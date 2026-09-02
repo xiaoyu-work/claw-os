@@ -67,9 +67,10 @@ claw-os-sdk/
 
 > The OS-internal `policy`, `snapshot`, and Rust `fs / exec / pkg /
 > notify / net` helpers used by the bundled claw-os apps live in the
-> sibling [`cos-runtime/`](../cos-runtime/) tree, not here. Third-party
-> Linux app developers do **not** need that package — it's only
-> referenced by code that ships inside the OS itself.
+> sibling [`cos-runtime/`](../cos-runtime/) tree, not here. That
+> package is not published or supported for third-party use, and none
+> of those helpers is exported by a public SDK. Public SDK operations
+> are capability-checked by the `cos` kernel when they run.
 
 ## The model
 

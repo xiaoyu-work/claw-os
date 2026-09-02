@@ -11,14 +11,23 @@ surfaces.
 - Configure providers and credentials without storing secret values in config.
 - Freeze versioned, content-addressed system prompts per session and trace
   request-local model context separately.
+- Label every model-visible segment with immutable trust provenance from
+  [`trust/`](trust/MODULE.md) at its ingestion adapter, and keep operator policy
+  separate from owner-controlled, extension and third-party content.
 - Run model turns, dispatch authorized tools, and preserve provider state.
 - Maintain memory, sessions, checkpoints, audit views, and usage records.
+- Publish deterministic task and approval lifecycle notifications after durable
+  state transitions.
 - Attach built-in, app, and MCP tools to one guarded registry.
 - Delegate dynamic App and MCP execution to the task-owned extension host when
   running inside `claw-agentd`.
-- Expose CLI, task-queue, and authenticated local web surfaces. The queue's
-  execution side runs in `claw-agentd`, never in the `clawd` broker — see
-  [`../agentd/MODULE.md`](../agentd/MODULE.md).
+- Expose CLI, task-queue, and authenticated local web surfaces. Web Chat and
+  Tasks use the same durable `clawd` queue, while Inbox projects the
+  Notification Service and keeps raw context events in a separate diagnostic
+  view. The queue's execution side runs in `claw-agentd`, never in the `clawd`
+  broker — see [`../agentd/MODULE.md`](../agentd/MODULE.md).
+- Keep CLI parsing and presentation grouped by command responsibility while
+  `mod.rs` remains the composition and top-level routing boundary.
 - Persist a versioned execution phase for every queued task. Workers acknowledge
   PREPARE while blocked; only a durable COMMIT record permits execution.
   Recovery requeues only phases that prove COMMIT was never issued.
@@ -33,24 +42,39 @@ surfaces.
 
 | Path | Role |
 | --- | --- |
-| `mod.rs` | `cos agent` command family and user-facing probes |
+| `mod.rs` | Agent module composition and top-level `cos agent` routing |
+| `command_catalog.rs` | Recursive-discovery metadata for the internal `agent dev` namespace |
+| `conversation_commands.rs` | `ask`/`chat`, streaming terminal presentation, and interactive session UI |
+| `session_commands.rs` | Conversation recall, session listing, titles, counts, purge, and statistics |
+| `memory_commands.rs` | App memory, notes, semantic memory, and memory-learning commands |
+| `skills_commands.rs` | Installed Skill inspection, provenance guards, usage, and hub operations |
+| `provider_commands.rs`, `model_commands.rs` | Provider status/probes and model/auxiliary/retry/compression diagnostics |
+| `media_commands.rs`, `vision_commands.rs` | Generated media/playback and image routing/analysis commands |
+| `mcp_commands.rs` | MCP server status, probing, calls, and stdio serving |
+| `safety_commands.rs` | Tool/approval/guardrail inspection, redaction, file safety, and OSV commands |
+| `curator_commands.rs` | Skill-draft proposal, review, authoring, and session scanning |
+| `app_ai_commands.rs`, `task_commands.rs` | App AI budgets/overrides and todo/nudge commands |
+| `diagnostic_commands.rs`, `developer_commands.rs`, `text_commands.rs` | Public usage and observability, context/hooks, and text/prompt developer commands |
 | `setup.rs` | Provider/modality setup, OAuth, model discovery, verification |
 | `setup/copilot.rs` | Copilot OAuth device flow and live model discovery |
 | `setup/media.rs` | TTS/STT/image/embedding specs, wizards, status, and probes |
 | `../../test/unit/agent/setup.rs` | Setup, status, apply, OAuth, and config regression tests |
 | `runtime/loop_.rs` | Multi-turn orchestration, prompt restore/freeze, compression, and persistence |
+| `runtime/deps.rs` | Explicit hooks, clock, semantic indexer, and runtime path context |
 | `runtime/turn.rs` | One provider turn, hooks, tool ordering, results |
-| `service.rs`, `../../test/unit/agent/service.rs` | Task queue, ownership/lease records, and `execute_job` — the runtime entry the `agentd` worker calls |
+| `service.rs`, `../../test/unit/agent/service.rs` | Task queue, approval-wait state, ownership/lease records, and `execute_job` — the runtime entry the `agentd` worker calls |
 | `llm/types.rs` | Provider-neutral request, response, content, and stream types |
 | `llm/registry.rs` | Provider construction |
 | `llm/providers/` | Provider-specific authentication and wire adapters |
 | `llm/accumulate.rs` | Streaming events to complete response/history |
-| `tools/registry.rs`, `tools/exposure.rs`, `tools/progressive.rs` | Immutable tool catalogue, session-scoped exposure, and budgeted extension disclosure |
+| `tools/registry.rs`, `tools/exposure.rs` | Immutable tool catalogue, explicit dependencies, session-scoped exposure, and dispatch lookup |
+| `tools/progressive.rs` | Stable bounded search/describe/call projection for deferred App/MCP tools |
 | `skills/loader.rs`, `skills/disclosure.rs` | Layered Skill discovery and progressive model disclosure |
 | `tools/mcp/` | Outbound/inbound MCP and lifecycle integration |
 | `memory/sqlite_fts.rs`, `memory/compaction.rs` | Durable messages, content-addressed prompts/summaries, compaction lifecycle, and FTS |
 | `memory/recovery.rs` | Memory health, serialized repair, FTS rebuild, and evidence-preserving quarantine |
 | `prompt/` | System prompt composition, tracing, caching |
+| `trust/` | Model-input trust lattice, source registry, labelled segments, data fence — see [`trust/MODULE.md`](trust/MODULE.md) |
 | `safety/` | Redaction, file/tool safety, and external-data controls |
 | `web/` | Authenticated local agent API and UI |
 
@@ -68,20 +92,32 @@ CLI/web -> clawd task queue -> claw-agentd worker
   -> tool result history
 ```
 
+A denied capability moves a task to the durable `waiting_approval` state after
+the worker exits. The `clawd` supervisor requeues the same task and session
+when every linked request is approved, or finishes it with an error when a
+request is denied, disappears, or remains undecided for eight hours. The Web
+surface reads owner-owned task memory directly, reads approval state through
+`clawd`, and requires the installed `pkexec` helper for decisions.
+
 `runtime/turn.rs` is the contract seam between providers and tools. Provider
 changes must preserve equivalent streaming/non-streaming text, tools, opaque
 reasoning state, usage, and error behavior. Tool schemas and calls use the same
 trusted per-request exposure context, then execute through registry
-reauthorization, guardrails, approvals, and hooks.
-Opaque MCP handles retain a non-model-visible internal policy identity; both
-catalog filtering and invocation use this same registry path.
-Hosted invocation audit records bind that identity to the server,
-handle/descriptor digest, capability generation, and signed extension lease at
-both gateway and host execution stages.
+reauthorization, guardrails, exact capability approval, and hooks. Opaque MCP
+handles retain a non-model-visible internal policy identity; hosted invocation
+audit binds that identity to the server, descriptor digest, capability
+generation, and signed extension lease.
+
+CLI, web, and worker composition roots snapshot `Arc<CosConfig>`, resolve
+runtime/registry paths, and open optional stores before calling
+`runtime::loop_::run_with_deps`. Lower runtime code receives these dependencies
+through typed contexts rather than rediscovering process state.
 
 ## Tests
 
-Most tests live inline with their owning module:
+Unit test bodies mirror their production modules under
+`../../test/unit/agent/`. Command tests use the corresponding
+`*_commands.rs` file:
 
 ```bash
 cargo test -p cos agent::setup::tests -- --test-threads=1
@@ -93,3 +129,21 @@ cargo test -p cos agent::llm::accumulate::tests -- --test-threads=1
 For an LLM-provider change, test setup/discovery, auth, request serialization,
 non-streaming parsing, SSE conversion, tool/reasoning round-trips, and
 pool/fallback classification.
+
+## Change Together
+
+- `mod.rs` command inventory and the owning `*_commands.rs` dispatcher when a
+  top-level command or `dev` subcommand is added, removed, or renamed.
+- `command_catalog.rs`, `cli_catalog.rs`, and `tools/cos_help.rs` when recursive
+  command discovery changes.
+- A production command module and its matching
+  `../../test/unit/agent/<module>.rs` test body.
+- `provider_commands.rs` with `setup.rs` and `doctor_cli.rs` when the shared
+  provider probe contract changes.
+- `conversation_commands.rs` with `runtime/loop_.rs`,
+  `runtime/presentation.rs`, and `memory/` when chat streaming or continuation
+  semantics change.
+- `trust/source.rs` with the ingestion adapter and an adversarial test when a
+  new model-visible source is added.
+- `mcp_commands.rs` with `tools/mcp/` and worker launch policy when MCP process
+  handling changes.

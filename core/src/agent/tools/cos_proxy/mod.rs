@@ -12,21 +12,19 @@
 //! function pointer per primitive — no hand-written wrappers, no per-tool
 //! IPC.
 //!
-//! The agent therefore inherits the **full** kernel surface: anything
-//! callable from the cos CLI is callable by the model, with the same
-//! command/args shape. This is the "agent-native OS" promise: the
-//! agent is a kernel resident with native access, not a bolt-on
-//! layer.
+//! The Agent discovers the full public CLI through `cos_help`, then uses the
+//! typed tools registered here for operations admitted to the model. Keeping
+//! discovery separate from execution preserves per-tool guardrails, approval,
+//! and audit classification instead of hiding every action behind one generic
+//! shell-shaped tool.
 //!
 //! Beyond the uniform-contract proxies, this module also hosts higher-level
 //! tools backed by agent subsystems (e.g. `cos_memory` over
 //! [`crate::agent::memory::notes`]).
 //!
-//! Proxy names are not an authorization boundary: one proxy may expose
-//! both read and write commands. Inputs are shape-checked here. A proxy
-//! bypasses the legacy name prompt only after every command derives and
-//! enforces an exact capability before side effects; mixed or incomplete
-//! proxies remain on `dangerous_tools`.
+//! Phase 5 will layer approval, redaction, and per-tool guardrails on top.
+//! For now, calls are dispatched directly. The `policy` module already
+//! self-polices destructive operations at the primitive layer.
 
 pub mod app_memory;
 pub mod memory;
@@ -67,9 +65,6 @@ pub struct CosPrimitiveTool {
 }
 
 impl CosPrimitiveTool {
-    /// Construct a serial primitive. It remains on the legacy
-    /// tool-name approval path until registration explicitly marks its
-    /// command mapping as capability-aware.
     pub const fn new(
         name: &'static str,
         description: &'static str,
@@ -98,8 +93,8 @@ impl CosPrimitiveTool {
     }
 
     /// Variant constructor for primitives whose every command is
-    /// read-only. The dispatch loop may run these concurrently with
-    /// other parallel-safe calls.
+    /// read-only (e.g. `cos_sysinfo`). The dispatch loop may run
+    /// these concurrently with other parallel-safe calls.
     pub const fn new_readonly(
         name: &'static str,
         description: &'static str,
@@ -130,6 +125,19 @@ impl CosPrimitiveTool {
     pub(crate) const fn with_capability_approval(mut self) -> Self {
         self.approval_boundary = ApprovalBoundary::Capability;
         self
+    }
+
+    fn success_result(&self, value: Value) -> ToolResult {
+        let serialized = serde_json::to_string(&value).unwrap_or_else(|_| value.to_string());
+        if self.name == "cos_sandbox"
+            && value
+                .get("exit_code")
+                .and_then(Value::as_i64)
+                .is_some_and(|code| code != 0)
+        {
+            return ToolResult::err(serialized);
+        }
+        ToolResult::ok(serialized)
     }
 }
 
@@ -216,9 +224,7 @@ impl Tool for CosPrimitiveTool {
             || crate::paths::current_home_override().is_some()
         {
             return match tokio::task::block_in_place(|| primitive(&command, &args)) {
-                Ok(value) => ToolResult::ok(
-                    serde_json::to_string(&value).unwrap_or_else(|_| value.to_string()),
-                ),
+                Ok(value) => self.success_result(value),
                 Err(message) => ToolResult::err(message),
             };
         }
@@ -231,11 +237,7 @@ impl Tool for CosPrimitiveTool {
         .await;
 
         match join {
-            Ok(Ok(value)) => {
-                let serialized =
-                    serde_json::to_string(&value).unwrap_or_else(|_| value.to_string());
-                ToolResult::ok(serialized)
-            }
+            Ok(Ok(value)) => self.success_result(value),
             Ok(Err(message)) => ToolResult::err(message),
             Err(join_err) => ToolResult::err(format!("primitive panicked: {join_err}")),
         }
@@ -269,9 +271,10 @@ struct PrimitiveSpec {
 const PRIMITIVES: &[PrimitiveSpec] = &[
     PrimitiveSpec {
         name: "cos_sandbox",
-        description: "Run commands inside a fail-closed bubblewrap+cgroup sandbox \
-                      (network denied and root/workspace read-only by default; mandatory \
-                      mem/cpu/pids/timeout/output limits and seccomp). Use for any user-supplied or \
+        description: "Run commands inside a fail-closed bubblewrap+seccomp+cgroup sandbox \
+                      (network denied and root/workspace read-only by default; egress needs \
+                      explicit `--allow-host HOST:PORT` endpoints; mandatory \
+                      mem/cpu/pids/timeout/output limits). Use for any user-supplied or \
                       model-generated shell command.",
         primitive: crate::sandbox::run,
         commands: &["exec"],
@@ -280,11 +283,9 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
     },
     PrimitiveSpec {
         name: "cos_proc",
-        description: "Manage long-running processes registered with cos. Unsandboxed spawn accepts \
-                      only exact root-owned static Linux executables and argv/cwd schemas from the \
-                      audited proc allowlist; use cos_sandbox for every other command. Other \
-                      commands query status/output, kill/signal, list, wait, renice, stats, and \
-                      result.",
+        description: "Manage long-running processes registered with cos: spawn, \
+                      query status/output, kill/signal, list, wait, renice, \
+                      stats, result.",
         primitive: crate::proc::run,
         commands: &[
             "spawn", "status", "output", "kill", "list", "wait", "signal", "result", "stats",
@@ -298,7 +299,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
         description: "Read live Linux system telemetry. Commands:\n\
                       identity: info (host distribution + Claw Agent layer) | env | uptime | who | desktop;\n\
                       load: resources | loadavg | sensors | cgroup;\n\
-                      processes: proc | top [--top N --by cpu|mem --interval ms] | threads <pid> | port <port>;\n\
+                      processes: proc | process <pid> [pid ...] (owner, command, cwd, ancestry) | top [--top N --by cpu|mem --interval ms] | threads <pid> | port <port>;\n\
                       network: net | net_rate [--interval ms];\n\
                       storage: mounts | disk_io [--interval ms] | largest_files <path> [--top N --min-mb N];\n\
                       logs: journal [--unit X --since X --lines N --priority N --kernel] | dmesg [--lines N];\n\
@@ -316,6 +317,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
             "sensors",
             "cgroup",
             "proc",
+            "process",
             "top",
             "threads",
             "port",
@@ -367,7 +369,12 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
             "add", "remove", "list", "status", "enable", "disable", "logs", "run", "tick",
         ],
         parallel_safe: false,
-        required_any_verbs: &[Verb::TIME_CRON, Verb::DATA_LOG_READ, Verb::PROC_SPAWN, Verb::SYS_KERNEL],
+        required_any_verbs: &[
+            Verb::TIME_CRON,
+            Verb::DATA_LOG_READ,
+            Verb::PROC_SPAWN,
+            Verb::SYS_KERNEL,
+        ],
     },
     PrimitiveSpec {
         name: "cos_checkpoint",
@@ -417,7 +424,12 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
         primitive: crate::watch::run,
         commands: &["file", "dir", "proc", "on", "multi", "history"],
         parallel_safe: false,
-        required_any_verbs: &[Verb::FS_WATCH, Verb::SYS_SERVICE, Verb::IPC_SUBSCRIBE, Verb::SECRET_READ],
+        required_any_verbs: &[
+            Verb::FS_WATCH,
+            Verb::SYS_SERVICE,
+            Verb::IPC_SUBSCRIBE,
+            Verb::SECRET_READ,
+        ],
     },
     PrimitiveSpec {
         name: "cos_ipc",
@@ -490,6 +502,18 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
         required_any_verbs: &[],
     },
     PrimitiveSpec {
+        name: "cos_usage",
+        description: "Read the current user's AI token usage. This is the \
+                      model-facing equivalent of `cos agent usage`. Choose \
+                      overall, provider, model, session, app, or verb as the \
+                      command; pass the selected value and optional --since, \
+                      --until, --ok, --error, --app, or --verb filters in args.",
+        primitive: crate::agent::usage_primitive,
+        commands: &["overall", "provider", "model", "session", "app", "verb"],
+        parallel_safe: true,
+        required_any_verbs: &[],
+    },
+    PrimitiveSpec {
         name: "cos_diagnose",
         description: "Deterministic system diagnosis orchestrator. Routes a symptom \
                       to bounded read-only probes, collects structured evidence, \
@@ -509,6 +533,16 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
 /// `cos_recall` — the caller must supply a `MemoryDb` via [`register_recall`].
 /// Keeps the proxy registration pure (no IO during test setup).
 pub fn register_all(registry: &mut ToolRegistry) {
+    register_all_with_notes(
+        registry,
+        crate::agent::memory::notes::NotesStore::system_default(),
+    );
+}
+
+pub fn register_all_with_notes(
+    registry: &mut ToolRegistry,
+    notes: crate::agent::memory::notes::NotesStore,
+) {
     for spec in PRIMITIVES {
         let mut tool = if spec.parallel_safe {
             CosPrimitiveTool::new_readonly_with_requirements(
@@ -527,16 +561,13 @@ pub fn register_all(registry: &mut ToolRegistry) {
                 spec.required_any_verbs,
             )
         };
-        // Only proxies whose complete command surface has an exact
-        // validated capability mapping may bypass the legacy
-        // `dangerous_tools` prompt.
         if spec.name == "cos_credential" {
             tool = tool.with_capability_approval();
         }
         registry.register(Arc::new(tool));
     }
     registry.register(Arc::new(oauth_login::CosOauthLoginTool::new()));
-    registry.register(Arc::new(memory::CosMemoryTool::new()));
+    registry.register(Arc::new(memory::CosMemoryTool::with_store(notes)));
 }
 
 /// Register the `cos_recall` history-search tool against an explicit DB.

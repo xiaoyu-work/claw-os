@@ -227,9 +227,13 @@ running records without phase metadata are also indeterminate rather than
 replayed.
 
 Mixed installs fail closed: both sides check `protocol::PROTOCOL_VERSION` and
-report a named mismatch that names the fix. `PR_SET_PDEATHSIG` means a worker
-cannot outlive the daemon that leased it, so every task left in `running/` at
-start-up belongs to a dead worker and is reconciled before the first claim.
+report a named mismatch that names the fix. The worker hello also carries the
+compiled release-security epoch, and the broker measures the installed worker
+image against the monotonic local security floor before `execve`; a superseded
+or substituted worker is refused before it can execute. `PR_SET_PDEATHSIG`
+means a worker cannot outlive the daemon that leased it, so every task left in
+`running/` at start-up belongs to a dead worker and is reconciled before the
+first claim.
 `CLAWD_AGENTD=off` disables supervision only; every other `clawd` primitive
 keeps working.
 

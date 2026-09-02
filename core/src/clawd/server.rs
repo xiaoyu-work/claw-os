@@ -28,7 +28,7 @@
 //! how many bytes had been read. Nothing the caller sent — not the
 //! frame, not the ancillary data, not a `serde` message — is recorded.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Instant;
@@ -48,7 +48,7 @@ use super::wire::{
     legacy_upgrade_notice, Fault, InboundRequest, RequestId, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES,
     PROTOCOL_VERSION,
 };
-use super::{audit, context, event_center, firewall, system_journal, usb_guard};
+use super::{audit, context, event_center, firewall, journal, system_journal, usb_guard};
 
 #[derive(Debug, Clone)]
 pub struct ServerOptions {
@@ -57,13 +57,63 @@ pub struct ServerOptions {
     pub socket_group: Option<String>,
 }
 
-pub async fn run(options: ServerOptions) -> Result<(), String> {
+#[derive(Debug, thiserror::Error)]
+pub enum DaemonError {
+    #[error(transparent)]
+    State(#[from] super::state::StateError),
+
+    #[error("{operation} {}: {source}", path.display())]
+    Socket {
+        operation: &'static str,
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("another clawd instance is already listening on {}", path.display())]
+    AlreadyRunning { path: PathBuf },
+
+    #[error("{message}")]
+    Startup {
+        operation: &'static str,
+        message: String,
+        #[source]
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    },
+}
+
+impl DaemonError {
+    pub fn operation(&self) -> &'static str {
+        match self {
+            Self::State(error) => error.operation(),
+            Self::Socket { operation, .. } | Self::Startup { operation, .. } => operation,
+            Self::AlreadyRunning { .. } => "socket.prepare",
+        }
+    }
+
+    fn startup_source<E>(operation: &'static str, message: impl Into<String>, source: E) -> Self
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        Self::Startup {
+            operation,
+            message: message.into(),
+            source: Some(Box::new(source)),
+        }
+    }
+}
+
+pub async fn run(options: ServerOptions) -> Result<(), DaemonError> {
     prepare_socket(&options.socket_path).await?;
-    let listener = UnixListener::bind(&options.socket_path)
-        .map_err(|err| format!("failed to bind {}: {err}", options.socket_path.display()))?;
+    let listener =
+        UnixListener::bind(&options.socket_path).map_err(|source| DaemonError::Socket {
+            operation: "socket.bind",
+            path: options.socket_path.clone(),
+            source,
+        })?;
     // Before the first `accept`, so no connection is ever served
     // without the kernel stamping credentials onto its messages.
-    enable_credential_passing(&listener)?;
+    enable_credential_passing(&listener, &options.socket_path)?;
     set_socket_permissions(
         &options.socket_path,
         options.socket_mode,
@@ -85,28 +135,49 @@ pub async fn run(options: ServerOptions) -> Result<(), String> {
     );
 
     audit::install_runtime_hook();
-    context::refresh_builtin_sources(&state);
+    // Verify every chain and close the books on the previous lifetime
+    // before the first request is served, so a mutation a crash left
+    // open is marked orphaned rather than silently replayed.
+    recover_journal();
+    context::refresh_builtin_sources(&state).map_err(|error| {
+        DaemonError::startup_source(
+            "context.initialize",
+            format!("failed to initialize daemon context: {error}"),
+            error,
+        )
+    })?;
     spawn_authority_sweep();
     let admission = Admission::new(Limits::default());
+    let agentd_broker = crate::agentd::supervisor::BrokerContext::new(
+        state.clone(),
+        admission.clone(),
+        options.socket_path.clone(),
+    )
+    .map_err(|message| DaemonError::Startup {
+        operation: "agentd.initialize",
+        message,
+        source: None,
+    })?;
     let agentd_shutdown = Arc::new(AtomicBool::new(false));
     // Agent work runs in unprivileged `claw-agentd` processes. The
     // supervisor handle is deliberately *not* part of the daemon's
     // fatal path: a worker exiting — normally or not — must never take
     // the broker down, and supervision stopping still leaves every
     // non-agent primitive served.
-    let broker_context = crate::agentd::supervisor::BrokerContext::new(
-        state.clone(),
-        admission.clone(),
-        options.socket_path.clone(),
-    )?;
-    let _agentd = crate::agentd::supervisor::spawn_supervisor(agentd_shutdown, broker_context);
+    let _agentd = crate::agentd::supervisor::spawn_supervisor(agentd_shutdown, agentd_broker);
+    let _notification_dispatcher = super::notifications::spawn_external_dispatcher();
     spawn_heartbeat();
     let serve = async move {
         loop {
-            let (stream, _addr) = listener
-                .accept()
-                .await
-                .map_err(|err| format!("failed to accept clawd client: {err}"))?;
+            let (stream, _addr) =
+                listener
+                    .accept()
+                    .await
+                    .map_err(|source| DaemonError::Socket {
+                        operation: "socket.accept",
+                        path: options.socket_path.clone(),
+                        source,
+                    })?;
             let bucket = accounting_bucket(&stream);
             let Some(permit) = admission.accept_connection(bucket) else {
                 tracing::warn!(
@@ -123,18 +194,62 @@ pub async fn run(options: ServerOptions) -> Result<(), String> {
             });
         }
         #[allow(unreachable_code)]
-        Ok::<(), String>(())
+        Ok::<(), DaemonError>(())
     };
     serve.await
 }
 
+/// Verify every journal partition and mark mutations a previous daemon
+/// left open.
+///
+/// Journalling failing is not a reason to refuse every read, so a
+/// failure here raises an alarm and lets the daemon serve queries;
+/// [`journal::begin`] is what makes durable mutations fail closed while
+/// the chain is unusable.
+fn recover_journal() {
+    use crate::session::journal;
+
+    match journal::startup_recovery(journal::RecoverySource::DaemonStart) {
+        Ok(report) => {
+            if !report.orphans.is_empty() || !report.quarantined.is_empty() {
+                tracing::error!(
+                    partitions = report.partitions,
+                    orphans = report.orphans.len(),
+                    quarantined = report.quarantined.len(),
+                    "session journal recovery needs an operator"
+                );
+            } else {
+                tracing::info!(
+                    partitions = report.partitions,
+                    verified = report.verified,
+                    "session journal verified"
+                );
+            }
+        }
+        Err(error) => {
+            journal::alarm::raise(
+                journal::alarm::Class::IntegrityFailed,
+                "startup",
+                &format!("session journal recovery did not run: {error}"),
+            );
+        }
+    }
+}
+
 /// Retire capability grants whose process, deadline or use budget is
-/// gone.
+/// gone, and stop extension instances whose package was revoked.
 ///
 /// The store already sweeps on every entry point, but a daemon that
 /// goes quiet after a burst of launches would otherwise hold rows for
 /// processes that exited. This is what makes "cleaned up on process
 /// exit" true without waiting for the next request.
+///
+/// The provenance pass rides the same tick rather than starting a loop
+/// of its own. It is the *bounded* half of the revocation guarantee:
+/// an instance that makes any authority call is denied and marked
+/// immediately by `provenance::runtime::assert_live`, but one sitting
+/// idle would never reach that check, so this pass finds it, kills its
+/// process group and drops its grants.
 fn spawn_authority_sweep() {
     tokio::spawn(async {
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(30));
@@ -142,8 +257,76 @@ fn spawn_authority_sweep() {
         loop {
             ticker.tick().await;
             super::authority::sweep();
+            sweep_revoked_instances().await;
         }
     });
+}
+
+/// Run one provenance lifecycle pass for every owner the daemon routes.
+///
+/// Each owner's running-instance record lives in their own root-owned
+/// partition of `/run/cos/caps`, so the pass is run once per owner
+/// under that owner's path view. Signalling and the bounded wait happen
+/// on a blocking thread; the async tick is never held.
+async fn sweep_revoked_instances() {
+    for uid in routed_owner_uids() {
+        // Addressed by the owner uid the daemon itself enumerated, not
+        // by an ambient path view: the same file the owner's own CLI
+        // and `agentd` would read.
+        let report = tokio::task::spawn_blocking(move || {
+            let trust = crate::provenance::trust_store();
+            crate::provenance::runtime::lifecycle_tick(
+                uid,
+                &trust,
+                crate::provenance::runtime::SHUTDOWN_GRACE,
+            )
+        })
+        .await
+        .unwrap_or_default();
+        if report.is_empty() {
+            continue;
+        }
+        // Authority outlives the process unless it is withdrawn too: a
+        // terminated instance must not leave a live session grant a
+        // relaying launcher could still present.
+        for session in report.finished() {
+            super::authority::authority().revoke_session(session);
+            super::authority::audit::record_revoked(
+                "app-session-revoked-package",
+                Some(session),
+                1,
+            );
+        }
+        tracing::warn!(
+            target: "provenance",
+            owner = uid,
+            marked = report.marked.len(),
+            terminated = report.terminated.len(),
+            released = report.released.len(),
+            "stopped extension instances whose package is no longer trusted"
+        );
+    }
+}
+
+/// Owners the daemon currently routes capability state for.
+///
+/// `/run/cos/caps` holds one directory per owner, created by the
+/// daemon itself and mode `0711`, so listing it is a root-only
+/// operation and the names are uids the daemon wrote — not anything a
+/// caller supplied. A name that is not a plain uid is skipped rather
+/// than guessed at.
+fn routed_owner_uids() -> Vec<u32> {
+    let Ok(entries) = std::fs::read_dir("/run/cos/caps") else {
+        return Vec::new();
+    };
+    let mut owners: Vec<u32> = entries
+        .flatten()
+        .filter(|entry| entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false))
+        .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok())
+        .collect();
+    owners.sort_unstable();
+    owners.dedup();
+    owners
 }
 
 /// Spawn the system-vitals heartbeat — the cheap, always-on reflex loop
@@ -231,22 +414,48 @@ async fn serve_connection(stream: UnixStream, state: DaemonState, admission: Arc
                 admitted.route.audit_fields,
                 &admitted.params,
             );
-            let response = dispatch(
-                admitted.route,
-                admitted.id,
-                admitted.params,
-                admitted.decision.as_ref(),
-                &state,
-                &client,
-            )
-            .await;
-            let outcome = response.audit_facts();
-            let elapsed = started.elapsed();
-            if let Err(err) = audit::record_request(&facts, &outcome, elapsed, &client) {
-                tracing::error!(error = %err, "failed to write clawd audit record");
+            let id = admitted.id.clone();
+            // The bracket is opened after authorization and before
+            // dispatch. A mutation the journal cannot record is refused
+            // here, so no privileged effect runs unrecorded.
+            match journal::begin(admitted.route, &id, admitted.decision.as_ref(), &client) {
+                Ok(guard) => {
+                    let mut response = dispatch(
+                        admitted.route,
+                        admitted.id,
+                        admitted.params,
+                        admitted.decision.as_ref(),
+                        &state,
+                        &client,
+                    )
+                    .await;
+                    // Closed only once the effect's durable result is
+                    // known. If the closing record cannot be written,
+                    // the answer becomes an explicit indeterminate.
+                    if let Some(guard) = guard {
+                        if let Some(replacement) = journal::finish(guard, &id, &response) {
+                            response = replacement;
+                        }
+                    }
+                    let outcome = response.audit_facts();
+                    let elapsed = started.elapsed();
+                    if let Err(err) = audit::record_request(&facts, &outcome, elapsed, &client) {
+                        tracing::error!(error = %err, "failed to write clawd audit record");
+                    }
+                    system_journal::record_clawd_request(&facts, &outcome, elapsed, &client);
+                    response
+                }
+                Err(fault) => {
+                    record_protocol_failure(
+                        fault,
+                        bytes,
+                        Some(admitted.route.name),
+                        started,
+                        &client,
+                    );
+                    Response::fault(id, fault)
+                }
             }
-            system_journal::record_clawd_request(&facts, &outcome, elapsed, &client);
-            response
         }
         Err(refusal) => {
             record_protocol_failure(refusal.fault, bytes, refusal.command, started, &client);
@@ -256,6 +465,66 @@ async fn serve_connection(stream: UnixStream, state: DaemonState, admission: Arc
 
     write_response(&mut peer_stream, response, limits.write_deadline, &client).await;
     let _ = tokio::time::timeout(DRAIN_DEADLINE, peer_stream.drain_pending()).await;
+}
+
+/// Dispatch a request whose kernel process identity was verified by another
+/// broker-owned listener. The private extension proxy applies its stricter
+/// host/descendant/session route filter first; typed admission, authority,
+/// mutation journaling, provider checks and audit remain identical here.
+pub(crate) async fn dispatch_verified_request(
+    request: crate::clawd::wire::Request,
+    client: &ClientIdentity,
+    state: &DaemonState,
+    admission: &Arc<Admission>,
+) -> Response {
+    let started = Instant::now();
+    let body = match serde_json::to_vec(&request) {
+        Ok(body) => body,
+        Err(_) => return Response::fault(request.id, Fault::InvalidEnvelope),
+    };
+    let bytes = body.len();
+    match admit(&body, client, admission).await {
+        Ok(admitted) => {
+            let facts = audit_policy::request_facts_for_route(
+                admitted.route.name,
+                admitted.route.audit_fields,
+                &admitted.params,
+            );
+            let id = admitted.id.clone();
+            let response =
+                match journal::begin(admitted.route, &id, admitted.decision.as_ref(), client) {
+                    Ok(guard) => {
+                        let mut response = dispatch(
+                            admitted.route,
+                            admitted.id,
+                            admitted.params,
+                            admitted.decision.as_ref(),
+                            state,
+                            client,
+                        )
+                        .await;
+                        if let Some(guard) = guard {
+                            if let Some(replacement) = journal::finish(guard, &id, &response) {
+                                response = replacement;
+                            }
+                        }
+                        response
+                    }
+                    Err(fault) => Response::fault(id, fault),
+                };
+            let outcome = response.audit_facts();
+            let elapsed = started.elapsed();
+            if let Err(error) = audit::record_request(&facts, &outcome, elapsed, client) {
+                tracing::error!(%error, "failed to write proxied clawd audit record");
+            }
+            system_journal::record_clawd_request(&facts, &outcome, elapsed, client);
+            response
+        }
+        Err(refusal) => {
+            record_protocol_failure(refusal.fault, bytes, refusal.command, started, client);
+            Response::fault(refusal.id, refusal.fault)
+        }
+    }
 }
 
 /// How long the daemon will spend discarding a refused peer's leftover
@@ -424,56 +693,6 @@ async fn dispatch(
     }
 }
 
-/// Dispatch a request whose process identity was verified by another
-/// broker-owned Unix listener.
-///
-/// The extension-host proxy uses this after applying its stricter route and
-/// task/session checks. Typed decoding, admission, duplicate detection,
-/// capability resolution, final provider enforcement, deadlines, and audit
-/// remain identical to the primary broker socket.
-pub(crate) async fn dispatch_verified_request(
-    request: crate::clawd::wire::Request,
-    client: &ClientIdentity,
-    state: &DaemonState,
-    admission: &Arc<Admission>,
-) -> Response {
-    let started = Instant::now();
-    let body = match serde_json::to_vec(&request) {
-        Ok(body) => body,
-        Err(_) => return Response::fault(request.id, Fault::InvalidEnvelope),
-    };
-    let bytes = body.len();
-    match admit(&body, client, admission).await {
-        Ok(admitted) => {
-            let facts = audit_policy::request_facts_for_route(
-                admitted.route.name,
-                admitted.route.audit_fields,
-                &admitted.params,
-            );
-            let response = dispatch(
-                admitted.route,
-                admitted.id,
-                admitted.params,
-                admitted.decision.as_ref(),
-                state,
-                client,
-            )
-            .await;
-            let outcome = response.audit_facts();
-            let elapsed = started.elapsed();
-            if let Err(error) = audit::record_request(&facts, &outcome, elapsed, client) {
-                tracing::error!(%error, "failed to write proxied clawd audit record");
-            }
-            system_journal::record_clawd_request(&facts, &outcome, elapsed, client);
-            response
-        }
-        Err(refusal) => {
-            record_protocol_failure(refusal.fault, bytes, refusal.command, started, client);
-            Response::fault(refusal.id, refusal.fault)
-        }
-    }
-}
-
 async fn refuse(peer_stream: &mut PeerStream, fault: Fault, bytes: usize, started: Instant) {
     let client = unknown_peer();
     record_protocol_failure(fault, bytes, None, started, &client);
@@ -562,81 +781,126 @@ async fn write_response(
     }
 }
 
-async fn prepare_socket(socket_path: &PathBuf) -> Result<(), String> {
+async fn prepare_socket(socket_path: &Path) -> Result<(), DaemonError> {
     if let Some(parent) = socket_path.parent() {
         tokio::fs::create_dir_all(parent)
             .await
-            .map_err(|err| format!("failed to create {}: {err}", parent.display()))?;
+            .map_err(|source| DaemonError::Socket {
+                operation: "socket.create_parent",
+                path: parent.to_path_buf(),
+                source,
+            })?;
     }
 
     match UnixStream::connect(socket_path).await {
-        Ok(_) => Err(format!(
-            "another clawd instance is already listening on {}",
-            socket_path.display()
-        )),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(_) => tokio::fs::remove_file(socket_path).await.map_err(|err| {
-            format!(
-                "failed to remove stale clawd socket {}: {err}",
-                socket_path.display()
-            )
+        Ok(_) => Err(DaemonError::AlreadyRunning {
+            path: socket_path.to_path_buf(),
         }),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => tokio::fs::remove_file(socket_path)
+            .await
+            .map_err(|source| DaemonError::Socket {
+                operation: "socket.remove_stale",
+                path: socket_path.to_path_buf(),
+                source,
+            }),
     }
 }
 
 #[cfg(unix)]
-fn enable_credential_passing(listener: &UnixListener) -> Result<(), String> {
+fn enable_credential_passing(
+    listener: &UnixListener,
+    socket_path: &Path,
+) -> Result<(), DaemonError> {
     use std::os::unix::io::AsRawFd;
 
-    peer::enable_credential_passing(listener.as_raw_fd())
-        .map_err(|err| format!("failed to enable clawd peer credential passing: {err}"))
+    peer::enable_credential_passing(listener.as_raw_fd()).map_err(|source| DaemonError::Socket {
+        operation: "socket.enable_credentials",
+        path: socket_path.to_path_buf(),
+        source,
+    })
 }
 
 #[cfg(not(unix))]
-fn enable_credential_passing(_listener: &UnixListener) -> Result<(), String> {
-    Err("clawd requires Unix domain sockets".to_string())
+fn enable_credential_passing(
+    _listener: &UnixListener,
+    socket_path: &Path,
+) -> Result<(), DaemonError> {
+    Err(DaemonError::Socket {
+        operation: "socket.enable_credentials",
+        path: socket_path.to_path_buf(),
+        source: std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "clawd requires Unix domain sockets",
+        ),
+    })
 }
 
 #[cfg(unix)]
 fn set_socket_permissions(
-    socket_path: &PathBuf,
+    socket_path: &Path,
     mode: u32,
     group: Option<&str>,
-) -> Result<(), String> {
+) -> Result<(), DaemonError> {
     use std::os::unix::ffi::OsStrExt;
     use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 
-    let before = std::fs::symlink_metadata(socket_path)
-        .map_err(|error| format!("inspect broker socket: {error}"))?;
+    let before = std::fs::symlink_metadata(socket_path).map_err(|source| DaemonError::Socket {
+        operation: "socket.inspect_permissions",
+        path: socket_path.to_path_buf(),
+        source,
+    })?;
     let euid = unsafe { libc::geteuid() as u32 };
-    if before.file_type().is_symlink()
-        || !before.file_type().is_socket()
-        || before.uid() != euid
-    {
-        return Err("broker socket has unsafe identity".to_string());
+    if before.file_type().is_symlink() || !before.file_type().is_socket() || before.uid() != euid {
+        return Err(DaemonError::Startup {
+            operation: "socket.set_permissions",
+            message: "broker socket has unsafe identity".to_string(),
+            source: None,
+        });
     }
-    let expected_gid = match group {
-        Some(group) => Some(resolve_group_gid(group)?),
-        None => None,
-    };
+    let expected_gid = group
+        .map(resolve_group_gid)
+        .transpose()
+        .map_err(|message| DaemonError::Startup {
+            operation: "socket.resolve_group",
+            message,
+            source: None,
+        })?;
     if let Some(gid) = expected_gid {
         if euid != 0 {
-            return Err("broker socket group override requires root".to_string());
+            return Err(DaemonError::Startup {
+                operation: "socket.set_group",
+                message: "broker socket group override requires root".to_string(),
+                source: None,
+            });
         }
-        let path = std::ffi::CString::new(socket_path.as_os_str().as_bytes())
-            .map_err(|_| "broker socket path contains NUL".to_string())?;
+        let path = std::ffi::CString::new(socket_path.as_os_str().as_bytes()).map_err(|_| {
+            DaemonError::Startup {
+                operation: "socket.set_group",
+                message: "broker socket path contains NUL".to_string(),
+                source: None,
+            }
+        })?;
         if unsafe { libc::lchown(path.as_ptr(), 0, gid) } != 0 {
-            return Err(format!(
-                "failed to chown {}: {}",
-                socket_path.display(),
-                std::io::Error::last_os_error()
-            ));
+            return Err(DaemonError::Socket {
+                operation: "socket.set_group",
+                path: socket_path.to_path_buf(),
+                source: std::io::Error::last_os_error(),
+            });
         }
     }
-    std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(mode))
-        .map_err(|err| format!("failed to chmod {}: {err}", socket_path.display()))?;
-    let after = std::fs::symlink_metadata(socket_path)
-        .map_err(|error| format!("verify broker socket: {error}"))?;
+    std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(mode)).map_err(
+        |source| DaemonError::Socket {
+            operation: "socket.set_permissions",
+            path: socket_path.to_path_buf(),
+            source,
+        },
+    )?;
+    let after = std::fs::symlink_metadata(socket_path).map_err(|source| DaemonError::Socket {
+        operation: "socket.verify_permissions",
+        path: socket_path.to_path_buf(),
+        source,
+    })?;
     if !after.file_type().is_socket()
         || after.dev() != before.dev()
         || after.ino() != before.ino()
@@ -644,17 +908,21 @@ fn set_socket_permissions(
         || after.mode() & 0o7777 != mode
         || expected_gid.is_some_and(|gid| after.gid() != gid)
     {
-        return Err("broker socket changed while permissions were applied".to_string());
+        return Err(DaemonError::Startup {
+            operation: "socket.verify_permissions",
+            message: "broker socket changed while permissions were applied".to_string(),
+            source: None,
+        });
     }
     Ok(())
 }
 
 #[cfg(not(unix))]
 fn set_socket_permissions(
-    _socket_path: &PathBuf,
+    _socket_path: &Path,
     _mode: u32,
     _group: Option<&str>,
-) -> Result<(), String> {
+) -> Result<(), DaemonError> {
     Ok(())
 }
 

@@ -34,6 +34,8 @@ use crate::config::AgentConfig;
 pub struct AutoCurator {
     curator: Arc<MemoryCurator>,
     db: MemoryDb,
+    config: Arc<crate::config::CosConfig>,
+    routed_paths: crate::paths::RoutedPathContext,
 }
 
 impl AutoCurator {
@@ -42,6 +44,55 @@ impl AutoCurator {
     /// i.e. the main provider is `mock` or build fails. Errors are
     /// logged at `warn!` and downgrade to `None`.
     pub fn from_cfg_logged(cfg: &AgentConfig, db: &MemoryDb) -> Option<Arc<Self>> {
+        Self::from_cfg_logged_with_notes(cfg, db, NotesStore::system_default())
+    }
+
+    pub fn from_cfg_logged_with_notes(
+        cfg: &AgentConfig,
+        db: &MemoryDb,
+        notes: NotesStore,
+    ) -> Option<Arc<Self>> {
+        let mut config = (*crate::config::current_snapshot()).clone();
+        config.agent = cfg.clone();
+        Self::from_snapshot_logged(Arc::new(config), db, notes)
+    }
+
+    pub fn from_snapshot_logged(
+        config: Arc<crate::config::CosConfig>,
+        db: &MemoryDb,
+        notes: NotesStore,
+    ) -> Option<Arc<Self>> {
+        Self::from_snapshot_with_paths(
+            config,
+            db,
+            notes,
+            crate::paths::RoutedPathContext::capture(),
+        )
+    }
+
+    pub fn from_snapshot_with_paths(
+        config: Arc<crate::config::CosConfig>,
+        db: &MemoryDb,
+        notes: NotesStore,
+        routed_paths: crate::paths::RoutedPathContext,
+    ) -> Option<Arc<Self>> {
+        Self::from_snapshot_with_runtime_paths(
+            config,
+            db,
+            notes,
+            routed_paths,
+            default_log_path(),
+        )
+    }
+
+    pub fn from_snapshot_with_runtime_paths(
+        config: Arc<crate::config::CosConfig>,
+        db: &MemoryDb,
+        notes: NotesStore,
+        routed_paths: crate::paths::RoutedPathContext,
+        log_path: std::path::PathBuf,
+    ) -> Option<Arc<Self>> {
+        let cfg = &config.agent;
         let aux = match auxiliary_from_cfg(cfg) {
             Ok(Some(a)) => a,
             Ok(None) => match aux_from_main(cfg) {
@@ -65,13 +116,30 @@ impl AutoCurator {
                 return None;
             }
         };
-        let notes = NotesStore::system_default();
-        let log_path = default_log_path();
         let curator = MemoryCurator::new(aux, notes, log_path);
         Some(Arc::new(Self {
             curator: Arc::new(curator),
             db: db.clone(),
+            config,
+            routed_paths,
         }))
+    }
+
+    pub fn notes_dir(&self) -> &std::path::Path {
+        self.curator.notes_dir()
+    }
+
+    pub fn config_snapshot(&self) -> &Arc<crate::config::CosConfig> {
+        &self.config
+    }
+
+    pub fn log_path(&self) -> &std::path::Path {
+        self.curator.log_path()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn save_empty_log(&self) -> Result<(), crate::agent::memory::curator::CurationError> {
+        self.curator.save_empty_log()
     }
 
     /// Fire-and-forget curation pass over `session_id`. The curator
@@ -88,48 +156,65 @@ impl AutoCurator {
     pub fn spawn_curate(self: &Arc<Self>, session_id: String) {
         let curator = self.curator.clone();
         let db = self.db.clone();
+        let config = Arc::clone(&self.config);
+        let routed_paths = self.routed_paths.clone();
         let trusted_session = crate::proc::current_trusted_session_for_caps();
         crate::agent::runtime::background::spawn(async move {
-            let curate_session_id = session_id.clone();
-            let run = async move {
-                curator
+            with_detached_context(config, routed_paths, trusted_session, async move {
+                let curate_session_id = session_id.clone();
+                let result = curator
                     .curate_session(&db, &curate_session_id, false)
-                    .await
-            };
-            let result = match trusted_session {
-                Some(session) => {
-                    crate::proc::with_trusted_session_override(session, run).await
-                }
-                None => run.await,
-            };
-            match result {
-                Ok(outcome) => {
-                    if outcome.skipped_no_new_messages {
-                        tracing::trace!(
-                            "curator: session={session_id} skipped (no new messages)"
-                        );
-                    } else if !outcome.facts_added.is_empty() {
-                        tracing::info!(
-                            "curator: session={} examined={} facts_added={}",
-                            session_id,
-                            outcome.messages_examined,
-                            outcome.facts_added.len()
-                        );
-                    } else {
-                        tracing::debug!(
-                            "curator: session={} examined={} facts_added=0 \
-                             (no new durable facts found)",
-                            session_id,
-                            outcome.messages_examined,
-                        );
+                    .await;
+                match result {
+                    Ok(outcome) => {
+                        if outcome.skipped_no_new_messages {
+                            tracing::trace!(
+                                "curator: session={session_id} skipped (no new messages)"
+                            );
+                        } else if !outcome.facts_added.is_empty() {
+                            tracing::info!(
+                                "curator: session={} examined={} facts_added={}",
+                                session_id,
+                                outcome.messages_examined,
+                                outcome.facts_added.len()
+                            );
+                        } else {
+                            tracing::debug!(
+                                "curator: session={} examined={} facts_added=0 \
+                                 (no new durable facts found)",
+                                session_id,
+                                outcome.messages_examined,
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("curator: session={session_id} extract failed: {e}");
                     }
                 }
-                Err(e) => {
-                    tracing::warn!("curator: session={session_id} extract failed: {e}");
-                }
-            }
+            })
+            .await;
         });
     }
+}
+
+pub(crate) async fn with_detached_context<F, R>(
+    config: Arc<crate::config::CosConfig>,
+    routed_paths: crate::paths::RoutedPathContext,
+    trusted_session: Option<crate::proc::SessionInfo>,
+    future: F,
+) -> R
+where
+    F: std::future::Future<Output = R>,
+{
+    let trusted = async move {
+        match trusted_session {
+            Some(session) => crate::proc::with_trusted_session_override(session, future).await,
+            None => future.await,
+        }
+    };
+    routed_paths
+        .scope(crate::config::with_snapshot(config, trusted))
+        .await
 }
 
 /// Build an [`AuxiliaryClient`] from the **main** `[agent]` provider

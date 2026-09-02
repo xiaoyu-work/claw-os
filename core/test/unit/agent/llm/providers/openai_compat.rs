@@ -1221,6 +1221,78 @@ fn request_header(request: &[u8], name: &str) -> Option<String> {
         })
 }
 
+fn request_line(request: &[u8]) -> &str {
+    std::str::from_utf8(request)
+        .unwrap_or_default()
+        .split("\r\n")
+        .next()
+        .unwrap_or_default()
+}
+
+#[tokio::test]
+async fn injected_transport_carries_copilot_exchange_catalog_and_chat() {
+    let (base_url, server) = spawn_sequence_mock(vec![
+        MockReply {
+            status_line: "HTTP/1.1 200 OK",
+            content_type: "application/json",
+            body: r#"{"token":"copilot-issue-38-shared-transport","expires_at":18446744073709551615}"#,
+        },
+        MockReply {
+            status_line: "HTTP/1.1 200 OK",
+            content_type: "application/json",
+            body: r#"{"data":[{"id":"gpt-4o-mini","supported_endpoints":["/chat/completions"]}]}"#,
+        },
+        MockReply {
+            status_line: "HTTP/1.1 200 OK",
+            content_type: "application/json",
+            body: r#"{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}]}"#,
+        },
+    ])
+    .await;
+    let transport = HttpTransport::new().unwrap();
+    let endpoints = crate::agent::llm::providers::copilot_auth::CopilotAuthEndpoints::for_test(
+        format!("{base_url}/token"),
+        base_url.clone(),
+    );
+    let provider = OpenAICompatProvider::new_with_copilot_endpoints(
+        OpenAICompatConfig {
+            alias: "copilot".into(),
+            base_url: base_url.clone(),
+            api_key: Some("github-issue-38-shared-transport".into()),
+            model: "gpt-4o-mini".into(),
+            extra_headers: HashMap::new(),
+            request_timeout: Duration::from_secs(5),
+            pool: None,
+        },
+        transport,
+        endpoints,
+    );
+
+    let response = provider.chat(req_text("hello")).await.unwrap();
+    assert!(matches!(
+        response.content.first(),
+        Some(ContentBlock::Text { text }) if text == "ok"
+    ));
+
+    let requests = server.await.unwrap();
+    assert_eq!(request_line(&requests[0]), "GET /token HTTP/1.1");
+    assert_eq!(request_line(&requests[1]), "GET /models HTTP/1.1");
+    assert_eq!(request_line(&requests[2]), "POST /chat/completions HTTP/1.1");
+    for request in &requests {
+        assert!(
+            request_header(request, "authorization")
+                .as_deref()
+                .is_some_and(|value| value.starts_with("Bearer ")),
+            "request did not use bearer auth: {}",
+            request_line(request)
+        );
+    }
+    assert_eq!(
+        request_header(&requests[1], "x-github-api-version").as_deref(),
+        Some(crate::agent::llm::providers::copilot_auth::GITHUB_API_VERSION)
+    );
+}
+
 struct FakeCopilotAuthSource {
     initial: crate::agent::llm::providers::copilot_auth::CopilotToken,
     refreshed: crate::agent::llm::providers::copilot_auth::CopilotToken,
@@ -1810,7 +1882,7 @@ fn is_configured_true_with_pool_only() {
     c.api_key_envs = vec!["COS_TEST_POOL_ICONFIG_X".into()];
     let oc = OpenAICompatConfig::from_agent_config("openai", "gpt-4o-mini", &c);
     std::env::remove_var("COS_TEST_POOL_ICONFIG_X");
-    let provider = OpenAICompatProvider::new(oc);
+    let provider = OpenAICompatProvider::new_with_transport(oc, HttpTransport::new().unwrap());
     assert!(provider.is_configured());
 }
 

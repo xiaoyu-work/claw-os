@@ -20,6 +20,8 @@ pub mod bridge;
 pub mod browser;
 pub mod caps;
 pub mod checkpoint;
+pub(crate) mod cli_catalog;
+pub(crate) mod cli_help;
 pub mod clawd;
 pub mod config;
 pub mod credential;
@@ -33,10 +35,12 @@ pub mod i18n;
 pub mod ipc;
 pub mod model;
 pub mod netfilter;
+pub mod notifications;
 pub mod paths;
 pub mod perms;
 pub mod policy;
 pub mod proc;
+pub mod provenance;
 pub mod router;
 pub mod mem_bridge;
 pub mod sandbox;
@@ -46,7 +50,9 @@ pub mod storage;
 pub mod sysinfo;
 pub mod trace;
 pub mod triggers;
+pub mod update;
 pub mod watch;
+pub mod worker;
 
 #[cfg(test)]
 pub mod test_env {

@@ -193,7 +193,12 @@ fn retry_branch_context_is_seeded_once_as_hidden_system_memory() {
     let rows = db.recent("branch-session", 20).unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].role, "system");
-    assert!(rows[0].content.contains("<untrusted_app_context>"));
+    let parsed =
+        crate::agent::trust::envelope::parse(&rows[0].content).expect("labelled branch context");
+    assert_eq!(
+        parsed.source.kind(),
+        crate::agent::trust::SourceKind::TransientAppContext
+    );
     assert!(rows[0].content.chars().count() < 34 * 1024);
 }
 
@@ -1010,9 +1015,10 @@ fn counts_reflect_per_bucket_state() {
             },
         )
         .unwrap();
-    let (p, r, d) = store.counts().unwrap();
+    let (p, r, w, d) = store.counts().unwrap();
     assert_eq!(p, 1);
     assert_eq!(r, 0);
+    assert_eq!(w, 0);
     assert_eq!(d, 1);
 }
 
@@ -1046,7 +1052,7 @@ fn prune_drops_aged_files_beyond_keep_last() {
     // keep_last = 1, older_than = 0 → should drop the 2 oldest.
     let removed = store.prune(Duration::from_secs(0), 1).unwrap();
     assert_eq!(removed, 2);
-    let (_, _, d) = store.counts().unwrap();
+    let (_, _, _, d) = store.counts().unwrap();
     assert_eq!(d, 1);
 
     let mut retained = 0;

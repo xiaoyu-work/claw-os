@@ -104,9 +104,10 @@ impl TestEnvironment {
             .prefix("cd-")
             .tempdir_in("/run")
             .ok()?;
+        std::fs::create_dir_all("/usr/lib/cos").ok()?;
         let apps = tempfile::Builder::new()
             .prefix("ca-")
-            .tempdir_in("/run")
+            .tempdir_in("/usr/lib/cos")
             .ok()?;
         let host_source = std::env::var_os("COS_PRIVILEGED_EXTENSION_HOST_BIN")
             .unwrap_or_else(|| HOST_BIN.into());
@@ -388,6 +389,8 @@ async fn worker_child() {
             timeout_secs: 5,
             url: None,
             bearer_env: None,
+            package: None,
+            provenance: None,
         })
         .await
         .expect("attach hosted MCP");

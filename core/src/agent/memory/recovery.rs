@@ -1659,10 +1659,9 @@ fn check_compactions(conn: &Connection, schema: &SchemaInspection) -> MemoryHeal
             check
                 .metrics
                 .insert("interrupted".to_string(), inspection.interrupted);
-            check.metrics.insert(
-                "invalid_records".to_string(),
-                inspection.invalid_records,
-            );
+            check
+                .metrics
+                .insert("invalid_records".to_string(), inspection.invalid_records);
             check.metrics.insert(
                 "orphaned_sessions".to_string(),
                 inspection.orphaned_sessions,
@@ -2969,23 +2968,39 @@ fn recover_authoritative_messages(
     let mut recovered = RecoveredRecords::default();
     let mut sessions = HashSet::new();
     {
-        let mut statement = source.prepare(
-            "SELECT id, session_id, role, content, ts_ms
+        let trust_projection = if table_has_columns(
+            source,
+            "messages",
+            &["trust_class", "trust_source", "trust_lineage"],
+        )? {
+            "trust_class, trust_source, trust_lineage"
+        } else {
+            "NULL, NULL, NULL"
+        };
+        let query = format!(
+            "SELECT id, session_id, role, content, ts_ms, {trust_projection}
              FROM messages NOT INDEXED
-             ORDER BY rowid",
-        )?;
+             ORDER BY rowid"
+        );
+        let mut statement = source.prepare(&query)?;
         let mut rows = statement.query([])?;
         while let Some(row) = rows.next()? {
             let session_id: String = row.get(1)?;
             tx.execute(
-                "INSERT INTO messages(id, session_id, role, content, ts_ms)
-                 VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO messages(
+                     id, session_id, role, content, ts_ms,
+                     trust_class, trust_source, trust_lineage
+                 )
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 params![
                     row.get::<_, i64>(0)?,
                     &session_id,
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
                     row.get::<_, i64>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
                 ],
             )?;
             sessions.insert(session_id);

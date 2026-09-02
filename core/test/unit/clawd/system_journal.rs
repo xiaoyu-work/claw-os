@@ -35,7 +35,10 @@ fn query_returns_recent_operations() {
     std::env::set_var("COS_DATA_DIR", tmp.path());
 
     let client = ClientIdentity::unknown();
-    let response = Response::ok(crate::clawd::protocol::RequestId::unknown(), json!({"status": "ok"}));
+    let response = Response::ok(
+        crate::clawd::protocol::RequestId::unknown(),
+        json!({"status": "ok"}),
+    );
     record_clawd_request(
         &audit_policy::request_facts("daemon.health", &Value::Null),
         &response.audit_facts(),
@@ -57,7 +60,10 @@ fn the_journal_projection_matches_the_broker_audit_projection() {
     // Both sinks are handed the same facts, so a value masked in one
     // can never survive in the other.
     let params = json!({"session_id": "app-1", "handle": "d34db33f-launch-handle", "pid": 4242});
-    let response = Response::ok(crate::clawd::protocol::RequestId::unknown(), json!({"bound": true}));
+    let response = Response::ok(
+        crate::clawd::protocol::RequestId::unknown(),
+        json!({"bound": true}),
+    );
     let facts = audit_policy::request_facts("app_session.bind", &params);
     let record = journal_record("app_session.bind", params, &response);
     assert_eq!(record["request"], serde_json::to_value(&facts).unwrap());
@@ -69,7 +75,10 @@ fn launch_handles_are_masked_in_the_system_journal() {
     let record = journal_record(
         "app_session.bind",
         json!({"session_id": "app-1", "handle": "d34db33f-launch-handle", "pid": 4242}),
-        &Response::ok(crate::clawd::protocol::RequestId::unknown(), json!({"bound": true})),
+        &Response::ok(
+            crate::clawd::protocol::RequestId::unknown(),
+            json!({"bound": true}),
+        ),
     );
     assert_eq!(record["operation"], json!("app_session.bind"));
     assert_eq!(record["request"]["params"]["session_id"], json!("app-1"));
@@ -104,7 +113,10 @@ fn scheduler_credentials_are_counted_not_journalled() {
             "command": "add",
             "args": ["--credential", "hunter2-password"],
         }),
-        &Response::ok(crate::clawd::protocol::RequestId::unknown(), json!({"added": true})),
+        &Response::ok(
+            crate::clawd::protocol::RequestId::unknown(),
+            json!({"added": true}),
+        ),
     );
     assert_eq!(record["request"]["params"]["command"], json!("add"));
     assert_eq!(
@@ -162,6 +174,7 @@ fn approval_reasons_are_journalled_as_metadata() {
             expires_at: 10,
             generation: 0,
         }),
+        resumable_until: None,
         operation_digest: Some(crate::crypto::sha256_hex(b"validated invocation")),
         requester: Some("uid:1000".to_string()),
     };
@@ -177,10 +190,7 @@ fn approval_reasons_are_journalled_as_metadata() {
     assert_eq!(record["worker_pid"], json!(42));
     assert_eq!(record["request_expires_at"], json!(10));
     assert_eq!(record["request_generation"], json!(0));
-    assert_eq!(
-        record["operation_digest"],
-        json!(request.operation_digest)
-    );
+    assert_eq!(record["operation_digest"], json!(request.operation_digest));
     assert_eq!(record["reason"]["bytes"], json!(request.reason.len()));
 }
 

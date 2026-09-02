@@ -16,10 +16,9 @@ the rootfs at `/usr/lib/cos/python/claw_os_sdk/`).
 ## Use
 
 ```python
-from claw_os_sdk import ai, policy, tools
+from claw_os_sdk import ai
 
 def handle_summarize(args):
-    policy.require("fs.read", path=args["path"])
     with open(args["path"]) as fh:
         body = fh.read()
     result = ai.chat(prompt=body, origin="external-content", max_units=2000)
@@ -32,13 +31,16 @@ def handle_summarize(args):
 |-------------------------|------------------------------------------------------------------------|
 | `claw_os_sdk.ai`        | Stable `chat` / `chat-untrusted` access through `cos ai chat`.          |
 | `claw_os_sdk.tools`     | `cos ai tool <name>` — fulfil catalog tools the model proposed.        |
+| `claw_os_sdk.gui`       | Desktop GUI bootstrap and kernel-provided launch context.              |
 | `claw_os_sdk.serve`     | `App.run(...)` — boilerplate for an app's main loop.                   |
 | `claw_os_sdk.claw_os_session` | Read / observe `COS_SESSION` from inside an app.                 |
 | `claw_os_sdk.generated` | TypedDicts generated from `wire/v1/*.schema.json`.                     |
 
-Capability gating (`policy.require`) and COW snapshots live in the
-internal **`cos_runtime`** package; they are implementation details of
-the claw-os bundled apps, not part of the public SDK surface.
+The package does not export `policy`. Capability gating
+(`cos_runtime.policy.require`) and COW snapshots belong to the
+OS-internal **`cos_runtime`** package, which is unavailable to
+third-party SDK consumers. The `cos` kernel performs capability checks
+when public SDK operations run.
 
 ## AI support
 

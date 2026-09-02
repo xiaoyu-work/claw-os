@@ -1,23 +1,46 @@
 #!/bin/sh
 # claw-os-agent prerm -- stop agent services on removal, but not upgrade.
+#
+# Also the downgrade gate dpkg gives the *currently installed* package:
+# `prerm upgrade <new-version>` runs before the incoming package's own
+# preinst and before anything is unpacked.
 
 set -e
 
+DPKG_ROOT="${DPKG_ROOT:-}"
+ROOT_ARG="${DPKG_ROOT:-/}"
+SECURITY_HELPER="$DPKG_ROOT/usr/lib/cos/bin/claw-security-floor"
+
 case "$1" in
     remove)
-        if [ -d /run/systemd/system ]; then
-            deb-systemd-invoke stop clawd.service >/dev/null || true
-            deb-systemd-invoke stop cos-browser.service >/dev/null || true
+        if [ -z "$DPKG_ROOT" ]; then
+            if [ -d /run/systemd/system ]; then
+                deb-systemd-invoke stop clawd.service >/dev/null || true
+                deb-systemd-invoke stop cos-browser.service >/dev/null || true
+            fi
+            if [ -x /usr/bin/deb-systemd-helper ]; then
+                deb-systemd-helper disable clawd.service >/dev/null || true
+                deb-systemd-helper disable cos-browser.service >/dev/null || true
+            fi
         fi
-        if [ -x /usr/bin/deb-systemd-helper ]; then
-            deb-systemd-helper disable clawd.service >/dev/null || true
-            deb-systemd-helper disable cos-browser.service >/dev/null || true
-        fi
-        rm -f /etc/systemd/user/default.target.wants/clawd.service
-        rm -f /etc/systemd/user/default.target.wants/claw-recoll-index.service
-        rm -f /etc/systemd/user/default.target.wants/claw-semantic.service
+        rm -f "$DPKG_ROOT/etc/systemd/user/default.target.wants/clawd.service"
+        rm -f "$DPKG_ROOT/etc/systemd/user/default.target.wants/claw-recoll-index.service"
+        rm -f "$DPKG_ROOT/etc/systemd/user/default.target.wants/claw-semantic.service"
         ;;
-    upgrade|deconfigure|failed-upgrade)
+    upgrade)
+        # The installed — and therefore already protected — release is
+        # the only party in a downgrade that the candidate cannot
+        # supply. dpkg runs this before the incoming package's own
+        # preinst, so an old artifact whose maintainer scripts predate
+        # downgrade protection is still refused here.
+        if [ -x "$SECURITY_HELPER" ] && [ -n "$2" ]; then
+            "$SECURITY_HELPER" check-incoming \
+                --root "$ROOT_ARG" \
+                --package claw-os-agent \
+                --version "$2"
+        fi
+        ;;
+    deconfigure|failed-upgrade)
         ;;
     *)
         echo "prerm called with unknown argument '$1'" >&2

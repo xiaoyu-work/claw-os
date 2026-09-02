@@ -1,5 +1,4 @@
 mod app_commands;
-mod help;
 
 use std::env;
 use std::io::Read;
@@ -16,19 +15,102 @@ use crate::bridge;
 use crate::caps;
 use crate::checkpoint;
 use crate::clawd::routes::Command;
+use crate::cli_help::{self, builtin_apps, show_help_for, show_overview};
 use crate::credential;
 use crate::cron;
 use crate::engine_pkg;
 use crate::mem_bridge;
 use crate::model;
 use crate::perms;
+use crate::provenance;
 use crate::service;
 use crate::sysinfo;
 use crate::triggers;
 use app_commands::dispatch_app;
-use help::{builtin_apps, show_help_for, show_overview};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CommandErrorKind {
+    InvalidInput,
+    NotAuthorized,
+    Unavailable,
+    Execution,
+}
+
+pub struct CommandError {
+    kind: CommandErrorKind,
+    command: String,
+    message: String,
+    source: Option<Box<dyn std::error::Error + Send + Sync>>,
+}
+
+impl CommandError {
+    pub fn kind(&self) -> CommandErrorKind {
+        self.kind
+    }
+
+    pub fn command(&self) -> &str {
+        &self.command
+    }
+
+    fn execution(command: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            kind: CommandErrorKind::Execution,
+            command: command.into(),
+            message: message.into(),
+            source: None,
+        }
+    }
+
+    fn credential(
+        command: impl Into<String>,
+        message: String,
+        source: credential::CredentialError,
+    ) -> Self {
+        let kind = match source.kind() {
+            credential::CredentialErrorKind::InvalidInput => CommandErrorKind::InvalidInput,
+            credential::CredentialErrorKind::NotAuthorized => CommandErrorKind::NotAuthorized,
+            credential::CredentialErrorKind::Unavailable
+            | credential::CredentialErrorKind::Corrupt => CommandErrorKind::Unavailable,
+            credential::CredentialErrorKind::NotFound
+            | credential::CredentialErrorKind::External => CommandErrorKind::Execution,
+        };
+        Self {
+            kind,
+            command: command.into(),
+            message,
+            source: Some(Box::new(source)),
+        }
+    }
+}
+
+impl std::fmt::Debug for CommandError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CommandError")
+            .field("kind", &self.kind)
+            .field("command", &self.command)
+            .field("message", &self.message)
+            .field("has_source", &self.source.is_some())
+            .finish()
+    }
+}
+
+impl std::fmt::Display for CommandError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for CommandError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.source
+            .as_deref()
+            .map(|source| source as &(dyn std::error::Error + 'static))
+    }
+}
+
+pub type CommandResult<T> = Result<T, CommandError>;
 
 fn apps_dir() -> PathBuf {
     PathBuf::from(env::var("COS_APPS_DIR").unwrap_or_else(|_| "/usr/lib/cos/apps".into()))
@@ -55,6 +137,9 @@ fn app_operation_accepts_stdin_in(args: &[String], root: &Path) -> bool {
     if app_commands::schema_requested(&args[3..]) {
         return false;
     }
+    // Whether to read stdin eagerly is a parsing decision made before
+    // any capability check; it grants nothing. The launch itself is
+    // gated by `require_runnable`.
     apps::find(root, app_id)
         .and_then(|app| {
             app.manifest
@@ -177,7 +262,7 @@ fn wait_for_scheduler_approvals(ids: &[String]) -> Result<(), String> {
             let id = entry.get("id").and_then(Value::as_str).unwrap_or("");
             match entry.get("status").and_then(Value::as_str) {
                 Some("approved") => {}
-                Some("pending") => pending = true,
+                Some("pending" | "resolving") => pending = true,
                 Some("denied") => return Err(format!("scheduler approval {id} was denied")),
                 other => {
                     return Err(format!(
@@ -235,7 +320,11 @@ fn audit_path() -> PathBuf {
 
 /// Main dispatch: parse CLI args and route to the appropriate handler.
 pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
-    dispatch_with_stdin(args, None)
+    dispatch_typed(args).map_err(|error| error.to_string())
+}
+
+pub fn dispatch_typed(args: &[String]) -> CommandResult<Option<String>> {
+    dispatch_with_stdin_typed(args, None)
 }
 
 /// Dispatch a top-level CLI invocation with explicitly supplied stdin bytes.
@@ -243,6 +332,89 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
 /// Internal callers use [`dispatch`] and therefore cannot accidentally pass a
 /// control pipe or service stdin through to an App.
 pub fn dispatch_with_stdin(
+    args: &[String],
+    stdin_data: Option<Vec<u8>>,
+) -> Result<Option<String>, String> {
+    dispatch_with_stdin_typed(args, stdin_data).map_err(|error| error.to_string())
+}
+
+pub fn dispatch_with_stdin_typed(
+    args: &[String],
+    stdin_data: Option<Vec<u8>>,
+) -> CommandResult<Option<String>> {
+    if args.first().map(String::as_str) == Some("credential") {
+        return dispatch_credential_typed(args);
+    }
+    let command = args.first().cloned().unwrap_or_else(|| "help".to_string());
+    dispatch_with_stdin_impl(args, stdin_data)
+        .map_err(|message| CommandError::execution(command, message))
+}
+
+fn dispatch_credential_typed(args: &[String]) -> CommandResult<Option<String>> {
+    let app_name = "credential";
+    let help_only = args.len() == 1
+        || (args.len() == 2 && matches!(args[1].as_str(), "--help" | "-h" | "help"));
+    if help_only {
+        let output = crate::cli_catalog::namespace_help(app_name).ok_or_else(|| {
+            CommandError::execution(
+                app_name,
+                format!("no public help catalogue for: cos {app_name}"),
+            )
+        })?;
+        return Ok(Some(output.to_string()));
+    }
+    if args.len() == 2 && args[1] == "--schema" {
+        return cli_help::show_builtin_schema(app_name)
+            .map_err(|message| CommandError::execution(app_name, message));
+    }
+
+    let command = &args[1];
+    let cmd_args = args[2..].to_vec();
+    if cmd_args.contains(&"--schema".to_string()) {
+        return cli_help::show_command_schema(app_name, command)
+            .map_err(|message| CommandError::execution(command, message));
+    }
+
+    let start = std::time::Instant::now();
+    let audit_p = audit_path();
+    match credential::run_typed(command, &cmd_args) {
+        Ok(value) => {
+            audit::log_entry(&audit_p, app_name, command, &cmd_args, start, "ok", None);
+            if value.is_null() {
+                Ok(None)
+            } else {
+                Ok(Some(value.to_string()))
+            }
+        }
+        Err(error) => {
+            let raw = error.to_string();
+            audit::log_entry(
+                &audit_p,
+                app_name,
+                command,
+                &cmd_args,
+                start,
+                "error",
+                Some(&raw),
+            );
+            let message = if let Some(recovery) = recovery_hint(&raw) {
+                let mut output = json!({
+                    "error": raw,
+                    "recovery": recovery,
+                });
+                if let Some(code) = error_code_from_hint(&raw) {
+                    output["code"] = json!(code);
+                }
+                output.to_string()
+            } else {
+                raw
+            };
+            Err(CommandError::credential(command, message, error))
+        }
+    }
+}
+
+fn dispatch_with_stdin_impl(
     args: &[String],
     stdin_data: Option<Vec<u8>>,
 ) -> Result<Option<String>, String> {
@@ -1332,9 +1504,13 @@ pub fn dispatch_with_stdin(
         "agent" => dispatch_agent(args),
         "model" => dispatch_builtin(args, "model", model::run),
         "engine" => dispatch_builtin(args, "engine", engine_pkg::run),
+        "provenance" => dispatch_builtin(args, "provenance", provenance::cli::run),
         _ => {
             // Check if user forgot "app" prefix — helpful error
             let apps_dir = apps_dir();
+            // "Did you mean `cos app <name>`?" — a diagnostic, not a
+            // dispatch. Quarantined installs should still produce the
+            // helpful hint rather than a bare "unknown command".
             let discovered = apps::discover(&apps_dir);
             if discovered.contains_key(name.as_str()) {
                 Err(format!(
@@ -1374,8 +1550,20 @@ fn run_app_command(
         }
     }
 
-    let result =
-        bridge::run_app_with_stdin(&app.dir, command, args, &data, &apps, stdin_data);
+    // One verified snapshot drives both the capability decision and
+    // the bytes that execute. `require_runnable` already re-asserted it
+    // against the current trust store immediately before this call.
+    let launch = match app
+        .require_verified()
+        .and_then(|pkg| bridge::AppLaunch::new(std::sync::Arc::clone(pkg)))
+    {
+        Ok(launch) => launch,
+        Err(reason) => {
+            audit::log_entry(&audit, app_name, command, args, start, "error", Some(&reason));
+            return Err(reason);
+        }
+    };
+    let result = bridge::run_app_with_stdin(&launch, command, args, &data, &apps, stdin_data);
 
     match result {
         Ok(output) => {
@@ -1438,7 +1626,10 @@ fn launch_app_gui(
     let data = data_dir();
     let apps = apps_dir().to_string_lossy().to_string();
 
-    match bridge::launch_gui(&app.dir, exec, files, &data, &apps) {
+    let launch = app
+        .require_verified()
+        .and_then(|pkg| bridge::AppLaunch::new(std::sync::Arc::clone(pkg)))?;
+    match bridge::launch_gui(&launch, exec, files, &data, &apps) {
         Ok(()) => {
             audit::log_entry(&audit, app_name, exec, files, start, "ok", None);
             Ok(None)
@@ -1553,7 +1744,8 @@ fn dispatch_agent(args: &[String]) -> Result<Option<String>, String> {
         use std::io::IsTerminal;
         let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
         if interactive {
-            let cfg = &crate::config::get().agent;
+            let config = crate::config::current_snapshot();
+            let cfg = &config.agent;
             let mut rewritten: Vec<String> = Vec::with_capacity(3);
             rewritten.push(args[0].clone());
             if agent::setup::is_ready(cfg).is_ok() {
@@ -1582,25 +1774,14 @@ fn dispatch_builtin(
     let help_only = args.len() == 1
         || (args.len() == 2 && matches!(args[1].as_str(), "--help" | "-h" | "help"));
     if help_only {
-        let apps = builtin_apps();
-        let app = apps.iter().find(|(n, _, _)| *n == app_name).unwrap();
-        let cmds: serde_json::Map<String, Value> = app
-            .2
-            .iter()
-            .map(|(k, v)| (k.to_string(), json!(v)))
-            .collect();
-        let output = json!({
-            "app": app_name,
-            "description": app.1,
-            "commands": cmds,
-            "hint": format!("Run: cos {app_name} <command> [args]"),
-        });
+        let output = crate::cli_catalog::namespace_help(app_name)
+            .ok_or_else(|| format!("no public help catalogue for: cos {app_name}"))?;
         return Ok(Some(output.to_string()));
     }
 
     // cos <primitive> --schema → show all command schemas for this primitive
     if args.len() == 2 && args[1] == "--schema" {
-        return help::show_builtin_schema(app_name);
+        return cli_help::show_builtin_schema(app_name);
     }
 
     let command = &args[1];
@@ -1608,7 +1789,7 @@ fn dispatch_builtin(
 
     // If --schema is in args, return schema instead of executing
     if cmd_args.contains(&"--schema".to_string()) {
-        return help::show_command_schema(app_name, command);
+        return cli_help::show_command_schema(app_name, command);
     }
 
     let start = std::time::Instant::now();

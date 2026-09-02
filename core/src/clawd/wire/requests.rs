@@ -30,6 +30,7 @@ const PROMPT_BYTES: usize = 512 * 1024;
 const PATH_BYTES: usize = 4096;
 const LABEL_BYTES: usize = 1024;
 const COMMAND_BYTES: usize = 8192;
+const NOTIFICATION_BODY_BYTES: usize = 16 * 1024;
 
 pub type NoBody = NoParams;
 
@@ -49,6 +50,8 @@ pub struct TaskSubmit {
     pub session_id: Option<Token>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_turns: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub use_memory: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,6 +61,8 @@ pub struct TaskList {
     pub status: Option<Token>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -94,6 +99,12 @@ pub struct MemoryHistory {
 pub struct MemorySessions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentUsage {
+    pub args: TextList<16, 256>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -160,6 +171,102 @@ pub struct ContextEventQuery {
     pub order: Option<Token>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u64>,
+}
+
+// ---------------------------------------------------------------------------
+// Notifications
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NotificationPublish {
+    pub source: Name<128>,
+    pub kind: Name<128>,
+    pub severity: Token<32>,
+    pub title: Text<LABEL_BYTES>,
+    pub body: Text<NOTIFICATION_BODY_BYTES>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_policy: Option<Token<32>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dedupe_key: Option<Name<192>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<Token<192>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<Token<192>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<Token<192>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actions: Option<Structured>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NotificationList {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_dismissed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NotificationSubscribe {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<WaitMillis>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NotificationId {
+    pub id: Token<192>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NotificationPreferencesSet {
+    pub web_enabled: bool,
+    pub desktop_enabled: bool,
+    pub ntfy_enabled: bool,
+    pub web_min_severity: Token<32>,
+    pub desktop_min_severity: Token<32>,
+    pub ntfy_min_severity: Token<32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub muted_kinds: Option<TextList<128, 128>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dnd_start_minute_utc: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dnd_end_minute_utc: Option<u16>,
+    pub critical_bypasses_dnd: bool,
+    pub retention_days: u16,
+    pub ntfy_server: Text<2048>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ntfy_topic: Option<Name<192>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NotificationDeliveryClaim {
+    pub channel: Token<32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lease_ms: Option<WaitMillis>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NotificationDeliveryComplete {
+    pub id: Token<192>,
+    pub channel: Token<32>,
+    pub status: Token<32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<Token<128>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -294,6 +401,22 @@ pub struct AppSessionSetTransient {
     pub call: Option<Structured>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_caps: Option<Structured>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppSessionRelay {
+    pub session_id: Token,
+    pub handle: Token,
+    /// Wire name of the inner route. Resolved against the one typed
+    /// route registry; anything the registry does not name, or names as
+    /// something other than a `Session`-subject system-service route,
+    /// is refused before its body is decoded.
+    pub command: Text<COMMAND_BYTES>,
+    /// The inner route's own parameters, decoded by that route's typed
+    /// body before it is authorized or dispatched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub params: Option<Structured>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -755,4 +878,36 @@ mod tests {
         env!("CARGO_MANIFEST_DIR"),
         "/test/unit/clawd/wire/requests.rs"
     ));
+}
+
+// ---------------------------------------------------------------------------
+// Session journal
+// ---------------------------------------------------------------------------
+
+/// Ask what the session journal has to say about the caller's own work.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JournalStatus {
+    /// Restrict the answer to one durable session. Omitted means the
+    /// caller's own owner partition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<Token>,
+}
+
+/// Record what an operator concluded about a mutation the machine could
+/// not resolve on its own.
+///
+/// Root-only, and bound to an exact partition and operation: the route
+/// resolves nothing it was not told to, re-runs nothing, and grants
+/// nothing. `outcome` is an enumerated statement, not an action.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JournalResolveMutation {
+    /// Partition key exactly as the journal renders it, e.g.
+    /// `owner/1000` or `session/ses_…`.
+    pub partition: Name,
+    /// The operation id the journal minted when the bracket opened.
+    pub operation: Token,
+    /// `abandoned`, `committed` or `rolled-back`.
+    pub outcome: Token,
 }

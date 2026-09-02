@@ -86,7 +86,7 @@ async fn a_privileged_provider_request_without_a_grant_is_refused() {
 async fn an_envelope_from_another_protocol_version_fails_closed() {
     let admission = admission();
     let body = serde_json::to_vec(&json!({
-        "v": 2,
+        "v": PROTOCOL_VERSION + 1,
         "id": "r-1",
         "command": "daemon.health",
         "params": {},
@@ -130,7 +130,7 @@ async fn deeply_nested_json_is_refused_before_a_route_sees_it() {
     let admission = admission();
     let deep = format!(
         "{}{}{}",
-        r#"{"v":1,"id":"r-1","command":"context.update","params":{"source":"s","payload":"#,
+        r#"{"v":2,"id":"r-1","command":"context.update","params":{"source":"s","payload":"#,
         "[".repeat(400),
         "]".repeat(400)
     ) + "}}";
@@ -528,4 +528,19 @@ fn every_route_is_reachable_by_name_and_declares_an_access_class() {
         assert!(matches!(route.access, Access::User | Access::Root));
         assert!(matches!(route.kind, Kind::Query | Kind::Mutation));
     }
+}
+
+#[tokio::test]
+async fn socket_preparation_preserves_operation_and_io_source() {
+    let directory = tempfile::tempdir().unwrap();
+    let parent_file = directory.path().join("not-a-directory");
+    std::fs::write(&parent_file, "occupied").unwrap();
+    let socket = parent_file.join("clawd.sock");
+
+    let error = prepare_socket(&socket).await.unwrap_err();
+
+    assert_eq!(error.operation(), "socket.create_parent");
+    assert!(std::error::Error::source(&error)
+        .and_then(|source| source.downcast_ref::<std::io::Error>())
+        .is_some());
 }

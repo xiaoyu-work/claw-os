@@ -25,11 +25,10 @@ const MAX_CALLBACK_BYTES: usize = 16 * 1024;
 const APP_ACCESS_TOKEN_TIER: u8 = 2;
 const REFRESH_TOKEN_TIER: u8 = 0;
 
-pub(crate) struct AgentOauthAuthorization {
-    _private: (),
-}
-
-pub(super) fn cmd_oauth_login(args: &[String]) -> Result<Value, String> {
+pub(super) fn cmd_oauth_login(
+    store: &dyn super::CredentialStore,
+    args: &[String],
+) -> Result<Value, String> {
     let direct_cli = crate::proc::current_session_info_for_caps()
         .is_some_and(|session| is_direct_oauth_login_session(&session));
     if !direct_cli {
@@ -37,33 +36,30 @@ pub(super) fn cmd_oauth_login(args: &[String]) -> Result<Value, String> {
             "interactive OAuth login must be run directly in the user's terminal".to_string(),
         );
     }
-    run_oauth_login(args)
+    run_oauth_login(store, args)
 }
 
-pub(crate) fn authorize_agent_oauth_login() -> Result<AgentOauthAuthorization, String> {
-    let allowed = crate::agent::tools::exposure::current()
-        .is_some_and(|context| context.permits_interactive_authorization());
-    if !allowed {
+pub(super) fn cmd_agent_oauth_login(
+    store: &dyn super::CredentialStore,
+    args: &[String],
+) -> Result<Value, String> {
+    let attended_agent = crate::proc::current_session_info_for_caps()
+        .is_some_and(|session| is_attended_agent_oauth_session(&session));
+    if !attended_agent {
         return Err(
-            "Agent-initiated OAuth requires a trusted attended local Agent session"
+            "Agent-initiated OAuth requires an attended local `cos agent ask`, \
+             `cos agent live`, or `cos agent chat` session"
                 .to_string(),
         );
     }
-    Ok(AgentOauthAuthorization { _private: () })
+    run_oauth_login(store, args)
 }
 
-pub(crate) fn run_agent_oauth_login_authorized(
-    args: &[String],
-    _authorization: AgentOauthAuthorization,
-) -> Result<Value, String> {
-    run_oauth_login(args)
-}
-
-fn run_oauth_login(args: &[String]) -> Result<Value, String> {
+fn run_oauth_login(store: &dyn super::CredentialStore, args: &[String]) -> Result<Value, String> {
     let (namespace, provider, no_open, timeout_secs) = parse_args(args)?;
     match provider.as_str() {
-        "google" => google_login(&namespace, no_open, timeout_secs),
-        "microsoft" => microsoft_login(&namespace, no_open, timeout_secs),
+        "google" => google_login(store, &namespace, no_open, timeout_secs),
+        "microsoft" => microsoft_login(store, &namespace, no_open, timeout_secs),
         _ => Err(format!(
             "unsupported OAuth login provider: {provider}. supported: google, microsoft"
         )),
@@ -82,6 +78,14 @@ fn is_direct_oauth_login_session(session: &crate::proc::SessionInfo) -> bool {
             .command
             .windows(2)
             .any(|args| args == ["credential", "oauth-login"])
+}
+
+fn is_attended_agent_oauth_session(session: &crate::proc::SessionInfo) -> bool {
+    is_same_pid_admin_cli_session(session)
+        && session
+            .command
+            .windows(2)
+            .any(|args| args[0] == "agent" && matches!(args[1].as_str(), "ask" | "live" | "chat"))
 }
 
 fn parse_args(args: &[String]) -> Result<(String, String, bool, u64), String> {
@@ -121,15 +125,21 @@ fn parse_args(args: &[String]) -> Result<(String, String, bool, u64), String> {
             }
         }
     }
-    super::validate_credential_component("namespace", &namespace)?;
+    super::validate_credential_component("namespace", &namespace)
+        .map_err(|error| error.to_string())?;
     let provider = provider.ok_or(
         "usage: cos credential oauth-login <google|microsoft> [--namespace NS] [--no-open] [--timeout SECS]",
     )?;
     Ok((namespace, provider, no_open, timeout_secs))
 }
 
-fn google_login(namespace: &str, no_open: bool, timeout_secs: u64) -> Result<Value, String> {
-    let (client_id, client_secret) = google_client_config(namespace)?;
+fn google_login(
+    store: &dyn super::CredentialStore,
+    namespace: &str,
+    no_open: bool,
+    timeout_secs: u64,
+) -> Result<Value, String> {
+    let (client_id, client_secret) = google_client_config(store, namespace)?;
     preflight_token_storage(namespace, &["GOOGLE_ACCESS_TOKEN", "GOOGLE_REFRESH_TOKEN"])?;
 
     let listener =
@@ -144,13 +154,8 @@ fn google_login(namespace: &str, no_open: bool, timeout_secs: u64) -> Result<Val
     let redirect_uri = format!("http://127.0.0.1:{port}/oauth/callback");
     let (verifier, challenge) = pkce_pair()?;
     let state = random_token(32)?;
-    let authorization_url = google_authorization_url(
-        &client_id,
-        &redirect_uri,
-        &challenge,
-        &state,
-        GOOGLE_SCOPES,
-    );
+    let authorization_url =
+        google_authorization_url(&client_id, &redirect_uri, &challenge, &state, GOOGLE_SCOPES);
 
     let browser_opened = !no_open && open_browser(&authorization_url);
     eprintln!("Open this URL to authorize Google:");
@@ -167,11 +172,7 @@ fn google_login(namespace: &str, no_open: bool, timeout_secs: u64) -> Result<Val
     );
     body.push_str("&client_secret=");
     body.push_str(&super::urlencoded(&client_secret));
-    let raw = super::http_post(
-        GOOGLE_TOKEN_URL,
-        &body,
-        "application/x-www-form-urlencoded",
-    )?;
+    let raw = super::http_post(GOOGLE_TOKEN_URL, &body, "application/x-www-form-urlencoded")?;
     let token: Value =
         serde_json::from_str(&raw).map_err(|e| format!("parse Google token response: {e}"))?;
     if let Some(error) = token.get("error").and_then(Value::as_str) {
@@ -193,12 +194,15 @@ fn google_login(namespace: &str, no_open: bool, timeout_secs: u64) -> Result<Val
     let granted_scopes = google_granted_scopes(&token)?;
     super::require_secret(
         Verb::SECRET_WRITE,
-        super::credential_scope(namespace, "GOOGLE_ACCESS_TOKEN")?,
-    )?;
-    super::store_credential_record(
+        super::credential_scope(namespace, "GOOGLE_ACCESS_TOKEN")
+            .map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    store_token(
+        store,
+        namespace,
         "GOOGLE_ACCESS_TOKEN",
         access_token,
-        namespace,
         APP_ACCESS_TOKEN_TIER,
         Some(expires_in),
         Some(format!(
@@ -209,12 +213,15 @@ fn google_login(namespace: &str, no_open: bool, timeout_secs: u64) -> Result<Val
     if let Some(refresh_token) = refresh_token {
         super::require_secret(
             Verb::SECRET_WRITE,
-            super::credential_scope(namespace, "GOOGLE_REFRESH_TOKEN")?,
-        )?;
-        super::store_credential_record(
+            super::credential_scope(namespace, "GOOGLE_REFRESH_TOKEN")
+                .map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
+        store_token(
+            store,
+            namespace,
             "GOOGLE_REFRESH_TOKEN",
             refresh_token,
-            namespace,
             REFRESH_TOKEN_TIER,
             None,
             None,
@@ -255,9 +262,15 @@ fn google_granted_scopes(token: &Value) -> Result<Vec<String>, String> {
     Ok(granted)
 }
 
-fn microsoft_login(namespace: &str, no_open: bool, timeout_secs: u64) -> Result<Value, String> {
-    let (client_id, tenant_id) = microsoft_client_config(namespace)?;
-    super::validate_credential_component("Microsoft tenant", &tenant_id)?;
+fn microsoft_login(
+    store: &dyn super::CredentialStore,
+    namespace: &str,
+    no_open: bool,
+    timeout_secs: u64,
+) -> Result<Value, String> {
+    let (client_id, tenant_id) = microsoft_client_config(store, namespace)?;
+    super::validate_credential_component("Microsoft tenant", &tenant_id)
+        .map_err(|error| error.to_string())?;
     preflight_token_storage(
         namespace,
         &["MICROSOFT_ACCESS_TOKEN", "MICROSOFT_REFRESH_TOKEN"],
@@ -365,21 +378,24 @@ fn microsoft_login(namespace: &str, no_open: bool, timeout_secs: u64) -> Result<
     for name in ["MICROSOFT_ACCESS_TOKEN", "MICROSOFT_REFRESH_TOKEN"] {
         super::require_secret(
             Verb::SECRET_WRITE,
-            super::credential_scope(namespace, name)?,
-        )?;
+            super::credential_scope(namespace, name).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
     }
-    super::store_credential_record(
+    store_token(
+        store,
+        namespace,
         "MICROSOFT_REFRESH_TOKEN",
         refresh_token,
-        namespace,
         REFRESH_TOKEN_TIER,
         None,
         None,
     )?;
-    super::store_credential_record(
+    store_token(
+        store,
+        namespace,
         "MICROSOFT_ACCESS_TOKEN",
         access_token,
-        namespace,
         APP_ACCESS_TOKEN_TIER,
         Some(access_expires),
         Some(format!(
@@ -403,14 +419,41 @@ fn preflight_token_storage(namespace: &str, names: &[&str]) -> Result<(), String
     for name in names {
         super::require_secret(
             Verb::SECRET_WRITE,
-            super::credential_scope(namespace, name)?,
-        )?;
+            super::credential_scope(namespace, name).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
     }
     Ok(())
 }
 
-pub(super) fn google_client_config(namespace: &str) -> Result<(String, String), String> {
+fn store_token(
+    store: &dyn super::CredentialStore,
+    namespace: &str,
+    name: &str,
+    value: &str,
+    min_tier: u8,
+    ttl: Option<u64>,
+    refresh_cmd: Option<String>,
+) -> Result<(), String> {
+    let id = super::CredentialId::parse(namespace, name).map_err(|error| error.to_string())?;
+    store
+        .store(super::StoreRequest {
+            id: &id,
+            value,
+            min_tier,
+            ttl,
+            refresh_cmd,
+        })
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+pub(super) fn google_client_config(
+    store: &dyn super::CredentialStore,
+    namespace: &str,
+) -> Result<(String, String), String> {
     let client_id = client_setting(
+        store,
         "COS_GOOGLE_OAUTH_CLIENT_ID",
         "GOOGLE_CLIENT_ID",
         namespace,
@@ -424,6 +467,7 @@ pub(super) fn google_client_config(namespace: &str) -> Result<(String, String), 
         )
     })?;
     let client_secret = client_setting(
+        store,
         "COS_GOOGLE_OAUTH_CLIENT_SECRET",
         "GOOGLE_CLIENT_SECRET",
         namespace,
@@ -441,15 +485,18 @@ pub(super) fn google_client_config(namespace: &str) -> Result<(String, String), 
 }
 
 pub(super) fn google_client_config_for_daemon(
+    store: &dyn super::CredentialStore,
     namespace: &str,
 ) -> Result<(String, String), String> {
     let client_id = daemon_client_setting(
+        store,
         "COS_GOOGLE_OAUTH_CLIENT_ID",
         "GOOGLE_CLIENT_ID",
         namespace,
     )?
     .ok_or_else(|| "Google OAuth client id is not configured".to_string())?;
     let client_secret = daemon_client_setting(
+        store,
         "COS_GOOGLE_OAUTH_CLIENT_SECRET",
         "GOOGLE_CLIENT_SECRET",
         namespace,
@@ -458,8 +505,12 @@ pub(super) fn google_client_config_for_daemon(
     Ok((client_id, client_secret))
 }
 
-pub(super) fn microsoft_client_config(namespace: &str) -> Result<(String, String), String> {
+pub(super) fn microsoft_client_config(
+    store: &dyn super::CredentialStore,
+    namespace: &str,
+) -> Result<(String, String), String> {
     let client_id = client_setting(
+        store,
         "COS_MICROSOFT_OAUTH_CLIENT_ID",
         "MICROSOFT_CLIENT_ID",
         namespace,
@@ -474,6 +525,7 @@ pub(super) fn microsoft_client_config(namespace: &str) -> Result<(String, String
         )
     })?;
     let tenant_id = client_setting(
+        store,
         "COS_MICROSOFT_OAUTH_TENANT_ID",
         "MICROSOFT_TENANT_ID",
         namespace,
@@ -483,15 +535,18 @@ pub(super) fn microsoft_client_config(namespace: &str) -> Result<(String, String
 }
 
 pub(super) fn microsoft_client_config_for_daemon(
+    store: &dyn super::CredentialStore,
     namespace: &str,
 ) -> Result<(String, String), String> {
     let client_id = daemon_client_setting(
+        store,
         "COS_MICROSOFT_OAUTH_CLIENT_ID",
         "MICROSOFT_CLIENT_ID",
         namespace,
     )?
     .ok_or_else(|| "Microsoft OAuth client id is not configured".to_string())?;
     let tenant_id = daemon_client_setting(
+        store,
         "COS_MICROSOFT_OAUTH_TENANT_ID",
         "MICROSOFT_TENANT_ID",
         namespace,
@@ -501,6 +556,7 @@ pub(super) fn microsoft_client_config_for_daemon(
 }
 
 fn client_setting(
+    store: &dyn super::CredentialStore,
     env_name: &str,
     credential_name: &str,
     namespace: &str,
@@ -511,14 +567,30 @@ fn client_setting(
             return Ok(Some(value.to_string()));
         }
     }
-    let path = super::namespace_dir(namespace).join(format!("{credential_name}.json"));
-    if !path.is_file() {
+    let id = super::CredentialId::parse(namespace, credential_name)
+        .map_err(|error| error.to_string())?;
+    super::require_secret(
+        Verb::SECRET_READ,
+        super::credential_scope(id.namespace(), id.name()).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    if !store.contains(&id).map_err(|error| error.to_string())? {
         return Ok(None);
     }
-    super::load_credential_value(credential_name, namespace).map(Some)
+    store
+        .load(&id, true)
+        .map(Some)
+        .map_err(|error| error.to_string())
 }
 
+/// Read OAuth client configuration inside the credential refresh broker.
+///
+/// The public/direct OAuth path uses [`client_setting`] and performs an exact
+/// `secret.read` check. This separate bypass is only used after clawd has
+/// authorized the broker route and switched to the requesting user's
+/// filesystem identity; it must not be used by CLI or provider code.
 fn daemon_client_setting(
+    store: &dyn super::CredentialStore,
     env_name: &str,
     credential_name: &str,
     namespace: &str,
@@ -529,11 +601,15 @@ fn daemon_client_setting(
             return Ok(Some(value.to_string()));
         }
     }
-    let path = super::namespace_dir(namespace).join(format!("{credential_name}.json"));
-    if !path.is_file() {
+    let id = super::CredentialId::parse(namespace, credential_name)
+        .map_err(|error| error.to_string())?;
+    if !store.contains(&id).map_err(|error| error.to_string())? {
         return Ok(None);
     }
-    super::read_credential_value(credential_name, namespace, false).map(Some)
+    store
+        .load(&id, false)
+        .map(Some)
+        .map_err(|error| error.to_string())
 }
 
 fn pkce_pair() -> Result<(String, String), String> {
@@ -700,9 +776,8 @@ fn write_callback_response(stream: &mut TcpStream, success: bool) -> std::io::Re
     } else {
         "Google authorization failed. Return to the terminal for details."
     };
-    let body = format!(
-        "<!doctype html><meta charset=\"utf-8\"><title>Claw OS</title><p>{message}</p>"
-    );
+    let body =
+        format!("<!doctype html><meta charset=\"utf-8\"><title>Claw OS</title><p>{message}</p>");
     write!(
         stream,
         "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",

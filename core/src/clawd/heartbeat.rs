@@ -211,10 +211,7 @@ pub fn evaluate(v: &Vitals, cfg: &HeartbeatConfig) -> Vec<Signal> {
             out.push(Signal {
                 key: "memory_low",
                 severity,
-                message: format!(
-                    "available memory is low: {:.1}% free",
-                    ratio * 100.0
-                ),
+                message: format!("available memory is low: {:.1}% free", ratio * 100.0),
                 detail: json!({ "mem_avail_ratio": ratio }),
             });
         }
@@ -228,6 +225,7 @@ pub fn evaluate(v: &Vitals, cfg: &HeartbeatConfig) -> Vec<Signal> {
 #[derive(Default)]
 pub struct CooldownState {
     last_fired: HashMap<&'static str, Instant>,
+    active: HashMap<&'static str, Severity>,
 }
 
 impl CooldownState {
@@ -241,6 +239,30 @@ impl CooldownState {
                 true
             }
         }
+    }
+
+    fn enter_or_refire(
+        &mut self,
+        key: &'static str,
+        severity: Severity,
+        cooldown: Duration,
+        now: Instant,
+    ) -> bool {
+        let changed = self.active.insert(key, severity) != Some(severity);
+        if changed {
+            self.last_fired.insert(key, now);
+            true
+        } else {
+            self.allow(key, cooldown, now)
+        }
+    }
+
+    fn recover(&mut self, key: &'static str) -> bool {
+        let was_active = self.active.remove(key).is_some();
+        if was_active {
+            self.last_fired.remove(key);
+        }
+        was_active
     }
 }
 
@@ -267,6 +289,77 @@ fn emit_signal(sig: &Signal) {
     if let Err(e) = super::context_events::append(params, &ClientIdentity::unknown()) {
         tracing::warn!(error = %e, key = sig.key, "heartbeat: failed to emit context.event");
     }
+    let (severity, title) = match (sig.key, sig.severity) {
+        ("memory_low", Severity::Critical) => (
+            crate::notifications::Severity::Critical,
+            "Memory is critically low",
+        ),
+        ("memory_low", _) => (
+            crate::notifications::Severity::Warning,
+            "Available memory is low",
+        ),
+        ("load_high", Severity::Critical) => (
+            crate::notifications::Severity::Critical,
+            "System load is critically high",
+        ),
+        _ => (
+            crate::notifications::Severity::Warning,
+            "System load is high",
+        ),
+    };
+    super::notifications::publish_for_known_owners(
+        crate::notifications::NotificationDraft::new(
+            SOURCE,
+            event_type,
+            severity,
+            title,
+            sig.message.clone(),
+        )
+        .dedupe(format!(
+            "heartbeat:{}:{}",
+            sig.key,
+            match sig.severity {
+                Severity::Critical => "critical",
+                Severity::Warn => "warning",
+                Severity::Ok => "ok",
+            }
+        )),
+    );
+}
+
+fn emit_recovery(key: &'static str) {
+    let (title, message) = match key {
+        "memory_low" => (
+            "Memory pressure recovered",
+            "Available memory has returned to a healthy level.",
+        ),
+        _ => (
+            "System load recovered",
+            "System load has returned to a healthy level.",
+        ),
+    };
+    let event_type = format!("{key}.recovered");
+    let params = json!({
+        "source": SOURCE,
+        "event_type": event_type,
+        "payload": {
+            "severity": "info",
+            "message": message,
+        },
+    });
+    if let Err(error) = super::context_events::append(params, &ClientIdentity::unknown()) {
+        tracing::warn!(%error, key, "heartbeat: failed to emit recovery context.event");
+    }
+    super::notifications::publish_for_known_owners(
+        crate::notifications::NotificationDraft::new(
+            SOURCE,
+            event_type,
+            crate::notifications::Severity::Info,
+            title,
+            message,
+        )
+        .dedupe(format!("heartbeat:{key}:recovered")),
+    );
 }
 
 /// One heartbeat beat: sample, evaluate, and emit while respecting
@@ -278,10 +371,24 @@ pub fn beat(cfg: &HeartbeatConfig, cooldowns: &mut CooldownState, now: Instant) 
 
 fn beat_vitals(cfg: &HeartbeatConfig, cooldowns: &mut CooldownState, now: Instant) {
     let vitals = sample();
-    for sig in evaluate(&vitals, cfg) {
-        if cooldowns.allow(sig.key, cfg.cooldown, now) {
-            emit_signal(&sig);
+    let signals = evaluate(&vitals, cfg);
+    for sig in &signals {
+        if cooldowns.enter_or_refire(sig.key, sig.severity, cfg.cooldown, now) {
+            emit_signal(sig);
         }
+    }
+    if vitals.load1.is_some()
+        && vitals.cpus.is_some()
+        && !signals.iter().any(|signal| signal.key == "load_high")
+        && cooldowns.recover("load_high")
+    {
+        emit_recovery("load_high");
+    }
+    if vitals.mem_avail_ratio.is_some()
+        && !signals.iter().any(|signal| signal.key == "memory_low")
+        && cooldowns.recover("memory_low")
+    {
+        emit_recovery("memory_low");
     }
 }
 
@@ -334,8 +441,26 @@ async fn run_scheduler_loop(interval: Duration, shutdown: Arc<AtomicBool>) {
             interval,
             Arc::clone(&shutdown),
         ),
-        run_scheduler_subsystem("triggers", scheduler.id.clone(), interval, shutdown),
+        run_scheduler_subsystem(
+            "triggers",
+            scheduler.id.clone(),
+            interval,
+            Arc::clone(&shutdown),
+        ),
+        run_nudge_loop(interval, shutdown),
     );
+}
+
+async fn run_nudge_loop(interval: Duration, shutdown: Arc<AtomicBool>) {
+    let mut ticker = tokio::time::interval(interval);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        ticker.tick().await;
+        if shutdown.load(Ordering::Relaxed) {
+            break;
+        }
+        super::notifications::publish_due_nudges();
+    }
 }
 
 async fn run_scheduler_subsystem(

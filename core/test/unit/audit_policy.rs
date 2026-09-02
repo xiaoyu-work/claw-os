@@ -301,6 +301,27 @@ fn known_tools_keep_selectors_and_sizes_only() {
 }
 
 #[test]
+fn discovery_and_usage_tools_log_only_bounded_shapes() {
+    let help = tool_facts(
+        "cos_help",
+        &json!({"path": ["agent", "usage"], "unexpected": "secret"}),
+    );
+    assert!(help.known);
+    assert_eq!(help.input["path"], json!({"type": "array", "len": 2}));
+    assert_eq!(help.input_omitted, 1);
+
+    let usage = tool_facts(
+        "cos_usage",
+        &json!({"command": "session", "args": ["private-session-id"]}),
+    );
+    assert!(usage.known);
+    assert_eq!(usage.input["command"], "session");
+    assert_eq!(usage.input["args"], json!({"type": "array", "len": 1}));
+    assert_no_secrets(&render(&help));
+    assert_no_secrets(&render(&usage));
+}
+
+#[test]
 fn model_authored_text_is_reduced_to_a_byte_count() {
     let facts = tool_facts(
         "cos_imagegen",

@@ -39,12 +39,10 @@
 //! ## Concurrency
 //!
 //! [`HookRegistry`] holds `Arc<dyn Hook>` and is `Clone + Send +
-//! Sync`. Hook impls themselves must be `Send + Sync`. The registry
-//! is process-wide, accessible via [`global_registry`], or a custom
-//! one can be passed to the runtime if/when the loop accepts a
-//! per-call registry. (Currently the runtime calls only into the
-//! global one — the per-call escape hatch lives here for future
-//! agent-in-agent scenarios.)
+//! Sync`. Hook impls themselves must be `Send + Sync`. Production
+//! runtimes receive a request-local registry through
+//! [`RuntimeDeps`](super::deps::RuntimeDeps); compatibility callers
+//! may still use [`global_registry`].
 //!
 //! ## What this module is NOT
 //!
@@ -59,13 +57,17 @@ use std::sync::{Arc, OnceLock, RwLock};
 
 use crate::agent::llm::types::ToolCall;
 
+tokio::task_local! {
+    static SCOPED_REGISTRY: HookRegistry;
+}
+
 // =====================================================================
 // Hook context — what the runtime hands the hook on every call
 // =====================================================================
 
 /// Snapshot of the agent state a hook sees on every callback.
 /// The runtime fills this in. Hooks must treat it as read-only.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct HookContext {
     pub session_id: String,
     /// 0-indexed turn within this session's run.
@@ -77,6 +79,20 @@ pub struct HookContext {
     pub started_at_ms: u64,
     /// True when the loop is acting as a delegated child agent.
     pub is_delegated: bool,
+}
+
+impl std::fmt::Debug for HookContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("HookContext")
+            .field("session_id", &self.session_id)
+            .field("turn_index", &self.turn_index)
+            .field("provider", &self.provider)
+            .field("model", &self.model)
+            .field("started_at_ms", &self.started_at_ms)
+            .field("is_delegated", &self.is_delegated)
+            .finish()
+    }
 }
 
 impl HookContext {
@@ -110,6 +126,19 @@ impl HookContext {
         self.is_delegated = b;
         self
     }
+}
+
+pub(crate) async fn with_registry<F>(registry: HookRegistry, future: F) -> F::Output
+where
+    F: std::future::Future,
+{
+    SCOPED_REGISTRY.scope(registry, future).await
+}
+
+pub(crate) fn current_registry() -> HookRegistry {
+    SCOPED_REGISTRY
+        .try_with(Clone::clone)
+        .unwrap_or_else(|_| global_registry())
 }
 
 fn now_ms() -> u64 {
@@ -192,6 +221,7 @@ pub struct ToolResultSummary {
     pub success: bool,
     pub latency_ms: u64,
     pub bytes_returned: usize,
+    pub result_digest: String,
     pub error: Option<String>,
 }
 

@@ -12,6 +12,7 @@ import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from _shared.credentials import load_credential  # noqa: E402
+from _shared.safe_http import open_url  # noqa: E402
 from cos_runtime import memory, policy  # noqa: E402
 
 VERSION = os.environ.get("COS_VERSION", "0.1.0")
@@ -147,7 +148,10 @@ def _request_json(url, headers=None):
         hdrs.update(headers)
     req = urllib.request.Request(url, headers=hdrs)
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+        # Authorized, transport-approved and redirect-checked: inside a
+        # sandbox this is the brokered egress tunnel, and every hop is
+        # re-authorized against `net.dial` before it is followed.
+        with open_url(req, timeout=TIMEOUT)[0] as resp:
             body = resp.read().decode("utf-8", errors="replace")
             return json.loads(body), None
     except urllib.error.HTTPError as e:

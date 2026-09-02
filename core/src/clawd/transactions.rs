@@ -6,19 +6,22 @@ use crate::caps::Role;
 use crate::session::{self, RollbackOutcome, SessionId, SessionOrigin, Status as SessionStatus};
 
 use super::client_identity::ClientIdentity;
+use super::protocol::BrokerError;
 use super::state::{DaemonState, TransactionHandle};
 
 pub fn begin(
     state: &DaemonState,
     params: Value,
     client: &ClientIdentity,
-) -> Result<Value, String> {
-    let owner_uid = client.require_uid()?;
+) -> Result<Value, BrokerError> {
+    let owner_uid = client.require_uid().map_err(BrokerError::execution)?;
     // Canonical, ownership-checked home — the same derivation the
     // capability baseline and the execution-time clamp use.
-    let owner_home = super::system_caps::verified_owner_home(owner_uid)?;
-    let purpose = required_string(&params, "purpose")?;
-    let session_id = session::create(&purpose).map_err(|err| err.to_string())?;
+    let owner_home =
+        super::system_caps::verified_owner_home(owner_uid).map_err(BrokerError::execution)?;
+    let purpose = required_string(&params, "purpose").map_err(BrokerError::execution)?;
+    let session_id =
+        session::create(&purpose).map_err(|error| BrokerError::execution(error.to_string()))?;
     if let Err(error) = session::update_meta(&session_id, |meta| {
         meta.creator_runtime = Some("clawd-transaction-pending".to_string());
         meta.role = Some(Role::Observer);
@@ -31,29 +34,29 @@ pub fn begin(
         );
         meta.status = SessionStatus::Running;
     }) {
-        return Err(fail_new_session(
+        return Err(BrokerError::execution(fail_new_session(
             &session_id,
             "initialize transaction metadata",
             error.to_string(),
-        ));
+        )));
     }
     let caps = super::system_caps::system_agent_caps(owner_uid, &owner_home);
     if let Err(error) = session::set_caps(&session_id, &caps) {
-        return Err(fail_new_session(
+        return Err(BrokerError::execution(fail_new_session(
             &session_id,
             "set transaction capabilities",
             error.to_string(),
-        ));
+        )));
     }
 
     let lease = match session::try_acquire(&session_id) {
         Ok(lease) => lease,
         Err(error) => {
-            return Err(fail_new_session(
+            return Err(BrokerError::execution(fail_new_session(
                 &session_id,
                 "acquire transaction lease",
                 error.to_string(),
-            ));
+            )));
         }
     };
     if let Err(error) = session::update_meta(&session_id, |meta| {
@@ -62,12 +65,12 @@ pub fn begin(
     }) {
         drop(lease);
         let cleanup = session::end(&session_id, SessionStatus::Failed);
-        return Err(match cleanup {
+        return Err(BrokerError::execution(match cleanup {
             Ok(()) => format!("activate transaction metadata: {error}"),
-            Err(cleanup) => format!(
-                "activate transaction metadata: {error}; marking session failed: {cleanup}"
-            ),
-        });
+            Err(cleanup) => {
+                format!("activate transaction metadata: {error}; marking session failed: {cleanup}")
+            }
+        }));
     }
     let handle = TransactionHandle {
         session_id: session_id.clone(),
@@ -78,12 +81,14 @@ pub fn begin(
     };
     if let Err(error) = state.insert_transaction(handle) {
         let cleanup = session::end(&session_id, SessionStatus::Failed);
-        return Err(match cleanup {
-            Ok(()) => error,
-            Err(cleanup) => format!(
-                "{error}; marking orphaned transaction session failed: {cleanup}"
-            ),
-        });
+        let mut broker = BrokerError::from(error);
+        if let Err(cleanup) = cleanup {
+            broker.message = format!(
+                "{}; marking orphaned transaction session failed: {cleanup}",
+                broker.message
+            );
+        }
+        return Err(broker);
     }
 
     Ok(json!({
@@ -94,9 +99,9 @@ pub fn begin(
     }))
 }
 
-pub fn list(state: &DaemonState, client: &ClientIdentity) -> Result<Value, String> {
+pub fn list(state: &DaemonState, client: &ClientIdentity) -> Result<Value, BrokerError> {
     let transactions = state
-        .list_transactions_for_owner(owner_filter(client)?)
+        .list_transactions_for_owner(owner_filter(client)?)?
         .into_iter()
         .map(|tx| {
             json!({
@@ -116,12 +121,17 @@ pub fn commit(
     state: &DaemonState,
     params: Value,
     client: &ClientIdentity,
-) -> Result<Value, String> {
-    let id = required_string(&params, "id")?;
-    let session_id = parse_session_id(&id)?;
+) -> Result<Value, BrokerError> {
+    let id = required_string(&params, "id").map_err(BrokerError::execution)?;
+    let session_id = parse_session_id(&id).map_err(BrokerError::execution)?;
     let handle = state
         .take_transaction_for_owner(session_id.as_str(), owner_filter(client)?)?
-        .ok_or_else(|| format!("transaction is not active: {}", session_id.as_str()))?;
+        .ok_or_else(|| {
+            BrokerError::execution(format!(
+                "transaction is not active: {}",
+                session_id.as_str()
+            ))
+        })?;
 
     if let Err(error) = session::end(&handle.session_id, SessionStatus::Done) {
         return Err(restore_handle_after_error(
@@ -143,18 +153,18 @@ pub async fn rollback(
     state: &DaemonState,
     params: Value,
     client: &ClientIdentity,
-) -> Result<Value, String> {
-    let id = required_string(&params, "id")?;
-    let session_id = parse_session_id(&id)?;
+) -> Result<Value, BrokerError> {
+    let id = required_string(&params, "id").map_err(BrokerError::execution)?;
+    let session_id = parse_session_id(&id).map_err(BrokerError::execution)?;
     let owner_uid = owner_filter(client)?;
     state.require_transaction_owner(session_id.as_str(), owner_uid)?;
-    let session_info =
-        super::session_scope::trusted_session_info(&session_id, "clawd-rollback")
-        .map_err(|err| format!("transaction rollback session scope: {err}"))?;
-    crate::proc::with_trusted_session_override(
-        session_info,
-        async { rollback_scoped(state, session_id, owner_uid) },
-    )
+    let session_info = super::session_scope::trusted_session_info(&session_id, "clawd-rollback")
+        .map_err(|error| {
+            BrokerError::execution(format!("transaction rollback session scope: {error}"))
+        })?;
+    crate::proc::with_trusted_session_override(session_info, async {
+        rollback_scoped(state, session_id, owner_uid)
+    })
     .await
 }
 
@@ -162,10 +172,15 @@ fn rollback_scoped(
     state: &DaemonState,
     session_id: SessionId,
     owner_uid: Option<u32>,
-) -> Result<Value, String> {
+) -> Result<Value, BrokerError> {
     let handle = state
         .take_transaction_for_owner(session_id.as_str(), owner_uid)?
-        .ok_or_else(|| format!("transaction is not active: {}", session_id.as_str()))?;
+        .ok_or_else(|| {
+            BrokerError::execution(format!(
+                "transaction is not active: {}",
+                session_id.as_str()
+            ))
+        })?;
     let rolled_back = match session::rollback(&session_id) {
         Ok(rolled_back) => rolled_back,
         Err(error) => {
@@ -182,8 +197,7 @@ fn rollback_scoped(
         .filter(|entry| {
             matches!(
                 entry.status,
-                crate::session::RollbackStatus::Failed
-                    | crate::session::RollbackStatus::Skipped
+                crate::session::RollbackStatus::Failed | crate::session::RollbackStatus::Skipped
             )
         })
         .map(|entry| format!("{}#{}: {}", entry.verb, entry.seq, entry.detail))
@@ -227,17 +241,22 @@ fn restore_handle_after_error(
     handle: TransactionHandle,
     operation: &str,
     error: String,
-) -> String {
+) -> BrokerError {
     match state.insert_transaction(handle) {
-        Ok(()) => format!("transaction {operation} failed: {error}"),
+        Ok(()) => BrokerError::execution(format!("transaction {operation} failed: {error}")),
         Err(restore) => {
-            format!("transaction {operation} failed: {error}; restoring handle failed: {restore}")
+            let mut broker = BrokerError::from(restore);
+            broker.message = format!(
+                "transaction {operation} failed: {error}; restoring handle failed: {}",
+                broker.message
+            );
+            broker
         }
     }
 }
 
-fn owner_filter(client: &ClientIdentity) -> Result<Option<u32>, String> {
-    let uid = client.require_uid()?;
+fn owner_filter(client: &ClientIdentity) -> Result<Option<u32>, BrokerError> {
+    let uid = client.require_uid().map_err(BrokerError::execution)?;
     Ok((uid != 0).then_some(uid))
 }
 

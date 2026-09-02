@@ -13,10 +13,13 @@ Pages root. It is based on
   panels and window manager.
 - Mirror the first-party native desktop app set with lightweight web demos for
   Agent, Files, Text Editor, App Store, Media Player, Screenshot, and Settings.
-- Enforce a click-by-click first-run spotlight from the Agent desktop icon
-  through plan review, scoped approval, visible tools, and audited result.
-- Keep all six Agent scenarios available after the guided path, together with
-  the freeform chat demo.
+- Mirror the shipped Agent app's Chat, Tasks, Approvals, Inbox, Settings,
+  session-sidebar, composer, and tool-card visual structure with local demo
+  data.
+- Provide optional first-run coachmarks from the Agent desktop icon through a
+  starter prompt, inline scoped approval, visible tools, and audited result.
+- Keep all six Agent scenarios as starter prompts inside the normal chat
+  surface, together with honest handling for unsupported freeform demo input.
 - Give Files a grounded AI conversation panel for natural-language search,
   summaries, storage analysis, duplicate detection, and safe organization
   previews.
@@ -41,7 +44,9 @@ Pages root. It is based on
 | `src/components/AppIcon.tsx` | Shared native-icon and Lucide icon renderer |
 | `src/components/GuideOverlay.tsx` | Blocking spotlight for the first-run Agent path |
 | `src/components/ScriptedAssistantPanel.tsx` | Shared chat UI for local scripted app assistants |
-| `src/apps/Agent/index.tsx` | Guided system Agent demo |
+| `src/apps/Agent/index.tsx` | Demo shell matching the shipped Agent chat UI |
+| `src/apps/Agent/demo.ts` | Recorded scenarios and demo timeline types |
+| `src/apps/Agent/DemoPages.tsx` | Hardcoded Tasks, Approvals, Inbox, and Settings views |
 | `src/apps/FileManager/FilesAiPanel.tsx` | Grounded Files AI chat and quick actions |
 | `src/apps/AppStore/StoreAiPanel.tsx` | Scripted app-need recommendations |
 | `src/apps/Settings/SettingsAiPanel.tsx` | Natural-language demo setting changes |

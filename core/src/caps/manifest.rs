@@ -262,6 +262,16 @@ pub enum Runtime {
 }
 
 impl Runtime {
+    /// Stable lowercase name, matching the manifest wire value.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Runtime::Python => "python",
+            Runtime::Node => "node",
+            Runtime::Shell => "shell",
+            Runtime::Binary => "binary",
+        }
+    }
+
     /// Default entry file for this runtime. Platform-aware: Windows
     /// gets `.bat` / `.exe` so packaged apps can ship a single
     /// manifest that works on every OS.

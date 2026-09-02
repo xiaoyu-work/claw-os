@@ -1,6 +1,4 @@
-/**
- * Inbox page. Tails clawd's context-events.jsonl via `/api/inbox`.
- */
+/** Raw context-event diagnostics, separate from the user notification Inbox. */
 
 import { useCallback, useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
@@ -9,7 +7,7 @@ import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 
-export function InboxPage() {
+export function EventsPage() {
   const [events, setEvents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -18,7 +16,7 @@ export function InboxPage() {
     setLoading(true);
     setErr(null);
     try {
-      const r = await api.get<any>("/api/inbox");
+      const r = await api.get<any>("/api/events");
       if (typeof r === "string") {
         const lines = r.split("\n").filter((l) => l.trim().length > 0);
         const parsed = lines.map((l) => {
@@ -49,9 +47,9 @@ export function InboxPage() {
     <div className="flex h-full flex-col gap-4 p-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold">Inbox</h1>
+          <h1 className="text-xl font-semibold">System Events</h1>
           <p className="text-xs text-muted-foreground">
-            Last 256 KB of clawd context-events.jsonl.
+            Raw context-event diagnostics from the last 256 KB of the journal.
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={load} disabled={loading}>

@@ -305,7 +305,8 @@ chroot "$ROOTFS" env \
     # ClawOS Agent UI + bridge — separate workspace (no justfile) under
     # desktop/agent/. com.clawos.Agent.desktop expects /usr/local/bin/cos-agent-ui
     # via `cos app agent open`; the cos-agent-bridge.service user unit
-    # invokes /usr/local/bin/cos-agent-bridge. Both binaries must be
+    # invokes /usr/local/bin/cos-agent-bridge. These binaries and the secure
+    # SDK launcher helper must be
     # produced here or the desktop agent app fails to launch with
     #   {"error":"cos-agent-ui is not installed"}.
     # ----------------------------------------------------------------------
@@ -313,14 +314,21 @@ chroot "$ROOTFS" env \
         echo "error: required desktop Agent workspace is missing" >&2
         exit 1
     fi
-    echo "  :: building cos-agent-ui + cos-agent-bridge"
+    if [ ! -f /build/cos-runtime/rust/Cargo.toml ]; then
+        echo "error: required cos-runtime helper source is missing" >&2
+        exit 1
+    fi
+    echo "  :: building cos-agent-ui + cos-agent-bridge + cos-ask-claw-launcher"
     cd /build/desktop-src/agent
     cargo build --release --workspace
+    cargo build --release --manifest-path /build/cos-runtime/rust/Cargo.toml \
+        --bin cos-ask-claw-launcher
     # Honour CARGO_TARGET_DIR (exported above) — cargo writes there, so
     # the binaries are not under ./target when it is set.
     agent_target="${CARGO_TARGET_DIR:-target}"
     install -Dm0755 "$agent_target/release/cos-agent-ui"     "$DESKTOP_PACKAGE_ROOT/usr/local/bin/cos-agent-ui"
     install -Dm0755 "$agent_target/release/cos-agent-bridge" "$DESKTOP_PACKAGE_ROOT/usr/local/bin/cos-agent-bridge"
+    install -Dm0755 "$agent_target/release/cos-ask-claw-launcher" "$DESKTOP_PACKAGE_ROOT/usr/local/bin/cos-ask-claw-launcher"
 '
 
 # ---------------------------------------------------------------------------
@@ -555,6 +563,7 @@ installed_required_files=(
     "$ROOTFS/usr/lib/systemd/user/cos-agent-bridge.service"
     "$ROOTFS/usr/local/bin/cos-agent-ui"
     "$ROOTFS/usr/local/bin/cos-agent-bridge"
+    "$ROOTFS/usr/local/bin/cos-ask-claw-launcher"
     "$ROOTFS/usr/share/icons/Tela-black-light/index.theme"
     "$ROOTFS/etc/greetd/cosmic-greeter.toml"
     "$ROOTFS/lib/systemd/system/cosmic-greeter.service"

@@ -1,4 +1,5 @@
 use super::*;
+use crate::agent::llm::{ContentBlock, Message, Role};
 
 fn db() -> MemoryDb {
     MemoryDb::open_in_memory().unwrap()
@@ -11,27 +12,52 @@ fn open_in_memory_is_clean() {
 }
 
 #[test]
-fn open_migrates_pre_compaction_database_additively() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("memory.db");
-    let connection = Connection::open(&path).unwrap();
-    connection.execute_batch(CONNECTION_PRAGMAS).unwrap();
-    connection.execute_batch(BASE_SCHEMA).unwrap();
-    connection.execute_batch(FTS_SCHEMA).unwrap();
-    drop(connection);
-
-    let db = MemoryDb::open(&path).unwrap();
-    let conn = db.lock_conn().unwrap();
-    let tables: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM sqlite_schema
-             WHERE type = 'table'
-               AND name IN ('session_compactions', 'compaction_summaries')",
-            [],
-            |row| row.get(0),
-        )
+fn tool_invocations_are_separate_from_messages_and_clear_with_session() {
+    let db = db();
+    db.record_tool_start("s", "call-1", "cos_sysinfo", r#"{"command":"info"}"#)
         .unwrap();
-    assert_eq!(tables, 2);
+    assert_eq!(db.count_total().unwrap(), 0);
+    assert_eq!(db.recent_tool_invocations("s", 10).unwrap().len(), 1);
+
+    assert_eq!(db.clear_session("s").unwrap(), 0);
+    assert!(db.recent_tool_invocations("s", 10).unwrap().is_empty());
+}
+
+#[test]
+fn render_message_content_uses_underlying_bridged_tool_identity() {
+    let message = Message {
+        role: Role::Assistant,
+        content: vec![ContentBlock::ToolUse {
+            id: "call-1".into(),
+            name: crate::agent::tools::progressive::TOOL_CALL.into(),
+            input: serde_json::json!({
+                "name": "cos_app_mail",
+                "arguments": {"command": "list"},
+            }),
+        }],
+    };
+    let rendered = render_message_content(&message);
+    assert!(rendered.contains("[tool_use:cos_app_mail]"));
+    assert!(rendered.contains("\"command\":\"list\""));
+    assert!(!rendered.contains("cos_tool_call"));
+}
+
+#[test]
+fn read_only_open_never_mutates_an_existing_database() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("memory.db");
+    {
+        let writable = MemoryDb::open(&path).unwrap();
+        writable
+            .record_message("session-a", "user", "hello")
+            .unwrap();
+    }
+
+    let readonly = MemoryDb::open_read_only(&path).unwrap();
+    assert_eq!(readonly.recent("session-a", 10).unwrap().len(), 1);
+    assert!(readonly
+        .record_message("session-a", "assistant", "no")
+        .is_err());
 }
 
 #[test]
@@ -144,38 +170,6 @@ fn system_prompt_freeze_is_content_addressed_and_first_writer_wins() {
     assert_eq!(stale_writer.prompt, "upgraded prompt");
     assert_eq!(stale_writer.version, 2);
     assert!(db.system_prompt_for("s1", 3).unwrap().is_none());
-}
-
-#[test]
-fn system_prompt_lookup_rejects_wrong_content_hash() {
-    let db = db();
-    db.freeze_system_prompt("s1", "trusted prompt", 1).unwrap();
-    {
-        let conn = db.lock_conn().unwrap();
-        conn.execute("UPDATE system_prompts SET prompt = 'tampered prompt'", [])
-            .unwrap();
-    }
-    let error = db.system_prompt_for("s1", 1).unwrap_err();
-    assert!(error.is_integrity_failure());
-}
-
-#[test]
-fn system_prompt_lookup_rejects_dangling_reference() {
-    let db = db();
-    db.freeze_system_prompt("s1", "trusted prompt", 1).unwrap();
-    {
-        let conn = db.lock_conn().unwrap();
-        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
-        conn.execute(
-            "UPDATE session_system_prompts
-             SET prompt_hash = 'missing'
-             WHERE session_id = 's1'",
-            [],
-        )
-        .unwrap();
-    }
-    let error = db.system_prompt_for("s1", 1).unwrap_err();
-    assert!(error.is_integrity_failure());
 }
 
 #[test]

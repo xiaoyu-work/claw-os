@@ -66,7 +66,22 @@ impl NudgeStore {
         // Replaces a previous `fs::write(tmp) + fs::rename` which skipped
         // both fsyncs and could surface a torn/empty nudges file on
         // recovery, dropping every queued reminder.
-        crate::agent::util::atomic_write_with_fsync(&self.path, &json)
+        #[cfg(unix)]
+        let owner = {
+            use std::os::unix::fs::MetadataExt;
+            fs::symlink_metadata(&self.path)
+                .ok()
+                .map(|metadata| (metadata.uid(), metadata.gid()))
+        };
+        crate::agent::util::atomic_write_with_fsync_and_prepare(&self.path, &json, |tmp| {
+            #[cfg(unix)]
+            if unsafe { libc::geteuid() } == 0 {
+                if let Some((uid, gid)) = owner {
+                    set_owner(tmp, uid, gid)?;
+                }
+            }
+            Ok(())
+        })
     }
 
     /// Acquire an exclusive advisory lock for the duration of a
@@ -164,6 +179,20 @@ impl NudgeStore {
         }
         self.save(&file)?;
         Ok(true)
+    }
+}
+
+#[cfg(unix)]
+fn set_owner(path: &Path, uid: u32, gid: u32) -> io::Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let path = std::ffi::CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains NUL"))?;
+    let result = unsafe { libc::chown(path.as_ptr(), uid as libc::uid_t, gid as libc::gid_t) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
     }
 }
 

@@ -188,3 +188,34 @@ fn home_override_scopes_to_task_only() {
         }
     }
 }
+
+#[tokio::test]
+async fn routed_path_context_nests_and_restores_outer_scope() {
+    let root = tempfile::tempdir().unwrap();
+    let outer_home = root.path().join("outer");
+    let inner_home = root.path().join("inner");
+
+    with_routed_job(with_user_override(1001, outer_home.clone(), async {
+        let outer = RoutedPathContext::capture();
+        let inner = with_user_override(2002, inner_home.clone(), async {
+            RoutedPathContext::capture()
+        })
+        .await;
+
+        let restored = inner
+            .clone()
+            .scope(async { RoutedPathContext::capture() })
+            .await;
+        assert_eq!(restored, inner);
+        assert_eq!(RoutedPathContext::capture(), outer);
+        assert_eq!(current_owner_uid_override(), Some(1001));
+        assert_eq!(
+            current_home_override().as_deref(),
+            Some(outer_home.as_path())
+        );
+        assert!(is_routed_job());
+    }))
+    .await;
+
+    assert_eq!(RoutedPathContext::capture(), RoutedPathContext::default());
+}

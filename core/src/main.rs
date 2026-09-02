@@ -19,7 +19,15 @@ const DEFAULT_APP_STDIN_MAX_BYTES: usize = 16 * 1024 * 1024;
 /// resolved format. When neither flag is present we auto-pretty on a
 /// TTY and stay compact for pipes / redirects, matching what most
 /// modern CLIs do.
+///
+/// Hidden internal bridges (`__memory`, `__policy`, …) are exempt:
+/// their argv is a private wire format between the SDK and the kernel,
+/// and `cos __memory remember --json <payload>` must reach the bridge
+/// with its flag intact. They always answer in compact JSON anyway.
 fn extract_format(argv: Vec<String>) -> (Vec<String>, OutputFormat) {
+    if argv.first().is_some_and(|first| first.starts_with("__")) {
+        return (argv, OutputFormat::Compact);
+    }
     let mut kept = Vec::with_capacity(argv.len());
     let mut explicit: Option<OutputFormat> = None;
     let mut options = true;
@@ -110,6 +118,16 @@ fn render(payload: &str, fmt: OutputFormat) -> String {
 }
 
 fn main() {
+    // Freshness gate, before argv is interpreted or a session is
+    // bootstrapped: a `cos` binary older than the release this system
+    // has already accepted refuses to act rather than reintroducing a
+    // fixed client-side flaw. Cheap — one small root-owned file.
+    if let Err(refusal) =
+        cos::update::runtime::enforce_startup(cos::update::runtime::Scope::CompiledEpoch)
+    {
+        eprintln!("cos: {refusal}");
+        process::exit(1);
+    }
     let raw_args: Vec<String> = env::args().skip(1).collect();
     let (raw_args, fmt) = extract_format(raw_args);
     let operation_accepts_stdin = router::app_operation_accepts_stdin(&raw_args);

@@ -16,9 +16,11 @@ use bytes::Bytes;
 use futures::Stream;
 use futures_util::StreamExt;
 use reqwest::Client;
-use serde_json::Value;
 
-use crate::bridge::{BridgeEndpoint, ChatRequest, DeltaPayload, StreamEvent, bridge_url};
+use crate::bridge::{
+    BridgeEndpoint, ChatRequest, StreamEvent, bridge_url, response_error,
+    validate_response_protocol, versioned_request,
+};
 
 const MAX_SSE_BUFFER: usize = 1024 * 1024;
 
@@ -33,8 +35,8 @@ pub async fn open_chat_stream(
         .connect_timeout(std::time::Duration::from_secs(5))
         .build()
         .context("building reqwest client")?;
-    let response = client
-        .post(&url)
+    let (request_builder, selected) = versioned_request(client.post(&url), &endpoint)?;
+    let response = request_builder
         .bearer_auth(&endpoint.token)
         .header("Accept", "text/event-stream")
         .header("Content-Type", "application/json")
@@ -43,10 +45,9 @@ pub async fn open_chat_stream(
         .await
         .with_context(|| format!("POST {url}"))?;
 
+    validate_response_protocol(&response, selected)?;
     if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        anyhow::bail!("bridge {url} responded {status}: {body}");
+        return Err(response_error(response, &url).await);
     }
 
     let byte_stream = response.bytes_stream();
@@ -79,8 +80,7 @@ where
                 return;
             }
 
-            loop {
-                let Some((sep, separator_len)) = find_event_separator(&buffer) else { break };
+            while let Some((sep, separator_len)) = find_event_separator(&buffer) {
                 let block: Vec<u8> = buffer.drain(..sep + separator_len).collect();
                 // `block` is one complete event (lines + trailing `\n\n`);
                 // lossily decode so genuinely corrupt bytes become U+FFFD
@@ -140,137 +140,17 @@ fn parse_block(block: &str) -> Result<Option<StreamEvent>> {
         return Ok(None);
     }
     let data = data_lines.join("\n");
-    let value = || {
-        serde_json::from_str::<Value>(&data)
-            .with_context(|| format!("decoding SSE `{event_name}` payload"))
-    };
-    let event = match event_name.as_str() {
-        "task" => {
-            let payload = value()?;
-            let task_id = payload
-                .get("task_id")
-                .and_then(Value::as_str)
-                .filter(|task_id| !task_id.is_empty())
-                .context("SSE task event omitted task_id")?
-                .to_string();
-            StreamEvent::TaskStarted {
-                task_id,
-                session_id: payload
-                    .get("session_id")
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned),
-            }
-        }
-        "delta" => StreamEvent::Delta(
-            serde_json::from_str::<DeltaPayload>(&data)
-                .with_context(|| "decoding SSE `delta` payload")?
-                .text,
-        ),
-        "text" => {
-            let payload = value()?;
-            StreamEvent::Delta(
-                payload
-                    .get("delta")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-            )
-        }
-        "tool_use_start" => {
-            let payload = value()?;
-            StreamEvent::ToolUseStart {
-                id: string_field(&payload, "id"),
-                name: string_field(&payload, "name"),
-            }
-        }
-        "tool_input_delta" => {
-            let payload = value()?;
-            StreamEvent::ToolInputDelta {
-                id: string_field(&payload, "id"),
-                delta: payload
-                    .get("delta")
-                    .or_else(|| payload.get("partial"))
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-            }
-        }
-        "tool_use" => {
-            let payload = value()?;
-            StreamEvent::ToolUse(crate::bridge::ToolCallView {
-                id: string_field(&payload, "id"),
-                name: string_field(&payload, "name"),
-                input: payload.get("input").cloned().unwrap_or(Value::Null),
-                partial_json: String::new(),
-                in_progress: false,
-            })
-        }
-        "tool_start" => {
-            let payload = value()?;
-            StreamEvent::ToolStart {
-                id: string_field(&payload, "id"),
-                name: string_field(&payload, "name"),
-                input: payload.get("input").cloned().unwrap_or(Value::Null),
-            }
-        }
-        "tool_result" => {
-            let payload = value()?;
-            let text = ["preview", "output", "content", "text"]
-                .into_iter()
-                .find_map(|field| payload.get(field).and_then(Value::as_str))
-                .unwrap_or_default()
-                .to_string();
-            let is_error = payload
-                .get("is_error")
-                .and_then(Value::as_bool)
-                .unwrap_or_else(|| !payload.get("ok").and_then(Value::as_bool).unwrap_or(true));
-            StreamEvent::ToolResult(crate::bridge::ToolResultView {
-                id: string_field(&payload, "id"),
-                name: string_field(&payload, "name"),
-                text,
-                is_error,
-            })
-        }
-        "warning" => {
-            let payload = value()?;
-            StreamEvent::Warning(
-                payload
-                    .get("message")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-            )
-        }
-        "turn_done" => StreamEvent::TurnDone(value()?),
-        "error" => {
-            let payload = value()?;
-            StreamEvent::Error(
-                payload
-                    .get("message")
-                    .or_else(|| payload.get("error"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("stream error")
-                    .to_string(),
-            )
-        }
-        "done" => StreamEvent::Done(value()?),
-        _ => return Ok(None),
-    };
-    Ok(Some(event))
-}
-
-fn string_field(value: &Value, field: &str) -> String {
-    value
-        .get(field)
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string()
+    let event = StreamEvent::from_json(&event_name, &data)
+        .map_err(|error| anyhow::anyhow!("decoding SSE `{event_name}` payload: {error}"))?;
+    if let Some(StreamEvent::TaskStarted(payload)) = &event
+        && payload.task_id.is_empty()
+    {
+        anyhow::bail!("SSE task event omitted task_id");
+    }
+    Ok(event)
 }
 
 #[cfg(test)]
 mod tests {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/test/unit/sse.rs"
-    ));
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/sse.rs"));
 }

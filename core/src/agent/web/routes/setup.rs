@@ -36,8 +36,8 @@ async fn run_args(args: Vec<String>) -> Response {
     // just performed via `setup::run`) returns the stale pre-apply
     // state and the UI shows "not configured" right after the user has
     // just configured the provider.
-    let cfg = crate::config::intern_user_config();
-    crate::config::with_override(cfg, async move {
+    let cfg = crate::config::load_user_config();
+    crate::config::with_snapshot(cfg, async move {
         let outcome = tokio::task::block_in_place(|| setup::run(&args));
         match outcome {
             Ok(v) => Json(v).into_response(),

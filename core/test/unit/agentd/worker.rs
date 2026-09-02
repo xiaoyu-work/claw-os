@@ -90,6 +90,77 @@ fn adopted_channel_is_cloexec_and_bootstrap_hints_are_removed() {
     assert!(std::env::var_os(protocol::TASK_HINT_ENV).is_none());
 }
 
+#[tokio::test]
+async fn routed_curator_context_survives_detached_spawn() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("owner-home");
+    std::fs::create_dir_all(&home).unwrap();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", root.path());
+    let owner_uid = 4242;
+    let context = crate::paths::with_routed_job(crate::paths::with_user_override(
+        owner_uid,
+        home.clone(),
+        async { crate::paths::RoutedPathContext::capture() },
+    ))
+    .await;
+    let owner_root = root.path().join("users").join(owner_uid.to_string());
+    let curation_log = owner_root
+        .join("agent")
+        .join("memory")
+        .join("curation_log.json");
+    let notes = crate::agent::memory::notes::NotesStore::at(owner_root.join("agent").join("notes"));
+    let mut config = crate::config::CosConfig::default();
+    config.agent.provider = "openai".into();
+    config.agent.model = "gpt-4o-mini".into();
+    config.agent.api_key_env = Some("OPENAI_API_KEY".into());
+    let config = Arc::new(config);
+    let db = crate::agent::memory::sqlite_fts::MemoryDb::open_in_memory().unwrap();
+    let curator =
+        crate::agent::runtime::auto_curator::AutoCurator::from_snapshot_with_runtime_paths(
+            Arc::clone(&config),
+            &db,
+            notes,
+            context.clone(),
+            curation_log.clone(),
+        )
+        .expect("routed curator");
+    assert_eq!(curator.log_path(), curation_log);
+
+    let observed = tokio::spawn(crate::agent::runtime::auto_curator::with_detached_context(
+        config,
+        context,
+        None,
+        async move {
+            curator.save_empty_log().expect("save routed curation log");
+            (
+                crate::paths::ai_budget_db_path(),
+                crate::paths::ai_run_log_path(),
+                crate::paths::agent_notes_dir(),
+                crate::paths::user_config_path(),
+                crate::paths::current_owner_uid_override(),
+                crate::paths::is_routed_job(),
+                curator.log_path().to_path_buf(),
+            )
+        },
+    ))
+    .await
+    .unwrap();
+
+    assert_eq!(observed.0, owner_root.join("ai_budget.db"));
+    assert_eq!(observed.1, owner_root.join("logs").join("ai.jsonl"));
+    assert_eq!(observed.2, owner_root.join("agent").join("notes"));
+    assert_eq!(
+        observed.3,
+        home.join(".config").join("cos").join("config.json")
+    );
+    assert_eq!(observed.4, Some(owner_uid));
+    assert!(observed.5);
+    assert_eq!(observed.6, curation_log);
+    assert!(curation_log.is_file());
+    assert!(crate::paths::current_owner_uid_override().is_none());
+    assert!(!crate::paths::is_routed_job());
+}
+
 // ---------------------------------------------------------------------------
 // Permission mediation
 // ---------------------------------------------------------------------------
@@ -100,6 +171,7 @@ fn gateway() -> (ChannelApprovalGateway, mpsc::UnboundedReceiver<WorkerFrame>) {
         tx,
         cancelled: Arc::new(AtomicBool::new(false)),
         waiters: Mutex::new(HashMap::new()),
+        pending_approvals: Mutex::new(Vec::new()),
         next_correlation: AtomicU64::new(1),
         asks_used: AtomicU32::new(0),
     });
@@ -210,6 +282,40 @@ fn a_pending_request_does_not_grant_anything() {
         ApprovalReply::Pending { request_id: None },
     );
     assert_eq!(handle.join().expect("join"), Ok(false));
+}
+
+#[test]
+fn a_filed_request_marks_the_worker_for_durable_suspension() {
+    let (gateway, mut rx) = gateway();
+    let state = gateway.state.clone();
+    let interrupt = crate::agent::runtime::interrupt::register("task-a");
+    let handle = std::thread::spawn(move || gateway.request(Verb::FS_READ, &scope(), None));
+    let (correlation_id, exchange) = loop {
+        if let Ok(WorkerFrame::Approval {
+            correlation_id,
+            exchange,
+            ..
+        }) = rx.try_recv()
+        {
+            break (correlation_id, exchange);
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    state.deliver(
+        correlation_id,
+        &exchange,
+        ApprovalReply::Pending {
+            request_id: Some("approval-a".to_string()),
+        },
+    );
+
+    let pending = handle.join().expect("join").expect("request");
+    assert_eq!(pending.request_id.as_deref(), Some("approval-a"));
+    assert_eq!(state.pending_approvals(), vec!["approval-a"]);
+    assert!(
+        interrupt.check(),
+        "filing an approval must interrupt the active runtime turn"
+    );
 }
 
 #[test]

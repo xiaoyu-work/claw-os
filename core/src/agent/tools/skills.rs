@@ -12,10 +12,20 @@ use crate::agent::skills::disclosure;
 use crate::agent::skills::loader::{self, LoadOptions, LoadResult, SkillOrigin};
 use crate::agent::skills::provenance::{UsageRecord, UsageStore};
 
-#[derive(Default)]
 pub struct SkillDisclosure {
     roots: Option<(PathBuf, PathBuf)>,
     usage_path: Option<PathBuf>,
+    system_origin: SkillOrigin,
+}
+
+impl Default for SkillDisclosure {
+    fn default() -> Self {
+        Self {
+            roots: None,
+            usage_path: None,
+            system_origin: SkillOrigin::BuiltIn,
+        }
+    }
 }
 
 impl SkillDisclosure {
@@ -23,12 +33,27 @@ impl SkillDisclosure {
         Self::default()
     }
 
+    pub fn with_paths(
+        system_root: PathBuf,
+        user_root: PathBuf,
+        usage_path: PathBuf,
+        system_origin: SkillOrigin,
+    ) -> Self {
+        Self {
+            roots: Some((system_root, user_root)),
+            usage_path: Some(usage_path),
+            system_origin,
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn with_roots(system_root: &std::path::Path, user_root: &std::path::Path) -> Self {
-        Self {
-            roots: Some((system_root.to_path_buf(), user_root.to_path_buf())),
-            usage_path: Some(user_root.join(".skills-usage.jsonl")),
-        }
+        Self::with_paths(
+            system_root.to_path_buf(),
+            user_root.to_path_buf(),
+            user_root.join(".skills-usage.jsonl"),
+            SkillOrigin::BuiltIn,
+        )
     }
 
     fn load_catalog(&self) -> LoadResult {
@@ -37,7 +62,12 @@ impl SkillDisclosure {
             ..LoadOptions::default()
         };
         match &self.roots {
-            Some((system, user)) => loader::load_layered(system, user, &options),
+            Some((system, user)) => loader::load_layered_with_origin(
+                system,
+                user,
+                &options,
+                self.system_origin,
+            ),
             None => loader::load_catalog_default(),
         }
     }
@@ -72,7 +102,8 @@ impl SkillDisclosure {
                         "disabled": load.disabled.len(),
                         "errors": load.errors.len(),
                     }),
-                    untrusted_tag: Some(disclosure::SKILL_CATALOG_TAG),
+                    source: crate::agent::trust::SourceKind::SkillCatalogMetadata,
+                    locator: None,
                 })
             }
             "read" => {
@@ -84,8 +115,8 @@ impl SkillDisclosure {
                 let hydrated = loader::hydrate(skill, &LoadOptions::default())?;
                 Ok(DisclosureOutput {
                     value: disclosure::disclose_instructions(&hydrated)?,
-                    untrusted_tag: (hydrated.origin != SkillOrigin::BuiltIn)
-                        .then_some(disclosure::SKILL_CONTENT_TAG),
+                    source: crate::agent::trust::SourceKind::SkillInstructions,
+                    locator: Some(id.to_string()),
                 })
             }
             "resource" => {
@@ -97,8 +128,8 @@ impl SkillDisclosure {
                     .ok_or_else(|| format!("unknown or unavailable skill: {id}"))?;
                 Ok(DisclosureOutput {
                     value: disclosure::disclose_resource(skill, path)?,
-                    untrusted_tag: (skill.origin != SkillOrigin::BuiltIn)
-                        .then_some(disclosure::SKILL_CONTENT_TAG),
+                    source: crate::agent::trust::SourceKind::SkillResource,
+                    locator: Some(id.to_string()),
                 })
             }
             other => Err(format!(
@@ -195,10 +226,15 @@ impl Tool for SkillDisclosure {
             Ok(output) => {
                 let serialized = serde_json::to_string_pretty(&output.value)
                     .unwrap_or_else(|error| format!(r#"{{"error":"{error}"}}"#));
-                let content = output
-                    .untrusted_tag
-                    .map(|tag| crate::agent::safety::untrusted::wrap_untrusted(tag, &serialized))
-                    .unwrap_or(serialized);
+                // Every disclosure level is extension metadata, vendor
+                // Skills included: package verification proves who
+                // published the bytes, not that their text is safe to
+                // obey. Fencing is therefore unconditional.
+                let content = crate::agent::safety::untrusted::wrap_labeled(
+                    output.source,
+                    output.locator.as_deref(),
+                    &serialized,
+                );
                 ToolResult::ok(content)
             }
             Err(error) => ToolResult::err(error),
@@ -212,7 +248,8 @@ impl Tool for SkillDisclosure {
 
 struct DisclosureOutput {
     value: Value,
-    untrusted_tag: Option<&'static str>,
+    source: crate::agent::trust::SourceKind,
+    locator: Option<String>,
 }
 
 fn required_string<'a>(input: &'a Value, field: &str) -> Result<&'a str, String> {

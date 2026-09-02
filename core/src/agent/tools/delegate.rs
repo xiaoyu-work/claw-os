@@ -10,7 +10,8 @@
 //!   * **Blast radius**: parent picks the subset of action tools the child can
 //!     use (e.g. only `echo` + `cos_sysinfo`), so an over-eager child can't
 //!     touch credentials or the sandbox unless explicitly allowed. Read-only
-//!     `cos_skill` remains available unless parent guardrails deny it.
+//!     `cos_skill` and read-only `cos_help` remain available unless parent
+//!     guardrails deny them.
 //!   * **Context isolation**: the child has a fresh trajectory, so its
 //!     turns don't pollute the parent's prompt window. Useful for
 //!     long-running research / extraction tasks the parent only needs the
@@ -39,9 +40,9 @@ use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::exposure::{ToolExposure, ToolExposureContext};
+use super::exposure::ToolExposureContext;
 use super::guardrails::Guardrails;
-use super::registry::{default_registry, ToolRegistry};
+use super::registry::{default_registry_with_deps, RegistryDeps, ToolRegistry};
 use super::{Tool, ToolResult};
 use crate::agent::llm::{self, Provider};
 use crate::agent::runtime::approval::ApprovalGate;
@@ -84,9 +85,7 @@ tokio::task_local! {
     /// [`PARENT_GUARDRAILS`] for scope semantics.
     pub static PARENT_APPROVAL: ApprovalGate;
 
-    /// Trusted exposure context of the parent call. Delegated children inherit
-    /// the same owner/capabilities/transports, but are explicitly marked as an
-    /// unattended delegated source.
+    /// Trusted parent request identity and capability projection.
     pub static PARENT_EXPOSURE: ToolExposureContext;
 }
 
@@ -109,7 +108,15 @@ pub fn current_depth() -> u32 {
 }
 
 /// `cos_delegate` tool — spawn a child agent with a scoped tool subset.
-pub struct Delegate;
+pub struct Delegate {
+    deps: RegistryDeps,
+}
+
+impl Delegate {
+    pub fn new(deps: RegistryDeps) -> Self {
+        Self { deps }
+    }
+}
 
 #[derive(Debug, Deserialize)]
 struct DelegateInput {
@@ -171,7 +178,7 @@ impl Tool for Delegate {
                 "allowed_tools": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "Action-tool names the child may call. Empty leaves only read-only cos_skill when parent guardrails permit it. cos_delegate is always filtered out to prevent recursion."
+                    "description": "Action-tool names the child may call. Empty leaves only read-only cos_skill and cos_help when parent guardrails permit them. cos_delegate is always filtered out to prevent recursion."
                 },
                 "provider": {
                     "type": "string",
@@ -203,41 +210,49 @@ impl Tool for Delegate {
         })
     }
 
-    fn exposure(&self) -> ToolExposure {
-        ToolExposure::always().requiring_all_verbs([crate::caps::Verb::AGENT_DELEGATE])
-    }
-
     async fn exec(&self, input: serde_json::Value) -> ToolResult {
         let parsed: DelegateInput = match serde_json::from_value(input) {
             Ok(p) => p,
             Err(e) => return ToolResult::err(format!("invalid delegate input: {e}")),
         };
-        if let Err(denial) =
-            crate::caps::require(crate::caps::Verb::AGENT_DELEGATE, crate::caps::Scope::Wild)
-        {
-            return ToolResult::err(denial.to_string());
-        }
 
-        let parent_cfg = crate::config::get().agent.clone();
-        run_delegate(parsed, &parent_cfg, registry_factory).await
+        let parent_cfg = self.deps.config.agent.clone();
+        let deps = self.deps.clone();
+        let runtime = self.deps.runtime.clone();
+        run_delegate_with_deps(
+            parsed,
+            &parent_cfg,
+            move || default_registry_with_deps(&deps),
+            runtime,
+        )
+        .await
     }
-}
-
-/// Allow tests to inject a custom registry instead of opening the real
-/// default_registry (which does Disk I/O for the FTS5 DB).
-type RegistryFactory = fn() -> ToolRegistry;
-
-fn registry_factory() -> ToolRegistry {
-    default_registry()
 }
 
 /// Core delegate logic. Split out from `Tool::exec` so tests can drive it
 /// without going through `serde_json::Value`.
-async fn run_delegate(
+async fn run_delegate<F>(input: DelegateInput, parent_cfg: &AgentConfig, factory: F) -> ToolResult
+where
+    F: Fn() -> ToolRegistry,
+{
+    run_delegate_with_deps(
+        input,
+        parent_cfg,
+        factory,
+        crate::agent::runtime::deps::RuntimeDeps::isolated(),
+    )
+    .await
+}
+
+async fn run_delegate_with_deps<F>(
     input: DelegateInput,
     parent_cfg: &AgentConfig,
-    factory: RegistryFactory,
-) -> ToolResult {
+    factory: F,
+    runtime: crate::agent::runtime::deps::RuntimeDeps,
+) -> ToolResult
+where
+    F: Fn() -> ToolRegistry,
+{
     let cur = current_depth();
     let requested_max_depth = input
         .max_depth
@@ -270,6 +285,10 @@ async fn run_delegate(
             .clamp(1, HARD_MAX_TURNS),
         max_tokens: parent_cfg.max_tokens,
         temperature: parent_cfg.temperature,
+        // Delegates already receive an explicit, narrow tool allowlist.
+        // A search bridge over that tiny surface adds round trips without
+        // reducing schema cost and complicates parent/child policy scoping.
+        progressive_tools_enabled: false,
         // Child uses a clean system prompt — no MEMORY.md / USER.md
         // injection, since the child has a fresh, isolated trajectory and
         // those are properties of the parent's session.
@@ -298,9 +317,7 @@ async fn run_delegate(
     };
 
     let (parent_guardrails, parent_approval) = current_parent_policy();
-    let parent_exposure = current_parent_exposure().unwrap_or_else(|| {
-        ToolExposureContext::isolated(parent_guardrails.clone().unwrap_or_default())
-    });
+    let parent_exposure = current_parent_exposure();
     let tools = build_child_registry(
         parent_guardrails.as_ref(),
         parent_approval.as_ref(),
@@ -310,11 +327,17 @@ async fn run_delegate(
 
     let timeout = Duration::from_secs(input.timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS));
     let task = input.task.clone();
-    let child_guardrails = child_guardrails(parent_guardrails.as_ref(), &input.allowed_tools);
-    let child_exposure = parent_exposure.delegated(child_guardrails);
 
     let child_future = DELEGATE_DEPTH.scope(cur + 1, async move {
-        loop_::ask_with_exposure(provider, &child_cfg, &task, &tools, &child_exposure).await
+        let request = loop_::RuntimeRequest::buffered(provider, &child_cfg, &task, &tools)
+            .with_delegated(true);
+        let child_exposure =
+            parent_exposure.map(|exposure| exposure.delegated(tools.guardrails().clone()));
+        let request = match child_exposure.as_ref() {
+            Some(exposure) => request.with_exposure(exposure),
+            None => request,
+        };
+        loop_::run_with_deps(&runtime, request).await
     });
 
     let outcome = tokio::time::timeout(timeout, child_future).await;
@@ -326,12 +349,12 @@ async fn run_delegate(
 }
 
 fn child_guardrails(parent: Option<&Guardrails>, allowed: &[String]) -> Guardrails {
-    let allowed: std::collections::HashSet<String> = allowed
+    let allowed = allowed
         .iter()
         .filter(|name| !matches!(name.as_str(), "cos_delegate" | "cos_oauth_login"))
         .cloned()
-        .chain(std::iter::once("cos_skill".to_string()))
-        .collect();
+        .chain(["cos_skill".to_string(), "cos_help".to_string()])
+        .collect::<std::collections::HashSet<_>>();
     let mut guardrails = parent.cloned().unwrap_or_default();
     guardrails.allow = Some(match guardrails.allow.take() {
         Some(parent_allow) => parent_allow.intersection(&allowed).cloned().collect(),
@@ -349,11 +372,11 @@ fn child_guardrails(parent: Option<&Guardrails>, allowed: &[String]) -> Guardrai
 ///
 /// The child registry **inherits the parent's `Guardrails` and
 /// `ApprovalGate`**. Without this, every delegate ran with the
-/// default permissive guardrails + a default no-op legacy approver —
-/// meaning any tool the parent had a deny rule for, or any non-capability
-/// tool that required a name-level prompt, became unguarded as soon as it
-/// crossed the delegate boundary. The agent's blast-radius advertised
-/// model (parent picks tools, parent's deny/approval policy follows them)
+/// default permissive guardrails + a default no-op approver — meaning
+/// any tool the parent had a deny rule for, or any tool that required
+/// human approval, became unguarded as soon as it crossed the
+/// delegate boundary. The agent's blast-radius advertised model
+/// (parent picks tools, parent's deny/approval policy follows them)
 /// only works if the child's registry inherits these.
 ///
 /// We also re-apply the `allowed_tools` filter on top of the parent's
@@ -367,23 +390,26 @@ fn build_child_registry(
     allowed: &[String],
 ) -> ToolRegistry {
     let mut child = ToolRegistry::new();
+    child.set_guardrails(child_guardrails(parent_guardrails, allowed));
     if let Some(a) = parent_approval {
         child.set_approval(a.clone());
     }
 
-    if parent_guardrails
-        .map(|guardrails| guardrails.permits("cos_skill"))
-        .unwrap_or(true)
-    {
-        if let Some(tool) = source.get_unfiltered("cos_skill") {
-            child.register(tool);
+    for discovery_tool in ["cos_skill", "cos_help"] {
+        if parent_guardrails
+            .map(|guardrails| guardrails.permits(discovery_tool))
+            .unwrap_or(true)
+        {
+            if let Some(tool) = source.get_unfiltered(discovery_tool) {
+                child.register(tool);
+            }
         }
     }
 
     for name in allowed {
         if matches!(
             name.as_str(),
-            "cos_delegate" | "cos_skill" | "cos_oauth_login"
+            "cos_delegate" | "cos_skill" | "cos_help" | "cos_oauth_login"
         ) {
             continue;
         }

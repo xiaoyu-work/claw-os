@@ -14,53 +14,39 @@ interface GuideStep {
 const guideSteps: GuideStep[] = [
   {
     target: 'agent-desktop-icon',
-    eyebrow: 'Step 1 of 7',
+    eyebrow: 'Step 1 of 5',
     title: 'Open Claw OS Agent',
-    description: 'The system Agent is the starting point for questions, app control, memory, models, and permissions.',
+    description: 'Open the same Agent workspace that ships with Claw OS.',
     action: 'Open Agent',
     event: 'dblclick',
   },
   {
     target: 'agent-scenario-health',
-    eyebrow: 'Step 2 of 7',
-    title: 'Choose a system question',
-    description: 'Start with network health. Five more complete Agent demos remain available beside it.',
-    action: 'Select system health',
+    eyebrow: 'Step 2 of 5',
+    title: 'Start from an example',
+    description: 'Examples only prefill the real chat composer. You stay inside the normal Agent interface.',
+    action: 'Use system health example',
   },
   {
     target: 'agent-primary-action',
-    eyebrow: 'Step 3 of 7',
-    title: 'Ask the Agent',
-    description: 'The Agent turns the question into a visible plan before touching system data.',
-    action: 'Run guided demo',
+    eyebrow: 'Step 3 of 5',
+    title: 'Send the request',
+    description: 'The recorded demo follows the same message, plan, and tool layout as the real Agent.',
+    action: 'Send request',
   },
   {
-    target: 'agent-primary-action',
-    eyebrow: 'Step 4 of 7',
-    title: 'Review the plan',
-    description: 'Every operation is explained before the Agent requests access.',
-    action: 'Review requested access',
-  },
-  {
-    target: 'agent-primary-action',
-    eyebrow: 'Step 5 of 7',
+    target: 'agent-approval-action',
+    eyebrow: 'Step 4 of 5',
     title: 'Approve exact access',
-    description: 'Only the listed, one-time capability scopes will be available to this task.',
+    description: 'The approval stays inline with the conversation and grants only the listed one-time scopes.',
     action: 'Allow once',
   },
   {
-    target: 'agent-primary-action',
-    eyebrow: 'Step 6 of 7',
-    title: 'Run visible tools',
-    description: 'Each system call reports its evidence and remains reconstructable in the audit trail.',
-    action: 'View result',
-  },
-  {
-    target: 'agent-primary-action',
-    eyebrow: 'Step 7 of 7',
-    title: 'Explore all six demos',
-    description: 'The guided path is complete. You can now run every scenario or use the Agent as an AI chat window.',
-    action: 'Finish guided tour',
+    target: 'agent-result-action',
+    eyebrow: 'Step 5 of 5',
+    title: 'Inspect the evidence',
+    description: 'Open the audit reference, then keep chatting or explore Tasks, Approvals, Inbox, and Settings.',
+    action: 'Open audit',
   },
 ];
 
@@ -76,6 +62,7 @@ export default function GuideOverlay() {
   const active = useDemoGuideStore((state) => state.active);
   const step = useDemoGuideStore((state) => state.step);
   const next = useDemoGuideStore((state) => state.next);
+  const dismiss = useDemoGuideStore((state) => state.dismiss);
   const [targetRect, setTargetRect] = useState<TargetRect | null>(null);
   const guide = guideSteps[step];
 
@@ -147,19 +134,15 @@ export default function GuideOverlay() {
 
   return (
     <div
-      className="fixed inset-0 z-[10000]"
-      onContextMenu={(event) => event.preventDefault()}
-      onKeyDown={(event) => event.preventDefault()}
+      className="pointer-events-none fixed inset-0 z-[10000]"
       role="presentation"
     >
-      <div className="absolute inset-0" />
-
       {targetRect && (
         <button
           type="button"
           onClick={activateTarget}
           aria-label={guide.action}
-          className="absolute rounded-xl border-2 border-[#005CFE] bg-transparent outline-none"
+          className="pointer-events-auto absolute rounded-xl border-2 border-[#005CFE] bg-transparent outline-none"
           style={{
             top: targetRect.top - 6,
             left: targetRect.left - 6,
@@ -175,11 +158,20 @@ export default function GuideOverlay() {
       )}
 
       <div
-        className={`absolute rounded-2xl border border-white/10 bg-[#111113] text-white shadow-2xl ${compactTooltip ? 'p-3' : 'p-4'}`}
+        className={`pointer-events-auto absolute rounded-2xl border border-white/10 bg-[#111113] text-white shadow-2xl ${compactTooltip ? 'p-3' : 'p-4'}`}
         style={{ top: tooltipTop, left: tooltipLeft, width: tooltipWidth }}
       >
-        <div className="mb-2 font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-[#4f8cff]">
-          {guide.eyebrow}
+        <div className="mb-2 flex items-center justify-between gap-3">
+          <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-[#4f8cff]">
+            {guide.eyebrow}
+          </span>
+          <button
+            type="button"
+            onClick={dismiss}
+            className="text-[10px] text-white/35 transition-colors hover:text-white/70"
+          >
+            Skip
+          </button>
         </div>
         <h2 className="text-base font-semibold">{guide.title}</h2>
         {!compactTooltip && (

@@ -18,7 +18,8 @@ pub mod ai;
 use std::io;
 use std::path::Path;
 
-use cos_runtime::{exec, fs, BridgeError};
+use cos_runtime::{BridgeError, ask_claw, exec, fs};
+use serde::Serialize;
 
 fn map_err(err: BridgeError) -> io::Error {
     let kind = if err.is_denied() {
@@ -68,18 +69,18 @@ pub fn start_detached(program: &Path, args: &[&str]) -> io::Result<()> {
     exec::start(&argv).map(|_| ()).map_err(map_err)
 }
 
-/// Open the system "Ask Claw" agent overlay, optionally carrying a
-/// one-shot context hint (host-app + open file) so the kernel agent
-/// knows which document the user is asking about. The overlay is the
-/// same `cos-agent-ui --overlay` window that the global hotkey
-/// summons; passing `--context` ensures the agent's first response
-/// is grounded in the editor's state without polluting the visible
-/// chat transcript.
-pub fn ask_claw_overlay(context: Option<&str>) -> io::Result<()> {
-    let mut argv: Vec<&str> = vec!["cos-agent-ui", "--overlay"];
-    if let Some(ctx) = context {
-        argv.push("--context");
-        argv.push(ctx);
-    }
-    exec::start(&argv).map(|_| ()).map_err(map_err)
+#[derive(Serialize)]
+struct EditContext<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    file: Option<&'a str>,
+}
+
+impl ask_claw::Context for EditContext<'_> {
+    const APP_ID: &'static str = "cosmic-edit";
+}
+
+/// Open Ask Claw with the optional active document path.
+pub fn ask_claw_overlay(file: Option<&Path>) -> Result<(), ask_claw::LaunchError> {
+    let file = file.and_then(Path::to_str);
+    ask_claw::launch(&EditContext { file })
 }

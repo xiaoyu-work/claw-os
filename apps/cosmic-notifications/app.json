@@ -8,10 +8,10 @@
     "en": "Post and dismiss freedesktop notifications via the session D-Bus."
   },
   "icon": "🔔",
-  "runtime": "binary",
+  "runtime": "shell",
   "operations": {},
   "session": {
-    "entry": "/usr/bin/cosmic-notifications",
+    "entry": "server.sh",
     "transport": "stdio",
     "tools": [
       {
@@ -58,6 +58,14 @@
             "required": false,
             "label": {
               "en": "Timeout in milliseconds before auto-dismiss (-1 = daemon default, 0 = never)."
+            }
+          },
+          {
+            "name": "transient",
+            "kind": "bool",
+            "required": false,
+            "label": {
+              "en": "Do not retain the popup in notification history."
             }
           }
         ],

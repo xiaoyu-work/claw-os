@@ -848,6 +848,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "claw-os-sdk"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "num-bigint",
+ "num-traits",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "clawd-client"
 version = "0.1.0"
 dependencies = [
@@ -1067,12 +1079,23 @@ dependencies = [
  "axum",
  "bytes",
  "clawd-client",
+ "cos-agent-protocol",
  "futures",
  "serde",
  "serde_json",
  "tokio",
+ "tower",
  "tracing",
  "tracing-subscriber",
+ "zbus",
+]
+
+[[package]]
+name = "cos-agent-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1082,6 +1105,8 @@ dependencies = [
  "anyhow",
  "async-stream",
  "bytes",
+ "cos-agent-protocol",
+ "cos-runtime",
  "cpal",
  "futures",
  "futures-util",
@@ -1098,6 +1123,18 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+]
+
+[[package]]
+name = "cos-runtime"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "claw-os-sdk",
+ "libc",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -3540,6 +3577,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "num-bigint"
+version = "0.4.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c89e69e7e0f03bea5ef08013795c25018e101932225a656383bd384495ecc367"
+dependencies = [
+ "num-integer",
+ "num-traits",
+]
+
+[[package]]
 name = "num-derive"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3548,6 +3595,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "num-integer"
+version = "0.1.47"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ce2d95d4b3734dc35aa2f45e1aa22cd416814592a4f9d9205e11affd5b8e10b"
+dependencies = [
+ "num-traits",
 ]
 
 [[package]]

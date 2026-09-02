@@ -70,10 +70,8 @@ impl crate::agent::tools::Tool for ExtensionTestTool {
         let Some(context) = crate::agent::tools::exposure::current() else {
             return crate::agent::tools::ToolResult::err("missing exposure context");
         };
-        let requested = crate::caps::Cap::new(
-            crate::caps::Verb::FS_READ,
-            crate::caps::Scope::path(path),
-        );
+        let requested =
+            crate::caps::Cap::new(crate::caps::Verb::FS_READ, crate::caps::Scope::path(path));
         if !context.capabilities().covers(&requested) {
             return crate::agent::tools::ToolResult::err("exact path is not authorized");
         }
@@ -407,9 +405,11 @@ async fn concurrent_sessions_cannot_leak_owner_source_grant_or_transport_schemas
                 names,
                 vec![
                     "alice_path",
-                    "alpha_extension",
                     "app_transport",
-                    "attended_cli"
+                    "attended_cli",
+                    "cos_tool_call",
+                    "cos_tool_describe",
+                    "cos_tool_search",
                 ]
             );
         }
@@ -422,7 +422,15 @@ async fn concurrent_sessions_cannot_leak_owner_source_grant_or_transport_schemas
                 .into_iter()
                 .map(|tool| tool.name)
                 .collect();
-            assert_eq!(names, vec!["beta_extension", "bob_path"]);
+            assert_eq!(
+                names,
+                vec![
+                    "bob_path",
+                    "cos_tool_call",
+                    "cos_tool_describe",
+                    "cos_tool_search",
+                ]
+            );
         }
     });
     let (alice_result, bob_result) = tokio::join!(alice_task, bob_task);
@@ -476,7 +484,7 @@ async fn execution_rechecks_exact_validated_arguments_after_exposure() {
 fn worker_does_not_advertise_unreachable_app_session_tools() {
     let mut registry = ToolRegistry::new();
     registry.register(Arc::new(
-        crate::agent::tools::cos_apps_session::CosAppSessionOpen,
+        crate::agent::tools::cos_apps_session::CosAppSessionOpen::default(),
     ));
     let caps = crate::caps::CapSet::from_caps([crate::caps::Cap::new(
         crate::caps::Verb::AGENT_INVOKE,
@@ -515,7 +523,7 @@ fn oauth_schema_requires_trusted_attended_source_not_just_local_presence() {
 }
 
 #[test]
-fn small_extension_catalog_remains_direct_and_deterministic() {
+fn small_extension_catalog_remains_deferred_and_deterministic() {
     let executions = Arc::new(AtomicUsize::new(0));
     let mut registry = builtin_only_registry();
     registry.register(extension_tool(
@@ -537,13 +545,13 @@ fn small_extension_catalog_remains_direct_and_deterministic() {
         serde_json::to_value(second.tools()).unwrap()
     );
     assert_eq!(first.diagnostics(), second.diagnostics());
-    assert!(!first.diagnostics().progressive);
-    assert_eq!(first.diagnostics().deferred_count, 0);
-    assert!(first
+    assert!(first.diagnostics().progressive);
+    assert_eq!(first.diagnostics().deferred_count, 1);
+    assert!(!first
         .tools()
         .iter()
         .any(|tool| tool.name == "mcp_alpha_lookup"));
-    assert!(!first
+    assert!(first
         .tools()
         .iter()
         .any(|tool| crate::agent::tools::progressive::is_bridge_tool(&tool.name)));
@@ -560,8 +568,8 @@ fn extension_exposure_is_automatically_budget_eligible() {
         schema_calls,
         executions,
     }));
-    let mut context = ToolExposureContext::isolated(Guardrails::permissive())
-        .with_tool_schema_budget_tokens(0);
+    let mut context =
+        ToolExposureContext::isolated(Guardrails::permissive()).with_tool_schema_budget_tokens(0);
     context.enable_extension("future:alpha");
 
     let projection = registry.projection_for(&context);
@@ -592,8 +600,8 @@ fn large_extension_catalog_defers_while_core_tools_stay_direct() {
             executions.clone(),
         ));
     }
-    let context = ToolExposureContext::isolated(Guardrails::permissive())
-        .with_tool_schema_budget_tokens(1);
+    let context =
+        ToolExposureContext::isolated(Guardrails::permissive()).with_tool_schema_budget_tokens(1);
     let projection = registry.projection_for(&context);
     let names = projection
         .tools()
@@ -630,8 +638,8 @@ fn one_oversized_schema_triggers_progressive_disclosure() {
         None,
         executions,
     ));
-    let context = ToolExposureContext::isolated(Guardrails::permissive())
-        .with_tool_schema_budget_tokens(128);
+    let context =
+        ToolExposureContext::isolated(Guardrails::permissive()).with_tool_schema_budget_tokens(128);
     let projection = registry.projection_for(&context);
     assert_eq!(projection.diagnostics().deferred_count, 1);
     assert!(!projection
@@ -662,10 +670,9 @@ fn denied_tools_never_enter_search_describe_or_call() {
         None,
         executions,
     ));
-    let context = ToolExposureContext::isolated(
-        Guardrails::permissive().deny_tool("mcp_alpha_denied"),
-    )
-    .with_tool_schema_budget_tokens(0);
+    let context =
+        ToolExposureContext::isolated(Guardrails::permissive().deny_tool("mcp_alpha_denied"))
+            .with_tool_schema_budget_tokens(0);
 
     let search = registry.execute_catalog(
         &context,
@@ -714,12 +721,9 @@ async fn bridge_reuses_exact_capability_and_approval_boundaries() {
         None,
         executions.clone(),
     ));
-    registry.set_approval(
-        crate::agent::runtime::approval::ApprovalGate::new(
-            crate::agent::runtime::approval::ApprovalConfig::new()
-                .auto_deny("mcp_alpha_read"),
-        ),
-    );
+    registry.set_approval(crate::agent::runtime::approval::ApprovalGate::new(
+        crate::agent::runtime::approval::ApprovalConfig::new().auto_deny("mcp_alpha_read"),
+    ));
     let context = ToolExposureContext::isolated(Guardrails::permissive())
         .with_capabilities(crate::caps::CapSet::from_caps([crate::caps::Cap::new(
             crate::caps::Verb::FS_READ,
@@ -815,13 +819,11 @@ async fn approving_bridge_name_does_not_approve_underlying_legacy_tool() {
         None,
         executions.clone(),
     ));
-    registry.set_approval(
-        crate::agent::runtime::approval::ApprovalGate::new(
-            crate::agent::runtime::approval::ApprovalConfig::new()
-                .auto_approve(crate::agent::tools::progressive::TOOL_CALL)
-                .dangerous("mcp_alpha_read"),
-        ),
-    );
+    registry.set_approval(crate::agent::runtime::approval::ApprovalGate::new(
+        crate::agent::runtime::approval::ApprovalConfig::new()
+            .auto_approve(crate::agent::tools::progressive::TOOL_CALL)
+            .dangerous("mcp_alpha_read"),
+    ));
     let context = ToolExposureContext::isolated(Guardrails::permissive())
         .with_capabilities(crate::caps::CapSet::from_caps([crate::caps::Cap::new(
             crate::caps::Verb::FS_READ,
@@ -865,8 +867,8 @@ fn bridge_cannot_invoke_core_or_bypass_direct_deferred_dispatch() {
         None,
         executions,
     ));
-    let context = ToolExposureContext::isolated(Guardrails::permissive())
-        .with_tool_schema_budget_tokens(0);
+    let context =
+        ToolExposureContext::isolated(Guardrails::permissive()).with_tool_schema_budget_tokens(0);
 
     let direct = registry.resolve_model_call(
         &context,
@@ -888,12 +890,10 @@ fn bridge_cannot_invoke_core_or_bypass_direct_deferred_dispatch() {
     );
     assert!(matches!(core.kind, ResolvedToolKind::Rejected(_)));
 
-    registry.set_approval(
-        crate::agent::runtime::approval::ApprovalGate::new(
-            crate::agent::runtime::approval::ApprovalConfig::new()
-                .auto_deny(crate::agent::tools::progressive::TOOL_CALL),
-        ),
-    );
+    registry.set_approval(crate::agent::runtime::approval::ApprovalGate::new(
+        crate::agent::runtime::approval::ApprovalConfig::new()
+            .auto_deny(crate::agent::tools::progressive::TOOL_CALL),
+    ));
     let denied_bridge = registry.resolve_model_call(
         &context,
         &ToolCall {

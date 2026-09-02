@@ -37,12 +37,19 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::run_log::{run_log_path, LlmRunRecord};
+
+pub const MAX_QUERY_BYTES: u64 = 64 * 1024 * 1024;
+pub const MAX_QUERY_RECORDS: usize = 200_000;
+const MAX_RECORD_BYTES: u64 = 1024 * 1024;
+const MAX_BREAKDOWN_BUCKETS: usize = 1024;
+const MAX_BREAKDOWN_KEY_BYTES: usize = 128;
 
 /// Optional filters for [`aggregate_filtered`].
 ///
@@ -128,6 +135,7 @@ impl UsageQuery {
 }
 
 /// Parsed JSONL plus a count of malformed lines we skipped.
+#[derive(Debug)]
 pub struct ReadResult {
     pub records: Vec<LlmRunRecord>,
     pub parse_errors: usize,
@@ -151,6 +159,30 @@ pub fn read_records(path: &Path) -> ReadResult {
             };
         }
     };
+    parse_records(&body)
+}
+
+pub fn read_records_bounded(
+    reader: impl Read,
+    max_bytes: u64,
+) -> Result<ReadResult, String> {
+    let mut bytes = Vec::new();
+    reader
+        .take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("read AI usage log: {error}"))?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(format!(
+            "AI usage log exceeds the {} byte query limit",
+            max_bytes
+        ));
+    }
+    let body =
+        String::from_utf8(bytes).map_err(|_| "AI usage log is not valid UTF-8".to_string())?;
+    Ok(parse_records(&body))
+}
+
+fn parse_records(body: &str) -> ReadResult {
     let mut records = Vec::new();
     let mut parse_errors = 0usize;
     for line in body.lines() {
@@ -180,6 +212,8 @@ pub struct Totals {
     pub cache_read_tokens: u64,
     pub cache_write_tokens: u64,
     pub total_duration_ms: u64,
+    pub finish_reasons: BTreeMap<String, u64>,
+    pub errors: u64,
 }
 
 impl Totals {
@@ -195,6 +229,27 @@ impl Totals {
         self.cache_read_tokens += rec.cache_read_tokens as u64;
         self.cache_write_tokens += rec.cache_write_tokens as u64;
         self.total_duration_ms += rec.duration_ms;
+        if rec.error.is_some() {
+            self.errors += 1;
+        }
+        let finish_reason = Self::canonical_finish_reason(&rec.finish_reason);
+        *self
+            .finish_reasons
+            .entry(finish_reason.to_string())
+            .or_default() += 1;
+    }
+
+    fn canonical_finish_reason(reason: &str) -> &'static str {
+        match reason {
+            "stop" => "stop",
+            "length" => "length",
+            "tool_use" => "tool_use",
+            "refusal" => "refusal",
+            "content_filter" => "content_filter",
+            "error" => "error",
+            "denied" => "denied",
+            _ => "other",
+        }
     }
 }
 
@@ -213,6 +268,12 @@ pub struct UsageSummary {
     pub by_verb: BTreeMap<String, Totals>,
     /// Number of malformed log lines encountered.
     pub parse_errors: usize,
+    /// Physical lines scanned from the selected log.
+    pub log_lines: u64,
+    /// Physical bytes scanned from the selected log.
+    pub log_bytes: u64,
+    /// At least one distinct or oversized breakdown key was omitted.
+    pub breakdown_truncated: bool,
 }
 
 /// Aggregate every record. No filtering.
@@ -227,21 +288,7 @@ pub fn aggregate_filtered(records: &[LlmRunRecord], query: &UsageQuery) -> Usage
         if !query.matches(rec) {
             continue;
         }
-        s.total.add(rec);
-        s.by_provider
-            .entry(rec.provider.clone())
-            .or_default()
-            .add(rec);
-        s.by_model.entry(rec.model.clone()).or_default().add(rec);
-        if let Some(sid) = &rec.session_id {
-            s.by_session.entry(sid.clone()).or_default().add(rec);
-        }
-        if let Some(aid) = &rec.app_id {
-            s.by_app.entry(aid.clone()).or_default().add(rec);
-        }
-        if let Some(v) = &rec.verb {
-            s.by_verb.entry(v.clone()).or_default().add(rec);
-        }
+        add_record(&mut s, rec);
     }
     s
 }
@@ -270,6 +317,130 @@ pub fn aggregate_path_filtered(path: &Path, query: &UsageQuery) -> UsageSummary 
     let mut s = aggregate_filtered(&read.records, query);
     s.parse_errors = read.parse_errors;
     s
+}
+
+pub fn aggregate_reader_filtered(
+    reader: impl Read,
+    query: &UsageQuery,
+    max_bytes: u64,
+) -> Result<UsageSummary, String> {
+    use std::io::BufRead;
+
+    let mut reader = std::io::BufReader::new(reader.take(max_bytes.saturating_add(1)));
+    let mut summary = UsageSummary::default();
+    let mut bytes_read = 0u64;
+    let mut records_read = 0usize;
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        let count = {
+            let mut bounded_line = std::io::Read::by_ref(&mut reader)
+                .take(MAX_RECORD_BYTES.saturating_add(1));
+            bounded_line
+                .read_until(b'\n', &mut line)
+                .map_err(|error| format!("read AI usage log: {error}"))?
+        };
+        if count == 0 {
+            break;
+        }
+        summary.log_lines += 1;
+        bytes_read = bytes_read.saturating_add(count as u64);
+        summary.log_bytes = bytes_read;
+        if bytes_read > max_bytes {
+            return Err(format!(
+                "AI usage log exceeds the {} byte query limit",
+                max_bytes
+            ));
+        }
+        if count as u64 > MAX_RECORD_BYTES {
+            return Err(format!(
+                "AI usage record exceeds the {} byte query limit",
+                MAX_RECORD_BYTES
+            ));
+        }
+        let line = std::str::from_utf8(&line)
+            .map_err(|_| "AI usage log contains non-UTF-8 data".to_string())?
+            .trim();
+        if line.is_empty() {
+            continue;
+        }
+        records_read += 1;
+        if records_read > MAX_QUERY_RECORDS {
+            return Err(format!(
+                "AI usage log exceeds the {} record query limit",
+                MAX_QUERY_RECORDS
+            ));
+        }
+        match serde_json::from_str::<LlmRunRecord>(line) {
+            Ok(record) if query.matches(&record) => add_record(&mut summary, &record),
+            Ok(_) => {}
+            Err(_) => summary.parse_errors += 1,
+        }
+    }
+    Ok(summary)
+}
+
+fn add_record(summary: &mut UsageSummary, record: &LlmRunRecord) {
+    summary.total.add(record);
+    add_bucket(
+        &mut summary.by_provider,
+        &record.provider,
+        record,
+        &mut summary.breakdown_truncated,
+    );
+    add_bucket(
+        &mut summary.by_model,
+        &record.model,
+        record,
+        &mut summary.breakdown_truncated,
+    );
+    if let Some(session_id) = &record.session_id {
+        add_bucket(
+            &mut summary.by_session,
+            session_id,
+            record,
+            &mut summary.breakdown_truncated,
+        );
+    }
+    if let Some(app_id) = &record.app_id {
+        add_bucket(
+            &mut summary.by_app,
+            app_id,
+            record,
+            &mut summary.breakdown_truncated,
+        );
+    }
+    if let Some(verb) = &record.verb {
+        add_bucket(
+            &mut summary.by_verb,
+            verb,
+            record,
+            &mut summary.breakdown_truncated,
+        );
+    }
+}
+
+fn add_bucket(
+    buckets: &mut BTreeMap<String, Totals>,
+    key: &str,
+    record: &LlmRunRecord,
+    truncated: &mut bool,
+) {
+    if key.len() > MAX_BREAKDOWN_KEY_BYTES {
+        *truncated = true;
+        return;
+    }
+    if let Some(bucket) = buckets.get_mut(key) {
+        bucket.add(record);
+        return;
+    }
+    if buckets.len() >= MAX_BREAKDOWN_BUCKETS {
+        *truncated = true;
+        return;
+    }
+    let mut bucket = Totals::default();
+    bucket.add(record);
+    buckets.insert(key.to_string(), bucket);
 }
 
 /// Re-export so callers don't need a separate import path for the

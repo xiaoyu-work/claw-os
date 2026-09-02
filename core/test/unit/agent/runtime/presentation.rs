@@ -92,6 +92,35 @@ fn tool_payloads_are_removed_from_visible_events() {
 }
 
 #[test]
+fn bridged_tool_is_presented_as_underlying_tool() {
+    let captured = Arc::new(CapturingStreamSink::default());
+    let sink = user_visible_stream_sink(captured.clone());
+
+    sink.on_event(&StreamEvent::ToolUseStart {
+        id: "call-1".into(),
+        name: crate::agent::tools::progressive::TOOL_CALL.into(),
+    });
+    sink.on_event(&StreamEvent::ToolUse(ToolCall {
+        id: "call-1".into(),
+        name: crate::agent::tools::progressive::TOOL_CALL.into(),
+        input: serde_json::json!({
+            "name": "cos_app_mail",
+            "arguments": {"command": "list"},
+        }),
+    }));
+
+    let events = captured.events.lock().unwrap();
+    assert_eq!(events.len(), 1);
+    match &events[0] {
+        StreamEvent::ToolUse(call) => {
+            assert_eq!(call.name, "cos_app_mail");
+            assert!(call.input.is_null());
+        }
+        other => panic!("expected visible underlying tool call, got {other:?}"),
+    }
+}
+
+#[test]
 fn tool_progress_hides_inputs_and_result_previews() {
     let captured = Arc::new(CapturingProgressSink::default());
     let sink = user_visible_progress_sink(captured.clone());
@@ -112,6 +141,26 @@ fn tool_progress_hides_inputs_and_result_previews() {
 
     assert_eq!(*captured.input.lock().unwrap(), Some(Value::Null));
     assert_eq!(captured.preview.lock().unwrap().as_deref(), Some(""));
+}
+
+#[test]
+fn tool_progress_shows_redacted_failure_previews() {
+    let captured = Arc::new(CapturingProgressSink::default());
+    let sink = user_visible_progress_sink(captured.clone());
+
+    sink.on_tool_result(
+        "call-1",
+        "cos_proc",
+        false,
+        12,
+        128,
+        "request failed with Authorization: Bearer abcdefghijklmnopqrstuvwxyz",
+    );
+
+    let preview = captured.preview.lock().unwrap().clone().unwrap();
+    assert!(preview.contains("request failed"));
+    assert!(preview.contains("[REDACTED:bearer]"));
+    assert!(!preview.contains("abcdefghijklmnopqrstuvwxyz"));
 }
 
 #[test]

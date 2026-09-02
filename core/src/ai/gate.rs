@@ -523,7 +523,7 @@ pub async fn chat(req: ChatRequest) -> Result<ChatResult, AiError> {
         Err(err) => {
             let mut rec = LlmRunRecord::from_denial(
                 &req.app_id,
-                &config::get().agent.model,
+                &config::current_snapshot().agent.model,
                 denial_reason_token(err),
                 &err.to_string(),
                 duration_ms,
@@ -792,7 +792,8 @@ async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
     // 5. Resolve the model. Apps don't get to pick — the OS owner
     //    configures one provider and one model in
     //    `/etc/cos/agent.toml`, and every app call uses that.
-    let cfg = &config::get().agent;
+    let config = config::current_snapshot();
+    let cfg = &config.agent;
     let model = cfg.model.clone();
 
     // 6. Capability check at the kernel boundary.
@@ -1062,7 +1063,7 @@ fn lookup_app(app_id: &str) -> Result<apps::App, AiError> {
     // long enough to swap the new entry in; concurrent calls may
     // each re-discover once, which is benign (the second result
     // overwrites the first with identical data).
-    let discovered = apps::discover(&apps_dir);
+    let discovered = apps::discover_verified(&apps_dir);
     let result = discovered
         .get(app_id)
         .cloned()
@@ -1184,8 +1185,9 @@ pub fn wrap_for_system(inner: Arc<dyn LlmProvider>) -> Arc<dyn LlmProvider> {
 pub fn build_system_provider(
     cfg: &crate::config::AgentConfig,
 ) -> llm::Result<Arc<dyn LlmProvider>> {
-    use crate::agent::llm::provider_chain::{ProviderChain, ProviderSlot};
-    use std::collections::BTreeSet;
+    use crate::agent::llm::attempt_observer::{
+        AuditProviderAttemptObserver, RequestMetadata,
+    };
 
     // Provider construction is where the model transport (HTTP client,
     // streaming parser, credential resolution) enters a process. It is
@@ -1193,13 +1195,29 @@ pub fn build_system_provider(
     crate::agentd::guard::ensure_agent_runtime_allowed("model provider construction")
         .map_err(llm::LlmError::NotConfigured)?;
 
+    let context = llm::construction::ProviderBuildContext::from_process()?;
+    let observer = Arc::new(AuditProviderAttemptObserver::new(
+        crate::paths::agent_audit_log_path(),
+        RequestMetadata::from_process(),
+    ));
+    build_system_provider_with_context(cfg, &context, observer)
+}
+
+pub fn build_system_provider_with_context(
+    cfg: &crate::config::AgentConfig,
+    context: &llm::construction::ProviderBuildContext,
+    observer: Arc<dyn llm::attempt_observer::ProviderAttemptObserver>,
+) -> llm::Result<Arc<dyn LlmProvider>> {
+    use crate::agent::llm::provider_chain::{ProviderChain, ProviderSlot};
+    use std::collections::BTreeSet;
+
     if cfg.provider_fallbacks.len() > 8 {
         return Err(llm::LlmError::NotConfigured(format!(
             "provider fallback chain has {} fallbacks; maximum is 8",
             cfg.provider_fallbacks.len()
         )));
     }
-    let primary = llm::registry::build(&cfg.provider, &cfg.model, cfg)?;
+    let primary = llm::registry::build_with_context(&cfg.provider, &cfg.model, cfg, context)?;
     let mut slots = vec![ProviderSlot::new(
         wrap_for_system(primary),
         cfg.provider.clone(),
@@ -1225,7 +1243,7 @@ pub fn build_system_provider(
             )));
         }
         let fallback_cfg = fallback.apply_to(cfg);
-        let built = llm::registry::build(provider, model, &fallback_cfg)?;
+        let built = llm::registry::build_with_context(provider, model, &fallback_cfg, context)?;
         slots.push(ProviderSlot::new(
             wrap_for_system(built),
             provider.to_string(),
@@ -1235,7 +1253,7 @@ pub fn build_system_provider(
     if slots.len() == 1 {
         Ok(slots.remove(0).provider)
     } else {
-        Ok(Arc::new(ProviderChain::new(slots)?))
+        Ok(Arc::new(ProviderChain::new_with_observer(slots, observer)?))
     }
 }
 
@@ -1278,7 +1296,8 @@ impl LlmProvider for SystemGatedProvider {
     }
 
     async fn chat(&self, mut request: LlmChatRequest) -> LlmResult<LlmChatResponse> {
-        let cfg = &config::get().agent;
+        let config = config::current_snapshot();
+        let cfg = &config.agent;
         let model = request.model.clone();
         normalize_output_limit(&mut request)?;
 
@@ -1335,7 +1354,8 @@ impl LlmProvider for SystemGatedProvider {
         //   - on `StreamEvent::Done { usage }` we settle to actuals,
         //   - on early drop (consumer hung up) we charge the conservative
         //     estimate because the provider may already have generated tokens.
-        let cfg = &config::get().agent;
+        let config = config::current_snapshot();
+        let cfg = &config.agent;
         let model = request.model.clone();
         normalize_output_limit(&mut request)?;
 

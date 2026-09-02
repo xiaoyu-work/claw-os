@@ -2096,16 +2096,11 @@ impl Application for App {
         }
         match message {
             Message::AiAskClaw => {
-                let context = self.active_tab().and_then(|tab| match tab {
-                    Tab::Editor(t) => t.path_opt.as_ref().and_then(|p| {
-                        p.to_str().map(|s| {
-                            format!(r#"{{"app":"cosmic-edit","file":"{}"}}"#, s)
-                        })
-                    }),
+                let file = self.active_tab().and_then(|tab| match tab {
+                    Tab::Editor(t) => t.path_opt.as_deref(),
                     _ => None,
                 });
-                let ctx_ref = context.as_deref();
-                if let Err(err) = crate::claw_glue::ask_claw_overlay(ctx_ref) {
+                if let Err(err) = crate::claw_glue::ask_claw_overlay(file) {
                     log::error!("failed to open Ask Claw overlay: {err}");
                 }
             }

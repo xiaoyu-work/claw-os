@@ -240,7 +240,7 @@ fn blank_stored_key_uses_env_fallback_for_all_text_providers() {
         assert_eq!(source.name, ENV_NAME);
     }
 
-    let key = llm::providers::openai_compat::resolve_api_key(
+    let key = llm::construction::resolve_process_api_key(
         cfg.api_key_credential.as_deref(),
         cfg.api_key_env.as_deref(),
     )
@@ -258,7 +258,7 @@ fn blank_stored_key_uses_env_fallback_for_all_text_providers() {
         ],
     )
     .expect("replace credential with non-blank value");
-    let key = llm::providers::openai_compat::resolve_api_key(
+    let key = llm::construction::resolve_process_api_key(
         cfg.api_key_credential.as_deref(),
         cfg.api_key_env.as_deref(),
     )
@@ -271,8 +271,8 @@ fn blank_stored_key_uses_env_fallback_for_all_text_providers() {
     assert_eq!(source.kind, "credential");
 }
 
-#[test]
-fn corrupt_stored_key_is_typed_and_blocks_readiness_for_all_text_providers() {
+#[tokio::test]
+async fn corrupt_stored_key_is_typed_and_blocks_readiness_for_all_text_providers() {
     let _g = env_lock();
     let store = CredentialTestEnv::new("corrupt-provider-key");
     let credential_name = format!("corrupt-key-{}", uuid::Uuid::new_v4().simple());
@@ -303,12 +303,16 @@ fn corrupt_stored_key_is_typed_and_blocks_readiness_for_all_text_providers() {
             Err(error) => error,
         };
         match &error {
-            llm::LlmError::CredentialStore {
-                credential,
-                message,
-            } => {
+            llm::LlmError::CredentialStore { credential, source } => {
                 assert_eq!(credential, &credential_name);
-                assert!(message.contains("parse"));
+                assert_eq!(
+                    source.kind(),
+                    crate::credential::CredentialErrorKind::Corrupt
+                );
+                assert!(source.to_string().contains("parse"));
+                assert!(std::error::Error::source(source)
+                    .and_then(|source| source.downcast_ref::<serde_json::Error>())
+                    .is_some());
             }
             other => panic!("expected typed credential-store error, got {other:?}"),
         }
@@ -327,6 +331,40 @@ fn corrupt_stored_key_is_typed_and_blocks_readiness_for_all_text_providers() {
             .as_str()
             .is_some_and(|fix| fix.contains("cos credential revoke")));
         assert!(!readiness.contains(ENV_VALUE));
+
+        let legacy: std::sync::Arc<dyn llm::Provider> = match provider {
+            "openai" => std::sync::Arc::new(
+                llm::providers::openai_compat::OpenAICompatProvider::from_agent_config(
+                    provider, model, &cfg,
+                ),
+            ),
+            "anthropic" => std::sync::Arc::new(
+                llm::providers::anthropic::AnthropicProvider::from_agent_config(model, &cfg),
+            ),
+            "gemini" => std::sync::Arc::new(
+                llm::providers::gemini::GeminiProvider::from_agent_config(model, &cfg),
+            ),
+            _ => unreachable!(),
+        };
+        assert!(!legacy.is_configured());
+        let request = llm::ChatRequest {
+            model: model.to_string(),
+            messages: vec![llm::Message::user_text("hello")],
+            system: None,
+            tools: Vec::new(),
+            tool_choice: Default::default(),
+            max_tokens: None,
+            temperature: None,
+            top_p: None,
+            stop_sequences: Vec::new(),
+            extra: serde_json::Value::Null,
+        };
+        assert!(matches!(
+            legacy.chat(request).await,
+            Err(llm::LlmError::Infrastructure(
+                llm::ProviderInfrastructureError::Initialization { .. }
+            ))
+        ));
     }
 }
 
@@ -439,6 +477,22 @@ fn corrupt_pool_credential_stays_typed_and_never_uses_legacy_key() {
     cfg.api_key_env = Some(LEGACY_ENV.into());
     cfg.api_key_credentials = vec![credential_name.clone()];
 
+    let pool_error =
+        llm::credential_pool::Pool::try_from_agent_config("direct-pool", &cfg).unwrap_err();
+    match pool_error {
+        llm::LlmError::CredentialStore { credential, source } => {
+            assert_eq!(credential, credential_name);
+            assert_eq!(
+                source.kind(),
+                crate::credential::CredentialErrorKind::Corrupt
+            );
+            assert!(std::error::Error::source(&source)
+                .and_then(|source| source.downcast_ref::<serde_json::Error>())
+                .is_some());
+        }
+        other => panic!("expected typed direct pool error, got {other:?}"),
+    }
+
     for (provider, model) in [
         ("openai", "gpt-test"),
         ("anthropic", "claude-test"),
@@ -451,12 +505,9 @@ fn corrupt_pool_credential_stays_typed_and_never_uses_legacy_key() {
             Err(error) => error,
         };
         match &error {
-            llm::LlmError::CredentialStore {
-                credential,
-                message,
-            } => {
+            llm::LlmError::CredentialStore { credential, source } => {
                 assert_eq!(credential, &credential_name);
-                assert!(message.contains("parse"));
+                assert!(source.to_string().contains("parse"));
             }
             other => panic!("expected typed credential-store error, got {other:?}"),
         }

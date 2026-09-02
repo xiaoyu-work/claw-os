@@ -218,7 +218,10 @@ fn protected_row_mutation_is_detected_and_repaired_by_shared_validation() {
     assert_eq!(health.compactions.status, "fail");
     repair(&path, RepairOptions::default()).expect("repair projection");
     let repaired = MemoryDb::open(&path).expect("reopen");
-    assert!(repaired.compactions_for_session("session").unwrap().is_empty());
+    assert!(repaired
+        .compactions_for_session("session")
+        .unwrap()
+        .is_empty());
     drop(repaired);
     assert_eq!(diagnose(&path).unwrap().compactions.status, "ok");
 }
@@ -566,8 +569,16 @@ fn dangling_prompt_reference_is_detected_and_never_returned() {
 fn wrong_prompt_hash_is_quarantined_while_recoverable_messages_survive() {
     let (_directory, path) = database_path();
     let db = MemoryDb::open(&path).expect("open memory db");
-    db.record_message("session", "user", "recoverable kiwi")
-        .expect("record");
+    db.record_labeled_message(
+        "session",
+        "user",
+        &crate::agent::trust::LabeledSegment::of(
+            crate::agent::trust::SourceKind::RecalledMemory,
+            "",
+        ),
+        "recoverable kiwi",
+    )
+    .expect("record");
     db.freeze_system_prompt("session", "trusted prompt", 1)
         .expect("freeze");
     {
@@ -638,6 +649,11 @@ fn wrong_prompt_hash_is_quarantined_while_recoverable_messages_survive() {
     let replacement = MemoryDb::open(&path).expect("replacement");
     assert_eq!(replacement.count_total().expect("count"), 1);
     assert_eq!(replacement.search("kiwi", 10).expect("search").len(), 1);
+    let recovered = replacement.recent("session", 1).expect("recovered row");
+    assert_eq!(
+        recovered[0].trust_source(),
+        crate::agent::trust::SourceKind::RecalledMemory
+    );
     assert!(replacement
         .system_prompt_for("session", 1)
         .expect("prompt query")
@@ -1221,7 +1237,10 @@ fn retry_recomputes_malformed_wal_that_became_valid() {
     assert!(log.last_applied.expect("completed event").checkpoint_source);
     let replacement = MemoryDb::open(&path).expect("replacement");
     assert_eq!(replacement.count_total().expect("count"), 2);
-    assert_eq!(replacement.search("committed", 10).expect("search").len(), 1);
+    assert_eq!(
+        replacement.search("committed", 10).expect("search").len(),
+        1
+    );
 }
 
 #[test]

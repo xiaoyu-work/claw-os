@@ -541,10 +541,32 @@ agent's `ToolRegistry`. Registry names are
 
 The MCP server itself is **not** started here. The first time any of
 its tools is called — or the agent explicitly invokes
-`cos_app_session_open` — `bring_up_app` spawns the server, runs the
+`cos_app_session_open` — `bring_up_app` launches the server, runs the
 MCP handshake, and stores the live handle in a process-wide
 `SessionManager`. Subsequent calls reuse it; `cos_app_session_close`
-drops the handle and terminates the child. **Hybrid attach.**
+drops the handle, which kills the worker's process group and cgroup.
+**Hybrid attach.**
+
+The server runs inside the hostile-worker sandbox
+(`core/src/worker/`), launched through
+`bridge::prepare_app_session_worker` with `StdioPlan::Streamed` — its
+stdin/stdout are the JSON-RPC transport rather than something to
+capture. It sees its own package read-only and pinned by inode, its own
+partition of the data root, and a per-launch broker endpoint that
+shadows the real `clawd` socket; it has no egress and no host paths.
+There is no unsandboxed fallback: a host that cannot enforce the policy
+refuses to open the session.
+
+A session server is headless by construction. It gets no compositor
+socket, no X authority and no GPU node. Three bundled vendor Apps —
+`cosmic-player`, `cosmic-screenshot` and `cosmic-notifications` —
+additionally hold the owner's **session bus**, because MPRIS, the
+screenshot portal and `org.freedesktop.Notifications` are the tools.
+That is granted by a kernel-side classification checked against vendor
+provenance and root ownership, never by anything in a manifest; see
+[extension-provenance.md](./extension-provenance.md#app-session-servers).
+An App whose tool needs a display transport must expose it as a
+desktop surface, not as a session tool.
 
 Per-call flow inside `AppSessionTool::exec`:
 
@@ -553,8 +575,20 @@ Per-call flow inside `AppSessionTool::exec`:
    arguments.
 2. `crate::caps::require(verb, scope)` checks each. A denial
    short-circuits the call — the App's server never sees the request.
-3. `client.call_tool(name, args)` forwards over MCP stdio.
-4. One `LlmRunRecord` row is appended to `ai.jsonl` with
+3. The launcher classifies where that authority can be exercised.
+   Capabilities the broker answers stay on the reusable server.
+   A filesystem or network capability naming one exact resource gets a
+   **single-call worker**: a fresh sandbox derived from exactly that
+   set, destroyed with the response. A resource capability naming no
+   resolvable resource is refused here, with the reason, rather than
+   granted and discovered as `EPERM` inside the App.
+4. The resolved set is installed as the *transient* capabilities of
+   whichever session serves the call, read live by that worker's broker
+   endpoint, and cleared when the call ends — on success, error,
+   timeout and cancellation alike. A session holds nothing at rest, so
+   a reused server cannot act on a previous call's grant.
+5. `client.call_tool(name, args)` forwards over MCP stdio.
+6. One `LlmRunRecord` row is appended to `ai.jsonl` with
    `provider="app:<id>"` and `model="tool:<name>"`, distinguishing
    App-session calls from kernel-catalog calls.
 

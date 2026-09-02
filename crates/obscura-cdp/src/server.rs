@@ -357,7 +357,7 @@ async fn process_with_interception(
 
     let mut page = page_back;
 
-    let network_events: Vec<_> = page.network_events.drain(..).collect();
+    let network_events = std::mem::take(&mut page.network_events);
     let page_url = page.url_string();
     let page_id_for_events = page.id.clone();
     let reached_network_idle = page.lifecycle.is_network_idle();

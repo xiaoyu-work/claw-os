@@ -191,7 +191,7 @@ fn is_safe_noninteractive_app_launcher(args: &[String]) -> bool {
     let apps_dir = std::env::var_os("COS_APPS_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("/usr/lib/cos/apps"));
-    let apps = crate::apps::discover(&apps_dir);
+    let apps = crate::apps::discover_verified(&apps_dir);
     let Some(app) = apps.get(app_id) else {
         return false;
     };

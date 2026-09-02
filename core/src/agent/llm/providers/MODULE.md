@@ -2,16 +2,19 @@
 
 ## Purpose
 
-`providers/` authenticates to each backend and translates between
+`providers/` authenticates already-resolved requests and translates between
 provider-neutral agent types and provider-specific HTTP/event protocols.
 
 ## Responsibilities
 
-- Resolve credentials and provider endpoints.
 - Serialize messages, images, tools, reasoning, and provider options.
 - Parse non-streaming responses and bounded streaming events.
+- Apply provider-specific authentication headers and error classification.
 - Preserve tool IDs, opaque state, usage, and retry/fallback semantics.
-- Keep provider-specific behavior out of runtime orchestration.
+- Consume resolved credentials and the shared transport supplied by `llm/`.
+- Surface provider-construction and shared-state failures through
+  `ProviderInfrastructureError`; never continue through poisoned credential,
+  Copilot cache, or mock-provider state.
 
 ## Key Files
 
@@ -30,10 +33,27 @@ provider-neutral agent types and provider-specific HTTP/event protocols.
 
 ## Dependencies
 
-Providers implement `llm::Provider` and use `llm::types`. They may share
-bounded parsers and credential infrastructure, but provider-specific headers or
-state do not leak into unrelated wire formats. Setup/model discovery changes
-stay consistent with runtime routing.
+Providers implement `llm::Provider` and use `llm::types`. Context-aware
+constructors never discover configuration, credential stores, process
+environment, audit paths, or HTTP client policy. Legacy public constructors
+remain as explicit compatibility boundaries, while `llm::registry` supplies provider-specific settings,
+`llm::construction` supplies resolved credential ownership and a shared
+transport, and provider-specific headers or state do not leak into unrelated
+wire formats. Setup/model discovery changes stay consistent with runtime
+routing.
+
+Provider constructors used by production composition are fallible. Legacy
+infallible constructors remain source-compatible and store deferred typed
+initialization failures; `is_configured` returns false and requests return that
+failure without creating a fallback HTTP client or inventing credentials.
+Every `HttpTransport` contains a successfully built client, and its public
+`get`/`post` methods retain the original infallible `RequestBuilder` chaining
+surface; fallible construction is handled before a provider stores transport.
+`CredentialSource` and `resolve_aws_value` retain their original public
+signatures, while `TypedCredentialSource` and `try_resolve_aws_value` drive
+source-preserving production composition. A pool whose keys are cooling maps
+to `RateLimited` so provider-chain fallback/retry semantics remain unchanged;
+only poisoned/unavailable pool state maps to infrastructure failure.
 
 ## Tests
 

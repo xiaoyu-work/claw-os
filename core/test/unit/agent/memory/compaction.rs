@@ -34,9 +34,9 @@ fn complete_chain(db: &MemoryDb, ids: &[i64]) -> Vec<CompactionSummary> {
     let mut completed = Vec::new();
     for end in [2_usize, 4, 6] {
         let mut next = spec(&ids[..end], ids[end]);
-        next.previous_compaction_id = completed.last().map(|summary: &CompactionSummary| {
-            summary.record.id
-        });
+        next.previous_compaction_id = completed
+            .last()
+            .map(|summary: &CompactionSummary| summary.record.id);
         let attempt = match db.begin_compaction("session", next).unwrap() {
             BeginCompaction::Started(attempt) => attempt,
             other => panic!("expected chain attempt, got {other:?}"),
@@ -153,8 +153,7 @@ fn successor_must_extend_and_reference_the_latest_valid_predecessor() {
 
     let missing_predecessor = spec(&ids[..4], ids[4]);
     assert!(matches!(
-        db.begin_compaction("session", missing_predecessor)
-            .unwrap(),
+        db.begin_compaction("session", missing_predecessor).unwrap(),
         BeginCompaction::StalePlan(_)
     ));
 
@@ -549,7 +548,8 @@ fn completed_projection_rejects_changed_or_missing_protected_identity() {
     {
         let conn = db.lock_conn().unwrap();
         conn.execute("DELETE FROM session_compactions", []).unwrap();
-        conn.execute("DELETE FROM compaction_summaries", []).unwrap();
+        conn.execute("DELETE FROM compaction_summaries", [])
+            .unwrap();
         conn.execute(
             "UPDATE messages SET content = 'message 3' WHERE id = ?",
             params![ids[3]],
@@ -616,7 +616,12 @@ fn repair_reroots_valid_latest_projection_around_invalid_middle() {
             .id,
         latest_id
     );
-    assert_eq!(inspect_projection(&db.lock_conn().unwrap()).unwrap().invalid_records, 0);
+    assert_eq!(
+        inspect_projection(&db.lock_conn().unwrap())
+            .unwrap()
+            .invalid_records,
+        0
+    );
 }
 
 #[test]
@@ -697,4 +702,31 @@ fn clearing_a_session_removes_only_its_compaction_projection() {
     assert_eq!(db.compactions_for_session("second").unwrap().len(), 1);
     assert_eq!(db.count_session("first").unwrap(), 0);
     assert_eq!(db.count_session("second").unwrap(), 4);
+}
+
+#[test]
+fn purging_source_rows_removes_the_dependent_compaction_projection() {
+    let db = db();
+    let sid = "purged";
+    let ids = (0..4)
+        .map(|index| {
+            db.record_message_at(
+                sid,
+                if index % 2 == 0 { "user" } else { "assistant" },
+                &format!("message {index}"),
+                index + 1,
+            )
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let attempt = match db.begin_compaction(sid, spec(&ids[..2], ids[2])).unwrap() {
+        BeginCompaction::Started(attempt) => attempt,
+        other => panic!("expected attempt, got {other:?}"),
+    };
+    attempt.complete("[CONTEXT SUMMARY]\n\npurged").unwrap();
+
+    db.purge_older_than_ms(3).unwrap();
+
+    assert!(db.compactions_for_session(sid).unwrap().is_empty());
+    assert!(db.latest_valid_compaction(sid).unwrap().0.is_none());
 }

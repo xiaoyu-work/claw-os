@@ -2,6 +2,29 @@ use super::*;
 use crate::test_env::{lock_env, TestEnvVarGuard};
 
 #[test]
+fn task_list_summary_omits_heavy_and_private_fields() {
+    let summary = task_summary_value(&json!({
+        "id": "task-a",
+        "prompt": "summarize this report",
+        "status": "ok",
+        "session_id": "session-a",
+        "created_at": "2026-01-01T00:00:00Z",
+        "response": "large response",
+        "evidence": {"large": true},
+        "owner_home": "/home/alice",
+        "owner_uid": 1000,
+    }));
+    assert_eq!(summary["title"], "summarize this report");
+    assert_eq!(summary["session_id"], "session-a");
+    for hidden in ["prompt", "response", "evidence", "owner_home", "owner_uid"] {
+        assert!(
+            summary.get(hidden).is_none(),
+            "{hidden} leaked into summary"
+        );
+    }
+}
+
+#[test]
 fn task_session_reuse_requires_owner_and_refreshes_caps() {
     let _lock = lock_env();
     let temp = tempfile::tempdir().unwrap();
@@ -9,9 +32,9 @@ fn task_session_reuse_requires_owner_and_refreshes_caps() {
     let home = temp.path().join("home-owner");
     std::fs::create_dir_all(&home).unwrap();
 
-    let trusted_client = SessionClient::new(SessionSource::BrokerTask, true, true);
-    let session_id =
-        create_task_session_with_client("test", 1001, &home, trusted_client).unwrap();
+    let session_id = create_task_session("test", 1001, &home).unwrap();
+    prepare_task_session(&session_id, 1001, &home)
+        .expect("an empty task session must be reusable after an early worker failure");
     let db = crate::agent::memory::sqlite_fts::MemoryDb::open(
         crate::paths::clawd_user_memory_db_path(1001),
     )
@@ -23,13 +46,6 @@ fn task_session_reuse_requires_owner_and_refreshes_caps() {
     assert_eq!(
         session::get_meta(&sid).unwrap().origin,
         Some(SessionOrigin::SystemAgentTask)
-    );
-    assert_eq!(
-        session::get_meta(&sid).unwrap().client,
-        SessionClient {
-            attended: false,
-            ..trusted_client
-        }
     );
     session::set_caps(&sid, &crate::caps::CapSet::new()).unwrap();
     // A session that acquired a delegation marker is re-stamped as
@@ -86,196 +102,52 @@ async fn a_root_peer_cannot_submit_an_agent_task() {
     assert!(error.contains("non-root"), "{error}");
 }
 
-fn attended_client() -> ClientIdentity {
-    ClientIdentity {
-        pid: Some(4242),
-        uid: Some(1000),
-        gid: Some(1000),
-        execution_uid: None,
-        start_time_ticks: Some(77),
-        attended_local: true,
+#[test]
+fn retry_creates_a_new_pending_task_for_the_same_session() {
+    let _lock = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    let _data = TestEnvVarGuard::set("COS_DATA_DIR", temp.path());
+    let owner_uid = unsafe { libc::geteuid() } as u32;
+    if owner_uid == 0 {
+        return;
     }
-}
-
-fn fresh_root() -> tempfile::TempDir {
-    tempfile::tempdir().unwrap()
-}
-
-fn pending_job() -> Job {
-    Job::new_pending_with_client(
-        "test".to_string(),
-        None,
-        None,
-        Some("session-a".to_string()),
-        None,
-        Some(1000),
-        Some("/home/test".to_string()),
-        SessionClient::new(SessionSource::BrokerTask, false, true),
+    let owner_home = crate::clawd::system_caps::verified_owner_home(owner_uid).unwrap();
+    let session_id = create_task_session("retry test", owner_uid, &owner_home).unwrap();
+    let db = crate::agent::memory::sqlite_fts::MemoryDb::open(
+        crate::paths::clawd_user_memory_db_path(owner_uid),
     )
-}
+    .unwrap();
+    db.record_message(&session_id, "user", "retry me").unwrap();
 
-#[test]
-fn live_submission_presence_is_consumed_once() {
-    let _lock = crate::caps::test_env_lock::env_lock();
-    clear_presence_leases();
-    let dir = fresh_root();
-    let store = Store::with_root(dir.path().to_path_buf()).unwrap();
-    let job = pending_job();
-    let task_id = job.id.clone();
-    with_presence_publication(&task_id, &attended_client(), 1_000, || store.publish(job))
+    let store = Store::open_default().unwrap();
+    let original = store
+        .submit(
+            "retry me".to_string(),
+            Some(session_id.clone()),
+            None,
+            Some(owner_uid),
+            Some(owner_home.to_string_lossy().into_owned()),
+        )
         .unwrap();
-    let (_, presence) = claim_job_with_presence_at(&store, 2_000, 60_000, |pid, start, uid| {
-        pid == 4242 && start == 77 && uid == 1000
-    })
-    .unwrap()
-    .expect("published task");
-    let presence = presence
-    .expect("live authenticated submitter should retain attendance");
-    assert_eq!(presence.owner_uid, 1000);
-    assert_eq!(presence.pid, 4242);
-    assert_eq!(presence.expires_at_ms, 62_000);
-}
-
-#[test]
-fn submitter_exit_expires_presence() {
-    let _lock = crate::caps::test_env_lock::env_lock();
-    clear_presence_leases();
-    let dir = fresh_root();
-    let store = Store::with_root(dir.path().to_path_buf()).unwrap();
-    let job = pending_job();
-    let task_id = job.id.clone();
-    with_presence_publication(&task_id, &attended_client(), 1_000, || store.publish(job))
-        .unwrap();
-    let (_, presence) =
-        claim_job_with_presence_at(&store, 2_000, 60_000, |_, _, _| false)
-            .unwrap()
-            .expect("published task");
-    assert!(presence.is_none());
-}
-
-#[test]
-fn queue_delay_expires_presence() {
-    let _lock = crate::caps::test_env_lock::env_lock();
-    clear_presence_leases();
-    let dir = fresh_root();
-    let store = Store::with_root(dir.path().to_path_buf()).unwrap();
-    let job = pending_job();
-    let task_id = job.id.clone();
-    with_presence_publication(&task_id, &attended_client(), 1_000, || store.publish(job))
-        .unwrap();
-    let (_, presence) = claim_job_with_presence_at(
-        &store,
-        1_000 + SUBMISSION_PRESENCE_TTL_MS + 1,
-        60_000,
-        |_, _, _| true,
-    )
-    .unwrap()
-    .expect("published task");
-    assert!(presence.is_none());
-}
-
-#[test]
-fn daemon_restart_drops_presence() {
-    let _lock = crate::caps::test_env_lock::env_lock();
-    clear_presence_leases();
-    let dir = fresh_root();
-    let store = Store::with_root(dir.path().to_path_buf()).unwrap();
-    let job = pending_job();
-    let task_id = job.id.clone();
-    with_presence_publication(&task_id, &attended_client(), 1_000, || store.publish(job))
-        .unwrap();
-    clear_presence_leases();
-    let (_, presence) =
-        claim_job_with_presence_at(&store, 2_000, 60_000, |_, _, _| true)
-            .unwrap()
-            .expect("published task");
-    assert!(presence.is_none());
-}
-
-#[test]
-fn publication_and_claim_are_atomic_with_presence() {
-    let _lock = crate::caps::test_env_lock::env_lock();
-    clear_presence_leases();
-    let dir = fresh_root();
-    let store = Store::with_root(dir.path().to_path_buf()).unwrap();
-    let publisher_store = store.clone();
-    let job = pending_job();
-    let task_id = job.id.clone();
-    let client = attended_client();
-    let (installed_tx, installed_rx) = std::sync::mpsc::channel();
-    let (publish_tx, publish_rx) = std::sync::mpsc::channel();
-    let publisher = std::thread::spawn(move || {
-        with_presence_publication(&task_id, &client, 1_000, || {
-            installed_tx.send(()).unwrap();
-            publish_rx.recv().unwrap();
-            publisher_store.publish(job)
-        })
-        .unwrap();
-    });
-    installed_rx.recv().unwrap();
-
-    let claimant_store = store.clone();
-    let (claimed_tx, claimed_rx) = std::sync::mpsc::channel();
-    let claimant = std::thread::spawn(move || {
-        let claimed =
-            claim_job_with_presence_at(&claimant_store, 2_000, 60_000, |_, _, _| true)
-                .unwrap();
-        claimed_tx.send(claimed).unwrap();
-    });
-    assert!(
-        claimed_rx
-            .recv_timeout(std::time::Duration::from_millis(50))
-            .is_err(),
-        "claim must wait until presence and the pending file are published together"
-    );
-    publish_tx.send(()).unwrap();
-    publisher.join().unwrap();
-    let (_, presence) = claimed_rx
-        .recv_timeout(std::time::Duration::from_secs(1))
-        .unwrap()
-        .expect("published task");
-    claimant.join().unwrap();
-    assert!(presence.is_some());
-}
-
-#[test]
-fn failed_publication_removes_presence() {
-    let _lock = crate::caps::test_env_lock::env_lock();
-    clear_presence_leases();
-    let result = with_presence_publication(
-        "task-failed",
-        &attended_client(),
-        1_000,
-        || Err::<(), _>("write failed"),
-    );
-    assert_eq!(result, Err("write failed"));
-    let leases = presence_leases()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    assert!(!leases.contains_key("task-failed"));
-}
-
-#[test]
-fn recovered_job_cannot_reuse_consumed_presence() {
-    let _lock = crate::caps::test_env_lock::env_lock();
-    clear_presence_leases();
-    let dir = fresh_root();
-    let store = Store::with_root(dir.path().to_path_buf()).unwrap();
-    let job = pending_job();
-    let task_id = job.id.clone();
-    store.publish(job).unwrap();
-    let claimed = store.claim_one().unwrap().expect("first claim");
+    let claimed = store.claim_one().unwrap().unwrap();
     store
-        .release_for_retry(&claimed.id, "worker exited")
-        .unwrap()
-        .expect("released");
-    // Simulate the old publish/lease race completing after recovery. Even a
-    // still-live late lease must not make a retried attempt attended.
-    with_presence_publication(&task_id, &attended_client(), 2_500, || Ok::<(), ()>(()))
+        .finish(
+            claimed,
+            crate::agent::service::FinishOutcome::Error("failed".into()),
+        )
         .unwrap();
-    let (_, retry_presence) =
-        claim_job_with_presence_at(&store, 3_000, 60_000, |_, _, _| true)
-            .unwrap()
-            .expect("retry claim");
-    assert!(retry_presence.is_none());
+    let client = ClientIdentity {
+        pid: Some(std::process::id()),
+        uid: Some(owner_uid),
+        gid: Some(unsafe { libc::getegid() } as u32),
+        execution_uid: None,
+        start_time_ticks: crate::proc::read_start_time_ticks_pub(std::process::id()),
+        attended_local: true,
+    };
+
+    let retried = retry(json!({ "id": original.id }), &client).unwrap();
+    assert_ne!(retried["id"], original.id);
+    assert_eq!(retried["status"], "pending");
+    assert_eq!(retried["session_id"], session_id);
+    assert_eq!(retried["prompt"], "retry me");
 }

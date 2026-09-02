@@ -364,6 +364,7 @@ fn with_tmp_apps<F: FnOnce()>(label: &str, manifests: &[(&str, &str)], f: F) {
         let app_dir = dir.join(id);
         std::fs::create_dir_all(&app_dir).unwrap();
         std::fs::write(app_dir.join("app.json"), body).unwrap();
+        crate::test_env::sign_test_package(&app_dir, crate::provenance::PackageKind::App, id);
     }
     let prev = std::env::var("COS_APPS_DIR").ok();
     std::env::set_var("COS_APPS_DIR", &dir);

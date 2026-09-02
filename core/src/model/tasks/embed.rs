@@ -51,12 +51,12 @@ pub const MODEL_NAME: &str = "text-embedding-3-small";
 /// cloud `[agent]` provider is available. Returns an error if the
 /// config block names a provider that does not exist.
 pub fn build_default() -> Result<Option<Box<dyn Embedder>>, String> {
-    let cfg = &crate::config::get().embed;
-    build_from(cfg)
+    let config = crate::config::current_snapshot();
+    build_from(&config.embed)
 }
 
 pub fn build_from(cfg: &EmbedConfig) -> Result<Option<Box<dyn Embedder>>, String> {
-    build_from_with_agent(cfg, &crate::config::get().agent)
+    build_from_with_agent(cfg, &crate::config::current_snapshot().agent)
 }
 
 /// Variant of [`build_from`] that takes the `[agent]` config
@@ -248,7 +248,7 @@ impl OpenAICompatEmbedder {
             .unwrap_or_else(|| default_base_url_for(&alias).to_string());
         let base_url = base_url.trim_end_matches('/').to_string();
 
-        let api_key = crate::agent::llm::providers::openai_compat::resolve_api_key(
+        let api_key = crate::agent::llm::construction::resolve_process_api_key(
             cfg.api_key_credential.as_deref(),
             cfg.api_key_env.as_deref(),
         )

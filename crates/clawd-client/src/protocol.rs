@@ -3,7 +3,7 @@ use serde_json::Value;
 
 use crate::{ClientError, Error, RemoteError};
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 pub const MAGIC: [u8; 4] = *b"CBK1";
 pub const KIND_REQUEST: u8 = 0x01;
 pub const KIND_RESPONSE: u8 = 0x02;
@@ -27,16 +27,25 @@ pub enum Command {
     MemoryHistory,
     #[serde(rename = "permission.pending")]
     PermissionPending,
+    #[serde(rename = "notification.subscribe")]
+    NotificationSubscribe,
+    #[serde(rename = "notification.delivery.claim")]
+    NotificationDeliveryClaim,
+    #[serde(rename = "notification.delivery.complete")]
+    NotificationDeliveryComplete,
 }
 
 impl Command {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 9] = [
         Self::TaskSubmit,
         Self::TaskStream,
         Self::TaskCancel,
         Self::MemorySessions,
         Self::MemoryHistory,
         Self::PermissionPending,
+        Self::NotificationSubscribe,
+        Self::NotificationDeliveryClaim,
+        Self::NotificationDeliveryComplete,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -47,6 +56,9 @@ impl Command {
             Self::MemorySessions => "memory.sessions",
             Self::MemoryHistory => "memory.history",
             Self::PermissionPending => "permission.pending",
+            Self::NotificationSubscribe => "notification.subscribe",
+            Self::NotificationDeliveryClaim => "notification.delivery.claim",
+            Self::NotificationDeliveryComplete => "notification.delivery.complete",
         }
     }
 }

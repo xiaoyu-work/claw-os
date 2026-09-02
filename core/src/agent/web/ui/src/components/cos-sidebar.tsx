@@ -10,6 +10,7 @@
  */
 
 import {
+  Activity,
   ChevronDown,
   Inbox,
   ListTodo,
@@ -24,6 +25,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 
 import { api } from "@/lib/api";
+import { useNotifications } from "@/lib/notifications";
 import { isActive, navigate, useRoute } from "@/lib/router";
 import { setTheme, useTheme, type Theme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
@@ -61,6 +63,7 @@ const NAV_ITEMS: Array<{
   { key: "tasks", label: "Tasks", icon: ListTodo, href: "/tasks" },
   { key: "approvals", label: "Approvals", icon: ShieldCheck, href: "/approvals" },
   { key: "inbox", label: "Inbox", icon: Inbox, href: "/inbox" },
+  { key: "events", label: "System Events", icon: Activity, href: "/events" },
   { key: "system", label: "System", icon: Monitor, href: "/system" },
   { key: "settings", label: "Settings", icon: Settings, href: "/settings" },
 ];
@@ -76,6 +79,7 @@ type Session = {
 
 export function CosSidebar({ meta }: { meta: any }) {
   const current = useRoute();
+  const { unreadCount } = useNotifications();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [navOpen, setNavOpen] = useState(true);
   const [sessionsOpen, setSessionsOpen] = useState(true);
@@ -159,6 +163,11 @@ export function CosSidebar({ meta }: { meta: any }) {
                       >
                         <Icon className="h-4 w-4" />
                         <span>{item.label}</span>
+                        {item.key === "inbox" && unreadCount > 0 && (
+                          <span className="ml-auto min-w-5 rounded-full bg-destructive px-1 text-center text-[10px] leading-5 text-destructive-foreground">
+                            {unreadCount > 99 ? "99+" : unreadCount}
+                          </span>
+                        )}
                       </SidebarMenuButton>
                     </SidebarMenuItem>
                   );

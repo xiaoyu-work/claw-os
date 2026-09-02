@@ -53,6 +53,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::anthropic::wire as anthropic_wire;
+use crate::agent::llm::construction::HttpTransport;
+use crate::agent::llm::construction::ProcessCredentialSource;
 use crate::agent::llm::sigv4::{
     current_amz_date, sign, AwsCredentials, SignableRequest, SigningContext,
 };
@@ -116,29 +118,31 @@ impl std::fmt::Debug for BedrockConfig {
 
 impl BedrockConfig {
     pub fn from_agent_config(model: &str, agent: &AgentConfig) -> Self {
-        let region = agent
-            .aws_region
-            .clone()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| DEFAULT_REGION.to_string());
+        Self::try_from_agent_config(model, agent).unwrap_or_else(|error| {
+            tracing::error!(
+                error = %error,
+                "legacy Bedrock constructor deferred provider infrastructure failure"
+            );
+            Self::unconfigured(model, agent)
+        })
+    }
 
-        let base_url = agent.base_url.clone().filter(|s| !s.is_empty());
+    pub fn try_from_agent_config(model: &str, agent: &AgentConfig) -> Result<Self> {
+        crate::agent::llm::registry::bedrock_config(model, agent, &ProcessCredentialSource)
+    }
 
-        let credentials = resolve_credentials(agent);
-
-        let request_timeout = if agent.request_timeout == 0 {
-            Duration::from_secs(0)
-        } else {
-            Duration::from_secs(agent.request_timeout)
-        };
-
+    fn unconfigured(model: &str, agent: &AgentConfig) -> Self {
         Self {
-            region,
-            base_url,
+            region: agent
+                .aws_region
+                .clone()
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| DEFAULT_REGION.to_string()),
+            base_url: agent.base_url.clone().filter(|value| !value.is_empty()),
             model: model.to_string(),
-            credentials,
+            credentials: None,
             extra_headers: agent.extra_headers.clone(),
-            request_timeout,
+            request_timeout: Duration::from_secs(agent.request_timeout),
         }
     }
 
@@ -178,79 +182,45 @@ fn host_from_url(url: &str) -> Option<String> {
     Some(host_with_port.to_string())
 }
 
-/// Look up access key + secret + optional session token from the
-/// agent config. Returns `None` if access key OR secret key is
-/// missing — partial credentials are useless and we don't want to
-/// silently send an unsigned request.
-fn resolve_credentials(agent: &AgentConfig) -> Option<AwsCredentials> {
-    let access_key = lookup_aws_value(
-        agent.aws_access_key_credential.as_deref(),
-        agent.aws_access_key_env.as_deref(),
-        DEFAULT_ACCESS_KEY_ENV,
-    )?;
-    let secret_key = lookup_aws_value(
-        agent.aws_secret_key_credential.as_deref(),
-        agent.aws_secret_key_env.as_deref(),
-        DEFAULT_SECRET_KEY_ENV,
-    )?;
-    let session_token = lookup_aws_value(
-        agent.aws_session_token_credential.as_deref(),
-        agent.aws_session_token_env.as_deref(),
-        DEFAULT_SESSION_TOKEN_ENV,
-    );
-
-    let mut creds = AwsCredentials::new(access_key, secret_key);
-    if let Some(t) = session_token {
-        creds = creds.with_session_token(t);
-    }
-    Some(creds)
-}
-
-/// Resolve a single AWS-credential value with the standard
-/// `*_credential` (cos credential store) → `*_env` (override) →
-/// `<default-env>` (AWS SDK convention) ladder.
-fn lookup_aws_value(
-    cred_name: Option<&str>,
-    env_name: Option<&str>,
-    default_env: &str,
-) -> Option<String> {
-    if let Some(name) = cred_name {
-        if let Ok(Some(v)) = crate::credential::try_load(name, "agent") {
-            if !v.is_empty() {
-                return Some(v);
-            }
-        }
-    }
-    let env = env_name.unwrap_or(default_env);
-    if let Ok(v) = std::env::var(env) {
-        if !v.is_empty() {
-            return Some(v);
-        }
-    }
-    None
-}
-
 pub struct BedrockProvider {
     cfg: BedrockConfig,
-    client: reqwest::Client,
+    transport: Option<HttpTransport>,
+    initialization_error: Option<Arc<crate::agent::llm::ProviderInitializationError>>,
 }
 
 impl BedrockProvider {
     pub fn new(cfg: BedrockConfig) -> Self {
-        let mut builder = reqwest::Client::builder()
-            .user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")))
-            // MEDIUM-14: per-phase HTTP timeout.
-            .connect_timeout(Duration::from_secs(5))
-            .pool_idle_timeout(Duration::from_secs(60));
-        if cfg.request_timeout > Duration::from_secs(0) {
-            builder = builder.timeout(cfg.request_timeout);
+        let (transport, initialization_error) =
+            crate::agent::llm::legacy_provider_transport(PROVIDER_NAME);
+        Self {
+            cfg,
+            transport,
+            initialization_error,
         }
-        let client = builder.build().unwrap_or_else(|_| reqwest::Client::new());
-        Self { cfg, client }
+    }
+
+    pub fn new_with_transport(cfg: BedrockConfig, transport: HttpTransport) -> Self {
+        Self {
+            cfg,
+            transport: Some(transport),
+            initialization_error: None,
+        }
     }
 
     pub fn from_agent_config(model: &str, agent: &AgentConfig) -> Self {
-        Self::new(BedrockConfig::from_agent_config(model, agent))
+        match BedrockConfig::try_from_agent_config(model, agent) {
+            Ok(config) => Self::new(config),
+            Err(error) => {
+                tracing::error!(error = %error, "legacy Bedrock provider initialization failed");
+                Self {
+                    cfg: BedrockConfig::unconfigured(model, agent),
+                    transport: None,
+                    initialization_error: Some(Arc::new(
+                        crate::agent::llm::ProviderInitializationError::new(PROVIDER_NAME, error),
+                    )),
+                }
+            }
+        }
     }
 
     /// `/model/<url-encoded model id>/invoke` — exact path, before SigV4
@@ -264,6 +234,18 @@ impl BedrockProvider {
             "/model/{}/invoke-with-response-stream",
             url_encode_path_segment(&self.cfg.model)
         )
+    }
+
+    fn transport(&self) -> Result<&HttpTransport> {
+        match &self.initialization_error {
+            Some(error) => Err(crate::agent::llm::deferred_initialization_error(error)),
+            None => self.transport.as_ref().ok_or_else(|| {
+                crate::agent::llm::ProviderInfrastructureError::StatePoisoned {
+                    component: "bedrock.transport",
+                }
+                .into()
+            }),
+        }
     }
 
     fn stream_full_url(&self) -> String {
@@ -307,7 +289,9 @@ impl Provider for BedrockProvider {
     }
 
     fn is_configured(&self) -> bool {
-        self.cfg.credentials.is_some()
+        self.initialization_error.is_none()
+            && self.transport.is_some()
+            && self.cfg.credentials.is_some()
     }
 
     fn supports_prompt_cache(&self) -> bool {
@@ -318,6 +302,7 @@ impl Provider for BedrockProvider {
     }
 
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
+        let transport = self.transport()?;
         let creds = self.cfg.credentials.as_ref().ok_or_else(|| {
             LlmError::NotConfigured(
                 "bedrock: missing AWS credentials (set AWS_ACCESS_KEY_ID + \
@@ -350,9 +335,8 @@ impl Provider for BedrockProvider {
         };
         let signed = sign(creds, &ctx, &host, &signable);
 
-        let mut http = self
-            .client
-            .post(self.full_url())
+        let mut http = transport
+            .post(self.full_url(), self.cfg.request_timeout)
             .header("Content-Type", "application/json")
             // accept identifies us in CloudTrail logs
             .header("Accept", "application/json")
@@ -378,11 +362,9 @@ impl Provider for BedrockProvider {
             .or_else(|| resp.headers().get("X-Amzn-Errortype"))
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
-        let bytes = crate::agent::llm::read_body_capped(
-            resp,
-            crate::agent::llm::MAX_NONSTREAM_BODY_BYTES,
-        )
-        .await?;
+        let bytes =
+            crate::agent::llm::read_body_capped(resp, crate::agent::llm::MAX_NONSTREAM_BODY_BYTES)
+                .await?;
 
         if !status.is_success() {
             return Err(classify_bedrock_error(
@@ -404,6 +386,7 @@ impl Provider for BedrockProvider {
         &self,
         request: ChatRequest,
     ) -> Result<BoxStream<'static, Result<StreamEvent>>> {
+        let transport = self.transport()?;
         let creds = self.cfg.credentials.as_ref().ok_or_else(|| {
             LlmError::NotConfigured(
                 "bedrock: missing AWS credentials (set AWS_ACCESS_KEY_ID + \
@@ -439,9 +422,8 @@ impl Provider for BedrockProvider {
         };
         let signed = sign(creds, &ctx, &host, &signable);
 
-        let mut http = self
-            .client
-            .post(self.stream_full_url())
+        let mut http = transport
+            .post(self.stream_full_url(), self.cfg.request_timeout)
             .header("Content-Type", "application/json")
             .header(
                 "X-Amzn-Bedrock-Accept",

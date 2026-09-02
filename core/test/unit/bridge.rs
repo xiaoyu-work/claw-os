@@ -15,8 +15,7 @@ fn hosted_app_commands_use_the_fixed_child_isolation_wrapper() {
     let home = tempfile::tempdir().unwrap();
     let app = tempfile::tempdir().unwrap();
     std::fs::write(app.path().join("main.py"), b"print('ok')").unwrap();
-    let _enabled =
-        crate::test_env::TestEnvVarGuard::set("COS_EXTENSION_CHILD_ISOLATION", "1");
+    let _enabled = crate::test_env::TestEnvVarGuard::set("COS_EXTENSION_CHILD_ISOLATION", "1");
     let _home = crate::test_env::TestEnvVarGuard::set("HOME", home.path());
     let _proc = crate::test_env::TestEnvVarGuard::remove("COS_PROC_DATA_DIR");
     let _broker = crate::test_env::TestEnvVarGuard::remove("COS_EXTENSION_BROKER_SOCKET");
@@ -28,7 +27,12 @@ fn hosted_app_commands_use_the_fixed_child_isolation_wrapper() {
         60_999,
         vec![
             crate::extension_host::protocol::ApprovedPath {
-                path: app.path().canonicalize().unwrap().to_string_lossy().into_owned(),
+                path: app
+                    .path()
+                    .canonicalize()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
                 device: std::os::unix::fs::MetadataExt::dev(&app_metadata),
                 inode: std::os::unix::fs::MetadataExt::ino(&app_metadata),
                 owner_uid: std::os::unix::fs::MetadataExt::uid(&app_metadata),
@@ -43,12 +47,20 @@ fn hosted_app_commands_use_the_fixed_child_isolation_wrapper() {
             },
         ],
     );
-    APP_ISOLATION_AUTHORITY.with(|slot| *slot.borrow_mut() = Some(authority));
-    let _authority_guard = AppIsolationGuard;
-    let command = app_command("python3", app.path()).unwrap();
-    assert_eq!(command.get_program(), "/usr/bin/bwrap");
-    let args = command
-        .get_args()
+    let launch = crate::extension_host::child_isolation::prepare(
+        app_runner_path(),
+        vec![
+            std::ffi::OsString::from("--"),
+            std::ffi::OsString::from("python3"),
+        ],
+        Some(app.path()),
+        Some(&authority),
+    )
+    .unwrap();
+    assert_eq!(launch.program, "/usr/bin/bwrap");
+    let args = launch
+        .args
+        .iter()
         .map(|value| value.to_string_lossy())
         .collect::<Vec<_>>()
         .join(" ");
@@ -93,15 +105,15 @@ fn panel_environment_requires_explicit_manifest_opt_in() {
 }
 
 #[test]
-fn run_app_errors_when_app_dir_missing() {
+fn an_absent_package_cannot_be_bound_for_launch() {
+    // The launch path starts from a verified snapshot, so a directory
+    // that does not exist fails before any runtime selection happens.
     let tmp = std::env::temp_dir().join("cos-bridge-test-missing");
     let _ = std::fs::remove_dir_all(&tmp);
-    let err = run_app(&tmp, "ls", &[], "/tmp", "/tmp").unwrap_err();
-    // No app.json + no main.py → python branch surfaces
-    // "app has no main.py" via run_python_app.
+    let err = crate::test_env::try_app_launch(&tmp, "missing").unwrap_err();
     assert!(
-        err.contains("main.py") || err.contains("app.json"),
-        "expected main.py / app.json reference, got: {err}"
+        err.contains("provenance") || err.contains("open package directory"),
+        "expected a provenance failure, got: {err}"
     );
 }
 
@@ -115,7 +127,8 @@ fn run_app_rejects_non_main_py_for_python() {
         r#"{"id":"x","version":"0","name":"X","runtime":"python","entry":"alt.py"}"#,
     )
     .unwrap();
-    let err = run_app(&tmp, "ls", &[], "/tmp", "/tmp").unwrap_err();
+    let launch = crate::test_env::app_launch(&tmp, "x");
+    let err = run_app(&launch, "ls", &[], "/tmp", "/tmp").unwrap_err();
     assert!(
         err.contains("entry='main.py'"),
         "expected python-entry guard, got: {err}"
@@ -133,8 +146,10 @@ fn run_app_errors_on_unknown_runtime() {
         r#"{"id":"x","version":"0","name":"X","runtime":"rust"}"#,
     )
     .unwrap();
-    let err = run_app(&tmp, "ls", &[], "/tmp", "/tmp").unwrap_err();
-    // serde rejects unknown runtime values at parse time.
+    // An unparseable manifest never becomes a verified snapshot, so the
+    // error surfaces at bind time rather than at launch.
+    crate::test_env::sign_test_package(&tmp, crate::provenance::PackageKind::App, "x");
+    let err = crate::test_env::try_app_launch(&tmp, "x").unwrap_err();
     assert!(
         err.contains("unknown variant") || err.contains("runtime"),
         "expected runtime parse error, got: {err}"
@@ -152,9 +167,10 @@ fn run_app_node_entry_missing_surfaces_clear_error() {
         r#"{"id":"x","version":"0","name":"X","runtime":"node"}"#,
     )
     .unwrap();
-    let err = run_app(&tmp, "ls", &[], "/tmp", "/tmp").unwrap_err();
+    let launch = crate::test_env::app_launch(&tmp, "x");
+    let err = run_app(&launch, "ls", &[], "/tmp", "/tmp").unwrap_err();
     assert!(
-        err.contains("app entry not found"),
+        err.contains("app entry not found") || err.contains("not a signed entrypoint"),
         "expected entry-missing error, got: {err}"
     );
     let _ = std::fs::remove_dir_all(&tmp);
@@ -210,8 +226,7 @@ fn run_python_app_handles_stdout_larger_than_pipe_buffer() {
     .unwrap();
     let state = tempfile::tempdir().unwrap();
     let _session = crate::test_env::TestSessionGuard::admin(state.path());
-    let _local_sessions =
-        crate::test_env::TestEnvVarGuard::set("COS_TEST_LOCAL_APP_SESSIONS", "1");
+    let _local_sessions = crate::test_env::TestEnvVarGuard::set("COS_TEST_LOCAL_APP_SESSIONS", "1");
     let runner = state.path().join("claw-app-runner");
     std::fs::write(
         &runner,
@@ -225,9 +240,9 @@ fn run_python_app_handles_stdout_larger_than_pipe_buffer() {
     // Hard timeout: any deadlock regresses this into a 10s failure
     // rather than a session-killing hang.
     let (tx, rx) = std::sync::mpsc::channel();
-    let app_dir = tmp.clone();
+    let launch = crate::test_env::app_launch(&tmp, "x");
     let t = std::thread::spawn(move || {
-        let r = run_python_app(&app_dir, "noop", &[], "/tmp", "/tmp");
+        let r = run_python_app(&launch, "noop", &[], "/tmp", "/tmp");
         let _ = tx.send(r);
     });
     let result = rx
@@ -366,7 +381,9 @@ fn operation_defaults_bind_the_same_argv_and_narrow_caps() {
         Verb::FS_WRITE,
         Scope::path(default_output.to_string_lossy()),
     ));
-    let download_resolved = manifest.resolve_needs("download", &download.values).unwrap();
+    let download_resolved = manifest
+        .resolve_needs("download", &download.values)
+        .unwrap();
     let download_caps = constrained_operation_caps(
         &download_parent,
         true,
@@ -392,7 +409,9 @@ fn operation_defaults_bind_the_same_argv_and_narrow_caps() {
         Verb::FS_WRITE,
         Scope::path(explicit_output.to_string_lossy()),
     ));
-    let explicit_resolved = manifest.resolve_needs("download", &explicit.values).unwrap();
+    let explicit_resolved = manifest
+        .resolve_needs("download", &explicit.values)
+        .unwrap();
     let explicit_caps = constrained_operation_caps(
         &explicit_parent,
         true,
@@ -538,44 +557,31 @@ fn canonical_argv_matches_bound_boolean_and_delimiter_values() {
     .unwrap();
     let operation = &manifest.operations["run"];
 
-    let inline_true = bind_operation_args(
-        operation,
-        &["hello".into(), "--confirm=true".into()],
-    )
-    .unwrap();
+    let inline_true =
+        bind_operation_args(operation, &["hello".into(), "--confirm=true".into()]).unwrap();
     assert_eq!(
         inline_true.argv,
         ["hello", "true", "--confirm", "--limit", "10"]
     );
     assert_eq!(inline_true.values["confirm"], serde_json::json!(true));
 
-    let inline_false = bind_operation_args(
-        operation,
-        &["hello".into(), "--confirm=false".into()],
-    )
-    .unwrap();
+    let inline_false =
+        bind_operation_args(operation, &["hello".into(), "--confirm=false".into()]).unwrap();
     assert_eq!(
         inline_false.argv,
         ["hello", "true", "--confirm=false", "--limit", "10"]
     );
     assert_eq!(inline_false.values["confirm"], serde_json::json!(false));
-    let rebound =
-        crate::caps::args::bind_cli_args(&operation.args, &inline_false.argv).unwrap();
+    let rebound = crate::caps::args::bind_cli_args(&operation.args, &inline_false.argv).unwrap();
     assert_eq!(rebound, inline_false.values);
 
     let delimited = bind_operation_args(operation, &["--".into(), "--literal".into()]).unwrap();
-    assert_eq!(
-        delimited.argv,
-        ["--limit", "10", "--", "--literal", "true"]
-    );
+    assert_eq!(delimited.argv, ["--limit", "10", "--", "--literal", "true"]);
     let rebound = crate::caps::args::bind_cli_args(&operation.args, &delimited.argv).unwrap();
     assert_eq!(rebound, delimited.values);
 
-    let option_shaped_value = bind_operation_args(
-        operation,
-        &["hello".into(), "--label=--urgent".into()],
-    )
-    .unwrap();
+    let option_shaped_value =
+        bind_operation_args(operation, &["hello".into(), "--label=--urgent".into()]).unwrap();
     assert_eq!(
         option_shaped_value.argv,
         ["hello", "true", "--limit", "10", "--label=--urgent"]
@@ -653,8 +659,7 @@ fn explicit_false_overrides_true_default_for_authority_and_child() {
     )
     .unwrap();
     let operation = &manifest.operations["run"];
-    let bound =
-        bind_operation_args(operation, &["--enabled=false".to_string()]).unwrap();
+    let bound = bind_operation_args(operation, &["--enabled=false".to_string()]).unwrap();
     assert_eq!(bound.argv, ["--enabled=false"]);
     assert_eq!(bound.values["enabled"], serde_json::json!(false));
     let rebound = crate::caps::args::bind_cli_args(&operation.args, &bound.argv).unwrap();
@@ -677,13 +682,7 @@ fn in_process_wild_need_rejects_typed_wildcard_authority() {
     let operation = &manifest.operations["dial"];
     let resolved = manifest.resolve_needs("dial", &BTreeMap::new()).unwrap();
     let parent = CapSet::from_caps([Cap::new(Verb::NET_DIAL, Scope::host("**"))]);
-    assert!(constrained_operation_caps(
-        &parent,
-        true,
-        &operation.needs,
-        &resolved
-    )
-    .is_err());
+    assert!(constrained_operation_caps(&parent, true, &operation.needs, &resolved).is_err());
 }
 
 #[test]
@@ -723,10 +722,7 @@ fn trusted_email_provider_is_bound_before_capability_derivation() {
     assert_eq!(bound.argv, trusted);
 
     let resolved = manifest.resolve_needs("send", &bound.values).unwrap();
-    assert_eq!(
-        resolved[0][0].scope,
-        Scope::name("default/SMTP_PASSWORD")
-    );
+    assert_eq!(resolved[0][0].scope, Scope::name("default/SMTP_PASSWORD"));
     assert_eq!(resolved[1][0].scope, Scope::host("mail.example.test"));
 }
 
@@ -753,20 +749,13 @@ fn local_calendar_resolution_is_identical_for_in_process_caps() {
         Scope::name("default/GOOGLE_ACCESS_TOKEN"),
     ));
     parent.insert(Cap::new(Verb::NET_DIAL, Scope::host("www.googleapis.com")));
-    let caps =
-        constrained_operation_caps(&parent, true, &operation.needs, &resolved).unwrap();
-    assert!(caps.covers(&Cap::new(
-        Verb::DATA_DB_READ,
-        Scope::name("calendar")
-    )));
+    let caps = constrained_operation_caps(&parent, true, &operation.needs, &resolved).unwrap();
+    assert!(caps.covers(&Cap::new(Verb::DATA_DB_READ, Scope::name("calendar"))));
     assert!(!caps.covers(&Cap::new(
         Verb::SECRET_READ,
         Scope::name("default/GOOGLE_ACCESS_TOKEN")
     )));
-    assert!(!caps.covers(&Cap::new(
-        Verb::NET_DIAL,
-        Scope::host("www.googleapis.com")
-    )));
+    assert!(!caps.covers(&Cap::new(Verb::NET_DIAL, Scope::host("www.googleapis.com"))));
 
     let namespace = credentials.path().join("default");
     std::fs::create_dir_all(&namespace).unwrap();
@@ -787,8 +776,7 @@ fn ntfy_server_is_resolved_before_exact_host_capability() {
     let operation = &manifest.operations["send"];
     let _server =
         crate::test_env::TestEnvVarGuard::set("COS_NTFY_SERVER", "https://notify.example:8443");
-    let trusted =
-        trusted_pre_dispatch_args("gateway-ntfy", operation, &["hello".into()]).unwrap();
+    let trusted = trusted_pre_dispatch_args("gateway-ntfy", operation, &["hello".into()]).unwrap();
     assert!(trusted
         .windows(2)
         .any(|pair| pair == ["--server", "https://notify.example:8443"]));
@@ -797,8 +785,7 @@ fn ntfy_server_is_resolved_before_exact_host_capability() {
     assert!(needs
         .into_iter()
         .flatten()
-        .any(|cap| cap.verb == Verb::NET_DIAL
-            && cap.scope == Scope::host("notify.example:8443")));
+        .any(|cap| cap.verb == Verb::NET_DIAL && cap.scope == Scope::host("notify.example:8443")));
 }
 
 #[test]
@@ -858,13 +845,12 @@ fn ntfy_server_resolution_uses_explicit_env_credential_fallback_precedence() {
     assert!(explicit
         .windows(2)
         .any(|pair| pair == ["--server", "https://explicit.example:7443"]));
-    assert!(!explicit.iter().any(|arg| arg == "https://credential.example:9443"));
+    assert!(!explicit
+        .iter()
+        .any(|arg| arg == "https://credential.example:9443"));
 
     let status_args = trusted_pre_dispatch_args("gateway-ntfy", status, &[]).unwrap();
-    assert_eq!(
-        status_args,
-        ["--server", "https://credential.example:9443"]
-    );
+    assert_eq!(status_args, ["--server", "https://credential.example:9443"]);
 }
 
 #[test]
@@ -880,22 +866,17 @@ fn usb_conditional_confirmation_is_enforced_by_canonical_binder() {
 
     let enabled = bind_operation_args(operation, &["1-2".into(), "on".into()]).unwrap();
     assert!(!enabled.values.contains_key("confirm"));
-    assert!(bind_operation_args(
-        operation,
-        &["1-2".into(), "on".into(), "--confirm".into()]
-    )
-    .is_err());
+    assert!(
+        bind_operation_args(operation, &["1-2".into(), "on".into(), "--confirm".into()]).is_err()
+    );
     assert!(bind_operation_args(operation, &["1-2".into(), "off".into()]).is_err());
     assert!(bind_operation_args(
         operation,
         &["1-2".into(), "off".into(), "--confirm=false".into()]
     )
     .is_err());
-    let disabled = bind_operation_args(
-        operation,
-        &["1-2".into(), "off".into(), "--confirm".into()],
-    )
-    .unwrap();
+    let disabled =
+        bind_operation_args(operation, &["1-2".into(), "off".into(), "--confirm".into()]).unwrap();
     assert_eq!(disabled.values["confirm"], serde_json::json!(true));
 }
 
@@ -934,17 +915,11 @@ fn canonical_url_is_materialized_in_child_argv_before_authority() {
     .unwrap();
     assert_eq!(
         bound.values["urls"],
-        serde_json::json!([
-            "https://xn--bcher-kva.example/a",
-            "https://example.com/b"
-        ])
+        serde_json::json!(["https://xn--bcher-kva.example/a", "https://example.com/b"])
     );
     assert_eq!(
         &bound.argv[..2],
-        [
-            "https://xn--bcher-kva.example/a",
-            "https://example.com/b"
-        ]
+        ["https://xn--bcher-kva.example/a", "https://example.com/b"]
     );
 }
 
@@ -972,8 +947,7 @@ fn explicit_stdin_bytes_reach_python_and_polyglot_children() {
     let _env = crate::test_env::lock_env();
     let state = tempfile::tempdir().unwrap();
     let _session = crate::test_env::TestSessionGuard::admin(state.path());
-    let _local_sessions =
-        crate::test_env::TestEnvVarGuard::set("COS_TEST_LOCAL_APP_SESSIONS", "1");
+    let _local_sessions = crate::test_env::TestEnvVarGuard::set("COS_TEST_LOCAL_APP_SESSIONS", "1");
     let runner = state.path().join("claw-app-runner");
     std::fs::write(
         &runner,
@@ -998,8 +972,9 @@ fn explicit_stdin_bytes_reach_python_and_polyglot_children() {
     )
     .unwrap();
     let state_text = state.path().to_string_lossy();
+    let python_launch = crate::test_env::app_launch(&python, "python-app");
     let output = run_python_app_with_stdin(
-        &python,
+        &python_launch,
         "read",
         &[],
         &state_text,
@@ -1012,15 +987,9 @@ fn explicit_stdin_bytes_reach_python_and_polyglot_children() {
         serde_json::from_str::<serde_json::Value>(&output).unwrap()["input"],
         "python input"
     );
-    let closed = run_python_app(
-        &python,
-        "read",
-        &[],
-        &state_text,
-        &state_text,
-    )
-    .unwrap()
-    .unwrap();
+    let closed = run_python_app(&python_launch, "read", &[], &state_text, &state_text)
+        .unwrap()
+        .unwrap();
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&closed).unwrap()["input"],
         ""
@@ -1041,8 +1010,9 @@ fn explicit_stdin_bytes_reach_python_and_polyglot_children() {
     )
     .unwrap();
     std::fs::set_permissions(&entry, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let shell_launch = crate::test_env::app_launch(&shell, "shell-app");
     let output = run_app_with_stdin(
-        &shell,
+        &shell_launch,
         "read",
         &[],
         &state_text,
@@ -1077,22 +1047,14 @@ fn bundled_lone_limits_bind_before_optional_selectors() {
     let lone_limit = bind_operation_args(recent, &["25".into()]).unwrap();
     assert_eq!(lone_limit.values["limit"], serde_json::json!(25));
     assert_eq!(lone_limit.argv, ["25"]);
-    let selected = bind_operation_args(
-        recent,
-        &["--source".into(), "security".into()],
-    )
-    .unwrap();
+    let selected = bind_operation_args(recent, &["--source".into(), "security".into()]).unwrap();
     assert_eq!(selected.values["source"], serde_json::json!("security"));
     assert_eq!(selected.values["limit"], serde_json::json!(100));
     assert_eq!(selected.argv, ["100", "--source", "security"]);
 
     let containers = load(&["container-manager"]);
     let logs = &containers.operations["logs"];
-    let docker = bind_operation_args(
-        logs,
-        &["docker".into(), "web".into(), "50".into()],
-    )
-    .unwrap();
+    let docker = bind_operation_args(logs, &["docker".into(), "web".into(), "50".into()]).unwrap();
     assert_eq!(docker.values["lines"], serde_json::json!(50));
     assert_eq!(docker.argv, ["docker", "web", "50"]);
     let containerd = bind_operation_args(
@@ -1135,7 +1097,9 @@ fn bundled_legacy_aliases_canonicalize_to_one_effective_grammar() {
     let load = |path: &[&str]| {
         let path = path
             .iter()
-            .fold(repository.join("apps"), |path, component| path.join(component))
+            .fold(repository.join("apps"), |path, component| {
+                path.join(component)
+            })
             .join("app.json");
         Manifest::from_json(&std::fs::read_to_string(path).unwrap()).unwrap()
     };
@@ -1152,11 +1116,7 @@ fn bundled_legacy_aliases_canonicalize_to_one_effective_grammar() {
             bind_operation_args(operation, &["destination".into(), "hello".into()]).unwrap();
         let canonical = bind_operation_args(
             operation,
-            &[
-                "hello".into(),
-                format!("--{alias}"),
-                "destination".into(),
-            ],
+            &["hello".into(), format!("--{alias}"), "destination".into()],
         )
         .unwrap();
         assert_eq!(legacy.values, canonical.values, "{app}");
@@ -1175,10 +1135,7 @@ fn bundled_legacy_aliases_canonicalize_to_one_effective_grammar() {
         ],
     )
     .unwrap();
-    assert_eq!(
-        flagged.argv,
-        [url, output.to_string_lossy().into_owned()]
-    );
+    assert_eq!(flagged.argv, [url, output.to_string_lossy().into_owned()]);
 
     let pkg = load(&["pkg"]);
     let short = bind_operation_args(

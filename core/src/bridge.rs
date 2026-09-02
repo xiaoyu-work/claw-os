@@ -4,26 +4,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Write;
 
 use crate::caps::manifest::{ArgKind, Manifest, Need, Operation, Runtime, ScopeBinding};
 use crate::caps::{Cap, CapSet, Scope, Verb};
 use crate::clawd::routes::Command as ClawdCommand;
 use crate::proc::{deregister_session, register_session, SessionInfo};
-
-thread_local! {
-    static APP_ISOLATION_AUTHORITY:
-        std::cell::RefCell<Option<crate::extension_host::child_isolation::IsolationAuthority>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-struct AppIsolationGuard;
-
-impl Drop for AppIsolationGuard {
-    fn drop(&mut self) {
-        APP_ISOLATION_AUTHORITY.with(|slot| *slot.borrow_mut() = None);
-    }
-}
 
 pub(crate) fn app_runner_path() -> std::path::PathBuf {
     if let Some(path) = std::env::var_os("CLAW_APP_RUNNER_BIN") {
@@ -40,23 +25,172 @@ pub(crate) fn app_runner_path() -> std::path::PathBuf {
     "/usr/local/bin/claw-app-runner".into()
 }
 
-fn app_command(program: impl AsRef<std::ffi::OsStr>, app_dir: &Path) -> Result<Command, String> {
-    let launch = APP_ISOLATION_AUTHORITY.with(|authority| {
-        let authority = authority.borrow();
-        crate::extension_host::child_isolation::prepare(
-            app_runner_path(),
-            vec![
-                std::ffi::OsString::from("--"),
-                program.as_ref().to_os_string(),
-            ],
-            Some(app_dir),
-            authority.as_ref(),
-        )
-    })?;
-    let mut command = Command::new(launch.program);
-    crate::extension_host::child_isolation::close_unallowlisted_fds(&mut command);
-    command.env_clear().args(launch.args).envs(launch.env);
-    Ok(command)
+/// One App launch bound to one verified package snapshot.
+///
+/// Everything downstream — the id, the capability needs, the runtime
+/// selection, the entry file, the stdin contract — is read from
+/// `manifest`, which was parsed exactly once from
+/// [`VerifiedPackage::manifest_text`]. Nothing in the launch path
+/// re-reads `app.json` or re-resolves the package by path, so the
+/// bytes that drove the capability decision and the bytes that execute
+/// cannot diverge.
+#[derive(Clone, Debug)]
+pub struct AppLaunch {
+    package: std::sync::Arc<crate::provenance::VerifiedPackage>,
+    manifest: Manifest,
+}
+
+impl AppLaunch {
+    /// Bind a verified package for launch, parsing its manifest once.
+    pub fn new(
+        package: std::sync::Arc<crate::provenance::VerifiedPackage>,
+    ) -> Result<Self, String> {
+        let text = package
+            .manifest_text()
+            .map_err(|e| format!("read verified manifest for `{}`: {e}", package.id()))?;
+        let manifest = Manifest::from_json(&text)
+            .map_err(|e| format!("parse verified manifest for `{}`: {e}", package.id()))?;
+        if manifest.id != package.id() {
+            return Err(format!(
+                "verified manifest declares id `{}` but the package is `{}`",
+                manifest.id,
+                package.id()
+            ));
+        }
+        Ok(Self { package, manifest })
+    }
+
+    pub fn package(&self) -> &std::sync::Arc<crate::provenance::VerifiedPackage> {
+        &self.package
+    }
+
+    pub fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
+
+    pub fn dir(&self) -> &Path {
+        self.package.dir()
+    }
+
+    pub fn app_id(&self) -> &str {
+        &self.manifest.id
+    }
+
+    pub fn ceiling(&self) -> crate::provenance::Ceiling {
+        self.package.ceiling()
+    }
+
+    /// Re-assert the snapshot against the current trust store, then
+    /// open and re-hash the files this launch will execute.
+    ///
+    /// The returned binding holds those descriptors open; the caller
+    /// keeps it alive until the child has been spawned.
+    pub fn bind(&self, entrypoints: &[String]) -> Result<LaunchBindingRef, String> {
+        let trust = crate::provenance::trust_store();
+        self.package.assert_current(&trust).map_err(|e| {
+            format!(
+                "App `{}` failed its pre-launch provenance check: {e}",
+                self.manifest.id
+            )
+        })?;
+        // The manifest is always part of the bound surface. It decided
+        // which capabilities this launch gets, so an edit to it after
+        // verification must fail the launch just as surely as an edit
+        // to the entrypoint — otherwise the grant and the code on disk
+        // could describe different packages.
+        let mut required = vec![self.package.manifest_path().to_string()];
+        for entry in entrypoints {
+            if !required.contains(entry) {
+                required.push(entry.clone());
+            }
+        }
+        #[cfg(unix)]
+        {
+            let inner = self
+                .package
+                .bind_for_launch(&required)
+                .map_err(|e| format!("bind App `{}` for launch: {e}", self.manifest.id))?;
+            Ok(LaunchBindingRef::new(inner))
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = required;
+            Err("App execution requires a Unix host".to_string())
+        }
+    }
+}
+
+/// Inode identities the sandbox must bind for one launch.
+///
+/// On Unix this wraps a live [`crate::provenance::verify::LaunchBinding`]
+/// whose descriptors stay open until the child is spawned. Elsewhere it
+/// is empty: those hosts cannot express the guarantee, and the
+/// provenance verifier already refuses to run there.
+pub struct LaunchBindingRef {
+    #[cfg(unix)]
+    inner: crate::provenance::verify::LaunchBinding,
+}
+
+impl LaunchBindingRef {
+    #[cfg(unix)]
+    pub fn new(inner: crate::provenance::verify::LaunchBinding) -> Self {
+        Self { inner }
+    }
+
+    #[cfg(unix)]
+    pub fn dir_identity(&self) -> Option<(u64, u64)> {
+        Some(self.inner.dir_identity())
+    }
+
+    /// The pinned package directory.
+    #[cfg(unix)]
+    pub fn dir(&self) -> &Path {
+        self.inner.dir()
+    }
+
+    /// True when this snapshot runs on developer trust alone.
+    #[cfg(unix)]
+    pub fn is_developer(&self) -> bool {
+        self.inner.ceiling().is_developer()
+    }
+
+    #[cfg(not(unix))]
+    pub fn is_developer(&self) -> bool {
+        false
+    }
+
+    /// The revocable package identity behind this launch.
+    #[cfg(unix)]
+    pub fn package_ref(&self) -> Option<crate::provenance::runtime::PackageRef> {
+        Some(self.inner.package_ref())
+    }
+
+    #[cfg(not(unix))]
+    pub fn package_ref(&self) -> Option<crate::provenance::runtime::PackageRef> {
+        None
+    }
+
+    #[cfg(unix)]
+    pub fn entries(&self) -> Vec<(std::path::PathBuf, (u64, u64))> {
+        self.inner.entries()
+    }
+
+    #[cfg(not(unix))]
+    pub fn dir_identity(&self) -> Option<(u64, u64)> {
+        None
+    }
+
+    #[cfg(not(unix))]
+    pub fn entries(&self) -> Vec<(std::path::PathBuf, (u64, u64))> {
+        Vec::new()
+    }
+}
+
+#[cfg(not(unix))]
+impl Default for LaunchBindingRef {
+    fn default() -> Self {
+        Self {}
+    }
 }
 
 fn manifest_app_id(app_dir: &Path) -> Result<String, String> {
@@ -79,6 +213,18 @@ pub(crate) struct AppIdentitySession {
     session_id: String,
     backend: AppSessionBackend,
     parent_caps: Option<CapSet>,
+    /// The launcher's right to relay one App-session system-service
+    /// call for this worker. Issued by `clawd` at bind time, bound to
+    /// this launcher process, and deliberately never exported into the
+    /// sandbox.
+    relay: crate::worker::RelayHandle,
+    /// Capabilities this launch was granted, derived by the launcher
+    /// from the same authenticated manifest and effective arguments the
+    /// authority uses. The daemon remains authoritative for the session
+    /// itself; this copy is what the worker sandbox derives mounts,
+    /// egress and its broker authority from, so the isolation shape and
+    /// the capability grant cannot describe different worlds.
+    granted_caps: CapSet,
 }
 
 #[derive(Clone)]
@@ -149,6 +295,11 @@ pub(crate) struct McpProcSession {
     session_id: String,
     proc_data_dir: std::path::PathBuf,
     handle: String,
+    /// Set by [`Self::bind_process`]. The MCP server's authority is
+    /// whatever the kernel has installed on the session *right now* —
+    /// nothing at rest, a session tool call's transient set while that
+    /// call is in flight — and this is how the launcher presents it.
+    relay: crate::worker::RelayHandle,
 }
 
 impl McpProcSession {
@@ -186,6 +337,7 @@ impl McpProcSession {
                 session_id,
                 proc_data_dir,
                 handle,
+                relay: crate::worker::relay_slot(),
             }));
         }
         Ok(None)
@@ -208,8 +360,30 @@ impl McpProcSession {
                 "pid": pid,
             }),
         )
-        .map(|_| ())
+        .map(|result| {
+            crate::worker::install_relay(
+                &self.relay,
+                result
+                    .get("relay_handle")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToOwned::to_owned),
+            );
+        })
         .map_err(String::from)
+    }
+
+    /// Authority for this server's broker endpoint.
+    ///
+    /// The capability set is read live on every call, so an MCP server
+    /// holds nothing at rest and exactly what the kernel granted for
+    /// one `tools/call` while that call is in flight.
+    pub fn broker_authority(&self) -> crate::worker::BrokerAuthority {
+        crate::worker::BrokerAuthority::new(
+            self.session_id.clone(),
+            None,
+            CapSet::new(),
+            self.relay.clone(),
+        )
     }
 }
 
@@ -270,12 +444,14 @@ impl AppIdentitySession {
                 handle,
             },
             parent_caps: None,
+            granted_caps: CapSet::new(),
+            relay: crate::worker::relay_slot(),
         })
     }
 
     /// Register the least-privileged identity for one manifest operation.
     pub fn for_operation(
-        app_dir: &Path,
+        launch: &AppLaunch,
         app_id: &str,
         operation: &str,
         args: &[String],
@@ -290,13 +466,17 @@ impl AppIdentitySession {
         // effective arguments and the authority derives the session's
         // capabilities from the same values, so a scope always names the
         // resource the App was actually handed.
-        let manifest = load_manifest(app_dir)?;
+        // The manifest comes from the verified snapshot, not from a
+        // fresh read of a mutable path: the bytes that decide which
+        // capabilities this launch gets are the bytes that were signed.
+        let manifest = Some(launch.manifest().clone());
         let declared = match manifest.as_ref() {
             Some(manifest) => Some(manifest.operations.get(operation).ok_or_else(|| {
                 format!("app `{app_id}` manifest has no operation `{operation}`")
             })?),
             None => None,
         };
+        let ceiling = launch.ceiling();
         let bound = match declared {
             Some(declared) => {
                 let trusted_args = trusted_pre_dispatch_args(app_id, declared, args)?;
@@ -313,20 +493,23 @@ impl AppIdentitySession {
             .map(|manifest| manifest.resolve_needs(operation, &bound.values))
             .transpose()
             .map_err(|error| format!("resolve `{operation}` capabilities: {error}"))?;
+        let local_ceiling = ceiling.clone();
         let session = Self::start(
             app_id,
             LaunchRequest::Operation {
                 operation,
                 args: &effective_args,
             },
+            Some(ceiling),
             |parent_caps| match declared {
                 Some(declared) => {
-                    constrained_operation_caps(
+                    let caps = constrained_operation_caps(
                         parent_caps,
                         false,
                         &declared.needs,
                         resolved.as_deref().unwrap_or_default(),
-                    )
+                    )?;
+                    Ok(apply_provenance_ceiling(&local_ceiling, caps))
                 }
                 None => Ok(CapSet::new()),
             },
@@ -335,23 +518,31 @@ impl AppIdentitySession {
     }
 
     /// Register a GUI identity with the constrained union of all operation needs.
-    pub fn for_gui(app_dir: &Path, app_id: &str, exec: &str) -> Result<Self, String> {
-        Self::start(app_id, LaunchRequest::Gui { exec }, |parent_caps| {
-            let manifest = load_manifest(app_dir)?;
-            let needs = manifest
-                .iter()
-                .flat_map(|manifest| manifest.operations.values())
-                .flat_map(|operation| operation.needs.iter())
-                .collect();
-            Ok(constrained_caps(parent_caps, needs))
-        })
+    pub fn for_gui(launch: &AppLaunch, app_id: &str, exec: &str) -> Result<Self, String> {
+        let ceiling = launch.ceiling();
+        let local_ceiling = ceiling.clone();
+        let manifest = launch.manifest().clone();
+        Self::start(
+            app_id,
+            LaunchRequest::Gui { exec },
+            Some(ceiling),
+            move |parent_caps| {
+                let needs = manifest
+                    .operations
+                    .values()
+                    .flat_map(|operation| operation.needs.iter())
+                    .collect();
+                let caps = constrained_caps(parent_caps, needs);
+                Ok(apply_provenance_ceiling(&local_ceiling, caps))
+            },
+        )
     }
 
     /// Register an MCP identity. Session tools receive their authority
     /// per call through [`AppSessionControl::set_transient_call`].
     pub fn for_mcp(app_id: &str, manifest: &Manifest) -> Result<Self, String> {
         let _ = manifest;
-        Self::start(app_id, LaunchRequest::Mcp, |_| Ok(CapSet::new()))
+        Self::start(app_id, LaunchRequest::Mcp, None, |_| Ok(CapSet::new()))
     }
 
     /// Shared launch path.
@@ -362,7 +553,12 @@ impl AppIdentitySession {
     /// ever uses the reported parent capabilities to narrow the result.
     /// `local_caps` is therefore consulted solely for the in-process
     /// backend, which already runs as trusted code.
-    fn start<F>(app_id: &str, request: LaunchRequest<'_>, local_caps: F) -> Result<Self, String>
+    fn start<F>(
+        app_id: &str,
+        request: LaunchRequest<'_>,
+        ceiling: Option<crate::provenance::Ceiling>,
+        local_caps: F,
+    ) -> Result<Self, String>
     where
         F: FnOnce(&CapSet) -> Result<CapSet, String>,
     {
@@ -379,12 +575,21 @@ impl AppIdentitySession {
             return Err(format!("parent session cannot invoke App `{app_id}`"));
         }
 
-        if use_clawd_app_session_backend() {
-            return Self::register_with_clawd(app_id, &request, parent_caps);
-        }
-
+        // Derived on both paths: the daemon mints the session, and the
+        // launcher still needs the same set to build the sandbox that
+        // session will run inside.
         let mut caps = local_caps(&parent_caps)?;
         caps.insert(invoke);
+
+        if use_clawd_app_session_backend() {
+            return Self::register_with_clawd(
+                app_id,
+                &request,
+                parent_caps,
+                caps,
+                ceiling.as_ref(),
+            );
+        }
         Self::register_local(&parent, app_id, &request.command(app_id), caps, parent_caps)
     }
 
@@ -392,6 +597,8 @@ impl AppIdentitySession {
         app_id: &str,
         request: &LaunchRequest<'_>,
         parent_caps: CapSet,
+        granted_caps: CapSet,
+        ceiling: Option<&crate::provenance::Ceiling>,
     ) -> Result<Self, String> {
         // Only `parent_caps` crosses the wire, and only ever to narrow
         // what the daemon already resolved. The launcher's identity —
@@ -444,6 +651,36 @@ impl AppIdentitySession {
             .and_then(serde_json::Value::as_str)
             .map(ToOwned::to_owned)
             .ok_or_else(|| "clawd App session response omitted handle".to_string())?;
+        // The sandbox is built from what the daemon *granted*, not from
+        // what this process resolved. Both are derived from the same
+        // signed manifest and should agree, but only one of them is
+        // authority: clawd re-derives the launcher's identity, settles
+        // the approvals and applies the provenance ceiling itself.
+        // Adopting its answer is what keeps the isolation shape and the
+        // live grant describing the same world.
+        let _ = granted_caps;
+        let granted_caps = result
+            .get("caps")
+            .ok_or_else(|| {
+                "clawd App session response omitted the granted capability set".to_string()
+            })
+            .and_then(|value| {
+                serde_json::from_value::<CapSet>(value.clone())
+                    .map_err(|error| format!("clawd granted an unreadable capability set: {error}"))
+            })?;
+        // Defence in depth, not the enforcement point. A difference
+        // here means the two sides disagree about the package's trust
+        // tier, so the launch is refused rather than reconciled.
+        if let Some(ceiling) = ceiling {
+            let (_, above) = ceiling.clamp(&granted_caps);
+            if !above.is_empty() {
+                return Err(format!(
+                    "clawd granted App `{app_id}` {} capabilities above its {} provenance ceiling",
+                    above.len(),
+                    ceiling.label()
+                ));
+            }
+        }
         Ok(Self {
             session_id,
             backend: AppSessionBackend::Clawd {
@@ -451,6 +688,8 @@ impl AppIdentitySession {
                 handle,
             },
             parent_caps: Some(parent_caps),
+            granted_caps,
+            relay: crate::worker::relay_slot(),
         })
     }
 
@@ -483,7 +722,7 @@ impl AppIdentitySession {
                 .map(|tier| tier.max(crate::caps::Role::Worker.credential_tier())),
             scope: parent.scope.clone(),
             priority: parent.priority.clone(),
-            caps: Some(caps),
+            caps: Some(caps.clone()),
             transient_caps: None,
             role: parent.role.clone(),
             app_id: Some(app_id.to_string()),
@@ -502,6 +741,8 @@ impl AppIdentitySession {
                 proc_data_dir: crate::paths::proc_data_dir(),
             },
             parent_caps: Some(parent_caps),
+            granted_caps: caps,
+            relay: crate::worker::relay_slot(),
         })
     }
 
@@ -532,7 +773,19 @@ impl AppIdentitySession {
                     "pid": pid,
                 }),
             )
-            .map(|_| ())
+            .map(|result| {
+                // The launcher's right to relay for this session, bound
+                // to this process. It stays here: it is never exported
+                // into the sandbox's environment, filesystem or
+                // responses.
+                crate::worker::install_relay(
+                    &self.relay,
+                    result
+                        .get("relay_handle")
+                        .and_then(serde_json::Value::as_str)
+                        .map(ToOwned::to_owned),
+                );
+            })
             .map_err(String::from),
         }
     }
@@ -553,6 +806,20 @@ impl AppIdentitySession {
         }
     }
 
+    /// Authority the launch's private broker endpoint answers with.
+    pub fn broker_authority(&self, app_id: &str) -> crate::worker::BrokerAuthority {
+        crate::worker::BrokerAuthority::new(
+            self.session_id.clone(),
+            Some(app_id.to_string()),
+            self.granted_caps.clone(),
+            self.relay.clone(),
+        )
+    }
+
+    pub fn granted_caps(&self) -> &CapSet {
+        &self.granted_caps
+    }
+
     pub fn control(&self) -> AppSessionControl {
         AppSessionControl {
             session_id: self.session_id.clone(),
@@ -560,6 +827,169 @@ impl AppIdentitySession {
             parent_caps: self.parent_caps.clone(),
         }
     }
+}
+
+/// Prepare one hostile-worker launch for an App.
+///
+/// Everything the sandbox needs is derived here from authenticated
+/// material: the installed package directory, the operation the
+/// authority bound, the capabilities it granted, and the runtime the
+/// manifest declared. A refusal is recorded and returned; it never
+/// falls back to an unsandboxed launch.
+#[allow(clippy::too_many_arguments)]
+fn prepare_app_worker(
+    session: &AppIdentitySession,
+    app_id: &str,
+    app_dir: &Path,
+    operation: &str,
+    program: std::path::PathBuf,
+    argv: Vec<String>,
+    data_dir: &str,
+    apps_dir: &str,
+    extra_env: BTreeMap<String, String>,
+    stdio: crate::worker::StdioPlan,
+    desktop: bool,
+    binding: &LaunchBindingRef,
+) -> Result<crate::worker::PreparedLaunch, String> {
+    let label = format!("app:{app_id}/{operation}");
+    let tier = if desktop {
+        crate::worker::TrustTier::DesktopSurface
+    } else {
+        crate::worker::TrustTier::AppOperation
+    };
+    let policy = crate::worker::derive::app_operation(crate::worker::derive::AppOperationInput {
+        app_id,
+        app_dir,
+        operation,
+        program,
+        argv,
+        caps: session.granted_caps(),
+        session_id: session.id(),
+        data_dir,
+        apps_dir,
+        extra_env,
+        stdio,
+        desktop,
+        package_identity: binding.dir_identity(),
+        pinned_entries: binding.entries(),
+        developer: binding.is_developer(),
+    })
+    .inspect_err(|error| {
+        crate::worker::audit::refused(&label, tier.as_str(), error);
+    })?;
+    // The endpoint is bound to the package the sandbox is about to
+    // execute, so a revocation landing mid-run is answered against the
+    // same snapshot the pinned inodes came from.
+    let launch = crate::worker::WorkerLaunch::new(policy).with_authority(
+        session
+            .broker_authority(app_id)
+            .with_package(binding.package_ref()),
+    );
+    let prepared = crate::worker::prepare(&launch).inspect_err(|error| {
+        crate::worker::audit::refused(&label, tier.as_str(), error);
+    })?;
+    crate::worker::audit::launched(&prepared.facts, Some(session.id()));
+    Ok(prepared)
+}
+
+/// Runtime selection for an App's session server.
+///
+/// The interpreter comes from the same verified manifest as the entry,
+/// and the entry is the pinned path the caller's launch binding holds
+/// open, so the bytes that were signed and the process that runs them
+/// cannot be decided by two different reads. Returned as
+/// `(program, argv)` for a [`crate::worker::LaunchPolicy`]: the sandbox
+/// is the runner, so there is no wrapper process in between.
+pub(crate) fn session_program(
+    runtime: Runtime,
+    entry: &Path,
+) -> Result<(std::path::PathBuf, Vec<String>), String> {
+    let entry_arg = entry.to_string_lossy().into_owned();
+    let python = if cfg!(windows) { "python" } else { "python3" };
+    Ok(match runtime {
+        Runtime::Python => (interpreter_path(python)?, vec![entry_arg]),
+        Runtime::Node => (interpreter_path("node")?, vec![entry_arg]),
+        Runtime::Shell => (interpreter_path("bash")?, vec![entry_arg]),
+        Runtime::Binary => (
+            entry
+                .canonicalize()
+                .map_err(|error| format!("resolve App session entry: {error}"))?,
+            Vec::new(),
+        ),
+    })
+}
+
+/// Prepare the hostile-worker launch for one App session server.
+///
+/// The counterpart to [`prepare_app_worker`] for a process that serves
+/// the agent over stdio JSON-RPC. Two things differ and both are
+/// deliberate: the policy comes from
+/// [`crate::worker::derive::app_session`], which never derives a
+/// reusable worker's mounts or egress from a per-call capability set,
+/// and the stdio plan is `Streamed` because the child's stdin/stdout
+/// are the transport rather than something to capture.
+///
+/// The broker authority is the session's, so the worker's only route to
+/// kernel authority reads the live routed registry row: the transient
+/// set installed for one `tools/call` is honoured while it is set and
+/// gone the moment the launcher clears it.
+///
+/// `lifetime` selects which of the two shapes is derived, and
+/// `transports` is whatever [`crate::worker::trusted_desktop::classify`]
+/// granted — empty for everything a manifest can describe.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn prepare_app_session_worker(
+    session: &AppIdentitySession,
+    app_id: &str,
+    app_dir: &Path,
+    program: std::path::PathBuf,
+    argv: Vec<String>,
+    data_dir: &str,
+    apps_dir: &str,
+    extra_env: BTreeMap<String, String>,
+    binding: &LaunchBindingRef,
+    lifetime: crate::worker::derive::SessionLifetime,
+    transports: &[crate::worker::trusted_desktop::Transport],
+    call_caps: Option<&CapSet>,
+) -> Result<crate::worker::PreparedLaunch, String> {
+    let label = format!("app-session:{app_id}");
+    let tier = if transports.is_empty() {
+        crate::worker::TrustTier::McpServer
+    } else {
+        crate::worker::TrustTier::TrustedDesktopSession
+    };
+    // A reusable worker is shaped by what the session holds at rest; a
+    // single-call worker by the exact set bound to the one request it
+    // exists to serve.
+    let caps = call_caps.unwrap_or_else(|| session.granted_caps());
+    let policy = crate::worker::derive::app_session(crate::worker::derive::AppSessionInput {
+        app_id,
+        app_dir,
+        program,
+        argv,
+        caps,
+        lifetime,
+        session_id: session.id(),
+        data_dir,
+        apps_dir,
+        extra_env,
+        package_identity: binding.dir_identity(),
+        pinned_entries: binding.entries(),
+        transports,
+    })
+    .inspect_err(|error| {
+        crate::worker::audit::refused(&label, tier.as_str(), error);
+    })?;
+    let launch = crate::worker::WorkerLaunch::new(policy).with_authority(
+        session
+            .broker_authority(app_id)
+            .with_package(binding.package_ref()),
+    );
+    let prepared = crate::worker::prepare(&launch).inspect_err(|error| {
+        crate::worker::audit::refused(&label, tier.as_str(), error);
+    })?;
+    crate::worker::audit::launched(&prepared.facts, Some(session.id()));
+    Ok(prepared)
 }
 
 pub fn run_native_app_host(
@@ -610,21 +1040,21 @@ pub fn run_native_app_host(
         ));
     }
     let mut app_session = AppIdentitySession::for_native_host(app_id)?;
-    let launch = APP_ISOLATION_AUTHORITY.with(|authority| {
-        let authority = authority.borrow();
-        crate::extension_host::child_isolation::prepare(
-            &runner,
-            vec![
-                std::ffi::OsString::from("--"),
-                program_path.as_os_str().to_os_string(),
-            ],
-            Some(&app_dir),
-            authority.as_ref(),
-        )
-    })?;
-    let mut command = Command::new(launch.program);
-    crate::extension_host::child_isolation::close_unallowlisted_fds(&mut command);
-    command.env_clear().args(launch.args).envs(launch.env);
+    // The only worker class that is not sandboxed. It qualifies through
+    // this kernel-side check — a fixed App id, a root-owned package
+    // directory, a root-owned interpreter and a root-owned entry file —
+    // and no manifest field can select it. It drives privileged native
+    // desktop transports that cannot be reconstructed inside a mount
+    // and pid namespace, so the exemption is recorded rather than
+    // silently taken.
+    crate::worker::audit::exempt(
+        &format!("app:{app_id}/native-host"),
+        crate::worker::TrustTier::TrustedNativeHost.as_str(),
+        crate::worker::exemption_reason(crate::worker::TrustTier::TrustedNativeHost)
+            .unwrap_or("trusted native host"),
+    );
+    let mut command = Command::new(&runner);
+    command.arg("--").arg(&program_path);
     reset_app_environment(&mut command, false);
     command
         .args(args)
@@ -835,7 +1265,7 @@ fn wait_for_approvals(ids: &[String]) -> Result<(), String> {
                 .unwrap_or("");
             match entry.get("status").and_then(serde_json::Value::as_str) {
                 Some("approved") => {}
-                Some("pending") => pending = true,
+                Some("pending" | "resolving") => pending = true,
                 Some("denied") => {
                     return Err(format!("App launch approval {id} was denied"));
                 }
@@ -870,6 +1300,24 @@ fn load_manifest(app_dir: &Path) -> Result<Option<Manifest>, String> {
     Manifest::from_json(&body)
         .map(Some)
         .map_err(|err| format!("parse {}: {err}", path.display()))
+}
+
+/// Clamp a locally resolved capability set to the package's ceiling.
+///
+/// A signed or vendor package keeps everything its manifest asked for
+/// and the parent session could cover. Unsigned developer content is
+/// cut down to the small allow-list in
+/// [`crate::provenance::ceiling`] — no system, secret, network,
+/// process, device or cross-App authority, and no wildcard scope —
+/// because nobody vouched for the code.
+///
+/// Deliberately silent. The launcher is unprivileged and its clamp is
+/// only a sanity gate on the set it proposes; the enforcement point and
+/// the `provenance.ceiling_applied` audit record both live in
+/// `clawd::app_sessions`, so the log describes authority that was
+/// actually withheld rather than a request that was never made.
+fn apply_provenance_ceiling(ceiling: &crate::provenance::Ceiling, caps: CapSet) -> CapSet {
+    ceiling.clamp(&caps).0
 }
 
 fn constrained_caps(parent: &CapSet, needs: Vec<&Need>) -> CapSet {
@@ -908,35 +1356,35 @@ fn constrained_operation_caps(
             continue;
         }
         if matches!(need.scope, ScopeBinding::Wild) {
-                let inherited = parent
-                    .iter()
-                    .filter(|cap| cap.verb == need.verb)
-                    .cloned()
-                    .collect::<Vec<_>>();
-                if inherited.iter().any(|cap| cap.scope.is_wildcard())
-                    && matches!(
-                        crate::caps::lookup_meta(need.verb).map(|meta| meta.scope_kind),
-                        Some(
-                            crate::caps::ScopeKind::Path
-                                | crate::caps::ScopeKind::Host
-                                | crate::caps::ScopeKind::Name
-                        ) | None
-                    )
-                {
-                    return Err(format!(
-                        "wildcard `{}` need cannot inherit unbounded authority",
-                        need.verb.as_str()
-                    ));
-                }
-                if inherited.is_empty() && !parent_is_app {
-                    let requested = Cap::new(need.verb, Scope::Wild);
-                    crate::caps::require(requested.verb, requested.scope.clone())
-                        .map_err(|denial| denial.to_string())?;
-                    caps.insert(requested);
-                } else {
-                    caps.extend(inherited);
-                }
-                continue;
+            let inherited = parent
+                .iter()
+                .filter(|cap| cap.verb == need.verb)
+                .cloned()
+                .collect::<Vec<_>>();
+            if inherited.iter().any(|cap| cap.scope.is_wildcard())
+                && matches!(
+                    crate::caps::lookup_meta(need.verb).map(|meta| meta.scope_kind),
+                    Some(
+                        crate::caps::ScopeKind::Path
+                            | crate::caps::ScopeKind::Host
+                            | crate::caps::ScopeKind::Name
+                    ) | None
+                )
+            {
+                return Err(format!(
+                    "wildcard `{}` need cannot inherit unbounded authority",
+                    need.verb.as_str()
+                ));
+            }
+            if inherited.is_empty() && !parent_is_app {
+                let requested = Cap::new(need.verb, Scope::Wild);
+                crate::caps::require(requested.verb, requested.scope.clone())
+                    .map_err(|denial| denial.to_string())?;
+                caps.insert(requested);
+            } else {
+                caps.extend(inherited);
+            }
+            continue;
         }
         for requested in requested_caps {
             if parent.covers(requested) {
@@ -998,9 +1446,7 @@ fn trusted_pre_dispatch_args(
             .iter()
             .take_while(|arg| arg.as_str() != "--")
             .any(|arg| arg == &format!("--{flag}") || arg.starts_with(&format!("--{flag}=")));
-        if supplied
-            && resolver == crate::caps::manifest::TrustedArgResolver::EmailHost
-        {
+        if supplied && resolver == crate::caps::manifest::TrustedArgResolver::EmailHost {
             return Err("`--host` is reserved for trusted email resolution".to_string());
         }
         if supplied {
@@ -1011,12 +1457,13 @@ fn trusted_pre_dispatch_args(
                 resolve_email_provider(operation, selector)?.to_string()
             }
             crate::caps::manifest::TrustedArgResolver::EmailHost => {
-                let bound =
-                    crate::caps::args::bind_supplied_cli_args(&operation.args, &resolved)?;
+                let bound = crate::caps::args::bind_supplied_cli_args(&operation.args, &resolved)?;
                 let provider = bound
                     .get("provider")
                     .and_then(serde_json::Value::as_str)
-                    .ok_or_else(|| "email host resolver requires provider resolution".to_string())?;
+                    .ok_or_else(|| {
+                        "email host resolver requires provider resolution".to_string()
+                    })?;
                 resolve_email_host(provider)?
             }
             crate::caps::manifest::TrustedArgResolver::CalendarProvider => {
@@ -1226,10 +1673,11 @@ fn raw_operation_positionals(operation: &Operation, raw: &[String]) -> Vec<Strin
         if options && token == "--" {
             options = false;
         } else if options && token.starts_with('-') {
-            let option = token.split_once('=').map_or(token.as_str(), |(name, _)| name);
+            let option = token
+                .split_once('=')
+                .map_or(token.as_str(), |(name, _)| name);
             if let Some(declaration) = operation.args.iter().find(|declaration| {
-                (declaration.effective_binding()
-                    == crate::caps::manifest::ArgBinding::Flag
+                (declaration.effective_binding() == crate::caps::manifest::ArgBinding::Flag
                     && option == format!("--{}", crate::caps::args::flag_name(declaration)))
                     || declaration.aliases.iter().any(|alias| alias == option)
             }) {
@@ -1363,8 +1811,6 @@ const SAFE_APP_ENV_KEYS: &[&str] = &[
     "COS_SDK_PYTHON_DIR",
     "COS_SNAPSHOT",
     "COS_PERMS_MODE",
-    "COS_EXTENSION_CHILD_ISOLATION",
-    crate::extension_host::protocol::BROKER_SOCKET_ENV,
 ];
 
 const PANEL_APPLET_ENV_KEYS: &[&str] = &[
@@ -1587,17 +2033,17 @@ if result is not None:
 ///
 /// Returns the raw JSON string from stdout, or an error.
 pub fn run_python_app(
-    app_dir: &Path,
+    launch: &AppLaunch,
     command: &str,
     args: &[String],
     data_dir: &str,
     apps_dir: &str,
 ) -> Result<Option<String>, String> {
-    run_python_app_with_stdin(app_dir, command, args, data_dir, apps_dir, None)
+    run_python_app_with_stdin(launch, command, args, data_dir, apps_dir, None)
 }
 
 pub fn run_python_app_with_stdin(
-    app_dir: &Path,
+    launch: &AppLaunch,
     command: &str,
     args: &[String],
     data_dir: &str,
@@ -1607,78 +2053,71 @@ pub fn run_python_app_with_stdin(
     // Dynamic App execution is model-reachable, so it belongs in the
     // unprivileged worker, never in the root broker's address space.
     crate::agentd::guard::ensure_agent_runtime_allowed("Python App execution")?;
-    if crate::paths::is_routed_job() {
-        return Err(
-            "App execution must be delegated to claw-extension-host; refusing to run it in claw-agentd"
-                .to_string(),
-        );
-    }
 
+    let app_dir = launch.dir();
     let main_py = app_dir.join("main.py");
-    if !main_py.is_file() {
-        return Err(format!("app has no main.py at {}", main_py.display()));
-    }
 
     let python = if cfg!(windows) { "python" } else { "python3" };
 
-    let app_id = manifest_app_id(app_dir)?;
+    let app_id = launch.app_id().to_string();
+    // Re-hash the entrypoint from the verified snapshot and hold its
+    // descriptor open. The sandbox binds that exact inode, so replacing
+    // `main.py` between here and `execve` is either refused or has no
+    // effect on what runs.
+    let binding = launch.bind(&["main.py".to_string()])?;
     let (mut app_session, effective_args) =
-        AppIdentitySession::for_operation(app_dir, &app_id, command, args)?;
+        AppIdentitySession::for_operation(launch, &app_id, command, args)?;
     let wrapper = python_wrapper(&main_py, command, &effective_args, data_dir, apps_dir)?;
-    let stdin_data = validated_operation_stdin(app_dir, command, stdin_data)?;
+    let stdin_data = validated_operation_stdin(launch, command, stdin_data)?;
 
-    let mut command = app_command(python, app_dir)?;
-    reset_app_environment(&mut command, false);
-    command
-        .arg("-c")
-        .arg(&wrapper)
-        .stdin(if stdin_data.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        // Agent-native: suppress all interactive prompts
-        .env("DEBIAN_FRONTEND", "noninteractive")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("CI", "true")
-        .env("PAGER", "cat")
-        .env("GIT_PAGER", "cat")
-        .env("PIP_NO_INPUT", "1")
-        .env("NPM_CONFIG_YES", "true")
-        .env("PYTHONDONTWRITEBYTECODE", "1")
-        .env("COS_APP_ID", &app_id)
-        .env("COS_SESSION", app_session.id())
-        .env("COS_DATA_DIR", data_dir)
-        .env("COS_PROC_DATA_DIR", app_session.proc_data_dir())
-        // Pass config values so Python apps use config.json instead of hardcoded defaults
-        .envs(crate::config::as_env_vars());
-    if let Some(home) = crate::paths::current_home_override() {
-        command.env("HOME", &home).env("COS_HOME", home);
-    }
-
-    apply_routed_identity(&mut command)?;
-    let mut child = command
-        .spawn()
-        .map_err(|e| format!("failed to spawn python3: {e}"))?;
-    bind_child_session(&mut app_session, &mut child)?;
-    let stdin_writer = write_child_stdin(&mut child, stdin_data)?;
-
-    // wait_with_output() drains stdout and stderr in background threads
-    // BEFORE the child can fill the kernel pipe buffer (Linux default
-    // 64KB). The previous pattern of `child.wait()` first and then
-    // reading the streams deadlocks for any verb that emits more than
-    // 64KB to stdout — e.g. fs.read of a multi-MB file, pkg.list, a
-    // wide db.query — because the child blocks on write() while we
-    // block on wait().
-    let output = child
-        .wait_with_output()
-        .map_err(|e| format!("python3 wait failed: {e}"))?;
-    finish_child_stdin(stdin_writer)?;
+    let prepared = prepare_app_worker(
+        &app_session,
+        &app_id,
+        app_dir,
+        command,
+        interpreter_path(python)?,
+        vec!["-c".to_string(), wrapper],
+        data_dir,
+        apps_dir,
+        BTreeMap::new(),
+        crate::worker::StdioPlan::Captured,
+        false,
+        &binding,
+    )?;
+    let policy_digest = prepared.facts["policy"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let limits = crate::worker::Limits::operation();
+    let output = crate::worker::run_captured(prepared, stdin_data, limits, |pid| {
+        // Record which verified artifact this session is running before
+        // the child gets any authority, so a revocation later can find
+        // and stop it.
+        let owner = crate::provenance::runtime::current_owner();
+        crate::provenance::runtime::register(owner, app_session.id(), launch.package());
+        // Bind the exact process, so a revocation can signal *this*
+        // group and nothing that later inherits the number.
+        crate::provenance::runtime::bind_process(owner, app_session.id(), pid);
+        app_session.bind_process(pid)
+    })?;
+    crate::provenance::runtime::deregister(
+        crate::provenance::runtime::current_owner(),
+        app_session.id(),
+    );
+    crate::worker::audit::outcome(
+        &policy_digest,
+        &format!("app:{app_id}/{command}"),
+        output.audit_facts(),
+    );
     let status = output.status;
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let stdout = output.stdout_string();
+    let stderr = output.stderr_string();
+    if output.timed_out {
+        return Err(format!(
+            "App operation `{command}` exceeded its {}s sandbox runtime limit",
+            limits.runtime.as_secs()
+        ));
+    }
 
     if !status.success() {
         // Try to extract a JSON error from stdout first.
@@ -1715,49 +2154,25 @@ fn operation_forwards_stdin(app_dir: &Path, operation: &str) -> Result<bool, Str
 }
 
 fn validated_operation_stdin(
-    app_dir: &Path,
+    launch: &AppLaunch,
     operation: &str,
     stdin_data: Option<Vec<u8>>,
 ) -> Result<Option<Vec<u8>>, String> {
     if stdin_data.is_none() {
         return Ok(None);
     }
-    if !operation_forwards_stdin(app_dir, operation)? {
+    if !launch
+        .manifest()
+        .operations
+        .get(operation)
+        .map(|op| op.stdin)
+        .unwrap_or(false)
+    {
         return Err(format!(
             "App operation `{operation}` does not declare stdin input"
         ));
     }
     Ok(stdin_data)
-}
-
-fn write_child_stdin(
-    child: &mut std::process::Child,
-    data: Option<Vec<u8>>,
-) -> Result<Option<std::thread::JoinHandle<Result<(), String>>>, String> {
-    let Some(data) = data else {
-        return Ok(None);
-    };
-    let stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| "App child stdin pipe is unavailable".to_string())?;
-    Ok(Some(std::thread::spawn(move || {
-        let mut stdin = stdin;
-        stdin
-            .write_all(&data)
-            .map_err(|error| format!("write App stdin: {error}"))
-    })))
-}
-
-fn finish_child_stdin(
-    writer: Option<std::thread::JoinHandle<Result<(), String>>>,
-) -> Result<(), String> {
-    let Some(writer) = writer else {
-        return Ok(());
-    };
-    writer
-        .join()
-        .map_err(|_| "App stdin writer panicked".to_string())?
 }
 
 /// Generic polyglot bridge: read `app_dir/app.json`, pick the runtime
@@ -1779,73 +2194,38 @@ fn finish_child_stdin(
 /// return that string; otherwise stderr (or the exit code) is
 /// returned as an `Err`.
 pub fn run_app(
-    app_dir: &Path,
+    launch: &AppLaunch,
     command: &str,
     args: &[String],
     data_dir: &str,
     apps_dir: &str,
 ) -> Result<Option<String>, String> {
-    run_app_with_stdin(app_dir, command, args, data_dir, apps_dir, None)
-}
-
-pub(crate) fn run_app_with_isolation(
-    app_dir: &Path,
-    command: &str,
-    args: &[String],
-    data_dir: &str,
-    apps_dir: &str,
-    authority: crate::extension_host::child_isolation::IsolationAuthority,
-) -> Result<Option<String>, String> {
-    APP_ISOLATION_AUTHORITY.with(|slot| {
-        if slot.borrow().is_some() {
-            return Err("nested App isolation authority is not permitted".to_string());
-        }
-        *slot.borrow_mut() = Some(authority);
-        let _guard = AppIsolationGuard;
-        run_app(app_dir, command, args, data_dir, apps_dir)
-    })
+    run_app_with_stdin(launch, command, args, data_dir, apps_dir, None)
 }
 
 pub fn run_app_with_stdin(
-    app_dir: &Path,
+    launch: &AppLaunch,
     command: &str,
     args: &[String],
     data_dir: &str,
     apps_dir: &str,
     stdin_data: Option<Vec<u8>>,
 ) -> Result<Option<String>, String> {
-    if crate::paths::is_routed_job() {
-        return Err(
-            "App execution must be delegated to claw-extension-host; refusing to run it in claw-agentd"
-                .to_string(),
-        );
-    }
-    // Load the manifest if present so we can pick a runtime. Apps
-    // that ship without app.json default to the Python runtime — this
-    // lets ad-hoc `main.py` apps in development still run.
-    let manifest_path = app_dir.join("app.json");
-    let (runtime, entry) = if manifest_path.is_file() {
-        let body = std::fs::read_to_string(&manifest_path)
-            .map_err(|e| format!("read {}: {}", manifest_path.display(), e))?;
-        let manifest = crate::apps::AppManifest::from_json(&body)
-            .map_err(|e| format!("parse {}: {}", manifest_path.display(), e))?;
-        // Reject app launches whose `ai.tools[]` references a tool
-        // the kernel doesn't know. Catches typoed allowlists before
-        // the model ever sees a tool definition. The catalog is
-        // passed in so the caps crate stays free of an `ai`
-        // dependency (would create a cycle).
-        let catalog = crate::ai::tools::list_names();
-        manifest
-            .validate_tools_against_catalog(&catalog)
-            .map_err(|e| format!("parse {}: {}", manifest_path.display(), e))?;
-        let rt = manifest.runtime;
-        let entry = manifest
-            .entry
-            .unwrap_or_else(|| rt.default_entry().to_string());
-        (rt, entry)
-    } else {
-        (Runtime::Python, Runtime::Python.default_entry().to_string())
-    };
+    // Runtime and entry come from the verified snapshot's manifest,
+    // parsed once. There is no path re-read here and no unsigned
+    // fallback: a package that did not verify never reaches this
+    // function.
+    let app_dir = launch.dir();
+    let manifest = launch.manifest();
+    let catalog = crate::ai::tools::list_names();
+    manifest
+        .validate_tools_against_catalog(&catalog)
+        .map_err(|e| format!("verified manifest for `{}`: {e}", launch.app_id()))?;
+    let runtime = manifest.runtime;
+    let entry = manifest
+        .entry
+        .clone()
+        .unwrap_or_else(|| runtime.default_entry().to_string());
 
     if matches!(runtime, Runtime::Python) {
         // Pythonic apps always run through the shared wrapper which
@@ -1858,14 +2238,7 @@ pub fn run_app_with_stdin(
                  file an issue if you need a per-app entry override"
             ));
         }
-        return run_python_app_with_stdin(
-            app_dir,
-            command,
-            args,
-            data_dir,
-            apps_dir,
-            stdin_data,
-        );
+        return run_python_app_with_stdin(launch, command, args, data_dir, apps_dir, stdin_data);
     }
 
     let entry_path = app_dir.join(&entry);
@@ -1873,77 +2246,86 @@ pub fn run_app_with_stdin(
         return Err(format!("app entry not found: {}", entry_path.display()));
     }
 
-    let mut cmd = match runtime {
-        Runtime::Node => {
-            let mut c = app_command("node", app_dir)?;
-            c.arg(&entry_path);
-            c
-        }
-        Runtime::Shell => {
-            if cfg!(windows) {
-                let mut c = app_command("cmd", app_dir)?;
-                c.arg("/c").arg(&entry_path);
-                c
-            } else {
-                let mut c = app_command("bash", app_dir)?;
-                c.arg(&entry_path);
-                c
-            }
-        }
-        Runtime::Binary => app_command(&entry_path, app_dir)?,
+    let (program, mut launch_argv) = match runtime {
+        Runtime::Node => (
+            interpreter_path("node")?,
+            vec![entry_path.to_string_lossy().into_owned()],
+        ),
+        Runtime::Shell => (
+            interpreter_path("bash")?,
+            vec![entry_path.to_string_lossy().into_owned()],
+        ),
+        Runtime::Binary => (
+            entry_path
+                .canonicalize()
+                .map_err(|error| format!("resolve app entry: {error}"))?,
+            Vec::new(),
+        ),
         Runtime::Python => unreachable!("python handled above"),
     };
-    let app_id = manifest_app_id(app_dir)?;
+    launch_argv.shrink_to_fit();
+    let app_id = launch.app_id().to_string();
+    // The interpreter is a system binary; the script it runs is the
+    // signed entry, pinned by inode for the life of the launch.
+    let binding = launch.bind(std::slice::from_ref(&entry))?;
     let (mut app_session, effective_args) =
-        AppIdentitySession::for_operation(app_dir, &app_id, command, args)?;
+        AppIdentitySession::for_operation(launch, &app_id, command, args)?;
     let args_json = serde_json::to_string(&effective_args)
         .map_err(|e| format!("failed to serialize args: {e}"))?;
-    reset_app_environment(&mut cmd, false);
+    let stdin_data = validated_operation_stdin(launch, command, stdin_data)?;
 
-    let stdin_data = validated_operation_stdin(app_dir, command, stdin_data)?;
-    cmd.stdin(if stdin_data.is_some() {
-        Stdio::piped()
-    } else {
-        Stdio::null()
-    })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .env("COS_COMMAND", command)
-        .env("COS_ARGS_JSON", &args_json)
-        .env("COS_DATA_DIR", data_dir)
-        .env("COS_PROC_DATA_DIR", app_session.proc_data_dir())
-        .env("COS_APPS_DIR", apps_dir)
-        .env("COS_APP_ID", &app_id)
-        .env("COS_SESSION", app_session.id())
-        .env("DEBIAN_FRONTEND", "noninteractive")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("CI", "true")
-        .env("PAGER", "cat")
-        .env("GIT_PAGER", "cat")
-        .env("PIP_NO_INPUT", "1")
-        .env("NPM_CONFIG_YES", "true")
-        .envs(crate::config::as_env_vars());
-    if let Some(home) = crate::paths::current_home_override() {
-        cmd.env("HOME", &home).env("COS_HOME", home);
+    let extra_env = BTreeMap::from([
+        ("COS_COMMAND".to_string(), command.to_string()),
+        ("COS_ARGS_JSON".to_string(), args_json),
+    ]);
+    let prepared = prepare_app_worker(
+        &app_session,
+        &app_id,
+        app_dir,
+        command,
+        program,
+        launch_argv,
+        data_dir,
+        apps_dir,
+        extra_env,
+        crate::worker::StdioPlan::Captured,
+        false,
+        &binding,
+    )?;
+    let policy_digest = prepared.facts["policy"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let limits = crate::worker::Limits::operation();
+    let output = crate::worker::run_captured(prepared, stdin_data, limits, |pid| {
+        // Record which verified artifact this session is running before
+        // the child gets any authority, so a revocation later can find
+        // and stop it.
+        let owner = crate::provenance::runtime::current_owner();
+        crate::provenance::runtime::register(owner, app_session.id(), launch.package());
+        // Bind the exact process, so a revocation can signal *this*
+        // group and nothing that later inherits the number.
+        crate::provenance::runtime::bind_process(owner, app_session.id(), pid);
+        app_session.bind_process(pid)
+    })?;
+    crate::provenance::runtime::deregister(
+        crate::provenance::runtime::current_owner(),
+        app_session.id(),
+    );
+    crate::worker::audit::outcome(
+        &policy_digest,
+        &format!("app:{app_id}/{command}"),
+        output.audit_facts(),
+    );
+    if output.timed_out {
+        return Err(format!(
+            "App operation `{command}` exceeded its {}s sandbox runtime limit",
+            limits.runtime.as_secs()
+        ));
     }
-    apply_routed_identity(&mut cmd)?;
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("failed to spawn {runtime:?} app: {e}"))?;
-    bind_child_session(&mut app_session, &mut child)?;
-    let stdin_writer = write_child_stdin(&mut child, stdin_data)?;
-
-    // wait_with_output() avoids the deadlock that occurs when the
-    // child writes more than ~64KB to stdout / stderr while we wait
-    // — pipe fills, child blocks on write, parent blocks on wait. See
-    // run_python_app above for the same fix.
-    let output = child
-        .wait_with_output()
-        .map_err(|e| format!("{runtime:?} app wait failed: {e}"))?;
-    finish_child_stdin(stdin_writer)?;
     let status = output.status;
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let stdout = output.stdout_string();
+    let stderr = output.stderr_string();
 
     if !status.success() {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(stdout.trim()) {
@@ -1984,107 +2366,131 @@ pub fn run_app_with_stdin(
 /// `desktop.exec`); `files` are the file paths passed by the launcher
 /// (`%F`). Returns once the GUI process exits.
 pub fn launch_gui(
-    app_dir: &Path,
+    launch: &AppLaunch,
     exec: &str,
     files: &[String],
     data_dir: &str,
     apps_dir: &str,
 ) -> Result<(), String> {
-    let manifest_path = app_dir.join("app.json");
-    let (runtime, entry, panel_applet) = if manifest_path.is_file() {
-        let body = std::fs::read_to_string(&manifest_path)
-            .map_err(|e| format!("read {}: {}", manifest_path.display(), e))?;
-        let manifest = crate::apps::AppManifest::from_json(&body)
-            .map_err(|e| format!("parse {}: {}", manifest_path.display(), e))?;
-        let rt = manifest.runtime;
-        let panel_applet = manifest
-            .desktop
-            .as_ref()
-            .is_some_and(|desktop| desktop.panel_applet);
-        let entry = manifest
-            .entry
-            .unwrap_or_else(|| rt.default_entry().to_string());
-        (rt, entry, panel_applet)
-    } else {
-        (
-            Runtime::Python,
-            Runtime::Python.default_entry().to_string(),
-            false,
-        )
-    };
+    let app_dir = launch.dir();
+    let manifest = launch.manifest();
+    let runtime = manifest.runtime;
+    let panel_applet = manifest
+        .desktop
+        .as_ref()
+        .is_some_and(|desktop| desktop.panel_applet);
+    let entry = manifest
+        .entry
+        .clone()
+        .unwrap_or_else(|| runtime.default_entry().to_string());
 
-    let app_id = manifest_app_id(app_dir)?;
-    let mut app_session = AppIdentitySession::for_gui(app_dir, &app_id, exec)?;
+    let app_id = launch.app_id().to_string();
+    let binding = launch.bind(std::slice::from_ref(&entry))?;
+    let mut app_session = AppIdentitySession::for_gui(launch, &app_id, exec)?;
 
-    let mut cmd = if matches!(runtime, Runtime::Python) {
+    let (program, mut launch_argv) = if matches!(runtime, Runtime::Python) {
         let main_py = app_dir.join("main.py");
         if !main_py.is_file() {
             return Err(format!("app has no main.py at {}", main_py.display()));
         }
         let wrapper = python_wrapper(&main_py, exec, files, data_dir, apps_dir)?;
         let python = if cfg!(windows) { "python" } else { "python3" };
-        let mut c = app_command(python, app_dir)?;
-        c.arg("-c").arg(wrapper);
-        c
+        (interpreter_path(python)?, vec!["-c".to_string(), wrapper])
     } else {
         let entry_path = app_dir.join(&entry);
         if !entry_path.is_file() {
             return Err(format!("app entry not found: {}", entry_path.display()));
         }
         match runtime {
-            Runtime::Node => {
-                let mut c = app_command("node", app_dir)?;
-                c.arg(&entry_path);
-                c
-            }
-            Runtime::Shell => {
-                if cfg!(windows) {
-                    let mut c = app_command("cmd", app_dir)?;
-                    c.arg("/c").arg(&entry_path);
-                    c
-                } else {
-                    let mut c = app_command("bash", app_dir)?;
-                    c.arg(&entry_path);
-                    c
-                }
-            }
-            Runtime::Binary => app_command(&entry_path, app_dir)?,
+            Runtime::Node => (
+                interpreter_path("node")?,
+                vec![entry_path.to_string_lossy().into_owned()],
+            ),
+            Runtime::Shell => (
+                interpreter_path("bash")?,
+                vec![entry_path.to_string_lossy().into_owned()],
+            ),
+            Runtime::Binary => (
+                entry_path
+                    .canonicalize()
+                    .map_err(|error| format!("resolve app entry: {error}"))?,
+                Vec::new(),
+            ),
             Runtime::Python => unreachable!("python handled above"),
         }
     };
-    reset_app_environment(&mut cmd, panel_applet);
+    launch_argv.shrink_to_fit();
 
     let args_json =
         serde_json::to_string(files).map_err(|e| format!("failed to serialize files: {e}"))?;
-    // A GUI draws on Wayland/X, not stdout. Inherit the parent's stdio
-    // so the app's own logging is visible and so it stays attached as a
-    // long-lived foreground process until the window is closed.
-    cmd.stdin(Stdio::null())
-        .env("COS_APP_ID", &app_id)
-        .env("COS_SESSION", app_session.id())
-        .env("COS_APP_GUI", "1")
-        .env("COS_COMMAND", exec)
-        .env("COS_ARGS_JSON", &args_json)
-        .env("COS_DATA_DIR", data_dir)
-        .env("COS_APPS_DIR", apps_dir)
-        .env("DEBIAN_FRONTEND", "noninteractive")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("PAGER", "cat")
-        .env("GIT_PAGER", "cat")
-        .env("PYTHONDONTWRITEBYTECODE", "1")
-        .env("COS_PROC_DATA_DIR", app_session.proc_data_dir())
-        .envs(crate::config::as_env_vars());
-    if let Some(home) = crate::paths::current_home_override() {
-        cmd.env("HOME", &home).env("COS_HOME", home);
+    let mut extra_env = BTreeMap::from([
+        ("COS_APP_GUI".to_string(), "1".to_string()),
+        ("COS_COMMAND".to_string(), exec.to_string()),
+        ("COS_ARGS_JSON".to_string(), args_json),
+    ]);
+    if panel_applet {
+        // Panel applets are handed a pre-opened compositor socket by the
+        // panel itself. It is still a display transport, so it stays
+        // inside the desktop tier and never reaches an operation worker.
+        for key in PANEL_APPLET_ENV_KEYS {
+            if let Ok(value) = std::env::var(key) {
+                extra_env.insert((*key).to_string(), value);
+            }
+        }
     }
-    apply_routed_identity(&mut cmd)?;
-    let mut child = cmd
+
+    // A GUI draws on Wayland/X, not stdout, and lives until its window
+    // closes: it inherits the launcher's stdio and has no wall-clock
+    // deadline, but it is still a third-party worker inside the
+    // sandbox.
+    let prepared = prepare_app_worker(
+        &app_session,
+        &app_id,
+        app_dir,
+        exec,
+        program,
+        launch_argv,
+        data_dir,
+        apps_dir,
+        extra_env,
+        crate::worker::StdioPlan::Inherited,
+        true,
+        &binding,
+    )?;
+    let policy_digest = prepared.facts["policy"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let crate::worker::PreparedLaunch {
+        mut command,
+        resources,
+        ..
+    } = prepared;
+    command.stdin(Stdio::null());
+    let mut child = command
         .spawn()
         .map_err(|e| format!("failed to launch {runtime:?} GUI: {e}"))?;
+    let owner = crate::provenance::runtime::current_owner();
+    crate::provenance::runtime::register(owner, app_session.id(), launch.package());
+    crate::provenance::runtime::bind_process(
+        crate::provenance::runtime::current_owner(),
+        app_session.id(),
+        child.id(),
+    );
     bind_child_session(&mut app_session, &mut child)?;
     let status = child
         .wait()
         .map_err(|e| format!("failed to wait for {runtime:?} GUI: {e}"))?;
+    resources.kill_all(Some(child.id()));
+    crate::provenance::runtime::deregister(
+        crate::provenance::runtime::current_owner(),
+        app_session.id(),
+    );
+    crate::worker::audit::outcome(
+        &policy_digest,
+        &format!("app:{app_id}/{exec}"),
+        serde_json::json!({ "exit_code": status.code(), "timed_out": false }),
+    );
 
     if status.success() {
         Ok(())
@@ -2094,6 +2500,25 @@ pub fn launch_gui(
             status.code().unwrap_or(-1)
         ))
     }
+}
+
+/// Resolve an interpreter to the canonical absolute path the sandbox
+/// will execute. Resolution happens in the launcher, on the host's
+/// `PATH`, so the worker cannot influence which binary runs.
+fn interpreter_path(program: &str) -> Result<std::path::PathBuf, String> {
+    if let Some(paths) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&paths) {
+            let candidate = dir.join(program);
+            if candidate.is_file() {
+                return candidate
+                    .canonicalize()
+                    .map_err(|error| format!("resolve interpreter `{program}`: {error}"));
+            }
+        }
+    }
+    Err(format!(
+        "App runtime interpreter `{program}` was not found on PATH"
+    ))
 }
 
 #[cfg(test)]

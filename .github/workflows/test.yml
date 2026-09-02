@@ -38,11 +38,29 @@ jobs:
       - name: Test APT package synchronization
         run: bash packaging/apt-repo/tests/test-sync-existing-packages.sh
 
+      - name: Test release-security publication
+        run: bash packaging/apt-repo/tests/test-release-security-publication.sh
+
       - name: Test managed-home package removal
         run: bash packaging/deb/tests/test-remove-home-overlay.sh
 
       - name: Test agent worker packaging contract
         run: bash packaging/deb/tests/test-agentd-packaging.sh
+
+      - name: Test session journal packaging contract
+        run: bash packaging/deb/tests/test-session-journal-packaging.sh
+
+      - name: Test worker sandbox packaging contract
+        run: bash packaging/deb/tests/test-worker-sandbox-packaging.sh
+
+      # Every App operation, GUI surface, MCP server and adapter runs
+      # inside bubblewrap, and the launcher fails closed without it. The
+      # runner image does not ship it, so it is installed here — and
+      # `COS_WORKER_SANDBOX_REQUIRED` makes the isolation suite *fail*
+      # rather than skip if it is somehow still unavailable, so a
+      # missing dependency cannot turn those tests into a no-op.
+      - name: Install worker sandbox dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends bubblewrap
 
       - name: Cache cargo registry & target
         uses: actions/cache@v4
@@ -72,14 +90,20 @@ jobs:
         # but the env vars themselves are shared, so two modules racing on
         # separate locks still trample each other. Running serially is the
         # cheapest fix; the lib test binary finishes in ~70s.
+        #
+        # `COS_WORKER_SANDBOX_REQUIRED` turns an unavailable worker
+        # sandbox into a failure here: the previous step installed the
+        # prerequisites, so a skip would mean they are broken rather
+        # than absent.
+        env:
+          COS_WORKER_SANDBOX_REQUIRED: "1"
         run: cd core && cargo test -- --test-threads=1
 
       - name: Run privileged extension boundaries
         shell: bash
         run: |
           set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends bubblewrap acl binutils
+          sudo apt-get install -y --no-install-recommends acl binutils
           cargo build -p cos --bin claw-agentd --bin claw-extension-host
           cargo test -p cos \
             --test agentd_process_boundary \
@@ -162,6 +186,22 @@ jobs:
             HOME=/root \
             COS_GID_SCAN_HELPER_SOURCE="$root/extension-gid-scan.py" \
             /usr/bin/python3 "$root/test-extension-gid-scan.py"
+
+      # Downgrade protection is exercised against real .deb archives,
+      # real maintainer scripts, real dpkg/apt transactions and real
+      # OpenPGP signatures. The signing keys are generated inside the
+      # tests and discarded with them, so these steps need no secret.
+      - name: Test update downgrade protection packaging
+        run: |
+          cd core && cargo build --bin claw-security-floor
+          cd "$GITHUB_WORKSPACE"
+          COS_SECURITY_FLOOR_BIN="$GITHUB_WORKSPACE/target/debug/claw-security-floor" \
+            bash packaging/deb/tests/test-security-floor-packaging.sh
+
+      - name: Test update downgrade protection installation
+        run: |
+          COS_SECURITY_FLOOR_BIN="$GITHUB_WORKSPACE/target/debug/claw-security-floor" \
+            bash packaging/deb/tests/test-security-floor-install.sh
 
       - name: Run cos-browser tests
         run: cargo test -p cos-browser

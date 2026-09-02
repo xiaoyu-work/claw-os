@@ -54,8 +54,20 @@ fn the_model_and_tool_runtime_is_refused_inside_the_broker() {
         "the broker must not be able to run the in-process agent loop"
     );
 
+    // A real signed package, so the refusal comes from the broker guard
+    // rather than from provenance failing first — the point of the test
+    // is that even a perfectly valid App cannot be launched here.
+    let dir = crate::test_env::secure_scratch_dir("agentd-guard-app");
+    std::fs::write(
+        dir.join("app.json"),
+        r#"{"id":"guarded","version":"1","name":"Guarded","operations":{}}"#,
+    )
+    .unwrap();
+    std::fs::write(dir.join("main.py"), "def run(command, args):\n    return {}\n").unwrap();
+    let launch = crate::test_env::app_launch(&dir, "guarded");
+
     let app = crate::bridge::run_python_app(
-        std::path::Path::new("/nonexistent-app"),
+        &launch,
         "noop",
         &[],
         "/nonexistent-data",
@@ -70,4 +82,5 @@ fn the_model_and_tool_runtime_is_refused_inside_the_broker() {
         message.contains("claw-agentd"),
         "the refusal should name the worker: {message}"
     );
+    let _ = std::fs::remove_dir_all(&dir);
 }

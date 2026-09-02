@@ -342,7 +342,7 @@ impl Modality {
     }
 }
 
-fn help_doc() -> Value {
+pub(crate) fn help_doc() -> Value {
     json!({
         "command": "cos agent setup <MODALITY> [SUBCOMMAND]",
         "summary": "Per-modality config wizard: pick a provider, a model, store an API key, and verify it works.",
@@ -427,7 +427,8 @@ fn verify_cmd(modality: Modality) -> Result<Value, String> {
 }
 
 fn verify_llm() -> Result<Value, String> {
-    let cfg = &crate::config::get().agent;
+    let config = crate::config::current_snapshot();
+    let cfg = &config.agent;
     if let Err(reason) = is_ready(cfg) {
         let reason_val: Value = serde_json::from_str(&reason).unwrap_or_else(|_| json!(reason));
         return Ok(json!({
@@ -560,7 +561,7 @@ pub(super) fn provider_configuration_error(
                 "details": details,
         }),
         llm::LlmError::NotConfigured(message)
-            if llm::credential_pool::Pool::is_declared(cfg)
+            if llm::construction::ApiCredentialConfig::from_agent_config(cfg).pool_declared()
                 && message.starts_with("credential pool '") =>
         {
             json!({
@@ -600,23 +601,27 @@ pub fn provider_needs_credential(name: &str) -> bool {
 /// resolved. Used by both the readiness gate and `cos agent status`
 /// so they agree on what "key present" means.
 pub fn resolved_key_source(cfg: &crate::config::AgentConfig) -> llm::Result<Option<KeySource>> {
-    if let Some(pool) = llm::credential_pool::Pool::try_from_agent_config(
+    let source = llm::construction::ProcessCredentialSource;
+    let resolved = llm::construction::resolve_api_credentials(
         format!("provider:{}", cfg.provider),
-        cfg,
-    )? {
+        llm::construction::ApiCredentialConfig::from_agent_config(cfg),
+        &source,
+    )?;
+    if let Some(pool) = resolved.pool {
         return Ok(pool
-            .stats()
+            .try_stats()
+            .map_err(llm::ProviderInfrastructureError::from)?
             .into_iter()
             .next()
             .map(|stats| KeySource::from_pool_source(stats.source)));
     }
     if let Some(name) = cfg.api_key_credential.as_deref() {
-        if llm::providers::openai_compat::resolve_api_key(Some(name), None)?.is_some() {
+        if llm::construction::resolve_process_api_key(Some(name), None)?.is_some() {
             return Ok(Some(KeySource::credential(name)));
         }
     }
     if let Some(env_name) = cfg.api_key_env.as_deref() {
-        if llm::providers::openai_compat::resolve_api_key(None, Some(env_name))?.is_some() {
+        if llm::construction::resolve_process_api_key(None, Some(env_name))?.is_some() {
             return Ok(Some(KeySource::env(env_name)));
         }
     }
@@ -685,7 +690,7 @@ fn status_cmd(modality: Modality) -> Result<Value, String> {
 }
 
 fn status_llm() -> Value {
-    status_llm_for(&crate::config::get().agent)
+    status_llm_for(&crate::config::current_snapshot().agent)
 }
 
 fn status_llm_for(cfg: &crate::config::AgentConfig) -> Value {
@@ -1181,7 +1186,7 @@ fn wizard_llm(verify_after: bool) -> Result<Value, String> {
         // config in-memory by cloning the cached one and overriding the
         // fields the wizard just wrote — this matches exactly what
         // `cos agent {ask,chat}` will see on next process start.
-        let mut probe_cfg = crate::config::get().agent.clone();
+        let mut probe_cfg = crate::config::current_snapshot().agent.clone();
         probe_cfg.provider = provider.clone();
         probe_cfg.model = model.clone();
         probe_cfg.api_key_credential = credential_name.clone();
@@ -1236,7 +1241,10 @@ fn wizard_all(verify_after: bool) -> Result<Value, String> {
     let _ = writeln!(e);
 
     let modalities = [
-        ("text", "Conversational text model (required for `ask`/`chat`)"),
+        (
+            "text",
+            "Conversational text model (required for `ask`/`chat`)",
+        ),
         ("tts", "Text-to-speech"),
         ("stt", "Speech-to-text"),
         ("imagegen", "Image generation"),

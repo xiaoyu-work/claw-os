@@ -44,14 +44,20 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | `claw-agentd` worker | Unprivileged per-task process that runs the model/tool loop after privilege drop; grant-authenticated private job channel | `core/src/bin/claw-agentd.rs`, `core/src/agentd/` |
 | `claw-extension-host` | Per-task isolated-UID process that runs dynamic App/MCP code behind a worker-only control socket and a broker-owned route-filtered proxy | `core/src/bin/claw-extension-host.rs`, `core/src/extension_host/` |
 | Agent runtime | Multi-turn model/tool loop, prompt assembly, hooks, progress, compression, and tool dispatch | `core/src/agent/runtime/` |
+| Model-input trust | Closed trust lattice, model-input source registry, labelled segments, and the bounded data fence for non-policy content | `core/src/agent/trust/` |
 | LLM abstraction | Provider registry, wire adapters, streaming accumulation, fallback chain, credentials, and usage | `core/src/agent/llm/` |
-| Tool/capability layer | Immutable tool descriptors, session-scoped model-visible projection, guardrails, MCP attachment, scope checks, and approval boundaries | `core/src/agent/tools/`, `core/src/caps/` |
+| Tool/capability layer | Model-visible tool registry, guardrails, MCP attachment, scope checks, and approval boundaries | `core/src/agent/tools/`, `core/src/caps/` |
+| Credential service | Validated credential identities, cryptography and master-key ownership, encrypted atomic persistence, authorization, refresh lifecycle, OAuth flows, and stable CLI facade | `core/src/credential/` |
 | Memory and sessions | SQLite/FTS memory, semantic recall, session/message persistence, curation, and checkpoints | `core/src/agent/memory/`, `core/src/session/`, `core/src/checkpoint.rs` |
+| Session event journal | Root-owned, MAC-chained record of session lifecycle and privileged mutation brackets; the ordering and recovery authority the other session/audit views project from | `core/src/session/journal/`, `core/src/clawd/journal.rs` |
 | Audit | Hash-chained JSONL events and agent audit/query commands | `core/src/audit.rs`, `core/src/agent/audit_cli.rs` |
+| Notification service | Durable owner-scoped user-attention records, delivery policy, DND, deduplication, retries, and channel leases | `core/src/notifications/`, `core/src/clawd/notifications.rs` |
 | Apps and adapters | Declarative operation manifests plus Python, Node, shell, or binary runtime handlers | `apps/`, `adapters/`, `core/src/apps.rs`, `core/src/bridge.rs` |
+| Extension provenance | Publisher signing, trust roots, package verification, and the shared bounded installer for Apps, Skills, and MCP/adapter packages | `core/src/provenance/` |
+| Update freshness | Signed release-security manifest, monotonic local security floor, one-use recovery authorizations, and the install/activation/runtime gates that refuse a superseded release | `core/src/update/`, `packaging/release-security/`, `packaging/deb/common/` |
 | SDK/runtime | Public app SDKs and internal bundled-app policy helpers | `claw-os-sdk/`, `cos-runtime/` |
 | Browser and semantic services | Obscura browser stack, `cos-browser`, embedding and semantic-search services | `crates/obscura-*`, `crates/cos-browser`, `crates/claw-*` |
-| Desktop | Product desktop fork and native UI clients communicating through stable OS boundaries | `desktop/` |
+| Desktop | Product desktop fork and native UI clients communicating through stable OS boundaries; the Agent UI and bridge share a versioned presentation protocol | `desktop/`, `desktop/agent/protocol/` |
 | Image composition | Reusable rootfs features and profile definitions | `rootfs/`, `scripts/lib/image-profiles.sh` |
 | Web desktop | React/Vite Linux desktop whose browser opens the embedded marketing site; independently built before Pages composition | `web/`, `.github/workflows/publish-website.yml` |
 | Distribution | WSL/Docker/VM/ISO/Azure packaging, Debian packages, signed APT repo, releases | `targets/`, `packaging/`, `.github/workflows/` |
@@ -94,11 +100,80 @@ Apps use the Claw OS SDK/agent gate rather than provider SDKs. Provider choice,
 credentials, consent, budgets, model-visible logging, and fallback behavior
 remain owned by the core agent.
 
+Bundled desktop apps launch Ask Claw through `cos_runtime::ask_claw`. Their
+thin `claw_glue` adapters define only typed, app-specific context fields; the
+runtime owns bounded JSON serialization, anonymous process-bound stdin
+handoff, executable selection, readiness and write deadlines, exact-child
+reaping, and the activation contract consumed by the Agent UI. Context payloads
+never enter process argv, D-Bus, audit entries, a process registry, environment,
+or filesystem. Context-bearing requests use isolated transient overlay
+processes; only context-free activation uses the well-known D-Bus
+single-instance path.
+
+### Model-input trust provenance
+
+`core/src/agent/trust/` owns a closed provenance model for everything a model
+can see. It is deliberately separate from chat role: providers expose only
+`system`/`user`/`assistant`/`tool` channels, so role cannot distinguish operator
+policy from a `MEMORY.md` note or a remote MCP server's tool description.
+
+- `TrustClass` is an ordered lattice — `LegacyUnknown`,
+  `UntrustedExternalContent`, `ModelGenerated`, `ExtensionMetadata`,
+  `UserControlledContext`, `UserInstruction`, `SystemPolicy`.
+- `SourceKind` is the closed registry of every way bytes reach a model request.
+  One exhaustive `match` declares each source's class, persistence, provider
+  projection, and audit strategy, so a new model-visible source cannot compile
+  without declaring provenance. An unrecognised source is `LegacyUnknown`.
+- `PromptProjection` splits one request into three channels. **Only
+  `SystemPolicy` segments reach `system`/`developer`**: the compiled scaffold,
+  plus an operator prompt file that ownership verification proved is root-owned
+  and not owner-writable. The authenticated user instruction goes to `user`
+  verbatim. Everything else — memory notes, `USER.md`, recalled memory, nudges,
+  Skill metadata, tool metadata, external and model content, legacy rows —
+  becomes separate bounded `user` data messages placed before the turn, in
+  assembly order. A provider without a `developer` role may merge policy with
+  policy; it can never merge policy with data, because the two never share a
+  message.
+- `LabeledSegment` carries the bytes, source and class together. Concatenation,
+  summarisation, truncation and replay take the least-trusted class of their
+  inputs, so trust never rises under transformation. Tool results are labelled
+  from the tool's registered identity, which the registry fixes before the model
+  call; tool *definitions* stay unfenced valid JSON schemas, bounded and
+  marker-stripped at ingestion so no provider schema breaks.
+- Labels are constructed only by trusted ingestion adapters naming a source.
+  Any label recovered from bytes — a stored row, a serialized payload, an
+  envelope header, a database column — is clamped to `UserControlledContext` or
+  below, so no stored or model-authored content can deserialize itself into
+  policy.
+- `trust::envelope` fences each data segment. `encode` guarantees an encoded
+  payload contains no `[[` digraph for *any* Unicode input — a fixpoint, not a
+  single substitution pass — and `decode` inverts it exactly. `bytes=` is the
+  emitted payload length, so a reader verifies the fence instead of trusting it.
+- `trust::authority` states in the type system that a label is evidence, never a
+  capability, role, approval or policy decision.
+
+Threat statement: this is containment and provenance, not detection. A
+malicious web page, MCP server, App or Skill can still persuade the model to
+propose any text or any tool call. What labelling guarantees is that untrusted
+bytes never enter the policy channel, cannot gain trust by being concatenated,
+summarised, stored, replayed or re-serialised, and cannot forge or escape the
+fence around themselves. The security boundary remains capabilities,
+guardrails, approvals and the sandbox — none of which read a trust label.
+
 ### Persistence and observability
 
 Anything inserted into a model request must be reconstructable from session or
 audit records. Prompt injections, memory, tool calls/results, provider usage,
-approvals, and privileged actions cannot bypass the recording path.
+approvals, and privileged actions cannot bypass the recording path. The
+owner-private message store keeps `trust_class`, `trust_source` and
+`trust_lineage` beside each row; a database written before those columns existed
+migrates by adding them as nullable, and a `NULL` — or a tampered value — reads
+back as `LegacyUnknown`. The busy timeout is armed before the WAL switch and the
+migration so the broker, worker and a CLI can open concurrently. Injected prompt
+segments carry their `SourceKind` tag, and the Session Journal records a
+content-addressed `ContentRef` plus the segment's provenance projected onto
+`Origin`/`SegmentKind`/`Trust`; a fence recovered from stored bytes may refine
+the recorded segment kind but never widens its trust.
 
 Long `MemoryDb` conversations use durable compaction projections rather than
 rewriting their authoritative transcript. Each per-session attempt records a
@@ -142,6 +217,17 @@ while projecting canonical chain tails, suppressing installation/version
 contradictions by append order, and excluding expired observations; the complete
 history remains inspectable through the memory tool.
 
+Curated `MEMORY.md` facts are an append-only history, not a live inventory.
+Before persistence, `core/src/agent/memory/ontology.rs` canonicalizes documented
+aliases, classifies durable knowledge versus observed environment state, bounds
+observation TTLs, and rejects session state or procedures. Each new fact records
+validated source session/message provenance (or an explicit unknown/redacted
+marker) and confidence. The curator performs its final reread, dedupe, and append
+under one file lock. Prompt assembly leaves the human-editable file untouched
+while projecting canonical chain tails, suppressing installation/version
+contradictions by append order, and excluding expired observations; the complete
+history remains inspectable through the memory tool.
+
 Semantic primitives have a one-way dependency boundary: `claw-embed` owns
 embedding, extraction, chunking, walking, and storage contracts;
 `claw-semantic` depends on those contracts and owns only filesystem daemon
@@ -155,6 +241,16 @@ lifecycle, configuration, service orchestration, and user-facing commands.
 - Debian packages are assembled from built binaries and source-tree files and
   do not require a rootfs build.
 - Docker and WSL share one rootfs per architecture in their combined workflow.
+- Authenticity and freshness are separate properties. Repository and package
+  signatures prove the publisher; a monotonic, root-owned local security floor
+  under `/var/lib/cos/security` proves the release is not superseded. Every
+  package carries its own canonical signed release-security manifest,
+  `preinst`, `prerm`, the APT pre-install hook and the binaries themselves all
+  decide against that floor, and the floor survives package removal.
+  Unprivileged processes enforce against a minimal root-owned projection in
+  `/var/lib/cos-security` that the privileged commit publishes; the private
+  tree is never widened. Local root and whole-state replacement remain outside
+  its reach; this is not hardware anti-rollback.
 
 ### Vendored boundaries
 
@@ -174,7 +270,8 @@ and where results become persistent or externally visible.
 ```text
 core/src/main.rs
   -> router::dispatch
-  -> primitive module or clawd client
+  -> cli_catalog + cli_help definitions (help/schema)
+     OR primitive module or clawd client (execution)
   -> capability/policy check
   -> structured JSON result
   -> requested output formatter
@@ -183,11 +280,34 @@ core/src/main.rs
 Hidden router bridges such as `__policy`, `__memory`, `__package`, and
 `__systemd` are internal protocol surfaces used by bundled apps and services.
 
+The same public command catalogue drives progressive model discovery:
+
+```text
+model
+  -> cos_help with path=[]
+  -> one public namespace
+  -> one public command
+  -> the named model tool
+  -> normal guardrail, approval, capability, and audit path
+```
+
+`cos_help` is structural and read-only: its path contains command names, never
+flags or operands, and it cannot dispatch a CLI operation or address hidden
+`__*` routes. Command discovery therefore does not become a generic shell or a
+way around per-tool policy. Installed Apps use the parallel
+`cos_app_catalog`/`cos_app_run` path.
+
+Token usage follows the same owner boundary as Agent execution. A model call to
+`cos_usage` reads the current routed owner's log. A direct
+`cos agent usage ...` client calls the typed `agent.usage` broker route; clawd
+derives the owner UID from kernel peer credentials and selects that UID's log,
+so neither path accepts a caller-supplied owner identifier.
+
 ### Broker request admission
 
 ```text
 client (cos / bridge / rollback / approval helper)
-  -> one length-prefixed v1 frame on /run/cos/clawd.sock
+  -> one length-prefixed v2 envelope in a CBK1 frame on /run/cos/clawd.sock
   -> connection slot for the peer's accounting bucket
   -> recvmsg: kernel SCM_CREDENTIALS, SCM_RIGHTS closed and refused
   -> /proc re-verification of the sending process
@@ -269,26 +389,29 @@ the `require` gate. It describes authority; the broker authority decides it.
 CLI / web UI / bridge
   -> clawd agent task client (for daemon-backed work)
   -> clawd claims the task, derives session capabilities, spawns claw-agentd
-  -> claw-agentd (task uid, dedicated cos-extension gid, no supplementary groups, NoNewPrivs)
-  -> clawd allocates an unmapped per-task extension uid and spawns
-     claw-extension-host for dynamic App/MCP processes
+  -> claw-agentd (task owner, no supplementary groups, NoNewPrivs)
+  -> composition snapshots Arc<CosConfig>, RegistryDeps, and RuntimeDeps
   -> runtime::loop_
-  -> restore the session's versioned content-addressed system prompt,
-     or build + freeze it once with the metadata-only Skill catalogue
-  -> append due reminders / transient App data to the current request only
-  -> load the latest verified durable compaction plus its uncompacted raw tail
-  -> deterministically prune old tool output, then start/complete a serialized
-     durable summary only when the configured budget still requires it
+  -> restore the session's frozen content-addressed *policy* prompt, or
+     build + freeze it once (compiled scaffold, plus a root-owned
+     operator policy file when ownership verification passes)
+  -> rebuild the request prelude per turn: Skill catalogue, memory notes,
+     owner-writable prompt file, due reminders, transient App data —
+     each a separate fenced user data message before the owner's turn
+  -> load persisted conversation and compress when the configured budget requires it
   -> Provider::chat or Provider::chat_stream
   -> StreamEvent accumulation
   -> user-visible stream projection (tool identity only; evidence markers hidden)
+  -> session-stable tool projection:
+       core tools stay direct
+       App schemas become cos_tool_search / cos_tool_describe / cos_tool_call
+       MCP descriptors remain behind fixed mcp_catalog / mcp_invoke tools
   -> compact tool registry / guardrails / hooks
-     -> rebuild session-scoped tool projection from trusted runtime facts
-        (never request fields or process environment)
-     (Apps default to cos_app_catalog + cos_app_run progressive disclosure)
-     (oversized extension catalogs use stable cos_tool_search /
-      cos_tool_describe / cos_tool_call schemas)
+  -> bridge envelopes resolve to the underlying tool before policy and scheduling
   -> parallel-safe or serial tool execution
+  -> denied capability files an approval and releases the worker
+  -> task waits durably in waiting_approval
+  -> approval resumes the same task/session; denial ends it
   -> tool results appended to conversation
   -> repeat until final response or max_turns
   -> final no-tools synthesis when the work limit is reached
@@ -320,6 +443,50 @@ presence lease can cross a process boundary.
 
 `core/src/agent/runtime/turn.rs` is the main seam where model output, tool
 authorization, execution ordering, hooks, and conversation history meet.
+Composition roots resolve environment-backed paths and open optional
+memory/semantic stores once. `RegistryDeps` makes registry assembly
+side-effect-free, while `RuntimeDeps` carries the scoped hook registry, clock,
+semantic indexer, notes store, and prompt/audit paths into the unified
+lifecycle. LLM composition follows the same snapshot rule:
+`ProviderBuildContext` injects a `CredentialSource` and one shared
+`HttpTransport` into `llm::registry`; the registry alone maps immutable
+`AgentConfig` values into provider-specific settings. Credential-store then
+environment precedence is resolved once before provider construction, and
+credential pools receive only pre-resolved entries. `ProviderChain` receives a
+`ProviderAttemptObserver`; the live audit observer is assembled with the audit
+path and request/session metadata outside the chain, and retains the existing
+warn-only audit-write failure semantics. Provider modules therefore own only
+authentication headers, wire serialization/parsing/streaming, and upstream
+error classification, with no config, environment, credential-store, or audit
+discovery.
+
+Copilot's context-aware path keeps the same transport through GitHub-token
+exchange, rejected-token refresh, live model-catalog negotiation, and the
+final chat/Responses request. Process-backed constructors and auth functions
+remain source-compatible legacy composition boundaries; production registry
+and fallback assembly use only injected variants.
+
+Deferred calls retain their provider-facing bridge envelope in the live
+trajectory, while progress, hooks, evidence, and persisted/searchable history
+use the resolved underlying tool identity. The provider tool array therefore
+stays stable for prompt caching without weakening capability or approval
+checks.
+
+Standalone and `claw-agentd` audit hooks are installed into that
+exact registry, and delegated children inherit it. App-session tools retain
+their discovered App root; Skill roots retain their trust origin. Legacy
+`config::get()` and static `with_override` callers remain source compatible,
+while all production core code uses Arc-owned
+`current_snapshot`/`with_snapshot`; a source inventory test enforces that
+separation. Detached curation and web request composition reinstall the
+captured snapshot before gated work. Detached curation also reinstalls a typed
+`RoutedPathContext` containing the owner home, owner UID, and routed-job marker,
+so budget, run-log, notes, credentials, and other path resolvers remain in the
+owner partition after `tokio::spawn`. The curation log path itself is resolved
+at composition and passed to `AutoCurator`, so its initial durable run bracket
+never targets process-global state. Legacy direct-library agent adapters
+retain compatibility contexts, but production CLI, web, and worker flows use
+`runtime::loop_::run_with_deps`.
 The projection in `core/src/agent/runtime/presentation.rs` affects display
 events only; complete tool inputs/results remain in the runtime trajectory,
 session memory, audit records, and evidence verifier. Canonical prompt snapshots
@@ -327,25 +494,51 @@ live in content-addressed memory tables and are restored byte-for-byte across
 continuations. Dynamic due/App context is logged separately as injected audit
 data and never becomes user-authored history.
 
-Memory recovery treats `messages` as authoritative and FTS, titles, and
-session prompt links as validated projections. `cos agent doctor` and
-`cos agent sessions health` diagnose SQLite, WAL, schema, FTS, prompt
-references, prompt hashes, titles, and repair lifecycle state without rewriting
-the database: it inspects a private snapshot of the database/WAL/SHM family.
-`cos agent sessions repair` takes an exclusive lifecycle lock shared by every
-normal `MemoryDb` handle, brackets mutation in a private metadata-only repair
-log, and rebuilds FTS transactionally. Damage that cannot be repaired without
-trusting suspect prompt or SQLite bytes is renamed to a restrictive
-same-filesystem quarantine before an attempt-bound staged replacement is
-installed. A malformed WAL is never replayed during salvage; repair validates a
-separate copy of the quarantined main database and retains its checkpointed
-authoritative rows when possible. A valid WAL must checkpoint completely before
-any rename, and staged replacements are accepted only after their attempt
-marker and recovered counts are durable in the standalone main database.
-Authoritative messages are scanned without secondary indexes and committed
-before rebuilding indexes/FTS or attempting title and prompt projection
-recovery.
-See [`docs/memory-recovery.md`](docs/memory-recovery.md).
+The embedded Agent Web app uses this same queue rather than running an
+in-process model loop. Chat submits and streams durable tasks, Tasks lists and
+cancels those records and creates explicit retries, and Approvals can wake a
+waiting task without requiring the user to repeat the request. The user-owned
+Web process reads session lists and history from the owner-partitioned memory
+database; decisions cross the existing `pkexec` approval helper rather than
+granting the Web process direct decision authority. The Inbox is the
+Notification Service projection; raw `context.event` records remain available
+separately as System Events.
+
+Closing or losing a Web SSE connection detaches the viewer but does not cancel
+the durable task. The Chat Stop control uses the task id returned at submission
+and calls `task.cancel` explicitly; completion remains observable through Tasks,
+session history, and notifications after a reconnect.
+
+Pre-queue Web conversations remain readable from their user-owned memory
+database, while new durable conversations use the owner task partition. Root
+`clawd` never opens the user-home compatibility database.
+
+### Proactive notification
+
+```text
+cron / triggers / Agent task lifecycle / heartbeat / due nudges
+  -> bounded NotificationDraft after the source transition is durable
+  -> core notification service
+  -> SQLite notification + change + per-channel delivery state
+  -> owner-scoped clawd list / subscribe / acknowledge / dismiss routes
+       -> authenticated Agent Web SSE + browser notifications
+       -> user-session cos-agent-bridge -> Freedesktop notification D-Bus
+  -> daemon delivery lease
+       -> opt-in ntfy adapter
+```
+
+Notification delivery is deterministic system behavior and never depends on
+the model deciding to call a notification tool. The service stores no full
+prompt, tool arguments, credentials, or raw task result. `context.event`
+remains an automation input and `system-operations.jsonl` remains immutable
+audit evidence; notification read, acknowledgement, dismissal, retry, and DND
+state live independently in `notifications.db`.
+
+The system daemon never opens a user's session D-Bus. The user-session Agent
+bridge claims desktop deliveries from `clawd`, posts them through
+`org.freedesktop.Notifications`, and reports success or retryable failure.
+External ntfy delivery is disabled by default and is enabled through
+owner-scoped preferences.
 
 A daemon-backed task no longer runs inside root `clawd`. The broker claims the
 task, derives its capabilities, and hands the work to a `claw-agentd` process
@@ -374,201 +567,21 @@ admin, App-session, scheduler or permission-decision route exists on that
 channel. `SO_PEERCRED` is not used to authenticate it: the socket pair predates
 the fork, so the kernel stamps it with the broker's own identity.
 
-The adopted fd 3 is marked close-on-exec before the runtime starts, and its
-bootstrap environment hints are removed. Process spawn independently marks
-every descriptor above stderr close-on-exec and clears agentd/clawd supervision
-hints from the child environment, preserving only the sealed executable memfd.
-Agent-started descendants therefore cannot forge worker frames or collide with
-the worker's approval traffic.
-
-Dynamic App and MCP code is not loaded into either `clawd` or `claw-agentd`.
-For every claimed task, the supervisor creates a private runtime directory,
-binds a second broker socket there, and spawns `claw-extension-host` as the task
-owner's authority but under a distinct, exclusively leased host-kernel uid.
-The host repeats the worker's group drop, `NoNewPrivs`, `0077` umask,
-environment/descriptor allowlists, separate session/process group, finite
-rlimits, and non-dumpable process state. A private mount namespace is
-mandatory and replaces `/tmp`, `/var/tmp`, `/dev/shm`, and `/run/lock` with
-task-private tmpfs mounts. The host sees the rest of the mount tree read-only;
-only its descriptor-verified task directory is remounted writable. IPC/UTS
-namespaces remain an optional additional layer. `clawd` also establishes a
-delegated CPU/memory/pids subtree, creates
-and verifies a bounded task cgroup, and moves the host into it in the pre-exec
-closure before any dynamic code can run. Every descendant inherits that
-membership. Teardown requires a successful `cgroup.kill`, `populated 0`, an
-empty `cgroup.procs`, removal of the task cgroup, successful private-mount
-unmounts, and descriptor-relative recursive removal of all task state.
-`setsid`, double-forking, host-first exit, clearing `PDEATHSIG`, symlinks,
-hardlinks, open descriptors, or nested mountpoints cannot produce a clean
-release while residue remains.
-
-Each App or stdio MCP process adds a second boundary through the trusted
-`claw-app-runner`/bubblewrap launch path: new PID and network namespaces with
-private procfs plus a mount namespace rooted at empty tmpfs. Exact pinned
-executables and ELF dependencies, filtered immutable language-runtime
-snapshots, generated minimal account files, exact live broker/session
-endpoints, and read-only snapshots of explicitly authorized App/MCP code are
-mounted. Broad live `/usr`, `/etc`, and `/usr/local`, plus `/home`, `/root`,
-`/mnt`, `/media`, arbitrary `/var`, and other host mounts are absent. Ambient network
-access is absent; native extensions use broker-mediated capabilities. Each
-child receives private writable
-home/data/cache/log/tmp trees. The cgroup remains the outer kill/reap
-authority, while private procfs prevents same-UID siblings from observing or
-signalling one another.
-
-The runtime path is also part of the root boundary. `/run/cos/extension-hosts`,
-its per-owner directory, and each task directory remain root-owned and
-non-writable. `openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|
-RESOLVE_NO_MAGICLINKS)`, pinned directory descriptors, `mkdirat`, `fchown`,
-`fchmod`, `fstatat(AT_SYMLINK_NOFOLLOW)`, and `unlinkat` cover creation,
-upgrade cleanup, socket metadata, and teardown. Only the final control
-subdirectory is transferred after the root-owned broker listener has been
-bound and its filesystem inode/type plus `/proc/net/unix` endpoint identity
-have been verified. No privileged `chown` or `chmod` follows a pathname below
-a task-writable directory.
-
-Host bootstrap authority crosses the root-to-extension boundary only through a
-private inherited descriptor carrying a typed versioned record. The worker
-grant signs the resulting exact binding, including owner/leased uid, isolated
-gid, capability generation, socket identities, and device/inode/mode-pinned
-approved roots. Child launch APIs require that typed authority; they never
-recover it from environment variables, effective ids, NSS, or fallback path
-resolution. Approved snapshots accept only root or the exact task owner and
-always reject reserved extension uid and execution-gid objects. Arbitrary
-`/srv` paths are absent unless an exact broker-pinned path capability exists.
-
-The package creates and locks `cos-ext-00` through `cos-ext-63` at fixed UIDs
-`61000..=61063`. Fresh installs reserve primary GID `60999`; an upgrade from
-the prior package may retain its arbitrary sysusers-assigned
-`cos-extension` GID only after proving it has no unrelated members, primary
-users, processes, subordinate-ID overlap, group-owned files, or named access/
-default ACLs. Upgrade preinstall stops `clawd`; postinstall uses the newly
-unpacked root-owned helper and configured dependencies to reject stacked
-mountpoints, pin each visible mount by descriptor/mount ID/device/inode, scan
-without crossing mounts, and recompare mountinfo. Timed scans own a dedicated
-process group and escalate TERM to SIGKILL before residue verification. Both
-identity policies remain outside systemd's `DynamicUser` range
-(`61184..=65519`). Postinstall also rejects NSS/name/UID collisions,
-systemd-homed records, and overlapping `/etc/subuid` or `/etc/subgid` ranges
-before creating anything; partial provisioning rolls back only records created
-in that attempt. `clawd` requires
-the exact name/uid/gid/home/shell/locked-shadow records plus a root-owned
-package reservation manifest on every start. It never reuses an identity until
-cgroup, private-mount, task-state, and routed-ACL cleanup succeed. A durable
-root-owned quarantine record is written before task state is created and
-removed only after every cleanup step succeeds. On restart, cgroup recovery
-runs first; quarantined identities remain locked until their process, runtime
-directory, `/run/user/<uid>`, and routed-reader state are all proven absent.
-The control socket admits the task-owner worker through the shared execution
-gid but checks its exact pid/start-time/task/nonce; the private broker socket
-belongs only to the extension uid. The proxy authenticates that kernel uid,
-then explicitly projects the already-bound task-owner principal into normal
-route/capability enforcement and records the execution uid in audit identity.
-The host and all descendants inherit a seccomp filter denying `ptrace`,
-`process_vm_readv`, `process_vm_writev`, `kcmp`, and `pidfd_getfd`. Both worker
-and host set `PR_SET_DUMPABLE=0` at process entry. Extension data, cache, log,
-and home paths are task-controlled directories rather than the owner's home.
-
-The signed worker grant includes the extension protocol version, owner, task,
-durable session, worker pid/start-time, host pid/start-time, random lease nonce,
-deadline, and both socket paths. The host's control listener accepts frames
-only from that exact worker identity. Its broker proxy uses per-message
-`SCM_CREDENTIALS`: the host may reach only App/MCP lifecycle plus
-`permission.status`, while descendants may reach only `Session` or
-`PeerSession` routes for their nearest root-maintained App/MCP row. Task,
-scheduler, permission-decision, admin, and sibling-session routes are absent.
-Accepted provider calls re-enter the normal typed route registry, global
-admission limits, capability authority, final provider checks, and audit path.
-The supervisor's retry boundary is a durable two-phase execution gate. The
-worker verifies PREPARE and remains blocked; `clawd` persists exact
-task/session/worker/generation/nonces as `execution_committed` before sending
-COMMIT. Recovery requeues only unprepared/prepared records. Commit persistence
-or delivery ambiguity, legacy running records, and worker/host failure after
-COMMIT become terminal indeterminate because an external side effect may have
-occurred.
-Every queue file replacement propagates file and parent-directory fsync
-failures. Cross-bucket moves fsync the destination directory and then the
-source directory before success is reported. Before claiming, committing,
-recovering, cancelling, or finishing, the store deduplicates identical IDs
-across pending/running/done: committed or conflicting copies dominate and
-become terminal indeterminate, while identical pre-COMMIT copies reconcile to
-one safe record. Queue roots and buckets are created bottom-up only after
-directory-fsync support is preflighted, with each new directory and parent
-synced. A Pending record is claimable only at the current schema in the
-explicit unprepared phase; legacy, unsupported, malformed, or phase-conflicting
-records become terminal indeterminate.
-
-Consent remains inside the capability boundary.
-`core/src/caps/approval_gateway.rs` is the seam `caps::require` consults instead
-of the root-owned approvals store: after validated arguments produce an exact
-verb and canonical scope, the worker names only those values. `clawd` supplies
-owner, session, task, worker identity, attended/unattended context, and catalog
-risk from trusted state. Attended denials may file one exact request;
-unattended denials fail closed and must rely on authority delegated when the
-automation was created. The request captures the worker pid/start time, a
-broker-only lease nonce and deadline, and the revocation generation current at
-request time; a stale decision, replacement worker, or concurrent task cannot
-rebind it.
-
-Approval correlation counters are not trusted as authenticators. Every worker
-ask carries a fresh random nonce and the broker echoes that nonce plus the
-complete ask. The worker resolves a waiter only when correlation id, nonce,
-ask kind, verb, canonical scope, and operation digest all match; substituted
-or replayed replies remain pending and cannot open a capability gate.
-
-In-process Agent surfaces use the same binding model without a process-global
-identity. Each invocation installs a Tokio task-local identity derived from its
-actual task or conversation-turn identifier plus a fresh nonce. Invocation
-completion, cancellation, and web-client disconnect durably revoke that
-identity and retire its pending and approved records, so another conversation
-or a later turn in the same conversation cannot redeem them.
-
-An approved record is durable consent evidence, not ambient session authority.
-At execution `clawd` atomically spends the exact record, then mints and
-immediately exercises an in-memory `Issuer::Approval` capability grant bound to
-the owner, session, task, worker pid/start time, verb, scope, approval expiry,
-use budget, and revocation generation. Only then does the execution-time
-`caps::require` return success. There is no worker route to decide a request or
-obtain a reusable capability. See
-[`docs/capability-consent.md`](docs/capability-consent.md).
-
-Tool-name policy is not authority. `auto_deny_tools` remains a hard
-pre-dispatch block, while `dangerous_tools` is retained for tools whose
-complete command surface has not yet been mapped to exact capabilities.
-`cos_proc` and `cos_sysinfo`, for example, stay on that compatibility path.
-Process spawn also canonicalizes its executable before consent, requires both
-`proc.spawn:self:children` and `fs.exec:path:<executable>`, and binds approval
-matching across the worker protocol and authority redemption to a digest of
-the validated executable, argv, working directory, and child-security
-options. On Linux `core/src/proc.rs` opens the canonical executable without
-following a final symlink, validates its owner and mode, snapshots and seals
-its exact bytes in a memfd, and retains that descriptor through both
-capability checks. The digest includes source file identity and content hash.
-The cwd is also held by descriptor and selected with `fchdir`; execution uses
-the snapshot's `/proc/self/fd` descriptor path, so pathname, inode, symlink,
-in-place content, and cwd replacement races cannot change what runs.
-The accepted image must be a static, fixed-address ELF for the host
-architecture with no interpreter, dynamic segment, or executable stack.
-It must additionally match the root-owned versioned manifest at
-`/etc/cos/proc-spawn-allowlist.json` by canonical path and SHA-256. Each
-manifest entry fixes the exact argv, explicitly identifies output-path
-positions, and fixes a root-owned non-writable cwd. Non-output arguments cannot
-name filesystem objects or contain paths, and the manifest hash is included in
-the approval digest. Scripts, shells, language runtimes, unknown/renamed static
-executables, mutable package or project directories, dynamically linked
-executables, and file arguments are rejected before consent and routed to
-`cos_sandbox`. Non-Linux process spawn fails closed rather than using a weaker
-pathname-based fallback.
-
-Allowlisted outputs are descriptor capabilities rather than path capabilities.
-`openat2` pins a root- or execution-user-owned, non-group/world-writable parent
-with `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS`, then exclusively creates the
-output with `O_NOFOLLOW` or pins an explicitly permitted existing single-link
-regular file. FIFO, socket, device, directory, symlink, and attacker-writable
-parents are rejected. Parent/output identities and descriptor roles are bound
-into consent, and the child receives only `/proc/self/fd/<fd>` for each output.
-`cos_sysinfo` additionally requires
-`secret.read:name:environment` before honoring `env --include-secrets`.
+Consent still works. `core/src/caps/approval_gateway.rs` is the seam
+`caps::require` consults instead of the root-owned approvals store: the worker
+names the exact verb and canonical scope it was denied and nothing else, and
+`clawd` supplies owner, session and task from the verified grant, spends an
+exactly-matching approved grant one-shot or files a deduped pending request
+under that identity. A filed request interrupts the current turn, moves the
+task from `running/` to `waiting/`, and releases the worker lease. The
+supervisor watches the durable decision: approval requeues the same task and
+session with a reconstructable continuation prompt, while denial or a missing
+request terminates it. The approval remains bound to the exact durable request,
+task, owner, session, capability, scope, risk and operation digest; redemption
+accepts a replacement worker only when that request appears in the requeued
+task's `resumed_after_approval` set, then mints authority for the replacement's
+fresh live PID/start-time/lease. Undecided requests expire after eight hours.
+There is no worker route to decide a request or obtain a reusable capability.
 
 The owner's baseline authority is still daemon policy rather than a consequence
 of process context. `core/src/clawd/system_caps.rs` records one
@@ -648,6 +661,13 @@ apply. Delegate children and inbound MCP servers exclude the tool. OAuth client
 registration remains runtime system configuration and is never embedded in
 packages or entered through model chat.
 
+OAuth flows depend on the credential store interface in
+`core/src/credential/domain.rs`; they do not know file locations, lock files,
+encryption keys, keyring syscalls, or persistent record encoding. The CLI
+facade preserves command flags and output while coordinating typed credential
+identifiers and store requests. Cryptography and master-key persistence are
+below the store boundary and cannot be imported by OAuth or CLI callers.
+
 ### Progressive Agent Skill disclosure
 
 ```text
@@ -657,18 +677,50 @@ packages or entered through model chat.
   -> metadata-only catalogue captured and recorded when a session freezes its
      canonical system prompt
   -> cos_skill read: disclose one matching SKILL.md instruction body
+  -> cos_help: disclose one level of the public CLI command tree
   -> cos_skill resource: disclose one explicitly requested child resource
   -> normal tool trajectory, session logging, and Skill usage record
 ```
 
-Built-in Skills from the package-owned default root do not require third-party
-provenance approval. A `COS_SYSTEM_SKILLS_DIR` override is treated as local
-content rather than promoted to built-in trust. User-installed Skills continue
-through the existing non-vendor disclosure guard; signature policy remains
-enforced when bundles are installed. Metadata pages, instruction bodies, and
-child resources are size-bounded. Child resource reads accept only visible,
-regular UTF-8 files beneath the selected Skill directory; absolute paths,
-parent traversal, symlinks, hidden files, and oversized resources are rejected.
+Every Skill package is authenticated by `core/src/provenance/` before it is
+loaded. Skills under the root-owned package root inherit vendor trust with a
+pinned content digest; a `COS_SYSTEM_SKILLS_DIR` override is treated as local
+content rather than promoted to built-in trust. User-installed Skills require a
+valid signature from a trusted, non-revoked publisher key — there is no
+environment variable that relaxes this — and layered shadowing compares the
+verified publisher key id rather than directory precedence. User-installed
+Skills still pass the non-vendor disclosure guard. Metadata pages, instruction
+bodies, and child resources are size-bounded and read from the verified
+snapshot: a file changed after the catalogue was built fails disclosure instead
+of injecting new model text. Child resource reads accept only visible, regular
+UTF-8 files beneath the selected Skill directory; absolute paths, parent
+traversal, symlinks, hidden files, and oversized resources are rejected.
+
+### Extension provenance
+
+```text
+publisher key -> claw.provenance/v1 envelope (kind, id, version, manifest
+                 schema/path, entrypoints, resources, complete file tree,
+                 content digest)
+  -> trust roots: /usr/lib/cos/trust/publishers.d, /etc/cos/trust/publishers.d,
+     ~/.config/cos/trust/publishers.d, ~/.config/cos/trust/developer.d
+     (root/owner-owned, non-symlink, not group/world-writable; never
+     environment-derived)
+  -> install: bounded untrusted staging -> hostile-shape rejection -> signature
+     and digest verification -> content-addressed artifact retention ->
+     atomic activation
+  -> use: verified snapshot bound to an open directory descriptor; manifest,
+     executable, skill body/resources and MCP command all re-checked against
+     their signed digests before launch or disclosure
+```
+
+Apps, Skills and MCP/adapter packages share one envelope format, one trust
+store and one installer. An unverified manifest can never influence capability
+grants or package identity: discovery quarantines the package with an
+actionable diagnostic and every authority-bearing caller refuses it. Revoking a
+key or an artifact digest moves the trust store's generation, which invalidates
+cached verifications so later launches, disclosures and attachments stop
+immediately. See [`docs/extension-provenance.md`](docs/extension-provenance.md).
 
 ### App invocation
 
@@ -677,8 +729,10 @@ apps/<id>/app.json
   -> core app discovery and manifest validation
   -> operation schema / validated default binding / capability derivation
   -> app session registration
-  -> declared Python / Node / shell / binary entrypoint with effective args
-  -> policy-enforced SDK/runtime calls
+  -> hostile-worker launch policy derived from the granted capabilities
+  -> declared Python / Node / shell / binary entrypoint with effective args,
+     inside a namespace/seccomp/cgroup sandbox
+  -> policy-enforced SDK/runtime calls through the per-launch broker endpoint
   -> structured result
 ```
 
@@ -735,12 +789,32 @@ verb, and scope; the caller waits on `permission.status` and retries over the
 same connection. A stored job never carries more than its creator could prove,
 bounded by the same home-scoped ceiling the executor applies before it runs.
 
+### Worker isolation
+
+Every process Claw OS did not write — an App operation, a GUI App
+surface, an App session server, an MCP server, an adapter, a
+model-authored command — runs under one shared launch policy defined in
+`core/src/worker/`. The definition is typed and derived by trusted code
+from authenticated manifest, operation and capability data; the Linux
+provider enforces it with user/mount/PID/IPC/UTS/network namespaces, all
+capabilities dropped, a seccomp filter, a resource governor, a read-only
+root and an explicit mount list. There is no second, weaker launch path:
+the App bridge, the App session bridge, the MCP attach path and the
+agent sandbox tool are consumers of the same provider, and a host that
+cannot enforce the policy refuses the launch instead of running the
+worker unsandboxed.
+
+Only a kernel-allowlisted, root-owned native host is exempt, and taking
+that exemption is recorded. Read
+[`core/src/worker/MODULE.md`](core/src/worker/MODULE.md) before
+changing anything a worker can observe.
+
 ### MCP attachment
 
 ```text
 config or discovered agent-API sidecar
-  -> direct process: MCP transport/client initialization
-  -> supervised task: claw-extension-host attach/ready
+  -> hostile-worker launch policy (network denied, no App data, no host paths)
+  -> MCP transport/client initialization
   -> tools/list
   -> strict structural-schema sanitization + canonical descriptor-set digest
   -> remote catalogue returned only as wrapped untrusted data
@@ -807,11 +881,13 @@ fans out to the combined Docker/WSL channel and the independent APT channel.
 | `cos` | `core/src/main.rs` | User-facing CLI and structured primitive router |
 | `clawd` | `core/src/bin/clawd.rs` | System daemon and privileged broker |
 | `claw-agentd` | `core/src/bin/claw-agentd.rs` | Unprivileged agent worker, spawned per task by `clawd` |
-| `claw-extension-host` | `core/src/bin/claw-extension-host.rs` | Isolated-UID dynamic App/MCP host, spawned per task by `clawd` |
-| `cos agent ...` | `core/src/agent/mod.rs` | Agent CLI command family |
+| `cos agent ...` | `core/src/agent/mod.rs`, `core/src/agent/*_commands.rs` | Top-level routing plus responsibility-specific command handlers |
 | Agent loop | `core/src/agent/runtime/loop_.rs` | Multi-turn orchestration |
 | One agent turn | `core/src/agent/runtime/turn.rs` | Provider call and tool execution |
-| App discovery | `core/src/apps.rs` | `app.json` loading and schema generation |
+| Notification service | `core/src/notifications/`, `core/src/clawd/notifications.rs` | Durable notification state, broker routes, and channel dispatch |
+| App discovery | `core/src/apps.rs` | Provenance-gated `app.json` loading and schema generation |
+| Extension provenance | `core/src/provenance/` | Package envelope, trust roots, verification, bounded install |
+| Update downgrade protection | `core/src/update/`, `core/src/bin/claw-security-floor.rs` | Signed release manifest, security floor, recovery authorizations |
 | App runtime | `apps/<id>/main.py` | Bundled operation implementation |
 | Rootfs build | `rootfs/build.sh` | Feature composition |
 | Profile definitions | `scripts/lib/image-profiles.sh` | Target feature sets |
@@ -833,19 +909,58 @@ fans out to the combined Docker/WSL channel and the independent APT channel.
   tools, reasoning state, usage, and errors.
 - Credential values never enter config files, logs, model prompts, or error
   messages.
+- Recoverable credential, provider-infrastructure, daemon-state, and command
+  failures retain typed operation/source context until the CLI or broker wire
+  boundary. The broker maps state corruption to the stable `unavailable` code;
+  compatibility string APIs render only after typed ownership has ended.
 - Broker protocol refusals carry only `&'static str` text and a stable class;
   refused frames and their ancillary data are never recorded, in any form.
 - Desktop broker consumers use the unprivileged `crates/clawd-client` library
   for socket discovery, v1 framing, correlation, deadlines, bounds, and stable
   errors; the library depends on neither desktop UI nor privileged core logic.
+- The desktop Agent UI and HTTP bridge compile against
+  `desktop/agent/protocol`; the bridge translates clawd/core models into this
+  versioned presentation contract and rejects incompatible versions explicitly.
+- Desktop Ask Claw launchers and the Agent UI share the
+  `cos_runtime::ask_claw` activation contract; host reducers never name the
+  Agent UI executable or hand-build context JSON. The runtime directly spawns
+  a transient UI with an inherited AF_UNIX socketpair and withholds the bounded payload until
+  the child signals that Yama isolation, non-dumpable state, and private
+  overlay mode are ready. The exact child is killed/reaped on startup failure
+  and reaped after successful use. Public SDKs enter the same implementation
+  through a packaged helper that authenticates its direct parent with
+  `SO_PEERCRED` on an abstract Unix socket.
+- Production resolves no executable input: the validated package target is
+  fixed at `/usr/local/bin/cos-agent-ui`, and tests inject binaries only through
+  a private compile-time test seam.
 - `cos` and `clawd` speak one broker protocol version and are replaced
   together. A mismatched pair fails closed with a named protocol error; there
   is no permissive dual-stack listener.
 - Memory and audit stores are append/transaction oriented; schema and recovery
   behavior require regression tests.
-- Memory repair never deletes quarantined evidence, never restores a prompt
-  blob without verifying its SHA-256 address, and never replaces a database
-  while a cooperating reader or writer still holds its lifecycle lock.
+- The session event journal is evidence, never authority: replaying any of its
+  events creates no grant and no approval. Only root `clawd` appends, under a
+  single writer lease and a monotonic epoch; a worker may request tool and turn
+  lifecycle events only, and the event-type ACL is structural.
+- Every `Kind::Mutation` broker route appends and fsyncs a `MutationStarted`
+  record before any side effect. A start that cannot be recorded refuses the
+  request; a completion that cannot be recorded is answered as `indeterminate`
+  rather than as success or ordinary failure.
+- A mutation whose outcome is unknown keeps refusing its own replay across
+  restarts. Durable operation identity is owner uid plus canonical route plus
+  the caller's operation key — never pid or process start time — and only the
+  root-only `journal.mutation.resolve` route retires it.
+- Journal read routes derive session ownership from the root-owned session
+  record and require it to equal the authenticated caller uid before opening a
+  partition. Request fields select a lookup, never an owner, and a foreign,
+  missing or malformed session id returns one indistinguishable refusal with no
+  read, alarm or quarantine side effect.
+- Journal capacity is classed by event kind, not by writer: only records that
+  retire, flag or recover a mutation may use the reserve, and that reserve is
+  computed from the number of open brackets.
+- Journal anti-rollback covers a local unprivileged attacker. Root or physical
+  restoration of a consistent key + chain + anchor snapshot is out of scope
+  until a TPM or remote anchor exists.
 - Rootfs/image builds require Linux filesystem semantics and root privileges.
 - Windows case-insensitive checkouts cannot faithfully represent every
   case-colliding desktop symlink.
@@ -860,6 +975,7 @@ fans out to the combined Docker/WSL channel and the independent APT channel.
 - [`docs/image-architecture.md`](docs/image-architecture.md)
 - [`docs/memory-recovery.md`](docs/memory-recovery.md)
 - [`docs/extension-host-isolation.md`](docs/extension-host-isolation.md)
+- [`docs/extension-provenance.md`](docs/extension-provenance.md)
 - [`docs/semantic-search-design.md`](docs/semantic-search-design.md)
 - [`docs/browser-attached-design.md`](docs/browser-attached-design.md)
 - [`packaging/README.md`](packaging/README.md)

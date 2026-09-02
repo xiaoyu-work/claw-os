@@ -7,7 +7,7 @@ through model turns, tools, hooks, progress, and final records.
 
 ## Responsibilities
 
-- Build and run bounded multi-turn loops.
+- Own one bounded multi-turn lifecycle for buffered and streaming asks.
 - Restore or freeze one versioned canonical system prompt per persisted session.
 - Keep due reminders and application context request-local.
 - Load the latest verified durable compaction plus its uncompacted tail for
@@ -30,6 +30,8 @@ through model turns, tools, hooks, progress, and final records.
   proxies reach exact execution-time consent instead.
 - Install a fresh task-local approval identity for every invocation and retire
   its consent state on completion or cancellation.
+- Resolve progressive tool envelopes before hooks, approval, progress, and
+  parallel scheduling while preserving provider call ids.
 - Run lifecycle hooks and progress/heartbeat reporting.
 - Record conversation, prompt injection, usage, and error state.
 
@@ -37,8 +39,9 @@ through model turns, tools, hooks, progress, and final records.
 
 | Path | Role |
 | --- | --- |
-| `loop_.rs` | Request-level orchestration, durable projection/compaction, and turn repetition |
-| `turn.rs` | Provider call, tool extraction, dispatch, results |
+| `loop_.rs` | Shared request lifecycle, public ask adapters, and turn repetition |
+| `deps.rs` | Explicit runtime hooks, clock, semantic indexer, and path snapshot |
+| `turn.rs` | Shared request/response/tool transitions, progressive resolution, and provider delivery adapters |
 | `hooks.rs` | Pre/post tool and turn hooks |
 | `progress.rs` | Tool progress and heartbeat contract |
 | `background.rs` | Background agent task handling |
@@ -47,19 +50,62 @@ through model turns, tools, hooks, progress, and final records.
 ## Dependencies
 
 Runtime depends on provider-neutral LLM types, the guarded tool registry,
-trusted tool-exposure context, prompt/memory services, and hooks. It never
-executes a model-emitted tool call outside `turn.rs` dispatch. The dispatch
-path repeats exposure checks before tool execution; exact capability checks
-remain inside tools/providers after argument validation. Message order and
-opaque provider state must survive every turn.
+trusted tool-exposure context, prompt/memory services, and an explicit
+`RuntimeDeps`. Production composition resolves hooks, audit/notes/nudge/Skill
+paths, clock, and semantic indexing before entering the lifecycle. Delegated
+children inherit the parent's runtime hooks, clock, and paths while retaining
+their own provider and narrowed tool registry, and their hook context is marked
+delegated. Detached curator work reinstalls both the captured `Arc<CosConfig>`
+and typed routed-path context (owner home, owner UID, routed-job marker); its
+curation log is an explicit composition-time path. It never executes a
+model-emitted tool call outside `turn.rs` dispatch. Dispatch repeats exposure
+checks before execution; exact argument-derived capability checks remain in
+tools/providers. Message order and opaque provider state must survive every
+turn. Provider history retains bridge envelopes; evidence, progress, approval,
+and stored presentation resolve them to the underlying tool identity.
 
-Progressive bridge envelopes are removed before pre-tool hooks, progress,
-approval, audit, and execution, so those layers observe the underlying tool
-identity rather than `cos_tool_call`.
+## Lifecycle ownership
 
-`auto_deny_tools` remains a hard pre-dispatch block. `dangerous_tools` and
-`auto_approve_tools` cannot grant or widen a capability; core primitive proxies
-declare a capability-aware boundary and defer consent to `caps::require`.
+`loop_::ask_inner` is the only request lifecycle owner. Buffered and streaming
+entry points select a `LifecycleOutput`; the streaming adapter additionally
+applies the user-visible stream/progress projection. Neither adapter records
+messages, runs hooks, compresses context, verifies evidence, generates titles,
+curates memory, or chooses terminal states.
+
+```text
+Prepare
+  -> record user + injected context
+  -> restore/freeze system prompt
+  -> register interrupt + hooks
+TurnReady
+  -> cancellation check -> pre-turn hook -> scrub/compress
+  -> turn::run_turn_inner
+       -> build request -> Buffered(retry) | Streaming(sink)
+       -> append assistant -> dispatch tools -> append tool results
+  -> post-turn hook -> cancellation check
+  -> observe evidence -> persist appended messages
+  -> ContinueWithTools -------------------------------> TurnReady
+  -> Final -> verify evidence -> title -> curate -> Success
+  -> provider/hook/progress error --------------------> Error
+  -> cancellation at any cancellation-aware boundary -> Interrupted
+  -> final-turn provider failure/empty answer -> persisted fallback -> Success
+```
+
+`turn::run_turn_inner` similarly owns request construction, run logging,
+assistant/tool-result message transitions, tool hooks, deterministic dispatch,
+and finish-reason handling. `ProviderDelivery` varies only how the complete
+provider response is obtained: buffered calls may retry before yielding a
+response; streaming calls accumulate and forward events without retrying after
+output may have begun.
+
+## Change together
+
+- Add request lifecycle side effects only in `ask_inner`, then extend the
+  buffered/streaming differential tests in `test/unit/agent/runtime/loop_.rs`.
+- Change provider request or post-response/tool transitions only in
+  `turn::run_turn_inner`; keep `ProviderDelivery` limited to response delivery.
+- Keep public buffered/streaming entry points as argument and presentation
+  adapters. They must not acquire independent persistence or terminal logic.
 
 ## Tests
 

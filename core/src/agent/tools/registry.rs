@@ -10,6 +10,7 @@
 //! session cannot populate process-global availability state for another.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -17,10 +18,159 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::exposure::{ExposureDecision, ToolExposure, ToolExposureContext};
+use super::guardrails::Guardrails;
 use super::progressive::{self, CatalogEntry, ToolDisclosure};
 use super::{Tool, ToolResult};
 use crate::agent::llm::{self, ToolCall};
 use crate::agent::runtime::approval::ApprovalGate;
+use crate::config::CosConfig;
+
+#[derive(Debug, Clone)]
+pub struct RegistryPaths {
+    pub apps_dir: PathBuf,
+    pub todos_dir: PathBuf,
+    pub system_skills_dir: PathBuf,
+    pub user_skills_dir: PathBuf,
+    pub skills_usage_path: PathBuf,
+    pub media_outputs_dir: PathBuf,
+    pub memory_db_path: PathBuf,
+    pub semantic_db_path: PathBuf,
+    pub notes_dir: PathBuf,
+    pub hooks_config_path: PathBuf,
+    pub audit_log_path: PathBuf,
+    pub nudges_path: PathBuf,
+    pub system_skills_origin: crate::agent::skills::loader::SkillOrigin,
+    pub curation_log_path: PathBuf,
+}
+
+impl RegistryPaths {
+    pub fn from_process() -> Self {
+        let apps_dir = std::env::var_os("COS_APPS_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/usr/lib/cos/apps"));
+        let system_skills_origin = if std::env::var_os("COS_SYSTEM_SKILLS_DIR").is_some() {
+            crate::agent::skills::loader::SkillOrigin::Local
+        } else {
+            crate::agent::skills::loader::SkillOrigin::BuiltIn
+        };
+        Self {
+            apps_dir,
+            todos_dir: crate::paths::agent_todos_dir(),
+            system_skills_dir: crate::paths::system_skills_dir(),
+            user_skills_dir: crate::paths::agent_skills_dir(),
+            skills_usage_path: crate::paths::agent_skills_usage_path(),
+            media_outputs_dir: crate::paths::agent_media_outputs_dir(),
+            memory_db_path: crate::paths::agent_memory_db_path(),
+            semantic_db_path: crate::paths::agent_semantic_db_path(),
+            notes_dir: crate::paths::agent_notes_dir(),
+            hooks_config_path: crate::paths::agent_hooks_path(),
+            audit_log_path: crate::paths::agent_audit_log_path(),
+            nudges_path: crate::paths::agent_nudges_path(),
+            system_skills_origin,
+            curation_log_path: crate::paths::agent_curation_log_path(),
+        }
+    }
+
+    pub fn runtime_paths(&self) -> crate::agent::runtime::deps::RuntimePaths {
+        crate::agent::runtime::deps::RuntimePaths {
+            hooks_config: self.hooks_config_path.clone(),
+            audit_log: self.audit_log_path.clone(),
+            notes_dir: self.notes_dir.clone(),
+            nudges_path: self.nudges_path.clone(),
+            system_skills_dir: self.system_skills_dir.clone(),
+            user_skills_dir: self.user_skills_dir.clone(),
+            system_skills_origin: self.system_skills_origin,
+            curation_log: self.curation_log_path.clone(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct RegistryDeps {
+    pub config: Arc<CosConfig>,
+    pub paths: RegistryPaths,
+    pub memory: Option<crate::agent::memory::sqlite_fts::MemoryDb>,
+    pub semantic: Option<Arc<crate::agent::memory::semantic::SemanticStore>>,
+    pub runtime: crate::agent::runtime::deps::RuntimeDeps,
+    app_sessions: Vec<super::cos_apps_session::RegisteredAppSession>,
+}
+
+impl RegistryDeps {
+    pub fn load_current() -> Self {
+        Self::load(
+            crate::config::current_snapshot(),
+            RegistryPaths::from_process(),
+        )
+    }
+
+    pub fn load(config: Arc<CosConfig>, paths: RegistryPaths) -> Self {
+        Self::load_with_hooks(
+            config,
+            paths,
+            crate::agent::runtime::hooks::HookRegistry::new(),
+        )
+    }
+
+    pub fn load_with_hooks(
+        config: Arc<CosConfig>,
+        paths: RegistryPaths,
+        hooks: crate::agent::runtime::hooks::HookRegistry,
+    ) -> Self {
+        let memory = match crate::agent::memory::sqlite_fts::MemoryDb::open(&paths.memory_db_path) {
+            Ok(db) => Some(db),
+            Err(error) => {
+                tracing::warn!("cos_recall/cos_app_memory: failed to open memory DB: {error}");
+                None
+            }
+        };
+        let semantic = match crate::agent::memory::semantic::open_with_config(
+            &config.embed,
+            &config.agent,
+            paths.semantic_db_path.clone(),
+        ) {
+            Ok(store) => store.map(Arc::new),
+            Err(error) => {
+                tracing::warn!("cos_recall_semantic: failed to open semantic DB: {error}");
+                None
+            }
+        };
+        let app_sessions = crate::apps::discover_verified(&paths.apps_dir)
+            .values()
+            .filter(|app| app.manifest.session.is_some())
+            .map(|app| super::cos_apps_session::RegisteredAppSession {
+                manifest: Arc::new(app.manifest.clone()),
+                app_dir: app.dir.clone(),
+            })
+            .collect();
+        let runtime = crate::agent::runtime::deps::RuntimeDeps::load_with_hooks(
+            &paths.runtime_paths(),
+            semantic.clone(),
+            hooks,
+        )
+        .with_config_snapshot(Arc::clone(&config));
+        Self {
+            config,
+            paths,
+            memory,
+            semantic,
+            runtime,
+            app_sessions,
+        }
+    }
+
+    pub fn without_optional_resources(config: Arc<CosConfig>, paths: RegistryPaths) -> Self {
+        let runtime = crate::agent::runtime::deps::RuntimeDeps::load(&paths.runtime_paths(), None)
+            .with_config_snapshot(Arc::clone(&config));
+        Self {
+            config,
+            paths,
+            memory: None,
+            semantic: None,
+            runtime,
+            app_sessions: Vec::new(),
+        }
+    }
+}
 
 #[derive(Clone)]
 struct ToolEntry {
@@ -132,6 +282,7 @@ pub(crate) struct ResolvedToolCall {
 #[derive(Clone)]
 pub struct ToolRegistry {
     tools: HashMap<String, ToolEntry>,
+    guardrails: Guardrails,
     approval: ApprovalGate,
     catalog_generation: Arc<AtomicU64>,
 }
@@ -140,6 +291,7 @@ impl Default for ToolRegistry {
     fn default() -> Self {
         Self {
             tools: HashMap::new(),
+            guardrails: Guardrails::permissive(),
             approval: ApprovalGate::default(),
             catalog_generation: Arc::new(AtomicU64::new(0)),
         }
@@ -212,9 +364,22 @@ impl ToolRegistry {
         self.approval = approval;
     }
 
+    pub fn set_guardrails(&mut self, guardrails: Guardrails) {
+        self.guardrails = guardrails;
+    }
+
+    pub fn guardrails(&self) -> &Guardrails {
+        &self.guardrails
+    }
+
+    pub fn approval(&self) -> &ApprovalGate {
+        &self.approval
+    }
+
     pub(crate) fn policy_fork(&self) -> Self {
         Self {
             tools: HashMap::new(),
+            guardrails: self.guardrails.clone(),
             approval: self.approval.clone(),
             catalog_generation: Arc::new(AtomicU64::new(0)),
         }
@@ -249,6 +414,9 @@ impl ToolRegistry {
     /// Descriptor-cache lookup without session projection. Runtime dispatch
     /// must use [`get_for`](Self::get_for).
     pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
+        if !self.guardrails.permits(name) {
+            return None;
+        }
         self.get_unfiltered(name)
     }
 
@@ -298,7 +466,9 @@ impl ToolRegistry {
     /// Names in the immutable descriptor cache. Runtime model projection must
     /// use [`names_for`](Self::names_for).
     pub fn names(&self) -> Vec<&str> {
-        self.names_unfiltered()
+        let mut names = self.names_unfiltered();
+        names.retain(|name| self.guardrails.permits(name));
+        names
     }
 
     /// Names of every registered tool ignoring guardrails. For diagnostics.
@@ -317,7 +487,7 @@ impl ToolRegistry {
     }
 
     pub fn len(&self) -> usize {
-        self.tools.len()
+        self.names().len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -356,8 +526,10 @@ impl ToolRegistry {
         });
         let raw_schema_tokens =
             progressive::schema_tokens(&direct).saturating_add(deferred_schema_tokens);
-        let progressive =
-            !eligible.is_empty() && deferred_schema_tokens > context.tool_schema_budget_tokens();
+        // Third-party descriptions and schemas are authenticated metadata,
+        // not trusted model instructions. Always keep them behind fixed local
+        // bridge schemas, independent of their token size.
+        let progressive = !eligible.is_empty();
 
         let (mut tools, deferred, direct_count) = if progressive {
             let direct_count = direct.len();
@@ -542,10 +714,16 @@ impl ToolRegistry {
         let mut out: Vec<llm::Tool> = self
             .tools
             .values()
+            .filter(|entry| self.guardrails.permits(&entry.descriptor.name))
             .map(|entry| entry.descriptor.as_ref().clone())
             .collect();
         out.sort_by(|a, b| a.name.cmp(&b.name));
         out
+    }
+
+    pub fn as_llm_tools_progressive(&self) -> Vec<llm::Tool> {
+        let exposure = ToolExposureContext::isolated(self.guardrails.clone());
+        self.as_llm_tools_for(&exposure)
     }
 
     /// Execute through the same session projection used for schema exposure.
@@ -638,43 +816,43 @@ impl ToolRegistry {
 ///   plus any explicitly active stateful App-session tools.
 /// - `cos_memory` (notes) and, if the default memory DB opens cleanly,
 ///   `cos_recall` (FTS5 history search).
-pub fn default_registry() -> ToolRegistry {
+pub fn default_registry_with_deps(deps: &RegistryDeps) -> ToolRegistry {
     let mut r = ToolRegistry::new();
     r.register(Arc::new(super::builtin::Echo));
     r.register(Arc::new(super::builtin::Now));
-    r.register(Arc::new(super::delegate::Delegate));
-    r.register(Arc::new(super::todo::Todo::default_tool()));
+    r.register(Arc::new(super::delegate::Delegate::new(deps.clone())));
+    r.register(Arc::new(super::todo::Todo::new(
+        super::todo::TodoStore::new(deps.paths.todos_dir.clone()),
+    )));
     r.register(Arc::new(super::clarify::Clarify::new()));
-    r.register(Arc::new(super::skills::SkillDisclosure::new()));
-    super::cos_proxy::register_all(&mut r);
-    super::cos_apps::register_default(&mut r);
-    super::cos_apps_session::register_all(&mut r);
-    super::media::register_default_media_tools(&mut r);
-    // Best-effort: open the default memory DB; if it fails (read-only fs,
-    // etc.) the agent still works, just without searchable history.
-    match crate::agent::memory::sqlite_fts::MemoryDb::open_default() {
-        Ok(db) => {
-            super::cos_proxy::register_recall(&mut r, db.clone());
-            super::cos_proxy::register_app_memory(&mut r, db);
-        }
-        Err(e) => {
-            tracing::warn!("cos_recall/cos_app_memory: failed to open default memory DB: {e}")
-        }
+    r.register(Arc::new(super::skills::SkillDisclosure::with_paths(
+        deps.paths.system_skills_dir.clone(),
+        deps.paths.user_skills_dir.clone(),
+        deps.paths.skills_usage_path.clone(),
+        deps.paths.system_skills_origin,
+    )));
+    r.register(Arc::new(super::cos_help::CosHelp));
+    super::cos_proxy::register_all_with_notes(&mut r, deps.runtime.notes().clone());
+    super::cos_apps::register_default_with_root(&mut r, deps.paths.apps_dir.clone());
+    super::cos_apps_session::register_manifests(&mut r, &deps.paths.apps_dir, &deps.app_sessions);
+    super::media::register_default_media_tools_with_outputs_dir(
+        &mut r,
+        deps.paths.media_outputs_dir.clone(),
+    );
+    if let Some(db) = &deps.memory {
+        super::cos_proxy::register_recall(&mut r, db.clone());
+        super::cos_proxy::register_app_memory(&mut r, db.clone());
     }
-    // Best-effort: open the default semantic store; only registered
-    // when `[embed]` is configured. When disabled the tool silently
-    // doesn't exist (the LLM falls back to cos_recall keyword search).
-    use crate::agent::memory::semantic::{SemanticStore, SemanticStoreExt};
-    match SemanticStore::open_default() {
-        Ok(Some(store)) => {
-            super::cos_proxy::register_recall_semantic(&mut r, std::sync::Arc::new(store))
-        }
-        Ok(None) => {
-            tracing::debug!("cos_recall_semantic: [embed] disabled — tool not registered")
-        }
-        Err(e) => tracing::warn!("cos_recall_semantic: failed to open default semantic DB: {e}"),
+    if let Some(store) = &deps.semantic {
+        super::cos_proxy::register_recall_semantic(&mut r, Arc::clone(store));
     }
     r
+}
+
+#[deprecated(note = "use default_registry_with_deps for explicit composition")]
+pub fn default_registry() -> ToolRegistry {
+    let deps = RegistryDeps::load_current();
+    default_registry_with_deps(&deps)
 }
 
 /// Minimal registry: only side-effect-free built-ins. Used by tests that

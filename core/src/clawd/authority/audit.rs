@@ -23,11 +23,28 @@ use serde::Serialize;
 
 use crate::audit_policy::TextDigest;
 use crate::caps::Cap;
+use crate::session::journal::{self, GrantEnd, JournalEvent, Label, Partition, Reference};
+use crate::session::SessionId;
 
 use super::decision::Decision;
 use super::grant::{Audience, AudienceSet, Issuer};
 use super::handle::GrantRef;
 use super::store::{AuthorityError, GrantView};
+
+/// Mirror one authority fact into the session journal.
+///
+/// The chain gets the same keyed [`GrantRef`] the audit log carries and
+/// nothing else: no handle, no capability value, no scope string.
+/// Replaying the record cannot mint a grant — the authority holds the
+/// live one, bound to a process and a use budget, and this is only
+/// evidence that it did.
+fn journal(session_id: Option<&str>, owner_uid: u32, event: JournalEvent) {
+    let partition = match session_id.and_then(|id| id.parse::<SessionId>().ok()) {
+        Some(sid) => Partition::Session(sid),
+        None => Partition::Owner(owner_uid),
+    };
+    journal::record_best_effort(&partition, owner_uid, journal::EventSource::Kernel, event);
+}
 
 /// One capability, projected so nothing sensitive survives.
 #[derive(Debug, Serialize)]
@@ -158,6 +175,17 @@ pub fn record_issued(view: &GrantView, parent: Option<&GrantRef>) {
         uses_remaining: view.uses_remaining,
         caps: CapFacts::many(&view.caps.iter().cloned().collect::<Vec<_>>()),
     });
+    journal(
+        view.subject.session_id.as_deref(),
+        view.owner_uid,
+        JournalEvent::CapabilityIssued {
+            grant: Reference::new(grant_ref.as_str()),
+            audience: Label::new(view.audience.names().first().copied().unwrap_or("none")),
+            issuer: Label::new(view.issuer.as_str()),
+            caps: view.caps.iter().count() as u32,
+            uses: view.uses_remaining,
+        },
+    );
 }
 
 /// One grant was exercised.
@@ -199,6 +227,26 @@ pub fn record_use(decision: &Decision, required: &[Cap], uses_remaining: Option<
             uses_remaining: Some(0),
             caps: Vec::new(),
         });
+    }
+    journal(
+        decision.session_id(),
+        decision.owner_uid(),
+        JournalEvent::CapabilityUsed {
+            grant: Reference::new(decision.grant_ref().as_str()),
+            route: Label::new(decision_route(decision)),
+            caps: required.len() as u32,
+            uses_remaining,
+        },
+    );
+    if uses_remaining == Some(0) {
+        journal(
+            decision.session_id(),
+            decision.owner_uid(),
+            JournalEvent::CapabilityExhausted {
+                grant: Reference::new(decision.grant_ref().as_str()),
+                reason: GrantEnd::UsesExhausted,
+            },
+        );
     }
 }
 

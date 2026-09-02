@@ -232,7 +232,11 @@ pub fn record_extension_host_event(
 }
 
 pub fn install_runtime_hook() {
-    hooks::global_registry().register(Arc::new(ClawdRuntimeAuditHook));
+    hooks::global_registry().register(runtime_hook());
+}
+
+pub fn runtime_hook() -> Arc<dyn Hook> {
+    Arc::new(ClawdRuntimeAuditHook)
 }
 
 /// Persist runtime audit forwarded by an `agentd` worker.

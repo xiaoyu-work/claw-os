@@ -10,12 +10,15 @@ and agent tasks.
 - Accept authenticated Unix-socket RPC.
 - Derive client/session identity and capability context.
 - Dispatch privileged services and app/MCP session operations.
-- Own task ownership/lease, snapshot authenticated client provenance, keep
-  attended presence in short-lived process-bound leases, and expose task
+- Own task ownership/lease, durable approval waits, retry, and task
   lifecycle RPC.
+- Expose owner-scoped approval views used by the Agent Web control center;
+  permission decisions still cross the polkit helper.
+- Expose owner-scoped notification publication, subscription, state, and
+  delivery-leasing RPC.
 - Supervise unprivileged `claw-agentd` workers and task-owned
   `claw-extension-host` processes; never run the model/tool loop or dynamic
-  extension code in this process.
+  extension code in this process (see `core/src/agentd/MODULE.md`).
 - Install audit hooks around broker-visible work, including runtime audit
   forwarded by a worker.
 
@@ -23,23 +26,25 @@ and agent tasks.
 
 | Path | Role |
 | --- | --- |
-| `server.rs` | Socket lifecycle, request admission, shared internal dispatch, agentd supervision start |
+| `server.rs` | Socket lifecycle and request admission order, agentd supervision start |
 | `transport/` | Frame reader/writer, per-message peer credentials, admission ceilings |
 | `wire/` | Versioned envelope, bounded field types, one typed request body per route |
 | `routes.rs` | The route registry: wire name, typed decode, access class, budget, audit fields, authorization descriptor, handler |
 | `authority/` | The capability authority: grants, opaque handles, attenuation, the route middleware and its audit facts |
 | `agent_client.rs` | Client RPC for agent task submit/result/cancel/status |
-| `tasks.rs` | Task queue and lifecycle |
+| `tasks.rs` | Task queue, summary/list, cancel, retry, and session continuity |
+| `usage.rs` | Peer-UID-scoped Agent token usage queries |
 | `app_sessions.rs` | App/native/MCP session authority: derives identity and capabilities, plans approvals, issues launch grants |
-| `../extension_host/broker.rs` | Per-task private proxy: verifies SCM credentials, host/child ancestry, route class and nearest child session before normal dispatch |
+| `../extension_host/broker.rs` | Per-task private proxy: verifies SCM credentials, host/child ancestry, route class, and nearest child session before normal dispatch |
 | `scheduler.rs` | Proactive-scheduler authority: validates `cos cron` / `cos triggers` requests and derives what a job may carry |
+| `notifications.rs` | Notification RPC handlers, due-nudge fanout, and external delivery dispatcher |
 | `system_caps.rs` | System capability derivation |
 | `session_scope.rs` | Trusted-session override and its owner-policy clamp |
 | Service modules | One privileged capability provider per domain |
 
 ## Wire Protocol
 
-`/run/cos/clawd.sock` carries broker protocol v1: one length-prefixed frame per
+`/run/cos/clawd.sock` carries broker protocol v2 over the `CBK1` framing: one length-prefixed frame per
 message, one request per connection, then close. The header is `CBK1`, a kind
 byte, a reserved flag byte that must be zero, and a big-endian `u32` length. The
 length is checked against the direction's ceiling before a body buffer exists,
@@ -187,6 +192,28 @@ call. Root has a larger — but still finite — allowance, because `clawd`'s ow
 rollback and approval clients run as root and must not be starved by a user
 flooding the socket.
 
+## Error Boundaries
+
+- `state::StateError` owns transaction recovery, in-memory context/transaction
+  locks, ownership conflicts, and corrupted daemon state. Poisoned locks are
+  unavailable state and are never recovered with `PoisonError::into_inner`.
+  Session decode/corruption and invalid persisted timestamps remain `Corrupt`;
+  missing sessions, held leases, and I/O/lock failures retain their distinct
+  not-found, conflict, and unavailable categories with original sources.
+- `server::DaemonError` owns socket setup, daemon initialization, and state
+  recovery. Socket parent creation, stale removal, credential passing, bind,
+  chmod, and accept preserve their `io::Error` sources and operation names.
+  The binary reports runtime/server initialization failures instead of
+  panicking.
+- Context and transaction handlers preserve `StateError` until the route
+  boundary. `protocol::BrokerError` translates it once: corruption and
+  unavailable state use #39's stable `unavailable` wire code; authorization and
+  ordinary execution retain their existing codes and messages.
+- Leaf device handlers still return `String` behind `routes.rs`; the registry
+  converts those once to `BrokerError`. Their remaining `unwrap`/`expect` calls
+  consume option fields immediately after the same handler's action validator
+  accepted the required combination. They are local decoder invariants, not
+  I/O, initialization, or shared-state failure handling.
 
 ## Dependencies
 
@@ -224,6 +251,18 @@ authenticated parent session, or the peer's exact uid/pid/start-time — never t
 a session string the request supplied and never to anything a sibling process
 shares.
 
+The installed package's provenance ceiling is applied here too, and here is
+where it is authoritative. `app_sessions.rs` resolves it from its own verified
+package — never from the launcher's report — and clamps the fully resolved plan
+before `authorize_plan`, before the session row is written and before any grant
+is minted, so a developer-trusted package cannot reach a forbidden capability
+through a manifest need, a `wild` scope binding, an approval, a wider parent, a
+GUI launch or a session-tool re-scope. Audiences are filtered the same way:
+developer content receives `AppLaunch` alone, is issued no relay grant, and its
+session grant addresses no provider route. `register` returns the set the daemon
+actually granted; the launcher adopts it for the sandbox policy and refuses to
+launch if it is wider than the ceiling it computed itself.
+
 A launch is authorized as one plan: the complete canonical capability set is
 derived first, every capability the launcher cannot delegate is collected, a
 deduplicated pending request is filed for each, and their ids are returned as
@@ -241,16 +280,6 @@ from it — when the session is deregistered. Binding is one-shot because the
 authority refuses a second claim on a live session index, not because a boolean
 was flipped. Nothing about the handle appears in any durable record.
 Caller-supplied capabilities may only narrow the ceiling.
-
-For daemon-backed tasks, the launcher is the exact
-`claw-extension-host` process registered by the supervisor. Its private broker
-socket is separate from `/run/cos/clawd.sock` and bound to the task owner,
-worker pid/start-time, host pid/start-time, session, nonce, and live lease.
-Only the host may use App/MCP lifecycle and `permission.status`; only a hosted
-descendant may use `Session`/`PeerSession` provider routes, and the request's
-session must be that process's nearest registered App/MCP row. The request then
-re-enters `server.rs` admission, capability authority, provider checks,
-deadlines, and audit unchanged.
 
 `system_caps.rs` owns the same rule for the system Agent. `BASELINE` records one
 explicit decision per catalog verb, so a verb the catalog gains without a
@@ -273,19 +302,15 @@ existing, owned by that uid, and with no fallback, so the home stamped at
 creation and the ceiling applied at execution cannot disagree.
 
 Everything above the baseline arrives one of two ways: an authenticated
-task/session delegation, or an exact grant the user approved for that session,
-verb, scope, catalog risk, and attended context. `caps::enforcement` files one
-pending request per attended capability denial. Unattended scheduler work
-cannot prompt and must carry authority proved when it was created.
+task/session delegation, or an exact one-shot grant the user approved for that
+session, verb, and scope. `caps::enforcement` files one pending request per
+capability denial and spends it at the gate, so an approval covers the resource
+that was refused and nothing adjacent, and is never written back into a
+capability set.
 
 An approval is a decision about one capability, not a standing licence.
-`approvals.rs` stamps every approved record with a `GrantBinding`: the exact
-owner/session/capability/risk/context and originating task/worker lease, a
-wall-clock deadline, a use budget, a request-time revocation generation and a
-keyed audit reference. Matching is equality, not scope containment. For a
-supervised Agent, spending that record mints and immediately exercises a
-one-use `Issuer::Approval` authority grant bound to the verified task and
-worker; approval is never written back into a capability set.
+`approvals.rs` stamps every approved record with a `GrantBinding`: a wall-clock
+deadline, a use budget, a revocation generation and a keyed audit reference.
 `Once` spends exactly one use; `session` and `forever` bound the same grant by
 time and stay revocable, so "always" is a promise about not being re-prompted
 during ordinary use rather than a promise that authority never expires. The
@@ -301,7 +326,7 @@ current when it was approved; every load compares it against the generation
 current now. Retiring authority is therefore an increment, which nothing a
 record can say — including a copy restored from a backup taken before the
 increment — can undo. Counters are per owner and per grant session, with an
-owner-wide increment advancing beyond every session generation it holds, so
+owner-wide increment acting as a floor under every session it holds, so
 "retire everything this account approved" is one atomic write rather than a
 walk that could race a concurrent approval. Unreadable, unparseable or
 group-writable state fails closed, and so does a binding with no generation at
@@ -338,7 +363,6 @@ bounded by the same home-scoped ceiling its executor applies.
 cargo test -p cos clawd:: -- --test-threads=1
 cargo test -p cos clawd::authority -- --test-threads=1
 cargo test -p cos --test clawd_broker_socket -- --test-threads=1
-cargo test -p cos --test extension_host_boundary -- --test-threads=1
 ```
 
 For a service change, include malformed input, exact scope, broker error, and

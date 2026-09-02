@@ -1,6 +1,6 @@
 ---
 name: claw-os
-description: "Operate the Claw system-agent layer: inspect and manage OS primitives, apps, diagnostics, permissions, and sessions. Read referenced resources only when needed."
+description: "Discover and operate the Claw system-agent layer. Use its progressive cos command tree before concluding that an OS, App, diagnostic, permission, or session capability is unavailable."
 ---
 
 # Claw System Agent
@@ -14,20 +14,28 @@ This `SKILL.md` is the instruction layer. Read a linked child document through
 `cos_skill` with `command=resource` only when the current task needs that
 specific detail; do not preload every resource.
 
-## Quick Reference
+## Progressive CLI discovery
 
-**OS primitives** (run with `cos <name> <command>`):
+Do not memorize or guess the complete CLI. Discover only the branch needed for
+the current task:
 
-| Primitive | Purpose |
-|---|---|
-| `checkpoint` | Snapshot, diff, rollback workspace ([details](checkpoint.md)) |
-| `service` | Lifecycle hooks, graceful shutdown ([details](service.md)) |
-| `credential` | Encrypted secrets, namespaces, TTL, bundles ([details](credential.md)) |
-| `cron` | Job scheduling with context and overlap protection ([details](cron.md)) |
-| `agent` | Manage agent tasks: list / show / stop / undo / resume ([details](sessions.md)) |
-| `sys` | System info, resources, processes |
+1. Call `cos_help` with `path=[]` to inspect top-level `cos` namespaces.
+2. Follow one returned name at a time, for example `path=["agent"]`.
+3. Inspect the selected command, for example
+   `path=["agent","usage"]`.
+4. Execute only through the returned `model_tool` or another named,
+   capability-gated tool. `cos_help` never executes commands.
 
-**Agent-only tools** (call directly via the tool interface, not the shell):
+For installed Apps, use `path=["app"]` or `cos_app_catalog`, then inspect one
+App and operation before calling `cos_app_run`. Before saying Claw lacks a
+capability, inspect the relevant command-tree branch. Read a linked resource
+below only when command discovery identifies a workflow whose semantics need
+more explanation.
+
+## Agent-only tools
+
+Call these directly through the tool interface; they are not public CLI
+namespaces:
 
 | Tool | Purpose |
 |---|---|
@@ -59,60 +67,9 @@ Never present a system-state claim without naming the evidence that supports
 it. Read-only investigation comes first; capability approval and a recovery
 plan come before mutation.
 
-Permission roles and app capability gates are documented in [permissions.md](permissions.md).
-
-**Apps** — `cos app <name> <command>` ([all apps](apps.md)):
-
-| App | Purpose |
-|---|---|
-| `accessibility-manager` | COSMIC magnifier/filter/inversion and AT-SPI screen reader |
-| `audio-manager` | PipeWire/WirePlumber volume, mute, routes, and profiles |
-| `backup-center` | Mounted Restic backup, retention, check, forget, and restore |
-| `bluetooth-manager` | BlueZ discovery, pairing, connection, trust, and power |
-| `fs` | File operations, search, metadata |
-| `hardware-center` | CPU, GPU, PCI, USB, memory, storage, driver, and thermal inventory |
-| `exec` | Command execution |
-| `web` | URL → Markdown (JS rendered) |
-| `search` | Web and image search (Google/Brave) |
-| `security-center` | Authentication, sudo, SSH, MAC, port, and security-event analysis |
-| `email` | Send, search, read (SMTP/Gmail/Outlook) |
-| `event-center` | Persistent udev, systemd, journal, storage, security, and pidfd events |
-| `firewall-manager` | Scoped nftables allow/drop rules with durable rollback |
-| `calendar` | Events and scheduling (local/Google/Outlook) |
-| `camera-manager` | PipeWire camera discovery and bounded PNG/JPEG capture |
-| `container-manager` | Docker, Podman, containerd lifecycle, logs, cgroups, and namespaces |
-| `config-editor` | Validated atomic /etc edits with durable backup and rollback |
-| `clipboard-manager` | Sensitive Wayland clipboard read, write, types, and clear |
-| `doc` | Read PDF, DOCX, XLSX, PPTX, CSV |
-| `crash-doctor` | Coredump, OOM, segfault, journal correlation, and backtraces |
-| `db` | SQLite databases |
-| `desktop-manager` | COSMIC Wayland window discovery, focus, close, and restart |
-| `display-manager` | COSMIC layout, modes, scale, mirror, rotation, and brightness |
-| `net` | HTTP client |
-| `kv` | Key-value store |
-| `log` | Audit log search |
-| `location-manager` | GeoClue coordinates and offline timezone suggestions |
-| `netdiag` | Link, route, DNS, TCP reachability, and latency diagnosis |
-| `network-manager` | Wi-Fi, VPN, and NetworkManager radio control |
-| `notify` | Notifications |
-| `pkg` | Package management |
-| `power-manager` | UPower status and logind sleep/reboot/shutdown |
-| `printer-manager` | CUPS discovery, capabilities, queues, printing, and cancel |
-| `systemd` | Native system service status and lifecycle control |
-| `system-snapshot` | Snapper, Btrfs, or LVM full-system recovery points |
-| `storage-manager` | UDisks2 mount/eject, SMART, and filesystem health |
-| `usb-guard` | USB inventory, authorization, persistent blocking, and eject |
-| `user-manager` | Local users, groups, passwords, shells, membership, and rollback |
-
-## Discovery
-
-```bash
-cos                              # list OS primitives
-cos app                          # list apps
-cos <name>                       # show commands for a primitive
-cos app <name>                   # show commands for an app
-cos <name> <command> --schema    # full parameter schema (JSON)
-```
+Permission roles and App capability gates are documented in
+[permissions.md](permissions.md). Detailed App semantics remain available in
+[apps.md](apps.md), but the live catalogue is authoritative.
 
 All errors include a `code` field for programmatic handling ([error codes](errors.md)).
 

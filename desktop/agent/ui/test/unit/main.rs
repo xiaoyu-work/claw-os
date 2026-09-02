@@ -1,92 +1,89 @@
 use super::*;
 
-fn init_i18n() {
-    localize::localize();
-}
-
 #[test]
-fn relative_labels_use_real_timestamps() {
-    init_i18n();
-    assert_eq!(relative_time_label(1_000_000, 1_020_000), "now");
-    let plain = |label: String| label.replace('\u{2068}', "").replace('\u{2069}', "");
-    assert_eq!(plain(relative_time_label(1_000_000, 1_300_000)), "5m");
-    assert_eq!(plain(relative_time_label(1_000_000, 8_200_000)), "2h");
-}
-
-#[test]
-fn provider_label_prefers_bridge_label() {
-    init_i18n();
-    let models = ModelsResponse {
-        ready: true,
-        provider: "anthropic".into(),
-        model: "claude".into(),
-        label: "Claude".into(),
-        models: Vec::new(),
+fn overlay_flags_publish_the_activation_payload() {
+    let flags = Flags {
+        overlay: true,
+        activation: Some(OverlayActivation::default()),
+        ..Flags::default()
     };
-    assert_eq!(provider_model_label(&models), "Claude");
+    assert!(flags.action().is_some());
 }
 
 #[test]
-fn tool_events_dedupe_by_id() {
-    let mut message = ChatMessage::assistant_streaming();
-    upsert_tool_call(
-        &mut message,
-        ToolCallView {
-            id: "one".into(),
-            name: "first".into(),
-            input: serde_json::Value::Null,
-            partial_json: String::new(),
-            in_progress: true,
-        },
+fn socket_context_becomes_private_transient_activation() {
+    let expected = OverlayActivation {
+        context: Some(r#"{"app":"cosmic-files"}"#.into()),
+        ..OverlayActivation::default()
+    };
+    let input = serde_json::to_vec(&expected).unwrap();
+    let parsed = cos_runtime::ask_claw::parse_ui_arguments([
+        "--overlay",
+        "--context-socket",
+        "--activation-fd",
+        "3",
+    ]);
+    let launch_mode = UiLaunchMode::from_arguments(&parsed);
+    let activation = parsed
+        .activation(std::io::Cursor::new(input))
+        .unwrap()
+        .unwrap();
+    let flags = Flags {
+        overlay: true,
+        context: activation.context.clone(),
+        activation: Some(activation),
+        ..Flags::default()
+    };
+
+    assert_eq!(
+        flags.action().and_then(|value| value.context.as_deref()),
+        Some(r#"{"app":"cosmic-files"}"#)
     );
-    upsert_tool_call(
-        &mut message,
-        ToolCallView {
-            id: "one".into(),
-            name: "updated".into(),
-            input: serde_json::json!({"ok": true}),
-            partial_json: String::new(),
-            in_progress: false,
-        },
-    );
-    assert_eq!(message.tool_calls.len(), 1);
-    assert_eq!(message.tool_calls[0].name, "updated");
+    assert_eq!(launch_mode, UiLaunchMode::PrivateOverlay);
+    assert!(launch_mode.exits_on_close());
 }
 
 #[test]
-fn retry_selects_latest_user_prompt() {
-    init_i18n();
-    let messages = vec![
-        ChatMessage::user("first".into()),
-        ChatMessage::assistant_streaming(),
-        ChatMessage::user("second".into()),
-    ];
-    let first = retry_branch(&messages, 1, "Session").unwrap();
-    assert_eq!(first.1, "first");
-    let second = retry_branch(&messages, messages.len(), "Session").unwrap();
-    assert_eq!(second.1, "second");
-    assert!(second.2.contains("User: first"));
+fn conflicting_context_sources_do_not_produce_activation() {
+    let parsed = cos_runtime::ask_claw::parse_ui_arguments([
+        "--overlay",
+        "--context-socket",
+        "--context",
+        r#"{"app":"legacy"}"#,
+    ]);
+    let input = serde_json::to_vec(&OverlayActivation {
+        context: Some(r#"{"app":"socket"}"#.into()),
+        ..OverlayActivation::default()
+    })
+    .unwrap();
+
+    assert!(matches!(
+        parsed.activation(std::io::Cursor::new(input)),
+        Err(cos_runtime::ask_claw::ActivationInputError::ConflictingContext)
+    ));
 }
 
 #[test]
-fn branch_context_keeps_recent_turns_within_limit() {
-    let mut messages = Vec::new();
-    for index in 0..20 {
-        messages.push(ChatMessage::user(format!(
-            "turn-{index} {}",
-            "x".repeat(3_000)
-        )));
-    }
-    let context = build_branch_context(&messages).unwrap();
-    assert!(context.chars().count() <= MAX_BRANCH_CONTEXT_CHARS);
-    assert!(context.contains("turn-19"));
-    assert!(!context.contains("turn-0 "));
+fn malformed_and_oversize_socket_data_do_not_produce_activation() {
+    let parsed = cos_runtime::ask_claw::parse_ui_arguments(["--overlay", "--context-socket"]);
+    assert!(matches!(
+        parsed.activation(std::io::Cursor::new(b"{not-json")),
+        Err(cos_runtime::ask_claw::ActivationInputError::Malformed(_))
+    ));
+    assert!(matches!(
+        parsed.activation(std::io::Cursor::new(vec![
+            b'x';
+            cos_runtime::ask_claw::MAX_ACTIVATION_BYTES
+                + 1
+        ])),
+        Err(cos_runtime::ask_claw::ActivationInputError::TooLarge { .. })
+    ));
 }
 
 #[test]
-fn voice_generation_rejects_stale_completion() {
-    let state = VoiceState::Processing { generation: 8 };
-    assert!(accept_voice_completion(8, &state, 8));
-    assert!(!accept_voice_completion(8, &state, 7));
-    assert!(!accept_voice_completion(9, &state, 8));
+fn context_free_overlay_keeps_single_instance_behavior() {
+    let parsed = cos_runtime::ask_claw::parse_ui_arguments(["--overlay"]);
+    let launch_mode = UiLaunchMode::from_arguments(&parsed);
+    assert_eq!(launch_mode, UiLaunchMode::SharedOverlay);
+    assert!(!launch_mode.exits_on_close());
 }

@@ -20,7 +20,7 @@
 //! - A function call is a content part — `{functionCall: {name, args}}` —
 //!   inside a `model` turn. There is **no upstream call ID** — Gemini
 //!   matches function responses by `name`. We synthesize a synthetic
-//!   `id = "<name>::<seq>"` so the runtime's per-call tracking still
+//!   `id = "<name>::<unique-id>"` so the runtime's per-call tracking still
 //!   works, then strip the suffix when serialising the response part.
 //! - Tool result is `{functionResponse: {name, response}}` inside a
 //!   `user` turn.
@@ -36,7 +36,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::openai_compat::resolve_api_key;
+use crate::agent::llm::construction::HttpTransport;
+use crate::agent::llm::construction::ProcessCredentialSource;
 use crate::agent::llm::{
     ChatRequest, ChatResponse, ContentBlock, FinishReason, LlmError, Provider, Result, Role,
     StreamEvent, Tool, ToolCall, ToolChoice, Usage,
@@ -56,10 +57,15 @@ pub const API_VERSION: &str = "v1beta";
 /// pinning a sensible default keeps cost predictable.
 pub const DEFAULT_MAX_TOKENS: u32 = 4096;
 
-/// Marker we splice into our internal call IDs so we can recover the
-/// function name later. `<name>::<seq>` round-trips losslessly through
-/// the runtime even though Gemini itself doesn't track call IDs.
+/// Marker we splice into our internal call IDs so we can recover the function
+/// name later. The suffix is a UUID because Gemini omits call IDs; restarting
+/// a numeric sequence for every response or process overwrites
+/// invocation/audit rows in long-lived resumed sessions.
 const ID_SEP: &str = "::";
+
+fn next_tool_call_id(name: &str) -> String {
+    format!("{name}{ID_SEP}{}", uuid::Uuid::new_v4().simple())
+}
 
 pub fn default_base_url() -> &'static str {
     DEFAULT_BASE
@@ -95,82 +101,78 @@ impl std::fmt::Debug for GeminiConfig {
 
 impl GeminiConfig {
     pub fn try_from_agent_config(model: &str, agent: &AgentConfig) -> Result<Self> {
-        let base_url = agent
-            .base_url
-            .clone()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| DEFAULT_BASE.to_string());
+        crate::agent::llm::registry::gemini_config(model, agent, &ProcessCredentialSource)
+    }
 
-        let base_url = base_url.trim_end_matches('/').to_string();
-
-        let request_timeout = if agent.request_timeout == 0 {
-            Duration::from_secs(0)
-        } else {
-            Duration::from_secs(agent.request_timeout)
-        };
-
-        let pool = crate::agent::llm::credential_pool::Pool::try_from_agent_config(
-            "provider:gemini",
-            agent,
-        )?
-        .map(Arc::new);
-        let api_key = if pool.is_some() {
-            None
-        } else {
-            resolve_api_key(
-                agent.api_key_credential.as_deref(),
-                agent.api_key_env.as_deref(),
-            )?
-        };
-
-        Ok(Self {
-            base_url,
-            api_key,
-            model: model.to_string(),
-            extra_headers: agent.extra_headers.clone(),
-            request_timeout,
-            pool,
+    pub fn from_agent_config(model: &str, agent: &AgentConfig) -> Self {
+        Self::try_from_agent_config(model, agent).unwrap_or_else(|error| {
+            tracing::error!(error = %error, "legacy Gemini configuration failed");
+            Self::unconfigured(model, agent)
         })
     }
 
-    #[cfg(test)]
-    pub fn from_agent_config(model: &str, agent: &AgentConfig) -> Self {
-        Self::try_from_agent_config(model, agent)
-            .expect("test credential configuration should resolve")
+    fn unconfigured(model: &str, agent: &AgentConfig) -> Self {
+        Self {
+            base_url: agent
+                .base_url
+                .clone()
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| default_base_url().to_string())
+                .trim_end_matches('/')
+                .to_string(),
+            api_key: None,
+            model: model.to_string(),
+            extra_headers: agent.extra_headers.clone(),
+            request_timeout: Duration::from_secs(agent.request_timeout),
+            pool: None,
+        }
     }
 }
 
 pub struct GeminiProvider {
     cfg: GeminiConfig,
-    client: reqwest::Client,
+    transport: Option<HttpTransport>,
+    initialization_error: Option<Arc<crate::agent::llm::ProviderInitializationError>>,
 }
 
 impl GeminiProvider {
     pub fn new(cfg: GeminiConfig) -> Self {
-        let mut builder = reqwest::Client::builder()
-            .user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")))
-            // MEDIUM-14: cap the TCP/TLS handshake separately from
-            // the overall request budget so a black-holed DNS or
-            // firewalled host can't tie up the kernel.
-            .connect_timeout(Duration::from_secs(5))
-            .pool_idle_timeout(Duration::from_secs(60));
-        if cfg.request_timeout > Duration::from_secs(0) {
-            builder = builder.timeout(cfg.request_timeout);
+        let (transport, initialization_error) =
+            crate::agent::llm::legacy_provider_transport(PROVIDER_NAME);
+        Self {
+            cfg,
+            transport,
+            initialization_error,
         }
-        let client = builder.build().unwrap_or_else(|_| reqwest::Client::new());
-        Self { cfg, client }
+    }
+
+    pub fn new_with_transport(cfg: GeminiConfig, transport: HttpTransport) -> Self {
+        Self {
+            cfg,
+            transport: Some(transport),
+            initialization_error: None,
+        }
     }
 
     pub fn try_from_agent_config(model: &str, agent: &AgentConfig) -> Result<Self> {
-        Ok(Self::new(GeminiConfig::try_from_agent_config(
-            model, agent,
-        )?))
+        let config = GeminiConfig::try_from_agent_config(model, agent)?;
+        Ok(Self::new_with_transport(config, HttpTransport::new()?))
     }
 
-    #[cfg(test)]
     pub fn from_agent_config(model: &str, agent: &AgentConfig) -> Self {
-        Self::try_from_agent_config(model, agent)
-            .expect("test credential configuration should resolve")
+        match Self::try_from_agent_config(model, agent) {
+            Ok(provider) => provider,
+            Err(error) => {
+                tracing::error!(error = %error, "legacy Gemini provider initialization failed");
+                Self {
+                    cfg: GeminiConfig::unconfigured(model, agent),
+                    transport: None,
+                    initialization_error: Some(Arc::new(
+                        crate::agent::llm::ProviderInitializationError::new(PROVIDER_NAME, error),
+                    )),
+                }
+            }
+        }
     }
 
     fn endpoint(&self) -> String {
@@ -178,6 +180,18 @@ impl GeminiProvider {
             "{}/{}/models/{}:generateContent",
             self.cfg.base_url, API_VERSION, self.cfg.model
         )
+    }
+
+    fn transport(&self) -> Result<&HttpTransport> {
+        match &self.initialization_error {
+            Some(error) => Err(crate::agent::llm::deferred_initialization_error(error)),
+            None => self.transport.as_ref().ok_or_else(|| {
+                crate::agent::llm::ProviderInfrastructureError::StatePoisoned {
+                    component: "gemini.transport",
+                }
+                .into()
+            }),
+        }
     }
 }
 
@@ -202,17 +216,18 @@ impl Provider for GeminiProvider {
     }
 
     fn is_configured(&self) -> bool {
-        self.cfg.api_key.is_some() || self.cfg.pool.as_ref().is_some_and(|p| !p.is_empty())
+        self.initialization_error.is_none()
+            && self.transport.is_some()
+            && (self.cfg.api_key.is_some()
+                || self.cfg.pool.as_ref().is_some_and(|pool| !pool.is_empty()))
     }
 
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
+        let transport = self.transport()?;
         let body = wire::build_request_body(&request, false);
 
         let lease = if let Some(pool) = &self.cfg.pool {
-            match pool.acquire() {
-                Ok(l) => Some(l),
-                Err(e) => return Err(LlmError::NotConfigured(format!("pool: {e}"))),
-            }
+            Some(pool.acquire()?)
         } else {
             None
         };
@@ -221,9 +236,8 @@ impl Provider for GeminiProvider {
             None => self.cfg.api_key.as_deref(),
         };
 
-        let mut http = self
-            .client
-            .post(self.endpoint())
+        let mut http = transport
+            .post(self.endpoint(), self.cfg.request_timeout)
             .header("Content-Type", "application/json")
             .json(&body);
 
@@ -241,10 +255,10 @@ impl Provider for GeminiProvider {
             Ok(r) => r,
             Err(e) => {
                 if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
-                    pool.report_failure(
+                    pool.try_report_failure(
                         l,
                         crate::agent::llm::error_classifier::classify_network_error(),
-                    );
+                    )?;
                 }
                 return Err(LlmError::Transport(e));
             }
@@ -272,7 +286,7 @@ impl Provider for GeminiProvider {
                         }
                         _ => crate::agent::llm::error_classifier::classify_network_error(),
                     };
-                    pool.report_failure(l, cls);
+                    pool.try_report_failure(l, cls)?;
                 }
                 return Err(e);
             }
@@ -283,7 +297,7 @@ impl Provider for GeminiProvider {
             if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
                 let body_str = std::str::from_utf8(&bytes).unwrap_or("");
                 let cls = crate::agent::llm::error_classifier::classify(status.as_u16(), body_str);
-                pool.report_failure(l, cls);
+                pool.try_report_failure(l, cls)?;
             }
             return Err(err);
         }
@@ -297,21 +311,19 @@ impl Provider for GeminiProvider {
                 // and surface as UpstreamMalformed so callers can
                 // distinguish from caller-side bugs.
                 if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
-                    pool.report_failure(
+                    pool.try_report_failure(
                         l,
                         crate::agent::llm::credential_pool::FailureClass::Transient,
-                    );
+                    )?;
                 }
-                return Err(LlmError::UpstreamMalformed(format!(
-                    "gemini response: {e}"
-                )));
+                return Err(LlmError::UpstreamMalformed(format!("gemini response: {e}")));
             }
         };
 
         let result = wire::response_to_chat(parsed, &self.cfg.model);
         if result.is_ok() {
             if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
-                pool.report_success(l);
+                pool.try_report_success(l)?;
             }
         }
         result
@@ -321,6 +333,7 @@ impl Provider for GeminiProvider {
         &self,
         request: ChatRequest,
     ) -> Result<BoxStream<'static, Result<StreamEvent>>> {
+        let _ = self.transport()?;
         // HIGH-4: real SSE delta streaming requires speaking
         // Gemini's `:streamGenerateContent?alt=sse` endpoint, which
         // differs enough from generateContent that wiring it is a
@@ -435,19 +448,23 @@ pub(crate) mod wire {
     fn content_block_to_part(b: &ContentBlock) -> Option<serde_json::Value> {
         match b {
             ContentBlock::Text { text } => Some(serde_json::json!({"text": text})),
-            ContentBlock::ToolUse { name, input, .. } => Some(serde_json::json!({
-                "functionCall": {
+            ContentBlock::ToolUse { id, name, input } => {
+                let mut function_call = serde_json::json!({
                     "name": name,
                     "args": input,
+                });
+                if let Some(id) = tool_id_suffix(id) {
+                    function_call["id"] = serde_json::json!(id);
                 }
-            })),
+                Some(serde_json::json!({"functionCall": function_call}))
+            }
             ContentBlock::ToolResult {
                 tool_use_id,
                 content,
                 ..
             } => {
                 // Recover the function name from our synthetic id
-                // ("<name>::<seq>"). If a caller hands us a non-synthetic
+                // ("<name>::<unique-id>"). If a caller hands us a non-synthetic
                 // id (no separator), treat the whole thing as the name.
                 let name = strip_id_seq(tool_use_id);
                 // Gemini's `response` is an arbitrary JSON object; if our
@@ -455,12 +472,14 @@ pub(crate) mod wire {
                 // otherwise wrap it as `{"content": "..."}`.
                 let response_value = serde_json::from_str::<serde_json::Value>(content)
                     .unwrap_or_else(|_| serde_json::json!({"content": content}));
-                Some(serde_json::json!({
-                    "functionResponse": {
-                        "name": name,
-                        "response": response_value,
-                    }
-                }))
+                let mut function_response = serde_json::json!({
+                    "name": name,
+                    "response": response_value,
+                });
+                if let Some(id) = tool_id_suffix(tool_use_id) {
+                    function_response["id"] = serde_json::json!(id);
+                }
+                Some(serde_json::json!({"functionResponse": function_response}))
             }
             ContentBlock::Reasoning { summary, .. } => {
                 (!summary.is_empty()).then(|| serde_json::json!({"text": summary.join("\n")}))
@@ -475,13 +494,19 @@ pub(crate) mod wire {
         }
     }
 
-    /// Strip our `<name>::<seq>` synthetic id back down to `<name>`.
+    /// Strip our `<name>::<unique-id>` synthetic id back down to `<name>`.
     /// Idempotent — IDs without the separator pass through unchanged.
     pub(crate) fn strip_id_seq(id: &str) -> &str {
         match id.split_once(ID_SEP) {
             Some((name, _)) => name,
             None => id,
         }
+    }
+
+    fn tool_id_suffix(id: &str) -> Option<&str> {
+        id.split_once(ID_SEP)
+            .map(|(_, suffix)| suffix)
+            .filter(|suffix| !suffix.is_empty())
     }
 
     fn tool_to_json(t: &Tool) -> serde_json::Value {
@@ -552,6 +577,8 @@ pub(crate) mod wire {
 
     #[derive(Debug, Deserialize)]
     pub(crate) struct FunctionCall {
+        #[serde(default)]
+        pub id: Option<String>,
         pub name: String,
         #[serde(default)]
         pub args: serde_json::Value,
@@ -576,8 +603,6 @@ pub(crate) mod wire {
 
         let mut content_blocks: Vec<ContentBlock> = Vec::new();
         let mut tool_calls: Vec<ToolCall> = Vec::new();
-        let mut fc_seq: u32 = 0;
-
         if let Some(content) = candidate.content {
             for part in content.parts {
                 match part {
@@ -587,8 +612,10 @@ pub(crate) mod wire {
                         }
                     }
                     Part::FunctionCall { function_call } => {
-                        let id = format!("{}{}{}", function_call.name, ID_SEP, fc_seq);
-                        fc_seq += 1;
+                        let id = match function_call.id.filter(|id| !id.is_empty()) {
+                            Some(id) => format!("{}{ID_SEP}{id}", function_call.name),
+                            None => next_tool_call_id(&function_call.name),
+                        };
                         content_blocks.push(ContentBlock::ToolUse {
                             id: id.clone(),
                             name: function_call.name.clone(),

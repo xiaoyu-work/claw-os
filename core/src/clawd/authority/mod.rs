@@ -80,6 +80,7 @@ pub use grant::{
     Requirement, Subject, Uses, MAX_CHILDREN, MAX_LINEAGE_DEPTH,
 };
 pub use handle::{GrantHandle, GrantId, GrantRef, HandleKey};
+use store::RelayProof;
 pub use store::{authority, Authority, AuthorityError, GrantView, Presentation};
 
 use super::client_identity::ClientIdentity;
@@ -313,14 +314,13 @@ pub async fn authorize(
         return Ok(None);
     }
 
-    let presentation = Presentation {
+    let presentation = Presentation::new(
         uid,
         pid,
-        start_time_ticks: client.start_time_ticks,
-        audience: descriptor.audience,
-        route: route_name,
-        session_id: None,
-    };
+        client.start_time_ticks,
+        descriptor.audience,
+        route_name,
+    );
 
     let view = match descriptor.subject {
         SubjectSource::Peer => unreachable!("handled above"),
@@ -362,6 +362,30 @@ pub async fn authorize(
 
     let mut presentation = presentation;
     presentation.session_id = view.subject.session_id.clone();
+    finish(
+        route_name,
+        descriptor,
+        requirement,
+        view,
+        presentation,
+        uid,
+        client,
+    )
+    .await
+}
+
+/// The tail every authorization shares: read the session row under the
+/// owner's own path view, build the decision, and spend an exact
+/// requirement before the handler is entered.
+async fn finish(
+    route_name: &'static str,
+    descriptor: &'static RouteAuthority,
+    requirement: Requirement,
+    view: GrantView,
+    presentation: Presentation,
+    uid: u32,
+    client: &ClientIdentity,
+) -> Result<Option<Decision>, Fault> {
     // The routed registry is partitioned per owner, so the row is read
     // under the owner's own path view — the same view the provider used
     // to read it before this decision existed.
@@ -396,6 +420,99 @@ pub async fn authorize(
         }
     }
     Ok(Some(decision))
+}
+
+/// Authorize one inner route that a trusted launcher is relaying for a
+/// sandboxed worker.
+///
+/// The relay is *not* the authority. What this does is prove, in order:
+///
+/// 1. the presenting process holds a live relay grant — bound
+///    `Process`-tight to it, in the [`Audience::AppRelay`] family, not
+///    expired and not revoked;
+/// 2. that grant names exactly the session the caller asked to act for;
+/// 3. the inner route is one a session may reach at all — a
+///    `Session`-subject `SystemService` route, never a root, peer,
+///    peer-session, handle-addressed, identity, consent, journal or
+///    scheduler route;
+/// 4. the App session grant itself still resolves, is live, covers the
+///    audience, and satisfies the inner route's requirement.
+///
+/// Step 4 runs against the *current* session grant, so a transient
+/// capability the kernel granted for one MCP call is visible while it
+/// is set and gone the moment it is cleared. Nothing here widens what
+/// the session holds; the relay only supplies the identity the worker
+/// cannot present from inside its namespace.
+pub async fn authorize_relayed(
+    relay_handle: &str,
+    session_id: &str,
+    route_name: &'static str,
+    descriptor: &'static RouteAuthority,
+    params: &Value,
+    client: &ClientIdentity,
+) -> Result<Option<Decision>, Fault> {
+    let uid = client.uid.ok_or(Fault::MissingCredentials)?;
+    let pid = client.pid.ok_or(Fault::MissingCredentials)?;
+    // Belt and braces: the relay route already refuses anything else,
+    // and a future route table change must not turn this into a way to
+    // reach a peer-scoped or root surface.
+    if descriptor.subject != SubjectSource::Session
+        || descriptor.audience != Audience::SystemService
+    {
+        return Err(Fault::NotAuthorized);
+    }
+
+    let relay_presentation = Presentation::new(
+        uid,
+        pid,
+        client.start_time_ticks,
+        Audience::AppRelay,
+        route_name,
+    );
+    let relay = authority()
+        .resolve(relay_handle, &relay_presentation)
+        .map_err(|error| unresolved(route_name, descriptor, uid, Some(session_id), error))?;
+    if relay.subject.session_id.as_deref() != Some(session_id) {
+        return Err(unresolved(
+            route_name,
+            descriptor,
+            uid,
+            Some(session_id),
+            AuthorityError::Subject,
+        ));
+    }
+
+    let requirement = (descriptor.requirement)(params).map_err(|error| {
+        tracing::debug!(route = route_name, error = %error, "relayed route refused its own request shape");
+        Fault::InvalidParams
+    })?;
+    let proof = RelayProof::for_session(session_id);
+    // The subject is named *before* the resolve, not patched in after
+    // it, so the store's own subject check decides this call: a relay
+    // proof answers "who is speaking", and the grant still has to be
+    // the one for this session and to carry the inner route's audience.
+    let mut presentation = Presentation::new(
+        uid,
+        pid,
+        client.start_time_ticks,
+        descriptor.audience,
+        route_name,
+    );
+    presentation.session_id = Some(session_id.to_string());
+    let view = authority()
+        .resolve_session_relayed(session_id, &presentation, &proof)
+        .map_err(|error| unresolved(route_name, descriptor, uid, Some(session_id), error))?;
+    presentation.session_id = view.subject.session_id.clone();
+    finish(
+        route_name,
+        descriptor,
+        requirement,
+        view,
+        presentation,
+        uid,
+        client,
+    )
+    .await
 }
 
 /// Did a handler satisfy the obligation its descriptor declared?
@@ -471,11 +588,12 @@ pub(crate) fn authorize_worker_approval(
         .execution
         .as_ref()
         .ok_or_else(|| "approval has no worker execution binding".to_string())?;
-    if execution.identity.task_id != task_id
-        || execution.identity.worker_pid != worker_pid
-        || execution.identity.worker_start_time_ticks != worker_start_time_ticks
-        || execution.identity.lease_nonce != lease_nonce
-    {
+    let same_worker = execution.identity.worker_pid == worker_pid
+        && execution.identity.worker_start_time_ticks == worker_start_time_ticks
+        && execution.identity.lease_nonce == lease_nonce;
+    let resumed_worker =
+        approval.authorization.resume_request_id.is_some() && execution.identity.task_id == task_id;
+    if execution.identity.task_id != task_id || (!same_worker && !resumed_worker) {
         return Err("approval does not match the active task and worker lease".to_string());
     }
     let principal = Principal::of_process(owner_uid, worker_pid)

@@ -7,15 +7,13 @@
 /// write to it under the running user's `$HOME`, so changes don't
 /// need root.
 use serde::{Deserialize, Serialize};
-use std::collections::hash_map::DefaultHasher;
-use std::collections::HashMap;
 use std::fs;
 use std::future::Future;
-use std::hash::{Hash, Hasher};
 use std::path::Path;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 
 static CONFIG: OnceLock<CosConfig> = OnceLock::new();
+static CONFIG_SNAPSHOT: OnceLock<Arc<CosConfig>> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CosConfig {
@@ -153,10 +151,8 @@ pub struct AgentConfig {
     /// Enable provider-backed conversation compression. When the
     /// estimated total token count of the system prompt, visible tool schemas,
     /// and running conversation exceeds `compress_trigger_tokens`, the head is
-    /// deterministically pruned and, when still necessary, summarised by the
-    /// same provider. `MemoryDb` sessions persist a content-addressed
-    /// `[CONTEXT SUMMARY]` assistant projection while keeping raw rows
-    /// searchable; the protected tail is kept verbatim.
+    /// summarised by the same provider and replaced with a single
+    /// `[CONTEXT SUMMARY]` user message; the tail is kept verbatim.
     /// Defaults to `true` — long-running sessions on a system-level
     /// agent OS are the norm, not the exception, and a runaway context
     /// is the difference between "agent that quietly keeps working"
@@ -225,30 +221,34 @@ pub struct AgentConfig {
     #[serde(default)]
     pub tool_deny: Vec<String>,
 
-    /// Maximum estimated schema tokens for directly exposed non-core
-    /// extension tools. Catalogs above this threshold are replaced with the
-    /// stable `cos_tool_search` / `cos_tool_describe` / `cos_tool_call`
-    /// bridge. Core tools remain direct. `0` always defers an eligible
-    /// non-empty catalog.
-    #[serde(default = "default_tool_schema_budget_tokens")]
-    pub tool_schema_budget_tokens: u32,
+    /// Replace extensible App schemas with a fixed search/describe/call
+    /// bridge while keeping kernel primitives direct. MCP always uses its
+    /// stricter fixed catalog/invoke gateway independently of this setting.
+    /// The provider-facing tool array remains stable for prompt caching.
+    #[serde(default = "default_progressive_tools_enabled")]
+    pub progressive_tools_enabled: bool,
 
-    /// Deprecated tool-name approval filter for tools that do not
-    /// expose a capability-aware execution boundary. Core proxies that
-    /// declare that boundary ignore this coarse prompt and derive
-    /// consent from the exact validated capability at execution.
-    /// Names are matched literally against `ToolCall.name`.
+    /// Optional tool-name approval override. Capability risk remains the
+    /// default policy: high/critical capability requests enter the durable
+    /// approval queue automatically. When this list is non-empty, headless
+    /// mode (no approver
+    /// configured) emits a synthetic `tool_result` with
+    /// `is_error: true` and the deferral prompt — the agent sees it
+    /// and can ask the user. Names matched literally against
+    /// `ToolCall.name`.
     #[serde(default)]
     pub dangerous_tools: Vec<String>,
 
-    /// Legacy tool-name prompt bypass. This never grants a capability
-    /// and therefore cannot bypass the exact execution-time gate.
+    /// Approval gate: tools that always pass approval without prompting,
+    /// even if listed in `dangerous_tools`. Useful for explicit
+    /// per-context overrides (e.g. allow `cos_proc kill` in an
+    /// orchestrator context but require approval everywhere else).
     #[serde(default)]
     pub auto_approve_tools: Vec<String>,
 
-    /// Tools that are always blocked before dispatch. This remains a
-    /// supported hard operator deny and takes precedence over every
-    /// consent path.
+    /// Approval gate: tools that are always blocked. Takes precedence
+    /// over `auto_approve_tools` and `dangerous_tools`. The dispatcher
+    /// emits a synthetic `tool_result` with `is_error: true`.
     #[serde(default)]
     pub auto_deny_tools: Vec<String>,
 
@@ -495,8 +495,8 @@ impl ProviderFallbackConfig {
 pub struct McpServerConfig {
     /// Stable, snake_case identifier. Becomes the prefix in registered
     /// tool names: `mcp_<name>_<remote_tool>`. Must be unique across
-    /// all entries in this list. Duplicate server or generated registry
-    /// names are skipped rather than overwriting an existing tool.
+    /// all entries in this list (the registry will overwrite earlier
+    /// duplicates silently otherwise).
     pub name: String,
 
     /// Executable to spawn. Resolved against `PATH`.
@@ -713,7 +713,7 @@ fn default_agent_model() -> String {
     String::new()
 }
 fn default_agent_max_turns() -> u32 {
-    10
+    50
 }
 fn default_agent_max_tokens() -> u32 {
     4096
@@ -723,6 +723,9 @@ fn default_agent_temperature() -> f32 {
 }
 fn default_agent_request_timeout() -> u64 {
     120
+}
+fn default_progressive_tools_enabled() -> bool {
+    true
 }
 fn default_compress_target() -> u32 {
     crate::agent::context::compressor::DEFAULT_TARGET_TOKENS
@@ -744,9 +747,6 @@ fn default_think_scrub_enabled() -> bool {
 }
 fn default_redact_memory_enabled() -> bool {
     true
-}
-fn default_tool_schema_budget_tokens() -> u32 {
-    crate::agent::tools::progressive::DEFAULT_TOOL_SCHEMA_BUDGET_TOKENS
 }
 fn default_auxiliary_max_tokens() -> u32 {
     1024
@@ -942,7 +942,7 @@ impl Default for AgentConfig {
             redact_memory_enabled: default_redact_memory_enabled(),
             tool_allow: None,
             tool_deny: Vec::new(),
-            tool_schema_budget_tokens: default_tool_schema_budget_tokens(),
+            progressive_tools_enabled: default_progressive_tools_enabled(),
             dangerous_tools: Vec::new(),
             auto_approve_tools: Vec::new(),
             auto_deny_tools: Vec::new(),
@@ -1041,74 +1041,76 @@ pub fn load_from_path(path: &Path) -> CosConfig {
 //
 // To bridge the two we install a per-async-task override: clawd's
 // worker resolves the job's owner home, loads that user's config, and
-// wraps the entire job execution in `with_override(...)`. Every
-// `config::get()` call from within that task — including ones deep
+// wraps the entire job execution in `with_snapshot(...)`. Every
+// `config::current_snapshot()` call from within that task — including ones deep
 // inside the LLM gate, model task helpers, and tool implementations —
 // transparently sees the user's config instead of clawd's.
 //
-// Lifetime: `get()` returns `&'static CosConfig` and ~50 call sites
-// rely on that. To keep the signature we intern each distinct
-// user-config payload (by content hash) into a leaked `Box`. After
-// interning the same content twice returns the same pointer, so the
-// leak is bounded by the number of *distinct* configs clawd sees over
-// its lifetime — in practice a small constant per user.
+// Overrides own an immutable `Arc<CosConfig>`. A request can pass the
+// snapshot explicitly to lower layers while compatibility callers retain the
+// original static `get()` API. The allocation is reclaimed when the
+// request scope and its explicit consumers finish.
 // ---------------------------------------------------------------------------
 
 tokio::task_local! {
-    /// Optional override for `config::get()`. Set by
-    /// `with_override(...)` for the duration of a single
+    /// Optional override for `config::current_snapshot()`. Set by
+    /// `with_snapshot(...)` for the duration of a single
     /// clawd-dispatched agent job; absent everywhere else.
+    static CONFIG_SNAPSHOT_OVERRIDE: Arc<CosConfig>;
     static CONFIG_OVERRIDE: &'static CosConfig;
 }
 
-static OVERRIDE_INTERN: OnceLock<Mutex<HashMap<u64, &'static CosConfig>>> = OnceLock::new();
-
-fn intern_static(cfg: CosConfig) -> &'static CosConfig {
-    let serialized = serde_json::to_string(&cfg).unwrap_or_default();
-    let mut hasher = DefaultHasher::new();
-    serialized.hash(&mut hasher);
-    let key = hasher.finish();
-
-    let cache = OVERRIDE_INTERN.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut guard = cache.lock().unwrap_or_else(|poison| poison.into_inner());
-    if let Some(existing) = guard.get(&key) {
-        return existing;
-    }
-    let leaked: &'static CosConfig = Box::leak(Box::new(cfg));
-    guard.insert(key, leaked);
-    leaked
-}
-
-/// Load `<home>/.config/cos/config.json` and intern it into a
-/// `'static` slot suitable for `with_override`. The same on-disk file
-/// content always returns the same pointer.
-pub fn intern_for_home(home: &Path) -> &'static CosConfig {
+/// Load an immutable snapshot of `<home>/.config/cos/config.json`.
+pub fn load_for_home(home: &Path) -> Arc<CosConfig> {
     let path = crate::paths::user_config_path_for(home);
-    intern_static(load_from_path(&path))
+    Arc::new(load_from_path(&path))
 }
 
 /// Re-read the standard user config (`~/.config/cos/config.json` or
-/// `$COS_CONFIG_PATH`) from disk and intern it as a `'static` pointer
-/// suitable for [`with_override`].
+/// `$COS_CONFIG_PATH`) into an immutable request snapshot.
 ///
 /// Long-running daemons like `cos agent serve` cache the process-wide
 /// `CONFIG: OnceLock<CosConfig>` at startup and never observe later
 /// writes — including writes the daemon itself makes via
 /// `cos agent setup apply`. Wrap each request handler in
-/// `with_override(intern_user_config(), ...)` so every `config::get()`
+/// `with_snapshot(load_user_config(), ...)` so every
+/// `config::current_snapshot()`
 /// call in the handler sees the current on-disk state.
-pub fn intern_user_config() -> &'static CosConfig {
+pub fn load_user_config() -> Arc<CosConfig> {
     let path = std::env::var_os("COS_CONFIG_PATH")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(crate::paths::user_config_path);
-    intern_static(load_from_path(&path))
+    Arc::new(load_from_path(&path))
 }
 
 /// Run `fut` with `cfg` installed as the per-task override visible to
-/// every `config::get()` call inside it (and any task spawned via
-/// `tokio::spawn` from within it, because `task_local` propagates).
-/// Outside the scope `config::get()` returns the process-wide config
-/// as before.
+/// every `config::current_snapshot()` call polled inside it. Separately spawned Tokio
+/// tasks do not inherit task-local values and must capture the `Arc` or
+/// establish their own scope. Outside the scope [`current_snapshot`] returns
+/// the process-wide snapshot.
+pub async fn with_snapshot<Fut, R>(cfg: Arc<CosConfig>, fut: Fut) -> R
+where
+    Fut: Future<Output = R>,
+{
+    CONFIG_SNAPSHOT_OVERRIDE.scope(cfg, fut).await
+}
+
+/// Return the immutable config snapshot for explicit runtime composition.
+pub fn current_snapshot() -> Arc<CosConfig> {
+    if let Ok(cfg) = CONFIG_SNAPSHOT_OVERRIDE.try_with(Arc::clone) {
+        return cfg;
+    }
+    if let Ok(cfg) = CONFIG_OVERRIDE.try_with(|cfg| *cfg) {
+        return Arc::new(cfg.clone());
+    }
+    Arc::clone(CONFIG_SNAPSHOT.get_or_init(|| Arc::new(get().clone())))
+}
+
+/// Legacy static override retained for source compatibility.
+///
+/// Dynamic production scopes must use [`with_snapshot`]; obtaining a new
+/// `'static` config without leaking is intentionally unsupported.
+#[deprecated(note = "use with_snapshot(Arc<CosConfig>, ...) for request-scoped config")]
 pub async fn with_override<Fut, R>(cfg: &'static CosConfig, fut: Fut) -> R
 where
     Fut: Future<Output = R>,
@@ -1116,11 +1118,12 @@ where
     CONFIG_OVERRIDE.scope(cfg, fut).await
 }
 
-/// Get the global config. Inside a [`with_override`] scope this
-/// returns the override; outside, it returns the process-wide config
-/// loaded once from disk.
+/// Get the process-global or legacy static-scoped configuration.
+///
+/// New runtime composition should use [`current_snapshot`] so ownership is
+/// explicit and request-scoped snapshots are visible.
 pub fn get() -> &'static CosConfig {
-    if let Ok(cfg) = CONFIG_OVERRIDE.try_with(|c| *c) {
+    if let Ok(cfg) = CONFIG_OVERRIDE.try_with(|cfg| *cfg) {
         return cfg;
     }
     CONFIG.get_or_init(load_from_disk)
@@ -1128,7 +1131,7 @@ pub fn get() -> &'static CosConfig {
 
 /// Return config values as environment variables for Python app subprocesses.
 pub fn as_env_vars() -> Vec<(String, String)> {
-    let cfg = get();
+    let cfg = current_snapshot();
     vec![
         ("COS_EXEC_TIMEOUT".into(), cfg.exec.timeout.to_string()),
         ("COS_EXEC_SHELL".into(), cfg.exec.shell.clone()),

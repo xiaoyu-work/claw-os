@@ -2,9 +2,40 @@
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/git-readonly.sh"
 
+# The release-security epoch is also the Debian epoch.
+#
+# A security epoch that only lives in Claw OS metadata cannot influence
+# which candidate APT selects: APT orders by Debian version, and an
+# emergency release with a *lower* upstream version would simply never
+# be chosen. The Debian epoch is the one field that outranks every
+# upstream version, so the two are kept identical and the packaging,
+# publication and manifest checks all enforce that.
+release_security_epoch() {
+    local project_dir="${1:?project root required}"
+    local policy="$project_dir/packaging/release-security/policy.json"
+    if [ ! -f "$policy" ]; then
+        echo "error: release-security policy not found: $policy" >&2
+        return 1
+    fi
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "error: python3 is required to read the release-security policy" >&2
+        return 1
+    fi
+    python3 - "$policy" <<'PY'
+import json, sys
+document = json.load(open(sys.argv[1], encoding="utf-8"))
+epoch = int(document["security_epoch"])
+if epoch < 0:
+    raise SystemExit("error: the release-security epoch must not be negative")
+print(epoch)
+PY
+}
+
 package_version() {
     local project_dir="${1:?project root required}"
     local version="${COS_PACKAGE_VERSION:-}"
+    local epoch
+    epoch="$(release_security_epoch "$project_dir")" || return 1
 
     if [ -z "$version" ]; then
         local base count sha
@@ -35,10 +66,25 @@ package_version() {
             pr="${pr#refs/pull/}"
             pr="${pr%%/*}"
             [[ "$pr" =~ ^[0-9]+$ ]] || pr=0
-            version="${base}~pr${pr}.git${count}.g${sha}"
+            version="${epoch}:${base}~pr${pr}.git${count}.g${sha}"
         else
-            version="${base}+git${count}.g${sha}"
+            version="${epoch}:${base}+git${count}.g${sha}"
         fi
+    fi
+
+    # An explicit override must still carry the security epoch, or a
+    # locally built package would sort below a published emergency
+    # release in APT while claiming the same protection.
+    local declared="0"
+    case "$version" in
+        *:*) declared="${version%%:*}" ;;
+    esac
+    if [ "$declared" != "$epoch" ]; then
+        echo "error: package version '$version' has Debian epoch '$declared'," >&2
+        echo "       but the release-security epoch is '$epoch'. Set" >&2
+        echo "       COS_PACKAGE_VERSION to '${epoch}:<upstream>' so APT orders" >&2
+        echo "       an emergency release above everything published before it." >&2
+        return 1
     fi
 
     if ! command -v dpkg >/dev/null 2>&1 \

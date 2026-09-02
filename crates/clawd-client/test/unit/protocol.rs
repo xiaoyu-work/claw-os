@@ -3,7 +3,7 @@ use crate::{ErrorCode, RemoteError};
 use serde_json::json;
 
 #[test]
-fn requests_are_closed_typed_v1_envelopes_with_fresh_bounded_ids() {
+fn requests_are_closed_typed_envelopes_with_fresh_bounded_ids() {
     let first = Request::new(Command::TaskSubmit, json!({"prompt": "hello"}));
     let second = Request::new(Command::TaskSubmit, json!({"prompt": "hello"}));
     assert_eq!(first.v, PROTOCOL_VERSION);
@@ -14,7 +14,7 @@ fn requests_are_closed_typed_v1_envelopes_with_fresh_bounded_ids() {
         json!("task.submit")
     );
     assert!(serde_json::from_value::<Request>(json!({
-        "v": 1,
+        "v": PROTOCOL_VERSION,
         "id": "r1",
         "command": "task.submit",
         "params": {},

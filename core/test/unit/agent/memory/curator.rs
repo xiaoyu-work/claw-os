@@ -211,6 +211,9 @@
             role: "user".into(),
             content: "remember this".into(),
             ts_ms: 1_700_000_000_000,
+            trust_class: None,
+            trust_source: None,
+            trust_lineage: None,
         }];
         let normalized =
             normalize_fact_for_persistence(&raw, "session-1", &messages, "2026-08-27").unwrap();
@@ -233,6 +236,9 @@
             role: "user".into(),
             content: "remember this".into(),
             ts_ms: 1_700_000_000_000,
+            trust_class: None,
+            trust_source: None,
+            trust_lineage: None,
         }];
         let uuid_normalized = normalize_fact_for_persistence(
             &raw,
@@ -272,6 +278,9 @@
             role: "user".into(),
             content: "Python is installed".into(),
             ts_ms: 1_700_000_000_000,
+            trust_class: None,
+            trust_source: None,
+            trust_lineage: None,
         }];
         assert!(
             normalize_fact_for_persistence(&raw, "session-1", &messages, "2026-08-27")
@@ -520,6 +529,9 @@ other content
             role: "user".into(),
             content: "x".repeat(2000),
             ts_ms: 0,
+            trust_class: None,
+            trust_source: None,
+            trust_lineage: None,
         }];
         let out = format_transcript(&rows, 100);
         assert!(out.contains("[user message_id=1] "));
@@ -535,6 +547,9 @@ other content
             role: "assistant".into(),
             content: "short".into(),
             ts_ms: 0,
+            trust_class: None,
+            trust_source: None,
+            trust_lineage: None,
         }];
         let out = format_transcript(&rows, 100);
         assert!(out.contains("[assistant message_id=1] short"));

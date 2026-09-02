@@ -91,7 +91,7 @@ pub trait SpeechToText: Send + Sync {
 // =====================================================================
 
 pub fn build_default() -> Result<Option<Box<dyn SpeechToText>>, String> {
-    build_from(&crate::config::get().stt)
+    build_from(&crate::config::current_snapshot().stt)
 }
 
 pub fn build_from(cfg: &SttConfig) -> Result<Option<Box<dyn SpeechToText>>, String> {
@@ -140,7 +140,7 @@ impl OpenAICompatStt {
             .unwrap_or_else(|| default_base_url(&cfg.provider).to_string());
         let base_url = base_url.trim_end_matches('/').to_string();
 
-        let api_key = crate::agent::llm::providers::openai_compat::resolve_api_key(
+        let api_key = crate::agent::llm::construction::resolve_process_api_key(
             cfg.api_key_credential.as_deref(),
             cfg.api_key_env.as_deref(),
         )

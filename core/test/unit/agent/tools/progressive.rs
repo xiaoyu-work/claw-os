@@ -23,16 +23,13 @@ fn entry(name: &str, server: &str, remote_name: &str, description: &str) -> Cata
 }
 
 fn result_json(result: &ToolResult) -> Value {
-    let start = result
-        .content
-        .find("\n{")
-        .expect("wrapped result JSON start")
-        + 1;
-    let end = result
-        .content
-        .rfind("\n</untrusted_tool_result>")
-        .expect("wrapped result JSON end");
-    serde_json::from_str(&result.content[start..end]).expect("valid result JSON")
+    let parsed = crate::agent::trust::envelope::parse(&result.content)
+        .expect("progressive result is trust-labelled");
+    assert_eq!(
+        parsed.source.kind(),
+        crate::agent::trust::SourceKind::McpToolMetadata
+    );
+    serde_json::from_str(&parsed.payload).expect("valid result JSON")
 }
 
 #[test]
@@ -70,7 +67,9 @@ fn search_distinguishes_duplicate_remote_names_by_server() {
         &serde_json::json!({"query": "lookup", "server": "beta"}),
     );
     assert!(!result.is_error);
-    assert!(result.content.contains("<untrusted_tool_result>"));
+    assert!(crate::agent::trust::envelope::looks_enveloped(
+        &result.content
+    ));
     assert!(result.content.contains("mcp_beta_lookup"));
     assert!(!result.content.contains("mcp_alpha_lookup"));
 }
@@ -90,11 +89,7 @@ fn describe_returns_the_exact_oversized_schema_on_demand() {
         }
     });
 
-    let result = describe_tool(
-        &catalog,
-        9,
-        &serde_json::json!({"name": "mcp_large_query"}),
-    );
+    let result = describe_tool(&catalog, 9, &serde_json::json!({"name": "mcp_large_query"}));
     assert!(!result.is_error);
     assert!(result.content.contains(&"x".repeat(32_000)));
     assert!(result.content.contains("\"catalog_generation\":9"));
@@ -164,14 +159,7 @@ fn search_bounds_sixteen_mib_required_metadata() {
     assert_eq!(metadata["required_total"], 1);
     assert_eq!(metadata["required_value_truncated_count"], 1);
     assert_eq!(metadata["metadata_truncated"], true);
-    assert!(
-        metadata["required"][0]
-            .as_str()
-            .unwrap()
-            .chars()
-            .count()
-            <= MAX_REQUIRED_FIELD_CHARS
-    );
+    assert!(metadata["required"][0].as_str().unwrap().chars().count() <= MAX_REQUIRED_FIELD_CHARS);
 }
 
 #[test]
@@ -194,15 +182,10 @@ fn search_bounds_utf8_tool_and_server_names_deterministically() {
     assert_eq!(metadata["name_truncated"], true);
     assert_eq!(metadata["server_truncated"], true);
     assert_eq!(metadata["remote_name_truncated"], true);
+    assert!(metadata["name"].as_str().unwrap().chars().count() <= MAX_RESULT_TOOL_NAME_CHARS);
+    assert!(metadata["server"].as_str().unwrap().chars().count() <= MAX_RESULT_SERVER_CHARS);
     assert!(
-        metadata["name"].as_str().unwrap().chars().count() <= MAX_RESULT_TOOL_NAME_CHARS
-    );
-    assert!(
-        metadata["server"].as_str().unwrap().chars().count() <= MAX_RESULT_SERVER_CHARS
-    );
-    assert!(
-        metadata["remote_name"].as_str().unwrap().chars().count()
-            <= MAX_RESULT_REMOTE_NAME_CHARS
+        metadata["remote_name"].as_str().unwrap().chars().count() <= MAX_RESULT_REMOTE_NAME_CHARS
     );
 }
 
@@ -251,9 +234,11 @@ fn search_caps_twenty_five_adversarial_results_and_reports_truncation() {
         first["required_truncated_count"],
         (64 - MAX_REQUIRED_FIELDS) as u64
     );
-    assert!(first["required"].as_array().unwrap().iter().all(|field| {
-        field.as_str().unwrap().chars().count() <= MAX_REQUIRED_FIELD_CHARS
-    }));
+    assert!(first["required"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|field| { field.as_str().unwrap().chars().count() <= MAX_REQUIRED_FIELD_CHARS }));
     assert!(
         value["truncation"]["metadata_truncated_count"]
             .as_u64()

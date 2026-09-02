@@ -25,7 +25,7 @@ pub const CGROUP_ROOT_ENV: &str = "CLAWD_EXTENSION_CGROUP_ROOT";
 
 const HOST_PATH: &str = "/usr/local/bin/claw-extension-host";
 const SAFE_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
-const HOST_NOFILE_LIMIT: libc::rlim_t = 128;
+const HOST_NOFILE_LIMIT: libc::rlim_t = 512;
 const HOST_NPROC_LIMIT: libc::rlim_t = 512;
 const HOST_ADDRESS_SPACE_LIMIT: libc::rlim_t = 2 * 1024 * 1024 * 1024;
 const HOST_FILE_SIZE_LIMIT: libc::rlim_t = 256 * 1024 * 1024;
@@ -700,6 +700,16 @@ pub fn spawn_host(
             paths.cleanup(),
         ));
     }
+    if let Err(refusal) =
+        crate::update::runtime::enforce_component_binary("claw-extension-host", &binary)
+    {
+        let cleanup = cgroup.cleanup_blocking();
+        return Err(combine_cleanup_error(
+            refusal.message,
+            cleanup,
+            paths.cleanup(),
+        ));
+    }
     if crate::agentd::spawn::broker_is_root() {
         if let Err(error) = crate::agentd::spawn::validate_root_owned_executable(&binary) {
             let cleanup = cgroup.cleanup_blocking();
@@ -737,7 +747,9 @@ pub fn spawn_host(
     command.current_dir(&paths.control_dir);
     command.env_clear();
     command.env("HOME", &paths.control_dir);
-    command.env("XDG_RUNTIME_DIR", paths.control_dir.join("runtime"));
+    // The host has a private /tmp mount. Keeping nested worker sockets there
+    // stays below AF_UNIX's short SUN_LEN ceiling without crossing tasks.
+    command.env("XDG_RUNTIME_DIR", "/tmp");
     command.env("USER", &extension.username);
     command.env("LOGNAME", &extension.username);
     command.env("PATH", SAFE_PATH);

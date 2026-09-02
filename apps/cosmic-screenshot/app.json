@@ -42,6 +42,7 @@
             "name": "save_dir",
             "kind": "path",
             "required": false,
+            "default": "~/Pictures",
             "label": {
               "en": "Directory to save the PNG to. Must already exist."
             }
@@ -50,7 +51,7 @@
         "needs": [
           {
             "verb": "fs.write",
-            "scope": { "kind": "wild" },
+            "scope": { "kind": "from-arg", "arg": "save_dir" },
             "why": {
               "en": "Write the captured PNG into the destination directory."
             }

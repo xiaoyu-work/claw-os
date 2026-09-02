@@ -19,6 +19,7 @@ and lifecycle state used across broker and agent operations.
 | Path | Role |
 | --- | --- |
 | `mod.rs` | Session API and lifecycle |
+| `journal/` | Authoritative session event journal (see its `MODULE.md`) |
 | `../../test/unit/session.rs` | Persistence, expiry, concurrency, and validation tests |
 
 ## Dependencies
@@ -26,6 +27,13 @@ and lifecycle state used across broker and agent operations.
 Sessions consume capability types and persistence helpers. Broker/tool/app
 consumers trust only validated session state, never caller-supplied authority.
 Persistent format changes require migration and recovery coverage.
+
+`turns.jsonl`, `mutations.jsonl` and the inverse blob store stay
+owner-private *content* stores. Ordering and lifecycle authority belong
+to [`journal/`](journal/MODULE.md), which records their immutable
+content-addressed references rather than a second copy of their bytes.
+Only the broker process journals; a `claw-agentd` worker reaches the
+chain through the private channel the supervisor validates.
 
 `SessionMeta::origin` is a typed provenance marker, not a role: it names the
 trusted issuer that minted the session's capabilities so a consumer can tell an

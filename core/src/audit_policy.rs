@@ -364,6 +364,11 @@ const TOOL_POLICIES: &[ToolPolicy] = &[
     ToolPolicy { tool: "echo", fields: &[("text", FieldRule::Size)] },
     ToolPolicy { tool: "now", fields: &[] },
     ToolPolicy { tool: "cos_clarify", fields: &[("options", FieldRule::Size)] },
+    ToolPolicy { tool: "cos_help", fields: &[("path", FieldRule::Size)] },
+    ToolPolicy {
+        tool: "cos_usage",
+        fields: &[("command", FieldRule::Token), ("args", FieldRule::Size)],
+    },
     ToolPolicy {
         tool: "cos_app_catalog",
         fields: &[("command", FieldRule::Token), ("args", FieldRule::Size)],

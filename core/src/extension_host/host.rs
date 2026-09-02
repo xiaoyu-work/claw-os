@@ -370,21 +370,12 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
             validate_text(&command, "App command", 256)?;
             validate_args(&args)?;
             let apps_root = apps_root();
-            let app_dir = crate::apps::find(&apps_root, &app_id)
-                .map(|app| app.dir)
-                .ok_or_else(|| format!("App `{app_id}` is not installed"))?;
+            let app = crate::apps::find_verified(&apps_root, &app_id)?;
+            let launch = crate::bridge::AppLaunch::new(app.require_verified()?.clone())?;
             let data = crate::paths::user_data_dir().to_string_lossy().into_owned();
             let apps = apps_root.to_string_lossy().into_owned();
-            let isolation = state.isolation.clone();
             let output = tokio::task::spawn_blocking(move || {
-                crate::bridge::run_app_with_isolation(
-                    &app_dir,
-                    &command,
-                    &args,
-                    &data,
-                    &apps,
-                    isolation,
-                )
+                crate::bridge::run_app(&launch, &command, &args, &data, &apps)
             })
             .await
             .map_err(|error| format!("App host task failed: {error}"))??;
@@ -398,11 +389,8 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
         }
         HostAction::AppOpen { app_id } => {
             validate_name(&app_id, "App id")?;
-            let tool_count = crate::agent::tools::cos_apps_session::host_open_session(
-                &app_id,
-                &state.isolation,
-            )
-            .await?;
+            let tool_count =
+                crate::agent::tools::cos_apps_session::host_open_session(&app_id).await?;
             Ok(HostResult::AppOpened { tool_count })
         }
         HostAction::AppCall {

@@ -11,7 +11,7 @@ pub async fn handler(State(state): State<AppState>) -> Json<Value> {
     // switch performed against a running daemon is reflected here on
     // the very next request — see the matching note in `chat.rs` for
     // why the startup snapshot in `state.inner.cfg` is not enough.
-    let fresh = crate::config::intern_user_config().agent.clone();
+    let fresh = crate::config::load_user_config().agent.clone();
     let cfg = if fresh.provider.is_empty() && !state.inner.cfg.provider.is_empty() {
         state.inner.cfg.clone()
     } else {

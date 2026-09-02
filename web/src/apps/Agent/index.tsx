@@ -1,562 +1,748 @@
-import { useEffect, useRef, useState, type ComponentType, type FormEvent } from 'react';
 import {
-  Activity,
-  BrainCircuit,
-  Bug,
+  AlertTriangle,
+  ArrowUp,
   Check,
-  ChevronRight,
-  History,
-  LockKeyhole,
-  Network,
+  ChevronDown,
+  Inbox,
+  ListTodo,
+  Loader2,
+  Menu,
+  MessageSquare,
+  Moon,
+  Plus,
   RefreshCw,
-  Send,
+  Settings,
   ShieldCheck,
-  Sparkles,
   Square,
+  Sun,
   Wrench,
+  type LucideIcon,
 } from 'lucide-react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type FormEvent,
+  type ReactNode,
+  type RefObject,
+} from 'react';
+import ClawOsAiIcon from '@/components/ClawOsAiIcon';
 import { useDemoGuideStore } from '@/stores/useDemoGuideStore';
+import { useSettingsStore } from '@/stores/useSettingsStore';
+import {
+  message,
+  scenarioById,
+  scenarioForPrompt,
+  scenarios,
+  type MessageItem,
+  type RunItem,
+  type Scenario,
+  type TimelineItem,
+} from './demo';
+import { ApprovalsView, InboxView, SettingsView, TasksView } from './DemoPages';
 
-interface Message {
-  id: number;
-  role: 'agent' | 'user';
-  text: string;
-  tools?: string[];
-}
+type AgentView = 'chat' | 'tasks' | 'approvals' | 'inbox' | 'settings';
 
-type ScenarioStage = 'ready' | 'plan' | 'scopes' | 'tools' | 'result';
-
-interface Scenario {
-  id: string;
-  title: string;
-  subtitle: string;
-  icon: ComponentType<{ size?: number; className?: string }>;
-  prompt: string;
-  intro: string;
-  plan: string[];
-  scopes: Array<[string, string]>;
-  tools: Array<[string, string]>;
-  resultTitle: string;
-  result: string;
-  audit: string;
-}
-
-const scenarios: Scenario[] = [
-  {
-    id: 'health',
-    title: 'System health',
-    subtitle: 'Find why the network is slow',
-    icon: Activity,
-    prompt: 'Why is my network slow right now?',
-    intro: 'I’ll correlate network activity, running apps, and recent service logs before I explain the cause.',
-    plan: [
-      'Measure current sockets, routes, DNS latency, and throughput.',
-      'Find the apps and background jobs using the most bandwidth.',
-      'Correlate NetworkManager logs with the activity timeline.',
-    ],
-    scopes: [
-      ['sys.net.read', 'interfaces, routes, and sockets'],
-      ['app.activity.read', 'network use by installed apps'],
-      ['log.read', 'NetworkManager · last 15 minutes'],
-    ],
-    tools: [
-      ['sys.net.snapshot', '42 sockets · 2 active routes'],
-      ['app.activity.list', 'Photo Sync is the top uploader'],
-      ['log.query', 'No link or DNS failures found'],
-    ],
-    resultTitle: 'Your network is healthy.',
-    result: 'Photo Sync is uploading 1,284 files at 47 Mbps and saturating the uplink. Pausing that job will restore interactive traffic immediately.',
-    audit: 'task net-8f21 · 3 reads · no system changes',
-  },
-  {
-    id: 'crash',
-    title: 'Explain an app crash',
-    subtitle: 'Permissions, history, logs, root cause',
-    icon: Bug,
-    prompt: 'Why did Photos crash, what could it access, and what happened before it failed?',
-    intro: 'I’ll inspect the app manifest, its scoped history, and crash evidence without opening unrelated app data.',
-    plan: [
-      'Read the Photos capability manifest and current grants.',
-      'Inspect its recent app activity and resource history.',
-      'Correlate the crash dump with journal and audit events.',
-    ],
-    scopes: [
-      ['app.inspect', 'Photos manifest and grants'],
-      ['app.history.read', 'Photos · last 30 minutes'],
-      ['log.read', 'Photos crash and journal evidence'],
-    ],
-    tools: [
-      ['app.schema', 'pictures.read · gpu.use · no network'],
-      ['app.history', 'Opened panorama-final.tiff'],
-      ['log.crash', 'OOM kill at 4.1 GiB resident memory'],
-    ],
-    resultTitle: 'Photos exceeded its memory boundary.',
-    result: 'The 1.8 GiB TIFF expanded to 4.1 GiB during decoding. The OS stopped Photos at its 4 GiB limit. It never had network access.',
-    audit: 'task crash-3a17 · app-scoped evidence only',
-  },
-  {
-    id: 'workflow',
-    title: 'Cross-app workflow',
-    subtitle: 'Files → AI → Mail → Calendar',
-    icon: Network,
-    prompt: 'Summarize the Q3 plan, draft an email to the team, and schedule a review Friday.',
-    intro: 'I’ll compose typed operations from four apps and stop before sending or creating anything until you approve.',
-    plan: [
-      'Read Q3-plan.md from Files and summarize it with the system AI gate.',
-      'Create a Mail draft addressed to the project team.',
-      'Create a Calendar review event for Friday at 2 PM.',
-    ],
-    scopes: [
-      ['app.call', 'Files · document.read · Q3-plan.md'],
-      ['ai.chat', 'summarize approved project content'],
-      ['app.call', 'Mail draft and Calendar event'],
-    ],
-    tools: [
-      ['files.document.read', 'Q3-plan.md · 18 pages'],
-      ['ai.chat', 'Configured model selected by policy'],
-      ['mail.draft.create', 'Draft saved · not sent'],
-      ['calendar.event.create', 'Friday 2:00–2:45 PM'],
-    ],
-    resultTitle: 'The cross-app workflow is complete.',
-    result: 'I summarized six Q3 priorities, created a team email draft, and scheduled a 45-minute review. Nothing was sent without approval.',
-    audit: 'task flow-92c4 · 4 app calls · 1 model call',
-  },
-  {
-    id: 'models',
-    title: 'Shared AI model',
-    subtitle: 'AI for apps without bundled providers',
-    icon: BrainCircuit,
-    prompt: 'Use the system model to summarize this note for the Notes app.',
-    intro: 'Notes can use the OS model layer without bundling a model, provider SDK, credential store, or safety pipeline.',
-    plan: [
-      'Validate the Notes AI declaration and user consent.',
-      'Route the request to the available local model.',
-      'Record usage and return only generated text to Notes.',
-    ],
-    scopes: [
-      ['ai.chat', 'Notes · summarize user-authored text'],
-      ['model.use', 'qwen3-8b · local NPU'],
-      ['audit.write', 'usage, latency, and model identity'],
-    ],
-    tools: [
-      ['ai.policy.check', 'Consent and budget valid'],
-      ['model.route', 'qwen3-8b selected · local'],
-      ['ai.chat', '214 tokens · 640 ms'],
-    ],
-    resultTitle: 'Notes used AI without owning an AI stack.',
-    result: 'The local model returned the summary and usage metadata. Notes never handled model files, provider credentials, or fallback logic.',
-    audit: 'task ai-5d60 · local model · 214 tokens',
-  },
-  {
-    id: 'memory',
-    title: 'Memory and history',
-    subtitle: 'Recall decisions across app sessions',
-    icon: History,
-    prompt: 'What did I decide about the launch plan last week?',
-    intro: 'I’ll search approved work memory across conversations and app sessions, then cite every conclusion.',
-    plan: [
-      'Search semantic memory for launch-plan decisions.',
-      'Open matching Files, Mail, and Calendar session records.',
-      'Synthesize the decision with citations and memory controls.',
-    ],
-    scopes: [
-      ['memory.recall', 'work memories · launch plan'],
-      ['session.read', 'Files, Mail, and Calendar matches'],
-      ['ai.chat', 'synthesize cited records'],
-    ],
-    tools: [
-      ['memory.search', '7 matches across 3 apps'],
-      ['session.read', '3 high-confidence records opened'],
-      ['ai.chat', 'Decision synthesized with citations'],
-    ],
-    resultTitle: 'You chose a three-stage launch.',
-    result: 'Internal dogfood starts September 4, private beta September 11, and public beta September 18 after the September 15 go/no-go review.',
-    audit: 'task mem-b884 · 3 memories cited · forget controls available',
-  },
-  {
-    id: 'access',
-    title: 'App access',
-    subtitle: 'Permissions, activity, and AI usage',
-    icon: ShieldCheck,
-    prompt: 'Show what my apps can access and which apps used AI today.',
-    intro: 'I’ll read app manifests, active grants, and today’s audit history, then highlight anything unusual.',
-    plan: [
-      'List installed app capability declarations and current grants.',
-      'Query today’s AI and privileged-operation audit records.',
-      'Explain outliers and provide revocation paths.',
-    ],
-    scopes: [
-      ['app.inspect', 'installed manifests and grants'],
-      ['audit.read', 'today · app and AI activity'],
-      ['caps.list', 'active approvals and expiry'],
-    ],
-    tools: [
-      ['app.list', '18 installed apps'],
-      ['caps.grants', '31 grants · 2 temporary'],
-      ['audit.query', '3 AI calls · 1 denied network call'],
-    ],
-    resultTitle: 'Your app access matches policy.',
-    result: 'Mail and Notes used the system AI gate three times today. Photos has no network access, and Weather’s expired temporary grant was correctly denied.',
-    audit: 'task access-0e19 · read-only review · no grants changed',
-  },
+const navigation: Array<{ id: AgentView; label: string; icon: LucideIcon }> = [
+  { id: 'chat', label: 'Chat', icon: MessageSquare },
+  { id: 'tasks', label: 'Tasks', icon: ListTodo },
+  { id: 'approvals', label: 'Approvals', icon: ShieldCheck },
+  { id: 'inbox', label: 'Inbox', icon: Inbox },
+  { id: 'settings', label: 'Settings', icon: Settings },
 ];
 
-function answerFor(prompt: string): Pick<Message, 'text' | 'tools'> {
-  const normalized = prompt.toLowerCase();
-  let scenarioId = 'health';
-  if (normalized.includes('permission') || normalized.includes('access') || normalized.includes('权限')) {
-    scenarioId = 'access';
-  } else if (normalized.includes('crash') || normalized.includes('崩溃')) {
-    scenarioId = 'crash';
-  } else if (normalized.includes('workflow') || normalized.includes('工作流')) {
-    scenarioId = 'workflow';
-  } else if (normalized.includes('memory') || normalized.includes('history') || normalized.includes('记忆')) {
-    scenarioId = 'memory';
-  } else if (normalized.includes('model') || normalized.includes('ai') || normalized.includes('模型')) {
-    scenarioId = 'models';
-  }
-  const matched = scenarios.find((scenario) => scenario.id === scenarioId) ?? scenarios[0];
+const savedSessions = [
+  { scenarioId: 'memory', label: 'Launch plan decisions', date: 'Today' },
+  { scenarioId: 'access', label: 'Review app access', date: 'Today' },
+  { scenarioId: 'crash', label: 'Photos crash report', date: 'Yesterday' },
+];
 
-  return {
-    text: matched.result,
-    tools: matched.tools.map(([tool]) => tool),
-  };
-}
-
-function stageLabel(stage: ScenarioStage, guideActive: boolean) {
-  if (stage === 'ready') return 'Run guided demo';
-  if (stage === 'plan') return 'Review requested access';
-  if (stage === 'scopes') return 'Allow once';
-  if (stage === 'tools') return 'View result';
-  return guideActive ? 'Finish guided tour' : 'Run this demo again';
-}
 
 export default function Agent() {
-  const guideActive = useDemoGuideStore((state) => state.active);
+  const theme = useSettingsStore((state) => state.theme);
+  const setTheme = useSettingsStore((state) => state.setTheme);
   const restartInAgent = useDemoGuideStore((state) => state.restartInAgent);
-  const [selectedId, setSelectedId] = useState('health');
-  const [stage, setStage] = useState<ScenarioStage>('ready');
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: 1,
-      role: 'agent',
-      text: 'I am the Claw OS system Agent. Choose a guided system task or ask me anything in the chat box.',
-    },
-  ]);
-  const [prompt, setPrompt] = useState('');
-  const [running, setRunning] = useState(false);
-  const nextId = useRef(2);
-  const pendingTimer = useRef<number | null>(null);
-  const conversationRef = useRef<HTMLDivElement>(null);
-  const scenario = scenarios.find((item) => item.id === selectedId) ?? scenarios[0];
+  const [view, setView] = useState<AgentView>('chat');
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [items, setItems] = useState<TimelineItem[]>([]);
+  const [input, setInput] = useState('');
+  const nextId = useRef(1);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
 
-  useEffect(() => () => {
-    if (pendingTimer.current !== null) window.clearTimeout(pendingTimer.current);
-  }, []);
+  const runningItem = useMemo(
+    () => items.find((item): item is RunItem => item.kind === 'run' && item.phase === 'running'),
+    [items],
+  );
+  const pendingItem = useMemo(
+    () => items.find((item): item is RunItem => item.kind === 'run' && item.phase === 'approval'),
+    [items],
+  );
+  const runItems = useMemo(
+    () => items.filter((item): item is RunItem => item.kind === 'run'),
+    [items],
+  );
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
-      conversationRef.current?.scrollTo({
-        top: conversationRef.current.scrollHeight,
+      scrollRef.current?.scrollTo({
+        top: scrollRef.current.scrollHeight,
         behavior: 'smooth',
       });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [messages, running, selectedId, stage]);
+  }, [items]);
 
-  const selectScenario = (id: string) => {
-    setSelectedId(id);
-    setStage('ready');
-    setMessages([
-      {
-        id: nextId.current++,
-        role: 'agent',
-        text: 'I am the Claw OS system Agent. Choose a guided system task or ask me anything in the chat box.',
-      },
-    ]);
+  useEffect(() => {
+    if (!runningItem) return;
+    const scenario = scenarioById.get(runningItem.scenarioId);
+    if (!scenario) return;
+
+    const timer = window.setTimeout(() => {
+      setItems((current) => current.map((item) => {
+        if (item.kind !== 'run' || item.id !== runningItem.id || item.phase !== 'running') {
+          return item;
+        }
+        const completedTools = item.completedTools + 1;
+        if (completedTools >= scenario.tools.length) {
+          return { ...item, phase: 'complete', completedTools: scenario.tools.length };
+        }
+        return { ...item, completedTools };
+      }));
+    }, 650);
+    return () => window.clearTimeout(timer);
+  }, [runningItem?.completedTools, runningItem?.id]);
+
+  const rootStyle = {
+    '--agent-bg': theme === 'dark' ? '#09090b' : '#ffffff',
+    '--agent-fg': theme === 'dark' ? '#fafafa' : '#18181b',
+    '--agent-muted': theme === 'dark' ? '#a1a1aa' : '#71717a',
+    '--agent-subtle': theme === 'dark' ? '#71717a' : '#a1a1aa',
+    '--agent-sidebar': theme === 'dark' ? '#18181b' : '#fafafa',
+    '--agent-card': theme === 'dark' ? '#18181b' : '#ffffff',
+    '--agent-soft': theme === 'dark' ? '#27272a' : '#f4f4f5',
+    '--agent-hover': theme === 'dark' ? '#27272a' : '#f4f4f5',
+    '--agent-border': theme === 'dark' ? 'rgba(255,255,255,0.10)' : '#e4e4e7',
+    '--agent-primary': theme === 'dark' ? '#fafafa' : '#18181b',
+    '--agent-primary-fg': theme === 'dark' ? '#18181b' : '#fafafa',
+  } as CSSProperties;
+
+  const updateRun = (id: number, update: Partial<RunItem>) => {
+    setItems((current) => current.map((item) => (
+      item.kind === 'run' && item.id === id ? { ...item, ...update } : item
+    )));
   };
 
-  const runPrimaryAction = () => {
-    if (stage === 'ready') {
-      setMessages((current) => [
-        ...current,
-        { id: nextId.current++, role: 'user', text: scenario.prompt },
-        { id: nextId.current++, role: 'agent', text: scenario.intro },
-      ]);
-      setStage('plan');
-      return;
-    }
-    if (stage === 'plan') {
-      setStage('scopes');
-      return;
-    }
-    if (stage === 'scopes') {
-      setStage('tools');
-      return;
-    }
-    if (stage === 'tools') {
-      setStage('result');
-      return;
-    }
-    if (!guideActive) setStage('ready');
+  const newChat = () => {
+    setItems([]);
+    setInput('');
+    setView('chat');
+    setSidebarOpen(false);
+    window.requestAnimationFrame(() => composerRef.current?.focus());
+  };
+
+  const chooseScenario = (scenario: Scenario) => {
+    setView('chat');
+    setInput(scenario.prompt);
+    setSidebarOpen(false);
+    window.requestAnimationFrame(() => composerRef.current?.focus());
+  };
+
+  const loadCompletedScenario = (scenarioId: string) => {
+    const scenario = scenarioById.get(scenarioId);
+    if (!scenario) return;
+    const userId = nextId.current++;
+    const assistantId = nextId.current++;
+    const runId = nextId.current++;
+    setItems([
+      message(userId, 'user', scenario.prompt),
+      message(assistantId, 'assistant', scenario.intro),
+      {
+        id: runId,
+        kind: 'run',
+        scenarioId,
+        phase: 'complete',
+        completedTools: scenario.tools.length,
+        auditOpen: false,
+      },
+    ]);
+    setView('chat');
+    setSidebarOpen(false);
   };
 
   const submitPrompt = (event?: FormEvent) => {
     event?.preventDefault();
-    const text = prompt.trim();
-    if (!text || running) return;
+    const text = input.trim();
+    if (!text || runningItem) return;
 
-    setMessages((current) => [
-      ...current,
-      { id: nextId.current++, role: 'user', text },
-    ]);
-    setPrompt('');
-    setRunning(true);
+    const scenario = scenarioForPrompt(text);
+    const userId = nextId.current++;
+    const assistantId = nextId.current++;
+    setInput('');
 
-    pendingTimer.current = window.setTimeout(() => {
-      const answer = answerFor(text);
-      setMessages((current) => [
+    if (!scenario) {
+      setItems((current) => [
         ...current,
-        { id: nextId.current++, role: 'agent', ...answer },
+        message(userId, 'user', text),
+        message(
+          assistantId,
+          'assistant',
+          'This public demo uses recorded Claw OS tasks. Try a system-health, app-crash, cross-app workflow, model, memory, or app-access request.',
+        ),
       ]);
-      setRunning(false);
-      pendingTimer.current = null;
-    }, 650);
+      return;
+    }
+
+    const runId = nextId.current++;
+    setItems((current) => [
+      ...current,
+      message(userId, 'user', text),
+      message(assistantId, 'assistant', scenario.intro),
+      {
+        id: runId,
+        kind: 'run',
+        scenarioId: scenario.id,
+        phase: 'approval',
+        completedTools: 0,
+        auditOpen: false,
+      },
+    ]);
   };
 
-  const stop = () => {
-    if (pendingTimer.current !== null) window.clearTimeout(pendingTimer.current);
-    pendingTimer.current = null;
-    setRunning(false);
+  const stopRunning = () => {
+    if (runningItem) updateRun(runningItem.id, { phase: 'stopped' });
   };
 
   const restartGuide = () => {
-    selectScenario('health');
+    newChat();
     restartInAgent();
   };
 
+  const navigate = (nextView: AgentView) => {
+    setView(nextView);
+    setSidebarOpen(false);
+  };
+
   return (
-    <div className="flex h-full min-h-0 flex-col text-sm sm:flex-row" style={{ background: '#0a0a0b', color: '#fff' }}>
-      <aside className="flex w-full shrink-0 flex-col border-b border-white/[0.06] bg-[#111113] p-3 sm:w-64 sm:border-b-0 sm:border-r sm:p-4">
-        <div className="mb-3 flex items-center gap-2 sm:mb-5">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#005CFE]">
-            <Sparkles size={18} />
+    <div
+      className="relative flex h-full min-h-0 overflow-hidden bg-[var(--agent-bg)] text-[var(--agent-fg)]"
+      style={rootStyle}
+    >
+      {sidebarOpen && (
+        <button
+          type="button"
+          aria-label="Close navigation"
+          onClick={() => setSidebarOpen(false)}
+          className="absolute inset-0 z-20 bg-black/30 md:hidden"
+        />
+      )}
+
+      <aside
+        className={`absolute inset-y-0 left-0 z-30 flex w-56 shrink-0 flex-col border-r border-[var(--agent-border)] bg-[var(--agent-sidebar)] transition-transform md:relative md:translate-x-0 ${
+          sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+        }`}
+      >
+        <div className="space-y-2 border-b border-[var(--agent-border)] p-3">
+          <div className="flex items-center justify-between px-1 py-0.5">
+            <div className="flex items-center gap-2">
+              <ClawOsAiIcon size={26} />
+              <div className="leading-tight">
+                <div className="text-sm font-semibold tracking-tight">Claw OS</div>
+                <div className="text-[10px] text-[var(--agent-muted)]">claw-os</div>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+              className="grid h-7 w-7 place-items-center rounded-md text-[var(--agent-muted)] hover:bg-[var(--agent-hover)] hover:text-[var(--agent-fg)]"
+              aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+            >
+              {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
+            </button>
           </div>
-          <div className="min-w-0">
-            <div className="font-medium">Claw OS Agent</div>
-            <div className="truncate text-[11px] text-white/40">System-level AI and app control</div>
-          </div>
+          <button
+            type="button"
+            onClick={newChat}
+            className="flex h-8 w-full items-center gap-2 rounded-md bg-[var(--agent-primary)] px-3 text-xs font-medium text-[var(--agent-primary-fg)]"
+          >
+            <Plus size={14} />
+            New chat
+          </button>
         </div>
 
-        <div className="flex gap-2 overflow-x-auto pb-1 sm:flex-1 sm:flex-col sm:overflow-y-auto sm:pb-0">
-          {scenarios.map((item) => {
-            const Icon = item.icon;
-            const selected = item.id === selectedId;
-            return (
-              <button
-                key={item.id}
-                data-guide-target={item.id === 'health' ? 'agent-scenario-health' : undefined}
-                onClick={() => selectScenario(item.id)}
-                className="flex w-44 shrink-0 items-center gap-2.5 rounded-xl border p-2.5 text-left transition-colors sm:w-full"
-                style={{
-                  background: selected ? 'rgba(0,92,254,0.16)' : 'rgba(255,255,255,0.025)',
-                  borderColor: selected ? 'rgba(79,140,255,0.7)' : 'rgba(255,255,255,0.06)',
-                }}
-              >
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/[0.05] text-[#4f8cff]">
-                  <Icon size={16} />
-                </div>
-                <div className="min-w-0">
-                  <div className="truncate text-xs font-medium text-white/85">{item.title}</div>
-                  <div className="truncate text-[10px] text-white/35">{item.subtitle}</div>
-                </div>
-              </button>
-            );
-          })}
+        <div className="min-h-0 flex-1 overflow-y-auto p-2">
+          <SidebarSection label="Navigation">
+            {navigation.map((item) => {
+              const Icon = item.icon;
+              const active = view === item.id;
+              const badge = item.id === 'approvals' && pendingItem ? 1 : 0;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => navigate(item.id)}
+                  className={`flex h-8 w-full items-center gap-2 rounded-md px-2 text-xs transition-colors ${
+                    active
+                      ? 'bg-[var(--agent-soft)] font-medium text-[var(--agent-fg)]'
+                      : 'text-[var(--agent-muted)] hover:bg-[var(--agent-hover)] hover:text-[var(--agent-fg)]'
+                  }`}
+                >
+                  <Icon size={15} />
+                  <span>{item.label}</span>
+                  {badge > 0 && (
+                    <span className="ml-auto grid h-4 min-w-4 place-items-center rounded-full bg-amber-500 px-1 text-[9px] font-semibold text-white">
+                      {badge}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </SidebarSection>
+
+          <SidebarSection label="Sessions">
+            <div className="px-2 pb-1 pt-2 text-[9px] font-medium uppercase tracking-wider text-[var(--agent-subtle)]">
+              Today
+            </div>
+            {savedSessions.filter((session) => session.date === 'Today').map((session) => (
+              <SessionButton
+                key={session.scenarioId}
+                label={session.label}
+                onClick={() => loadCompletedScenario(session.scenarioId)}
+              />
+            ))}
+            <div className="px-2 pb-1 pt-3 text-[9px] font-medium uppercase tracking-wider text-[var(--agent-subtle)]">
+              Yesterday
+            </div>
+            {savedSessions.filter((session) => session.date === 'Yesterday').map((session) => (
+              <SessionButton
+                key={session.scenarioId}
+                label={session.label}
+                onClick={() => loadCompletedScenario(session.scenarioId)}
+              />
+            ))}
+          </SidebarSection>
         </div>
 
-        <div className="mt-3 hidden rounded-xl border border-white/[0.06] bg-white/[0.025] p-3 sm:block">
-          <div className="flex items-center gap-2 text-xs text-white/70">
-            <LockKeyhole size={14} className="text-[#4f8cff]" />
-            Approval-gated
-          </div>
-          <p className="mt-2 text-[10px] leading-relaxed text-white/35">
-            Plans, capability grants, tool evidence, and audit IDs stay visible.
-          </p>
+        <div className="border-t border-[var(--agent-border)] p-3">
+          <button
+            type="button"
+            onClick={() => navigate('settings')}
+            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-[var(--agent-hover)]"
+          >
+            <div className="grid h-7 w-7 place-items-center rounded-full bg-[var(--agent-primary)] text-[10px] font-semibold text-[var(--agent-primary-fg)]">
+              C
+            </div>
+            <div className="min-w-0 flex-1 leading-tight">
+              <div className="truncate text-xs font-medium">claw-os</div>
+              <div className="flex items-center gap-1 text-[9px] text-[var(--agent-muted)]">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                <span className="truncate">llama_local · qwen3-8b</span>
+              </div>
+            </div>
+          </button>
         </div>
       </aside>
 
       <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <header className="flex h-14 shrink-0 items-center justify-between border-b border-white/[0.06] px-4">
-          <div className="min-w-0">
-            <div className="truncate font-medium">{scenario.title}</div>
-            <div className="truncate text-[11px] text-white/40">{scenario.subtitle}</div>
-          </div>
-          <div className="flex items-center gap-2">
-            {!guideActive && (
-              <button
-                onClick={restartGuide}
-                className="hidden items-center gap-1.5 rounded-full border border-white/[0.07] bg-white/[0.03] px-3 py-1 text-[10px] text-white/45 hover:text-white/75 sm:flex"
-              >
-                <RefreshCw size={11} />
-                Restart guide
-              </button>
-            )}
-            <div className="flex items-center gap-2 rounded-full border border-white/[0.06] bg-white/[0.03] px-3 py-1 text-[10px] text-white/45">
-              <span className="h-1.5 w-1.5 rounded-full bg-[#005CFE]" />
-              Ready
-            </div>
+        <header className="flex h-12 shrink-0 items-center gap-2 border-b border-[var(--agent-border)] px-3">
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(true)}
+            className="grid h-8 w-8 place-items-center rounded-md text-[var(--agent-muted)] hover:bg-[var(--agent-hover)] md:hidden"
+            aria-label="Open navigation"
+          >
+            <Menu size={16} />
+          </button>
+          <div className="hidden h-5 w-px bg-[var(--agent-border)] md:block" />
+          <h1 className="text-sm font-medium">{navigation.find((item) => item.id === view)?.label}</h1>
+          <div className="ml-auto flex items-center gap-2">
+            <span className="hidden rounded-full border border-[var(--agent-border)] px-2 py-1 text-[9px] text-[var(--agent-muted)] sm:inline">
+              Interactive demo
+            </span>
+            <button
+              type="button"
+              onClick={restartGuide}
+              className="flex h-7 items-center gap-1.5 rounded-md px-2 text-[10px] text-[var(--agent-muted)] hover:bg-[var(--agent-hover)] hover:text-[var(--agent-fg)]"
+            >
+              <RefreshCw size={11} />
+              Guide
+            </button>
           </div>
         </header>
 
-        <div ref={conversationRef} className="flex-1 space-y-4 overflow-y-auto p-4">
-          {messages.map((message) => (
-            <div key={message.id} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              <div
-                className={`max-w-[88%] rounded-2xl px-4 py-3 text-xs leading-relaxed sm:text-sm ${
-                  message.role === 'user'
-                    ? 'rounded-br-md bg-[#005CFE] text-white'
-                    : 'rounded-bl-md border border-white/[0.07] bg-[#111113] text-white/70'
+        {view === 'chat' && (
+          <ChatView
+            items={items}
+            input={input}
+            setInput={setInput}
+            runningItem={runningItem}
+            scrollRef={scrollRef}
+            composerRef={composerRef}
+            onChooseScenario={chooseScenario}
+            onSubmit={submitPrompt}
+            onStop={stopRunning}
+            onApprove={(id) => updateRun(id, { phase: 'running', completedTools: 0 })}
+            onDeny={(id) => updateRun(id, { phase: 'denied' })}
+            onToggleAudit={(id, auditOpen) => updateRun(id, { auditOpen })}
+          />
+        )}
+        {view === 'tasks' && (
+          <TasksView
+            runs={runItems}
+            onOpen={(scenarioId) => loadCompletedScenario(scenarioId)}
+            onStop={(id) => updateRun(id, { phase: 'stopped' })}
+            onResume={(id) => updateRun(id, { phase: 'running' })}
+          />
+        )}
+        {view === 'approvals' && (
+          <ApprovalsView
+            pending={pendingItem}
+            onApprove={(id) => updateRun(id, { phase: 'running', completedTools: 0 })}
+            onDeny={(id) => updateRun(id, { phase: 'denied' })}
+          />
+        )}
+        {view === 'inbox' && <InboxView onOpen={(scenarioId) => loadCompletedScenario(scenarioId)} />}
+        {view === 'settings' && <SettingsView />}
+      </main>
+    </div>
+  );
+}
+
+function SidebarSection({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <section className="mb-4">
+      <div className="flex h-7 items-center gap-1 px-2 text-[10px] font-medium text-[var(--agent-muted)]">
+        <ChevronDown size={12} />
+        {label}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function SessionButton({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="block h-8 w-full truncate rounded-md px-2 text-left text-[11px] text-[var(--agent-muted)] hover:bg-[var(--agent-hover)] hover:text-[var(--agent-fg)]"
+    >
+      {label}
+    </button>
+  );
+}
+
+interface ChatViewProps {
+  items: TimelineItem[];
+  input: string;
+  setInput: (value: string) => void;
+  runningItem?: RunItem;
+  scrollRef: RefObject<HTMLDivElement | null>;
+  composerRef: RefObject<HTMLTextAreaElement | null>;
+  onChooseScenario: (scenario: Scenario) => void;
+  onSubmit: (event?: FormEvent) => void;
+  onStop: () => void;
+  onApprove: (id: number) => void;
+  onDeny: (id: number) => void;
+  onToggleAudit: (id: number, open: boolean) => void;
+}
+
+function ChatView({
+  items,
+  input,
+  setInput,
+  runningItem,
+  scrollRef,
+  composerRef,
+  onChooseScenario,
+  onSubmit,
+  onStop,
+  onApprove,
+  onDeny,
+  onToggleAudit,
+}: ChatViewProps) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4">
+        <div className="mx-auto flex max-w-3xl flex-col gap-5 py-7">
+          {items.length === 0 ? (
+            <EmptyState onChooseScenario={onChooseScenario} />
+          ) : (
+            items.map((item) => (
+              item.kind === 'message'
+                ? <ChatMessage key={item.id} item={item} />
+                : (
+                  <RunTrace
+                    key={item.id}
+                    run={item}
+                    onApprove={() => onApprove(item.id)}
+                    onDeny={() => onDeny(item.id)}
+                    onToggleAudit={(open) => onToggleAudit(item.id, open)}
+                  />
+                )
+            ))
+          )}
+        </div>
+      </div>
+
+      <div className="shrink-0 border-t border-[var(--agent-border)] bg-[var(--agent-bg)]/95 px-4 py-3 backdrop-blur">
+        <form onSubmit={onSubmit} className="mx-auto flex max-w-3xl items-end gap-2">
+          <textarea
+            ref={composerRef}
+            value={input}
+            onChange={(event) => setInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                onSubmit();
+              }
+            }}
+            rows={1}
+            placeholder="Ask qwen3-8b…"
+            className="min-h-11 max-h-32 flex-1 resize-none rounded-md border border-[var(--agent-border)] bg-[var(--agent-bg)] px-3 py-2.5 text-sm text-[var(--agent-fg)] outline-none placeholder:text-[var(--agent-subtle)] focus:ring-2 focus:ring-[var(--agent-muted)]/30"
+          />
+          {runningItem ? (
+            <button
+              type="button"
+              onClick={onStop}
+              className="grid h-11 w-11 place-items-center rounded-md bg-red-600 text-white hover:bg-red-500"
+              title="Stop"
+            >
+              <Square size={15} fill="currentColor" />
+            </button>
+          ) : (
+            <button
+              type="submit"
+              data-guide-target="agent-primary-action"
+              disabled={!input.trim()}
+              className="grid h-11 w-11 place-items-center rounded-md bg-[var(--agent-primary)] text-[var(--agent-primary-fg)] disabled:opacity-35"
+              title="Send"
+            >
+              <ArrowUp size={17} />
+            </button>
+          )}
+        </form>
+        <p className="mx-auto mt-2 max-w-3xl text-center text-[9px] text-[var(--agent-subtle)]">
+          Demo responses are recorded locally. Claw OS still applies capability checks before real actions.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function EmptyState({ onChooseScenario }: { onChooseScenario: (scenario: Scenario) => void }) {
+  return (
+    <div className="mx-auto flex min-h-[410px] w-full max-w-2xl flex-col items-center justify-center py-6 text-center">
+      <ClawOsAiIcon size={42} className="mb-4" />
+      <h2 className="text-2xl font-semibold tracking-tight">What can I help with?</h2>
+      <p className="mt-2 max-w-md text-sm leading-relaxed text-[var(--agent-muted)]">
+        Ask the system Agent to inspect Linux, work across apps, use shared models, or recall approved history.
+      </p>
+      <div className="mt-7 grid w-full grid-cols-1 gap-2 sm:grid-cols-2">
+        {scenarios.map((scenario) => {
+          const Icon = scenario.icon;
+          return (
+            <button
+              key={scenario.id}
+              type="button"
+              data-guide-target={scenario.id === 'health' ? 'agent-scenario-health' : undefined}
+              onClick={() => onChooseScenario(scenario)}
+              className="group flex min-h-16 items-center gap-3 rounded-lg border border-[var(--agent-border)] bg-[var(--agent-card)] p-3 text-left transition-colors hover:bg-[var(--agent-hover)]"
+            >
+              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-md bg-[var(--agent-soft)] text-[var(--agent-muted)] group-hover:text-[var(--agent-fg)]">
+                <Icon size={15} />
+              </span>
+              <span className="min-w-0">
+                <span className="block truncate text-xs font-medium">{scenario.title}</span>
+                <span className="mt-0.5 block truncate text-[10px] text-[var(--agent-muted)]">
+                  {scenario.subtitle}
+                </span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ChatMessage({ item }: { item: MessageItem }) {
+  if (item.role === 'user') {
+    return (
+      <div className="flex justify-end">
+        <div className="max-w-[82%] rounded-2xl rounded-br-md bg-[var(--agent-primary)] px-4 py-2.5 text-sm leading-relaxed text-[var(--agent-primary-fg)]">
+          {item.text}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="flex gap-3">
+      <ClawOsAiIcon size={20} className="mt-0.5" />
+      <p className="min-w-0 flex-1 whitespace-pre-wrap text-sm leading-relaxed">{item.text}</p>
+    </div>
+  );
+}
+
+function RunTrace({
+  run,
+  onApprove,
+  onDeny,
+  onToggleAudit,
+}: {
+  run: RunItem;
+  onApprove: () => void;
+  onDeny: () => void;
+  onToggleAudit: (open: boolean) => void;
+}) {
+  const scenario = scenarioById.get(run.scenarioId);
+  if (!scenario) return null;
+
+  return (
+    <div className="ml-0 space-y-3 sm:ml-8">
+      <section className="rounded-lg border border-[var(--agent-border)] bg-[var(--agent-card)]">
+        <div className="flex items-center justify-between border-b border-[var(--agent-border)] px-3 py-2">
+          <span className="text-xs font-medium">Plan</span>
+          <span className="text-[9px] text-[var(--agent-muted)]">
+            {run.phase === 'complete' ? `${scenario.plan.length}/${scenario.plan.length} complete` : `${Math.min(run.completedTools, scenario.plan.length)}/${scenario.plan.length}`}
+          </span>
+        </div>
+        <div className="space-y-1 p-2">
+          {scenario.plan.map((step, index) => {
+            const complete = run.phase === 'complete' || index < run.completedTools;
+            const active = run.phase === 'running' && index === run.completedTools;
+            return (
+              <div key={step} className="flex items-start gap-2 rounded-md px-2 py-1.5 text-[11px]">
+                <span className={`mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded-full border text-[8px] ${
+                  complete
+                    ? 'border-emerald-500 bg-emerald-500 text-white'
+                    : active
+                      ? 'border-blue-500 text-blue-500'
+                      : 'border-[var(--agent-border)] text-[var(--agent-muted)]'
                 }`}
+                >
+                  {complete ? <Check size={9} /> : index + 1}
+                </span>
+                <span className={complete ? 'text-[var(--agent-muted)]' : ''}>{step}</span>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      {run.phase === 'approval' && (
+        <section className="rounded-lg border border-amber-500/35 bg-amber-500/[0.06] p-3">
+          <div className="flex items-center gap-2 text-xs font-medium">
+            <ShieldCheck size={15} className="text-amber-500" />
+            Approval required
+          </div>
+          <p className="mt-1 text-[10px] text-[var(--agent-muted)]">
+            Allow these exact scopes for this task only.
+          </p>
+          <div className="mt-3 space-y-1.5">
+            {scenario.scopes.map(([scope, description]) => (
+              <div
+                key={scope}
+                className="flex flex-col gap-1 rounded-md border border-[var(--agent-border)] bg-[var(--agent-bg)]/50 px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
               >
-                {message.text}
-                {message.tools && (
-                  <div className="mt-3 flex flex-wrap gap-1.5">
-                    {message.tools.map((tool) => (
-                      <span key={tool} className="inline-flex items-center gap-1 rounded-md border border-white/[0.07] bg-white/[0.03] px-2 py-1 font-mono text-[10px] text-white/45">
-                        <Wrench size={10} />
-                        {tool}
-                      </span>
-                    ))}
-                  </div>
+                <code className="text-[10px] font-semibold text-amber-600 dark:text-amber-300">{scope}</code>
+                <span className="text-[9px] text-[var(--agent-muted)]">{description}</span>
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={onDeny}
+              className="h-8 rounded-md border border-[var(--agent-border)] px-3 text-[10px] hover:bg-[var(--agent-hover)]"
+            >
+              Deny
+            </button>
+            <button
+              type="button"
+              data-guide-target={scenario.id === 'health' ? 'agent-approval-action' : undefined}
+              onClick={onApprove}
+              className="h-8 rounded-md bg-[var(--agent-primary)] px-3 text-[10px] font-medium text-[var(--agent-primary-fg)]"
+            >
+              Allow once
+            </button>
+          </div>
+        </section>
+      )}
+
+      {(run.phase === 'running' || run.phase === 'complete' || run.phase === 'stopped') && (
+        <div className="space-y-2">
+          {scenario.tools.map(([tool, result], index) => {
+            const complete = index < run.completedTools;
+            const active = run.phase === 'running' && index === run.completedTools;
+            if (!complete && !active) return null;
+            return (
+              <div
+                key={tool}
+                className="flex items-center justify-between gap-3 rounded-lg border border-[var(--agent-border)] bg-[var(--agent-card)] px-3 py-2 text-[10px]"
+              >
+                <span className="flex min-w-0 items-center gap-2">
+                  <Wrench size={13} className="shrink-0 text-[var(--agent-muted)]" />
+                  <code className="truncate font-semibold">{tool}</code>
+                  <span className="hidden truncate text-[var(--agent-muted)] sm:inline">
+                    {complete ? result : 'running…'}
+                  </span>
+                </span>
+                {active ? (
+                  <Loader2 size={12} className="shrink-0 animate-spin text-[var(--agent-muted)]" />
+                ) : (
+                  <Check size={12} className="shrink-0 text-emerald-500" />
                 )}
               </div>
-            </div>
-          ))}
-
-          {stage === 'ready' && (
-            <section className="rounded-2xl border border-white/[0.07] bg-[#111113] p-4">
-              <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.16em] text-[#4f8cff]">Guided system task</div>
-              <h2 className="text-base font-semibold">{scenario.prompt}</h2>
-              <p className="mt-2 text-xs leading-relaxed text-white/45">{scenario.intro}</p>
-            </section>
-          )}
-
-          {stage === 'plan' && (
-            <section className="rounded-2xl border border-white/[0.07] bg-[#111113] p-4">
-              <div className="mb-3 flex items-center gap-2 text-xs font-medium text-white/80">
-                <Sparkles size={15} className="text-[#4f8cff]" />
-                Proposed plan
-              </div>
-              <div className="space-y-2">
-                {scenario.plan.map((item, index) => (
-                  <div key={item} className="flex gap-3 rounded-xl bg-white/[0.025] p-3 text-xs text-white/55">
-                    <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#005CFE]/20 text-[10px] text-[#7aa7ff]">{index + 1}</span>
-                    <span className="leading-relaxed">{item}</span>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
-
-          {stage === 'scopes' && (
-            <section className="rounded-2xl border border-amber-400/25 bg-amber-400/[0.04] p-4">
-              <div className="mb-1 flex items-center gap-2 text-xs font-medium text-amber-200/85">
-                <ShieldCheck size={15} />
-                One-time approval required
-              </div>
-              <p className="mb-3 text-[11px] text-white/35">Only these exact capability scopes will be granted.</p>
-              <div className="space-y-2">
-                {scenario.scopes.map(([scope, description]) => (
-                  <div key={scope} className="flex flex-col justify-between gap-1 rounded-xl border border-white/[0.06] bg-black/15 p-3 sm:flex-row sm:items-center">
-                    <code className="text-[11px] font-semibold text-amber-200/80">{scope}</code>
-                    <span className="text-[10px] text-white/40">{description}</span>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
-
-          {stage === 'tools' && (
-            <section className="rounded-2xl border border-white/[0.07] bg-[#111113] p-4">
-              <div className="mb-3 flex items-center gap-2 text-xs font-medium text-white/80">
-                <Wrench size={15} className="text-[#4f8cff]" />
-                Tool evidence
-              </div>
-              <div className="space-y-2">
-                {scenario.tools.map(([tool, result]) => (
-                  <div key={tool} className="flex flex-col justify-between gap-1 rounded-xl bg-white/[0.025] p-3 sm:flex-row sm:items-center">
-                    <code className="text-[11px] text-[#7aa7ff]">{tool}</code>
-                    <span className="flex items-center gap-1.5 text-[10px] text-white/45">
-                      <Check size={11} className="text-emerald-400" />
-                      {result}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
-
-          {stage === 'result' && (
-            <section className="rounded-2xl border border-[#005CFE]/30 bg-[#005CFE]/[0.08] p-4">
-              <div className="mb-2 flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.16em] text-[#7aa7ff]">
-                <Check size={13} />
-                Completed
-              </div>
-              <h2 className="text-base font-semibold">{scenario.resultTitle}</h2>
-              <p className="mt-2 text-xs leading-relaxed text-white/60">{scenario.result}</p>
-              <div className="mt-4 rounded-lg border border-white/[0.06] bg-black/15 px-3 py-2 font-mono text-[10px] text-white/35">
-                {scenario.audit}
-              </div>
-            </section>
-          )}
-
-          {running && (
-            <div className="flex justify-start">
-              <div className="rounded-2xl rounded-bl-md border border-white/[0.07] bg-[#111113] px-4 py-3 text-white/45">
-                Inspecting the demo system…
-              </div>
-            </div>
-          )}
+            );
+          })}
         </div>
+      )}
 
-        <div className="shrink-0 border-t border-white/[0.06] p-3">
-          <button
-            type="button"
-            data-guide-target="agent-primary-action"
-            onClick={runPrimaryAction}
-            className="mb-3 flex w-full items-center justify-center gap-2 rounded-xl bg-[#005CFE] px-4 py-2.5 text-xs font-medium text-white transition-opacity hover:opacity-90"
-          >
-            {stageLabel(stage, guideActive)}
-            <ChevronRight size={14} />
-          </button>
-
-          <form onSubmit={submitPrompt} className="flex items-end gap-2">
-            <textarea
-              value={prompt}
-              onChange={(event) => setPrompt(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && !event.shiftKey) {
-                  event.preventDefault();
-                  submitPrompt();
-                }
-              }}
-              rows={1}
-              placeholder="Or ask Claw OS anything…"
-              className="min-h-10 flex-1 resize-none rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-xs text-white outline-none placeholder:text-white/25 focus:border-[#005CFE]/60"
-            />
+      {run.phase === 'complete' && (
+        <section className="space-y-2 pt-1">
+          <div className="flex items-start gap-3">
+            <span className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full bg-emerald-500 text-white">
+              <Check size={12} />
+            </span>
+            <div>
+              <h3 className="text-sm font-semibold">{scenario.resultTitle}</h3>
+              <p className="mt-1 text-sm leading-relaxed text-[var(--agent-muted)]">{scenario.result}</p>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2 pl-8">
             <button
-              type={running ? 'button' : 'submit'}
-              onClick={running ? stop : undefined}
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/[0.08] bg-white/[0.06] transition-colors hover:bg-white/[0.1] disabled:opacity-35"
-              disabled={!running && !prompt.trim()}
-              title={running ? 'Stop' : 'Send'}
+              type="button"
+              data-guide-target={scenario.id === 'health' ? 'agent-result-action' : undefined}
+              onClick={() => onToggleAudit(!run.auditOpen)}
+              className="h-8 rounded-md border border-[var(--agent-border)] px-3 text-[10px] hover:bg-[var(--agent-hover)]"
             >
-              {running ? <Square size={15} fill="currentColor" /> : <Send size={16} />}
+              {run.auditOpen ? 'Hide audit' : 'View audit'}
             </button>
-          </form>
+          </div>
+          {run.auditOpen && (
+            <div className="ml-8 rounded-md bg-[var(--agent-soft)] px-3 py-2 font-mono text-[9px] text-[var(--agent-muted)]">
+              {scenario.audit}
+            </div>
+          )}
+        </section>
+      )}
+
+      {run.phase === 'denied' && (
+        <div className="flex items-center gap-2 rounded-lg border border-[var(--agent-border)] px-3 py-2 text-xs text-[var(--agent-muted)]">
+          <AlertTriangle size={14} />
+          Access was denied. No tools ran and no system state changed.
         </div>
-      </main>
+      )}
+
+      {run.phase === 'stopped' && (
+        <div className="flex items-center gap-2 rounded-lg border border-[var(--agent-border)] px-3 py-2 text-xs text-[var(--agent-muted)]">
+          <Square size={12} />
+          Task stopped. Resume it from Tasks when you are ready.
+        </div>
+      )}
     </div>
   );
 }

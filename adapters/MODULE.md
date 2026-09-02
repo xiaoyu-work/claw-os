@@ -22,11 +22,36 @@ same manifest/operation contract as bundled apps.
 | `_template/` | Starting structure for a new adapter |
 | `README.md` | Adapter overview |
 
+## Provenance and packaging status
+
+Adapters are **not packaged today**: nothing under `packaging/` or
+`rootfs/` installs `adapters/` onto a system. They are therefore
+source-tree content, do not inherit vendor trust, and are quarantined by
+the extension-provenance gate until they are either signed and installed
+as packages or given an explicit developer grant:
+
+```bash
+cos provenance dev-trust --kind mcp --id <adapter-id> --path adapters/<id>
+```
+
+Productizing an adapter means shipping it as a signed package directory
+(`agent-api.json` plus `.provenance.json`) under an approved package
+root. See [`../docs/extension-provenance.md`](../docs/extension-provenance.md).
+
 ## Dependencies
 
 Adapters use argument-vector subprocess APIs, never shell interpolation.
 Operation manifests and runtime validation remain aligned. External binary
 failure is surfaced as an adapter error, not a successful empty result.
+
+Adapters attach as MCP servers and therefore run in the same
+hostile-worker sandbox as any third-party server
+([`../core/src/worker/MODULE.md`](../core/src/worker/MODULE.md)): a
+read-only system image, no App data directory, no host paths beyond the
+configured working directory, no network at all, and a per-launch broker
+endpoint that admits nothing by default. An adapter that shells out to a
+binary outside `/usr` must declare it as a dependency; a binary the
+sandbox cannot see is not a smaller adapter, it is a failed launch.
 
 ## Tests
 

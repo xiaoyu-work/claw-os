@@ -56,6 +56,7 @@ use crate::paths::agent_jobs_dir;
 /// worker from looping forever and starving the queue.
 const MAX_RECOVERIES: u32 = 3;
 const JOB_SCHEMA_VERSION: u32 = 2;
+const APPROVAL_WAIT_TIMEOUT_SECS: i64 = 8 * 60 * 60;
 const STREAM_PRUNE_TOMBSTONE_SUFFIX: &str = ".jsonl.prune";
 
 // ---------------------------------------------------------------------------
@@ -70,6 +71,8 @@ const STREAM_PRUNE_TOMBSTONE_SUFFIX: &str = ".jsonl.prune";
 pub enum JobStatus {
     Pending,
     Running,
+    #[serde(rename = "waiting_approval")]
+    WaitingApproval,
     Ok,
     Error,
     Cancelled,
@@ -116,6 +119,7 @@ impl JobStatus {
         match self {
             JobStatus::Pending => "pending",
             JobStatus::Running => "running",
+            JobStatus::WaitingApproval => "waiting",
             JobStatus::Ok | JobStatus::Error | JobStatus::Cancelled => "done",
         }
     }
@@ -124,6 +128,7 @@ impl JobStatus {
         match self {
             JobStatus::Pending => "pending",
             JobStatus::Running => "running",
+            JobStatus::WaitingApproval => "waiting_approval",
             JobStatus::Ok => "ok",
             JobStatus::Error => "error",
             JobStatus::Cancelled => "cancelled",
@@ -146,6 +151,8 @@ pub struct Job {
     pub session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_turns: Option<u32>,
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub use_memory: bool,
     pub status: JobStatus,
     pub created_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -158,6 +165,12 @@ pub struct Job {
     pub worker_start_time_ticks: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cancel_requested_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub waiting_on: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting_since: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resumed_after_approval: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -215,6 +228,14 @@ fn is_zero_u32(n: &u32) -> bool {
     *n == 0
 }
 
+fn default_true() -> bool {
+    true
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
+}
+
 impl Job {
     fn new_pending(
         prompt: String,
@@ -257,6 +278,7 @@ impl Job {
             branch_context,
             session_id,
             max_turns,
+            use_memory: true,
             status: JobStatus::Pending,
             created_at: now_iso(),
             started_at: None,
@@ -264,6 +286,9 @@ impl Job {
             worker_pid: None,
             worker_start_time_ticks: None,
             cancel_requested_at: None,
+            waiting_on: Vec::new(),
+            waiting_since: None,
+            resumed_after_approval: Vec::new(),
             response: None,
             error: None,
             turns_used: None,
@@ -304,19 +329,27 @@ impl Job {
 #[derive(Debug, Clone)]
 pub struct Store {
     root: PathBuf,
+    publish_notifications: bool,
 }
 
 impl Store {
     pub fn open_default() -> io::Result<Self> {
-        Self::with_root(agent_jobs_dir())
+        Self::open(agent_jobs_dir(), true)
     }
 
     pub fn with_root(root: PathBuf) -> io::Result<Self> {
+        Self::open(root, false)
+    }
+
+    fn open(root: PathBuf, publish_notifications: bool) -> io::Result<Self> {
         crate::agent::util::ensure_durable_private_dir(&root)?;
-        for sub in ["pending", "running", "done", "locks", "streams"] {
+        for sub in ["pending", "running", "waiting", "done", "locks", "streams"] {
             crate::agent::util::ensure_durable_private_dir(&root.join(sub))?;
         }
-        Ok(Self { root })
+        Ok(Self {
+            root,
+            publish_notifications,
+        })
     }
 
     pub fn root(&self) -> &Path {
@@ -345,8 +378,18 @@ impl Store {
         self.root.join("locks").join(format!("{id}.lock"))
     }
 
+    fn notify(&self, job: &Job, phase: &str) {
+        if self.publish_notifications {
+            publish_task_notification(job, phase);
+        }
+    }
+
     fn active_job_exists(&self, id: &str) -> io::Result<bool> {
-        for status in [JobStatus::Pending, JobStatus::Running] {
+        for status in [
+            JobStatus::Pending,
+            JobStatus::Running,
+            JobStatus::WaitingApproval,
+        ] {
             if path_exists(&self.path_for(status, id))? {
                 return Ok(true);
             }
@@ -424,7 +467,12 @@ impl Store {
     /// Job, or `Ok(None)` if no file exists in any bucket.
     pub fn locate(&self, id: &str) -> io::Result<Option<(JobStatus, Job)>> {
         validate_job_id(id)?;
-        for bucket in [JobStatus::Pending, JobStatus::Running, JobStatus::Ok] {
+        for bucket in [
+            JobStatus::Pending,
+            JobStatus::Running,
+            JobStatus::WaitingApproval,
+            JobStatus::Ok,
+        ] {
             let p = self.path_for(bucket, id);
             match fs::read_to_string(&p) {
                 Ok(s) => {
@@ -529,6 +577,7 @@ impl Store {
         let path = self.path_for(JobStatus::Pending, &job.id);
         write_json_atomic(&path, &job)?;
         crate::clawd::audit::record_task_event("clawd.task.submitted", &job);
+        self.notify(&job, "submitted");
         Ok(job)
     }
 
@@ -697,6 +746,7 @@ impl Store {
                     job.execution_generation = None;
                     write_json_atomic(&dst, &job)?;
                     crate::clawd::audit::record_task_event("clawd.task.started", &job);
+                    self.notify(&job, "started");
                     return Ok(Some(job));
                 }
                 Err(e) if e.kind() == ErrorKind::NotFound => continue, // raced
@@ -772,6 +822,32 @@ impl Store {
                 }
             };
 
+            if job.cancel_requested_at.is_some() {
+                deny_waiting_approvals(&job, "Associated task was cancelled.");
+                job.waiting_on.clear();
+                job.waiting_since = None;
+                job.status = JobStatus::Cancelled;
+                job.finished_at = Some(now_iso());
+                write_json_atomic(&path, &job)?;
+                let done = self.path_for(JobStatus::Ok, &id);
+                durable_rename(&path, &done)?;
+                let _ = finish_durable_session(&job);
+                crate::clawd::audit::record_task_event("clawd.task.cancelled", &job);
+                self.notify(&job, "cancelled");
+                continue;
+            }
+
+            if !job.waiting_on.is_empty() {
+                job.status = JobStatus::WaitingApproval;
+                job.waiting_since.get_or_insert_with(now_iso);
+                job.worker_pid = None;
+                job.worker_start_time_ticks = None;
+                write_json_atomic(&path, &job)?;
+                durable_rename(&path, &self.path_for(JobStatus::WaitingApproval, &id))?;
+                crate::clawd::audit::record_task_event("clawd.task.waiting-approval", &job);
+                continue;
+            }
+
             if job.schema_version != JOB_SCHEMA_VERSION
                 || !job.execution_phase.replay_is_proven_safe()
             {
@@ -825,17 +901,6 @@ impl Store {
                 continue;
             }
 
-            if job.cancel_requested_at.is_some() {
-                job.status = JobStatus::Cancelled;
-                job.finished_at = Some(now_iso());
-                write_json_atomic(&path, &job)?;
-                let done = self.path_for(JobStatus::Ok, &id);
-                durable_rename(&path, &done)?;
-                let _ = finish_durable_session(&job);
-                crate::clawd::audit::record_task_event("clawd.task.cancelled", &job);
-                continue;
-            }
-
             job.recovery_count = job.recovery_count.saturating_add(1);
 
             if job.recovery_count > MAX_RECOVERIES {
@@ -853,6 +918,7 @@ impl Store {
                 durable_rename(&path, &done)?;
                 let _ = finish_durable_session(&job);
                 crate::clawd::audit::record_task_event("clawd.task.abandoned", &job);
+                self.notify(&job, "failed");
                 failed += 1;
                 continue;
             }
@@ -873,6 +939,7 @@ impl Store {
             let pending = self.path_for(JobStatus::Pending, &id);
             durable_rename(&path, &pending)?;
             crate::clawd::audit::record_task_event("clawd.task.recovered", &audit_job);
+            self.notify(&audit_job, "recovered");
             requeued += 1;
         }
 
@@ -881,7 +948,12 @@ impl Store {
 
     fn reconcile_duplicate_job_ids(&self) -> io::Result<usize> {
         let mut paths = BTreeMap::<String, Vec<(JobStatus, PathBuf)>>::new();
-        for bucket in [JobStatus::Pending, JobStatus::Running, JobStatus::Ok] {
+        for bucket in [
+            JobStatus::Pending,
+            JobStatus::Running,
+            JobStatus::WaitingApproval,
+            JobStatus::Ok,
+        ] {
             for entry in fs::read_dir(self.bucket_dir(bucket))? {
                 let entry = entry?;
                 let path = entry.path();
@@ -1102,6 +1174,31 @@ impl Store {
         Ok(job)
     }
 
+    pub fn record_waiting_approval(&self, id: &str, request_id: &str) -> io::Result<Job> {
+        validate_job_id(id)?;
+        if request_id.is_empty()
+            || request_id.len() > 128
+            || !request_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid approval request id",
+            ));
+        }
+        let _lock = self.lock_for_id(id)?;
+        let path = self.path_for(JobStatus::Running, id);
+        let raw = fs::read_to_string(&path)?;
+        let mut job: Job = serde_json::from_str(&raw).map_err(io_other)?;
+        if !job.waiting_on.iter().any(|value| value == request_id) {
+            job.waiting_on.push(request_id.to_string());
+            write_json_atomic(&path, &job)?;
+            crate::clawd::audit::record_task_event("clawd.task.approval-requested", &job);
+        }
+        Ok(job)
+    }
+
     fn finish_indeterminate(
         &self,
         path: &Path,
@@ -1140,6 +1237,32 @@ impl Store {
         let mut job: Job = serde_json::from_str(&raw).map_err(io_other)?;
         validate_job_id(&job.id)?;
 
+        if job.cancel_requested_at.is_some() {
+            deny_waiting_approvals(&job, "Associated task was cancelled.");
+            job.waiting_on.clear();
+            job.waiting_since = None;
+            job.status = JobStatus::Cancelled;
+            job.error = Some("cancelled by user".to_string());
+            job.finished_at = Some(now_iso());
+            write_json_atomic(&path, &job)?;
+            durable_rename(&path, &self.path_for(JobStatus::Ok, id))?;
+            let _ = finish_durable_session(&job);
+            crate::clawd::audit::record_task_event("clawd.task.cancelled", &job);
+            self.notify(&job, "cancelled");
+            return Ok(Some(job));
+        }
+
+        if !job.waiting_on.is_empty() {
+            job.status = JobStatus::WaitingApproval;
+            job.waiting_since.get_or_insert_with(now_iso);
+            job.worker_pid = None;
+            job.worker_start_time_ticks = None;
+            write_json_atomic(&path, &job)?;
+            durable_rename(&path, &self.path_for(JobStatus::WaitingApproval, id))?;
+            crate::clawd::audit::record_task_event("clawd.task.waiting-approval", &job);
+            return Ok(Some(job));
+        }
+
         if job.schema_version != JOB_SCHEMA_VERSION || !job.execution_phase.replay_is_proven_safe()
         {
             return self
@@ -1150,17 +1273,6 @@ impl Store {
                     "worker outcome is unknown after durable execution commit; refusing replay",
                 )
                 .map(Some);
-        }
-
-        if job.cancel_requested_at.is_some() {
-            job.status = JobStatus::Cancelled;
-            job.error = Some("cancelled by user".to_string());
-            job.finished_at = Some(now_iso());
-            write_json_atomic(&path, &job)?;
-            durable_rename(&path, &self.path_for(JobStatus::Ok, id))?;
-            let _ = finish_durable_session(&job);
-            crate::clawd::audit::record_task_event("clawd.task.cancelled", &job);
-            return Ok(Some(job));
         }
 
         job.recovery_count = job.recovery_count.saturating_add(1);
@@ -1175,6 +1287,7 @@ impl Store {
             durable_rename(&path, &self.path_for(JobStatus::Ok, id))?;
             let _ = finish_durable_session(&job);
             crate::clawd::audit::record_task_event("clawd.task.abandoned", &job);
+            self.notify(&job, "failed");
             return Ok(Some(job));
         }
 
@@ -1182,6 +1295,8 @@ impl Store {
         job.worker_pid = None;
         job.worker_start_time_ticks = None;
         job.started_at = None;
+        job.waiting_on.clear();
+        job.waiting_since = None;
         job.execution_phase = ExecutionPhase::Unprepared;
         job.execution_prepare_nonce = None;
         job.execution_commit_nonce = None;
@@ -1189,6 +1304,7 @@ impl Store {
         write_json_atomic(&path, &job)?;
         durable_rename(&path, &self.path_for(JobStatus::Pending, id))?;
         crate::clawd::audit::record_task_event("clawd.task.recovered", &job);
+        self.notify(&job, "recovered");
         Ok(Some(job))
     }
 
@@ -1201,10 +1317,21 @@ impl Store {
         let mut job: Job = serde_json::from_str(&raw).map_err(io_other)?;
         validate_job_id(&job.id)?;
         let outcome = if job.cancel_requested_at.is_some() {
+            if let FinishOutcome::WaitingApproval { request_ids } = &outcome {
+                job.waiting_on = request_ids.clone();
+            }
             FinishOutcome::Cancelled
         } else {
             outcome
         };
+        let revoke_after_pending_cleanup =
+            !matches!(&outcome, FinishOutcome::WaitingApproval { .. })
+                && !job.waiting_on.is_empty();
+        if revoke_after_pending_cleanup {
+            deny_waiting_approvals(&job, "The associated task ended.");
+            job.waiting_on.clear();
+            job.waiting_since = None;
+        }
         match outcome {
             FinishOutcome::Ok {
                 response,
@@ -1244,20 +1371,253 @@ impl Store {
                 job.status = JobStatus::Cancelled;
                 job.error = Some("cancelled by user".to_string());
             }
+            FinishOutcome::WaitingApproval { mut request_ids } => {
+                request_ids.sort();
+                request_ids.dedup();
+                if request_ids.is_empty() {
+                    return Err(io::Error::new(
+                        ErrorKind::InvalidInput,
+                        "waiting task must name at least one approval request",
+                    ));
+                }
+                job.status = JobStatus::WaitingApproval;
+                job.waiting_on = request_ids;
+                job.waiting_since = Some(now_iso());
+                job.worker_pid = None;
+                job.worker_start_time_ticks = None;
+                job.error = None;
+            }
         }
-        job.finished_at = Some(now_iso());
+        job.finished_at = (job.status != JobStatus::WaitingApproval).then(now_iso);
         write_json_atomic(&running_path, &job)?;
-        let done_path = self.path_for(JobStatus::Ok, &job.id);
-        durable_rename(&running_path, &done_path)?;
+        durable_rename(&running_path, &self.path_for(job.status, &job.id))?;
+        if job.status == JobStatus::WaitingApproval {
+            if let Err(error) = self.append_stream_progress(
+                &job.id,
+                json!({
+                    "kind": "waiting_approval",
+                    "request_ids": job.waiting_on,
+                }),
+            ) {
+                tracing::warn!(
+                    task = %job.id,
+                    %error,
+                    "failed to append approval-wait progress"
+                );
+            }
+            crate::clawd::audit::record_task_event("clawd.task.waiting-approval", &job);
+        } else {
+            finish_durable_session(&job)?;
+            if revoke_after_pending_cleanup {
+                revoke_job_session(&job);
+            }
+            crate::clawd::audit::record_task_event(
+                if job.execution_phase == ExecutionPhase::Indeterminate {
+                    "clawd.task.execution_indeterminate"
+                } else {
+                    "clawd.task.finished"
+                },
+                &job,
+            );
+            self.notify(
+                &job,
+                match job.status {
+                    JobStatus::Ok => "completed",
+                    JobStatus::Error => "failed",
+                    JobStatus::Cancelled => "cancelled",
+                    JobStatus::Pending | JobStatus::Running | JobStatus::WaitingApproval => {
+                        "finished"
+                    }
+                },
+            );
+        }
+        Ok(job)
+    }
+
+    /// Reconcile tasks that released their worker while waiting for consent.
+    pub fn reconcile_waiting_approvals(&self) -> io::Result<(usize, usize)> {
+        let waiting = self.bucket_dir(JobStatus::WaitingApproval);
+        let entries = match fs::read_dir(&waiting) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok((0, 0)),
+            Err(error) => return Err(error),
+        };
+        let mut resumed = 0usize;
+        let mut failed = 0usize;
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                continue;
+            }
+            let Some(id) = path.file_stem().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            let _lock = match self.lock_for_id(id) {
+                Ok(lock) => lock,
+                Err(_) => continue,
+            };
+            let raw = match fs::read_to_string(&path) {
+                Ok(raw) => raw,
+                Err(error) if error.kind() == ErrorKind::NotFound => continue,
+                Err(error) => return Err(error),
+            };
+            let mut job: Job = match serde_json::from_str(&raw) {
+                Ok(job) => job,
+                Err(error) => {
+                    tracing::warn!(
+                        "agent approval reconciliation: skipping malformed job {path:?}: {error}"
+                    );
+                    continue;
+                }
+            };
+            if job.status != JobStatus::WaitingApproval || job.waiting_on.is_empty() {
+                self.fail_waiting_job(
+                    &path,
+                    id,
+                    job,
+                    "task has invalid approval-wait state".to_string(),
+                    "clawd.task.approval-state-invalid",
+                )?;
+                failed += 1;
+                continue;
+            }
+            let Some(wait_started) = job
+                .waiting_since
+                .as_deref()
+                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+            else {
+                self.fail_waiting_job(
+                    &path,
+                    id,
+                    job,
+                    "task has invalid approval-wait timestamp".to_string(),
+                    "clawd.task.approval-state-invalid",
+                )?;
+                failed += 1;
+                continue;
+            };
+            if chrono::Utc::now()
+                .signed_duration_since(wait_started.with_timezone(&chrono::Utc))
+                .num_seconds()
+                > APPROVAL_WAIT_TIMEOUT_SECS
+            {
+                self.fail_waiting_job(
+                    &path,
+                    id,
+                    job,
+                    "task approval wait expired after 8 hours".to_string(),
+                    "clawd.task.approval-timeout",
+                )?;
+                failed += 1;
+                continue;
+            }
+
+            let statuses = job
+                .waiting_on
+                .iter()
+                .map(|request_id| {
+                    (
+                        request_id.clone(),
+                        crate::approvals::status_for_owner(request_id, job.owner_uid),
+                    )
+                })
+                .collect::<Vec<_>>();
+            if statuses.iter().all(|(_, status)| {
+                matches!(
+                    status,
+                    crate::approvals::RequestStatus::Approved
+                        | crate::approvals::RequestStatus::Consumed
+                )
+            }) {
+                if job.session_id.is_none() {
+                    self.fail_waiting_job(
+                        &path,
+                        id,
+                        job,
+                        "waiting task has no durable session".to_string(),
+                        "clawd.task.approval-state-invalid",
+                    )?;
+                    failed += 1;
+                    continue;
+                }
+                job.resumed_after_approval = std::mem::take(&mut job.waiting_on);
+                job.waiting_since = None;
+                job.status = JobStatus::Pending;
+                job.started_at = None;
+                job.finished_at = None;
+                job.worker_pid = None;
+                job.worker_start_time_ticks = None;
+                job.cancel_requested_at = None;
+                job.error = None;
+                job.execution_phase = ExecutionPhase::Unprepared;
+                job.execution_prepare_nonce = None;
+                job.execution_commit_nonce = None;
+                job.execution_generation = None;
+                write_json_atomic(&path, &job)?;
+                durable_rename(&path, &self.path_for(JobStatus::Pending, id))?;
+                if let Err(error) = self.append_stream_progress(
+                    id,
+                    json!({
+                        "kind": "approval_resumed",
+                        "request_ids": job.resumed_after_approval,
+                    }),
+                ) {
+                    tracing::warn!(
+                        task = %job.id,
+                        %error,
+                        "failed to append approval-resume progress"
+                    );
+                }
+                crate::clawd::audit::record_task_event("clawd.task.approval-granted", &job);
+                self.notify(&job, "resumed");
+                resumed += 1;
+                continue;
+            }
+            let terminal = statuses.iter().find(|(_, status)| {
+                matches!(
+                    status,
+                    crate::approvals::RequestStatus::Denied
+                        | crate::approvals::RequestStatus::Unknown
+                )
+            });
+            let Some((request_id, status)) = terminal else {
+                continue;
+            };
+            self.fail_waiting_job(
+                &path,
+                id,
+                job,
+                format!(
+                    "approval request {request_id} is {}; task will not resume",
+                    status.as_str()
+                ),
+                "clawd.task.approval-refused",
+            )?;
+            failed += 1;
+        }
+
+        Ok((resumed, failed))
+    }
+
+    fn fail_waiting_job(
+        &self,
+        path: &Path,
+        id: &str,
+        mut job: Job,
+        message: String,
+        event: &'static str,
+    ) -> io::Result<Job> {
+        deny_waiting_approvals(&job, &message);
+        job.status = JobStatus::Error;
+        job.error = Some(message);
+        job.finished_at = Some(now_iso());
+        write_json_atomic(path, &job)?;
+        durable_rename(path, &self.path_for(JobStatus::Ok, id))?;
         finish_durable_session(&job)?;
-        crate::clawd::audit::record_task_event(
-            if job.execution_phase == ExecutionPhase::Indeterminate {
-                "clawd.task.execution_indeterminate"
-            } else {
-                "clawd.task.finished"
-            },
-            &job,
-        );
+        revoke_job_session(&job);
+        crate::clawd::audit::record_task_event(event, &job);
+        self.notify(&job, "failed");
         Ok(job)
     }
 
@@ -1300,6 +1660,7 @@ impl Store {
                 durable_rename(&src, &dst)?;
                 finish_durable_session(&job)?;
                 crate::clawd::audit::record_task_event("clawd.task.cancelled", &job);
+                self.notify(&job, "cancelled");
                 Ok(Some(job))
             }
             Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
@@ -1329,6 +1690,7 @@ impl Store {
                 durable_rename(&pending, &done)?;
                 finish_durable_session(&job)?;
                 crate::clawd::audit::record_task_event("clawd.task.cancelled", &job);
+                self.notify(&job, "cancelled");
                 return Ok(Some((job, true)));
             }
             Err(error) if error.kind() == ErrorKind::NotFound => {}
@@ -1347,7 +1709,31 @@ impl Store {
                     write_json_atomic(&running, &job)?;
                     crate::clawd::audit::record_task_event("clawd.task.cancel-requested", &job);
                 }
-                Ok(Some((job, false)))
+                return Ok(Some((job, false)));
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+
+        let waiting = self.path_for(JobStatus::WaitingApproval, id);
+        match fs::read_to_string(&waiting) {
+            Ok(raw) => {
+                let mut job: Job = serde_json::from_str(&raw).map_err(io_other)?;
+                if !job_visible_to(&job, owner_uid) {
+                    return Ok(None);
+                }
+                job.status = JobStatus::Cancelled;
+                job.cancel_requested_at = Some(now_iso());
+                job.finished_at = Some(now_iso());
+                deny_waiting_approvals(&job, "Associated task was cancelled.");
+                job.waiting_on.clear();
+                job.waiting_since = None;
+                write_json_atomic(&waiting, &job)?;
+                durable_rename(&waiting, &done)?;
+                finish_durable_session(&job)?;
+                crate::clawd::audit::record_task_event("clawd.task.cancelled", &job);
+                self.notify(&job, "cancelled");
+                Ok(Some((job, true)))
             }
             Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
             Err(error) => Err(error),
@@ -1603,11 +1989,12 @@ impl Store {
         Ok(removed)
     }
 
-    pub fn counts(&self) -> io::Result<(usize, usize, usize)> {
+    pub fn counts(&self) -> io::Result<(usize, usize, usize, usize)> {
         let p = count_json(&self.bucket_dir(JobStatus::Pending))?;
         let r = count_json(&self.bucket_dir(JobStatus::Running))?;
+        let w = count_json(&self.bucket_dir(JobStatus::WaitingApproval))?;
         let d = count_json(&self.bucket_dir(JobStatus::Ok))?;
-        Ok((p, r, d))
+        Ok((p, r, w, d))
     }
 
     /// Acquire an exclusive flock keyed on `id`. Used by claim_one
@@ -1657,6 +2044,7 @@ fn same_logical_job(left: &Job, right: &Job) -> bool {
         && left.branch_context == right.branch_context
         && left.session_id == right.session_id
         && left.max_turns == right.max_turns
+        && left.use_memory == right.use_memory
         && left.created_at == right.created_at
         && left.owner_uid == right.owner_uid
         && left.owner_home == right.owner_home
@@ -1678,7 +2066,8 @@ fn bucket_rank(status: JobStatus) -> u8 {
     match status {
         JobStatus::Pending => 0,
         JobStatus::Running => 1,
-        JobStatus::Ok | JobStatus::Error | JobStatus::Cancelled => 2,
+        JobStatus::WaitingApproval => 2,
+        JobStatus::Ok | JobStatus::Error | JobStatus::Cancelled => 3,
     }
 }
 
@@ -1771,6 +2160,9 @@ pub enum FinishOutcome {
     Error(String),
     Indeterminate(String),
     Cancelled,
+    WaitingApproval {
+        request_ids: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1802,6 +2194,7 @@ fn bucket_for_status(s: JobStatus) -> JobStatus {
     match s {
         JobStatus::Pending => JobStatus::Pending,
         JobStatus::Running => JobStatus::Running,
+        JobStatus::WaitingApproval => JobStatus::WaitingApproval,
         JobStatus::Ok | JobStatus::Error | JobStatus::Cancelled => JobStatus::Ok,
     }
 }
@@ -1925,9 +2318,125 @@ fn finish_durable_session(job: &Job) -> io::Result<()> {
     let status = match job.status {
         JobStatus::Ok => crate::session::Status::Done,
         JobStatus::Error | JobStatus::Cancelled => crate::session::Status::Failed,
-        JobStatus::Pending | JobStatus::Running => return Ok(()),
+        JobStatus::Pending | JobStatus::Running | JobStatus::WaitingApproval => return Ok(()),
     };
     crate::session::end(&sid, status).map_err(io_other)
+}
+
+fn deny_waiting_approvals(job: &Job, note: &str) {
+    for request_id in &job.waiting_on {
+        if let Err(error) = crate::approvals::deny_if_pending_for_owner(
+            request_id,
+            None,
+            Some(note.to_string()),
+            job.owner_uid,
+        ) {
+            tracing::warn!(
+                task = %job.id,
+                approval = request_id,
+                %error,
+                "failed to retire approval for terminal task"
+            );
+        }
+    }
+}
+
+fn revoke_job_session(job: &Job) {
+    let Some(session_id) = job.session_id.as_deref() else {
+        return;
+    };
+    match job.owner_uid {
+        Some(owner_uid) => crate::clawd::authority::revoke_session_for_owner(session_id, owner_uid),
+        None => crate::clawd::authority::revoke_session(session_id),
+    }
+}
+
+fn publish_task_notification(job: &Job, phase: &str) {
+    let Some(owner_uid) = job.owner_uid.filter(|uid| *uid != 0) else {
+        return;
+    };
+    let trigger = job
+        .session_id
+        .as_deref()
+        .and_then(|session_id| session_id.parse::<crate::session::SessionId>().ok())
+        .and_then(|session_id| crate::session::get_meta(&session_id).ok())
+        .is_some_and(|meta| meta.origin == Some(crate::session::SessionOrigin::TriggerDelegation));
+    let source = if trigger { "trigger" } else { "agent" };
+    let kind = if trigger {
+        format!("trigger.agent.{phase}")
+    } else {
+        format!("agent.{phase}")
+    };
+    let (severity, title, body, activity) = match phase {
+        "submitted" => (
+            crate::notifications::Severity::Info,
+            "Agent task queued",
+            "A background Agent task is waiting to run.",
+            true,
+        ),
+        "started" => (
+            crate::notifications::Severity::Info,
+            "Agent task started",
+            "A background Agent task has started.",
+            true,
+        ),
+        "recovered" => (
+            crate::notifications::Severity::Warning,
+            "Agent task restarted",
+            "A background Agent task was recovered after its worker stopped.",
+            true,
+        ),
+        "resumed" => (
+            crate::notifications::Severity::Info,
+            "Agent task resumed",
+            "A background Agent task resumed after approval.",
+            true,
+        ),
+        "completed" => (
+            crate::notifications::Severity::Info,
+            "Agent task completed",
+            "A background Agent task finished successfully.",
+            false,
+        ),
+        "cancelled" => (
+            crate::notifications::Severity::Warning,
+            "Agent task cancelled",
+            "A background Agent task was cancelled.",
+            false,
+        ),
+        _ => (
+            crate::notifications::Severity::Error,
+            "Agent task failed",
+            "A background Agent task failed. Open the Agent to inspect the result.",
+            false,
+        ),
+    };
+    let mut draft =
+        crate::notifications::NotificationDraft::new(source, kind, severity, title, body)
+            .dedupe(format!("task:{}:{phase}", job.id));
+    if activity {
+        draft = draft.activity();
+    }
+    draft.task_id = Some(job.id.clone());
+    draft.session_id = job.session_id.clone();
+    if let Some(session_id) = job.session_id.as_deref() {
+        draft
+            .actions
+            .push(crate::notifications::NotificationAction {
+                id: "open-agent".to_string(),
+                label: "Open Agent".to_string(),
+                uri: format!("clawos://agent/session/{session_id}"),
+            });
+    }
+    if let Err(error) = crate::clawd::notifications::publish_for_owner(owner_uid, draft) {
+        tracing::warn!(
+            task = %job.id,
+            owner_uid,
+            phase,
+            %error,
+            "failed to publish Agent task notification"
+        );
+    }
 }
 
 fn now_iso() -> String {
@@ -2075,10 +2584,16 @@ fn cmd_list(args: &[String]) -> Result<Value, String> {
     let buckets: Vec<JobStatus> = match status_filter {
         Some(JobStatus::Pending) => vec![JobStatus::Pending],
         Some(JobStatus::Running) => vec![JobStatus::Running],
+        Some(JobStatus::WaitingApproval) => vec![JobStatus::WaitingApproval],
         Some(JobStatus::Ok) | Some(JobStatus::Error) | Some(JobStatus::Cancelled) => {
             vec![JobStatus::Ok]
         }
-        None => vec![JobStatus::Pending, JobStatus::Running, JobStatus::Ok],
+        None => vec![
+            JobStatus::Pending,
+            JobStatus::Running,
+            JobStatus::WaitingApproval,
+            JobStatus::Ok,
+        ],
     };
     let mut all: Vec<Job> = Vec::new();
     for b in buckets {
@@ -2109,11 +2624,12 @@ fn cmd_list(args: &[String]) -> Result<Value, String> {
 fn cmd_status(args: &[String]) -> Result<Value, String> {
     let store = Store::open_default().map_err(|e| e.to_string())?;
     if args.is_empty() {
-        let (p, r, d) = store.counts().map_err(|e| e.to_string())?;
+        let (p, r, w, d) = store.counts().map_err(|e| e.to_string())?;
         return Ok(json!({
             "queue_dir": store.root().display().to_string(),
             "pending": p,
             "running": r,
+            "waiting_approval": w,
             "done": d,
         }));
     }
@@ -2469,7 +2985,7 @@ async fn run_one_routed_job(job: &Job) -> FinishOutcome {
     // therefore `paths::user_credentials_dir`,
     // `paths::user_app_override_path`, `paths::user_app_consent_path`,
     // `paths::user_budget_config_path`, …) to the owner's home before
-    // running the rest of the job. Every `config::get()` inside the
+    // running the rest of the job. Every `config::current_snapshot()` inside the
     // agent loop — and every credential / consent / app-override
     // lookup reached transitively from tool implementations, the LLM
     // gate, and the delegate tool — will see the user's
@@ -2484,8 +3000,8 @@ async fn run_one_routed_job(job: &Job) -> FinishOutcome {
     // `/home/<user>/.local/share/cos/credentials/...`.
     if let Some(home) = job.owner_home.as_deref() {
         let home_path = std::path::PathBuf::from(home);
-        let cfg = crate::config::intern_for_home(&home_path);
-        let run = crate::config::with_override(cfg, run_one_job_inner(job));
+        let cfg = crate::config::load_for_home(&home_path);
+        let run = crate::config::with_snapshot(cfg, run_one_job_inner(job));
         match job.owner_uid {
             Some(0) => run.await,
             Some(uid) => crate::paths::with_user_override(uid, home_path, run).await,
@@ -2525,6 +3041,7 @@ async fn run_one_job_scoped(job: &Job) -> FinishOutcome {
             branch_context: job.branch_context.clone(),
             session_id: job.session_id.clone(),
             max_turns: job.max_turns,
+            use_memory: job.use_memory,
             presence: None,
         },
         stream_sink,
@@ -2545,7 +3062,14 @@ pub struct JobExecution {
     pub branch_context: Option<String>,
     pub session_id: Option<String>,
     pub max_turns: Option<u32>,
+    pub use_memory: bool,
     pub presence: Option<crate::session::SessionPresence>,
+}
+
+fn standalone_runtime_hooks() -> crate::agent::runtime::hooks::HookRegistry {
+    let hooks = crate::agent::runtime::hooks::HookRegistry::new();
+    hooks.register(crate::clawd::audit::runtime_hook());
+    hooks
 }
 
 /// Run the agent loop for one task.
@@ -2558,18 +3082,29 @@ pub async fn execute_job(
     stream_sink: Arc<dyn crate::agent::llm::accumulate::StreamSink>,
     progress_sink: Arc<dyn crate::agent::runtime::progress::ProgressSink>,
 ) -> FinishOutcome {
+    execute_job_with_hooks(
+        job,
+        stream_sink,
+        progress_sink,
+        standalone_runtime_hooks(),
+    )
+    .await
+}
+
+pub async fn execute_job_with_hooks(
+    job: JobExecution,
+    stream_sink: Arc<dyn crate::agent::llm::accumulate::StreamSink>,
+    progress_sink: Arc<dyn crate::agent::runtime::progress::ProgressSink>,
+    hooks: crate::agent::runtime::hooks::HookRegistry,
+) -> FinishOutcome {
     use crate::agent::runtime::loop_;
 
     if let Err(error) = crate::agentd::guard::ensure_agent_runtime_allowed("agent job execution") {
         return FinishOutcome::Error(error);
     }
 
-    // Apply per-job max-turns override on a clone of the global cfg
-    // so other jobs in the same worker process aren't affected.
-    // `config::get()` here is intentionally the *task-local* one
-    // installed by the caller for clawd-routed jobs; for in-process
-    // submits it falls through to the process-wide config as before.
-    let base = crate::config::get().agent.clone();
+    let current_config = crate::config::current_snapshot();
+    let base = current_config.agent.clone();
     let mut cfg = base;
     if let Some(n) = job.max_turns {
         cfg.max_turns = n;
@@ -2579,12 +3114,12 @@ pub async fn execute_job(
         Err(e) => return FinishOutcome::Error(format!("provider unavailable: {e}")),
     };
     let guardrails = loop_::guardrails_from_cfg(&cfg);
-    let mut exposure =
+    let exposure =
         match crate::agent::tools::exposure::ToolExposureContext::from_current_session_with_presence(
             job.session_id.as_deref(),
             Some(&job.id),
             crate::agent::tools::exposure::ExecutionHost::AgentWorker,
-            guardrails,
+            guardrails.clone(),
             job.presence,
         ) {
             Ok(context) => context,
@@ -2596,20 +3131,39 @@ pub async fn execute_job(
             }
             Err(error) => return FinishOutcome::Error(error),
         };
-    let mut tools = crate::agent::tools::registry::default_registry();
+    let mut effective_config = (*current_config).clone();
+    effective_config.agent = cfg.clone();
+    let registry_deps = crate::agent::tools::registry::RegistryDeps::load_with_hooks(
+        Arc::new(effective_config),
+        crate::agent::tools::registry::RegistryPaths::from_process(),
+        hooks.clone(),
+    );
+    let runtime_deps = registry_deps.runtime.clone();
+    let mut tools = crate::agent::tools::registry::default_registry_with_deps(&registry_deps);
+    tools.set_guardrails(guardrails);
     tools.set_approval(loop_::approval_from_cfg(&cfg));
-    // MCP attach (best-effort) — handles dropped at end of fn.
-    let _mcp_handles = loop_::attach_mcp_servers_for_cli(&mut tools, &cfg, &mut exposure).await;
+    let _mcp_handles = loop_::attach_mcp_servers_for_cli(&mut tools, &cfg, &exposure).await;
 
-    let result = if let Some(sid) = job.session_id.as_deref() {
-        match crate::agent::memory::sqlite_fts::MemoryDb::open_default() {
-            Ok(db) => {
+    let request = loop_::RuntimeRequest::streaming(
+        provider,
+        &cfg,
+        &job.prompt,
+        &tools,
+        stream_sink,
+        progress_sink,
+    )
+    .with_exposure(&exposure)
+    .with_transient_context(job.context.as_deref())
+    .with_interrupt_scope(&job.id);
+    let request = if job.use_memory {
+        match (job.session_id.as_deref(), registry_deps.memory.as_ref()) {
+            (Some(sid), Some(db)) => {
                 if let Some(context) = job
                     .branch_context
                     .as_deref()
                     .filter(|context| !context.trim().is_empty())
                 {
-                    if let Err(error) = seed_branch_context(&db, sid, context) {
+                    if let Err(error) = seed_branch_context(db, sid, context) {
                         tracing::warn!(
                             session_id = sid,
                             %error,
@@ -2617,56 +3171,14 @@ pub async fn execute_job(
                         );
                     }
                 }
-                // Replay prior turns so multi-turn task.stream sessions (the
-                // desktop agent UI is the main caller) see continuous context
-                // instead of treating every job.submit as a fresh exchange.
-                loop_::ask_with_stream_continuation_scoped_exposure(
-                    provider.clone(),
-                    &cfg,
-                    &job.prompt,
-                    job.context.as_deref(),
-                    &tools,
-                    &exposure,
-                    &db,
-                    sid,
-                    100,
-                    stream_sink.clone(),
-                    progress_sink.clone(),
-                    &job.id,
-                )
-                .await
+                request.with_continuation(db, sid, 100)
             }
-            Err(_) => {
-                loop_::ask_with_stream_scoped_exposure(
-                    provider.clone(),
-                    &cfg,
-                    &job.prompt,
-                    job.context.as_deref(),
-                    &tools,
-                    &exposure,
-                    None,
-                    stream_sink.clone(),
-                    progress_sink.clone(),
-                    &job.id,
-                )
-                .await
-            }
+            _ => request,
         }
     } else {
-        loop_::ask_with_stream_scoped_exposure(
-            provider.clone(),
-            &cfg,
-            &job.prompt,
-            job.context.as_deref(),
-            &tools,
-            &exposure,
-            None,
-            stream_sink,
-            progress_sink,
-            &job.id,
-        )
-        .await
+        request
     };
+    let result = loop_::run_with_deps(&runtime_deps, request).await;
 
     match result {
         Ok(r) => FinishOutcome::Ok {
@@ -2686,16 +3198,19 @@ fn seed_branch_context(
     session_id: &str,
     context: &str,
 ) -> Result<(), String> {
+    use crate::agent::trust::{envelope, LabeledSegment, SourceKind};
+
     let bounded = clip_progress_text(context.trim(), 32 * 1024);
-    let wrapped = crate::agent::safety::untrusted::wrap_untrusted(
-        crate::agent::safety::untrusted::APP_CONTEXT_TAG,
-        &bounded,
-    );
+    let segment = LabeledSegment::of(SourceKind::TransientAppContext, bounded);
+    let wrapped = segment.render_fenced(envelope::process_seal());
     let already_seeded = db
         .recent(session_id, 20)
         .map_err(|error| error.to_string())?
         .iter()
-        .any(|row| row.role == "system" && row.content == wrapped);
+        .any(|row| {
+            row.role == "system"
+                && LabeledSegment::from_stored(&row.content).content() == segment.content()
+        });
     if !already_seeded {
         db.record_message(session_id, "system", &wrapped)
             .map_err(|error| error.to_string())?;
@@ -2795,6 +3310,7 @@ fn parse_status(s: &str) -> Result<JobStatus, String> {
     match s.to_ascii_lowercase().as_str() {
         "pending" => Ok(JobStatus::Pending),
         "running" => Ok(JobStatus::Running),
+        "waiting" | "waiting_approval" | "approval" => Ok(JobStatus::WaitingApproval),
         "done" | "ok" | "complete" | "completed" => Ok(JobStatus::Ok),
         "error" | "failed" => Ok(JobStatus::Error),
         "cancelled" | "canceled" => Ok(JobStatus::Cancelled),

@@ -55,12 +55,7 @@ async fn pre_tool_allow_passes_through() {
             self.pre_calls.fetch_add(1, Ordering::SeqCst);
             ToolDecision::Allow
         }
-        fn post_tool(
-            &self,
-            _c: &HookContext,
-            _t: &ToolCall,
-            s: &ToolResultSummary,
-        ) -> HookOutcome {
+        fn post_tool(&self, _c: &HookContext, _t: &ToolCall, s: &ToolResultSummary) -> HookOutcome {
             if s.success {
                 self.post_success.fetch_add(1, Ordering::SeqCst);
             }
@@ -152,13 +147,11 @@ fn one_proxy_uses_capability_consent_for_read_and_write_commands() {
         )
         .with_capability_approval(),
     ));
-    registry.set_approval(
-        crate::agent::runtime::approval::ApprovalGate::new(
-            crate::agent::runtime::approval::ApprovalConfig::new()
-                .dangerous("cos_mixed")
-                .auto_approve("cos_mixed"),
-        ),
-    );
+    registry.set_approval(crate::agent::runtime::approval::ApprovalGate::new(
+        crate::agent::runtime::approval::ApprovalConfig::new()
+            .dangerous("cos_mixed")
+            .auto_approve("cos_mixed"),
+    ));
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -166,9 +159,8 @@ fn one_proxy_uses_capability_consent_for_read_and_write_commands() {
         .unwrap();
     let invocation =
         crate::approvals::LocalApprovalInvocation::new("test:mixed-proxy:turn:1").unwrap();
-    let exposure = ToolExposureContext::isolated(
-        crate::agent::tools::guardrails::Guardrails::permissive(),
-    );
+    let exposure =
+        ToolExposureContext::isolated(crate::agent::tools::guardrails::Guardrails::permissive());
     runtime.block_on(invocation.scope(async {
         let read = dispatch_tool(
             &registry,
@@ -182,7 +174,10 @@ fn one_proxy_uses_capability_consent_for_read_and_write_commands() {
             Some("mixed-session"),
         )
         .await;
-        assert!(!read.is_error, "read command should use its held cap: {read:?}");
+        assert!(
+            !read.is_error,
+            "read command should use its held cap: {read:?}"
+        );
 
         let write = dispatch_tool(
             &registry,
@@ -517,12 +512,10 @@ impl progress::ProgressSink for RecordingProgress {
         bytes_returned: usize,
         _preview: &str,
     ) {
-        self.results.lock().unwrap().push((
-            id.to_string(),
-            name.to_string(),
-            ok,
-            bytes_returned,
-        ));
+        self.results
+            .lock()
+            .unwrap()
+            .push((id.to_string(), name.to_string(), ok, bytes_returned));
     }
 }
 
@@ -560,6 +553,48 @@ impl Tool for SlowReader {
             Some(self.name.to_string()),
             ["mcp".to_string(), "test".to_string()],
         )
+    }
+}
+
+struct ConcurrencyReader {
+    name: &'static str,
+    active: Arc<std::sync::atomic::AtomicUsize>,
+    max_active: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[async_trait::async_trait]
+impl Tool for ConcurrencyReader {
+    fn name(&self) -> &str {
+        self.name
+    }
+
+    fn description(&self) -> &str {
+        "concurrency reader"
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object"})
+    }
+
+    fn disclosure(&self) -> crate::agent::tools::progressive::ToolDisclosure {
+        crate::agent::tools::progressive::ToolDisclosure::extension(
+            "mcp",
+            Some("test".to_string()),
+            Some(self.name.to_string()),
+            ["mcp".to_string()],
+        )
+    }
+
+    async fn exec(&self, _input: serde_json::Value) -> TR {
+        let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+        self.max_active.fetch_max(active, Ordering::SeqCst);
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        self.active.fetch_sub(1, Ordering::SeqCst);
+        TR::ok(self.name)
+    }
+
+    fn parallel_safe(&self) -> bool {
+        true
     }
 }
 
@@ -621,18 +656,17 @@ async fn progress_sink_fires_for_every_dispatch_in_order() {
     let tool_calls = calls(&[("id-1", "w1"), ("id-2", "w1")]);
     let p = Arc::new(RecordingProgress::default());
     let exposure = exposure();
-    let (blocks, stop) =
-        dispatch_calls(
-            &registry,
-            &exposure,
-            None,
-            &tool_calls,
-            None,
-            p.as_ref() as &dyn progress::ProgressSink,
-            None,
-        )
-        .await
-        .unwrap();
+    let (blocks, stop) = dispatch_calls(
+        &registry,
+        &exposure,
+        None,
+        &tool_calls,
+        None,
+        p.as_ref() as &dyn progress::ProgressSink,
+        None,
+    )
+    .await
+    .unwrap();
     assert!(stop.is_none());
     assert_eq!(blocks.len(), 2);
     let starts = p.starts.lock().unwrap();
@@ -665,18 +699,17 @@ async fn parallel_safe_tools_dispatch_concurrently() {
     let p = progress::null_progress();
     let started = std::time::Instant::now();
     let exposure = exposure();
-    let (blocks, _) =
-        dispatch_calls(
-            &registry,
-            &exposure,
-            None,
-            &tool_calls,
-            None,
-            p.as_ref() as &dyn progress::ProgressSink,
-            None,
-        )
-        .await
-        .unwrap();
+    let (blocks, _) = dispatch_calls(
+        &registry,
+        &exposure,
+        None,
+        &tool_calls,
+        None,
+        p.as_ref() as &dyn progress::ProgressSink,
+        None,
+    )
+    .await
+    .unwrap();
     let elapsed = started.elapsed();
     assert_eq!(blocks.len(), 3);
     // Sequential dispatch would take ~300ms. Concurrent
@@ -704,18 +737,17 @@ async fn serial_tools_remain_sequential() {
     let p = progress::null_progress();
     let started = std::time::Instant::now();
     let exposure = exposure();
-    let _ =
-        dispatch_calls(
-            &registry,
-            &exposure,
-            None,
-            &tool_calls,
-            None,
-            p.as_ref() as &dyn progress::ProgressSink,
-            None,
-        )
-        .await
-        .unwrap();
+    let _ = dispatch_calls(
+        &registry,
+        &exposure,
+        None,
+        &tool_calls,
+        None,
+        p.as_ref() as &dyn progress::ProgressSink,
+        None,
+    )
+    .await
+    .unwrap();
     let elapsed = started.elapsed();
     assert!(
         elapsed >= std::time::Duration::from_millis(220),
@@ -748,18 +780,17 @@ async fn mixed_batch_preserves_declaration_order() {
     let tool_calls = calls(&[("id-w1", "w1"), ("id-r1", "r1"), ("id-w2", "w2")]);
     let p = progress::null_progress();
     let exposure = exposure();
-    let (blocks, _) =
-        dispatch_calls(
-            &registry,
-            &exposure,
-            None,
-            &tool_calls,
-            None,
-            p.as_ref() as &dyn progress::ProgressSink,
-            None,
-        )
-        .await
-        .unwrap();
+    let (blocks, _) = dispatch_calls(
+        &registry,
+        &exposure,
+        None,
+        &tool_calls,
+        None,
+        p.as_ref() as &dyn progress::ProgressSink,
+        None,
+    )
+    .await
+    .unwrap();
     let ids: Vec<&str> = blocks
         .iter()
         .map(|b| match b {
@@ -1130,4 +1161,159 @@ async fn clean_stream_eof_is_a_typed_runtime_failure() {
         ))
     ));
     assert_eq!(messages.len(), 1);
+}
+
+#[tokio::test]
+async fn bridged_parallel_tools_resolve_before_planning_and_hooks() {
+    struct NameSpy {
+        seen: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+    impl Hook for NameSpy {
+        fn name(&self) -> &str {
+            "bridged-name-spy"
+        }
+
+        fn pre_tool(&self, _ctx: &HookContext, call: &ToolCall) -> ToolDecision {
+            self.seen.lock().unwrap().push(call.name.clone());
+            ToolDecision::Allow
+        }
+    }
+
+    let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let max_active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let registry = registry_with(vec![
+        Arc::new(ConcurrencyReader {
+            name: "mcp_test_r1",
+            active: active.clone(),
+            max_active: max_active.clone(),
+        }),
+        Arc::new(ConcurrencyReader {
+            name: "mcp_test_r2",
+            active: active.clone(),
+            max_active: max_active.clone(),
+        }),
+        Arc::new(ConcurrencyReader {
+            name: "mcp_test_r3",
+            active: active.clone(),
+            max_active: max_active.clone(),
+        }),
+    ]);
+    let calls = vec![
+        ToolCall {
+            id: "a".into(),
+            name: crate::agent::tools::progressive::TOOL_CALL.into(),
+            input: serde_json::json!({
+                "name": "mcp_test_r1",
+                "arguments": {},
+            }),
+        },
+        ToolCall {
+            id: "b".into(),
+            name: crate::agent::tools::progressive::TOOL_CALL.into(),
+            input: serde_json::json!({
+                "name": "mcp_test_r2",
+                "arguments": {},
+            }),
+        },
+        ToolCall {
+            id: "c".into(),
+            name: crate::agent::tools::progressive::TOOL_CALL.into(),
+            input: serde_json::json!({
+                "name": "mcp_test_r3",
+                "arguments": {},
+            }),
+        },
+    ];
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    global_registry().register(Arc::new(NameSpy { seen: seen.clone() }));
+    let hook_ctx = ctx();
+    let db = crate::agent::memory::sqlite_fts::MemoryDb::open_in_memory().unwrap();
+    let progress = progress::recording_progress(
+        progress::null_progress(),
+        db.clone(),
+        "bridged-session",
+        true,
+    );
+    let exposure = exposure().with_tool_schema_budget_tokens(0);
+    let result = dispatch_calls(
+        &registry,
+        &exposure,
+        Some(&hook_ctx),
+        &calls,
+        None,
+        progress.as_ref(),
+        None,
+    )
+    .await;
+    global_registry().unregister("bridged-name-spy");
+
+    let (blocks, _) = result.unwrap();
+    assert_eq!(blocks.len(), 3);
+    assert_eq!(max_active.load(Ordering::SeqCst), 3);
+    let mut seen = seen.lock().unwrap().clone();
+    seen.sort();
+    assert_eq!(seen, vec!["mcp_test_r1", "mcp_test_r2", "mcp_test_r3"]);
+    let recorded = db.recent_tool_invocations("bridged-session", 10).unwrap();
+    assert_eq!(recorded.len(), 3);
+    assert!(recorded
+        .iter()
+        .all(|row| row.tool_name.starts_with("mcp_test_r")));
+    assert!(recorded.iter().all(|row| row.success == Some(true)));
+}
+
+#[tokio::test]
+async fn rejected_bridge_call_keeps_underlying_identity_for_hooks_and_progress() {
+    struct NameSpy {
+        seen: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+    impl Hook for NameSpy {
+        fn name(&self) -> &str {
+            "rejected-bridge-name-spy"
+        }
+
+        fn pre_tool(&self, _ctx: &HookContext, call: &ToolCall) -> ToolDecision {
+            self.seen.lock().unwrap().push(call.name.clone());
+            ToolDecision::Allow
+        }
+    }
+
+    let registry = builtin_only_registry();
+    let calls = vec![ToolCall {
+        id: "missing".into(),
+        name: crate::agent::tools::progressive::TOOL_CALL.into(),
+        input: serde_json::json!({
+            "name": "mcp_missing_lookup",
+            "arguments": {"query": "value"},
+        }),
+    }];
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    global_registry().register(Arc::new(NameSpy { seen: seen.clone() }));
+    let db = crate::agent::memory::sqlite_fts::MemoryDb::open_in_memory().unwrap();
+    let progress = progress::recording_progress(
+        progress::null_progress(),
+        db.clone(),
+        "rejected-session",
+        true,
+    );
+    let result = dispatch_calls(
+        &registry,
+        &exposure(),
+        Some(&ctx()),
+        &calls,
+        None,
+        progress.as_ref(),
+        None,
+    )
+    .await;
+    global_registry().unregister("rejected-bridge-name-spy");
+
+    let (blocks, _) = result.unwrap();
+    assert!(matches!(
+        &blocks[0],
+        ContentBlock::ToolResult { is_error: true, .. }
+    ));
+    assert_eq!(seen.lock().unwrap().as_slice(), ["mcp_missing_lookup"]);
+    let recorded = db.recent_tool_invocations("rejected-session", 10).unwrap();
+    assert_eq!(recorded[0].tool_name, "mcp_missing_lookup");
+    assert_eq!(recorded[0].success, Some(false));
 }

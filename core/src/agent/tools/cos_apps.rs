@@ -35,6 +35,10 @@ use super::progressive::ToolDisclosure;
 use super::registry::ToolRegistry;
 use super::{Tool, ToolResult};
 
+tokio::task_local! {
+    static APPS_ROOT_OVERRIDE: PathBuf;
+}
+
 /// One LLM-visible proxy bound to a single cos app. Manifest-derived
 /// metadata is owned by the tool and released with its registry.
 pub struct CosAppTool {
@@ -134,6 +138,9 @@ fn build_description(manifest: &Manifest) -> String {
 /// env var read per tool call is sub-microsecond — well below the
 /// noise floor of the rest of the tool dispatch path.
 fn apps_root() -> PathBuf {
+    if let Ok(root) = APPS_ROOT_OVERRIDE.try_with(Clone::clone) {
+        return root;
+    }
     PathBuf::from(std::env::var("COS_APPS_DIR").unwrap_or_else(|_| "/usr/lib/cos/apps".into()))
 }
 
@@ -249,8 +256,14 @@ impl Tool for CosAppTool {
         }
 
         let app_name = self.app.to_string();
-        let app_dir = match crate::apps::find(&apps_root(), &app_name) {
-            Some(app) => app.dir,
+        let app_launch = match crate::apps::find_verified(&apps_root(), &app_name)
+            .ok()
+            .and_then(|app| {
+                app.require_verified()
+                    .ok()
+                    .and_then(|pkg| crate::bridge::AppLaunch::new(std::sync::Arc::clone(pkg)).ok())
+            }) {
+            Some(launch) => launch,
             None => {
                 return ToolResult::err(format!(
                     "no app named `{app_name}` installed. Try `cos_app_catalog list`."
@@ -258,10 +271,9 @@ impl Tool for CosAppTool {
             }
         };
         if command == "__schema__" {
-            return match manifest_schema_at(&app_dir) {
-                Ok(schema) => ToolResult::ok(schema),
-                Err(error) => ToolResult::err(error),
-            };
+            return ToolResult::ok(
+                crate::apps::manifest_schema(app_launch.manifest()).to_string(),
+            );
         }
         let data = data_dir();
         let apps = apps_root().to_string_lossy().to_string();
@@ -280,7 +292,7 @@ impl Tool for CosAppTool {
         }
         if crate::paths::current_owner_uid_override().is_some() {
             return match tokio::task::block_in_place(|| {
-                crate::bridge::run_python_app(&app_dir, &command, &args, &data, &apps)
+                crate::bridge::run_python_app(&app_launch, &command, &args, &data, &apps)
             }) {
                 Ok(Some(text)) => ToolResult::ok(text),
                 Ok(None) => ToolResult::ok(String::new()),
@@ -288,7 +300,7 @@ impl Tool for CosAppTool {
             };
         }
         let join = tokio::task::spawn_blocking(move || {
-            crate::bridge::run_python_app(&app_dir, &command, &args, &data, &apps)
+            crate::bridge::run_python_app(&app_launch, &command, &args, &data, &apps)
         })
         .await;
 
@@ -320,6 +332,31 @@ impl Tool for CosAppTool {
 // only these two gateways so app growth does not grow every request schema.
 
 pub struct CosAppCatalog;
+
+struct RootedCosAppCatalog {
+    apps_root: PathBuf,
+}
+
+#[async_trait]
+impl Tool for RootedCosAppCatalog {
+    fn name(&self) -> &str {
+        CosAppCatalog.name()
+    }
+
+    fn description(&self) -> &str {
+        CosAppCatalog.description()
+    }
+
+    fn input_schema(&self) -> Value {
+        CosAppCatalog.input_schema()
+    }
+
+    async fn exec(&self, input: Value) -> ToolResult {
+        APPS_ROOT_OVERRIDE
+            .scope(self.apps_root.clone(), CosAppCatalog.exec(input))
+            .await
+    }
+}
 
 #[async_trait]
 impl Tool for CosAppCatalog {
@@ -382,7 +419,7 @@ impl Tool for CosAppCatalog {
             .unwrap_or_default();
 
         let apps_dir = apps_root();
-        let apps = match tokio::task::spawn_blocking(move || crate::apps::discover(&apps_dir)).await
+        let apps = match tokio::task::spawn_blocking(move || crate::apps::discover_verified(&apps_dir)).await
         {
             Ok(map) => map,
             Err(join_err) => {
@@ -567,6 +604,31 @@ fn render_app_detail(app: &crate::apps::App) -> String {
 
 pub struct CosAppRun;
 
+struct RootedCosAppRun {
+    apps_root: PathBuf,
+}
+
+#[async_trait]
+impl Tool for RootedCosAppRun {
+    fn name(&self) -> &str {
+        CosAppRun.name()
+    }
+
+    fn description(&self) -> &str {
+        CosAppRun.description()
+    }
+
+    fn input_schema(&self) -> Value {
+        CosAppRun.input_schema()
+    }
+
+    async fn exec(&self, input: Value) -> ToolResult {
+        APPS_ROOT_OVERRIDE
+            .scope(self.apps_root.clone(), CosAppRun.exec(input))
+            .await
+    }
+}
+
 #[async_trait]
 impl Tool for CosAppRun {
     fn name(&self) -> &str {
@@ -636,8 +698,14 @@ impl Tool for CosAppRun {
             ));
         }
 
-        let app_dir = match crate::apps::find(&apps_root(), &app_name) {
-            Some(app) => app.dir,
+        let app_launch = match crate::apps::find_verified(&apps_root(), &app_name)
+            .ok()
+            .and_then(|app| {
+                app.require_verified()
+                    .ok()
+                    .and_then(|pkg| crate::bridge::AppLaunch::new(std::sync::Arc::clone(pkg)).ok())
+            }) {
+            Some(launch) => launch,
             None => {
                 return ToolResult::err(format!(
                     "no app named `{app_name}` installed. Try `cos_app_catalog list`."
@@ -646,10 +714,9 @@ impl Tool for CosAppRun {
         };
 
         if command == "__schema__" {
-            return match manifest_schema_at(&app_dir) {
-                Ok(schema) => ToolResult::ok(schema),
-                Err(error) => ToolResult::err(error),
-            };
+            return ToolResult::ok(
+                crate::apps::manifest_schema(app_launch.manifest()).to_string(),
+            );
         }
 
         if let Err(denial) = crate::caps::require(
@@ -661,7 +728,7 @@ impl Tool for CosAppRun {
 
         let data = data_dir();
         let apps = apps_root().to_string_lossy().to_string();
-        let app_dir_clone = app_dir.clone();
+        let launch_clone = app_launch.clone();
         let cmd = command.clone();
         if let Some(host) = crate::extension_host::client::current() {
             return match host.run_app(app_name, command, args).await {
@@ -677,7 +744,7 @@ impl Tool for CosAppRun {
         }
         if crate::paths::current_owner_uid_override().is_some() {
             return match tokio::task::block_in_place(|| {
-                crate::bridge::run_python_app(&app_dir_clone, &cmd, &args, &data, &apps)
+                crate::bridge::run_python_app(&launch_clone, &cmd, &args, &data, &apps)
             }) {
                 Ok(Some(text)) => ToolResult::ok(text),
                 Ok(None) => ToolResult::ok(String::new()),
@@ -685,7 +752,7 @@ impl Tool for CosAppRun {
             };
         }
         let join = tokio::task::spawn_blocking(move || {
-            crate::bridge::run_python_app(&app_dir_clone, &cmd, &args, &data, &apps)
+            crate::bridge::run_python_app(&launch_clone, &cmd, &args, &data, &apps)
         })
         .await;
 
@@ -717,8 +784,14 @@ fn untrusted_app_output(value: &str) -> String {
 /// App count does not affect the model schema: unfamiliar apps are discovered
 /// with `cos_app_catalog` and invoked through `cos_app_run`.
 pub fn register_default(registry: &mut ToolRegistry) {
-    registry.register(Arc::new(CosAppCatalog));
-    registry.register(Arc::new(CosAppRun));
+    register_default_with_root(registry, apps_root());
+}
+
+pub fn register_default_with_root(registry: &mut ToolRegistry, apps_root: PathBuf) {
+    registry.register(Arc::new(RootedCosAppCatalog {
+        apps_root: apps_root.clone(),
+    }));
+    registry.register(Arc::new(RootedCosAppRun { apps_root }));
 }
 
 /// Register one typed [`CosAppTool`] per discovered app plus the generic
@@ -728,7 +801,7 @@ pub fn register_default(registry: &mut ToolRegistry) {
 /// construction uses [`register_default`] to avoid paying for every manifest
 /// on every provider request.
 pub fn register_all(registry: &mut ToolRegistry) {
-    let apps = crate::apps::discover(&apps_root());
+    let apps = crate::apps::discover_verified(&apps_root());
     for app in apps.values() {
         registry.register(Arc::new(CosAppTool::from_manifest(&app.manifest)));
     }

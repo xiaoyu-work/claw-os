@@ -64,7 +64,7 @@ pub async fn handle(
                 }
 
                 let reached_network_idle = page.lifecycle.is_network_idle();
-                let network_events: Vec<_> = page.network_events.drain(..).collect();
+                let network_events = std::mem::take(&mut page.network_events);
                 let page_url = page.url_string();
                 let page_id = page.id.clone();
                 (frame_id, loader_id, network_events, page_url, page_id, reached_network_idle)

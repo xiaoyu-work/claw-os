@@ -3879,22 +3879,7 @@ impl Application for App {
                     .and_then(|t| t.location.path_opt().cloned())
                     .map(|p| p.to_string_lossy().into_owned());
                 let sel_str = selected.map(|p| p.to_string_lossy().into_owned());
-                let ctx = match (cwd, sel_str) {
-                    (Some(c), Some(s)) => format!(
-                        r#"{{"app":"cosmic-files","cwd":"{}","selection":"{}"}}"#,
-                        c.replace('"', "\\\""),
-                        s.replace('"', "\\\""),
-                    ),
-                    (Some(c), None) => format!(
-                        r#"{{"app":"cosmic-files","cwd":"{}"}}"#,
-                        c.replace('"', "\\\""),
-                    ),
-                    _ => r#"{"app":"cosmic-files"}"#.to_string(),
-                };
-                if let Err(err) = crate::claw_glue::start_detached(
-                    "cos-agent-ui",
-                    &["--overlay", "--context", &ctx],
-                ) {
+                if let Err(err) = crate::claw_glue::ask_claw(cwd.as_deref(), sel_str.as_deref()) {
                     log::error!("failed to open Ask Claw overlay: {err}");
                 }
             }
@@ -8416,7 +8401,7 @@ impl Application for App {
 //
 // Ideally, tests would use the cap-std crate which limits path traversal.
 #[cfg(test)]
-pub (crate) mod test_utils {
+pub(crate) mod test_utils {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/test/unit/app/test_utils.rs"

@@ -329,7 +329,9 @@ fn prepare_impl(
     }
     for key in ["COS_SDK_PYTHON_DIR"] {
         if let Some(path) = std::env::var_os(key).map(PathBuf::from) {
-            roots.push(path);
+            if path.exists() {
+                roots.push(path);
+            }
         }
     }
     roots.sort();
@@ -358,10 +360,14 @@ fn prepare_impl(
     }
 
     if let Some(path) = std::env::var_os("COS_PROC_DATA_DIR").map(PathBuf::from) {
-        bind_live_read_only(&path, &mut args)?;
+        if path.exists() {
+            bind_live_read_only(&path, &mut args)?;
+        }
     }
     if let Some(path) = std::env::var_os("COS_EXTENSION_BROKER_SOCKET").map(PathBuf::from) {
-        bind_live_read_only(&path, &mut args)?;
+        if path.exists() {
+            bind_live_read_only(&path, &mut args)?;
+        }
     }
     for (key, value) in [
         ("HOME", "/state/home"),

@@ -57,7 +57,60 @@ EOF
 cat > "$TEST_ROOT/bin/curl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-printf '%s' "${FIXTURE_HTTP_STATUS:?}"
+# Enough of curl for the sync script: `-o` output, `%{http_code}` and
+# `--fail-with-body`. Bodies come from FIXTURE_BODY_DIR, keyed by the
+# last path segment of the URL.
+output=""
+url=""
+previous=""
+fail_mode=0
+for argument in "$@"; do
+    case "$previous" in
+        -o) output="$argument" ;;
+    esac
+    case "$argument" in
+        --fail-with-body) fail_mode=1 ;;
+        http://*|https://*) url="$argument" ;;
+    esac
+    previous="$argument"
+done
+status="${FIXTURE_HTTP_STATUS:?}"
+if [ -n "$output" ]; then
+    name="${url##*/}"
+    # The sync script appends a cache-busting query so no proxy can
+    # serve it a stale snapshot. A real origin ignores it; so does this.
+    name="${name%%\?*}"
+    if [ "$status" = "200" ] && [ -n "${FIXTURE_BODY_DIR:-}" ] \
+        && [ -f "$FIXTURE_BODY_DIR/$name" ]; then
+        cp "$FIXTURE_BODY_DIR/$name" "$output"
+    else
+        : > "$output"
+    fi
+fi
+printf '%s' "$status"
+if [ "$fail_mode" = "1" ] && [ "$status" != "200" ]; then
+    exit 22
+fi
+exit 0
+EOF
+
+cat > "$TEST_ROOT/bin/gpgv" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+# The fixture repository is not really signed; the merge logic under
+# test is what happens *after* verification succeeds.
+output=""
+previous=""
+for argument in "$@"; do
+    case "$previous" in
+        --output) output="$argument" ;;
+    esac
+    previous="$argument"
+done
+if [ -n "$output" ]; then
+    cp "${!#}" "$output" 2>/dev/null || : > "$output"
+fi
+exit 0
 EOF
 
 cat > "$TEST_ROOT/bin/apt-cache" <<'EOF'
@@ -107,7 +160,29 @@ case "$mode" in
         ;;
 esac
 EOF
-chmod +x "$TEST_ROOT/bin/curl" "$TEST_ROOT/bin/apt-cache" "$TEST_ROOT/bin/apt-get"
+chmod +x "$TEST_ROOT/bin/curl" "$TEST_ROOT/bin/gpgv" \
+    "$TEST_ROOT/bin/apt-cache" "$TEST_ROOT/bin/apt-get"
+
+# A published repository that predates release-security metadata: the
+# merge logic under test is the same either way, and the baseline
+# ratchet has its own suite in test-release-security-publication.sh.
+mkdir -p "$TEST_ROOT/bodies"
+# `Date` and `Valid-Until` are generated: the publisher refuses to
+# treat an undated, future-dated or expired index as current state.
+write_inrelease() {
+    local target="$1" date="$2" valid_until="$3"
+    cat > "$target" <<EOF
+Origin: Claw OS
+Suite: trixie
+Codename: trixie
+Architectures: amd64 arm64 all
+Components: main
+Date: $date
+Valid-Until: $valid_until
+EOF
+}
+write_inrelease "$TEST_ROOT/bodies/InRelease" \
+    "$(date -u -R)" "$(date -u -R -d '+30 days')"
 
 run_sync() {
     local scenario="$1"
@@ -115,11 +190,13 @@ run_sync() {
     mkdir -p "$scenario/tmp"
     PATH="$TEST_ROOT/bin:$ORIGINAL_PATH" \
         FIXTURE_HTTP_STATUS="$http_status" \
+        FIXTURE_BODY_DIR="$TEST_ROOT/bodies" \
         FIXTURE_CANDIDATES="$scenario/candidates" \
         FIXTURE_CALL_LOG="$scenario/calls" \
         EXISTING_APT_REPO_URL="https://apt.example.invalid" \
         APT_PUBLIC_KEYRING="$scenario/keyring.gpg" \
         DEBS_DIR="$scenario/debs" \
+        COS_PREVIOUS_RELEASE_SECURITY_DIR="$scenario/release-security-previous" \
         TMPDIR="$scenario/tmp" \
         bash "$SYNC_SCRIPT"
 }

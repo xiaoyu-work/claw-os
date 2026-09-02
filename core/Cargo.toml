@@ -1,6 +1,6 @@
 [package]
 name = "cos"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Claw OS — agent-native operating system core"
 
@@ -35,6 +35,10 @@ path = "src/bin/claw-app-runner.rs"
 [[bin]]
 name = "claw-mail-ai-host"
 path = "src/bin/claw-mail-ai-host.rs"
+
+[[bin]]
+name = "claw-security-floor"
+path = "src/bin/claw-security-floor.rs"
 
 [features]
 default = []

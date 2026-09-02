@@ -100,6 +100,7 @@ fn every_worker_frame_names_its_route_and_task() {
     let frames = [
         WorkerFrame::Hello(Box::new(WorkerHello {
             protocol: PROTOCOL_VERSION,
+            security_epoch: crate::update::SECURITY_EPOCH,
             grant: signed_grant(),
             pid: 2,
             start_time_ticks: None,
@@ -215,5 +216,15 @@ fn a_reported_outcome_maps_onto_the_queue_outcome() {
     assert!(matches!(
         finish,
         crate::agent::service::FinishOutcome::Cancelled
+    ));
+
+    let finish: crate::agent::service::FinishOutcome = WorkerOutcome::WaitingApproval {
+        request_ids: vec!["approval-a".to_string()],
+    }
+    .into();
+    assert!(matches!(
+        finish,
+        crate::agent::service::FinishOutcome::WaitingApproval { request_ids }
+            if request_ids == vec!["approval-a"]
     ));
 }

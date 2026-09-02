@@ -1,11 +1,9 @@
 use super::*;
 use serde_json::json;
 
-/// The route surface as it stood before the registry existed.
-///
-/// Kept verbatim so the migration to a declarative table is proved to
-/// have preserved the allowlist rather than quietly widened it.
-const HISTORICAL_USER_COMMANDS: &[&str] = &[
+/// Expected non-root route surface. Changes here are intentional API and
+/// authority changes rather than incidental registry drift.
+const EXPECTED_USER_COMMANDS: &[&str] = &[
     "daemon.health",
     "daemon.status",
     "task.submit",
@@ -13,11 +11,13 @@ const HISTORICAL_USER_COMMANDS: &[&str] = &[
     "task.get",
     "task.status",
     "task.cancel",
+    "task.retry",
     "task.stream",
     "task.result",
     "task.count",
     "memory.history",
     "memory.sessions",
+    "agent.usage",
     "credential.oauth-refresh",
     "system.audio.control",
     "system.accessibility.control",
@@ -54,6 +54,10 @@ const HISTORICAL_USER_COMMANDS: &[&str] = &[
     "app_session.bind",
     "app_session.set_transient",
     "app_session.deregister",
+    // The launcher's relay: addressed by a grant `clawd` issued to that
+    // exact process, and refused for every route a session may not
+    // reach. It is `Access::User` because the launcher is unprivileged.
+    "app_session.relay",
     "permission.pending",
     "permission.recent",
     "permission.status",
@@ -64,16 +68,37 @@ const HISTORICAL_USER_COMMANDS: &[&str] = &[
     "context.event.append",
     "context.event.query",
     "system.operations",
+    "notification.publish",
+    "notification.list",
+    "notification.subscribe",
+    "notification.read",
+    "notification.acknowledge",
+    "notification.dismiss",
+    "notification.preferences.get",
+    "notification.preferences.set",
+    "notification.delivery.claim",
+    "notification.delivery.complete",
     "transaction.begin",
     "transaction.list",
     "transaction.commit",
     "transaction.rollback",
+    // Read-only view of the caller's own session-journal partitions:
+    // health, head sequence and the mutations whose outcome is still
+    // unknown. It resolves no grant and reads nobody else's chain.
+    "journal.status",
 ];
 
 /// Root-only routes. `permission.revoke` joins `context.update`: it
 /// retires standing authority and its `owner_uid` names whose, so a
 /// non-root peer must not reach it in either direction.
-const HISTORICAL_ROOT_COMMANDS: &[&str] = &["context.update", "permission.revoke"];
+/// `journal.mutation.resolve` joins them because recording what
+/// happened to an unresolved privileged mutation is an administrative
+/// statement, and it is what ends that operation's replay refusal.
+const EXPECTED_ROOT_COMMANDS: &[&str] = &[
+    "context.update",
+    "journal.mutation.resolve",
+    "permission.revoke",
+];
 
 #[test]
 fn the_table_and_the_command_enum_cannot_drift() {
@@ -104,12 +129,12 @@ fn the_access_allowlist_is_exactly_what_it_was() {
     let root: std::collections::BTreeSet<_> = root_commands().collect();
     assert_eq!(
         user,
-        HISTORICAL_USER_COMMANDS.iter().copied().collect(),
+        EXPECTED_USER_COMMANDS.iter().copied().collect(),
         "the set of routes a non-root peer may reach changed"
     );
     assert_eq!(
         root,
-        HISTORICAL_ROOT_COMMANDS.iter().copied().collect(),
+        EXPECTED_ROOT_COMMANDS.iter().copied().collect(),
         "the set of root-only routes changed"
     );
 }
@@ -122,6 +147,7 @@ fn every_route_owns_its_audit_metadata() {
         "task.count",
         "context.snapshot",
         "context.sources",
+        "notification.preferences.get",
         "transaction.begin",
         "transaction.list",
     ]
@@ -195,7 +221,7 @@ fn root_only_commands_are_not_reachable_by_a_user_peer() {
         start_time_ticks: Some(1),
         attended_local: false,
     };
-    for command in HISTORICAL_ROOT_COMMANDS {
+    for command in EXPECTED_ROOT_COMMANDS {
         let route = Command::parse(command).unwrap().route();
         assert_eq!(
             route.authorize(&user),
@@ -265,6 +291,7 @@ fn read_only_routes_are_classified_as_queries() {
         "task.get",
         "task.result",
         "memory.history",
+        "agent.usage",
         "context.snapshot",
         "context.event.query",
         "permission.status",
@@ -285,6 +312,7 @@ fn state_changing_routes_are_classified_as_mutations() {
     for name in [
         "task.submit",
         "task.cancel",
+        "task.retry",
         "context.update",
         "context.event.append",
         "permission.request",

@@ -12,6 +12,14 @@ on:
         description: "Unique Pages artifact name for this package publisher"
         required: true
         type: string
+      release_security_bootstrap:
+        description: >-
+          One-time migration: establish the release-security baseline for a
+          repository that predates downgrade protection. Rejected once a
+          baseline exists.
+        required: false
+        default: false
+        type: boolean
     secrets:
       CLAW_OS_APT_SIGNING_PRIVATE_KEY:
         required: true
@@ -86,6 +94,11 @@ jobs:
           CLAW_OS_APT_SIGNING_PRIVATE_KEY: ${{ secrets.CLAW_OS_APT_SIGNING_PRIVATE_KEY }}
           GPG_PASSPHRASE: ${{ secrets.CLAW_OS_APT_SIGNING_PASSPHRASE }}
           CLAW_OS_WEB_DIST_DIR: ${{ github.workspace }}/build/web-dist
+          # Only the explicit workflow input can enable the one-time
+          # release-security migration. There is no other way to set it,
+          # and `verify-release-security.sh` refuses it outright once the
+          # published repository already advertises a baseline.
+          COS_RELEASE_SECURITY_BOOTSTRAP: ${{ inputs.release_security_bootstrap && '1' || '0' }}
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq apt-utils gnupg

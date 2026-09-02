@@ -1,6 +1,37 @@
 #!/bin/sh
 set -e
 
+DPKG_ROOT="${DPKG_ROOT:-}"
+ROOT_ARG="${DPKG_ROOT:-/}"
+SECURITY_HELPER="$DPKG_ROOT/usr/lib/cos/bin/claw-security-floor"
+RELEASE_MANIFEST="$DPKG_ROOT/usr/lib/cos/release-security/claw-os-desktop/manifest.json"
+RELEASE_SIGNATURE="$RELEASE_MANIFEST.asc"
+
+# Record this release in the update-security floor only after its files
+# match the content its signed release manifest declares.
+commit_security_floor() {
+    if [ ! -x "$SECURITY_HELPER" ] || [ ! -f "$RELEASE_MANIFEST" ]; then
+        echo "error: claw-os-desktop is missing its update-security metadata" >&2
+        return 1
+    fi
+    if [ -f "$RELEASE_SIGNATURE" ]; then
+        "$SECURITY_HELPER" commit \
+            --root "$ROOT_ARG" \
+            --package claw-os-desktop \
+            --version "__VERSION__" \
+            --manifest "$RELEASE_MANIFEST" \
+            --signature "$RELEASE_SIGNATURE" \
+            --reason "claw-os-desktop configure"
+    else
+        "$SECURITY_HELPER" commit \
+            --root "$ROOT_ARG" \
+            --package claw-os-desktop \
+            --version "__VERSION__" \
+            --manifest "$RELEASE_MANIFEST" \
+            --reason "claw-os-desktop configure"
+    fi
+}
+
 ensure_line() {
     file="$1"
     line="$2"
@@ -111,29 +142,36 @@ generate_default_locales() {
 }
 
 if [ "$1" = "configure" ]; then
-    ensure_line /etc/environment "XCURSOR_THEME=Bibata-Modern-Classic"
-    ensure_line /etc/environment "XCURSOR_SIZE=24"
-    ensure_line /etc/environment "GTK_IM_MODULE=fcitx"
-    ensure_line /etc/environment "QT_IM_MODULE=fcitx"
-    ensure_line /etc/environment "XMODIFIERS=@im=fcitx"
-    ensure_line /etc/environment "SDL_IM_MODULE=fcitx"
-    ensure_line /etc/environment "GLFW_IM_MODULE=ibus"
-    ensure_initial_setup_user
-    enable_desktop_links
-    enable_desktop_services
-    enable_fingerprint_auth
-    if command -v systemd-sysusers >/dev/null 2>&1; then
-        systemd-sysusers || true
+    # Desktop integration touches the running system: accounts, PAM,
+    # locales, systemd links. Under DPKG_ROOT (an image build, a staged
+    # root, a test) none of that applies, but the release-security
+    # commit still must.
+    if [ -z "$DPKG_ROOT" ]; then
+        ensure_line /etc/environment "XCURSOR_THEME=Bibata-Modern-Classic"
+        ensure_line /etc/environment "XCURSOR_SIZE=24"
+        ensure_line /etc/environment "GTK_IM_MODULE=fcitx"
+        ensure_line /etc/environment "QT_IM_MODULE=fcitx"
+        ensure_line /etc/environment "XMODIFIERS=@im=fcitx"
+        ensure_line /etc/environment "SDL_IM_MODULE=fcitx"
+        ensure_line /etc/environment "GLFW_IM_MODULE=ibus"
+        ensure_initial_setup_user
+        enable_desktop_links
+        enable_desktop_services
+        enable_fingerprint_auth
+        if command -v systemd-sysusers >/dev/null 2>&1; then
+            systemd-sysusers || true
+        fi
+        if command -v systemd-tmpfiles >/dev/null 2>&1; then
+            # Non-fatal: in a build chroot tmpfiles can fail on unsafe path
+            # transitions / missing devices, but it re-runs on every real boot.
+            # A build-time hiccup must not abort package configuration.
+            systemd-tmpfiles --create || true
+        fi
+        generate_default_locales
+        command -v plymouth-set-default-theme >/dev/null 2>&1 && \
+            plymouth-set-default-theme claw || true
     fi
-    if command -v systemd-tmpfiles >/dev/null 2>&1; then
-        # Non-fatal: in a build chroot tmpfiles can fail on unsafe path
-        # transitions / missing devices, but it re-runs on every real boot.
-        # A build-time hiccup must not abort package configuration.
-        systemd-tmpfiles --create || true
-    fi
-    generate_default_locales
-    command -v plymouth-set-default-theme >/dev/null 2>&1 && \
-        plymouth-set-default-theme claw || true
+    commit_security_floor
 fi
 
 exit 0
