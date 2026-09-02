@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // ExpectedWireVersion is the wire-protocol version the kernel must
@@ -278,6 +279,30 @@ type Desktop struct {
 	PanelApplet bool `json:"panel_applet,omitempty"`
 }
 
+// McpCallContext — MCP call context.
+// Authenticated call identity and lineage injected by the Claw MCP Gateway over
+// the private App-host transport. Caller-supplied MCP arguments must never
+// populate this object.
+type McpCallContext struct {
+	WireVersion int `json:"wire_version"`
+	CallId string `json:"call_id"`
+	TraceId string `json:"trace_id"`
+	ParentCallId string `json:"parent_call_id,omitempty"`
+	Depth uint64 `json:"depth"`
+	DeadlineUnixMs uint64 `json:"deadline_unix_ms,omitempty"`
+	SessionId string `json:"session_id,omitempty"`
+	TaskId string `json:"task_id,omitempty"`
+	Caller McpPrincipal `json:"caller"`
+}
+
+// McpPrincipal — McpPrincipal.
+type McpPrincipal struct {
+	Kind string `json:"kind"`
+	Id string `json:"id"`
+	OwnerUid uint64 `json:"owner_uid"`
+	AppId string `json:"app_id,omitempty"`
+}
+
 // Perms — Permissions request / reply.
 // Shape of the success-path data field returned by policy checks. Apps call this
 // via SDK helpers (e.g. cos_runtime.policy.check).
@@ -375,9 +400,12 @@ func (e *WireDecodeError) Error() string {
 const (
 	WireConst = "WIRE_CONST"
 	WireEnum = "WIRE_ENUM"
+	WireMaxLength = "WIRE_MAX_LENGTH"
 	WireMaximum = "WIRE_MAXIMUM"
+	WireMinLength = "WIRE_MIN_LENGTH"
 	WireMinimum = "WIRE_MINIMUM"
 	WireOneOf = "WIRE_ONE_OF"
+	WirePattern = "WIRE_PATTERN"
 	WireRequired = "WIRE_REQUIRED"
 	WireType = "WIRE_TYPE"
 	WireUnknownField = "WIRE_UNKNOWN_FIELD"
@@ -550,6 +578,21 @@ func validateWireSchema(rule, root map[string]any, value any, schemaName, path s
 			return wireError(WireEnum, schemaName, path, "value is not in the allowed enum")
 		}
 	}
+	if text, ok := value.(string); ok {
+		if minimum, ok := wireExactInteger(rule["minLength"]); ok && minimum.value != nil && utf8.RuneCountInString(text) < int(minimum.value.Int64()) {
+			return wireError(WireMinLength, schemaName, path, "below minimum length")
+		}
+		if maximum, ok := wireExactInteger(rule["maxLength"]); ok && maximum.value != nil && utf8.RuneCountInString(text) > int(maximum.value.Int64()) {
+			return wireError(WireMaxLength, schemaName, path, "above maximum length")
+		}
+		if pattern, ok := rule["pattern"].(string); ok {
+			matcher, err := regexp.Compile(pattern)
+			if err != nil { return wireError(WirePattern, schemaName, path, "invalid schema pattern") }
+			match := matcher.FindStringIndex(text)
+			fullMatch, _ := rule["x-full-match"].(bool)
+			if match == nil || (fullMatch && (match[0] != 0 || match[1] != len(text))) { return wireError(WirePattern, schemaName, path, "string does not match pattern") }
+		}
+	}
 	if number, numeric := wireExactInteger(value); numeric {
 		if minimum, ok := wireExactInteger(rule["minimum"]); ok && compareWireExactIntegers(number, minimum) < 0 {
 			return wireError(WireMinimum, schemaName, path, "below minimum")
@@ -627,6 +670,19 @@ func ValidateBudgetShow(value any) error {
 		panic("generated wire schema is invalid: " + err.Error())
 	}
 	return validateWireSchema(schema, schema, value, "BudgetShow", "$")
+}
+
+const wireSchemaMcpCallContext = "{\"$defs\":{\"McpPrincipal\":{\"additionalProperties\":false,\"properties\":{\"app_id\":{\"pattern\":\"^[a-z][a-z0-9_-]*$\",\"type\":\"string\",\"x-full-match\":true},\"id\":{\"maxLength\":256,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$\",\"type\":\"string\",\"x-full-match\":true},\"kind\":{\"enum\":[\"system-agent\",\"app\",\"app-agent\",\"external-agent\",\"cli\"],\"type\":\"string\"},\"owner_uid\":{\"maximum\":4294967295,\"minimum\":0,\"type\":\"integer\"}},\"required\":[\"kind\",\"id\",\"owner_uid\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/mcp_call_context.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":\"Authenticated call identity and lineage injected by the Claw MCP Gateway over the private App-host transport. Caller-supplied MCP arguments must never populate this object.\",\"properties\":{\"call_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:-]*$\",\"type\":\"string\",\"x-full-match\":true},\"caller\":{\"$ref\":\"#/$defs/McpPrincipal\"},\"deadline_unix_ms\":{\"maximum\":9007199254740991,\"minimum\":1,\"type\":\"integer\"},\"depth\":{\"maximum\":16,\"minimum\":0,\"type\":\"integer\"},\"parent_call_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:-]*$\",\"type\":\"string\",\"x-full-match\":true},\"session_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$\",\"type\":\"string\",\"x-full-match\":true},\"task_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$\",\"type\":\"string\",\"x-full-match\":true},\"trace_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:-]*$\",\"type\":\"string\",\"x-full-match\":true},\"wire_version\":{\"const\":1,\"maximum\":1,\"minimum\":1,\"type\":\"integer\"}},\"required\":[\"wire_version\",\"call_id\",\"trace_id\",\"depth\",\"caller\"],\"title\":\"MCP call context\",\"type\":\"object\"}"
+
+// ValidateMcpCallContext validates a value against wire/v1/mcp_call_context.schema.json.
+func ValidateMcpCallContext(value any) error {
+	var schema map[string]any
+	decoder := json.NewDecoder(strings.NewReader(wireSchemaMcpCallContext))
+	decoder.UseNumber()
+	if err := decoder.Decode(&schema); err != nil {
+		panic("generated wire schema is invalid: " + err.Error())
+	}
+	return validateWireSchema(schema, schema, value, "McpCallContext", "$")
 }
 
 const wireSchemaToolCatalog = "{\"$defs\":{\"WireCatalogEntry\":{\"additionalProperties\":true,\"properties\":{\"args_schema\":{\"additionalProperties\":true,\"type\":\"object\"},\"name\":{\"type\":\"string\"},\"returns_schema\":{\"additionalProperties\":true,\"type\":\"object\"},\"stability\":{\"enum\":[\"stable\",\"experimental\"],\"type\":\"string\"},\"summary\":{\"type\":\"string\"},\"verb\":{\"type\":\"string\"}},\"required\":[\"name\",\"summary\",\"verb\",\"stability\",\"args_schema\",\"returns_schema\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/tool_catalog.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":true,\"description\":\"Shape returned by `cos ai tools`.\",\"properties\":{\"tools\":{\"items\":{\"$ref\":\"#/$defs/WireCatalogEntry\"},\"type\":\"array\"}},\"required\":[\"tools\"],\"title\":\"Catalog tool list reply\",\"type\":\"object\"}"

@@ -165,6 +165,7 @@ func TestRootTypeAndBudgetShowContract(t *testing.T) {
 	root := decodeWireValue(t, "null")
 	for _, validator := range []func(any) error{
 		ValidateAi,
+		ValidateMcpCallContext,
 		ValidateTool,
 		ValidateToolCatalog,
 	} {
@@ -178,5 +179,60 @@ func TestRootTypeAndBudgetShowContract(t *testing.T) {
 		`{"app":"notes","period":"2026-08","units_used":7}`,
 	)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMcpCallContextIsClosedAndDepthBounded(t *testing.T) {
+	context := decodeWireValue(t, `{
+		"wire_version":1,
+		"call_id":"call-1",
+		"trace_id":"trace-1",
+		"depth":0,
+		"caller":{"kind":"system-agent","id":"session-1","owner_uid":1000}
+	}`)
+	if err := ValidateMcpCallContext(context); err != nil {
+		t.Fatal(err)
+	}
+
+	unknown := decodeWireValue(t, `{
+		"wire_version":1,
+		"call_id":"call-1",
+		"trace_id":"trace-1",
+		"depth":0,
+		"caller":{"kind":"system-agent","id":"session-1","owner_uid":1000,"token":"forged"}
+	}`)
+	err := ValidateMcpCallContext(unknown).(*WireDecodeError)
+	if err.Code != WireUnknownField || err.Path != "$.caller.token" {
+		t.Fatalf("unknown caller field error = %#v", err)
+	}
+
+	tooDeep := context.(map[string]any)
+	tooDeep["depth"] = json.Number("17")
+	err = ValidateMcpCallContext(tooDeep).(*WireDecodeError)
+	if err.Code != WireMaximum || err.Path != "$.depth" {
+		t.Fatalf("depth error = %#v", err)
+	}
+
+	for _, test := range []struct {
+		callID string
+		code   string
+	}{
+		{"", WireMinLength},
+		{strings.Repeat("x", 129), WireMaxLength},
+		{"call id", WirePattern},
+		{"call-1\n", WirePattern},
+	} {
+		malformed := decodeWireValue(t, `{
+			"wire_version":1,
+			"call_id":"call-1",
+			"trace_id":"trace-1",
+			"depth":0,
+			"caller":{"kind":"system-agent","id":"session-1","owner_uid":1000}
+		}`).(map[string]any)
+		malformed["call_id"] = test.callID
+		err = ValidateMcpCallContext(malformed).(*WireDecodeError)
+		if err.Code != test.code || err.Path != "$.call_id" {
+			t.Fatalf("call id %q error = %#v", test.callID, err)
+		}
 	}
 }

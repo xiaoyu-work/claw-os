@@ -20,6 +20,7 @@ claw-os-sdk/
 │   │   ├── budget_show.schema.json cos agent budget show reply
 │   │   ├── tool.schema.json        catalog tool invocation
 │   │   ├── tool_catalog.schema.json catalog tool list
+│   │   ├── mcp_call_context.schema.json authenticated App-call identity
 │   │   ├── contract.json           validators + stable error codes
 │   │   ├── app.schema.json         cos app <id> <verb>
 │   │   └── manifest.schema.json    app.json schema
@@ -43,7 +44,8 @@ claw-os-sdk/
 │   ├── README.md
 │   └── src/claw_os_sdk/
 │       ├── __init__.py
-│       ├── ai.py, tools.py, serve.py, claw_os_session.py
+│       ├── ai.py, tools.py, mcp.py, claw_os_session.py
+│       ├── serve.py            temporary legacy import path
 │       └── generated.py
 │
 ├── node/                Node SDK (npm package `@claw-os/sdk`)
@@ -73,11 +75,11 @@ claw-os-sdk/
 
 ## The model
 
-Every SDK in every language is a **thin client** over the same
-**wire protocol v1**, which is the JSON envelope that `cos` (the
-kernel CLI) writes to stdout. Routing flags use argv; AI prompt and
-system bodies use private `0600` temporary files so they never appear
-in `/proc/*/cmdline`.
+Every SDK consumes the same **wire protocol v1**. Outbound AI and
+system calls use the JSON envelope that `cos` writes to stdout.
+Inbound App tools use private MCP stdio owned by the App Host, with a
+Gateway-authenticated call context that is never taken from tool
+arguments.
 
 ```
 ┌──────────────────────┐

@@ -78,6 +78,22 @@ be added in v1; existing codes keep their meaning.
 
 App manifests (`app.json`) are validated against `manifest.schema.json`.
 
+## Private App MCP calls
+
+MCP-first Apps serve their manifest-declared tools over private stdio owned
+by the Claw App Host. For every `tools/call`, the Gateway replaces any
+caller-supplied Claw metadata and injects a value conforming to
+`mcp_call_context.schema.json` under
+`_meta["claw-os.dev/call-context"]`. It binds the authenticated workload
+principal to the call/trace lineage, nesting depth, owner, task/session, and
+deadline. This context is descriptive, not authority; the App Host retains
+the transient target capability grant.
+
+The Python runtime exposes that value through `claw_os_sdk.mcp.current_context()`
+and supports MCP progress tokens plus cooperative
+`notifications/cancelled`. MCP-first runtimes reject calls without a valid
+Gateway context.
+
 ## Error codes
 
 See `error_codes.md` for the canonical list. The minimum:

@@ -587,6 +587,7 @@ dependencies = [
  "base64",
  "num-bigint",
  "num-traits",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",

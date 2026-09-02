@@ -336,6 +336,35 @@ class Desktop(TypedDict, total=False):
     single_instance: bool
     panel_applet: bool
 
+class _McpCallContextRequired(TypedDict):
+    wire_version: int
+    call_id: str
+    trace_id: str
+    depth: int
+    caller: "McpPrincipal"
+
+class McpCallContext(_McpCallContextRequired, total=False):
+    """MCP call context.
+
+    Authenticated call identity and lineage injected by the Claw MCP Gateway
+    over the private App-host transport. Caller-supplied MCP arguments must
+    never populate this object.
+    """
+    parent_call_id: str
+    deadline_unix_ms: int
+    session_id: str
+    task_id: str
+
+class _McpPrincipalRequired(TypedDict):
+    kind: str
+    id: str
+    owner_uid: int
+
+class McpPrincipal(_McpPrincipalRequired, total=False):
+    """McpPrincipal.
+    """
+    app_id: str
+
 class _PermsRequired(TypedDict):
     decision: str
     verb: str
@@ -425,9 +454,12 @@ class WireDecodeError(ValueError):
 
 WIRE_CONST = "WIRE_CONST"
 WIRE_ENUM = "WIRE_ENUM"
+WIRE_MAX_LENGTH = "WIRE_MAX_LENGTH"
 WIRE_MAXIMUM = "WIRE_MAXIMUM"
+WIRE_MIN_LENGTH = "WIRE_MIN_LENGTH"
 WIRE_MINIMUM = "WIRE_MINIMUM"
 WIRE_ONE_OF = "WIRE_ONE_OF"
+WIRE_PATTERN = "WIRE_PATTERN"
 WIRE_REQUIRED = "WIRE_REQUIRED"
 WIRE_TYPE = "WIRE_TYPE"
 WIRE_UNKNOWN_FIELD = "WIRE_UNKNOWN_FIELD"
@@ -672,6 +704,19 @@ def _validate_wire_schema(
     allowed = rule.get("enum")
     if isinstance(allowed, list) and value not in allowed:
         raise _wire_error(WIRE_ENUM, schema_name, path, "value is not in the allowed enum")
+    if isinstance(value, str):
+        minimum_length = rule.get("minLength")
+        if isinstance(minimum_length, int) and len(value) < minimum_length:
+            raise _wire_error(WIRE_MIN_LENGTH, schema_name, path, f"length must be >= {minimum_length}")
+        maximum_length = rule.get("maxLength")
+        if isinstance(maximum_length, int) and len(value) > maximum_length:
+            raise _wire_error(WIRE_MAX_LENGTH, schema_name, path, f"length must be <= {maximum_length}")
+        pattern = rule.get("pattern")
+        if isinstance(pattern, str):
+            match = re.search(pattern, value)
+            full_match = rule.get("x-full-match") is True
+            if match is None or (full_match and match.span() != (0, len(value))):
+                raise _wire_error(WIRE_PATTERN, schema_name, path, "string does not match pattern")
     if integer is not None:
         minimum = rule.get("minimum")
         minimum_integer = _exact_integer(minimum)
@@ -718,6 +763,12 @@ _WIRE_SCHEMA_BUDGET_SHOW: Dict[str, Any] = decode_wire_json(r'''{"$id":"https://
 def validate_budget_show(value: Any) -> None:
     """Validate a value against wire/v1/budget_show.schema.json."""
     _validate_wire_schema(_WIRE_SCHEMA_BUDGET_SHOW, _WIRE_SCHEMA_BUDGET_SHOW, value, "BudgetShow", "$")
+
+_WIRE_SCHEMA_MCP_CALL_CONTEXT: Dict[str, Any] = decode_wire_json(r'''{"$defs":{"McpPrincipal":{"additionalProperties":false,"properties":{"app_id":{"pattern":"^[a-z][a-z0-9_-]*$","type":"string","x-full-match":true},"id":{"maxLength":256,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$","type":"string","x-full-match":true},"kind":{"enum":["system-agent","app","app-agent","external-agent","cli"],"type":"string"},"owner_uid":{"maximum":4294967295,"minimum":0,"type":"integer"}},"required":["kind","id","owner_uid"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/mcp_call_context.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"description":"Authenticated call identity and lineage injected by the Claw MCP Gateway over the private App-host transport. Caller-supplied MCP arguments must never populate this object.","properties":{"call_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$","type":"string","x-full-match":true},"caller":{"$ref":"#/$defs/McpPrincipal"},"deadline_unix_ms":{"maximum":9007199254740991,"minimum":1,"type":"integer"},"depth":{"maximum":16,"minimum":0,"type":"integer"},"parent_call_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$","type":"string","x-full-match":true},"session_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$","type":"string","x-full-match":true},"task_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$","type":"string","x-full-match":true},"trace_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$","type":"string","x-full-match":true},"wire_version":{"const":1,"maximum":1,"minimum":1,"type":"integer"}},"required":["wire_version","call_id","trace_id","depth","caller"],"title":"MCP call context","type":"object"}''')
+
+def validate_mcp_call_context(value: Any) -> None:
+    """Validate a value against wire/v1/mcp_call_context.schema.json."""
+    _validate_wire_schema(_WIRE_SCHEMA_MCP_CALL_CONTEXT, _WIRE_SCHEMA_MCP_CALL_CONTEXT, value, "McpCallContext", "$")
 
 _WIRE_SCHEMA_TOOL_CATALOG: Dict[str, Any] = decode_wire_json(r'''{"$defs":{"WireCatalogEntry":{"additionalProperties":true,"properties":{"args_schema":{"additionalProperties":true,"type":"object"},"name":{"type":"string"},"returns_schema":{"additionalProperties":true,"type":"object"},"stability":{"enum":["stable","experimental"],"type":"string"},"summary":{"type":"string"},"verb":{"type":"string"}},"required":["name","summary","verb","stability","args_schema","returns_schema"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/tool_catalog.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Shape returned by `cos ai tools`.","properties":{"tools":{"items":{"$ref":"#/$defs/WireCatalogEntry"},"type":"array"}},"required":["tools"],"title":"Catalog tool list reply","type":"object"}''')
 

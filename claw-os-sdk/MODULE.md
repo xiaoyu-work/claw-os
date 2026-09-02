@@ -24,11 +24,13 @@ Rust, Python, Node, and Go bindings.
 | `wire/` | Versioned contract and code generation |
 | `wire/v1/contract.json` | Generated decoder set, stable validation errors, and JSON-RPC codes |
 | `wire/v1/manifest.schema.json` | Versioned App/MCP service, tool, access, and capability contract |
+| `wire/v1/mcp_call_context.schema.json` | Gateway-authenticated caller identity, lineage, depth, and deadline |
 | `rust/` | Rust public SDK |
 | `python/` | Python public SDK |
 | `node/` | Node public SDK |
 | `go/` | Go public SDK |
 | `python/src/claw_os_sdk/generated.py` | Generated Python wire bindings |
+| `python/src/claw_os_sdk/mcp.py` | Manifest-bound MCP server, progress, and cooperative cancellation |
 | `../.github/workflows/publish-sdk-release.yml` | GitHub-only multi-language SDK release |
 
 `cos-runtime/` is a separate internal package for bundled apps; public apps
