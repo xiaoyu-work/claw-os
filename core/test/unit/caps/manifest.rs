@@ -1166,6 +1166,7 @@ fn mcp_first_service_parses_lifecycle_access_and_tools() {
                 "lifecycle": "always-on",
                 "access": {
                   "system_agent": true,
+                  "local_cli": false,
                   "apps": ["crm"],
                   "external_agents": false
                 },
@@ -1184,6 +1185,7 @@ fn mcp_first_service_parses_lifecycle_access_and_tools() {
     assert_eq!(service.entry.as_deref(), Some("server.py"));
     assert_eq!(service.lifecycle, McpLifecycle::AlwaysOn);
     assert!(service.access.system_agent);
+    assert!(!service.access.local_cli);
     assert_eq!(service.access.apps, vec!["crm"]);
     assert!(!service.access.external_agents);
     assert_eq!(service.tools[0].name, "email.search");
@@ -1203,6 +1205,7 @@ fn mcp_first_service_uses_restrictive_caller_defaults() {
     let service = manifest.mcp_service().expect("MCP service");
     assert_eq!(service.lifecycle, McpLifecycle::Lazy);
     assert!(service.access.system_agent);
+    assert!(service.access.local_cli);
     assert!(service.access.apps.is_empty());
     assert!(!service.access.external_agents);
 }
@@ -1283,6 +1286,29 @@ fn mcp_first_service_rejects_legacy_session_and_invalid_callers() {
     )
     .unwrap_err();
     assert!(matches!(unknown_field, ManifestError::Json(_)));
+}
+
+#[test]
+fn mcp_first_service_rejects_ambiguous_or_unbounded_tool_names() {
+    for name in ["email..search".to_string(), format!("a{}", "x".repeat(128))] {
+        let error = Manifest::from_json(
+            &serde_json::json!({
+                "schema_version": 2,
+                "id": "email",
+                "version": "1.0.0",
+                "name": "Email",
+                "mcp": {
+                    "tools": [{"name": name, "summary": "Search mail."}]
+                }
+            })
+            .to_string(),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            ManifestError::SessionToolInvalidName { .. }
+        ));
+    }
 }
 
 #[test]

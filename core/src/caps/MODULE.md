@@ -11,6 +11,8 @@ separate description from system authority.
 - Parse, normalize, and compare scopes.
 - Validate legacy operation manifests and MCP-first App services, then derive
   exact per-tool capability needs.
+- Keep MCP caller restrictions separate from exact
+  `agent.invoke:<app>/<tool>` authority and target-side capability needs.
 - Enforce permissions for sessions, tools, apps, and broker requests.
 - Route denied Agent capabilities into attended, exact-scope consent
   without turning approval into ambient session authority.

@@ -338,11 +338,18 @@ async fn worker_child() {
             .expect("open hosted App session"),
         1
     );
+    let context =
+        cos::agent::tools::app_gateway::McpCallContext::for_extension_system_agent(
+            &binding,
+            Duration::from_secs(5),
+        )
+        .expect("bound App call context");
     let app_call = client
         .call_app(
             "echo-app".to_string(),
             "ping".to_string(),
             serde_json::json!({}),
+            context,
             Duration::from_secs(5),
         )
         .await

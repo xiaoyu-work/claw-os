@@ -44,6 +44,58 @@ async fn request_round_trip_via_in_memory_pair() {
 }
 
 #[tokio::test]
+async fn call_tool_context_is_injected_outside_arguments() {
+    let (client_t, server_t) = in_memory_pair();
+    let client = McpClient::new(client_t);
+    client.start().await;
+
+    let server = tokio::spawn(async move {
+        let frame = server_t.recv().await.unwrap().unwrap();
+        let request: JsonRpcRequest = serde_json::from_str(&frame).unwrap();
+        let params = request.params.as_ref().unwrap();
+        assert_eq!(params["name"], "email.search");
+        assert_eq!(params["arguments"], serde_json::json!({"query": "customer"}));
+        assert!(params["arguments"].get("caller").is_none());
+        assert_eq!(
+            params["_meta"]["claw-os.dev/call-context"]["caller"]["kind"],
+            "system-agent"
+        );
+        let response = JsonRpcResponse::ok(
+            request.id,
+            serde_json::json!({"content": [], "isError": false}),
+        );
+        server_t
+            .send(serde_json::to_string(&response).unwrap())
+            .await
+            .unwrap();
+    });
+
+    let context = crate::agent::tools::app_gateway::McpCallContext {
+        wire_version: 1,
+        call_id: "call-1".to_string(),
+        trace_id: "trace-1".to_string(),
+        parent_call_id: None,
+        depth: 0,
+        deadline_unix_ms: Some(1),
+        session_id: Some("session-1".to_string()),
+        task_id: Some("task-1".to_string()),
+        caller: crate::agent::tools::app_gateway::McpPrincipal::system_agent(
+            1000,
+            "session-1",
+        ),
+    };
+    client
+        .call_tool_with_context(
+            "email.search",
+            Some(serde_json::json!({"query": "customer"})),
+            context,
+        )
+        .await
+        .unwrap();
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn server_error_response_surfaces_as_client_error() {
     let (client_t, server_t) = in_memory_pair();
     let client = McpClient::new(client_t);

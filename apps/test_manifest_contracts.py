@@ -1098,6 +1098,7 @@ def test_published_schema_validates_all_manifests_and_rejects_alias_ambiguity() 
             "lifecycle": "always-on",
             "access": {
                 "system_agent": True,
+                "local_cli": False,
                 "apps": ["crm"],
                 "external_agents": False,
             },
@@ -1125,6 +1126,10 @@ def test_published_schema_validates_all_manifests_and_rejects_alias_ambiguity() 
     duplicate_callers = json.loads(json.dumps(mcp_first))
     duplicate_callers["mcp"]["access"]["apps"] = ["crm", "crm"]
     assert list(validator.iter_errors(duplicate_callers))
+
+    ambiguous_tool = json.loads(json.dumps(mcp_first))
+    ambiguous_tool["mcp"]["tools"][0]["name"] = "email..search"
+    assert list(validator.iter_errors(ambiguous_tool))
 
 
 def test_wire_capability_catalog_matches_kernel_and_manifests() -> None:

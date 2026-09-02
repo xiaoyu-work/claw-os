@@ -337,6 +337,7 @@ pub fn record_worker_runtime(
             lease_digest,
             stage,
             mcp,
+            app,
             manifest_digest,
             success,
             latency_ms,
@@ -372,6 +373,36 @@ pub fn record_worker_runtime(
                 untrusted_remote_name: mcp
                     .as_ref()
                     .map(|mcp| mcp.untrusted_remote_name.clone()),
+                app_tool: app
+                    .as_ref()
+                    .map(|app| audit_policy::safe_identity(&app.tool)),
+                invoke_target: app
+                    .as_ref()
+                    .map(|app| audit_policy::safe_identity(&app.invoke_target)),
+                call_id: app
+                    .as_ref()
+                    .map(|app| audit_policy::safe_identity(&app.context.call_id)),
+                trace_id: app
+                    .as_ref()
+                    .map(|app| audit_policy::safe_identity(&app.context.trace_id)),
+                parent_call_id: app
+                    .as_ref()
+                    .and_then(|app| app.context.parent_call_id.as_deref())
+                    .map(audit_policy::safe_identity),
+                call_depth: app.as_ref().map(|app| app.context.depth),
+                deadline_unix_ms: app
+                    .as_ref()
+                    .and_then(|app| app.context.deadline_unix_ms),
+                caller_kind: app
+                    .as_ref()
+                    .map(|app| app.context.caller.kind.as_str()),
+                caller_id: app
+                    .as_ref()
+                    .map(|app| audit_policy::safe_identity(&app.context.caller.id)),
+                caller_app_id: app
+                    .as_ref()
+                    .and_then(|app| app.context.caller.app_id.as_deref())
+                    .map(audit_policy::safe_identity),
                 manifest_digest: manifest_digest.as_deref().map(audit_policy::safe_reference),
                 success: *success,
                 latency_ms: *latency_ms,
@@ -578,6 +609,26 @@ struct WorkerExtensionAudit<'a> {
     capability_generation: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     untrusted_remote_name: Option<TextDigest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    app_tool: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    invoke_target: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    trace_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent_call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    call_depth: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    deadline_unix_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    caller_kind: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    caller_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    caller_app_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     manifest_digest: Option<String>,
     success: bool,

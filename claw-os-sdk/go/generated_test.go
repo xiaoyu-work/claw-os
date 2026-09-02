@@ -236,3 +236,18 @@ func TestMcpCallContextIsClosedAndDepthBounded(t *testing.T) {
 		}
 	}
 }
+
+func TestManifestAccessCanSerializeExplicitFalseAgainstTrueDefault(t *testing.T) {
+	disabled := false
+	access := Mcpaccess{
+		SystemAgent: &disabled,
+		LocalCli:    &disabled,
+	}
+	body, err := json.Marshal(access)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != `{"system_agent":false,"local_cli":false}` {
+		t.Fatalf("explicit false access was not preserved: %s", body)
+	}
+}

@@ -11,6 +11,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::agent::tools::app_gateway::McpCallContext;
+
 /// JSON-RPC version literal — every envelope must carry exactly this.
 pub const JSONRPC_VERSION: &str = "2.0";
 
@@ -281,6 +283,24 @@ pub struct CallToolParams {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arguments: Option<Value>,
+    #[serde(
+        default,
+        rename = "_meta",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub metadata: Option<CallToolMetadata>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CallToolMetadata {
+    #[serde(
+        default,
+        rename = "claw-os.dev/call-context",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub call_context: Option<McpCallContext>,
+    #[serde(flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

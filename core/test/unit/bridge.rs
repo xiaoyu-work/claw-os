@@ -10,6 +10,22 @@ fn default_entries_are_runtime_aware() {
 }
 
 #[test]
+fn mcp_first_launch_uses_exact_tool_invoke_authority() {
+    let exact = launch_invoke_cap(
+        "email",
+        &LaunchRequest::Mcp {
+            tool: Some("email.search"),
+        },
+    )
+    .unwrap();
+    assert_eq!(exact.scope, Scope::name("email/email.search"));
+    assert!(!Cap::new(Verb::AGENT_INVOKE, Scope::name("email")).covers(&exact));
+
+    let legacy = launch_invoke_cap("email", &LaunchRequest::Mcp { tool: None }).unwrap();
+    assert_eq!(legacy.scope, Scope::name("email"));
+}
+
+#[test]
 fn hosted_app_commands_use_the_fixed_child_isolation_wrapper() {
     let _lock = crate::test_env::lock_env();
     let home = tempfile::tempdir().unwrap();
@@ -439,11 +455,18 @@ fn approval_request_ids_are_read_only_from_a_typed_approval_denial() {
 #[test]
 fn an_approval_wait_can_be_cancelled() {
     cancel_pending_approval_wait();
-    let error = wait_for_approvals(&["ap-1".to_string()])
+    let error = wait_for_approvals(&["ap-1".to_string()], None)
         .expect_err("a cancelled wait must end with a terminal error");
     assert!(error.contains("cancelled"), "unexpected: {error}");
     // The flag is taken, so a later launch is not poisoned by it.
     assert!(!APPROVAL_WAIT_CANCELLED.load(Ordering::SeqCst));
+}
+
+#[test]
+fn an_approval_wait_cannot_outlive_the_mcp_call_deadline() {
+    let error = wait_for_approvals(&["ap-1".to_string()], Some(1))
+        .expect_err("an expired App call must not poll or consume approval");
+    assert!(error.contains("deadline"), "unexpected: {error}");
 }
 
 #[test]

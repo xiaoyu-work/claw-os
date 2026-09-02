@@ -30,7 +30,7 @@ and agent tasks.
 | `authority/` | The capability authority: grants, opaque handles, attenuation, the route middleware and its audit facts |
 | `agent_client.rs` | Client RPC for agent task submit/result/cancel/status |
 | `tasks.rs` | Task queue and lifecycle |
-| `app_sessions.rs` | App/native/MCP session authority: derives identity and capabilities, plans approvals, issues launch grants |
+| `app_sessions.rs` | App/native/MCP authority: exact caller invoke checks, target-capability approvals, launch and short-lived Gateway grants |
 | `../extension_host/broker.rs` | Per-task private proxy: verifies SCM credentials, host/child ancestry, route class and nearest child session before normal dispatch |
 | `scheduler.rs` | Proactive-scheduler authority: validates `cos cron` / `cos triggers` requests and derives what a job may carry |
 | `system_caps.rs` | System capability derivation |
@@ -116,6 +116,14 @@ namespace even when the parent holds it — only where the catalog says `Wild` i
 the canonical scope. Revocation and expiry cascade to every descendant;
 exhausting a use budget retires only the grant that was spent, because its
 children were already clamped to it.
+
+An MCP App target grant is not caller delegation. After `clawd` independently
+rechecks the caller's exact `agent.invoke:<app>/<tool>`, re-derives target
+`needs[]` from the verified manifest and validated arguments, and settles any
+exact owner approvals, `Issuer::AppGateway` creates a short-lived root grant
+bound to the target App process. The caller invoke cap is removed from that
+grant. Clearing the call revokes it and restores the empty between-call App
+grant from the opaque launch parent.
 
 The store is in memory and dies with the process. That is the design: a `clawd`
 that restarted can no longer prove the bindings it made, so every ephemeral

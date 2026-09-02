@@ -67,6 +67,7 @@ const LAUNCH_GRANT_TTL: Duration = Duration::from_secs(12 * 60 * 60);
 /// a bind that happens seconds after registration from being refused
 /// for asking for exactly as long as its parent has left.
 const SESSION_GRANT_TTL: Duration = Duration::from_secs(11 * 60 * 60);
+const TARGET_CALL_GRANT_TTL: Duration = Duration::from_secs(2 * 60);
 
 /// What the launcher asked to run. The kind decides which part of the
 /// manifest the capability derivation reads.
@@ -170,6 +171,12 @@ struct LaunchPlan {
     missing: Vec<Cap>,
 }
 
+#[derive(Debug)]
+struct McpCallAuthority {
+    invoke: Cap,
+    deadline_unix_ms: u64,
+}
+
 impl LaunchPlan {
     fn require(&mut self, cap: Cap, delegation: &Delegation) {
         if !delegation.ceiling.covers(&cap) && !self.missing.contains(&cap) {
@@ -231,6 +238,53 @@ pub const COMMANDS: &[&str] = &[
     "app_session.deregister",
 ];
 
+fn mcp_launch_command_and_cap(
+    app: &App,
+    params: &Value,
+) -> Result<(String, Cap), BrokerError> {
+    let app_id = &app.manifest.id;
+    if let Some(service) = app.manifest.mcp.as_ref() {
+        let tool = required_string(params, "tool")?;
+        if !service.tools.iter().any(|declared| declared.name == tool) {
+            return Err(BrokerError::execution(format!(
+                "App `{app_id}` manifest has no MCP tool `{tool}`"
+            )));
+        }
+        Ok((
+            format!("cos app {app_id} mcp {tool}"),
+            crate::agent::tools::app_gateway::invoke_cap(app_id, &tool)
+                .map_err(BrokerError::execution)?,
+        ))
+    } else {
+        if params.get("tool").is_some() {
+            return Err(BrokerError::execution(
+                "legacy App session launch cannot name an MCP-first tool",
+            ));
+        }
+        Ok((
+            format!("cos app {app_id} session"),
+            Cap::new(Verb::AGENT_INVOKE, Scope::name(app_id)),
+        ))
+    }
+}
+
+fn target_session_caps(
+    authorized_caps: CapSet,
+    mcp_first: bool,
+    launch_invoke: &Cap,
+) -> CapSet {
+    if mcp_first {
+        CapSet::from_caps(
+            authorized_caps
+                .iter()
+                .filter(|cap| *cap != launch_invoke)
+                .cloned(),
+        )
+    } else {
+        authorized_caps
+    }
+}
+
 pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, BrokerError> {
     let uid = client.require_uid()?;
     let home = client.require_home_dir()?;
@@ -240,26 +294,50 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
     let delegation = Delegation::new(&launcher, uid, &home, &params)?;
     let app = installed_app(&app_id)?;
 
-    let (command, mut plan) = match kind {
+    let (command, mut plan, invoke) = match kind {
         LaunchKind::Operation => {
+            if params.get("tool").is_some() {
+                return Err(BrokerError::execution(
+                    "operation launch cannot name an MCP tool",
+                ));
+            }
             let operation = required_string(&params, "operation")?;
             let args = string_array(&params, "args")?;
             let plan = operation_plan(&app, &operation, &args, &delegation)?;
-            (format!("cos app {app_id} {operation}"), plan)
+            (
+                format!("cos app {app_id} {operation}"),
+                plan,
+                Cap::new(Verb::AGENT_INVOKE, Scope::name(&app_id)),
+            )
         }
         LaunchKind::Gui => {
+            if params.get("tool").is_some() {
+                return Err(BrokerError::execution(
+                    "GUI launch cannot name an MCP tool",
+                ));
+            }
             let exec = required_string(&params, "operation")?;
             let plan = gui_plan(&app, &exec, &delegation)?;
-            (format!("cos app {app_id} {exec}"), plan)
+            (
+                format!("cos app {app_id} {exec}"),
+                plan,
+                Cap::new(Verb::AGENT_INVOKE, Scope::name(&app_id)),
+            )
         }
-        LaunchKind::Mcp => (format!("cos app {app_id} session"), LaunchPlan::default()),
+        LaunchKind::Mcp => {
+            let (command, invoke) = mcp_launch_command_and_cap(&app, &params)?;
+            (command, LaunchPlan::default(), invoke)
+        }
     };
-    plan.require(
-        Cap::new(Verb::AGENT_INVOKE, Scope::name(&app_id)),
-        &delegation,
-    );
-    let caps = authorize_plan(&delegation, plan)?;
-    let grant_caps = caps.clone();
+    let mcp_first = kind == LaunchKind::Mcp && app.manifest.mcp.is_some();
+    let launch_invoke = invoke.clone();
+    plan.require(invoke, &delegation);
+    let authorized_caps = authorize_plan(&delegation, plan)?;
+    let grant_caps = authorized_caps.clone();
+    // The caller's exact invoke capability authorizes this launch but is not
+    // target authority. MCP-first App sessions start empty and receive only
+    // the selected tool's manifest-derived transient capabilities per call.
+    let caps = target_session_caps(authorized_caps, mcp_first, &launch_invoke);
 
     let session_id = format!("app-{}", uuid::Uuid::new_v4().simple());
     let info = SessionInfo {
@@ -538,17 +616,27 @@ pub async fn set_transient(params: Value, client: &ClientIdentity) -> Result<Val
     // Derive and authorize the requested capabilities *before* anything
     // is written. A launch that cannot settle its approvals leaves both
     // the registry and the authority untouched.
-    let caps = match params.get("call") {
-        None | Some(Value::Null) => None,
+    let (caps, mcp_call_authority) = match params.get("call") {
+        None | Some(Value::Null) => (None, None),
         Some(call) => {
             let launcher = authenticate_launcher(client, uid, home.clone()).await?;
             // A serialized MCP call is answered in the caller's own
             // process, so a denial is retried under the same
             // pid/start identity.
             let delegation = Delegation::new(&launcher, uid, &home, &params)?;
-            let plan =
+            let (plan, caller_authority) =
                 session_tool_plan(&app_id, call, &delegation).map_err(|error| error.message)?;
-            Some(authorize_plan(&delegation, plan).map_err(|error| error.message)?)
+            let authorized =
+                authorize_plan(&delegation, plan).map_err(|error| error.message)?;
+            (
+                Some(match caller_authority.as_ref() {
+                    Some(authority) => {
+                        target_session_caps(authorized, true, &authority.invoke)
+                    }
+                    None => authorized,
+                }),
+                caller_authority,
+            )
         }
     };
 
@@ -572,14 +660,26 @@ pub async fn set_transient(params: Value, client: &ClientIdentity) -> Result<Val
     })
     .await?;
 
-    if let Err(error) = reissue_session_grant(
-        &handle,
-        &session_id,
-        Some(&app_id),
-        uid,
-        child_pid,
-        &effective,
-    ) {
+    let grant = if let Some(authority) = mcp_call_authority.filter(|_| !effective.is_empty()) {
+        issue_gateway_target_grant(
+            &session_id,
+            &app_id,
+            uid,
+            child_pid,
+            &effective,
+            authority.deadline_unix_ms,
+        )
+    } else {
+        reissue_session_grant(
+            &handle,
+            &session_id,
+            Some(&app_id),
+            uid,
+            child_pid,
+            &effective,
+        )
+    };
+    if let Err(error) = grant {
         rollback_transient_caps(uid, home, &session_id, previous).await;
         return Err(error);
     }
@@ -638,6 +738,7 @@ pub async fn deregister(params: Value, client: &ClientIdentity) -> Result<Value,
     // from it, so an App whose session row is gone also loses every
     // provider route in the same transaction.
     authority::authority().revoke(launch.id);
+    authority::revoke_indexed_session(&session_id);
     super::authority::audit::record_revoked("app-session", Some(&session_id), 1);
     // Drop the guard before forgetting the entry, so a caller already
     // waiting on it is released rather than stranded on a mutex nothing
@@ -894,7 +995,7 @@ fn session_tool_plan(
     app_id: &str,
     call: &Value,
     delegation: &Delegation,
-) -> Result<LaunchPlan, BrokerError> {
+) -> Result<(LaunchPlan, Option<McpCallAuthority>), BrokerError> {
     let app = installed_app(app_id)?;
     let tool_name = required_string(call, "tool")?;
     let args: BTreeMap<String, Value> = match call.get("args") {
@@ -904,15 +1005,41 @@ fn session_tool_plan(
     };
     let tool = app
         .manifest
-        .session
-        .as_ref()
+        .mcp_service()
         .and_then(|session| session.tools.iter().find(|tool| tool.name == tool_name))
         .ok_or_else(|| format!("App `{app_id}` has no session tool `{tool_name}`"))?;
     let effective = app
         .manifest
         .resolve_session_tool_call(&tool_name, &args, &delegation.paths)
         .map_err(|error| format!("resolve `{tool_name}` capabilities: {error}"))?;
-    derive_plan(&tool.needs, &effective.needs, delegation)
+    let mut plan = derive_plan(&tool.needs, &effective.needs, delegation)?;
+    let caller_authority = if app.manifest.mcp.is_some() {
+        let invoke = crate::agent::tools::app_gateway::invoke_cap(app_id, &tool_name)
+            .map_err(BrokerError::execution)?;
+        let deadline_unix_ms = call
+            .get("deadline_unix_ms")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| {
+                BrokerError::execution("MCP-first App call requires an absolute deadline")
+            })?;
+        let now = crate::agentd::grant::now_ms();
+        if deadline_unix_ms <= now
+            || deadline_unix_ms
+                > now.saturating_add(crate::extension_host::protocol::MAX_REQUEST_TIMEOUT_MS)
+        {
+            return Err(BrokerError::execution(
+                "MCP-first App call deadline is outside the allowed range",
+            ));
+        }
+        plan.require(invoke.clone(), delegation);
+        Some(McpCallAuthority {
+            invoke,
+            deadline_unix_ms,
+        })
+    } else {
+        None
+    };
+    Ok((plan, caller_authority))
 }
 
 /// Turn manifest needs into a complete capability plan.
@@ -1255,6 +1382,47 @@ fn issue_session_grant(
                 index_session: true,
             },
         )
+        .map_err(|error| error.to_string())?;
+    authority::audit::record_issued(&view, None);
+    Ok(())
+}
+
+/// Mint one root-authorized target grant for an MCP-first App call.
+///
+/// Caller invoke authority is checked separately and never appears here.
+/// Target capabilities may come from an exact owner approval rather than the
+/// caller's standing ceiling, so deriving this grant from the launch parent
+/// would incorrectly reject the approved target authority.
+fn issue_gateway_target_grant(
+    session_id: &str,
+    app_id: &str,
+    uid: u32,
+    child_pid: u32,
+    caps: &CapSet,
+    deadline_unix_ms: u64,
+) -> Result<(), String> {
+    authority::revoke_indexed_session(session_id);
+    let remaining = deadline_unix_ms
+        .checked_sub(crate::agentd::grant::now_ms())
+        .filter(|remaining| *remaining > 0)
+        .ok_or_else(|| "MCP App target grant deadline has expired".to_string())?;
+    let principal = authority::Principal::of_process(uid, child_pid)
+        .ok_or_else(|| format!("App process {child_pid} could not be identified"))?;
+    let (_handle, view) = authority::authority()
+        .issue(authority::Issuance {
+            issuer: authority::Issuer::AppGateway,
+            principal,
+            binding: authority::Binding::ProcessTree,
+            subject: authority::Subject::session(session_id).with_app(Some(app_id.to_string())),
+            audience: authority::AudienceSet::of(&[
+                authority::Audience::SystemService,
+                authority::Audience::Credential,
+            ]),
+            caps: caps.clone(),
+            lifetime: TARGET_CALL_GRANT_TTL.min(Duration::from_millis(remaining)),
+            uses: authority::Uses::Unbounded,
+            index_session: true,
+        })
         .map_err(|error| error.to_string())?;
     authority::audit::record_issued(&view, None);
     Ok(())

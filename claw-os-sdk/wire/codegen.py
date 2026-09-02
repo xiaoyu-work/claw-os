@@ -1561,13 +1561,14 @@ def go_struct(name: str, schema: dict, defs: dict, out: list[str]) -> None:
         ty = go_type(pschema, defs, f"{name}_{pname}")
         is_required = pname in required
         omit = "" if is_required else ",omitempty"
-        # Go's `omitempty` is a no-op on non-pointer struct values: a
-        # zero-valued nested struct still serialises as `{}`, which
-        # diverges from what the Python/Rust/TS SDKs emit (they omit
-        # the field entirely). For optional object-type fields we emit
-        # a pointer (`*T`) so `omitempty` actually skips the key when
-        # the field is `nil`.
-        if not is_required and not _is_scalar_schema(pschema):
+        # Go's `omitempty` cannot distinguish an omitted field from an
+        # explicit scalar zero. Optional fields with schema defaults need that
+        # distinction (`system_agent: false` must not disappear and become the
+        # default `true`), and nested structs need pointers to be omitted at
+        # all. Emit pointers for both cases.
+        if not is_required and (
+            not _is_scalar_schema(pschema) or "default" in pschema
+        ):
             ty = f"*{ty}"
         field = "".join(p.capitalize() for p in pname.replace("-", "_").split("_"))
         out.append(f'\t{field} {ty} `json:"{pname}{omit}"`')

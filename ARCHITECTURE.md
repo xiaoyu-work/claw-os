@@ -48,7 +48,7 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | Tool/capability layer | Immutable tool descriptors, session-scoped model-visible projection, guardrails, MCP attachment, scope checks, and approval boundaries | `core/src/agent/tools/`, `core/src/caps/` |
 | Memory and sessions | SQLite/FTS memory, semantic recall, session/message persistence, curation, and checkpoints | `core/src/agent/memory/`, `core/src/session/`, `core/src/checkpoint.rs` |
 | Audit | Hash-chained JSONL events and agent audit/query commands | `core/src/audit.rs`, `core/src/agent/audit_cli.rs` |
-| Apps and adapters | Declarative operation manifests plus Python, Node, shell, or binary runtime handlers | `apps/`, `adapters/`, `core/src/apps.rs`, `core/src/bridge.rs` |
+| Apps and adapters | Versioned MCP-first service manifests plus Python, Node, shell, or binary handlers; legacy operations remain during migration | `apps/`, `adapters/`, `core/src/apps.rs`, `core/src/agent/tools/app_gateway.rs` |
 | SDK/runtime | Public app SDKs and internal bundled-app policy helpers | `claw-os-sdk/`, `cos-runtime/` |
 | Browser and semantic services | Obscura browser stack, `cos-browser`, embedding and semantic-search services | `crates/obscura-*`, `crates/cos-browser`, `crates/claw-*` |
 | Desktop | Product desktop fork and native UI clients communicating through stable OS boundaries | `desktop/` |
@@ -86,6 +86,10 @@ This keeps local, sandboxed, and remote implementations interchangeable.
 - Runtime dispatch runs guardrails and pre/post hooks around tool calls.
 - App manifests declare capability needs; bundled apps enforce them through
   `cos_runtime.policy`.
+- An MCP App's `access` block only narrows which authenticated principal
+  classes may address it. It never grants authority: the caller still needs
+  exact `agent.invoke:<app>/<tool>`, while target capabilities are derived
+  independently from that tool's verified manifest declaration.
 - A model response is data, never authorization.
 
 ### AI ownership
@@ -673,17 +677,27 @@ parent traversal, symlinks, hidden files, and oversized resources are rejected.
 ### App invocation
 
 ```text
-apps/<id>/app.json
-  -> core app discovery and manifest validation
-  -> operation schema / validated default binding / capability derivation
-  -> app session registration
-  -> declared Python / Node / shell / binary entrypoint with effective args
-  -> policy-enforced SDK/runtime calls
-  -> structured result
+verified apps/<id>/app.json.mcp
+  -> system-Agent registry applies mcp.access.system_agent
+  -> validate tool + arguments and materialize manifest defaults
+  -> require exact agent.invoke:<app>/<tool>
+  -> derive caller identity/lineage/deadline from the signed task binding
+  -> claw-extension-host rebinds that context to the authenticated worker
+  -> derive target needs[] and install them only as a transient App grant
+  -> private MCP tools/call with _meta["claw-os.dev/call-context"]
+  -> bounded untrusted result + root-validated lineage audit
 ```
 
 Manifest/schema discovery must remain side-effect free and must not execute the
 app entrypoint.
+
+`core/src/agent/tools/app_gateway.rs` is the invocation-policy definition.
+System-Agent calls use a root context (`depth = 0`) derived from the task's
+signed `ExtensionBinding`; App, App-Agent, local-CLI, and external-Agent
+principal kinds share the same closed wire type but must enter through their
+own authenticated ingress before they can be authorized. Tool arguments can
+never populate caller identity. The host rejects owner/session/task,
+capability-generation, target, deadline, or lineage substitution.
 
 App identity and capabilities are issued by the session authority, never
 asserted by the launcher. For an unprivileged launch the request names only the
@@ -705,14 +719,30 @@ grant — launch authority dropped, bound to the App's own process tree — whic
 what every privileged provider route the App later calls is authorized against.
 Deregistration revokes the launch grant, and the session grant with it.
 
-Inside a supervised task, the tool registry sends one-shot App operations and
-stateful session calls over the extension-host control channel. The host
-re-reads the installed manifest, launches the declared entrypoint, and uses its
-private broker proxy for registration, binding, transient call scopes, and
-teardown. Returned stdout, stderr-derived failures, MCP descriptors, and tool
-results are bounded and treated as untrusted model data. A missing or crashed
-host fails dynamic execution closed; there is no fallback that runs App code
-inside `claw-agentd`.
+Inside a supervised task, the tool registry sends one-shot legacy operations
+and MCP-first App calls over the extension-host control channel. For MCP-first
+Apps, the server must reproduce the manifest's exact names, descriptions, and
+input schemas; descriptor drift fails startup closed. The host re-reads the
+installed manifest, launches the declared entrypoint from its verified
+read-only snapshot, and uses its private broker proxy for registration,
+binding, transient target scopes, and teardown. Returned stdout,
+stderr-derived failures, MCP descriptors, and tool results are bounded and
+treated as untrusted model data. A missing or crashed host fails dynamic
+execution closed; there is no fallback that runs App code inside
+`claw-agentd`. Explicit open/close meta-tools remain only for legacy
+`session` manifests; MCP-first lifecycle belongs to the Gateway/host.
+
+If a target tool needs authority the host session does not already cover,
+`clawd` files exact permission requests for the manifest-derived target
+capabilities. The authenticated host waits on those decisions and retries the
+same transient-scope transaction; it never returns a reusable grant or target
+credential to the calling Agent. The caller's exact `agent.invoke` capability
+is rechecked by `clawd` on every transient call, authorizes addressing the
+tool only, and is removed from the target App session's base and transient
+capabilities. `Issuer::AppGateway` mints the short-lived target grant directly
+from the daemon's authorized decision rather than trying to widen the
+invoke-only launch parent; clearing the call revokes it and restores the empty
+between-call grant.
 
 ### Proactive scheduling
 

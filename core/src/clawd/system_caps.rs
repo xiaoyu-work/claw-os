@@ -162,8 +162,9 @@ const BASELINE: &[(Verb, Baseline)] = &[
     (Verb::SECRET_GRANT, Baseline::Denied),
     // -- Agents ------------------------------------------------------
     // Spawning or delegating hands authority to something the user
-    // never saw; invoking an installed App does not, because the App's
-    // capabilities are derived by intersecting this very set.
+    // never saw; invoking an exact installed App tool does not, because the
+    // target App's capabilities are independently derived from its manifest
+    // and installed transiently around that call.
     (Verb::AGENT_SPAWN, Baseline::Denied),
     (Verb::AGENT_INVOKE, Baseline::AnyName),
     (Verb::AGENT_OBSERVE, Baseline::AnyName),

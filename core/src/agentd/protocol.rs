@@ -468,6 +468,8 @@ pub enum RuntimeAuditRecord {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         mcp: Option<crate::extension_host::protocol::McpInvocationAudit>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        app: Option<Box<crate::extension_host::protocol::AppInvocationAudit>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         manifest_digest: Option<String>,
         success: bool,
         latency_ms: u64,

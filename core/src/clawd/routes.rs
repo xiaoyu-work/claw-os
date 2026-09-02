@@ -786,6 +786,7 @@ routes! {
             ("app_id", FieldRule::Token),
             ("kind", FieldRule::Token),
             ("operation", FieldRule::Token),
+            ("tool", FieldRule::Token),
             ("args", FieldRule::Size),
         ],
         run: |c| app_sessions::register(c.params, c.client).await,

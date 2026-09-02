@@ -429,6 +429,7 @@
       "additionalProperties": false,
       "properties": {
         "system_agent": { "type": "boolean", "default": true, "description": "Allow the owner-scoped system Agent." },
+        "local_cli": { "type": "boolean", "default": true, "description": "Allow the owner through the authenticated local cos adapter." },
         "apps": { "type": "array", "items": { "type": "string", "pattern": "^[a-z][a-z0-9_-]*$" }, "uniqueItems": true, "description": "Verified App identities allowed to request this service." },
         "external_agents": { "type": "boolean", "default": false, "description": "Allow authenticated external-Gateway agents." }
       }
@@ -439,7 +440,7 @@
       "required": ["name", "summary"],
       "additionalProperties": true,
       "properties": {
-        "name": { "type": "string", "pattern": "^[a-z][a-z0-9._-]*$", "description": "Globally unique tool name; convention <app_id>.<verb> (e.g. kv.get)." },
+        "name": { "type": "string", "pattern": "^[a-z][a-z0-9._-]*$", "maxLength": 128, "not": { "pattern": "\\.\\." }, "description": "Globally unique tool name; convention <app_id>.<verb> (e.g. kv.get)." },
         "summary": { "$ref": "#/$defs/localizedText" },
         "args": {
           "type": "array",

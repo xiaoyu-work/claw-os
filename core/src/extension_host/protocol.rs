@@ -5,7 +5,7 @@ use crate::agent::tools::mcp::integration::McpServerSpec;
 use crate::agent::tools::mcp::protocol::{CallToolResult, ToolDescriptor};
 use crate::clawd::wire::RequestId;
 
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 pub const MAX_CONTROL_FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_CONTROL_CONNECTIONS: usize = 8;
 pub const MAX_REQUEST_TIMEOUT_MS: u64 = 180_000;
@@ -174,6 +174,67 @@ impl McpInvocationAudit {
             return Err("MCP invocation audit identity is invalid".to_string());
         }
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppInvocationAudit {
+    pub app_id: String,
+    pub tool: String,
+    pub invoke_target: String,
+    pub capability_generation: String,
+    pub context: crate::agent::tools::app_gateway::McpCallContext,
+}
+
+impl AppInvocationAudit {
+    pub fn new(
+        app_id: impl Into<String>,
+        tool: impl Into<String>,
+        capability_generation: impl Into<String>,
+        context: crate::agent::tools::app_gateway::McpCallContext,
+    ) -> Result<Self, String> {
+        let app_id = app_id.into();
+        let tool = tool.into();
+        let invocation = Self {
+            invoke_target: crate::agent::tools::app_gateway::invoke_target(&app_id, &tool)?,
+            app_id,
+            tool,
+            capability_generation: capability_generation.into(),
+            context,
+        };
+        invocation.validate_shape()?;
+        Ok(invocation)
+    }
+
+    pub fn validate_shape(&self) -> Result<(), String> {
+        if self.invoke_target
+            != crate::agent::tools::app_gateway::invoke_target(&self.app_id, &self.tool)?
+            || self.capability_generation.len() != 16
+            || !self
+                .capability_generation
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            return Err("App invocation audit target is invalid".to_string());
+        }
+        self.context.validate()
+    }
+
+    pub fn validate_live_binding(&self, binding: &ExtensionBinding) -> Result<(), String> {
+        self.validate_shape()?;
+        if self.capability_generation != binding.capability_generation {
+            return Err("App invocation used a substituted capability generation".to_string());
+        }
+        self.context.validate_system_agent_binding(binding)
+    }
+
+    pub fn validate_audit_binding(&self, binding: &ExtensionBinding) -> Result<(), String> {
+        self.validate_shape()?;
+        if self.capability_generation != binding.capability_generation {
+            return Err("App invocation audit used a substituted capability generation".to_string());
+        }
+        self.context.validate_system_agent_audit_binding(binding)
     }
 }
 
@@ -392,6 +453,7 @@ pub enum HostAction {
         tool: String,
         #[serde(default)]
         arguments: Value,
+        audit: AppInvocationAudit,
     },
     AppClose {
         app_id: String,

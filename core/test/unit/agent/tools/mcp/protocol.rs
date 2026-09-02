@@ -79,6 +79,51 @@ fn call_tool_result_is_error_round_trip() {
 }
 
 #[test]
+fn call_tool_metadata_uses_private_claw_context_key() {
+    let params = CallToolParams {
+        name: "email.search".to_string(),
+        arguments: Some(serde_json::json!({"query": "customer"})),
+        metadata: Some(CallToolMetadata {
+            call_context: Some(crate::agent::tools::app_gateway::McpCallContext {
+                wire_version: 1,
+                call_id: "call-1".to_string(),
+                trace_id: "trace-1".to_string(),
+                parent_call_id: None,
+                depth: 0,
+                deadline_unix_ms: Some(1),
+                session_id: Some("session-1".to_string()),
+                task_id: Some("task-1".to_string()),
+                caller: crate::agent::tools::app_gateway::McpPrincipal::system_agent(
+                    1000,
+                    "session-1",
+                ),
+            }),
+            ..CallToolMetadata::default()
+        }),
+    };
+    let value = serde_json::to_value(params).unwrap();
+    assert!(value["_meta"]["claw-os.dev/call-context"].is_object());
+    assert!(value["arguments"].get("caller").is_none());
+}
+
+#[test]
+fn call_tool_metadata_accepts_standard_and_future_fields() {
+    let params: CallToolParams = serde_json::from_value(serde_json::json!({
+        "name": "echo",
+        "arguments": {},
+        "_meta": {
+            "progressToken": "progress-1",
+            "future": {"enabled": true}
+        }
+    }))
+    .unwrap();
+    let metadata = params.metadata.unwrap();
+    assert!(metadata.call_context.is_none());
+    assert_eq!(metadata.extra["progressToken"], "progress-1");
+    assert_eq!(metadata.extra["future"]["enabled"], true);
+}
+
+#[test]
 fn tool_descriptor_serializes_input_schema_camel_case() {
     let t = ToolDescriptor {
         name: "echo".into(),

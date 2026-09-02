@@ -1,7 +1,25 @@
 use super::*;
-
 use crate::agent::service::{JobStatus, Store};
 use crate::agentd::grant::GRANT_AUDIENCE;
+
+#[test]
+fn app_gateway_audit_requires_authenticated_call_context() {
+    assert!(app_gateway_audit_context_missing(
+        crate::extension_host::protocol::ExtensionKind::App,
+        Some(crate::extension_host::protocol::AuditStage::Gateway),
+        false,
+    ));
+    assert!(!app_gateway_audit_context_missing(
+        crate::extension_host::protocol::ExtensionKind::App,
+        Some(crate::extension_host::protocol::AuditStage::Gateway),
+        true,
+    ));
+    assert!(!app_gateway_audit_context_missing(
+        crate::extension_host::protocol::ExtensionKind::App,
+        None,
+        false,
+    ));
+}
 
 fn new_lease() -> Lease {
     Lease {

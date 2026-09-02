@@ -409,16 +409,22 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
             app_id,
             tool,
             arguments,
+            audit,
         } => {
             validate_name(&app_id, "App id")?;
             validate_text(&tool, "App tool", 256)?;
             if !arguments.is_object() && !arguments.is_null() {
                 return Err("App tool arguments must be an object".to_string());
             }
+            if audit.app_id != app_id || audit.tool != tool {
+                return Err("App invocation audit does not match its target".to_string());
+            }
+            audit.validate_live_binding(&state.binding)?;
             let value = crate::agent::tools::cos_apps_session::host_call_session(
                 &app_id,
                 &tool,
                 arguments,
+                audit.context,
                 Duration::from_millis(MAX_REQUEST_TIMEOUT_MS),
             )
             .await?;

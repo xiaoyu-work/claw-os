@@ -32,6 +32,12 @@ extensions.
 - Return only sanitized MCP descriptors and require every hosted MCP call to
   carry the exact canonical descriptor-set digest held by that host session.
   A relist mismatch blocks the call rather than substituting a new schema.
+- Rebind every MCP-first App call to the signed task owner/session/worker
+  identity, exact App/tool target, capability generation, deadline, and root
+  call lineage before forwarding Gateway metadata to the child.
+- Hold target-capability approval waits inside the authenticated host and
+  retry the same transient-scope transaction without returning target
+  authority or credentials to the worker.
 - Tear down the host cgroup/process tree and every child session on task
   completion, cancellation, timeout, crash, or worker loss.
 - Treat descriptors and results returned by hosted code as untrusted.
@@ -64,6 +70,7 @@ clawd supervisor
 
 claw-agentd registry call
   -> versioned control request to exact host pid
+  -> verify Gateway caller context against the signed ExtensionBinding
   -> host starts/calls App or MCP child
   -> child policy check reads its root-maintained session row
   -> child privileged request uses COS_EXTENSION_BROKER_SOCKET

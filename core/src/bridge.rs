@@ -106,7 +106,9 @@ enum LaunchRequest<'a> {
     Gui {
         exec: &'a str,
     },
-    Mcp,
+    Mcp {
+        tool: Option<&'a str>,
+    },
 }
 
 impl LaunchRequest<'_> {
@@ -114,7 +116,7 @@ impl LaunchRequest<'_> {
         match self {
             LaunchRequest::Operation { .. } => "operation",
             LaunchRequest::Gui { .. } => "gui",
-            LaunchRequest::Mcp => "mcp",
+            LaunchRequest::Mcp { .. } => "mcp",
         }
     }
 
@@ -122,8 +124,20 @@ impl LaunchRequest<'_> {
         match self {
             LaunchRequest::Operation { operation, .. } => format!("cos app {app_id} {operation}"),
             LaunchRequest::Gui { exec } => format!("cos app {app_id} {exec}"),
-            LaunchRequest::Mcp => format!("cos app {app_id} session"),
+            LaunchRequest::Mcp { tool } => match tool {
+                Some(tool) => format!("cos app {app_id} mcp {tool}"),
+                None => format!("cos app {app_id} session"),
+            },
         }
+    }
+}
+
+fn launch_invoke_cap(app_id: &str, request: &LaunchRequest<'_>) -> Result<Cap, String> {
+    match request {
+        LaunchRequest::Mcp { tool: Some(tool) } => {
+            crate::agent::tools::app_gateway::invoke_cap(app_id, tool)
+        }
+        _ => Ok(Cap::new(Verb::AGENT_INVOKE, Scope::name(app_id))),
     }
 }
 
@@ -136,6 +150,7 @@ pub(crate) struct TransientCall<'a> {
     pub tool: &'a str,
     pub args: &'a BTreeMap<String, serde_json::Value>,
     pub caps: CapSet,
+    pub deadline_unix_ms: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -349,9 +364,25 @@ impl AppIdentitySession {
 
     /// Register an MCP identity. Session tools receive their authority
     /// per call through [`AppSessionControl::set_transient_call`].
-    pub fn for_mcp(app_id: &str, manifest: &Manifest) -> Result<Self, String> {
-        let _ = manifest;
-        Self::start(app_id, LaunchRequest::Mcp, |_| Ok(CapSet::new()))
+    pub fn for_mcp(
+        app_id: &str,
+        manifest: &Manifest,
+        tool: Option<&str>,
+    ) -> Result<Self, String> {
+        let tool = if let Some(service) = manifest.mcp.as_ref() {
+            let tool = tool.ok_or_else(|| {
+                format!("MCP-first App `{app_id}` launch requires an exact tool")
+            })?;
+            if !service.tools.iter().any(|declared| declared.name == tool) {
+                return Err(format!(
+                    "MCP-first App `{app_id}` has no tool `{tool}`"
+                ));
+            }
+            Some(tool)
+        } else {
+            None
+        };
+        Self::start(app_id, LaunchRequest::Mcp { tool }, |_| Ok(CapSet::new()))
     }
 
     /// Shared launch path.
@@ -374,17 +405,25 @@ impl AppIdentitySession {
         }
         crate::caps::enforcement::require_current_session_identity(&parent.session_id, parent.pid)
             .map_err(|err| format!("App parent session identity check failed: {err}"))?;
-        let invoke = Cap::new(Verb::AGENT_INVOKE, Scope::name(app_id));
+        let invoke = launch_invoke_cap(app_id, &request)?;
         if !parent_caps.covers(&invoke) {
             return Err(format!("parent session cannot invoke App `{app_id}`"));
         }
+        let mcp_first = matches!(
+            &request,
+            LaunchRequest::Mcp {
+                tool: Some(_)
+            }
+        );
 
         if use_clawd_app_session_backend() {
             return Self::register_with_clawd(app_id, &request, parent_caps);
         }
 
         let mut caps = local_caps(&parent_caps)?;
-        caps.insert(invoke);
+        if !mcp_first {
+            caps.insert(invoke);
+        }
         Self::register_local(&parent, app_id, &request.command(app_id), caps, parent_caps)
     }
 
@@ -411,24 +450,19 @@ impl AppIdentitySession {
             LaunchRequest::Gui { exec } => {
                 params["operation"] = serde_json::Value::String((*exec).to_string());
             }
-            LaunchRequest::Mcp => {}
+            LaunchRequest::Mcp { tool } => {
+                if let Some(tool) = tool {
+                    params["tool"] = serde_json::Value::String((*tool).to_string());
+                }
+            }
         }
 
         // A launch that needs consent is answered with the ids of the
         // requests the daemon filed. This process stays alive and waits,
         // then retries over the same connection identity, so the user
         // never has to rerun anything and no secret has to travel.
-        let result = match clawd_request(ClawdCommand::AppSessionRegister, params.clone()) {
-            Ok(result) => result,
-            Err(error) => {
-                let ids = approval_requests(&error);
-                if ids.is_empty() {
-                    return Err(error.message);
-                }
-                wait_for_approvals(&ids)?;
-                clawd_request(ClawdCommand::AppSessionRegister, params).map_err(String::from)?
-            }
-        };
+        let result =
+            clawd_request_with_approval_wait(ClawdCommand::AppSessionRegister, params, None)?;
         let session_id = result
             .get("session_id")
             .and_then(serde_json::Value::as_str)
@@ -687,10 +721,12 @@ fn set_app_session_transient_call(
             crate::proc::set_app_session_transient_caps(session_id, call.map(|call| call.caps))
         }
         AppSessionBackend::Clawd { handle, .. } => {
+            let deadline_unix_ms = call.as_ref().and_then(|call| call.deadline_unix_ms);
             let call = match call {
                 Some(call) => serde_json::json!({
                     "tool": call.tool,
                     "args": call.args,
+                    "deadline_unix_ms": call.deadline_unix_ms,
                 }),
                 None => serde_json::Value::Null,
             };
@@ -703,9 +739,12 @@ fn set_app_session_transient_call(
                 params["parent_caps"] = serde_json::to_value(parent_caps)
                     .map_err(|error| format!("failed to serialize parent capabilities: {error}"))?;
             }
-            clawd_request(ClawdCommand::AppSessionSetTransient, params)
-                .map(|_| ())
-                .map_err(String::from)
+            clawd_request_with_approval_wait(
+                ClawdCommand::AppSessionSetTransient,
+                params,
+                deadline_unix_ms,
+            )
+            .map(|_| ())
         }
     }
 }
@@ -767,6 +806,29 @@ fn clawd_request(
     }
 }
 
+fn clawd_request_with_approval_wait(
+    command: ClawdCommand,
+    params: serde_json::Value,
+    deadline_unix_ms: Option<u64>,
+) -> Result<serde_json::Value, String> {
+    match clawd_request(command, params.clone()) {
+        Ok(result) => Ok(result),
+        Err(error) => {
+            let ids = approval_requests(&error);
+            if ids.is_empty() {
+                return Err(error.message);
+            }
+            wait_for_approvals(&ids, deadline_unix_ms)?;
+            if deadline_unix_ms
+                .is_some_and(|deadline| crate::agentd::grant::now_ms() >= deadline)
+            {
+                return Err("MCP App call deadline expired while waiting for approval".to_string());
+            }
+            clawd_request(command, params).map_err(String::from)
+        }
+    }
+}
+
 /// Longest a launcher will hold its place while the user decides.
 const APPROVAL_WAIT: Duration = Duration::from_secs(120);
 const APPROVAL_POLL: Duration = Duration::from_millis(500);
@@ -811,11 +873,16 @@ fn approval_requests(error: &ClawdCallError) -> Vec<String> {
 /// no token, environment variable or session string has to travel. The
 /// wait is bounded, ends immediately on a rejection, and reports a
 /// terminal error for anything that is not a clean approval.
-fn wait_for_approvals(ids: &[String]) -> Result<(), String> {
+fn wait_for_approvals(ids: &[String], deadline_unix_ms: Option<u64>) -> Result<(), String> {
     let deadline = Instant::now() + APPROVAL_WAIT;
     loop {
         if APPROVAL_WAIT_CANCELLED.swap(false, Ordering::SeqCst) {
             return Err("waiting for App launch approval was cancelled".to_string());
+        }
+        if deadline_unix_ms
+            .is_some_and(|deadline| crate::agentd::grant::now_ms() >= deadline)
+        {
+            return Err("MCP App call deadline expired while waiting for approval".to_string());
         }
         let result = clawd_request(
             ClawdCommand::PermissionStatus,

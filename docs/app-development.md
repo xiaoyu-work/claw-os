@@ -36,6 +36,17 @@ Apps must never accept caller identity through tool arguments. The runtime
 validates arguments and applies defaults from the manifest before invoking
 the handler.
 
+`mcp.access` defaults to the owner-scoped system Agent and authenticated local
+CLI. App callers must be listed by verified App id; external agents are denied
+unless explicitly enabled. These switches only restrict addressability. They
+never replace the caller's exact `agent.invoke:<app>/<tool>` capability or the
+target tool's own `needs[]`.
+
+`agent.invoke` uses a two-segment Name scope: `email/email.search` addresses
+one tool, `email/*` explicitly covers every tool in one App, and `**` covers
+all Apps. A single-segment `email` or `*` is legacy authority and does not
+cover MCP-first tools.
+
 ## 1. What is a Claw OS app?
 
 A Claw OS app is a directory whose minimum contents are a manifest and an

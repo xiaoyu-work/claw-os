@@ -70,7 +70,7 @@
       "properties": {
         "kind": {
           "type": "string",
-          "enum": ["system-agent", "app", "app-agent", "external-agent", "cli"]
+          "enum": ["system-agent", "app", "app-agent", "external-agent", "local-cli"]
         },
         "id": {
           "type": "string",

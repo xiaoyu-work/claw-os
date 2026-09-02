@@ -1742,9 +1742,13 @@ fn record_worker_audit(lease: &Lease, record: &RuntimeAuditRecord) {
         return;
     }
     if let RuntimeAuditRecord::ExtensionLifecycle {
+        kind,
+        extension_id,
         binding_digest,
         lease_digest,
+        stage,
         mcp,
+        app,
         ..
     } = record
     {
@@ -1771,8 +1775,35 @@ fn record_worker_audit(lease: &Lease, record: &RuntimeAuditRecord) {
             tracing::warn!(task = %lease.task_id, "discarding MCP audit for a substituted capability generation");
             return;
         }
+        if mcp.is_some() && app.is_some() {
+            tracing::warn!(task = %lease.task_id, "discarding ambiguous extension invocation audit");
+            return;
+        }
+        if app_gateway_audit_context_missing(*kind, *stage, app.is_some()) {
+            tracing::warn!(task = %lease.task_id, "discarding App gateway audit without call context");
+            return;
+        }
+        if app.as_ref().is_some_and(|app| {
+            *kind != crate::extension_host::protocol::ExtensionKind::App
+                || *stage != Some(crate::extension_host::protocol::AuditStage::Gateway)
+                || extension_id != &app.app_id
+                || app.validate_audit_binding(binding).is_err()
+        }) {
+            tracing::warn!(task = %lease.task_id, "discarding App audit for a substituted call context");
+            return;
+        }
     }
     crate::clawd::audit::record_worker_runtime(&lease.task_id, lease.owner_uid, record);
+}
+
+fn app_gateway_audit_context_missing(
+    kind: crate::extension_host::protocol::ExtensionKind,
+    stage: Option<crate::extension_host::protocol::AuditStage>,
+    has_context: bool,
+) -> bool {
+    kind == crate::extension_host::protocol::ExtensionKind::App
+        && stage == Some(crate::extension_host::protocol::AuditStage::Gateway)
+        && !has_context
 }
 
 fn broker_session_info(

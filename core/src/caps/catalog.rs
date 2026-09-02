@@ -358,8 +358,8 @@ pub const CATALOG: &[CapMeta] = &[
     CapMeta::new(
         Verb::AGENT_INVOKE,
         ScopeKind::Name,
-        LocalizedStr::new("Call other agents"),
-        LocalizedStr::new("Send tasks to existing agents and receive their results."),
+        LocalizedStr::new("Call agents and Apps"),
+        LocalizedStr::new("Invoke an exact tool on an installed App or another agent."),
         "📨",
         Risk::Medium,
     ),

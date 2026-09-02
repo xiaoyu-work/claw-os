@@ -751,6 +751,9 @@ pub struct McpAccess {
     /// The owner-scoped system Agent may discover and call this service.
     #[serde(default = "default_mcp_system_agent")]
     pub system_agent: bool,
+    /// The owner may call this service through the local `cos` adapter.
+    #[serde(default = "default_mcp_local_cli")]
+    pub local_cli: bool,
     /// Verified App identities allowed to request this service.
     #[serde(default)]
     pub apps: Vec<String>,
@@ -763,6 +766,7 @@ impl Default for McpAccess {
     fn default() -> Self {
         Self {
             system_agent: true,
+            local_cli: true,
             apps: Vec::new(),
             external_agents: false,
         }
@@ -770,6 +774,10 @@ impl Default for McpAccess {
 }
 
 fn default_mcp_system_agent() -> bool {
+    true
+}
+
+fn default_mcp_local_cli() -> bool {
     true
 }
 
@@ -2509,6 +2517,9 @@ fn validate_literal_path_scopes(binding: &ScopeBinding) -> Result<(), String> {
 }
 
 fn is_valid_session_tool_name(s: &str) -> bool {
+    if s.len() > 128 || s.contains("..") {
+        return false;
+    }
     let mut bytes = s.bytes();
     match bytes.next() {
         Some(b) if b.is_ascii_lowercase() => {}

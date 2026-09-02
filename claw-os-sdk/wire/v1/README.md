@@ -89,6 +89,11 @@ principal to the call/trace lineage, nesting depth, owner, task/session, and
 deadline. This context is descriptive, not authority; the App Host retains
 the transient target capability grant.
 
+The principal kind is one of `system-agent`, `app`, `app-agent`,
+`external-agent`, or `local-cli`. An App service's access declaration only
+restricts these authenticated classes; the Gateway separately enforces exact
+`agent.invoke:<app>/<tool>` caller authority.
+
 The Python runtime exposes that value through `claw_os_sdk.mcp.current_context()`
 and supports MCP progress tokens plus cooperative
 `notifications/cancelled`. MCP-first runtimes reject calls without a valid

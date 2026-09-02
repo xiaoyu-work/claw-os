@@ -74,6 +74,7 @@ impl Drop for InstallGuard {
                     super::protocol::LifecycleAction::TaskComplete,
                     "task-host",
                     None,
+                    None,
                     true,
                     Duration::ZERO,
                     None,
@@ -131,6 +132,7 @@ async fn install_with_audit(
         super::protocol::ExtensionKind::Host,
         super::protocol::LifecycleAction::Ready,
         "task-host",
+        None,
         None,
         true,
         Duration::ZERO,
@@ -279,16 +281,24 @@ impl ExtensionHostClient {
         app_id: String,
         tool: String,
         arguments: Value,
+        context: crate::agent::tools::app_gateway::McpCallContext,
         timeout: Duration,
     ) -> Result<crate::agent::tools::mcp::protocol::CallToolResult, String> {
         let started = std::time::Instant::now();
         let digest = app_manifest_digest(&app_id);
+        let audit = super::protocol::AppInvocationAudit::new(
+            app_id.clone(),
+            tool.clone(),
+            self.binding.capability_generation.clone(),
+            context,
+        )?;
         let result = self
             .request_with_timeout(
                 HostAction::AppCall {
                     app_id: app_id.clone(),
                     tool,
                     arguments,
+                    audit: audit.clone(),
                 },
                 timeout.saturating_add(Duration::from_secs(5)),
                 true,
@@ -300,11 +310,11 @@ impl ExtensionHostClient {
                     "extension host returned the wrong App-call result",
                 )),
             });
-        self.emit_result(
-            super::protocol::ExtensionKind::App,
+        self.emit_app_result(
             action_for_result(&result),
             &app_id,
             digest.as_deref(),
+            &audit,
             started.elapsed(),
             &result,
         );
@@ -578,6 +588,7 @@ impl ExtensionHostClient {
         action: super::protocol::LifecycleAction,
         extension_id: &str,
         manifest_digest: Option<&str>,
+        app: Option<&super::protocol::AppInvocationAudit>,
         success: bool,
         latency: Duration,
         error: Option<&str>,
@@ -597,8 +608,9 @@ impl ExtensionHostClient {
                     extension_id: super::protocol::clamp_text(extension_id, 128),
                     binding_digest: self.binding_digest.clone(),
                     lease_digest: self.lease_digest.clone(),
-                    stage: None,
+                    stage: app.map(|_| super::protocol::AuditStage::Gateway),
                     mcp: None,
+                    app: app.cloned().map(Box::new),
                     manifest_digest: manifest_digest.map(str::to_string),
                     success,
                     latency_ms: latency.as_millis().min(u128::from(u64::MAX)) as u64,
@@ -653,6 +665,7 @@ impl ExtensionHostClient {
                     lease_digest: self.lease_digest.clone(),
                     stage: Some(stage),
                     mcp: Some(mcp.clone()),
+                    app: None,
                     manifest_digest: Some(mcp.descriptor_digest.clone()),
                     success,
                     latency_ms: latency.as_millis().min(u128::from(u64::MAX)) as u64,
@@ -696,6 +709,28 @@ impl ExtensionHostClient {
             action,
             extension_id,
             manifest_digest,
+            None,
+            result.is_ok(),
+            latency,
+            result.as_ref().err().map(|error| error.message.as_str()),
+        );
+    }
+
+    fn emit_app_result<T>(
+        &self,
+        action: super::protocol::LifecycleAction,
+        extension_id: &str,
+        manifest_digest: Option<&str>,
+        app: &super::protocol::AppInvocationAudit,
+        latency: Duration,
+        result: &ClientResult<T>,
+    ) {
+        self.emit(
+            super::protocol::ExtensionKind::App,
+            action,
+            extension_id,
+            manifest_digest,
+            Some(app),
             result.is_ok(),
             latency,
             result.as_ref().err().map(|error| error.message.as_str()),

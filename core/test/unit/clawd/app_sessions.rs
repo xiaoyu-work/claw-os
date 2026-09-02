@@ -84,6 +84,19 @@ const USER_MANAGER_MANIFEST: &str = r#"{
   }
 }"#;
 
+const EMAIL_MCP_MANIFEST: &str = r#"{
+  "schema_version": 2,
+  "id": "email",
+  "version": "1.0.0",
+  "name": "Email",
+  "mcp": {
+    "tools": [{
+      "name": "email.search",
+      "summary": "Search mail."
+    }]
+  }
+}"#;
+
 fn app_from(manifest: &str) -> App {
     let manifest = Manifest::from_json(manifest).expect("test manifest");
     let dir = std::path::PathBuf::from("/usr/lib/cos/apps").join(&manifest.id);
@@ -184,6 +197,122 @@ fn with_invoke_cap(
         delegation,
     );
     authorize_plan(delegation, plan)
+}
+
+#[test]
+fn mcp_first_launch_plan_requires_exact_tool_scope() {
+    let app = app_from(EMAIL_MCP_MANIFEST);
+    let params = serde_json::json!({"kind": "mcp", "tool": "email.search"});
+    let (command, invoke) = mcp_launch_command_and_cap(&app, &params).unwrap();
+    assert_eq!(command, "cos app email mcp email.search");
+    assert_eq!(invoke.scope, Scope::name("email/email.search"));
+
+    let exact = delegation(CapSet::from_iter([invoke.clone()]));
+    let mut plan = LaunchPlan::default();
+    plan.require(invoke.clone(), &exact);
+    assert!(plan.missing.is_empty());
+    let target_caps = target_session_caps(plan.caps, true, &invoke);
+    assert!(
+        !target_caps.covers(&invoke),
+        "caller invoke authority must not enter the target App session"
+    );
+
+    let coarse = delegation(CapSet::from_iter([Cap::new(
+        Verb::AGENT_INVOKE,
+        Scope::name("email"),
+    )]));
+    let mut plan = LaunchPlan::default();
+    plan.require(invoke, &coarse);
+    assert_eq!(plan.missing.len(), 1);
+}
+
+#[test]
+fn mcp_first_transient_plan_rechecks_and_removes_caller_invoke_cap() {
+    let _lock = crate::caps::test_env_lock::env_lock();
+    let apps = tempfile::tempdir().unwrap();
+    let app_dir = apps.path().join("email");
+    std::fs::create_dir_all(&app_dir).unwrap();
+    std::fs::write(app_dir.join("app.json"), EMAIL_MCP_MANIFEST).unwrap();
+    let _apps = crate::test_env::TestEnvVarGuard::set("COS_APPS_DIR", apps.path());
+    let invoke = Cap::new(
+        Verb::AGENT_INVOKE,
+        Scope::name("email/email.search"),
+    );
+    let delegation = delegation(CapSet::from_iter([invoke.clone()]));
+    let deadline = crate::agentd::grant::now_ms() + 1000;
+    let (plan, caller_authority) = session_tool_plan(
+        "email",
+        &serde_json::json!({
+            "tool": "email.search",
+            "args": {},
+            "deadline_unix_ms": deadline
+        }),
+        &delegation,
+    )
+    .unwrap();
+    let caller_authority = caller_authority.expect("MCP call authority");
+    assert_eq!(caller_authority.invoke, invoke);
+    assert_eq!(caller_authority.deadline_unix_ms, deadline);
+    assert!(plan.missing.is_empty());
+    assert!(plan.caps.covers(&invoke));
+    let target = target_session_caps(plan.caps, true, &invoke);
+    assert!(!target.covers(&invoke));
+    assert!(session_tool_plan(
+        "email",
+        &serde_json::json!({"tool": "email.search", "args": {}}),
+        &delegation,
+    )
+    .is_err());
+    assert!(session_tool_plan(
+        "email",
+        &serde_json::json!({
+            "tool": "email.search",
+            "args": {},
+            "deadline_unix_ms": 1
+        }),
+        &delegation,
+    )
+    .is_err());
+}
+
+#[test]
+fn gateway_target_grant_can_exceed_invoke_only_launch_authority() {
+    let _lock = crate::caps::test_env_lock::env_lock();
+    authority::authority().clear_for_test();
+    let uid = unsafe { libc::geteuid() as u32 };
+    let pid = std::process::id();
+    let session_id = format!("gateway-target-{}", uuid::Uuid::new_v4().simple());
+    let target = CapSet::from_caps([Cap::new(
+        Verb::FS_READ,
+        Scope::path("/srv/customer/**"),
+    )]);
+    issue_gateway_target_grant(
+        &session_id,
+        "email",
+        uid,
+        pid,
+        &target,
+        crate::agentd::grant::now_ms() + 60_000,
+    )
+    .unwrap();
+    let view = authority::authority()
+        .resolve_session(
+            &session_id,
+            &authority::Presentation {
+                uid,
+                pid,
+                start_time_ticks: crate::proc::read_start_time_ticks_pub(pid),
+                audience: authority::Audience::SystemService,
+                route: "test",
+                session_id: Some(session_id.clone()),
+            },
+        )
+        .unwrap();
+    assert_eq!(view.issuer, authority::Issuer::AppGateway);
+    assert!(view
+        .caps
+        .covers(&Cap::new(Verb::FS_READ, Scope::path("/srv/customer/file"))));
+    authority::authority().clear_for_test();
 }
 
 /// Launcher authority for a synthetic peer process.
@@ -1552,6 +1681,44 @@ fn e2e_session_grant_is_live(session_id: &str, pid: u32) -> bool {
             },
         )
         .is_ok()
+}
+
+#[test]
+fn gateway_target_grant_is_independent_of_caller_launch_ceiling() {
+    if !e2e_is_root() {
+        eprintln!("skipped: the routed capability partition can only be prepared as root");
+        return;
+    }
+    let mut harness = transient_harness();
+    let child = e2e_spawn_child(&mut harness);
+    let session_id = "app-e2e-gateway-target";
+    e2e_install_row(e2e_row(session_id, child, Some(e2e_call_caps())));
+
+    issue_gateway_target_grant(
+        session_id,
+        "fs",
+        E2E_UID,
+        child,
+        &e2e_call_caps(),
+        crate::agentd::grant::now_ms() + 60_000,
+    )
+    .expect("Gateway target grant");
+    let view = authority::authority()
+        .resolve_session(
+            session_id,
+            &authority::Presentation {
+                uid: E2E_UID,
+                pid: child,
+                start_time_ticks: crate::proc::read_start_time_ticks_pub(child),
+                audience: authority::Audience::SystemService,
+                route: "test",
+                session_id: Some(session_id.to_string()),
+            },
+        )
+            .expect("target session grant");
+        assert_eq!(view.issuer, authority::Issuer::AppGateway);
+        let required = Cap::new(Verb::FS_READ, Scope::path("/srv/scratch/**"));
+        assert!(view.caps.covers(&required));
 }
 
 #[test]

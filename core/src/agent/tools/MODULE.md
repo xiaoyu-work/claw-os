@@ -8,6 +8,9 @@ which tool calls are exposed and executed.
 ## Responsibilities
 
 - Register built-in, `cos` proxy, progressive app, memory, browser, and MCP tools.
+- Authenticate MCP App callers separately from target execution authority:
+  caller access narrows discovery, exact `agent.invoke:<app>/<tool>` gates
+  dispatch, and manifest `needs[]` become transient target-only grants.
 - Use host-backed proxy tools in supervised tasks so dynamic App/MCP code
   never executes in the worker process.
 - Cache immutable name/description/schema descriptors separately from
@@ -47,6 +50,7 @@ which tool calls are exposed and executed.
 | `cos_proxy/` | Structured `cos` primitive tools |
 | `cos_proxy/oauth_login.rs` | Agent-initiated trusted OAuth browser flow |
 | `cos_apps.rs`, `cos_apps_session.rs` | Compact app catalog/run gateways and active session calls |
+| `app_gateway.rs` | MCP caller classes, exact invoke targets, access policy, call lineage, and deadlines |
 | `mcp/` | MCP attachment and proxy tools |
 | `memory.rs`, `recall.rs` | Agent memory tools |
 
@@ -61,6 +65,9 @@ untrusted; authority comes only from authenticated session/runtime facts.
 Hosted results are wrapped as untrusted model data before they enter the
 trajectory. Hosted descriptor calls carry the canonical sanitized descriptor
 set digest; relist drift fails closed for the rest of that attachment.
+MCP-first App servers likewise reproduce the verified manifest descriptor set
+exactly. Gateway call context comes from an authenticated task/peer binding,
+never from MCP arguments, and is revalidated by the extension host.
 
 Bridge calls are resolved to the original tool identity before hooks,
 parallelism, approval, and execution. Direct calls to deferred names are

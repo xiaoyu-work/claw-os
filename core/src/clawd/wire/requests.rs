@@ -254,6 +254,8 @@ pub struct AppSessionRegister {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation: Option<Text<LABEL_BYTES>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<Text<LABEL_BYTES>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub args: Option<TextList<128, PATH_BYTES>>,
     /// The launcher's own capability set, used only to narrow what the
     /// daemon already resolved for it.

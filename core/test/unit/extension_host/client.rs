@@ -71,6 +71,7 @@ fn lifecycle_events_are_forwarded_as_typed_worker_audit() {
         super::super::protocol::LifecycleAction::Call,
         "echo-app",
         Some("abcd"),
+        None,
         false,
         Duration::from_millis(7),
         Some("untrusted failure"),
@@ -103,6 +104,53 @@ fn lifecycle_events_are_forwarded_as_typed_worker_audit() {
     assert!(error.is_some());
     assert_eq!(binding_digest, client.binding_digest);
     assert_eq!(lease_digest, client.lease_digest);
+}
+
+#[test]
+fn app_invocation_audit_preserves_gateway_lineage() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let binding = binding();
+    let context =
+        crate::agent::tools::app_gateway::McpCallContext::for_extension_system_agent(
+            &binding,
+            Duration::from_secs(5),
+        )
+        .unwrap();
+    let invocation = super::super::protocol::AppInvocationAudit::new(
+        "email",
+        "email.search",
+        binding.capability_generation.clone(),
+        context,
+    )
+    .unwrap();
+    let client = ExtensionHostClient {
+        binding_digest: binding.digest().unwrap(),
+        lease_digest: crate::crypto::sha256_hex(binding.lease_nonce.as_bytes()),
+        binding,
+        audit: Some(tx),
+    };
+    let result: ClientResult<()> = Ok(());
+    client.emit_app_result(
+        super::super::protocol::LifecycleAction::Call,
+        "email",
+        Some("abcd"),
+        &invocation,
+        Duration::from_millis(3),
+        &result,
+    );
+    let crate::agentd::protocol::WorkerFrame::Audit { record, .. } =
+        rx.try_recv().expect("App invocation audit frame")
+    else {
+        panic!("expected audit frame");
+    };
+    let crate::agentd::protocol::RuntimeAuditRecord::ExtensionLifecycle {
+        stage, app, ..
+    } = *record
+    else {
+        panic!("expected lifecycle audit");
+    };
+    assert_eq!(stage, Some(super::super::protocol::AuditStage::Gateway));
+    assert_eq!(app.as_deref(), Some(&invocation));
 }
 
 #[test]

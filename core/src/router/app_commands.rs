@@ -195,7 +195,7 @@ fn app_lint_violations(app: &apps::App) -> Vec<Value> {
     violations
 }
 
-/// On-disk lint checks for an app's `session` block. The manifest
+/// On-disk lint checks for an app's MCP service. The manifest
 /// parser already enforces structural validity (duplicate tool
 /// names, undeclared scope args, missing English text, etc.) and
 /// `apps::discover` would have skipped the app otherwise. What we
@@ -204,8 +204,13 @@ fn app_lint_violations(app: &apps::App) -> Vec<Value> {
 /// script, since a missing entry breaks the agent at first call
 /// rather than at install time.
 fn scan_session_block(app: &apps::App) -> Vec<Value> {
-    let Some(session) = app.manifest.session.as_ref() else {
+    let Some(session) = app.manifest.mcp_service() else {
         return Vec::new();
+    };
+    let field = if app.manifest.mcp.is_some() {
+        "mcp"
+    } else {
+        "session"
     };
     let entry_rel = session
         .entry
@@ -215,10 +220,10 @@ fn scan_session_block(app: &apps::App) -> Vec<Value> {
     let mut hits = Vec::new();
     if !entry_abs.is_file() {
         hits.push(json!({
-            "kind": "session.entry-missing",
+            "kind": format!("{field}.entry-missing"),
             "file": entry_abs.display().to_string(),
             "hint": format!(
-                "Manifest declares a `session` block with {} tool(s) but the entry script \
+                "Manifest declares a `{field}` service with {} tool(s) but the entry script \
                  `{}` is not present on disk. The kernel agent will fail to bring up the MCP \
                  server on the first call.",
                 session.tools.len(),
@@ -229,9 +234,9 @@ fn scan_session_block(app: &apps::App) -> Vec<Value> {
     hits
 }
 
-/// `cos app tool <sub>` — discovery surface for App-defined session
+/// `cos app tool <sub>` — discovery surface for App-defined MCP
 /// tools (the strict-schema, agent-callable surface declared in each
-/// manifest's `session` block).
+/// manifest service.
 ///
 /// Currently supports:
 /// * `cos app tool list` — every session tool across every installed app.
@@ -262,8 +267,7 @@ fn tool_cmd(
             for app in apps_to_show {
                 let tools_json: Vec<Value> = app
                     .manifest
-                    .session
-                    .as_ref()
+                    .mcp_service()
                     .map(|s| {
                         s.tools
                             .iter()
@@ -287,6 +291,7 @@ fn tool_cmd(
                 apps_json.push(json!({
                     "app": app.manifest.id,
                     "has_session": app.manifest.session.is_some(),
+                    "has_mcp": app.manifest.mcp.is_some(),
                     "tools": tools_json,
                 }));
             }

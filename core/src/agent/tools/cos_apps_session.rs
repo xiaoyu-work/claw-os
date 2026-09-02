@@ -58,9 +58,11 @@ use tokio::time::timeout;
 
 use crate::agent::llm::run_log::{record as record_run, LlmRunRecord};
 use crate::agent::tools::mcp::client::{ClientError, McpClient};
-use crate::agent::tools::mcp::protocol::{ClientCapabilities, Implementation, PROTOCOL_VERSION};
+use crate::agent::tools::mcp::protocol::{
+    ClientCapabilities, Implementation, ToolDescriptor, PROTOCOL_VERSION,
+};
 use crate::agent::tools::mcp::transport::StdioTransport;
-use crate::caps::manifest::{Manifest, Runtime, SessionTransport};
+use crate::caps::manifest::{Manifest, Runtime, Session, SessionTransport};
 
 use super::exposure::{ToolExposure, ToolTransport};
 use super::progressive::ToolDisclosure;
@@ -189,6 +191,7 @@ async fn bring_up_app(
     app_id: &str,
     app_dir: &Path,
     manifest: &Manifest,
+    launch_tool: Option<&str>,
     timeout_dur: Duration,
     isolation: Option<&crate::extension_host::child_isolation::IsolationAuthority>,
 ) -> Result<
@@ -200,10 +203,12 @@ async fn bring_up_app(
     ),
     String,
 > {
+    let startup_deadline = Instant::now()
+        .checked_add(timeout_dur)
+        .ok_or_else(|| "MCP App startup deadline overflowed".to_string())?;
     let session = manifest
-        .session
-        .as_ref()
-        .ok_or_else(|| format!("app `{app_id}` has no session block"))?;
+        .mcp_service()
+        .ok_or_else(|| format!("app `{app_id}` has no MCP service"))?;
     if !matches!(session.transport, SessionTransport::Stdio) {
         return Err(format!(
             "app `{app_id}`: only `stdio` transport is supported"
@@ -251,6 +256,12 @@ async fn bring_up_app(
             canon_app.display()
         ));
     }
+    let manifest_path = canon_app.join("app.json");
+    if !manifest_path.is_file() {
+        return Err(format!(
+            "app `{app_id}` verified snapshot has no app.json"
+        ));
+    }
 
     let apps_dir = apps_root();
     let apps_dir_str = apps_dir.to_string_lossy().to_string();
@@ -272,7 +283,8 @@ async fn bring_up_app(
     let pythonpath = path_parts.join(pathsep());
 
     let mut command = build_command(manifest.runtime, &entry_abs, app_dir, isolation)?;
-    let mut app_session = crate::bridge::AppIdentitySession::for_mcp(app_id, manifest)?;
+    let mut app_session =
+        crate::bridge::AppIdentitySession::for_mcp(app_id, manifest, launch_tool)?;
     // Wipe inherited env then reinstate the bare minimum + the
     // `COS_*` configuration variables. App-internal env from
     // `crate::config::as_env_vars()` is the curated subset the
@@ -283,6 +295,7 @@ async fn bring_up_app(
     }
     command
         .env("COS_APP_ID", app_id)
+        .env("COS_APP_MANIFEST", &manifest_path)
         .env("COS_SESSION", app_session.id())
         .env("COS_DATA_DIR", &data_dir)
         .env("COS_PROC_DATA_DIR", app_session.proc_data_dir())
@@ -361,7 +374,12 @@ async fn bring_up_app(
         },
         ClientCapabilities::default(),
     );
-    let init = match timeout(timeout_dur, init_fut).await {
+    let init_timeout = startup_deadline.saturating_duration_since(Instant::now());
+    if init_timeout.is_zero() {
+        kill_and_reap_child(child);
+        return Err("MCP App startup deadline expired before initialize".to_string());
+    }
+    let init = match timeout(init_timeout, init_fut).await {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => {
             kill_and_reap_child(child);
@@ -383,13 +401,17 @@ async fn bring_up_app(
     }
     let _ = client.notify("notifications/initialized", None).await;
 
-    // tools/list is advisory: we register from the manifest, not from
-    // here, so the kernel's view of what's callable never depends on
-    // a misbehaving server. We still call it to surface server-side
-    // errors immediately.
+    // The kernel registers from the manifest, never from remote text.
+    // MCP-first servers must reproduce that exact descriptor set;
+    // legacy session servers keep their historical advisory listing.
     let list_fut = client.list_tools();
-    let listed_count = match timeout(timeout_dur, list_fut).await {
-        Ok(Ok(v)) => v.tools.len(),
+    let list_timeout = startup_deadline.saturating_duration_since(Instant::now());
+    if list_timeout.is_zero() {
+        kill_and_reap_child(child);
+        return Err("MCP App startup deadline expired before tools/list".to_string());
+    }
+    let listed_tools = match timeout(list_timeout, list_fut).await {
+        Ok(Ok(v)) => v.tools,
         Ok(Err(e)) => {
             kill_and_reap_child(child);
             return Err(format!("tools/list: {e}"));
@@ -402,6 +424,13 @@ async fn bring_up_app(
             ));
         }
     };
+    if manifest.mcp.is_some() {
+        if let Err(error) = validate_mcp_descriptors(session, &listed_tools) {
+            kill_and_reap_child(child);
+            return Err(error);
+        }
+    }
+    let listed_count = listed_tools.len();
 
     Ok((client, child, listed_count, app_session))
 }
@@ -470,12 +499,18 @@ fn build_command(
 /// within the request; grants are cleared as soon as the response is
 /// received.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
+const HOSTED_GATEWAY_TIMEOUT: Duration =
+    Duration::from_millis(crate::extension_host::protocol::MAX_REQUEST_TIMEOUT_MS);
 
 /// Return the active client for `app_id`, opening the session lazily
 /// if no entry exists. Holds the manager mutex across spawn (which is
 /// fine — sessions are infrequent and the spawn happens off-thread
 /// via tokio's blocking pool inside `Command::spawn`).
-async fn get_or_open(app_id: &str) -> Result<Arc<McpClient>, String> {
+async fn get_or_open(
+    app_id: &str,
+    tool: &str,
+    startup_timeout: Duration,
+) -> Result<Arc<McpClient>, String> {
     let key = session_key(app_id)?;
     let stale = {
         let mut table = manager().lock().await;
@@ -487,7 +522,9 @@ async fn get_or_open(app_id: &str) -> Result<Arc<McpClient>, String> {
         table.remove(&key)
     };
     drop(stale);
-    open_session(app_id, None).await.map(|(c, _)| c)
+    open_session(app_id, Some(tool), startup_timeout, None)
+        .await
+        .map(|(client, _)| client)
 }
 
 struct ActiveCallGuard {
@@ -529,6 +566,7 @@ async fn begin_active_session_call(
     tool: &str,
     args: &BTreeMap<String, Value>,
     caps: &[crate::caps::Cap],
+    deadline_unix_ms: u64,
 ) -> Result<ActiveCallGuard, String> {
     let key = session_key(app_id)?;
     let (control, child_pid, call_lock, poisoned) = {
@@ -543,13 +581,32 @@ async fn begin_active_session_call(
             session.poisoned.clone(),
         )
     };
-    let lock = call_lock.lock_owned().await;
-    if let Err(error) = control.set_transient_call(Some(crate::bridge::TransientCall {
-        tool,
-        args,
-        caps: crate::caps::CapSet::from_caps(caps.iter().cloned()),
-    })) {
-        let clear_error = control.set_transient_call(None).err();
+    let lock_timeout = deadline_unix_ms
+        .checked_sub(crate::agentd::grant::now_ms())
+        .filter(|remaining| *remaining > 0)
+        .map(Duration::from_millis)
+        .ok_or_else(|| "MCP App call deadline expired in the call queue".to_string())?;
+    let lock = timeout(lock_timeout, call_lock.lock_owned())
+        .await
+        .map_err(|_| "MCP App call deadline expired in the call queue".to_string())?;
+    let install = {
+        let control = control.clone();
+        let tool = tool.to_string();
+        let args = args.clone();
+        let caps = crate::caps::CapSet::from_caps(caps.iter().cloned());
+        tokio::task::spawn_blocking(move || {
+            control.set_transient_call(Some(crate::bridge::TransientCall {
+                tool: &tool,
+                args: &args,
+                caps,
+                deadline_unix_ms: Some(deadline_unix_ms),
+            }))
+        })
+        .await
+        .map_err(|error| format!("App transient authority task failed: {error}"))?
+    };
+    if let Err(error) = install {
+        let clear_error = clear_transient_call(control.clone()).await.err();
         #[cfg(unix)]
         unsafe {
             libc::kill(child_pid as i32, libc::SIGKILL);
@@ -561,6 +618,20 @@ async fn begin_active_session_call(
             None => error,
         });
     }
+    if crate::agentd::grant::now_ms() >= deadline_unix_ms {
+        let clear = clear_transient_call(control.clone()).await;
+        if let Err(error) = clear {
+            poisoned.store(true, Ordering::SeqCst);
+            #[cfg(unix)]
+            unsafe {
+                libc::kill(child_pid as i32, libc::SIGKILL);
+            }
+            return Err(format!(
+                "MCP App call expired before dispatch and transient cleanup failed: {error}"
+            ));
+        }
+        return Err("MCP App call deadline expired before dispatch".to_string());
+    }
     Ok(ActiveCallGuard {
         control,
         child_pid,
@@ -568,6 +639,12 @@ async fn begin_active_session_call(
         poisoned,
         _lock: lock,
     })
+}
+
+async fn clear_transient_call(control: crate::bridge::AppSessionControl) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || control.set_transient_call(None))
+        .await
+        .map_err(|error| format!("App transient cleanup task failed: {error}"))?
 }
 
 /// Explicitly bring up `app_id`. Returns `(client, tool_count)`.
@@ -583,6 +660,8 @@ async fn begin_active_session_call(
 /// is created per app per process.
 async fn open_session(
     app_id: &str,
+    launch_tool: Option<&str>,
+    startup_timeout: Duration,
     isolation: Option<&crate::extension_host::child_isolation::IsolationAuthority>,
 ) -> Result<(Arc<McpClient>, usize), String> {
     if crate::paths::is_routed_job() {
@@ -615,8 +694,15 @@ async fn open_session(
         .map_err(|e| format!("read manifest for `{app_id}`: {e}"))?;
     let manifest = Manifest::from_json(&manifest_text)
         .map_err(|e| format!("parse manifest for `{app_id}`: {e}"))?;
-    let (client, child, listed, identity) =
-        bring_up_app(app_id, &app_dir, &manifest, DEFAULT_TIMEOUT, isolation).await?;
+    let (client, child, listed, identity) = bring_up_app(
+        app_id,
+        &app_dir,
+        &manifest,
+        launch_tool,
+        startup_timeout,
+        isolation,
+    )
+    .await?;
     let child_pid = child
         .id()
         .ok_or_else(|| format!("App session `{app_id}` lost its pid"))?;
@@ -760,12 +846,14 @@ pub struct AppSessionTool {
     name: String,
     /// Description built from the tool's summary.
     description: String,
-    /// JSON Schema derived from `manifest.session.tools[i].args`.
+    /// JSON Schema derived from the manifest MCP tool arguments.
     schema: Value,
     /// The app's manifest id.
     app_id: String,
     /// The manifest's tool name (e.g. `kv.get`) — what we send over the wire.
     manifest_tool_name: String,
+    /// Exact caller-side authority for this App/tool pair.
+    invoke_scope: crate::caps::Scope,
     /// Cached manifest used for cap resolution. Kept here so every call
     /// avoids re-parsing the JSON file.
     manifest: Arc<Manifest>,
@@ -774,29 +862,39 @@ pub struct AppSessionTool {
 }
 
 impl AppSessionTool {
-    fn from_manifest_tool(manifest: Arc<Manifest>, tool_idx: usize) -> Self {
+    fn from_manifest_tool(manifest: Arc<Manifest>, tool_idx: usize) -> Result<Self, String> {
         let session = manifest
-            .session
-            .as_ref()
-            .expect("from_manifest_tool requires a session block");
-        let tool = &session.tools[tool_idx];
+            .mcp_service()
+            .ok_or_else(|| "App manifest has no MCP service".to_string())?;
+        let tool = session
+            .tools
+            .get(tool_idx)
+            .ok_or_else(|| "App manifest has no MCP tool at that index".to_string())?;
         let app_id = manifest.id.clone();
         let manifest_tool_name = tool.name.clone();
+        let invoke_scope = if manifest.mcp.is_some() {
+            super::app_gateway::invoke_cap(&app_id, &manifest_tool_name)
+                .map_err(|error| format!("invalid MCP invocation target: {error}"))?
+                .scope
+        } else {
+            crate::caps::Scope::name(&app_id)
+        };
         let name = registry_name_for(&app_id, &manifest_tool_name);
         let description = format!(
             "App `{app_id}` session tool `{manifest_tool_name}`. {}",
             tool.summary.en_str()
         );
         let schema = build_schema(&tool.args);
-        Self {
+        Ok(Self {
             name,
             description,
             schema,
             app_id,
             manifest_tool_name,
+            invoke_scope,
             manifest,
             timeout: DEFAULT_TIMEOUT,
-        }
+        })
     }
 }
 
@@ -886,6 +984,35 @@ fn build_schema(args: &[crate::caps::manifest::Arg]) -> Value {
     Value::Object(schema)
 }
 
+fn validate_mcp_descriptors(
+    service: &Session,
+    listed: &[ToolDescriptor],
+) -> Result<(), String> {
+    if listed.len() != service.tools.len() {
+        return Err("MCP App descriptor set does not match its manifest".to_string());
+    }
+    let mut by_name = BTreeMap::new();
+    for descriptor in listed {
+        if by_name.insert(descriptor.name.as_str(), descriptor).is_some() {
+            return Err("MCP App returned duplicate tool descriptors".to_string());
+        }
+    }
+    for tool in &service.tools {
+        let Some(descriptor) = by_name.get(tool.name.as_str()) else {
+            return Err("MCP App descriptor set does not match its manifest".to_string());
+        };
+        if descriptor.description.as_deref() != Some(tool.summary.en_str())
+            || descriptor.input_schema != build_schema(&tool.args)
+        {
+            return Err(format!(
+                "MCP App descriptor `{}` drifted from its manifest",
+                tool.name
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[async_trait]
 impl Tool for AppSessionTool {
     fn name(&self) -> &str {
@@ -904,7 +1031,7 @@ impl Tool for AppSessionTool {
         ToolExposure::always()
             .requiring_caps([crate::caps::Cap::new(
                 crate::caps::Verb::AGENT_INVOKE,
-                crate::caps::Scope::name(&self.app_id),
+                self.invoke_scope.clone(),
             )])
             .requiring_transport(ToolTransport::AppSession)
     }
@@ -950,7 +1077,7 @@ impl Tool for AppSessionTool {
         let caps = effective.needs.into_iter().flatten().collect::<Vec<_>>();
         if let Err(denial) = crate::caps::require(
             crate::caps::Verb::AGENT_INVOKE,
-            crate::caps::Scope::name(&self.app_id),
+            self.invoke_scope.clone(),
         ) {
             let message = denial.to_string();
             emit_audit(
@@ -965,13 +1092,58 @@ impl Tool for AppSessionTool {
             return ToolResult::err(message);
         }
 
-        if let Some(host) = crate::extension_host::client::current() {
+        let host = crate::extension_host::client::current();
+        let (context, gateway_timeout) = match host.as_ref() {
+            Some(host) => (
+                super::app_gateway::McpCallContext::for_extension_system_agent(
+                    host.binding(),
+                    HOSTED_GATEWAY_TIMEOUT,
+                ),
+                HOSTED_GATEWAY_TIMEOUT,
+            ),
+            None => (
+                super::app_gateway::McpCallContext::for_current_system_agent(self.timeout),
+                self.timeout,
+            ),
+        };
+        let context = match context {
+            Ok(context) => context,
+            Err(error) => {
+                emit_audit(
+                    &self.app_id,
+                    &self.manifest_tool_name,
+                    crate::caps::Verb::AGENT_INVOKE.as_str(),
+                    "denied",
+                    Some(&error),
+                    Some(&error),
+                    started.elapsed(),
+                );
+                return ToolResult::err(error);
+            }
+        };
+        if let Err(error) =
+            super::app_gateway::authorize_manifest(&self.manifest, &context.caller)
+        {
+            emit_audit(
+                &self.app_id,
+                &self.manifest_tool_name,
+                crate::caps::Verb::AGENT_INVOKE.as_str(),
+                "denied",
+                Some(&error),
+                Some(&error),
+                started.elapsed(),
+            );
+            return ToolResult::err(error);
+        }
+
+        if let Some(host) = host {
             return match host
                 .call_app(
                     self.app_id.clone(),
                     self.manifest_tool_name.clone(),
                     Value::Object(args_map.into_iter().collect()),
-                    self.timeout,
+                    context,
+                    gateway_timeout,
                 )
                 .await
             {
@@ -1011,24 +1183,36 @@ impl Tool for AppSessionTool {
             };
         }
 
-        for cap in &caps {
-            if let Err(denial) = crate::caps::require(cap.verb, cap.scope.clone()) {
-                let msg = denial.to_string();
-                emit_audit(
-                    &self.app_id,
-                    &self.manifest_tool_name,
-                    cap.verb.as_str(),
-                    "denied",
-                    Some(&msg),
-                    Some(&msg),
-                    started.elapsed(),
-                );
-                return ToolResult::err(msg);
+        if self.manifest.mcp.is_none() {
+            for cap in &caps {
+                if let Err(denial) = crate::caps::require(cap.verb, cap.scope.clone()) {
+                    let msg = denial.to_string();
+                    emit_audit(
+                        &self.app_id,
+                        &self.manifest_tool_name,
+                        cap.verb.as_str(),
+                        "denied",
+                        Some(&msg),
+                        Some(&msg),
+                        started.elapsed(),
+                    );
+                    return ToolResult::err(msg);
+                }
             }
         }
 
         // 2) Open / reuse session.
-        let client = match get_or_open(&self.app_id).await {
+        let startup_timeout = match context.remaining(self.timeout) {
+            Ok(timeout) => timeout,
+            Err(error) => return ToolResult::err(error),
+        };
+        let client = match get_or_open(
+            &self.app_id,
+            &self.manifest_tool_name,
+            startup_timeout,
+        )
+        .await
+        {
             Ok(c) => c,
             Err(e) => {
                 emit_audit(
@@ -1043,11 +1227,15 @@ impl Tool for AppSessionTool {
                 return ToolResult::err(format!("could not bring up app `{}`: {e}", self.app_id));
             }
         };
+        let Some(deadline_unix_ms) = context.deadline_unix_ms else {
+            return ToolResult::err("MCP App call context omitted its deadline");
+        };
         let mut active_call = match begin_active_session_call(
             &self.app_id,
             &self.manifest_tool_name,
             &args_map,
             &caps,
+            deadline_unix_ms,
         )
         .await
         {
@@ -1060,6 +1248,14 @@ impl Tool for AppSessionTool {
                 ));
             }
         };
+        let effective_timeout = match context.remaining(self.timeout) {
+            Ok(timeout) => timeout,
+            Err(error) => {
+                active_call.mark_completed();
+                drop(active_call);
+                return ToolResult::err(error);
+            }
+        };
 
         // 3) Forward tools/call.
         let arguments = if args_map.is_empty() {
@@ -1067,15 +1263,21 @@ impl Tool for AppSessionTool {
         } else {
             Some(Value::Object(args_map.clone().into_iter().collect()))
         };
-        let call = client.call_tool(self.manifest_tool_name.clone(), arguments);
-        let res = match timeout(self.timeout, call).await {
+        let call = call_manifest_tool(
+            &client,
+            &self.manifest,
+            &self.manifest_tool_name,
+            arguments,
+            Some(context),
+        );
+        let res = match timeout(effective_timeout, call).await {
             Ok(r) => r,
             Err(_) => {
                 let msg = format!(
                     "app `{}` tool `{}` timed out after {}s",
                     self.app_id,
                     self.manifest_tool_name,
-                    self.timeout.as_secs()
+                    effective_timeout.as_secs()
                 );
                 emit_audit(
                     &self.app_id,
@@ -1257,6 +1459,9 @@ impl Tool for CosAppSessionOpen {
             Some(s) if !s.is_empty() => s.to_string(),
             _ => return ToolResult::err("missing `app` field".to_string()),
         };
+        if let Err(error) = require_legacy_session(&app_id) {
+            return ToolResult::err(error);
+        }
         if let Err(denial) = crate::caps::require(
             crate::caps::Verb::AGENT_INVOKE,
             crate::caps::Scope::name(&app_id),
@@ -1265,7 +1470,9 @@ impl Tool for CosAppSessionOpen {
         }
         let opened = match crate::extension_host::client::current() {
             Some(host) => host.open_app(app_id.clone()).await,
-            None => open_session(&app_id, None).await.map(|(_, count)| count),
+            None => open_session(&app_id, None, DEFAULT_TIMEOUT, None)
+                .await
+                .map(|(_, count)| count),
         };
         match opened {
             Ok(count) => {
@@ -1330,6 +1537,9 @@ impl Tool for CosAppSessionClose {
             Some(s) if !s.is_empty() => s.to_string(),
             _ => return ToolResult::err("missing `app` field".to_string()),
         };
+        if let Err(error) = require_legacy_session(&app_id) {
+            return ToolResult::err(error);
+        }
         if let Err(denial) = crate::caps::require(
             crate::caps::Verb::AGENT_INVOKE,
             crate::caps::Scope::name(&app_id),
@@ -1358,7 +1568,8 @@ pub(crate) async fn host_open_session(
     app_id: &str,
     isolation: &crate::extension_host::child_isolation::IsolationAuthority,
 ) -> Result<usize, String> {
-    open_session(app_id, Some(isolation))
+    require_legacy_session(app_id)?;
+    open_session(app_id, None, DEFAULT_TIMEOUT, Some(isolation))
         .await
         .map(|(_, count)| count)
 }
@@ -1370,8 +1581,10 @@ pub(crate) async fn host_call_session(
     app_id: &str,
     tool_name: &str,
     input: Value,
+    context: super::app_gateway::McpCallContext,
     call_timeout: Duration,
 ) -> Result<crate::agent::tools::mcp::protocol::CallToolResult, String> {
+    context.validate()?;
     let app_dir = crate::apps::find(&apps_root(), app_id)
         .map(|app| app.dir)
         .ok_or_else(|| format!("App `{app_id}` is not installed"))?;
@@ -1380,6 +1593,7 @@ pub(crate) async fn host_call_session(
         .map_err(|error| format!("read manifest for `{app_id}`: {error}"))?;
     let manifest = Manifest::from_json(&manifest_text)
         .map_err(|error| format!("parse manifest for `{app_id}`: {error}"))?;
+    super::app_gateway::authorize_manifest(&manifest, &context.caller)?;
     let supplied = json_to_arg_map(&input);
     let paths = crate::bridge::launcher_path_context()?;
     let effective = manifest
@@ -1387,12 +1601,26 @@ pub(crate) async fn host_call_session(
         .map_err(|error| format!("argument resolution failed: {error}"))?;
     let args = effective.values;
     let caps = effective.needs.into_iter().flatten().collect::<Vec<_>>();
-    let client = get_or_open(app_id).await?;
-    let mut active = begin_active_session_call(app_id, tool_name, &args, &caps).await?;
+    let maximum_timeout = call_timeout.min(DEFAULT_TIMEOUT);
+    let startup_timeout = context.remaining(maximum_timeout)?;
+    let client = get_or_open(app_id, tool_name, startup_timeout).await?;
+    let deadline_unix_ms = context
+        .deadline_unix_ms
+        .ok_or_else(|| "MCP App call context omitted its deadline".to_string())?;
+    let mut active =
+        begin_active_session_call(app_id, tool_name, &args, &caps, deadline_unix_ms).await?;
+    let effective_timeout = match context.remaining(maximum_timeout) {
+        Ok(timeout) => timeout,
+        Err(error) => {
+            active.mark_completed();
+            drop(active);
+            return Err(error);
+        }
+    };
     let arguments = (!args.is_empty()).then(|| Value::Object(args.into_iter().collect()));
     match timeout(
-        call_timeout.min(DEFAULT_TIMEOUT),
-        client.call_tool(tool_name, arguments),
+        effective_timeout,
+        call_manifest_tool(&client, &manifest, tool_name, arguments, Some(context)),
     )
     .await
     {
@@ -1414,7 +1642,7 @@ pub(crate) async fn host_call_session(
             close_session(app_id).await;
             Err(format!(
                 "app `{app_id}` tool `{tool_name}` timed out after {}s",
-                call_timeout.min(DEFAULT_TIMEOUT).as_secs()
+                effective_timeout.as_secs()
             ))
         }
     }
@@ -1432,6 +1660,25 @@ pub(crate) async fn host_close_all_sessions() {
     drop(sessions);
 }
 
+async fn call_manifest_tool(
+    client: &Arc<McpClient>,
+    manifest: &Manifest,
+    tool_name: &str,
+    arguments: Option<Value>,
+    context: Option<super::app_gateway::McpCallContext>,
+) -> Result<crate::agent::tools::mcp::protocol::CallToolResult, ClientError> {
+    if manifest.mcp.is_some() {
+        let context = context.ok_or_else(|| {
+            ClientError::Protocol("MCP-first App call omitted its trusted context".to_string())
+        })?;
+        client
+            .call_tool_with_context(tool_name, arguments, context)
+            .await
+    } else {
+        client.call_tool(tool_name, arguments).await
+    }
+}
+
 fn manifest_tool_names(app_id: &str) -> Result<Vec<String>, String> {
     let manifest_path = crate::apps::find(&apps_root(), app_id)
         .map(|app| app.dir.join("app.json"))
@@ -1440,9 +1687,23 @@ fn manifest_tool_names(app_id: &str) -> Result<Vec<String>, String> {
         std::fs::read_to_string(&manifest_path).map_err(|e| format!("read manifest: {e}"))?;
     let manifest = Manifest::from_json(&text).map_err(|e| format!("parse manifest: {e}"))?;
     Ok(manifest
-        .session
-        .map(|s| s.tools.into_iter().map(|t| t.name).collect())
+        .mcp_service()
+        .map(|service| service.tools.iter().map(|tool| tool.name.clone()).collect())
         .unwrap_or_default())
+}
+
+fn require_legacy_session(app_id: &str) -> Result<(), String> {
+    let app = crate::apps::find(&apps_root(), app_id)
+        .ok_or_else(|| format!("App `{app_id}` is not installed"))?;
+    if app.manifest.mcp.is_some() {
+        return Err(format!(
+            "App `{app_id}` uses Gateway-managed MCP lifecycle"
+        ));
+    }
+    if app.manifest.session.is_none() {
+        return Err(format!("App `{app_id}` has no legacy session"));
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1450,27 +1711,35 @@ fn manifest_tool_names(app_id: &str) -> Result<Vec<String>, String> {
 // ---------------------------------------------------------------------------
 
 /// Walk `$COS_APPS_DIR` and register one [`AppSessionTool`] per
-/// session tool declared in any app's manifest, plus the two
-/// meta-tools. The MCP servers themselves are *not* started here —
-/// they come up lazily on first call (or explicitly via
-/// `cos_app_session_open`).
+/// manifest-declared MCP tool. MCP-first services are exposed only
+/// when their caller policy admits the system Agent. Legacy session
+/// manifests retain the explicit open/close meta-tools during migration.
 pub fn register_all(registry: &mut ToolRegistry) {
     let apps = crate::apps::discover(&apps_root());
-    let mut has_session_tools = false;
+    let mut has_legacy_session_tools = false;
     for app in apps.values() {
-        let Some(session) = &app.manifest.session else {
+        let Some(session) = app.manifest.mcp_service() else {
             continue;
         };
-        has_session_tools = true;
+        if app.manifest.mcp.is_some() && !session.access.system_agent {
+            continue;
+        }
+        has_legacy_session_tools |= app.manifest.session.is_some();
         let arc_manifest = Arc::new(app.manifest.clone());
         for idx in 0..session.tools.len() {
-            registry.register(Arc::new(AppSessionTool::from_manifest_tool(
-                arc_manifest.clone(),
-                idx,
-            )));
+            match AppSessionTool::from_manifest_tool(arc_manifest.clone(), idx) {
+                Ok(tool) => registry.register(Arc::new(tool)),
+                Err(error) => {
+                    tracing::warn!(
+                        app = %app.manifest.id,
+                        %error,
+                        "skipping invalid MCP App tool"
+                    );
+                }
+            }
         }
     }
-    if has_session_tools {
+    if has_legacy_session_tools {
         registry.register(Arc::new(CosAppSessionOpen));
         registry.register(Arc::new(CosAppSessionClose));
     }
