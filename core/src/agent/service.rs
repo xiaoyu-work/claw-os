@@ -3082,7 +3082,13 @@ pub async fn execute_job(
     stream_sink: Arc<dyn crate::agent::llm::accumulate::StreamSink>,
     progress_sink: Arc<dyn crate::agent::runtime::progress::ProgressSink>,
 ) -> FinishOutcome {
-    execute_job_with_hooks(job, stream_sink, progress_sink, standalone_runtime_hooks()).await
+    execute_job_with_hooks(
+        job,
+        stream_sink,
+        progress_sink,
+        standalone_runtime_hooks(),
+    )
+    .await
 }
 
 pub async fn execute_job_with_hooks(

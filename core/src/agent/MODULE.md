@@ -19,6 +19,8 @@ surfaces.
 - Publish deterministic task and approval lifecycle notifications after durable
   state transitions.
 - Attach built-in, app, and MCP tools to one guarded registry.
+- Delegate dynamic App and MCP execution to the task-owned extension host when
+  running inside `claw-agentd`.
 - Expose CLI, task-queue, and authenticated local web surfaces. Web Chat and
   Tasks use the same durable `clawd` queue, while Inbox projects the
   Notification Service and keeps raw context events in a separate diagnostic
@@ -26,6 +28,15 @@ surfaces.
   broker — see [`../agentd/MODULE.md`](../agentd/MODULE.md).
 - Keep CLI parsing and presentation grouped by command responsibility while
   `mod.rs` remains the composition and top-level routing boundary.
+- Persist a versioned execution phase for every queued task. Workers acknowledge
+  PREPARE while blocked; only a durable COMMIT record permits execution.
+  Recovery requeues only phases that prove COMMIT was never issued.
+- Treat file and directory fsync as mandatory queue barriers. Cross-bucket
+  moves sync both directories, and recovery deduplicates resurrected records
+  by conservative execution-phase dominance before any mutation.
+- Durably create and fsync queue topology before accepting a submission.
+  Legacy, unsupported, or malformed Pending records become terminal
+  indeterminate instead of being upgraded into a replayable phase.
 
 ## Key Files
 
@@ -56,11 +67,12 @@ surfaces.
 | `llm/registry.rs` | Provider construction |
 | `llm/providers/` | Provider-specific authentication and wire adapters |
 | `llm/accumulate.rs` | Streaming events to complete response/history |
-| `tools/registry.rs` | Tool exposure, dispatch lookup, and explicit registry dependencies |
-| `tools/progressive.rs` | Stable search/describe/call projection for deferred App/MCP tools |
+| `tools/registry.rs`, `tools/exposure.rs` | Immutable tool catalogue, explicit dependencies, session-scoped exposure, and dispatch lookup |
+| `tools/progressive.rs` | Stable bounded search/describe/call projection for deferred App/MCP tools |
 | `skills/loader.rs`, `skills/disclosure.rs` | Layered Skill discovery and progressive model disclosure |
 | `tools/mcp/` | Outbound/inbound MCP and lifecycle integration |
-| `memory/sqlite_fts.rs` | Durable messages, content-addressed session prompts, and FTS |
+| `memory/sqlite_fts.rs`, `memory/compaction.rs` | Durable messages, content-addressed prompts/summaries, compaction lifecycle, and FTS |
+| `memory/recovery.rs` | Memory health, serialized repair, FTS rebuild, and evidence-preserving quarantine |
 | `prompt/` | System prompt composition, tracing, caching |
 | `trust/` | Model-input trust lattice, source registry, labelled segments, data fence — see [`trust/MODULE.md`](trust/MODULE.md) |
 | `safety/` | Redaction, file/tool safety, and external-data controls |
@@ -89,8 +101,12 @@ surface reads owner-owned task memory directly, reads approval state through
 
 `runtime/turn.rs` is the contract seam between providers and tools. Provider
 changes must preserve equivalent streaming/non-streaming text, tools, opaque
-reasoning state, usage, and error behavior. Tool calls only execute through the
-registry, guardrails, and hooks.
+reasoning state, usage, and error behavior. Tool schemas and calls use the same
+trusted per-request exposure context, then execute through registry
+reauthorization, guardrails, exact capability approval, and hooks. Opaque MCP
+handles retain a non-model-visible internal policy identity; hosted invocation
+audit binds that identity to the server, descriptor digest, capability
+generation, and signed extension lease.
 
 CLI, web, and worker composition roots snapshot `Arc<CosConfig>`, resolve
 runtime/registry paths, and open optional stores before calling

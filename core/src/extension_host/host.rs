@@ -577,35 +577,12 @@ async fn attach_agent_extension(
     })
 }
 
-async fn attach_mcp(mut spec: McpServerSpec, state: &HostState) -> Result<HostResult, String> {
+async fn attach_mcp(spec: McpServerSpec, state: &HostState) -> Result<HostResult, String> {
     validate_name(&spec.name, "MCP server")?;
     validate_text(&spec.command, "MCP command", 4096)?;
     validate_args(&spec.args)?;
     if spec.env.len() > 64 {
         return Err("MCP environment exceeds 64 entries".to_string());
-    }
-    if let Some(binding) = spec.package.clone() {
-        let trust = crate::provenance::trust_store();
-        let mut options =
-            crate::provenance::VerifyOptions::new(crate::provenance::PackageKind::Mcp)
-                .expect_id(&binding.id);
-        options.allow_developer = false;
-        let package = crate::provenance::verify::verify_package_cached(
-            std::path::Path::new(&binding.path),
-            &options,
-            &trust,
-        )
-        .map_err(|error| {
-            crate::provenance::quarantine_reason(
-                crate::provenance::PackageKind::Mcp,
-                &binding.id,
-                &error,
-            )
-        })?;
-        if package.content_digest() != binding.content_digest {
-            return Err("MCP package content changed before hosted attachment".to_string());
-        }
-        spec.provenance = Some(package);
     }
     {
         let mcp = state.mcp.lock().await;

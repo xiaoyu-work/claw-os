@@ -217,4 +217,14 @@ fn a_reported_outcome_maps_onto_the_queue_outcome() {
         finish,
         crate::agent::service::FinishOutcome::Cancelled
     ));
+
+    let finish: crate::agent::service::FinishOutcome = WorkerOutcome::WaitingApproval {
+        request_ids: vec!["approval-a".to_string()],
+    }
+    .into();
+    assert!(matches!(
+        finish,
+        crate::agent::service::FinishOutcome::WaitingApproval { request_ids }
+            if request_ids == vec!["approval-a"]
+    ));
 }

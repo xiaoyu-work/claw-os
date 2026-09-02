@@ -27,6 +27,7 @@ library API exported by `core/src/lib.rs`.
 | `caps/` | Capability model and enforcement |
 | `credential/` | Encrypted store, crypto/master-key boundary, authorization, OAuth, lifecycle, and CLI facade; see [`credential/MODULE.md`](credential/MODULE.md) |
 | `provenance/` | Extension package signing, trust roots, verification, install |
+| `proc.rs`, `proc/proc_spawn_allowlist.rs` | Session-scoped process lifecycle and root-owned, versioned, descriptor-pinned launch policy |
 | `model/` | Local/cloud model tasks and engines |
 | `session/` | Session persistence |
 | `notifications/` | Durable owner-scoped notification model, store, policy, and external delivery adapters |

@@ -626,23 +626,19 @@ impl LlmCompressor {
         for message in head {
             segment = segment.concat(&Self::label_message(message));
         }
-        let summarised = segment.into_model_summary(summary);
+        let summarised = segment.into_model_summary(envelope::defang(summary));
         let lineage = summarised
             .lineage()
             .iter()
             .map(|kind| kind.tag())
             .collect::<Vec<_>>()
             .join(",");
-        let payload = format!(
+        Message::assistant_text(format!(
             "{SUMMARY_MARKER} (compressed {} prior messages; trust={}; sources={lineage})\n\n{}",
             head.len(),
             summarised.class(),
             summarised.content(),
-        );
-        let fenced = summarised
-            .into_model_summary(payload)
-            .render_fenced(envelope::process_seal());
-        Message::assistant_text(fenced)
+        ))
     }
 
     /// Label one history message for compression lineage.

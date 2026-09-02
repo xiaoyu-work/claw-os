@@ -750,8 +750,8 @@ pub fn spawn_host(
     command.current_dir(&paths.control_dir);
     command.env_clear();
     command.env("HOME", &paths.control_dir);
-    // The host runs with a private /tmp mount. Keep nested worker socket paths
-    // below AF_UNIX's small SUN_LEN ceiling without exposing them cross-task.
+    // The host has a private /tmp mount. Keeping nested worker sockets there
+    // stays below AF_UNIX's short SUN_LEN ceiling without crossing tasks.
     command.env("XDG_RUNTIME_DIR", "/tmp");
     command.env("USER", &extension.username);
     command.env("LOGNAME", &extension.username);

@@ -316,7 +316,7 @@ impl TestEnvironment {
             .ok()?;
         std::fs::create_dir_all("/usr/lib/cos").ok()?;
         let apps = tempfile::Builder::new()
-            .prefix("test-apps-")
+            .prefix("ca-")
             .tempdir_in("/usr/lib/cos")
             .ok()?;
         let host_source = std::env::var_os("COS_PRIVILEGED_EXTENSION_HOST_BIN")

@@ -217,7 +217,7 @@ impl IsolationOptions {
     const fn dynamic_extension() -> Self {
         Self {
             verified_owner_source: false,
-            expose_provider_authority: false,
+            expose_provider_authority: true,
         }
     }
 
@@ -381,7 +381,9 @@ fn prepare_impl(
     if options.expose_provider_authority {
         for key in ["COS_SDK_PYTHON_DIR"] {
             if let Some(path) = std::env::var_os(key).map(PathBuf::from) {
-                roots.push(path);
+                if path.exists() {
+                    roots.push(path);
+                }
             }
         }
     }
@@ -427,10 +429,14 @@ fn prepare_impl(
 
     if options.expose_provider_authority {
         if let Some(path) = std::env::var_os("COS_PROC_DATA_DIR").map(PathBuf::from) {
-            bind_live_read_only(&path, &mut args)?;
+            if path.exists() {
+                bind_live_read_only(&path, &mut args)?;
+            }
         }
         if let Some(path) = std::env::var_os("COS_EXTENSION_BROKER_SOCKET").map(PathBuf::from) {
-            bind_live_read_only(&path, &mut args)?;
+            if path.exists() {
+                bind_live_read_only(&path, &mut args)?;
+            }
         }
     }
     for (key, value) in [

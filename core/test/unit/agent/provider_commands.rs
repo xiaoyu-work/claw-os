@@ -382,12 +382,17 @@ fn provider_doctor_non_numeric_timeout_rejected() {
     assert!(err.contains("--timeout"));
 }
 
-#[test]
-fn provider_doctor_skips_probe_for_unconfigured_provider() {
+#[tokio::test]
+async fn provider_doctor_skips_probe_for_unconfigured_provider() {
     // The default test config now has provider="" (not configured).
-    // Verify --probe-network is gracefully skipped without spinning a
-    // tokio runtime or hitting the network.
-    let v = provider_doctor_cmd(&["--probe-network".into()]).expect("doctor ok");
+    // Verify --probe-network is gracefully skipped without hitting the
+    // network, independent of the developer's process-global config.
+    let v = crate::config::with_snapshot(
+        std::sync::Arc::new(crate::config::CosConfig::default()),
+        async { provider_doctor_cmd(&["--probe-network".into()]) },
+    )
+    .await
+    .expect("doctor ok");
     let probe = v
         .get("doctor")
         .and_then(|d| d.get("active_probe"))

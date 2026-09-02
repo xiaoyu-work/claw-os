@@ -10,8 +10,28 @@ through model turns, tools, hooks, progress, and final records.
 - Own one bounded multi-turn lifecycle for buffered and streaming asks.
 - Restore or freeze one versioned canonical system prompt per persisted session.
 - Keep due reminders and application context request-local.
+- Load the latest verified durable compaction plus its uncompacted tail for
+  every continuation surface.
+- Track raw row provenance through each turn so a prepared compaction can be
+  committed before its summary becomes model-visible.
+- Adopt a concurrent compaction winner's verified summary/tail when a
+  pre-lock plan becomes stale or already covered, then recheck and boundedly
+  replan until the request is compliant or fails explicitly.
+- Merge unpersisted live messages by neighboring durable row anchors during
+  winner adoption, preserving tool evidence and rejecting any ephemeral that
+  the winner collapsed without including in its durable inputs.
 - Execute one provider/tool-result turn.
+- Emit paired Agent-extension observations for each concrete provider attempt,
+  including retries and fallback slots, before any tool dispatch.
 - Dispatch parallel-safe and serial tools deterministically.
+- Build every provider tool schema and dispatch lookup from the same
+  session-scoped exposure context.
+- Keep provider tool schemas deterministic while a session's exposure and
+  attachment generation are unchanged; reproject after explicit invalidation.
+- Treat `dangerous_tools` as a legacy name filter only; capability-aware
+  proxies reach exact execution-time consent instead.
+- Install a fresh task-local approval identity for every invocation and retire
+  its consent state on completion or cancellation.
 - Resolve progressive tool envelopes before hooks, approval, progress, and
   parallel scheduling while preserving provider call ids.
 - Run lifecycle hooks and progress/heartbeat reporting.
@@ -32,17 +52,19 @@ through model turns, tools, hooks, progress, and final records.
 ## Dependencies
 
 Runtime depends on provider-neutral LLM types, the guarded tool registry,
-prompt/memory services, and an explicit `RuntimeDeps`. Production composition
-resolves hooks, audit/notes/nudge/Skill paths, clock, and semantic indexing
-before entering the lifecycle. Delegated children inherit the parent's runtime
-hooks, clock, and paths while retaining their own provider and narrowed tool
-registry, and their hook context is marked delegated. Detached curator work
-reinstalls both the captured `Arc<CosConfig>` and typed routed-path context
-(owner home, owner UID, routed-job marker); its curation log is an explicit
-composition-time path. It never executes a model-emitted tool call
-outside `turn.rs` dispatch. Message order and opaque provider state must survive
-every turn. Provider history retains bridge envelopes; evidence, progress, and
-stored presentation resolve them to the underlying tool identity.
+trusted tool-exposure context, prompt/memory services, and an explicit
+`RuntimeDeps`. Production composition resolves hooks, audit/notes/nudge/Skill
+paths, clock, and semantic indexing before entering the lifecycle. Delegated
+children inherit the parent's runtime hooks, clock, and paths while retaining
+their own provider and narrowed tool registry, and their hook context is marked
+delegated. Detached curator work reinstalls both the captured `Arc<CosConfig>`
+and typed routed-path context (owner home, owner UID, routed-job marker); its
+curation log is an explicit composition-time path. It never executes a
+model-emitted tool call outside `turn.rs` dispatch. Dispatch repeats exposure
+checks before execution; exact argument-derived capability checks remain in
+tools/providers. Message order and opaque provider state must survive every
+turn. Provider history retains bridge envelopes; evidence, progress, approval,
+and stored presentation resolve them to the underlying tool identity.
 
 ## Lifecycle ownership
 

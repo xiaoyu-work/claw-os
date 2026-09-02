@@ -24,6 +24,8 @@ Debian packages and a signed multi-architecture APT repository.
 | `deb/build-debs.sh` | Package staging and `.deb` assembly |
 | `deb/*/control` | Package metadata, ABI generation, and runtime dependencies |
 | `deb/*/{preinst,postinst,prerm,postrm}` | Upgrade/install/remove behavior and the downgrade gates |
+| `deb/claw-os-agent/extension-gid-scan.py` | Root-owned mount/ownership/ACL proof used during Agent postinstall |
+| `deb/tests/test-extension-gid-scan.py` | Real getfacl, mount pinning, stacked mount, and timeout-process-group coverage |
 | `deb/common/security-floor.preinst` | Shared pre-unpack refusal, rendered per package |
 | `deb/common/50claw-os-security-floor` | APT pre-install hook configuration (conffile) |
 | `release-security/policy.json` | Security epoch, ABI, protocols, tracked components |
@@ -40,6 +42,7 @@ Debian packages and a signed multi-architecture APT repository.
 | `deb/tests/test-security-floor-packaging.sh` | Real `.deb`, maintainer-script and signature downgrade scenarios |
 | `deb/tests/test-security-floor-install.sh` | Real `dpkg` multi-package and `apt-get` hook transactions |
 | `apt-repo/verify-release-security.sh` | Refuse a publication that regresses, is incoherent, or has no authenticated baseline |
+| `deb/tests/test-agentd-packaging.sh` | Worker/extension-host binary, identity, service, and isolation contract |
 | `../rootfs/overlay/usr/lib/cos/init/remove-home-overlay.sh` | Safe managed-home flattening before Base removal |
 | `deb/tests/test-remove-home-overlay.sh` | Merged-tree, metadata, whiteout, and opaque-directory removal regression tests |
 | `apt-repo/build-repo.sh` | Multi-arch index, Release, `Valid-Until`, by-hash, and GPG signatures |

@@ -16,8 +16,9 @@ and agent tasks.
   permission decisions still cross the polkit helper.
 - Expose owner-scoped notification publication, subscription, state, and
   delivery-leasing RPC.
-- Supervise unprivileged `claw-agentd` workers; never run the model/tool loop
-  in this process (see `core/src/agentd/MODULE.md`).
+- Supervise unprivileged `claw-agentd` workers and task-owned
+  `claw-extension-host` processes; never run the model/tool loop or dynamic
+  extension code in this process (see `core/src/agentd/MODULE.md`).
 - Install audit hooks around broker-visible work, including runtime audit
   forwarded by a worker.
 
@@ -34,6 +35,7 @@ and agent tasks.
 | `tasks.rs` | Task queue, summary/list, cancel, retry, and session continuity |
 | `usage.rs` | Peer-UID-scoped Agent token usage queries |
 | `app_sessions.rs` | App/native/MCP session authority: derives identity and capabilities, plans approvals, issues launch grants |
+| `../extension_host/broker.rs` | Per-task private proxy: verifies SCM credentials, host/child ancestry, route class, and nearest child session before normal dispatch |
 | `scheduler.rs` | Proactive-scheduler authority: validates `cos cron` / `cos triggers` requests and derives what a job may carry |
 | `notifications.rs` | Notification RPC handlers, due-nudge fanout, and external delivery dispatcher |
 | `system_caps.rs` | System capability derivation |
