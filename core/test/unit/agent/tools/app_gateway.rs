@@ -95,6 +95,7 @@ fn gateway_operation_identity_is_canonical_and_call_bound() {
         "task-a",
         deadline,
         "0123456789abcdef",
+        &"a".repeat(64),
     )
     .unwrap();
     assert_eq!(
@@ -108,6 +109,7 @@ fn gateway_operation_identity_is_canonical_and_call_bound() {
             "task-a",
             deadline,
             "0123456789abcdef",
+            &"a".repeat(64),
         )
         .unwrap()
     );
@@ -122,6 +124,7 @@ fn gateway_operation_identity_is_canonical_and_call_bound() {
             "task-a",
             deadline,
             "0123456789abcdef",
+            &"a".repeat(64),
         )
         .unwrap()
     );

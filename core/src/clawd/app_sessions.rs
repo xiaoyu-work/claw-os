@@ -186,6 +186,9 @@ pub(crate) struct AgentGatewayAuthority {
     pub worker_pid: u32,
     pub worker_start_time_ticks: Option<u64>,
     pub lease_deadline_ms: u64,
+    pub approval_nonce: String,
+    pub approval_expires_at: u64,
+    pub consent_context: crate::caps::ConsentContext,
     pub capability_generation: String,
     pub caps: CapSet,
 }
@@ -194,6 +197,7 @@ pub(crate) struct AuthorizedGatewayCall {
     pub arguments: Value,
     pub target_caps: CapSet,
     pub lifecycle: crate::caps::manifest::McpLifecycle,
+    pub package_digest: String,
 }
 
 impl LaunchPlan {
@@ -209,7 +213,7 @@ impl LaunchPlan {
     }
 }
 
-pub(crate) fn authorize_agent_gateway_call(
+pub(crate) async fn authorize_agent_gateway_call(
     authority: &AgentGatewayAuthority,
     app_id: &str,
     tool_name: &str,
@@ -217,6 +221,7 @@ pub(crate) fn authorize_agent_gateway_call(
     context: &crate::agent::tools::app_gateway::McpCallContext,
 ) -> Result<AuthorizedGatewayCall, BrokerError> {
     context.validate().map_err(BrokerError::authorization)?;
+    verify_agent_gateway_authority(authority).await?;
     if authority.owner_uid == 0
         || crate::proc::read_start_time_ticks_pub(authority.worker_pid)
             != authority.worker_start_time_ticks
@@ -233,7 +238,9 @@ pub(crate) fn authorize_agent_gateway_call(
             "MCP App call does not match the authenticated agent task",
         ));
     }
+
     let app = installed_app(app_id).map_err(BrokerError::execution)?;
+    let package_digest = installed_manifest_digest(&app).map_err(BrokerError::execution)?;
     crate::agent::tools::app_gateway::authorize_manifest(&app.manifest, &context.caller)
         .map_err(BrokerError::authorization)?;
     let service = app
@@ -281,12 +288,67 @@ pub(crate) fn authorize_agent_gateway_call(
         )));
     }
     let plan = derive_plan(&tool.needs, &effective.needs, &delegation)?;
-    let target_caps = authorize_plan(&delegation, plan)?;
+    let arguments = Value::Object(effective.values.into_iter().collect());
+    let deadline_unix_ms = context
+        .deadline_unix_ms
+        .ok_or_else(|| BrokerError::execution("MCP App call context omitted its deadline"))?;
+    let operation_id = crate::agent::tools::app_gateway::gateway_operation_id(
+        app_id,
+        tool_name,
+        &arguments,
+        &context.call_id,
+        &authority.session_id,
+        &authority.task_id,
+        deadline_unix_ms,
+        &authority.capability_generation,
+        &package_digest,
+    )
+    .map_err(BrokerError::execution)?;
+    let target_caps = authorize_agent_gateway_plan(
+        &delegation,
+        plan,
+        authority,
+        &operation_id,
+        app_id,
+        tool_name,
+        deadline_unix_ms,
+    )?;
     Ok(AuthorizedGatewayCall {
-        arguments: Value::Object(effective.values.into_iter().collect()),
+        arguments,
         target_caps,
         lifecycle: service.lifecycle,
+        package_digest,
     })
+}
+
+pub(crate) async fn verify_agent_gateway_authority(
+    authority: &AgentGatewayAuthority,
+) -> Result<(), BrokerError> {
+    let session_id = authority.session_id.clone();
+    let live = crate::paths::with_user_override(
+        authority.owner_uid,
+        authority.owner_home.clone(),
+        async move { crate::proc::session_info_by_id(&session_id) },
+    )
+    .await
+    .ok_or_else(|| BrokerError::authorization("agent task session is no longer active"))?;
+    let live_caps = live.caps.unwrap_or_default();
+    if live.pending_bind
+        || authority.capability_generation
+            != crate::agent::tools::exposure::capability_generation(&live_caps)
+        || authority.caps != live_caps
+    {
+        return Err(BrokerError::authorization(
+            "agent task capabilities changed during the MCP App call",
+        ));
+    }
+    Ok(())
+}
+
+fn installed_manifest_digest(app: &App) -> Result<String, String> {
+    let bytes = std::fs::read(app.dir.join("app.json"))
+        .map_err(|error| format!("read installed App manifest: {error}"))?;
+    Ok(crate::crypto::sha256_hex(&bytes))
 }
 
 /// Identity an approval grant is bound to when the launcher belongs to
@@ -935,6 +997,10 @@ fn consume_gateway_dispatch_grant(
         .get("capability_generation")
         .and_then(Value::as_str)
         .ok_or_else(|| "App Gateway call omitted its capability generation".to_string())?;
+    let package_digest = call
+        .get("package_digest")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "App Gateway call omitted its package digest".to_string())?;
     let operation_id = crate::agent::tools::app_gateway::gateway_operation_id(
         app_id,
         tool,
@@ -944,12 +1010,13 @@ fn consume_gateway_dispatch_grant(
         task_id,
         deadline_unix_ms,
         capability_generation,
+        package_digest,
     )?;
     let presentation = authority::Presentation {
         uid,
         pid,
         start_time_ticks: client.start_time_ticks,
-        audience: authority::Audience::AppLaunch,
+        audience: authority::Audience::AppGateway,
         route: "app_session.set_transient",
         session_id: None,
     };
@@ -1294,6 +1361,115 @@ fn authorize_plan(delegation: &Delegation, plan: LaunchPlan) -> Result<CapSet, B
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn authorize_agent_gateway_plan(
+    delegation: &Delegation,
+    plan: LaunchPlan,
+    authority: &AgentGatewayAuthority,
+    operation_id: &str,
+    app_id: &str,
+    tool_name: &str,
+    deadline_unix_ms: u64,
+) -> Result<CapSet, BrokerError> {
+    if plan.missing.is_empty() {
+        return Ok(plan.caps);
+    }
+    if authority.consent_context == crate::caps::ConsentContext::Unattended {
+        return Err(BrokerError::authorization(format!(
+            "unattended agent task cannot approve target authority for `{app_id}/{tool_name}`"
+        )));
+    }
+    let execution = crate::approvals::ApprovalExecutionIdentity {
+        task_id: authority.task_id.clone(),
+        worker_pid: authority.worker_pid,
+        worker_start_time_ticks: authority.worker_start_time_ticks,
+        lease_nonce: authority.approval_nonce.clone(),
+    };
+    match crate::approvals::consume_worker_grant_set_once_for_owner_operation(
+        &authority.session_id,
+        &plan.missing,
+        authority.owner_uid,
+        &execution,
+        operation_id,
+    ) {
+        Ok(true) => return Ok(plan.caps),
+        Ok(false) => {}
+        Err(error) => {
+            return Err(format!("could not settle App Gateway approvals: {error}").into())
+        }
+    }
+
+    let expires_at = authority.approval_expires_at.min(
+        deadline_unix_ms
+            .saturating_add(999)
+            .saturating_div(1000),
+    );
+    let mut ids = Vec::new();
+    let mut failures = Vec::new();
+    for cap in &plan.missing {
+        match crate::approvals::has_approved_worker_grant_for_owner_operation(
+            &authority.session_id,
+            cap,
+            authority.owner_uid,
+            &execution,
+            operation_id,
+        ) {
+            Ok(true) => continue,
+            Ok(false) => {}
+            Err(error) => {
+                failures.push(error);
+                continue;
+            }
+        }
+        if let Some(request) = crate::approvals::find_pending_worker_request_for_operation(
+            &authority.session_id,
+            cap,
+            authority.owner_uid,
+            &execution,
+            Some(operation_id),
+        ) {
+            ids.push(request.id);
+            continue;
+        }
+        match crate::approvals::submit_worker_request_for_operation(
+            cap.verb,
+            cap.scope.clone(),
+            authority.session_id.clone(),
+            format!(
+                "App Gateway call `{app_id}/{tool_name}` requires {}:{}",
+                cap.verb.as_str(),
+                cap.scope
+            ),
+            Some(delegation.requester.clone()),
+            authority.owner_uid,
+            authority.task_id.clone(),
+            authority.worker_pid,
+            authority.worker_start_time_ticks,
+            authority.approval_nonce.clone(),
+            expires_at,
+            Some(operation_id),
+        ) {
+            Ok(id) => ids.push(id),
+            Err(error) => failures.push(error),
+        }
+    }
+    if !failures.is_empty() {
+        return Err(format!(
+            "could not create App Gateway approval request: {}",
+            failures.join("; ")
+        )
+        .into());
+    }
+    Err(BrokerError::authorization_required(
+        format!("App Gateway call `{app_id}/{tool_name}` is awaiting approval"),
+        json!({
+            "status": "approval_required",
+            "approval_requests": ids,
+        }),
+    )
+    .classified("approval_required"))
+}
+
 /// File (or reuse) one pending request per missing capability and tell
 /// the launcher which decisions it is waiting on.
 ///
@@ -1588,6 +1764,7 @@ pub(crate) fn issue_gateway_dispatch_grant(
     args: &Value,
     context: &crate::agent::tools::app_gateway::McpCallContext,
     capability_generation: &str,
+    package_digest: &str,
     caps: CapSet,
 ) -> Result<String, String> {
     context.validate_persistent_owner_binding(binding)?;
@@ -1619,6 +1796,7 @@ pub(crate) fn issue_gateway_dispatch_grant(
             .ok_or_else(|| "MCP App call context omitted its task".to_string())?,
         deadline_unix_ms,
         capability_generation,
+        package_digest,
     )?;
     let remaining = deadline_unix_ms
         .checked_sub(crate::agentd::grant::now_ms())
@@ -1645,7 +1823,7 @@ pub(crate) fn issue_gateway_dispatch_grant(
             .with_app(Some(app_id.to_string()))
             .with_task(context.task_id.clone())
             .with_operation(Some(operation_id)),
-            audience: authority::AudienceSet::of(&[authority::Audience::AppLaunch]),
+            audience: authority::AudienceSet::of(&[authority::Audience::AppGateway]),
             caps,
             lifetime: TARGET_CALL_GRANT_TTL.min(Duration::from_millis(remaining)),
             uses: authority::Uses::Budget(1),

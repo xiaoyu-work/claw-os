@@ -268,6 +268,7 @@ fn persistent_gateway_grant_is_exact_and_one_use() {
         )
         .unwrap();
     let capability_generation = "0123456789abcdef";
+    let package_digest = "a".repeat(64);
     let arguments = serde_json::json!({"query": "Acme"});
     let target = Cap::new(Verb::DATA_DB_READ, Scope::name("email"));
     let handle = issue_gateway_dispatch_grant(
@@ -277,6 +278,7 @@ fn persistent_gateway_grant_is_exact_and_one_use() {
         &arguments,
         &context,
         capability_generation,
+        &package_digest,
         CapSet::from_iter([target.clone()]),
     )
     .unwrap();
@@ -287,6 +289,20 @@ fn persistent_gateway_grant_is_exact_and_one_use() {
         unsafe { libc::getegid() as u32 },
         start_time.unwrap(),
     );
+    assert!(matches!(
+        crate::clawd::authority::authority().resolve(
+            &handle,
+            &crate::clawd::authority::Presentation {
+                uid: owner_uid,
+                pid,
+                start_time_ticks: start_time,
+                audience: crate::clawd::authority::Audience::AppLaunch,
+                route: "app_session",
+                session_id: None,
+            },
+        ),
+        Err(crate::clawd::authority::AuthorityError::Audience { .. })
+    ));
     let call = serde_json::json!({
         "tool": "email.search",
         "args": arguments,
@@ -295,6 +311,7 @@ fn persistent_gateway_grant_is_exact_and_one_use() {
         "task_id": context.task_id,
         "deadline_unix_ms": context.deadline_unix_ms,
         "capability_generation": capability_generation,
+        "package_digest": package_digest,
     });
     let mut substituted = call.clone();
     substituted["tool"] = serde_json::json!("email.send");

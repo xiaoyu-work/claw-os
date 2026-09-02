@@ -33,9 +33,14 @@ one daemon-controlled Host per owner and separate isolated children per App.
   A relist mismatch blocks the call rather than substituting a new schema.
 - Require every persistent MCP-first call to present a one-use daemon grant
   bound to Host pid/start time, owner, task/session, exact App/tool/effective
-  arguments, call id, capability generation, and deadline.
-- Tear down the host cgroup/process tree and every child session on task
-  completion, cancellation, timeout, crash, or worker loss.
+  arguments, verified manifest digest, call id, capability generation, and
+  deadline. Its dedicated audience is not valid for other App lifecycle
+  routes.
+- Reconcile manifest lifecycle under the same per-App lock used for calls:
+  idle-close `lazy`, health-check/back off `always-on`, and bind
+  `while-app-running` to a live root-owned GUI session.
+- Tear down task Hosts with their task and persistent Hosts on owner idle,
+  daemon shutdown, or failed containment.
 - Treat descriptors and results returned by hosted code as untrusted.
 - Keep every setup parent root-owned and pinned by directory descriptor.
   Create/open/remove children with `*at`/`openat2` calls; transfer only the
@@ -106,8 +111,10 @@ descriptor-pinned task tree without crossing mounts, and then revokes ACLs.
 Any failure is terminal and audited as `cleanup-failed`.
 
 The uid pool is the fixed package-created account set `cos-ext-00..63`
-(`61000..61063`), outside systemd DynamicUser. Concurrent tasks never share an
-extension uid. A uid is released only after verified cgroup
+(`61000..61063`), outside systemd DynamicUser. Concurrent task Hosts never
+share an extension uid. One persistent owner Host intentionally spans that
+owner's Agent tasks, while each App child retains separate PID/mount/network
+namespaces. A uid is released only after verified cgroup
 emptiness, private-mount teardown, task-state removal, and routed-registry ACL
 revocation. A durable quarantine marker makes failures survive broker restart;
 startup recovery keeps the uid unavailable until residue is safely purged.

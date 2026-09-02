@@ -154,6 +154,7 @@ pub(crate) struct TransientCall<'a> {
     pub session_id: Option<&'a str>,
     pub task_id: Option<&'a str>,
     pub capability_generation: Option<&'a str>,
+    pub package_digest: Option<&'a str>,
     pub deadline_unix_ms: Option<u64>,
     pub gateway_handle: Option<&'a str>,
 }
@@ -739,6 +740,7 @@ fn set_app_session_transient_call(
                     "session_id": call.session_id,
                     "task_id": call.task_id,
                     "capability_generation": call.capability_generation,
+                    "package_digest": call.package_digest,
                     "deadline_unix_ms": call.deadline_unix_ms,
                 }),
                 None => serde_json::Value::Null,

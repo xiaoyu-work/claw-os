@@ -30,7 +30,7 @@ use super::grant::SignedGrant;
 /// Bumped whenever a frame changes shape. `clawd` refuses a worker that
 /// reports a different version, and the worker refuses an assignment
 /// that carries one.
-pub const PROTOCOL_VERSION: u32 = 9;
+pub const PROTOCOL_VERSION: u32 = 10;
 
 /// Descriptor the broker dups the worker end of the channel onto.
 pub const CHANNEL_FD: i32 = 3;
@@ -379,6 +379,11 @@ pub enum WorkerFrame {
         correlation_id: u64,
         exchange: AppGatewayExchange,
     },
+    AppGatewayCancel {
+        task_id: String,
+        correlation_id: u64,
+        nonce: String,
+    },
     Result {
         task_id: String,
         outcome: Box<WorkerOutcome>,
@@ -395,7 +400,9 @@ impl WorkerFrame {
             WorkerFrame::Audit { .. } => ROUTE_AUDIT,
             WorkerFrame::Heartbeat { .. } => ROUTE_HEARTBEAT,
             WorkerFrame::Approval { .. } => ROUTE_APPROVAL,
-            WorkerFrame::AppGateway { .. } => ROUTE_APP_GATEWAY,
+            WorkerFrame::AppGateway { .. } | WorkerFrame::AppGatewayCancel { .. } => {
+                ROUTE_APP_GATEWAY
+            }
             WorkerFrame::Result { .. } => ROUTE_RESULT,
         }
     }
@@ -412,6 +419,7 @@ impl WorkerFrame {
             | WorkerFrame::Heartbeat { task_id }
             | WorkerFrame::Approval { task_id, .. }
             | WorkerFrame::AppGateway { task_id, .. }
+            | WorkerFrame::AppGatewayCancel { task_id, .. }
             | WorkerFrame::Result { task_id, .. } => Some(task_id.as_str()),
         }
     }

@@ -296,6 +296,7 @@ pub(crate) fn gateway_operation_id(
     task_id: &str,
     deadline_unix_ms: u64,
     capability_generation: &str,
+    package_digest: &str,
 ) -> Result<String, String> {
     invoke_target(app_id, tool)?;
     if !args.is_object()
@@ -305,6 +306,10 @@ pub(crate) fn gateway_operation_id(
         || deadline_unix_ms <= crate::agentd::grant::now_ms()
         || capability_generation.len() != 16
         || !capability_generation
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        || package_digest.len() != 64
+        || !package_digest
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
     {
@@ -319,6 +324,7 @@ pub(crate) fn gateway_operation_id(
         "task_id": task_id,
         "deadline_unix_ms": deadline_unix_ms,
         "capability_generation": capability_generation,
+        "package_digest": package_digest,
     }))
 }
 

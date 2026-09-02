@@ -418,6 +418,7 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
             tool,
             arguments,
             audit,
+            package_digest,
             gateway_handle,
         } => {
             validate_name(&app_id, "App id")?;
@@ -436,6 +437,8 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
                 audit.context,
                 gateway_handle,
                 audit.capability_generation,
+                package_digest,
+                &state.isolation,
                 Duration::from_millis(MAX_REQUEST_TIMEOUT_MS),
             )
             .await?;

@@ -5,7 +5,7 @@ use crate::agent::tools::mcp::integration::McpServerSpec;
 use crate::agent::tools::mcp::protocol::{CallToolResult, ToolDescriptor};
 use crate::clawd::wire::RequestId;
 
-pub const PROTOCOL_VERSION: u32 = 9;
+pub const PROTOCOL_VERSION: u32 = 10;
 pub const MAX_CONTROL_FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_CONTROL_CONNECTIONS: usize = 8;
 pub const MAX_REQUEST_TIMEOUT_MS: u64 = 180_000;
@@ -523,6 +523,8 @@ pub enum HostAction {
         #[serde(default)]
         arguments: Value,
         audit: AppInvocationAudit,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        package_digest: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         gateway_handle: Option<String>,
     },

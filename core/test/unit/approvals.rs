@@ -508,6 +508,78 @@ fn grant_set_consumption_needs_one_grant_per_capability() {
 }
 
 #[test]
+fn worker_grant_set_is_atomic_and_bound_to_execution_and_operation() {
+    let _tmp = isolated_env();
+    let owner_uid = unsafe { libc::geteuid() as u32 };
+    let pid = std::process::id();
+    let start = crate::proc::read_start_time_ticks_pub(pid);
+    let execution = ApprovalExecutionIdentity {
+        task_id: "task-app-gateway".to_string(),
+        worker_pid: pid,
+        worker_start_time_ticks: start,
+        lease_nonce: "0123456789abcdef".to_string(),
+    };
+    let operation = crate::crypto::sha256_hex(b"email/search/acme");
+    let required = vec![
+        Cap::new(Verb::FS_READ, Scope::path("/tmp/customer.txt")),
+        Cap::new(Verb::DATA_DB_WRITE, Scope::name("email")),
+    ];
+    let mut ids = Vec::new();
+    for cap in &required {
+        let id = submit_worker_request_for_operation(
+            cap.verb,
+            cap.scope.clone(),
+            "agent-session",
+            "App Gateway test",
+            None,
+            owner_uid,
+            execution.task_id.clone(),
+            pid,
+            start,
+            execution.lease_nonce.clone(),
+            now_secs() + 60,
+            Some(&operation),
+        )
+        .unwrap();
+        approve_for_owner(
+            &id,
+            GrantDuration::Once,
+            Some("uid:0".to_string()),
+            None,
+            Some(owner_uid),
+        )
+        .unwrap();
+        ids.push(id);
+    }
+
+    let mut substituted = execution.clone();
+    substituted.lease_nonce = "fedcba9876543210".to_string();
+    assert!(!consume_worker_grant_set_once_for_owner_operation(
+        "agent-session",
+        &required,
+        owner_uid,
+        &substituted,
+        &operation,
+    )
+    .unwrap());
+    assert!(ids
+        .iter()
+        .all(|id| approved_dir().join(format!("{id}.json")).exists()));
+
+    assert!(consume_worker_grant_set_once_for_owner_operation(
+        "agent-session",
+        &required,
+        owner_uid,
+        &execution,
+        &operation,
+    )
+    .unwrap());
+    assert!(ids
+        .iter()
+        .all(|id| consumed_dir().join(format!("{id}.json")).exists()));
+}
+
+#[test]
 fn status_reports_the_decision_state_for_the_owner_only() {
     let _tmp = isolated_env();
     let pending = submit_owned(

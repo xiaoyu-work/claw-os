@@ -398,6 +398,7 @@ async fn mcp_first_python_runtime_receives_bound_gateway_context() {
         &[],
         &expired_context,
         None,
+        None,
         1,
         None,
     )

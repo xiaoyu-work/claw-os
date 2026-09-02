@@ -1811,6 +1811,23 @@ fn has_approved_grant_for_execution_operation(
         .any(|path| load_matching_grant(&path, &expected, execution).is_some()))
 }
 
+pub(crate) fn has_approved_worker_grant_for_owner_operation(
+    session: &str,
+    cap: &Cap,
+    owner_uid: u32,
+    execution: &ApprovalExecutionIdentity,
+    operation_digest: &str,
+) -> Result<bool, String> {
+    has_approved_grant_for_execution_operation(
+        session,
+        cap,
+        Some(owner_uid),
+        Some(ConsentContext::Attended),
+        Some(execution),
+        Some(operation_digest),
+    )
+}
+
 /// Find a pending request for exactly this owner/session/capability and
 /// execution context. Scope containment is intentionally not used:
 /// consent for one canonical operation must never be substituted for
@@ -2004,9 +2021,45 @@ pub fn consume_grant_set_once_for_owner(
     required: &[Cap],
     owner_uid: Option<u32>,
 ) -> Result<bool, String> {
+    consume_grant_set_once(
+        session,
+        required,
+        owner_uid,
+        None,
+        None,
+        None,
+    )
+}
+
+pub(crate) fn consume_worker_grant_set_once_for_owner_operation(
+    session: &str,
+    required: &[Cap],
+    owner_uid: u32,
+    execution: &ApprovalExecutionIdentity,
+    operation_digest: &str,
+) -> Result<bool, String> {
+    consume_grant_set_once(
+        session,
+        required,
+        Some(owner_uid),
+        Some(ConsentContext::Attended),
+        Some(execution),
+        Some(operation_digest),
+    )
+}
+
+fn consume_grant_set_once(
+    session: &str,
+    required: &[Cap],
+    owner_uid: Option<u32>,
+    context: Option<ConsentContext>,
+    execution: Option<&ApprovalExecutionIdentity>,
+    operation_digest: Option<&str>,
+) -> Result<bool, String> {
     if required.is_empty() {
         return Ok(true);
     }
+    let operation_digest = canonical_operation_digest(operation_digest)?;
     ensure_dirs().map_err(|e| format!("approvals dir: {e}"))?;
     crate::filelock::with_exclusive_path_lock(&grant_lock_path(), || {
         let mut claimed: Vec<PathBuf> = Vec::new();
@@ -2017,12 +2070,13 @@ pub fn consume_grant_set_once_for_owner(
                 session: session.to_string(),
                 capability,
                 risk,
-                context: None,
+                context,
                 execution: None,
-                operation_digest: None,
+                operation_digest: operation_digest.clone(),
             };
             let found = list_dir(&approved_dir()).into_iter().find(|path| {
-                !claimed.contains(path) && load_matching_grant(path, &expected, None).is_some()
+                !claimed.contains(path)
+                    && load_matching_grant(path, &expected, execution).is_some()
             });
             match found {
                 Some(path) => claimed.push(path),

@@ -126,6 +126,10 @@ installs one.
 - `clawd` takes owner, session, task, worker pid/start time, and
   attended/unattended context from trusted lease/session state. It re-parses
   the verb and scope against the catalog and composes the reason itself.
+- MCP App target approvals use those same execution bindings plus the exact
+  App-call and manifest digest; all required capabilities are consumed
+  atomically. Session capability generation is re-read while waiting and
+  immediately before dispatch.
 - Attended `Request` files or dedupes a pending record bound to the exact
   capability, catalog risk, owner, session, task, worker pid/start time, lease
   nonce/deadline, request generation, and consent context. Unattended requests
@@ -203,10 +207,11 @@ records correlate within a task rather than across the daemon's lifetime.
 
 ## Failure and Upgrade Behavior
 
-A worker or extension host that panics, is killed, exits unexpectedly, stops
+A worker or task Host that panics, is killed, exits unexpectedly, stops
 heartbeating, sends a frame outside its grant, or speaks a different protocol
-version only ends its own task. The supervisor terminates both process trees
-and reaps them. Extension execution starts only after a delegated cgroup-v2
+version only ends its own task. A persistent owner Host failure fails the
+current App call and enters bounded restart backoff rather than widening into a
+worker fallback. Extension execution starts only after a delegated cgroup-v2
 CPU/memory/pids subtree, finite limits, pre-exec host membership, and working
 `cgroup.kill` have all been verified. A mandatory private mount namespace
 provides task-private tmpfs instances for `/tmp`, `/var/tmp`, `/dev/shm`, and

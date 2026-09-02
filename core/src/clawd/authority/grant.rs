@@ -59,6 +59,8 @@ pub enum Audience {
     Transaction,
     /// Minting and lifecycle of App/MCP sessions.
     AppLaunch,
+    /// One exact MCP App dispatch from the daemon-owned Gateway.
+    AppGateway,
     /// The proactive scheduler.
     Scheduler,
     /// Credential material.
@@ -77,6 +79,7 @@ impl Audience {
             Audience::Permission => "permission",
             Audience::Transaction => "transaction",
             Audience::AppLaunch => "app-launch",
+            Audience::AppGateway => "app-gateway",
             Audience::Scheduler => "scheduler",
             Audience::Credential => "credential",
             Audience::SystemService => "system-service",
@@ -136,6 +139,7 @@ impl AudienceSet {
             Audience::Permission,
             Audience::Transaction,
             Audience::AppLaunch,
+            Audience::AppGateway,
             Audience::Scheduler,
             Audience::Credential,
             Audience::SystemService,

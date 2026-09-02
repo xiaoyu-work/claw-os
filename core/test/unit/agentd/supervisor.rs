@@ -197,12 +197,19 @@ fn app_gateway_frames_are_task_bound_and_validated_before_dispatch() {
         arguments: serde_json::json!({"query": "Acme"}),
         timeout_ms: 30_000,
     };
+    let exchange = protocol::AppGatewayExchange::new(request.clone());
     let valid = WorkerFrame::AppGateway {
         task_id: lease.task_id.clone(),
         correlation_id: 1,
-        exchange: protocol::AppGatewayExchange::new(request.clone()),
+        exchange: exchange.clone(),
     };
     assert!(accept(&signer, std::process::id(), &mut lease, &valid, true).is_ok());
+    let cancel = WorkerFrame::AppGatewayCancel {
+        task_id: lease.task_id.clone(),
+        correlation_id: 1,
+        nonce: exchange.nonce,
+    };
+    assert!(accept(&signer, std::process::id(), &mut lease, &cancel, true).is_ok());
 
     let zero = WorkerFrame::AppGateway {
         task_id: lease.task_id.clone(),
@@ -227,6 +234,21 @@ fn app_gateway_frames_are_task_bound_and_validated_before_dispatch() {
     )
     .unwrap_err()
     .contains("different task"));
+
+    let invalid_cancel = WorkerFrame::AppGatewayCancel {
+        task_id: lease.task_id.clone(),
+        correlation_id: 1,
+        nonce: "predictable".to_string(),
+    };
+    assert!(accept(
+        &signer,
+        std::process::id(),
+        &mut lease,
+        &invalid_cancel,
+        true,
+    )
+    .unwrap_err()
+    .contains("cancellation"));
 }
 
 #[test]

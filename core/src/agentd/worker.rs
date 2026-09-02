@@ -805,6 +805,34 @@ struct ChannelAppGateway {
     state: Arc<ChannelState>,
 }
 
+struct AppGatewayCancellation {
+    task_id: String,
+    correlation_id: u64,
+    nonce: String,
+    state: Arc<ChannelState>,
+    armed: bool,
+}
+
+impl AppGatewayCancellation {
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for AppGatewayCancellation {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        self.state.forget_app(self.correlation_id);
+        let _ = self.state.tx.send(WorkerFrame::AppGatewayCancel {
+            task_id: self.task_id.clone(),
+            correlation_id: self.correlation_id,
+            nonce: self.nonce.clone(),
+        });
+    }
+}
+
 #[async_trait::async_trait]
 impl super::app_gateway::AppGateway for ChannelAppGateway {
     async fn call(
@@ -817,6 +845,13 @@ impl super::app_gateway::AppGateway for ChannelAppGateway {
         let exchange = AppGatewayExchange::new(request);
         exchange.validate()?;
         let waiter = self.state.register_app(correlation_id, exchange.clone());
+        let mut cancellation = AppGatewayCancellation {
+            task_id: self.task_id.clone(),
+            correlation_id,
+            nonce: exchange.nonce.clone(),
+            state: self.state.clone(),
+            armed: true,
+        };
         if self
             .state
             .tx
@@ -827,17 +862,19 @@ impl super::app_gateway::AppGateway for ChannelAppGateway {
             })
             .is_err()
         {
-            self.state.forget_app(correlation_id);
             return Err("agent worker lost its App Gateway channel".to_string());
         }
         match tokio::time::timeout(timeout, waiter).await {
-            Ok(Ok(AppGatewayReply::Completed { value })) => Ok(value),
-            Ok(Ok(AppGatewayReply::Failed { message })) => Err(message),
-            Ok(Err(_)) => Err("clawd closed the App Gateway reply".to_string()),
-            Err(_) => {
-                self.state.forget_app(correlation_id);
-                Err("timed out waiting for the daemon App Gateway".to_string())
+            Ok(Ok(AppGatewayReply::Completed { value })) => {
+                cancellation.disarm();
+                Ok(value)
             }
+            Ok(Ok(AppGatewayReply::Failed { message })) => {
+                cancellation.disarm();
+                Err(message)
+            }
+            Ok(Err(_)) => Err("clawd closed the App Gateway reply".to_string()),
+            Err(_) => Err("timed out waiting for the daemon App Gateway".to_string()),
         }
     }
 }

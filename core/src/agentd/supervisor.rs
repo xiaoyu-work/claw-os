@@ -14,6 +14,7 @@
 //! failure, and keeps serving. `clawd` treats no worker exit — normal
 //! or not — as fatal.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -50,6 +51,23 @@ const CANCEL_GRACE: Duration = Duration::from_secs(15);
 const SPAWN_BACKOFF_MAX: Duration = Duration::from_secs(60);
 const SPAWN_BACKOFF_BASE: Duration = Duration::from_secs(1);
 const MAX_APP_GATEWAY_CALLS: usize = 8;
+const APP_HOST_SWEEP_INTERVAL: Duration = Duration::from_secs(30);
+
+struct AbortTaskOnDrop<T> {
+    handle: tokio::task::JoinHandle<T>,
+}
+
+impl<T> AbortTaskOnDrop<T> {
+    async fn join(mut self) -> Result<T, tokio::task::JoinError> {
+        (&mut self.handle).await
+    }
+}
+
+impl<T> Drop for AbortTaskOnDrop<T> {
+    fn drop(&mut self) {
+        self.handle.abort();
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct SupervisorConfig {
@@ -269,6 +287,18 @@ pub async fn run_with_store_and_broker(
         worker = %spawn::worker_binary_path().display(),
         "agentd supervision started"
     );
+    let app_hosts = broker.persistent_app_hosts();
+    let lifecycle_shutdown = shutdown.clone();
+    let lifecycle_hosts = app_hosts.clone();
+    let lifecycle_task = tokio::spawn(async move {
+        while !lifecycle_shutdown.load(Ordering::SeqCst) {
+            tokio::time::sleep(APP_HOST_SWEEP_INTERVAL).await;
+            if lifecycle_shutdown.load(Ordering::SeqCst) {
+                break;
+            }
+            lifecycle_hosts.sweep().await;
+        }
+    });
 
     loop {
         if shutdown.load(Ordering::SeqCst) {
@@ -328,7 +358,8 @@ pub async fn run_with_store_and_broker(
             }
         });
     }
-    broker.persistent_app_hosts().shutdown_all().await;
+    lifecycle_task.abort();
+    app_hosts.shutdown_all().await;
     Ok(())
 }
 
@@ -482,6 +513,10 @@ async fn supervise(
         );
         return Ok(());
     }
+    broker
+        .persistent_app_hosts()
+        .recognize_owner(owner_uid, &identity.home)
+        .await;
 
     // Capabilities are derived here, from root-owned session metadata,
     // and handed to the worker. Nothing the worker says can widen them.
@@ -1146,6 +1181,7 @@ async fn pump(
     let mut last_progress = Instant::now();
     let (app_reply_tx, mut app_reply_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut app_calls = tokio::task::JoinSet::new();
+    let mut active_app_calls = HashMap::new();
     let mut ticker = tokio::time::interval(PUMP_TICK);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
@@ -1218,7 +1254,22 @@ async fn pump(
                             exchange,
                             ..
                         } => {
-                            if app_calls.len() >= MAX_APP_GATEWAY_CALLS {
+                            if active_app_calls.contains_key(&correlation_id) {
+                                let _ = send(
+                                    &mut writer,
+                                    &BrokerFrame::AppGatewayReply {
+                                        correlation_id,
+                                        exchange,
+                                        reply: protocol::AppGatewayReply::Failed {
+                                            message: "App Gateway correlation is already active"
+                                                .to_string(),
+                                        },
+                                    },
+                                )
+                                .await;
+                                continue;
+                            }
+                            if active_app_calls.len() >= MAX_APP_GATEWAY_CALLS {
                                 let _ = send(
                                     &mut writer,
                                     &BrokerFrame::AppGatewayReply {
@@ -1256,13 +1307,27 @@ async fn pump(
                                 worker_pid: lease.worker_pid,
                                 worker_start_time_ticks: lease.worker_start_time_ticks,
                                 lease_deadline_ms: unix_deadline_ms(lease.deadline),
+                                approval_nonce: lease.approval_nonce.clone(),
+                                approval_expires_at: lease.approval_expires_at,
+                                consent_context: lease.consent_context,
                                 capability_generation: lease.capability_generation.clone(),
                                 caps: lease.caps.clone(),
                             };
                             let manager = app_hosts.clone();
                             let replies = app_reply_tx.clone();
-                            app_calls.spawn(async move {
-                                let result = manager.call(&authority, exchange.request.clone()).await;
+                            let nonce = exchange.nonce.clone();
+                            let abort = app_calls.spawn(async move {
+                                let request = exchange.request.clone();
+                                let result = AbortTaskOnDrop {
+                                    handle: tokio::spawn(async move {
+                                        manager.call(&authority, request).await
+                                    }),
+                                }
+                                .join()
+                                .await
+                                .unwrap_or_else(|_| {
+                                    Err("persistent App Gateway task failed".to_string())
+                                });
                                 let reply = match result {
                                     Ok(value) => protocol::AppGatewayReply::Completed { value },
                                     Err(message) => protocol::AppGatewayReply::Failed {
@@ -1274,6 +1339,21 @@ async fn pump(
                                 };
                                 let _ = replies.send((correlation_id, exchange, reply));
                             });
+                            active_app_calls.insert(correlation_id, (nonce, abort));
+                        }
+                        WorkerFrame::AppGatewayCancel {
+                            correlation_id,
+                            nonce,
+                            ..
+                        } => {
+                            let matches = active_app_calls
+                                .get(&correlation_id)
+                                .is_some_and(|(active_nonce, _)| active_nonce == &nonce);
+                            if matches {
+                                if let Some((_, abort)) = active_app_calls.remove(&correlation_id) {
+                                    abort.abort();
+                                }
+                            }
                         }
                         WorkerFrame::Heartbeat { .. } => {
                             lease.deadline = Instant::now() + config.lease;
@@ -1296,6 +1376,12 @@ async fn pump(
                 }
             },
             Some((correlation_id, exchange, reply)) = app_reply_rx.recv() => {
+                if active_app_calls
+                    .get(&correlation_id)
+                    .is_some_and(|(nonce, _)| nonce == &exchange.nonce)
+                {
+                    active_app_calls.remove(&correlation_id);
+                }
                 let _ = send(
                     &mut writer,
                     &BrokerFrame::AppGatewayReply {
@@ -1543,6 +1629,21 @@ fn accept(
             return Err("App Gateway correlation id is invalid".to_string());
         }
         exchange.validate()?;
+    }
+    if let WorkerFrame::AppGatewayCancel {
+        correlation_id,
+        nonce,
+        ..
+    } = frame
+    {
+        if *correlation_id == 0
+            || nonce.len() != 32
+            || !nonce
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err("App Gateway cancellation binding is invalid".to_string());
+        }
     }
     if Instant::now() > lease.deadline {
         return Err("worker lease has expired".to_string());

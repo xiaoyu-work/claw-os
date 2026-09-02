@@ -510,21 +510,30 @@ async fn get_or_open(
     app_id: &str,
     tool: &str,
     startup_timeout: Duration,
+    isolation: Option<&crate::extension_host::child_isolation::IsolationAuthority>,
 ) -> Result<Arc<McpClient>, String> {
     let key = session_key(app_id)?;
     let stale = {
         let mut table = manager().lock().await;
-        if let Some(s) = table.get(&key) {
-            if !s.poisoned.load(Ordering::SeqCst) {
+        if let Some(s) = table.get_mut(&key) {
+            if active_session_is_live(s) {
                 return Ok(s.client.clone());
             }
         }
         table.remove(&key)
     };
     drop(stale);
-    open_session(app_id, Some(tool), startup_timeout, None)
+    open_session(app_id, Some(tool), startup_timeout, isolation)
         .await
         .map(|(client, _)| client)
+}
+
+fn active_session_is_live(session: &mut ActiveSession) -> bool {
+    !session.poisoned.load(Ordering::SeqCst)
+        && session
+            .child
+            .as_mut()
+            .is_some_and(|child| matches!(child.try_wait(), Ok(None)))
 }
 
 struct ActiveCallGuard {
@@ -568,6 +577,7 @@ async fn begin_active_session_call(
     caps: &[crate::caps::Cap],
     context: &super::app_gateway::McpCallContext,
     capability_generation: Option<&str>,
+    package_digest: Option<&str>,
     deadline_unix_ms: u64,
     gateway_handle: Option<&str>,
 ) -> Result<ActiveCallGuard, String> {
@@ -600,6 +610,7 @@ async fn begin_active_session_call(
         let session_id = context.session_id.clone();
         let task_id = context.task_id.clone();
         let capability_generation = capability_generation.map(ToOwned::to_owned);
+        let package_digest = package_digest.map(ToOwned::to_owned);
         let gateway_handle = gateway_handle.map(ToOwned::to_owned);
         let caps = crate::caps::CapSet::from_caps(caps.iter().cloned());
         tokio::task::spawn_blocking(move || {
@@ -611,6 +622,7 @@ async fn begin_active_session_call(
                 session_id: session_id.as_deref(),
                 task_id: task_id.as_deref(),
                 capability_generation: capability_generation.as_deref(),
+                package_digest: package_digest.as_deref(),
                 deadline_unix_ms: Some(deadline_unix_ms),
                 gateway_handle: gateway_handle.as_deref(),
             }))
@@ -691,8 +703,8 @@ async fn open_session(
     // finished the spawn we were blocked on.
     let stale = {
         let mut table = manager().lock().await;
-        if let Some(s) = table.get(&key) {
-            if !s.poisoned.load(Ordering::SeqCst) {
+        if let Some(s) = table.get_mut(&key) {
+            if active_session_is_live(s) {
                 return Ok((s.client.clone(), s.tool_count));
             }
         }
@@ -1268,6 +1280,7 @@ impl Tool for AppSessionTool {
             &self.app_id,
             &self.manifest_tool_name,
             startup_timeout,
+            None,
         )
         .await
         {
@@ -1294,6 +1307,7 @@ impl Tool for AppSessionTool {
             &args_map,
             &caps,
             &context,
+            None,
             None,
             deadline_unix_ms,
             None,
@@ -1655,6 +1669,8 @@ pub(crate) async fn host_call_session(
     context: super::app_gateway::McpCallContext,
     gateway_handle: Option<String>,
     capability_generation: String,
+    package_digest: Option<String>,
+    isolation: &crate::extension_host::child_isolation::IsolationAuthority,
     call_timeout: Duration,
 ) -> Result<crate::agent::tools::mcp::protocol::CallToolResult, String> {
     context.validate()?;
@@ -1664,6 +1680,14 @@ pub(crate) async fn host_call_session(
     let manifest_path = app_dir.join("app.json");
     let manifest_text = std::fs::read_to_string(&manifest_path)
         .map_err(|error| format!("read manifest for `{app_id}`: {error}"))?;
+    if package_digest
+        .as_deref()
+        .is_some_and(|expected| crate::crypto::sha256_hex(manifest_text.as_bytes()) != expected)
+    {
+        return Err(format!(
+            "App `{app_id}` manifest changed after Gateway authorization"
+        ));
+    }
     let manifest = Manifest::from_json(&manifest_text)
         .map_err(|error| format!("parse manifest for `{app_id}`: {error}"))?;
     super::app_gateway::authorize_manifest(&manifest, &context.caller)?;
@@ -1676,7 +1700,7 @@ pub(crate) async fn host_call_session(
     let caps = effective.needs.into_iter().flatten().collect::<Vec<_>>();
     let maximum_timeout = call_timeout.min(DEFAULT_TIMEOUT);
     let startup_timeout = context.remaining(maximum_timeout)?;
-    let client = get_or_open(app_id, tool_name, startup_timeout).await?;
+    let client = get_or_open(app_id, tool_name, startup_timeout, Some(isolation)).await?;
     let deadline_unix_ms = context
         .deadline_unix_ms
         .ok_or_else(|| "MCP App call context omitted its deadline".to_string())?;
@@ -1687,6 +1711,7 @@ pub(crate) async fn host_call_session(
         &caps,
         &context,
         Some(&capability_generation),
+        package_digest.as_deref(),
         deadline_unix_ms,
         gateway_handle.as_deref(),
     )

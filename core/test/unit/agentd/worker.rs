@@ -163,6 +163,39 @@ async fn app_gateway_reply_requires_exact_correlation_and_exchange() {
     ));
 }
 
+#[tokio::test]
+async fn dropping_an_app_call_sends_exact_cancellation() {
+    let (gateway, mut frames) = gateway();
+    let state = gateway.state;
+    let request = AppGatewayRequest {
+        app_id: "email".to_string(),
+        tool: "email.search".to_string(),
+        arguments: serde_json::json!({}),
+        timeout_ms: 1_000,
+    };
+    let exchange = AppGatewayExchange::new(request);
+    let waiter = state.register_app(9, exchange.clone());
+    drop(AppGatewayCancellation {
+        task_id: "task-a".to_string(),
+        correlation_id: 9,
+        nonce: exchange.nonce.clone(),
+        state,
+        armed: true,
+    });
+    let WorkerFrame::AppGatewayCancel {
+        task_id,
+        correlation_id,
+        nonce,
+    } = frames.try_recv().unwrap()
+    else {
+        panic!("expected App Gateway cancellation");
+    };
+    assert_eq!(task_id, "task-a");
+    assert_eq!(correlation_id, 9);
+    assert_eq!(nonce, exchange.nonce);
+    assert!(waiter.await.is_err());
+}
+
 fn scope() -> Scope {
     Scope::path("/home/user/notes.txt")
 }

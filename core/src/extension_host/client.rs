@@ -22,6 +22,36 @@ struct ClientFault {
     message: String,
 }
 
+struct RequestCancellation {
+    binding: ExtensionBinding,
+    request_id: RequestId,
+    armed: bool,
+}
+
+impl RequestCancellation {
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for RequestCancellation {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let binding = self.binding.clone();
+        let request_id = self.request_id.clone();
+        std::thread::spawn(move || {
+            let request = ControlRequest::new(
+                &binding,
+                HostAction::Cancel { request_id },
+                DEFAULT_REQUEST_TIMEOUT_MS,
+            );
+            let _ = exchange_blocking(&binding, &request, false);
+        });
+    }
+}
+
 impl ClientFault {
     fn new(category: ExtensionErrorCategory, message: impl Into<String>) -> Self {
         Self {
@@ -338,6 +368,7 @@ impl ExtensionHostClient {
             context,
             self.binding.capability_generation.clone(),
             None,
+            None,
             timeout,
         )
         .await
@@ -350,6 +381,7 @@ impl ExtensionHostClient {
         arguments: Value,
         context: crate::agent::tools::app_gateway::McpCallContext,
         capability_generation: String,
+        package_digest: Option<String>,
         gateway_handle: String,
         timeout: Duration,
     ) -> Result<crate::agent::tools::mcp::protocol::CallToolResult, String> {
@@ -362,6 +394,7 @@ impl ExtensionHostClient {
             arguments,
             context,
             capability_generation,
+            package_digest,
             Some(gateway_handle),
             timeout,
         )
@@ -376,6 +409,7 @@ impl ExtensionHostClient {
         arguments: Value,
         context: crate::agent::tools::app_gateway::McpCallContext,
         capability_generation: String,
+        package_digest: Option<String>,
         gateway_handle: Option<String>,
         timeout: Duration,
     ) -> Result<crate::agent::tools::mcp::protocol::CallToolResult, String> {
@@ -394,6 +428,7 @@ impl ExtensionHostClient {
                     tool,
                     arguments,
                     audit: audit.clone(),
+                    package_digest,
                     gateway_handle,
                 },
                 timeout.saturating_add(Duration::from_secs(5)),
@@ -571,12 +606,19 @@ impl ExtensionHostClient {
                 .min(u128::from(u64::MAX)) as u64,
         );
         let request_id = request.id.clone();
+        let mut cancellation = cancel_on_timeout.then(|| RequestCancellation {
+            binding: self.binding.clone(),
+            request_id,
+            armed: true,
+        });
         match tokio::time::timeout(timeout, self.exchange(request)).await {
-            Ok(result) => result,
-            Err(_) => {
-                if cancel_on_timeout {
-                    self.cancel_best_effort(request_id);
+            Ok(result) => {
+                if let Some(cancellation) = cancellation.as_mut() {
+                    cancellation.disarm();
                 }
+                result
+            }
+            Err(_) => {
                 Err(ClientFault::new(
                     ExtensionErrorCategory::Timeout,
                     format!(
@@ -654,18 +696,6 @@ impl ExtensionHostClient {
         response
             .result
             .ok_or_else(|| ClientFault::protocol("extension host response omitted its result"))
-    }
-
-    fn cancel_best_effort(&self, request_id: RequestId) {
-        let binding = self.binding.clone();
-        std::thread::spawn(move || {
-            let request = ControlRequest::new(
-                &binding,
-                HostAction::Cancel { request_id },
-                DEFAULT_REQUEST_TIMEOUT_MS,
-            );
-            let _ = exchange_blocking(&binding, &request, false);
-        });
     }
 
     fn shutdown_best_effort(&self) {

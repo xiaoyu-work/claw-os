@@ -15,7 +15,7 @@ use tokio::sync::Mutex;
 use crate::agent::tools::mcp::protocol::CallToolResult;
 use crate::agentd::protocol::AppGatewayRequest;
 use crate::agentd::spawn::{ExecutionIsolation, WorkerIdentity};
-use crate::caps::Role;
+use crate::caps::{CapSet, Role};
 use crate::clawd::state::DaemonState;
 use crate::clawd::transport::limits::Admission;
 use crate::extension_host::broker::ExtensionLease;
@@ -28,6 +28,10 @@ use crate::extension_host::spawn::{ContainmentRoot, HostPaths, SpawnedExtensionH
 
 const HOST_SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 const APPROVAL_POLL: Duration = Duration::from_millis(250);
+const LAZY_APP_IDLE: Duration = Duration::from_secs(5 * 60);
+const OWNER_HOST_IDLE: Duration = Duration::from_secs(10 * 60);
+const APP_RESTART_MAX: Duration = Duration::from_secs(60);
+const PERSISTENT_BROKER_LEASE: Duration = Duration::from_secs(120);
 
 pub(crate) struct PersistentAppHostManager {
     state: DaemonState,
@@ -40,7 +44,38 @@ pub(crate) struct PersistentAppHostManager {
 }
 
 struct OwnerHostSlot {
+    owner_uid: u32,
+    owner_home: PathBuf,
     runtime: Mutex<Option<PersistentHostRuntime>>,
+    services: Mutex<HashMap<String, AppServiceState>>,
+    restart: Mutex<RestartState>,
+}
+
+#[derive(Default)]
+struct RestartState {
+    failures: u32,
+    retry_at: Option<Instant>,
+}
+
+struct AppServiceState {
+    lifecycle: crate::caps::manifest::McpLifecycle,
+    tool: String,
+    last_used: Instant,
+    running: bool,
+    failures: u32,
+    retry_at: Option<Instant>,
+    call_lock: Arc<Mutex<()>>,
+}
+
+#[derive(Clone)]
+struct AppServiceSnapshot {
+    app_id: String,
+    lifecycle: crate::caps::manifest::McpLifecycle,
+    tool: String,
+    last_used: Instant,
+    running: bool,
+    retry_at: Option<Instant>,
+    call_lock: Arc<Mutex<()>>,
 }
 
 struct PersistentHostRuntime {
@@ -52,6 +87,7 @@ struct PersistentHostRuntime {
     extension_uid: u32,
     lease: Arc<ExtensionLease>,
     broker_task: tokio::task::JoinHandle<()>,
+    last_used: Instant,
 }
 
 impl PersistentAppHostManager {
@@ -118,18 +154,54 @@ impl PersistentAppHostManager {
                 &request.tool,
                 &request.arguments,
                 &context,
-            ) {
+            )
+            .await
+            {
                 Ok(authorized) => break authorized,
                 Err(error) if error.audit_class == Some("approval_required") => {
-                    context.remaining(APPROVAL_POLL)?;
-                    tokio::time::sleep(APPROVAL_POLL).await;
+                    let wait = context.remaining(APPROVAL_POLL)?;
+                    tokio::time::sleep(wait).await;
                 }
                 Err(error) => return Err(error.message),
             }
         };
-        let (client, binding) = self
-            .get_or_start(authority.owner_uid, &authority.owner_home)
+        if authorized.lifecycle == crate::caps::manifest::McpLifecycle::WhileAppRunning
+            && !gui_app_is_running(
+                authority.owner_uid,
+                &authority.owner_home,
+                &request.app_id,
+                None,
+            )
+            .await
+        {
+            return Err(format!(
+                "App `{}` MCP service is available only while its desktop App is running",
+                request.app_id
+            ));
+        }
+        let (slot, client, binding, host_session_id) = self
+            .get_or_start(authority.owner_uid, &authority.owner_home, true)
             .await?;
+        let call_lock =
+            track_service(&slot, &request.app_id, &request.tool, authorized.lifecycle).await;
+        let _call = call_lock.lock().await;
+        if authorized.lifecycle == crate::caps::manifest::McpLifecycle::WhileAppRunning
+            && !gui_app_is_running(
+                authority.owner_uid,
+                &authority.owner_home,
+                &request.app_id,
+                Some(&host_session_id),
+            )
+            .await
+        {
+            return Err(format!(
+                "App `{}` desktop session ended before its MCP call",
+                request.app_id
+            ));
+        }
+        super::app_sessions::verify_agent_gateway_authority(authority)
+            .await
+            .map_err(|error| error.message)?;
         let gateway_handle = super::app_sessions::issue_gateway_dispatch_grant(
             &binding,
             &request.app_id,
@@ -137,6 +209,7 @@ impl PersistentAppHostManager {
             &authorized.arguments,
             &context,
             &authority.capability_generation,
+            &authorized.package_digest,
             authorized.target_caps,
         )?;
         let timeout = context.remaining(Duration::from_millis(request.timeout_ms))?;
@@ -154,6 +227,7 @@ impl PersistentAppHostManager {
                 authorized.arguments,
                 context,
                 authority.capability_generation.clone(),
+                Some(authorized.package_digest),
                 gateway_handle,
                 timeout,
             )
@@ -165,6 +239,7 @@ impl PersistentAppHostManager {
             started.elapsed(),
             result.as_ref().err().map(String::as_str),
         );
+        record_service_result(&slot, &request.app_id, result.is_ok()).await;
         result
     }
 
@@ -172,24 +247,17 @@ impl PersistentAppHostManager {
         &self,
         owner_uid: u32,
         owner_home: &std::path::Path,
+        mark_used: bool,
     ) -> Result<
         (
+            Arc<OwnerHostSlot>,
             Arc<ExtensionHostClient>,
             crate::extension_host::protocol::ExtensionBinding,
+            String,
         ),
         String,
     > {
-        let slot = {
-            let mut hosts = self.hosts.lock().await;
-            hosts
-                .entry(owner_uid)
-                .or_insert_with(|| {
-                    Arc::new(OwnerHostSlot {
-                        runtime: Mutex::new(None),
-                    })
-                })
-                .clone()
-        };
+        let slot = self.owner_slot(owner_uid, owner_home).await?;
         let mut runtime = slot.runtime.lock().await;
         let live = runtime.as_mut().is_some_and(|active| {
             crate::proc::read_start_time_ticks_pub(active.host.pid) == active.host.start_time_ticks
@@ -198,16 +266,86 @@ impl PersistentAppHostManager {
         let stale = (!live).then(|| runtime.take()).flatten();
         if let Some(stale) = stale {
             if let Err(error) = shutdown_runtime(stale).await {
+                record_host_failure(&slot).await;
                 return Err(format!("stale persistent App Host cleanup failed: {error}"));
             }
+            record_host_failure(&slot).await;
         }
         if runtime.is_none() {
-            *runtime = Some(self.start_owner_host(owner_uid, owner_home).await?);
+            require_host_restart_ready(&slot).await?;
+            match self.start_owner_host(owner_uid, owner_home).await {
+                Ok(host) => {
+                    clear_host_failures(&slot).await;
+                    *runtime = Some(host);
+                }
+                Err(error) => {
+                    record_host_failure(&slot).await;
+                    return Err(error);
+                }
+            }
         }
         let active = runtime
-            .as_ref()
+            .as_mut()
             .ok_or_else(|| "persistent App Host was not installed".to_string())?;
-        Ok((active.client.clone(), active.host.binding.clone()))
+        if mark_used {
+            active.last_used = Instant::now();
+        }
+        active.lease.renew(PERSISTENT_BROKER_LEASE);
+        let result = (
+            slot.clone(),
+            active.client.clone(),
+            active.host.binding.clone(),
+            active.host_session_id.clone(),
+        );
+        drop(runtime);
+        self.reconcile_services(&slot, &result.1, &result.3).await;
+        Ok(result)
+    }
+
+    async fn owner_slot(
+        &self,
+        owner_uid: u32,
+        owner_home: &std::path::Path,
+    ) -> Result<Arc<OwnerHostSlot>, String> {
+        let slot = {
+            let mut hosts = self.hosts.lock().await;
+            hosts
+                .entry(owner_uid)
+                .or_insert_with(|| {
+                    Arc::new(OwnerHostSlot {
+                        owner_uid,
+                        owner_home: owner_home.to_path_buf(),
+                        runtime: Mutex::new(None),
+                        services: Mutex::new(HashMap::new()),
+                        restart: Mutex::new(RestartState::default()),
+                    })
+                })
+                .clone()
+        };
+        if slot.owner_home != owner_home {
+            return Err("persistent App Host owner home changed".to_string());
+        }
+        Ok(slot)
+    }
+
+    pub(crate) async fn recognize_owner(&self, owner_uid: u32, owner_home: &std::path::Path) {
+        let slot = match self.owner_slot(owner_uid, owner_home).await {
+            Ok(slot) => slot,
+            Err(error) => {
+                tracing::warn!(owner_uid, error = %error, "could not register App Host owner");
+                return;
+            }
+        };
+        merge_declared_services(&slot).await;
+        if slot_needs_host(&slot).await {
+            if let Err(error) = self.get_or_start(owner_uid, owner_home, false).await {
+                tracing::warn!(
+                    owner_uid,
+                    error = %error,
+                    "could not warm owner App services"
+                );
+            }
+        }
     }
 
     async fn start_owner_host(
@@ -270,7 +408,10 @@ impl PersistentAppHostManager {
         let lease_nonce = uuid::Uuid::new_v4().simple().to_string();
         let controller_pid = std::process::id();
         let controller_start_time = crate::proc::read_start_time_ticks_pub(controller_pid);
-        let host_caps = super::system_caps::system_agent_caps(owner_uid, owner_home);
+        let host_caps = CapSet::from_iter([crate::caps::Cap::new(
+            crate::caps::Verb::AGENT_INVOKE,
+            crate::caps::Scope::name("**"),
+        )]);
         let capability_generation =
             crate::agent::tools::exposure::capability_generation(&host_caps);
         let approved_paths = persistent_approved_paths(&identity)?;
@@ -358,7 +499,8 @@ impl PersistentAppHostManager {
             controller_start_time,
             host.pid,
             host.start_time_ticks,
-            u64::MAX,
+            crate::agentd::grant::now_ms()
+                .saturating_add(PERSISTENT_BROKER_LEASE.as_millis() as u64),
         ));
         let broker_task = tokio::spawn(crate::extension_host::broker::serve(
             listener,
@@ -409,7 +551,162 @@ impl PersistentAppHostManager {
             extension_uid: extension.uid,
             lease,
             broker_task,
+            last_used: Instant::now(),
         })
+    }
+
+    async fn reconcile_services(
+        &self,
+        slot: &Arc<OwnerHostSlot>,
+        client: &Arc<ExtensionHostClient>,
+        host_session_id: &str,
+    ) {
+        merge_declared_services(slot).await;
+        let services = service_snapshots(slot).await;
+        for service in services {
+            let gui_running =
+                if service.lifecycle == crate::caps::manifest::McpLifecycle::WhileAppRunning {
+                    gui_app_is_running(
+                        slot.owner_uid,
+                        &slot.owner_home,
+                        &service.app_id,
+                        Some(host_session_id),
+                    )
+                    .await
+                } else {
+                    false
+                };
+            let desired = service_should_run(&service, gui_running);
+            if desired == service.running
+                && (!desired || service.lifecycle == crate::caps::manifest::McpLifecycle::Lazy)
+            {
+                continue;
+            }
+            if desired
+                && service
+                    .retry_at
+                    .is_some_and(|retry_at| retry_at > Instant::now())
+            {
+                continue;
+            }
+            let _call = service.call_lock.lock().await;
+            let Some(current) = service_snapshot(slot, &service.app_id).await else {
+                continue;
+            };
+            let gui_running =
+                if current.lifecycle == crate::caps::manifest::McpLifecycle::WhileAppRunning {
+                    gui_app_is_running(
+                        slot.owner_uid,
+                        &slot.owner_home,
+                        &current.app_id,
+                        Some(host_session_id),
+                    )
+                    .await
+                } else {
+                    false
+                };
+            let desired = service_should_run(&current, gui_running);
+            if (desired == current.running
+                && (!desired || current.lifecycle == crate::caps::manifest::McpLifecycle::Lazy))
+                || (desired
+                    && current
+                        .retry_at
+                        .is_some_and(|retry_at| retry_at > Instant::now()))
+            {
+                continue;
+            }
+            let result = if desired {
+                client
+                    .warm_app(current.app_id.clone(), current.tool)
+                    .await
+                    .map(|_| true)
+            } else {
+                client
+                    .close_app(current.app_id.clone())
+                    .await
+                    .map(|_| false)
+            };
+            update_reconcile_result(slot, &current.app_id, result).await;
+        }
+    }
+
+    pub(crate) async fn sweep(&self) {
+        let slots = self
+            .hosts
+            .lock()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        for slot in slots {
+            merge_declared_services(&slot).await;
+            let should_run = slot_needs_host(&slot).await;
+            let (live, stale, active) = {
+                let mut runtime = slot.runtime.lock().await;
+                let live = runtime.as_mut().is_some_and(|active| {
+                    crate::proc::read_start_time_ticks_pub(active.host.pid)
+                        == active.host.start_time_ticks
+                        && active.host.child.try_wait().ok().flatten().is_none()
+                });
+                let stale = (!live).then(|| runtime.take()).flatten();
+                let active = runtime.as_ref().map(|active| {
+                    active.lease.renew(PERSISTENT_BROKER_LEASE);
+                    (active.client.clone(), active.host_session_id.clone())
+                });
+                (live, stale, active)
+            };
+            if let Some(stale) = stale {
+                if let Err(error) = shutdown_runtime(stale).await {
+                    record_host_failure(&slot).await;
+                    tracing::error!(
+                        owner_uid = slot.owner_uid,
+                        error = %error,
+                        "crashed persistent App Host cleanup failed"
+                    );
+                    continue;
+                }
+                record_host_failure(&slot).await;
+            }
+            if live {
+                if let Some((client, host_session_id)) = active {
+                    self.reconcile_services(&slot, &client, &host_session_id)
+                        .await;
+                }
+            } else if should_run {
+                if let Err(error) = self
+                    .get_or_start(slot.owner_uid, &slot.owner_home, false)
+                    .await
+                {
+                    tracing::warn!(
+                        owner_uid = slot.owner_uid,
+                        error = %error,
+                        "persistent App Host lifecycle reconciliation failed"
+                    );
+                    continue;
+                }
+            } else {
+                continue;
+            }
+            if !slot_needs_host(&slot).await {
+                let runtime = {
+                    let mut runtime = slot.runtime.lock().await;
+                    runtime
+                        .as_ref()
+                        .is_some_and(|runtime| runtime.last_used.elapsed() >= OWNER_HOST_IDLE)
+                        .then(|| runtime.take())
+                        .flatten()
+                };
+                if let Some(runtime) = runtime {
+                    if let Err(error) = shutdown_runtime(runtime).await {
+                        tracing::error!(
+                            owner_uid = slot.owner_uid,
+                            error = %error,
+                            "idle persistent App Host cleanup failed"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     pub(crate) async fn shutdown_all(&self) {
@@ -431,6 +728,235 @@ impl PersistentAppHostManager {
             }
         }
     }
+}
+
+async fn require_host_restart_ready(slot: &OwnerHostSlot) -> Result<(), String> {
+    let restart = slot.restart.lock().await;
+    if let Some(retry_at) = restart
+        .retry_at
+        .filter(|retry_at| *retry_at > Instant::now())
+    {
+        return Err(format!(
+            "persistent App Host restart is delayed for {}ms after {} failure(s)",
+            retry_at
+                .saturating_duration_since(Instant::now())
+                .as_millis(),
+            restart.failures
+        ));
+    }
+    Ok(())
+}
+
+async fn record_host_failure(slot: &OwnerHostSlot) {
+    let mut restart = slot.restart.lock().await;
+    restart.failures = restart.failures.saturating_add(1);
+    let delay = Duration::from_secs(1u64 << restart.failures.min(6)).min(APP_RESTART_MAX);
+    restart.retry_at = Some(Instant::now() + delay);
+}
+
+async fn clear_host_failures(slot: &OwnerHostSlot) {
+    let mut restart = slot.restart.lock().await;
+    restart.failures = 0;
+    restart.retry_at = None;
+}
+
+async fn track_service(
+    slot: &OwnerHostSlot,
+    app_id: &str,
+    tool: &str,
+    lifecycle: crate::caps::manifest::McpLifecycle,
+) -> Arc<Mutex<()>> {
+    let mut services = slot.services.lock().await;
+    let state = services
+        .entry(app_id.to_string())
+        .or_insert_with(|| AppServiceState {
+            lifecycle,
+            tool: tool.to_string(),
+            last_used: Instant::now(),
+            running: false,
+            failures: 0,
+            retry_at: None,
+            call_lock: Arc::new(Mutex::new(())),
+        });
+    state.lifecycle = lifecycle;
+    state.tool = tool.to_string();
+    state.last_used = Instant::now();
+    state.call_lock.clone()
+}
+
+async fn record_service_result(slot: &OwnerHostSlot, app_id: &str, success: bool) {
+    let mut services = slot.services.lock().await;
+    let Some(state) = services.get_mut(app_id) else {
+        return;
+    };
+    state.last_used = Instant::now();
+    if success {
+        state.running = true;
+        state.failures = 0;
+        state.retry_at = None;
+    } else {
+        record_service_failure(state);
+    }
+}
+
+async fn update_reconcile_result(slot: &OwnerHostSlot, app_id: &str, result: Result<bool, String>) {
+    let mut services = slot.services.lock().await;
+    let Some(state) = services.get_mut(app_id) else {
+        return;
+    };
+    match result {
+        Ok(running) => {
+            state.running = running;
+            state.failures = 0;
+            state.retry_at = None;
+        }
+        Err(error) => {
+            record_service_failure(state);
+            tracing::warn!(
+                owner_uid = slot.owner_uid,
+                app_id,
+                error = %error,
+                "persistent App service lifecycle action failed"
+            );
+        }
+    }
+}
+
+fn record_service_failure(state: &mut AppServiceState) {
+    state.running = false;
+    state.failures = state.failures.saturating_add(1);
+    let delay = Duration::from_secs(1u64 << state.failures.min(6)).min(APP_RESTART_MAX);
+    state.retry_at = Some(Instant::now() + delay);
+}
+
+async fn merge_declared_services(slot: &OwnerHostSlot) {
+    let declared = declared_services();
+    let declared_ids = declared
+        .iter()
+        .map(|(app_id, _, _)| app_id.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let mut services = slot.services.lock().await;
+    for (app_id, state) in services.iter_mut() {
+        if !declared_ids.contains(app_id.as_str()) {
+            state.lifecycle = crate::caps::manifest::McpLifecycle::Lazy;
+            state.last_used = Instant::now()
+                .checked_sub(LAZY_APP_IDLE)
+                .unwrap_or_else(Instant::now);
+        }
+    }
+    for (app_id, lifecycle, tool) in declared {
+        let state = services.entry(app_id).or_insert_with(|| AppServiceState {
+            lifecycle,
+            tool: tool.clone(),
+            last_used: Instant::now(),
+            running: false,
+            failures: 0,
+            retry_at: None,
+            call_lock: Arc::new(Mutex::new(())),
+        });
+        state.lifecycle = lifecycle;
+        state.tool = tool;
+    }
+}
+
+fn declared_services() -> Vec<(String, crate::caps::manifest::McpLifecycle, String)> {
+    crate::apps::discover(&apps_root())
+        .into_values()
+        .filter_map(|app| {
+            let service = app.manifest.mcp?;
+            let tool = service.tools.first()?.name.clone();
+            Some((app.manifest.id, service.lifecycle, tool))
+        })
+        .collect()
+}
+
+fn apps_root() -> PathBuf {
+    std::env::var_os("COS_APPS_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/usr/lib/cos/apps"))
+}
+
+async fn service_snapshots(slot: &OwnerHostSlot) -> Vec<AppServiceSnapshot> {
+    slot.services
+        .lock()
+        .await
+        .iter()
+        .map(|(app_id, state)| AppServiceSnapshot {
+            app_id: app_id.clone(),
+            lifecycle: state.lifecycle,
+            tool: state.tool.clone(),
+            last_used: state.last_used,
+            running: state.running,
+            retry_at: state.retry_at,
+            call_lock: state.call_lock.clone(),
+        })
+        .collect()
+}
+
+async fn service_snapshot(slot: &OwnerHostSlot, app_id: &str) -> Option<AppServiceSnapshot> {
+    slot.services
+        .lock()
+        .await
+        .get(app_id)
+        .map(|state| AppServiceSnapshot {
+            app_id: app_id.to_string(),
+            lifecycle: state.lifecycle,
+            tool: state.tool.clone(),
+            last_used: state.last_used,
+            running: state.running,
+            retry_at: state.retry_at,
+            call_lock: state.call_lock.clone(),
+        })
+}
+
+fn service_should_run(service: &AppServiceSnapshot, gui_running: bool) -> bool {
+    match service.lifecycle {
+        crate::caps::manifest::McpLifecycle::Lazy => {
+            service.running && service.last_used.elapsed() < LAZY_APP_IDLE
+        }
+        crate::caps::manifest::McpLifecycle::AlwaysOn => true,
+        crate::caps::manifest::McpLifecycle::WhileAppRunning => gui_running,
+    }
+}
+
+async fn slot_needs_host(slot: &OwnerHostSlot) -> bool {
+    let services = service_snapshots(slot).await;
+    for service in services {
+        match service.lifecycle {
+            crate::caps::manifest::McpLifecycle::AlwaysOn => return true,
+            crate::caps::manifest::McpLifecycle::WhileAppRunning => {
+                if gui_app_is_running(slot.owner_uid, &slot.owner_home, &service.app_id, None).await
+                {
+                    return true;
+                }
+            }
+            crate::caps::manifest::McpLifecycle::Lazy if service.running => return true,
+            crate::caps::manifest::McpLifecycle::Lazy => {}
+        }
+    }
+    false
+}
+
+async fn gui_app_is_running(
+    owner_uid: u32,
+    owner_home: &std::path::Path,
+    app_id: &str,
+    host_session_id: Option<&str>,
+) -> bool {
+    let sessions = crate::paths::with_user_override(owner_uid, owner_home.to_path_buf(), async {
+        crate::proc::registry_sessions()
+    })
+    .await;
+    sessions.into_iter().any(|session| {
+        session.group.as_deref() == Some("app")
+            && session.app_id.as_deref() == Some(app_id)
+            && host_session_id
+                .is_none_or(|host_session_id| session.parent.as_deref() != Some(host_session_id))
+            && !session.pending_bind
+            && session.pid > 1
+            && session.start_time_ticks.is_some()
+            && crate::proc::read_start_time_ticks_pub(session.pid) == session.start_time_ticks
+    })
 }
 
 fn persistent_approved_paths(
@@ -487,14 +1013,19 @@ fn record_call(
     latency: Duration,
     error: Option<&str>,
 ) {
+    let binding_digest = match binding.digest() {
+        Ok(digest) => digest,
+        Err(error) => {
+            tracing::error!(error = %error, "could not encode persistent Host audit binding");
+            return;
+        }
+    };
     let record = crate::agentd::protocol::RuntimeAuditRecord::ExtensionLifecycle {
         session_id: authority.session_id.clone(),
         kind: ExtensionKind::App,
         action: LifecycleAction::Call,
         extension_id: invocation.app_id.clone(),
-        binding_digest: binding
-            .digest()
-            .expect("validated persistent Host binding must serialize"),
+        binding_digest,
         lease_digest: crate::crypto::sha256_hex(binding.lease_nonce.as_bytes()),
         stage: Some(AuditStage::Gateway),
         mcp: None,
@@ -618,4 +1149,12 @@ fn merge_error(error: String, cleanup: Result<(), String>) -> String {
         Ok(()) => error,
         Err(cleanup) => format!("{error}; cleanup failed: {cleanup}"),
     }
+}
+
+#[cfg(test)]
+mod tests {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/clawd/app_host.rs"
+    ));
 }

@@ -728,7 +728,10 @@ channel. `clawd` derives owner/session/task/caller identity from the worker
 lease, rechecks exact `agent.invoke:<app>/<tool>`, re-reads the installed
 manifest, revalidates effective arguments and target needs, and dispatches
 through the owner's persistent Host. The worker cannot assert caller identity,
-capabilities, lineage, or Host selection.
+capabilities, lineage, or Host selection. While consent is pending and again
+before dispatch, the daemon re-reads the root-owned session capability
+generation; narrowing or removal cancels the call rather than authorizing from
+the earlier snapshot.
 
 The MCP-first server must reproduce the manifest's exact names, descriptions,
 and input schemas; descriptor drift fails startup closed. The Host launches the
@@ -738,16 +741,32 @@ Returned failures and tool results are bounded and treated as untrusted model
 data. A missing or crashed Host fails dynamic execution closed; there is no
 fallback that runs App code inside `claw-agentd`.
 
+The manifest is also the lifecycle authority. `lazy` starts on the first call
+and closes after the idle window; `always-on` is warmed when `clawd`
+authenticates an owner and is health-checked/restarted with bounded exponential
+backoff; `while-app-running` is started only while a live root-owned GUI App
+session with the same App id exists. Lifecycle reconciliation takes the same
+per-App call lock as dispatch, so an idle sweep cannot close a service after a
+new call has started. An owner Host with no retained service is itself reaped
+after its longer idle window.
+
 If a target tool needs additional authority, `clawd` files exact permission
 requests under the original task session and waits only until that call's
 absolute deadline. It then mints a one-use opaque dispatch grant bound to the
 exact persistent Host pid/start time, owner, task, session, App, tool,
 canonical arguments, call id, capability generation, and deadline. The Host
-can present but cannot alter that grant. The App session authority consumes it
-atomically and installs only its manifest-derived target capabilities around
+can present but cannot alter that grant. Its dedicated `AppGateway` audience
+cannot be substituted for an App launch/bind/deregister handle. The operation
+identity also binds the authorized manifest bytes, and the Host rechecks that
+digest before launch. The App session authority consumes the grant atomically
+and installs only its manifest-derived target capabilities around
 one serialized MCP call. Caller `agent.invoke` authority never enters the
 target session, and neither a reusable grant nor a target credential returns
-to the Agent.
+to the Agent. Approval records carry the original task, worker pid/start time,
+lease nonce, consent context, expiry, and operation digest; a complete
+multi-capability set is consumed atomically or not at all. Cancellation travels
+back over the same private channel, aborts the daemon dispatch, and sends an
+exact Host request cancellation so transient authority is cleared.
 
 ### Proactive scheduling
 
