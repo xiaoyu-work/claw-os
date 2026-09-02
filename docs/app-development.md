@@ -491,7 +491,7 @@ and ship an app
 | `cos app <id> <op> --schema` | Schema for one op. |
 | `cos app lint [<id>]` | Refuse apps that import provider SDKs directly. Run on every app if no id given. |
 | `cos app tool list [<id>]` | Show the session-tool surface this app exposes to the agent. |
-| `cos app install <dir> [--force] [--no-consent] [--yes]` | Validate the manifest, copy into `$COS_APPS_DIR/<id>/`, and (unless `--no-consent`) walk through the AI consent prompt. Copying is skipped only when the source resolves to that exact destination path. |
+| `cos app install <dir> [--force] [--no-consent] [--yes] [--dev-trust]` | Validate the manifest, verify the package's provenance envelope, copy into `$COS_APPS_DIR/<id>/`, and (unless `--no-consent`) walk through the AI consent prompt. Copying is skipped only when the source resolves to that exact destination path. `--dev-trust` is the only route that installs unsigned content and records a persistent, digest-bound developer decision. |
 | `cos app consent list` | Which apps you have granted AI consent to. |
 | `cos app consent show <id>` | Display the manifest's AI block. |
 | `cos app consent grant <id> [--yes]` | Grant AI consent. |
@@ -508,33 +508,124 @@ Set explicitly only when overriding defaults
 | Variable | Purpose | Default |
 |---|---|---|
 | `COS_APPS_DIR` | Apps root the kernel scans. | `/usr/lib/cos/apps` |
-| `COS_DATA_DIR` | Where the current process persists Claw OS data. | `$XDG_DATA_HOME/cos`, normally `~/.local/share/cos`; clawd overrides this to `/var/lib/cos` |
+| `COS_DATA_DIR` | Where the current process persists Claw OS data. Inside a sandboxed operation this is the app's own partition, `<data-root>/apps/<app-id>` — never the owner's data root. | `$XDG_DATA_HOME/cos`, normally `~/.local/share/cos`; clawd overrides this to `/var/lib/cos` |
 | `COS_APPLICATIONS_DIR` | Where `cos app install` writes generated desktop launchers. | `/usr/share/applications` |
 | `COS_SDK_PYTHON_DIR` | Force the SDK lookup to a specific dir. Must contain both `claw_os_sdk/` and `cos_runtime/` as subdirs. | unset → kernel probes `/usr/lib/cos/python` + sibling dev paths |
 | `COS_APP_ID` | The id of the calling app. **Auto-set by the bridge** from `app.json`; do not override. | (auto) |
 | `COS_BIN` | Path to the `cos` binary the SDK shells back to. | `cos` (from `$PATH`) |
 | `COS_SESSION` | Session id for grouped multi-call audit. | unset |
-| `COS_EXTENSION_BROKER_SOCKET` | Private task-scoped broker proxy for a hosted App/MCP child. **Auto-set by the host; do not override.** | unset |
+| `COS_WORKER_SANDBOX` | Set to `1` inside every sandboxed operation. Read it to detect the sandbox; do not rely on it for security. | (auto) |
+| `COS_EGRESS_SOCKET` | HTTP `CONNECT` proxy socket, present only when the operation was granted exact `net.dial` hosts. | unset |
+| `COS_EGRESS_ENDPOINTS` | Comma-separated `host:port` list the egress broker admits. | unset |
 
-## 10. Ship it
+Everything else is cleared. An operation starts from an empty
+environment and receives only the variables above plus a fixed `PATH`,
+`HOME`, `TMPDIR` and locale — never the launcher's environment, never a
+provider key, never `COS_PROC_DATA_DIR`, `COS_CAPS_DATA_DIR`,
+`SSH_AUTH_SOCK`, `DISPLAY`, `WAYLAND_DISPLAY` or a session bus address.
+
+## 10. What an operation can reach
+
+Operations run inside a namespace/seccomp/cgroup sandbox
+([`core/src/worker/MODULE.md`](../core/src/worker/MODULE.md)). Plan for
+this while writing the manifest:
+
+* **Filesystem.** Only the app package (read-only), the app data
+  directory (read-write), the `cos` binary and SDK trees (read-only),
+  and the paths the operation's `needs[]` actually granted. A
+  `fs.read` grant is a read-only mount, `fs.write` and `fs.delete` are
+  read-write, and a `from-arg` scope is mounted at the same absolute
+  path the argument named. A wildcard scope maps to no mount at all: the
+  capability check passes and the path is still not there. Never assume
+  `$HOME` is the user's home — inside the sandbox it is the app's own
+  data directory.
+* **App data.** `COS_DATA_DIR` is the app's own partition of the owner's
+  data root, `<data-root>/apps/<app-id>`. Neither the root nor another
+  app's partition is mounted, so two apps cannot read each other's
+  files even though they run as the same user. State a bundled app
+  wrote to the data root before isolation is moved into that partition
+  once, automatically, before its first sandboxed run
+  ([`docs/updating.md`](updating.md) covers the cases that stop and ask).
+* **Agent memory.** `cos_runtime.memory` still writes into the owner's
+  cross-app agent memory; the database is not mounted, and the call is
+  carried out by the launcher after checking `memory.write` scoped
+  `self:<your-app-id>`. Writing to another app's source is refused, and
+  there is no file to open directly. `show` and `forget --row` answer
+  for another app's row exactly as they answer for a row that does not
+  exist, so the row id space says nothing about what other apps store.
+* **Network.** Denied by default, in a private network namespace, and
+  the worker seccomp filter allows only `AF_UNIX` sockets — an
+  `AF_INET` socket cannot even be created, so there is no direct dial
+  to fall back to. An operation that declares `net.dial` with an exact
+  `host[:port]` scope receives a Unix-domain egress socket at
+  `COS_EGRESS_SOCKET`; `cos_runtime.egress.create_connection()` opens a
+  tunnel through it, and the broker admits only those endpoints, pins
+  the address it resolved itself, and refuses loopback, link-local,
+  cloud-metadata, private and CGNAT addresses. TLS is established by the
+  caller over the returned stream, against the hostname it asked for. A
+  wildcard host scope grants nothing, because there is no identity to
+  check against.
+* **Filesystem globs.** `*` matches one segment and is expanded entry
+  by entry, so `Documents/*` exposes the entries in `Documents` and not
+  their children. `**` covers a subtree and is refused outright when
+  that subtree contains a credential store, so `$HOME/**` does not
+  quietly hand over `~/.ssh`. A write scope must name an exact path or a
+  `**` subtree.
+* **Processes.** Bounded process count, open files, file size, memory,
+  CPU, wall clock and captured output. A worker cannot daemonize: the
+  whole process group and cgroup are killed when the operation ends, is
+  cancelled or times out.
+* **Authority.** `cos_runtime.policy` and every `cos` call the app makes
+  go through a private broker endpoint bound to that one launch, which
+  relays them to `clawd` under a launcher-held grant. `clawd` still
+  decodes, authorizes and spends the exact capability against the live
+  App session, so the endpoint can only narrow what the app may do. An
+  app cannot register an identity, widen its own capabilities, answer
+  its own consent prompts, or reach the real broker socket.
+* **GUI.** Display and GPU transports are granted only to a
+  `desktop.exec` launch, never to a headless operation.
+
+## 11. Ship it
 
 Once the app does what you want:
 
 ```sh
 cos app lint ~/my-apps/hello         # static check
-cos app install ~/my-apps/hello      # validate manifest + copy into $COS_APPS_DIR
+cos provenance sign --kind app --id hello --version 1.0.0 \
+    --path ~/my-apps/hello --key ~/.secrets/my-publisher.json \
+    --entrypoint main.py             # bind the whole tree to your key
+cos app install ~/my-apps/hello      # verify provenance + copy into $COS_APPS_DIR
 # If the manifest has an `ai` block, the installer prompts for consent
 # (skip with --no-consent and run `cos app consent grant hello` later).
 cos app hello say                    # now lives under /usr/lib/cos/apps/hello/
 ```
 
-Subsequent edits to `/usr/lib/cos/apps/<id>/main.py` are picked up
-immediately — the same hot-reload story as §4. For a clean
-distributable, package the directory as a tarball: any machine with
-Claw OS can `cos app install <untarred-dir>` it.
+An App is authenticated before its manifest can influence capability
+grants or App identity, so `cos app install` refuses an unsigned tree
+unless the operator explicitly opts in:
+
+```sh
+cos app install ~/my-apps/hello --dev-trust
+```
+
+That records a developer grant bound to the installed content digest,
+runs the App with a restricted ceiling and no privileged routes, and is
+invalidated the moment the tree changes. Editing
+`/usr/lib/cos/apps/<id>/main.py` in place therefore no longer
+hot-reloads: the edited package stops verifying and is quarantined
+until it is re-signed and re-installed (or the developer grant is
+re-recorded). Iterate in your source tree and re-run `cos app install`.
+
+For a clean distributable, sign the directory and package it as a
+tarball: any machine that trusts your publisher key can
+`cos app install <untarred-dir>` it. See
+[`extension-provenance.md`](extension-provenance.md) for the envelope
+format, trust roots, revocation and rollback.
 
 ## See also
 
+* [`extension-provenance.md`](extension-provenance.md) — package
+  signing, trust roots, install pipeline, revocation, rollback.
 * [`app-ai-integration.md`](app-ai-integration.md) — AI gate, manifest
   reference, lifecycle, audit surface.
 * [`app-ai-tool-catalog.md`](app-ai-tool-catalog.md) — every

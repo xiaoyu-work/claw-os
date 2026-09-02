@@ -1,33 +1,52 @@
 #!/bin/sh
 # claw-os-base prerm -- stop distribution integration on removal.
+#
+# Also the downgrade gate dpkg gives the currently installed package:
+# `prerm upgrade <new-version>` runs before the incoming package's own
+# preinst and before anything is unpacked.
 
 set -e
 
+DPKG_ROOT="${DPKG_ROOT:-}"
+ROOT_ARG="${DPKG_ROOT:-/}"
+SECURITY_HELPER="$DPKG_ROOT/usr/lib/cos/bin/claw-security-floor"
+
 case "$1" in
     remove)
-        if [ -d /run/systemd/system ]; then
-            if ! deb-systemd-invoke stop cos-home-setup.service >/dev/null; then
-                echo "claw-os-base: could not stop cos-home-setup.service; refusing removal" >&2
-                echo "Close active setup jobs and retry: sudo apt remove claw-os-base" >&2
+        # Managed-home flattening only applies to the running system.
+        if [ -z "$DPKG_ROOT" ]; then
+            if [ -d /run/systemd/system ]; then
+                if ! deb-systemd-invoke stop cos-home-setup.service >/dev/null; then
+                    echo "claw-os-base: could not stop cos-home-setup.service; refusing removal" >&2
+                    echo "Close active setup jobs and retry: sudo apt remove claw-os-base" >&2
+                    exit 1
+                fi
+            fi
+            if [ ! -x /usr/lib/cos/init/remove-home-overlay.sh ]; then
+                echo "claw-os-base: managed-home removal helper is missing; refusing removal" >&2
+                echo "Reinstall claw-os-base, then retry removal so home data can be preserved." >&2
                 exit 1
             fi
-        fi
-        if [ ! -x /usr/lib/cos/init/remove-home-overlay.sh ]; then
-            echo "claw-os-base: managed-home removal helper is missing; refusing removal" >&2
-            echo "Reinstall claw-os-base, then retry removal so home data can be preserved." >&2
-            exit 1
-        fi
-        if ! /usr/lib/cos/init/remove-home-overlay.sh; then
-            if [ -d /run/systemd/system ]; then
-                deb-systemd-invoke start cos-home-setup.service >/dev/null || true
+            if ! /usr/lib/cos/init/remove-home-overlay.sh; then
+                if [ -d /run/systemd/system ]; then
+                    deb-systemd-invoke start cos-home-setup.service >/dev/null || true
+                fi
+                exit 1
             fi
-            exit 1
-        fi
-        if [ -x /usr/bin/deb-systemd-helper ]; then
-            deb-systemd-helper disable cos-home-setup.service >/dev/null || true
+            if [ -x /usr/bin/deb-systemd-helper ]; then
+                deb-systemd-helper disable cos-home-setup.service >/dev/null || true
+            fi
         fi
         ;;
-    upgrade|deconfigure|failed-upgrade)
+    upgrade)
+        if [ -x "$SECURITY_HELPER" ] && [ -n "$2" ]; then
+            "$SECURITY_HELPER" check-incoming \
+                --root "$ROOT_ARG" \
+                --package claw-os-base \
+                --version "$2"
+        fi
+        ;;
+    deconfigure|failed-upgrade)
         ;;
     *)
         echo "prerm called with unknown argument '$1'" >&2

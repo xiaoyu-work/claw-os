@@ -56,8 +56,10 @@ impl AbiBinding {
         }
         semver::Version::parse(&self.extension_version)
             .map_err(|_| "extension ABI version is invalid".to_string())?;
+        if !crate::provenance::envelope::is_sha256_ref(&self.package_digest) {
+            return Err("extension ABI package digest is invalid".to_string());
+        }
         for (digest, label, len) in [
-            (&self.package_digest, "package digest", 64),
             (&self.manifest_digest, "manifest digest", 64),
             (&self.entry_digest, "entry digest", 64),
             (&self.capability_generation, "capability generation", 16),

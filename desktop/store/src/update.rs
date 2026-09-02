@@ -66,22 +66,14 @@ impl App {
             }
 
             Message::AskClaw => {
-                let ctx = if let Some(selected) = &self.selected_opt {
-                    format!(
-                        r#"{{"app":"cosmic-store","view":"app","app_id":"{}","name":"{}"}}"#,
-                        escape_json_str(selected.id.raw()),
-                        escape_json_str(&selected.info.name),
-                    )
+                let outcome = if let Some(selected) = &self.selected_opt {
+                    crate::claw_glue::ask_claw_app(selected.id.raw(), &selected.info.name)
                 } else if let Some(page) = self.explore_page_opt {
-                    format!(
-                        r#"{{"app":"cosmic-store","view":"explore","page":"{:?}"}}"#,
-                        page,
-                    )
+                    crate::claw_glue::ask_claw_explore(&format!("{page:?}"))
                 } else {
-                    r#"{"app":"cosmic-store","view":"home"}"#.to_string()
+                    crate::claw_glue::ask_claw_home()
                 };
-                let argv: &[&str] = &["cos-agent-ui", "--overlay", "--context", &ctx];
-                if let Err(err) = crate::claw_glue::exec_start(argv) {
+                if let Err(err) = outcome {
                     log::error!("failed to open Ask Claw overlay: {err}");
                 }
             }
@@ -95,12 +87,7 @@ impl App {
                 // result.
                 let query = self.search_input.trim().to_string();
                 if !query.is_empty() {
-                    let safe = escape_json_str(&query);
-                    let ctx = format!(
-                        r#"{{"app":"cosmic-store","mode":"search","query":"{safe}"}}"#,
-                    );
-                    let argv: &[&str] = &["cos-agent-ui", "--overlay", "--context", &ctx];
-                    if let Err(err) = crate::claw_glue::exec_start(argv) {
+                    if let Err(err) = crate::claw_glue::ask_claw_search(&query) {
                         log::error!("failed to open Ask Claw overlay: {err}");
                     }
                 }
@@ -1091,22 +1078,4 @@ impl App {
 
         Task::none()
     }
-}
-
-fn escape_json_str(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for ch in s.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => {
-                out.push_str(&format!("\\u{:04x}", c as u32));
-            }
-            c => out.push(c),
-        }
-    }
-    out
 }

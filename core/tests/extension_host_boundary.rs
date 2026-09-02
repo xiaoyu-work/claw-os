@@ -9,19 +9,13 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use base64::Engine;
 use cos::caps::{Cap, CapSet, Scope, Verb};
 use cos::extension_host::{broker, client, spawn};
-use ed25519_dalek::{Signer, SigningKey};
 
 const HOST_BIN: &str = env!("CARGO_BIN_EXE_claw-extension-host");
 const APP_RUNNER_BIN: &str = env!("CARGO_BIN_EXE_claw-app-runner");
 const LEAK_MARKER: &str = "COS_EXTENSION_TEST_BROKER_SECRET";
 const TEST_CAPABILITY_GENERATION: &str = "aaaaaaaaaaaaaaaa";
-const TEST_EXTENSION_SEED: [u8; 32] = [
-    0xd4, 0x0f, 0x95, 0xd1, 0xf9, 0x6d, 0x42, 0xac, 0x5e, 0x00, 0x00, 0x4e, 0x04, 0x21, 0xc7, 0x0d,
-    0xd4, 0xf2, 0x91, 0xb4, 0x71, 0x8e, 0x1a, 0x94, 0xf8, 0xe0, 0xd5, 0xee, 0x20, 0xd5, 0x87, 0x1d,
-];
 const TEST_MCP_SERVER: &str = r#"import json
 import sys
 
@@ -173,22 +167,41 @@ while True:
         break
 "#;
 
-fn signed_agent_extension(
+fn install_agent_extension(
+    root: &std::path::Path,
     id: &str,
     mode: &str,
     timeout_ms: u64,
-) -> (
-    cos::extension_host::protocol::AgentExtensionRegistration,
-    cos::provenance::PackageSnapshot,
-) {
+) -> cos::extension_host::protocol::AgentExtensionRegistration {
+    let package_dir = root.join(id);
+    std::fs::create_dir_all(package_dir.join("bin")).unwrap();
+    std::fs::set_permissions(&package_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::set_permissions(
+        package_dir.join("bin"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
     let entry = TEST_AGENT_EXTENSION.replace("__MODE__", mode).into_bytes();
-    let content_file = cos::provenance::SignedFile {
+    let entry_path = package_dir.join("bin/observer.py");
+    std::fs::write(&entry_path, &entry).unwrap();
+    std::fs::set_permissions(&entry_path, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let content_file = cos::provenance::envelope::FileEntry {
         path: "bin/observer.py".to_string(),
-        sha256: cos::crypto::sha256_hex(&entry),
+        kind: cos::provenance::envelope::NodeKind::File,
+        mode: 0o555,
         size: entry.len() as u64,
-        executable: true,
+        digest: format!("sha256:{}", cos::crypto::sha256_hex(&entry)),
     };
-    let content_digest = cos::provenance::package_digest(std::slice::from_ref(&content_file));
+    let content_digest = cos::provenance::envelope::content_digest(&[
+        cos::provenance::envelope::FileEntry {
+            path: "bin".to_string(),
+            kind: cos::provenance::envelope::NodeKind::Dir,
+            mode: 0o755,
+            size: 0,
+            digest: String::new(),
+        },
+        content_file,
+    ]);
     let manifest = serde_json::json!({
         "schema_version": 1,
         "identity": {
@@ -216,82 +229,34 @@ fn signed_agent_extension(
         },
     });
     let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
-    let files = vec![
-        content_file,
-        cos::provenance::SignedFile {
-            path: "extension.json".to_string(),
-            sha256: cos::crypto::sha256_hex(&manifest_bytes),
-            size: manifest_bytes.len() as u64,
-            executable: false,
-        },
-    ];
-    let mut provenance = cos::provenance::PackageProvenance {
-        schema_version: 1,
-        kind: cos::provenance::PackageKind::AgentExtension,
-        publisher: "claw-os-test".to_string(),
-        key_id: "debug-1".to_string(),
-        package_id: id.to_string(),
-        package_version: "1.0.0".to_string(),
-        package_digest: cos::provenance::package_digest(&files),
-        files,
-        signature: "0".repeat(128),
-    };
-    provenance.signature = hex::encode(
-        SigningKey::from_bytes(&TEST_EXTENSION_SEED)
-            .sign(&cos::provenance::signing_input(&provenance))
-            .to_bytes(),
-    );
-    let manifest_digest = cos::crypto::sha256_hex(&manifest_bytes);
-    (
-        cos::extension_host::protocol::AgentExtensionRegistration {
-            extension_id: id.to_string(),
-            extension_version: "1.0.0".to_string(),
-            package_digest: provenance.package_digest.clone(),
-            manifest_digest,
-            content_digest,
-        },
-        cos::provenance::PackageSnapshot {
-            provenance,
-            files: vec![
-                cos::provenance::SnapshotFile {
-                    path: "bin/observer.py".to_string(),
-                    executable: true,
-                    bytes_base64: base64::engine::general_purpose::STANDARD.encode(entry),
-                },
-                cos::provenance::SnapshotFile {
-                    path: "extension.json".to_string(),
-                    executable: false,
-                    bytes_base64: base64::engine::general_purpose::STANDARD.encode(manifest_bytes),
-                },
-            ],
-        },
-    )
-}
-
-fn install_snapshot(root: &std::path::Path, snapshot: &cos::provenance::PackageSnapshot) {
-    let package = root.join(&snapshot.provenance.package_id);
-    std::fs::create_dir_all(&package).unwrap();
-    std::fs::set_permissions(&package, std::fs::Permissions::from_mode(0o755)).unwrap();
-    for file in &snapshot.files {
-        let path = package.join(&file.path);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(&file.bytes_base64)
-            .unwrap();
-        std::fs::write(&path, bytes).unwrap();
-        std::fs::set_permissions(
-            &path,
-            std::fs::Permissions::from_mode(if file.executable { 0o555 } else { 0o444 }),
-        )
-        .unwrap();
-    }
-    let provenance = package.join("provenance.json");
-    std::fs::write(
-        &provenance,
-        serde_json::to_vec(&snapshot.provenance).unwrap(),
+    let manifest_path = package_dir.join("extension.json");
+    std::fs::write(&manifest_path, &manifest_bytes).unwrap();
+    std::fs::set_permissions(&manifest_path, std::fs::Permissions::from_mode(0o444)).unwrap();
+    let mut options =
+        cos::provenance::VerifyOptions::new(cos::provenance::PackageKind::AgentExtension)
+            .expect_id(id);
+    options.allow_developer = false;
+    let package = cos::provenance::verify::verify_package(
+        &package_dir,
+        &options,
+        &cos::provenance::trust_store(),
     )
     .unwrap();
-    std::fs::set_permissions(&provenance, std::fs::Permissions::from_mode(0o444)).unwrap();
+    let manifest_digest = cos::crypto::sha256_hex(&manifest_bytes);
+    cos::extension_host::protocol::AgentExtensionRegistration {
+        extension_id: id.to_string(),
+        extension_version: "1.0.0".to_string(),
+        package_digest: package.content_digest().to_string(),
+        manifest_digest,
+        content_digest,
+    }
+}
+
+fn installed_registration(id: &str) -> cos::extension_host::protocol::AgentExtensionRegistration {
+    let path = std::env::var("COS_EXTENSION_BOUNDARY_REGISTRATIONS").unwrap();
+    let registrations: HashMap<String, cos::extension_host::protocol::AgentExtensionRegistration> =
+        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    registrations.get(id).cloned().unwrap()
 }
 
 fn env_lock() -> std::sync::MutexGuard<'static, ()> {
@@ -305,6 +270,7 @@ struct TestEnvironment {
     _sync: tempfile::TempDir,
     _data: tempfile::TempDir,
     _apps: tempfile::TempDir,
+    extensions: PathBuf,
     mcp_server: PathBuf,
     leaked_path: PathBuf,
     leaked_fd: i32,
@@ -343,9 +309,10 @@ impl TestEnvironment {
             .prefix("cd-")
             .tempdir_in("/run")
             .ok()?;
+        std::fs::create_dir_all("/usr/lib/cos").ok()?;
         let apps = tempfile::Builder::new()
-            .prefix("ca-")
-            .tempdir_in("/run")
+            .prefix("test-apps-")
+            .tempdir_in("/usr/lib/cos")
             .ok()?;
         let host_source = std::env::var_os("COS_PRIVILEGED_EXTENSION_HOST_BIN")
             .unwrap_or_else(|| HOST_BIN.into());
@@ -369,6 +336,13 @@ impl TestEnvironment {
         std::env::set_var("COS_USER_DATA_DIR", data.path());
         std::env::set_var("COS_APPS_DIR", apps.path());
         std::env::set_var(LEAK_MARKER, "broker-only-value");
+        let extensions = PathBuf::from(format!(
+            "/usr/lib/cos/test-extensions-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&extensions).ok()?;
+        std::fs::set_permissions(&extensions, std::fs::Permissions::from_mode(0o755)).ok()?;
+        std::env::set_var("COS_AGENT_EXTENSIONS_DIR", &extensions);
 
         let leaked_path = runtime.path().join("broker-held.bin");
         let mut file = std::fs::File::create(&leaked_path).ok()?;
@@ -381,6 +355,33 @@ impl TestEnvironment {
         }
         write_echo_app(apps.path());
         let mcp_server = write_mcp_server(apps.path());
+        let mut registrations = HashMap::new();
+        for (id, mode, timeout_ms) in [
+            ("observer", "normal", 1000),
+            ("downgrade", "downgrade", 500),
+            ("steady", "normal", 1000),
+            ("malformed", "malformed", 200),
+            ("oversize", "oversize", 200),
+            ("hung", "hang", 200),
+            ("crashed", "crash", 200),
+            ("forged", "forged-ref", 1000),
+            ("descendant", "descendant", 1000),
+            ("installed-observer", "normal", 1000),
+        ] {
+            registrations.insert(
+                id.to_string(),
+                install_agent_extension(&extensions, id, mode, timeout_ms),
+            );
+        }
+        let registrations_path = sync.path().join("extension-registrations.json");
+        std::fs::write(
+            &registrations_path,
+            serde_json::to_vec(&registrations).ok()?,
+        )
+        .ok()?;
+        std::fs::set_permissions(&registrations_path, std::fs::Permissions::from_mode(0o444))
+            .ok()?;
+        std::env::set_var("COS_EXTENSION_BOUNDARY_REGISTRATIONS", &registrations_path);
         make_owner_writable(sync.path(), owner_uid, execution_gid).ok()?;
         make_root_readable(apps.path()).ok()?;
         Some(Self {
@@ -389,6 +390,7 @@ impl TestEnvironment {
             _sync: sync,
             _data: data,
             _apps: apps,
+            extensions,
             mcp_server,
             leaked_path,
             leaked_fd,
@@ -443,11 +445,14 @@ impl Drop for TestEnvironment {
             "COS_DATA_DIR",
             "COS_USER_DATA_DIR",
             "COS_APPS_DIR",
+            "COS_AGENT_EXTENSIONS_DIR",
+            "COS_EXTENSION_BOUNDARY_REGISTRATIONS",
             cos::agentd::spawn::ISOLATED_GROUP_ENV,
             LEAK_MARKER,
         ] {
             std::env::remove_var(key);
         }
+        let _ = std::fs::remove_dir_all(&self.extensions);
     }
 }
 
@@ -648,6 +653,8 @@ async fn worker_child() {
             timeout_secs: 5,
             url: None,
             bearer_env: None,
+            package: None,
+            provenance: None,
         })
         .await
         .expect("attach hosted MCP");
@@ -684,17 +691,17 @@ async fn worker_child() {
         .await
         .expect("detach hosted MCP"));
 
-    let (registration, package) = signed_agent_extension("observer", "normal", 1000);
+    let registration = installed_registration("observer");
     let mut drift = registration.clone();
     drift.manifest_digest = "f".repeat(64);
     let drift_error = client
-        .attach_agent_extension(drift, package.clone())
+        .attach_agent_extension(drift)
         .await
         .expect_err("manifest drift must fail");
     assert!(drift_error.contains("registration"), "{drift_error}");
 
     let binding = client
-        .attach_agent_extension(registration.clone(), package)
+        .attach_agent_extension(registration.clone())
         .await
         .expect("attach generic Agent extension");
     let refs = cos::agent_extensions::capability_ref::CapabilityReferenceStore::default();
@@ -765,17 +772,16 @@ async fn worker_child() {
     .expect_err("cross-session event must fail");
     assert!(cross_session.contains("binding"), "{cross_session}");
 
-    let (downgrade_registration, downgrade_package) =
-        signed_agent_extension("downgrade", "downgrade", 500);
+    let downgrade_registration = installed_registration("downgrade");
     let downgrade = client
-        .attach_agent_extension(downgrade_registration, downgrade_package)
+        .attach_agent_extension(downgrade_registration)
         .await
         .expect_err("protocol downgrade must fail");
     assert!(downgrade.contains("downgrade"), "{downgrade}");
 
-    let (steady_registration, steady_package) = signed_agent_extension("steady", "normal", 1000);
+    let steady_registration = installed_registration("steady");
     let steady = client
-        .attach_agent_extension(steady_registration, steady_package)
+        .attach_agent_extension(steady_registration)
         .await
         .expect("attach unaffected extension");
     for (id, mode) in [
@@ -784,9 +790,9 @@ async fn worker_child() {
         ("hung", "hang"),
         ("crashed", "crash"),
     ] {
-        let (registration, package) = signed_agent_extension(id, mode, 200);
+        let registration = installed_registration(id);
         let hostile = client
-            .attach_agent_extension(registration, package)
+            .attach_agent_extension(registration)
             .await
             .unwrap_or_else(|error| panic!("attach {mode}: {error}"));
         let error = send_agent_extension_probe(
@@ -816,10 +822,9 @@ async fn worker_child() {
         .unwrap_or_else(|error| panic!("hostile {mode} affected steady extension: {error}"));
     }
 
-    let (forged_registration, forged_package) =
-        signed_agent_extension("forged", "forged-ref", 1000);
+    let forged_registration = installed_registration("forged");
     let forged_binding = client
-        .attach_agent_extension(forged_registration, forged_package)
+        .attach_agent_extension(forged_registration)
         .await
         .expect("attach forged-ref probe");
     let forged = send_agent_extension_probe(
@@ -845,10 +850,9 @@ async fn worker_child() {
         .await
         .expect("detach forged probe");
 
-    let (descendant_registration, descendant_package) =
-        signed_agent_extension("descendant", "descendant", 1000);
+    let descendant_registration = installed_registration("descendant");
     let descendant_binding = client
-        .attach_agent_extension(descendant_registration, descendant_package)
+        .attach_agent_extension(descendant_registration)
         .await
         .expect("attach descendant probe");
     send_agent_extension_probe(
@@ -947,20 +951,24 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
         cos::apps::find(env._apps.path(), "echo-app").is_some(),
         "echo App fixture is not discoverable"
     );
-    let installed_root = env._runtime.path().join("installed-extensions");
-    std::fs::create_dir(&installed_root).expect("create installed extension root");
-    std::fs::set_permissions(&installed_root, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let (_, installed_snapshot) = signed_agent_extension("installed-observer", "normal", 1000);
-    install_snapshot(&installed_root, &installed_snapshot);
+    let registration_path = std::env::var("COS_EXTENSION_BOUNDARY_REGISTRATIONS").unwrap();
+    let registrations: HashMap<String, cos::extension_host::protocol::AgentExtensionRegistration> =
+        serde_json::from_slice(&std::fs::read(registration_path).unwrap()).unwrap();
+    let selected = registrations.keys().cloned().collect::<Vec<_>>();
     let installed = cos::agent_extensions::registry::ExtensionRegistry::load_selected(
-        &installed_root,
-        &["installed-observer".to_string()],
+        &env.extensions,
+        &selected,
     );
     assert!(
         installed.registered.contains_key("installed-observer"),
         "root-owned signed installed package did not register: {:?}",
         installed.quarantined
     );
+    let agent_extension_receipts = installed
+        .registered
+        .values()
+        .map(|extension| extension.package.verification_receipt().unwrap())
+        .collect();
     let binding_path = env._sync.path().join("binding.json");
     let worker = worker_command(&identity, execution_gid, &binding_path, &env, "run")
         .spawn()
@@ -1015,7 +1023,10 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
             spawn::approve_runtime_path(env._apps.path(), identity.uid).expect("approve App root"),
             spawn::approve_runtime_path(env._runtime.path(), identity.uid)
                 .expect("approve test runtime"),
+            spawn::approve_runtime_path(&env.extensions, identity.uid)
+                .expect("approve installed extension root"),
         ],
+        agent_extension_receipts,
         paths,
     )
     .expect("spawn host");

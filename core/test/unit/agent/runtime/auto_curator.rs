@@ -50,6 +50,69 @@ fn auto_curator_respects_explicit_aux() {
     assert!(AutoCurator::from_cfg_logged(&cfg, &mem_db()).is_some());
 }
 
+#[test]
+fn auto_curator_retains_the_request_config_snapshot() {
+    let mut config = crate::config::CosConfig::default();
+    config.agent.provider = "openai".into();
+    config.agent.model = "gpt-4o-mini".into();
+    config.agent.api_key_env = Some("OPENAI_API_KEY".into());
+    let config = Arc::new(config);
+    let notes = NotesStore::at(tempfile::tempdir().unwrap().path());
+
+    let curator =
+        AutoCurator::from_snapshot_logged(Arc::clone(&config), &mem_db(), notes).unwrap();
+
+    assert!(Arc::ptr_eq(curator.config_snapshot(), &config));
+}
+
+#[tokio::test]
+async fn non_routed_detached_context_keeps_process_paths() {
+    let root = tempfile::tempdir().unwrap();
+    let data = root.path().join("data");
+    let logs = root.path().join("logs");
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", &data);
+    let _logs = crate::test_env::TestEnvVarGuard::set("COS_LOG_DIR", &logs);
+    let context = crate::paths::RoutedPathContext::capture();
+    let curation_log = data
+        .join("agent")
+        .join("memory")
+        .join("curation_log.json");
+    let notes = NotesStore::at(data.join("agent").join("notes"));
+    let mut config = crate::config::CosConfig::default();
+    config.agent.provider = "openai".into();
+    config.agent.model = "gpt-4o-mini".into();
+    config.agent.api_key_env = Some("OPENAI_API_KEY".into());
+    let config = Arc::new(config);
+    let db = mem_db();
+    let curator = AutoCurator::from_snapshot_with_runtime_paths(
+        Arc::clone(&config),
+        &db,
+        notes,
+        context.clone(),
+        curation_log.clone(),
+    )
+    .expect("non-routed curator");
+    assert_eq!(curator.log_path(), curation_log);
+
+    let observed = tokio::spawn(with_detached_context(config, context, None, async {
+        (
+            crate::paths::ai_budget_db_path(),
+            crate::paths::ai_run_log_path(),
+            crate::paths::agent_notes_dir(),
+            crate::paths::current_owner_uid_override(),
+            crate::paths::is_routed_job(),
+        )
+    }))
+    .await
+    .unwrap();
+
+    assert_eq!(observed.0, data.join("ai_budget.db"));
+    assert_eq!(observed.1, logs.join("ai.jsonl"));
+    assert_eq!(observed.2, data.join("agent").join("notes"));
+    assert_eq!(observed.3, None);
+    assert!(!observed.4);
+}
+
 /// `aux_from_main` errors when the main model is empty — we
 /// shouldn't silently swallow a malformed config.
 #[test]

@@ -1,5 +1,13 @@
 #!/bin/sh
 # claw-os-agent postrm -- purge systemd state owned by the agent package.
+#
+# The update-security floor under /var/lib/cos/security is deliberately
+# NOT removed, on remove or on purge. It is the record of the newest
+# Claw OS release this machine has ever accepted; deleting it would let
+# a later `apt install claw-os-agent=<old-version>` reinstate a
+# superseded, still validly signed release with nothing to compare
+# against. Removing it is an explicit, documented operator action —
+# see docs/updating.md.
 
 set -e
 
@@ -9,22 +17,31 @@ if ! command -v identity_purge_owned >/dev/null 2>&1 &&
     . "$SCRIPT_DIR/extension-identities.sh"
 fi
 
+DPKG_ROOT="${DPKG_ROOT:-}"
+
 case "$1" in
     purge)
-        rm -f /etc/systemd/user/default.target.wants/claw-recoll-index.service
-        rm -f /etc/systemd/user/default.target.wants/claw-semantic.service
-        if [ -x /usr/bin/deb-systemd-helper ]; then
+        if [ -z "$DPKG_ROOT" ]; then
+            command -v identity_purge_owned >/dev/null 2>&1 &&
+                identity_purge_owned
+        fi
+        rm -f "$DPKG_ROOT/etc/systemd/user/default.target.wants/claw-recoll-index.service"
+        rm -f "$DPKG_ROOT/etc/systemd/user/default.target.wants/claw-semantic.service"
+        if [ -z "$DPKG_ROOT" ] && [ -x /usr/bin/deb-systemd-helper ]; then
             deb-systemd-helper purge clawd.service >/dev/null || true
             deb-systemd-helper purge cos-browser.service >/dev/null || true
         fi
-        command -v identity_purge_owned >/dev/null 2>&1 &&
-            identity_purge_owned
+        # Candidate manifests staged by a preinst are scratch data, not
+        # floor state, so they are the only thing cleaned up here.
+        rm -rf "$DPKG_ROOT/var/lib/cos/security/staging"
         ;;
     abort-install|abort-upgrade|failed-upgrade)
-        command -v identity_recover_partial >/dev/null 2>&1 &&
-            identity_recover_partial
-        command -v identity_rollback_pending >/dev/null 2>&1 &&
-            identity_rollback_pending
+        if [ -z "$DPKG_ROOT" ]; then
+            command -v identity_recover_partial >/dev/null 2>&1 &&
+                identity_recover_partial
+            command -v identity_rollback_pending >/dev/null 2>&1 &&
+                identity_rollback_pending
+        fi
         ;;
     remove|upgrade|disappear)
         ;;

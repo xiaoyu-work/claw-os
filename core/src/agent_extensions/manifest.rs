@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::caps::{Cap, ScopeKind};
-use crate::provenance::{package_digest, SignedFile, VerifiedPackage};
+use crate::provenance::envelope::{content_digest as tree_content_digest, FileEntry, NodeKind};
+use crate::provenance::VerifiedPackage;
 
 pub const MANIFEST_FILE: &str = "extension.json";
 pub const ABI_VERSION: u32 = 1;
@@ -123,13 +124,17 @@ const fn default_max_in_flight() -> usize {
 
 impl ExtensionManifest {
     pub fn parse_verified(package: &VerifiedPackage) -> Result<Self, String> {
+        if package.kind() != crate::provenance::PackageKind::AgentExtension {
+            return Err("verified package is not an Agent extension".to_string());
+        }
         let bytes = package
-            .file_bytes(MANIFEST_FILE)
-            .ok_or_else(|| format!("verified package omitted {MANIFEST_FILE}"))?;
+            .manifest_text()
+            .map_err(|error| format!("read verified extension manifest: {error}"))?
+            .into_bytes();
         if bytes.is_empty() || bytes.len() > 64 * 1024 {
             return Err("extension manifest is empty or oversized".to_string());
         }
-        let manifest: Self = serde_json::from_slice(bytes)
+        let manifest: Self = serde_json::from_slice(&bytes)
             .map_err(|error| format!("parse extension manifest: {error}"))?;
         manifest.validate(package)?;
         Ok(manifest)
@@ -161,7 +166,15 @@ impl ExtensionManifest {
             );
         }
         validate_entry(&self.entry)?;
-        if package.file_bytes(&self.entry).is_none() || !package.file_is_executable(&self.entry) {
+        let executable = package.files().any(|file| {
+            file.path == self.entry && file.kind == NodeKind::File && file.mode & 0o111 != 0
+        });
+        if !executable
+            || !package
+                .entrypoints()
+                .iter()
+                .any(|entry| entry == &self.entry)
+        {
             return Err(
                 "extension entry is missing or not executable in the verified package".to_string(),
             );
@@ -228,20 +241,19 @@ impl ExtensionManifest {
 
     pub fn manifest_digest(package: &VerifiedPackage) -> Result<String, String> {
         package
-            .file_bytes(MANIFEST_FILE)
-            .map(crate::crypto::sha256_hex)
-            .ok_or_else(|| format!("verified package omitted {MANIFEST_FILE}"))
+            .read_verified(MANIFEST_FILE)
+            .map(|bytes| crate::crypto::sha256_hex(&bytes))
+            .map_err(|error| format!("read verified extension manifest: {error}"))
     }
 }
 
 pub fn content_digest(package: &VerifiedPackage) -> String {
     let files = package
-        .signed_files()
-        .iter()
+        .files()
         .filter(|file| file.path != MANIFEST_FILE)
         .cloned()
-        .collect::<Vec<SignedFile>>();
-    package_digest(&files)
+        .collect::<Vec<FileEntry>>();
+    tree_content_digest(&files)
 }
 
 fn validate_id(value: &str) -> Result<(), String> {
@@ -280,11 +292,7 @@ fn validate_entry(value: &str) -> Result<(), String> {
 }
 
 fn validate_digest(value: &str) -> Result<(), String> {
-    if value.len() != 64
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-    {
+    if !crate::provenance::envelope::is_sha256_ref(value) {
         return Err("extension content digest is invalid".to_string());
     }
     Ok(())

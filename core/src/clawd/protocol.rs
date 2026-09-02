@@ -52,6 +52,10 @@ pub enum BrokerErrorKind {
     Unauthorized,
     Unavailable,
     Execution,
+    /// The effect may or may not have taken. Distinct from
+    /// [`Self::Execution`] because "it failed" and "nobody knows" call
+    /// for different action.
+    Indeterminate,
 }
 
 impl BrokerErrorKind {
@@ -60,6 +64,7 @@ impl BrokerErrorKind {
             Self::Unauthorized => "not_authorized",
             Self::Unavailable => "unavailable",
             Self::Execution => "execution_failed",
+            Self::Indeterminate => "indeterminate",
         }
     }
 }
@@ -135,11 +140,29 @@ impl From<String> for BrokerError {
     }
 }
 
+impl From<super::state::StateError> for BrokerError {
+    fn from(error: super::state::StateError) -> Self {
+        use super::state::StateErrorKind;
+
+        match error.kind() {
+            StateErrorKind::Unavailable | StateErrorKind::Corrupt => {
+                Self::unavailable(error.to_string()).classified(error.operation())
+            }
+            StateErrorKind::NotAuthorized => Self::authorization(error.to_string()),
+            StateErrorKind::Conflict | StateErrorKind::NotFound => {
+                Self::execution(error.to_string())
+            }
+        }
+    }
+}
+
 impl std::fmt::Display for BrokerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.message)
     }
 }
+
+impl std::error::Error for BrokerError {}
 
 impl Request {
     /// Build a request for a route this crate names at compile time.
@@ -202,6 +225,29 @@ impl Response {
     /// nothing the caller sent is echoed back or classified.
     pub fn fault(id: RequestId, fault: Fault) -> Self {
         Self::error_classified(id, fault.code(), fault.class(), fault.message())
+    }
+
+    /// Answer a mutation whose effect ran but whose completion the
+    /// session journal could not record.
+    ///
+    /// Deliberately not `ok`: the daemon does not know whether the
+    /// privileged change took, and reporting either success or an
+    /// ordinary failure would be a claim it cannot support. The message
+    /// is assembled by [`crate::session::journal`] from its own
+    /// identifiers and classes, so it carries no caller bytes.
+    pub fn indeterminate(id: RequestId, class: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            v: PROTOCOL_VERSION,
+            id,
+            ok: false,
+            result: None,
+            error: Some(ErrorBody {
+                code: BrokerErrorKind::Indeterminate.code().to_string(),
+                message: message.into(),
+                data: None,
+                audit_class: Some(class),
+            }),
+        }
     }
 
     pub fn handler_error(id: RequestId, error: BrokerError) -> Self {

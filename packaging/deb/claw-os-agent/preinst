@@ -2,13 +2,15 @@
 
 set -e
 
+DPKG_ROOT="${DPKG_ROOT:-}"
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 command -v identity_provision >/dev/null 2>&1 ||
     . "$SCRIPT_DIR/extension-identities.sh"
 
 case "$1" in
     install|upgrade)
-        if [ "$1" = upgrade ] && [ -d "$identity_systemd_dir" ]; then
+        if [ -z "$DPKG_ROOT" ] && [ "$1" = upgrade ] &&
+            [ -d "$identity_systemd_dir" ]; then
             deb-systemd-invoke stop clawd.service >/dev/null
             if systemctl --quiet is-active clawd.service; then
                 echo "claw-os-agent: clawd.service did not stop before identity migration" >&2
@@ -17,7 +19,9 @@ case "$1" in
         fi
         ;;
     abort-upgrade)
-        identity_rollback_pending
+        if [ -z "$DPKG_ROOT" ]; then
+            identity_rollback_pending
+        fi
         ;;
     *)
         echo "preinst called with unknown argument '$1'" >&2

@@ -1,4 +1,5 @@
 use super::*;
+use serde_json::json;
 use std::ffi::OsString;
 use std::sync::{Mutex, MutexGuard};
 
@@ -567,6 +568,64 @@ fn status_reports_the_decision_state_for_the_owner_only() {
     .unwrap();
     deny_for_owner(&denied, Some("uid:0".into()), None, Some(1000)).unwrap();
     assert_eq!(status_for_owner(&denied, Some(1000)), RequestStatus::Denied);
+}
+
+#[test]
+fn status_reports_a_claimed_request_as_resolving() {
+    let _tmp = isolated_env();
+    let id = submit_owned(
+        Verb::FS_READ,
+        Scope::path("/tmp/input"),
+        "sess-a",
+        "read input".to_string(),
+        None,
+        Some(1000),
+    )
+    .unwrap();
+    let pending = pending_dir().join(format!("{id}.json"));
+    let scratch = scratch_dir().join(format!("{id}.resolver.json"));
+    std::fs::rename(&pending, &scratch).unwrap();
+
+    assert_eq!(status_for_owner(&id, Some(1000)), RequestStatus::Resolving);
+    assert_eq!(status_for_owner(&id, Some(1001)), RequestStatus::Unknown);
+}
+
+#[test]
+fn authoritative_decision_wins_over_leftover_scratch() {
+    let _tmp = isolated_env();
+    let id = submit_owned(
+        Verb::FS_READ,
+        Scope::path("/tmp/input"),
+        "sess-a",
+        "read input".to_string(),
+        None,
+        Some(1000),
+    )
+    .unwrap();
+    approve_for_owner(
+        &id,
+        GrantDuration::Once,
+        Some("test".to_string()),
+        None,
+        Some(1000),
+    )
+    .unwrap();
+    let request = json!({
+        "id": id,
+        "verb": Verb::FS_READ.as_str(),
+        "scope": Scope::path("/tmp/input"),
+        "session": "sess-a",
+        "reason": "read input",
+        "requested_at": now_secs(),
+        "owner_uid": 1000,
+    });
+    fs::write(
+        scratch_dir().join(format!("{id}.leftover.json")),
+        serde_json::to_vec_pretty(&request).unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(status_for_owner(&id, Some(1000)), RequestStatus::Approved);
 }
 
 // ---------------------------------------------------------------------------

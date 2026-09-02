@@ -1294,12 +1294,10 @@ impl cosmic::Application for CosmicLauncher {
                     .unwrap_or(raw)
                     .trim()
                     .to_string();
-                if !query.is_empty() {
-                    let mut cmd = std::process::Command::new("cos");
-                    cmd.args(["app", "agent", "overlay", "--query", &query]);
-                    if let Err(err) = cmd.spawn() {
-                        error!("failed to launch cos app agent overlay: {err}");
-                    }
+                if !query.is_empty()
+                    && let Err(err) = crate::claw_glue::ask_claw(&query)
+                {
+                    error!("failed to launch Ask Claw overlay: {err}");
                 }
                 return self.hide();
             }
@@ -2105,8 +2103,7 @@ impl cosmic::Application for CosmicLauncher {
             // "Ask Claw AI" footer — offered when the user has typed
             // something AND is not already in inline-AI mode (the card
             // above takes over for `?`-prefixed queries). Routes the
-            // raw query into the agent overlay via:
-            //   cos app agent overlay --query <text>
+            // raw query into the private Ask Claw activation channel.
             if !self.alt_tab
                 && !self.input_value.trim().is_empty()
                 && matches!(self.ai_inline, AiInlineState::Idle)

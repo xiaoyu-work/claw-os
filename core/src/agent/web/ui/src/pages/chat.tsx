@@ -10,7 +10,7 @@
  *   - sticky composer at the bottom
  *
  * Frames consumed (from core/src/agent/web/routes/chat.rs):
- *   text, tool_use_start, tool_use, tool_result, tool_start, warning,
+ *   task, text, tool_use_start, tool_use, tool_result, tool_start, warning,
  *   turn_done, done, error.
  */
 
@@ -44,6 +44,8 @@ export function ChatPage({ meta }: { meta: any }) {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const taskIdRef = useRef<string>("");
+  const stopRequestedRef = useRef(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   // When the server assigns a session id mid-stream we push the URL to
   // `/chat/<id>`. That route change fires the history-load effect below
@@ -95,6 +97,30 @@ export function ChatPage({ meta }: { meta: any }) {
     el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   }, [messages]);
 
+  const cancelTask = useCallback(
+    async (taskId: string, controller: AbortController) => {
+      try {
+        const result = await api.post<{
+          cancelled?: boolean;
+          cancel_requested?: boolean;
+        }>(`/api/tasks/${encodeURIComponent(taskId)}/stop`);
+        if (result.cancelled || result.cancel_requested) {
+          controller.abort();
+        }
+      } catch (error: any) {
+        setMessages((current) => {
+          const copy = current.slice();
+          const last = copy[copy.length - 1];
+          if (last?.role === "assistant") {
+            last.warnings.push(error?.message || "Failed to stop task");
+          }
+          return copy;
+        });
+      }
+    },
+    [],
+  );
+
   const send = useCallback(async () => {
     const text = input.trim();
     if (!text || busy) return;
@@ -125,6 +151,13 @@ export function ChatPage({ meta }: { meta: any }) {
         "/api/chat",
         { prompt: text, session_id: sessionId || undefined },
         (event, data) => {
+          if (event === "task" && data?.task_id) {
+            const taskId = String(data.task_id);
+            taskIdRef.current = taskId;
+            if (stopRequestedRef.current) {
+              void cancelTask(taskId, ac);
+            }
+          }
           setMessages((m) => {
             const copy = m.slice();
             const last = copy[copy.length - 1];
@@ -164,12 +197,21 @@ export function ChatPage({ meta }: { meta: any }) {
     } finally {
       setBusy(false);
       abortRef.current = null;
+      taskIdRef.current = "";
+      stopRequestedRef.current = false;
     }
-  }, [input, busy, sessionId, route]);
+  }, [input, busy, sessionId, route, cancelTask]);
 
   const stop = useCallback(() => {
-    abortRef.current?.abort();
-  }, []);
+    const controller = abortRef.current;
+    if (!controller) return;
+    const taskId = taskIdRef.current;
+    if (!taskId) {
+      stopRequestedRef.current = true;
+      return;
+    }
+    void cancelTask(taskId, controller);
+  }, [cancelTask]);
 
   const placeholder = useMemo(() => {
     if (!meta) return "Ask cos anything…";

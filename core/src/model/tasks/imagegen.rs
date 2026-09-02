@@ -83,8 +83,8 @@ pub trait ImageGenerator: Send + Sync {
 // =====================================================================
 
 pub fn build_default() -> Result<Option<Box<dyn ImageGenerator>>, String> {
-    let cfg = &crate::config::get().imagegen;
-    build_from(cfg)
+    let config = crate::config::current_snapshot();
+    build_from(&config.imagegen)
 }
 
 pub fn build_from(cfg: &ImageGenConfig) -> Result<Option<Box<dyn ImageGenerator>>, String> {
@@ -129,7 +129,7 @@ impl OpenAICompatImageGen {
             .unwrap_or_else(|| default_base_url_for(&alias).to_string());
         let base_url = base_url.trim_end_matches('/').to_string();
 
-        let api_key = crate::agent::llm::providers::openai_compat::resolve_api_key(
+        let api_key = crate::agent::llm::construction::resolve_process_api_key(
             cfg.api_key_credential.as_deref(),
             cfg.api_key_env.as_deref(),
         )

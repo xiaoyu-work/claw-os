@@ -191,6 +191,29 @@ pub fn record_task_event(event: &'static str, job: &Job) {
     let _ = append(task_event_record(event, job));
 }
 
+pub fn record_notification_event(
+    operation: &'static str,
+    notification: &crate::notifications::Notification,
+) {
+    let record = json!({
+        "ts": Utc::now(),
+        "event": "system.operation",
+        "source": "notification.service",
+        "operation": operation,
+        "ok": true,
+        "notification_id": notification.id,
+        "notification_source": notification.source,
+        "notification_kind": notification.kind,
+        "severity": notification.severity,
+        "state": notification.state,
+        "owner_uid": notification.owner_uid,
+        "task_id": notification.task_id,
+        "session_id": notification.session_id,
+        "job_id": notification.job_id,
+    });
+    let _ = append(record);
+}
+
 fn task_event_record(event: &'static str, job: &Job) -> Value {
     json!({
         "ts": Utc::now(),
@@ -228,6 +251,56 @@ pub fn record_power_intent(action: &str, owner_uid: u32, session_id: &str) -> Re
         "session_id": session_id,
         "owner_uid": owner_uid,
     }))
+}
+
+/// Surface a session-journal alarm on the user-visible timeline.
+///
+/// This is one of the three independent legs of
+/// [`crate::session::journal::alarm`]: it deliberately does not go
+/// through the journal, so "the journal cannot record" is still
+/// something an operator sees. `class` and `detail` are produced by the
+/// journal from stable strings and counters, never from a caller.
+pub fn record_journal_alarm(class: &str, partition: &str, detail: &str) {
+    let _ = append(json!({
+        "ts": Utc::now(),
+        "event": "system.operation",
+        "source": "session.journal",
+        "operation": class,
+        "ok": false,
+        "partition": audit_policy::safe_reference(partition),
+        "detail": detail,
+    }));
+}
+
+/// Journal the broker's own view of a durable mutation, as a reference
+/// into the chain rather than a second copy of it.
+///
+/// The journal owns the ordering and the outcome. What lands here is
+/// the pointer an operator follows — partition, sequence and operation
+/// — so the two records cannot drift apart the way two independent
+/// writes would.
+pub fn record_journal_mutation(
+    command: &'static str,
+    partition: &str,
+    operation: &str,
+    start_seq: u64,
+    status: &'static str,
+    owner_uid: u32,
+) {
+    let _ = append(json!({
+        "ts": Utc::now(),
+        "event": "system.operation",
+        "source": "session.journal.mutation",
+        "operation": command,
+        "ok": status == "committed",
+        "journal": {
+            "partition": audit_policy::safe_reference(partition),
+            "operation": audit_policy::safe_identity(operation),
+            "start_seq": start_seq,
+            "status": status,
+        },
+        "owner_uid": owner_uid,
+    }));
 }
 
 pub fn query(params: Value) -> Result<Value, String> {

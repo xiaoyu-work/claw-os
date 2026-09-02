@@ -12,6 +12,9 @@ Read only the documents relevant to the task:
 2. [`CONTRIBUTING.md`](CONTRIBUTING.md) — build commands and architecture rules.
 3. [`docs/app-development.md`](docs/app-development.md) — Python app manifest,
    capability, SDK, lint, and install contracts.
+   [`docs/extension-provenance.md`](docs/extension-provenance.md) — the
+   signing/trust/install contract every App, Skill and MCP package must
+   satisfy before it is trusted.
 4. [`docs/image-architecture.md`](docs/image-architecture.md) — rootfs features,
    image profiles, and target identity.
 5. [`packaging/README.md`](packaging/README.md) and
@@ -34,23 +37,28 @@ editing additional surfaces.
 | Task | Start here | Commonly coupled files |
 | --- | --- | --- |
 | `cos` CLI command or primitive | `core/src/main.rs`, `core/src/router.rs` | The primitive module, `core/src/clawd/`, inline Rust tests |
+| Model-visible content or prompt-injection containment | `core/src/agent/trust/` | `agent/prompt/`, `agent/safety/untrusted.rs`, the ingestion adapter, `test/unit/agent/trust/` |
 | Agent ask/chat loop | `core/src/agent/runtime/loop_.rs`, `core/src/agent/runtime/turn.rs` | `prompt/`, `tools/`, `memory/`, `llm/` |
 | Agent worker process / broker isolation | `core/src/agentd/`, `core/src/bin/claw-agentd.rs` | `clawd/server.rs`, `agent/service.rs`, `clawd.service`, `packaging/deb/build-debs.sh` |
 | Dynamic App/MCP extension isolation | `core/src/extension_host/`, `core/src/bin/claw-extension-host.rs` | `agentd/`, `clawd/server.rs`, App/MCP tool integration, `clawd.service`, packaging |
 | Out-of-process Agent extension ABI | `core/src/agent_extensions/`, `core/src/extension_host/abi.rs` | `extension_host/agent_extension.rs`, agent runtime hooks/tools, provenance, audit, packaging |
-| Extension package provenance | `core/src/provenance.rs`, `docs/extension-provenance.md` | Agent extension registry/host, package roots and adversarial process tests |
+| Extension package provenance | `core/src/provenance/`, `docs/extension-provenance.md` | Agent extension registry/host, package roots and adversarial process tests |
 | LLM provider or model setup | `core/src/agent/llm/providers/`, `core/src/agent/llm/registry.rs`, `core/src/agent/setup.rs` | `types.rs`, `accumulate.rs`, streaming and non-streaming tests |
 | Tool, guardrail, or approval | `core/src/agent/tools/registry.rs`, `core/src/agent/runtime/turn.rs` | `guardrails.rs`, hooks, capability checks, audit |
 | Memory, recall, or sessions | `core/src/agent/memory/`, `core/src/session/` | runtime recording, prompt injection, audit/session CLI |
+| Session journal or mutation bracketing | `core/src/session/journal/`, `core/src/clawd/journal.rs` | `core/src/clawd/server.rs` dispatch, `core/src/agentd/supervisor.rs`, authority audit, packaging modes |
+| Proactive notification | `core/src/notifications/`, `core/src/clawd/notifications.rs` | cron/triggers/heartbeat/nudges, Agent task lifecycle, Agent Web UI, desktop Agent bridge |
 | `clawd` RPC or privileged operation | `core/src/bin/clawd.rs`, `core/src/clawd/server.rs` | client RPC, caps, audit, the owning `clawd` module |
 | Broker wire protocol or a new broker route | `core/src/clawd/routes.rs`, `core/src/clawd/wire/`, `core/src/clawd/transport/` | `client.rs`, every in-repo client, `audit_policy.rs`, `core/tests/clawd_broker_socket.rs` |
 | MCP client/server integration | `core/src/agent/tools/mcp/`, `core/src/config.rs` | tool registry and agent lifecycle attachment |
+| Extension package provenance (App/Skill/MCP signing, trust roots, revocation) | `core/src/provenance/`, `docs/extension-provenance.md` | `core/src/apps.rs`, `core/src/agent/skills/loader.rs`, `core/src/agent/tools/mcp/discover.rs`, `packaging/deb/build-debs.sh` |
 | Python app operation | `apps/<id>/app.json`, `apps/<id>/main.py` | `test_main.py`, `cos_runtime.policy`, app lint |
 | Adapter | `adapters/<id>/app.json`, `adapters/<id>/main.py` | adapter tests and external binary dependency |
 | App/SDK wire contract | `claw-os-sdk/wire/`, language SDK package | generated bindings, conformance tests, `publish-sdk-release.yml` |
 | Rootfs composition | `scripts/lib/image-profiles.sh`, `rootfs/build.sh`, `rootfs/features/` | target build script and package contents |
 | WSL or Docker image | `.github/workflows/build-docker-and-wsl.yml`, `targets/wsl/`, `targets/docker/` | shared rootfs profile |
 | Debian/APT package | `packaging/deb/`, `packaging/apt-repo/` | `publish-*-package.yml`, rootfs package-install features |
+| Update downgrade protection | `core/src/update/`, `packaging/release-security/policy.json` | `packaging/deb/common/`, maintainer scripts, `packaging/apt-repo/verify-release-security.sh`, `docs/updating.md` |
 | Web desktop or website | `web/src/App.tsx`, `web/MODULE.md` | `web/src/components/`, `web/public/site/`, Pages composition workflow |
 | Desktop component | `desktop/README.md`, `desktop/PROVENANCE.md`, component README | component Cargo/just manifest and license |
 | CI workflow | `.github/workflows/` | scripts invoked by the workflow; only `test.yml` runs on pull requests, while publication workflows are manually dispatched or reusable |
@@ -100,6 +108,10 @@ test file after selecting the implementation, when confirming existing
 behavior, adding a regression, or diagnosing a failure.
 
 ```bash
+# Extension provenance (format, trust, verify, install, CLI)
+cargo test -p cos --lib provenance:: -- --test-threads=1
+cargo test -p cos --test extension_provenance_process -- --test-threads=1
+
 # One Rust test or module
 cargo test -p cos <test-filter> -- --test-threads=1
 
@@ -161,15 +173,45 @@ Trace the full chain: catalog/scope definition → enforcement/provider →
 consumer/tool or app manifest. Update policy-facing tests and audit behavior in
 the same change.
 
+### New model-visible content source
+
+1. Add the `SourceKind` variant in `core/src/agent/trust/source.rs`, giving it an
+   ordinal, an `ALL` entry, and a profile (class, persistence, projection,
+   audit). Omitting any of these fails to compile or fails the registry test.
+2. Label the bytes at the ingestion adapter, not at the prompt boundary.
+3. Let `PromptProjection` choose the channel. Only `SystemPolicy` reaches
+   `system`/`developer`; everything else is a fenced user data message.
+4. Add an adversarial test in `core/test/unit/agent/trust/adversarial.rs`
+   asserting the label cannot rise and the fence cannot be escaped.
+5. Never let a label reach `caps`, `policy`, `clawd`, the approvals store, or
+   the guarded tool registry.
+
 ### New or changed extension surface
 
-An executable extension package is authenticated before its manifest,
-subscriptions, capability requests, schemas, entrypoint, or model-visible text
-is trusted. A new package kind, discovery root, or install path must call
-`crate::provenance::verify`, consume only the returned snapshot, quarantine
-failures with diagnostics, keep trust roots compiled in, and add adversarial
-unit plus process coverage. Never reopen a mutable package path after
-verification or fall back to unsigned content.
+An App, Skill or MCP/adapter package is authenticated before its
+manifest, operations, capability needs, tool schemas or model-visible
+text are trusted. When adding a discovery root, an install path or a
+new package kind:
+
+1. Verify through `crate::provenance::verify` — never re-read a mutable
+   path after verification; read from the `VerifiedPackage` snapshot.
+2. Quarantine failures with an actionable diagnostic; never drop them
+   silently and never fall back to unverified content.
+3. Keep trust roots compiled in. No environment variable, manifest
+   field or model-reachable input may add a trust root or disable
+   verification.
+4. Add adversarial coverage under `core/test/unit/provenance/` and, for
+   filesystem/process behaviour,
+   `core/tests/extension_provenance_process.rs`.
+
+### New or changed notification
+
+Trace the full path: deterministic producer -> durable Notification Service ->
+owner-scoped broker route -> enabled delivery adapters. Keep notification state
+separate from audit and context-event journals, publish only after the source
+state transition is durable, and cover deduplication, DND, retries, owner
+isolation, and acknowledgement in tests. Background delivery must not depend
+on an LLM choosing to invoke a notification tool.
 
 ### LLM provider change
 
@@ -187,6 +229,16 @@ Decide separately whether the change belongs in:
 - target-only packaging (`targets/`).
 
 If installed-system update behavior changes, update `docs/updating.md`.
+
+### Release-security change
+
+`packaging/release-security/policy.json` and the constants in
+`core/src/update/mod.rs` are one contract; a unit test fails when they diverge.
+Raising the security epoch or the ABI generation is a coordinated change:
+update the policy, the compiled constants, the package `control` dependencies
+that encode the ABI, and `docs/updating.md`. Never lower an epoch, and never
+weaken a gate to make a release install — publish a newer one, or use the
+documented recovery authorization.
 
 ## Agent Workflow
 
@@ -222,4 +274,5 @@ Before completion:
 | App/manifest/SDK contract | `docs/app-development.md`, SDK README |
 | Image feature/profile/identity | `docs/image-architecture.md`, `rootfs/features/README.md` |
 | Package or installed update behavior | `packaging/README.md`, `docs/updating.md` |
+| Extension signing, trust roots, or package verification | `docs/extension-provenance.md`, `packaging/deb/claw-os-agent/trust/publishers.d/README.md` |
 | Desktop boundary or provenance | `desktop/README.md`, `desktop/PROVENANCE.md` |

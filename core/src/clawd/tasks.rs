@@ -39,6 +39,11 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
     // system-agent policy derivation uses, so the capabilities stamped
     // here and the ceiling applied at execution cannot disagree.
     let owner_home = super::system_caps::verified_owner_home(owner_uid)?;
+    let owner_gid = client
+        .gid
+        .ok_or_else(|| "clawd peer gid is unavailable".to_string())?;
+    crate::storage::ensure_owner_agent_state_dir(owner_uid, owner_gid)
+        .map_err(|err| format!("prepare owner agent state: {err}"))?;
     let prompt = required_string(&params, "prompt")?;
     let context = params
         .get("context")
@@ -63,6 +68,10 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
         .and_then(Value::as_u64)
         .map(|value| u32::try_from(value).map_err(|_| format!("max_turns is too large: {value}")))
         .transpose()?;
+    let use_memory = params
+        .get("use_memory")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
     let store = Store::open_default().map_err(|err| err.to_string())?;
     let session_client = SessionClient::new(SessionSource::BrokerTask, false, true);
     let session_id = match session_id {
@@ -77,7 +86,7 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
             session_client,
         )?),
     };
-    let job = Job::new_pending_with_client(
+    let mut job = Job::new_pending_with_client(
         prompt,
         context,
         branch_context,
@@ -87,113 +96,11 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
         Some(owner_home.to_string_lossy().into_owned()),
         session_client,
     );
-    let job = publish_task_with_presence(&store, job, client)
+    job.use_memory = use_memory;
+    let task_id = job.id.clone();
+    let job = with_presence_publication(&task_id, client, unix_now_ms(), || store.publish(job))
         .map_err(|err| err.to_string())?;
     Ok(job_value(job))
-}
-
-fn publish_task_with_presence(
-    store: &Store,
-    job: Job,
-    client: &ClientIdentity,
-) -> std::io::Result<Job> {
-    let task_id = job.id.clone();
-    with_presence_publication(&task_id, client, unix_now_ms(), || store.publish(job))
-}
-
-fn with_presence_publication<T, E>(
-    task_id: &str,
-    client: &ClientIdentity,
-    now_ms: u64,
-    publish: impl FnOnce() -> Result<T, E>,
-) -> Result<T, E> {
-    let mut leases = presence_leases()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    leases.retain(|_, lease| lease.expires_at_ms >= now_ms);
-    let (Some(owner_uid), Some(pid), Some(start_time_ticks)) =
-        (client.uid, client.pid, client.start_time_ticks)
-    else {
-        return publish();
-    };
-    if client.attended_local {
-        leases.insert(
-            task_id.to_string(),
-            PendingPresence {
-                owner_uid,
-                pid,
-                start_time_ticks,
-                expires_at_ms: now_ms.saturating_add(SUBMISSION_PRESENCE_TTL_MS),
-            },
-        );
-    }
-    let result = publish();
-    if result.is_err() {
-        leases.remove(task_id);
-    }
-    result
-}
-
-pub(crate) fn claim_job_with_presence(
-    store: &Store,
-    execution_ttl: Duration,
-) -> std::io::Result<Option<(Job, Option<crate::session::SessionPresence>)>> {
-    claim_job_with_presence_at(
-        store,
-        unix_now_ms(),
-        execution_ttl.as_millis() as u64,
-        crate::proc::process_identity_is_live,
-    )
-}
-
-fn claim_job_with_presence_at(
-    store: &Store,
-    now_ms: u64,
-    execution_ttl_ms: u64,
-    process_is_live: impl Fn(u32, u64, u32) -> bool,
-) -> std::io::Result<Option<(Job, Option<crate::session::SessionPresence>)>> {
-    let mut leases = presence_leases()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    leases.retain(|_, lease| lease.expires_at_ms >= now_ms);
-    let Some(job) = store.claim_one()? else {
-        return Ok(None);
-    };
-    let presence = leases.remove(&job.id).and_then(|pending| {
-        (job.recovery_count == 0
-            && job.owner_uid == Some(pending.owner_uid)
-            && now_ms <= pending.expires_at_ms
-            && process_is_live(pending.pid, pending.start_time_ticks, pending.owner_uid))
-        .then_some(crate::session::SessionPresence {
-            owner_uid: pending.owner_uid,
-            pid: pending.pid,
-            start_time_ticks: pending.start_time_ticks,
-            expires_at_ms: now_ms.saturating_add(execution_ttl_ms),
-        })
-    });
-    Ok(Some((job, presence)))
-}
-
-fn unix_now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0)
-}
-
-fn drop_presence(task_id: &str) {
-    presence_leases()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .remove(task_id);
-}
-
-#[cfg(test)]
-fn clear_presence_leases() {
-    presence_leases()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .clear();
 }
 
 fn create_task_session(
@@ -213,12 +120,21 @@ fn create_task_session_with_client(
     prompt: &str,
     owner_uid: u32,
     owner_home: &std::path::Path,
-    mut client: SessionClient,
+    client: SessionClient,
 ) -> Result<String, String> {
-    client.attended = false;
     let purpose = format!("agent task: {}", preview(prompt, 80));
     let sid = session::create(purpose).map_err(|err| err.to_string())?;
-    session::update_meta(&sid, |meta| {
+    configure_task_session(&sid, owner_uid, owner_home, client)?;
+    Ok(sid.into_string())
+}
+
+fn configure_task_session(
+    sid: &session::SessionId,
+    owner_uid: u32,
+    owner_home: &std::path::Path,
+    client: SessionClient,
+) -> Result<(), String> {
+    session::update_meta(sid, |meta| {
         meta.creator_runtime = Some("clawd".to_string());
         meta.role = Some(Role::Observer);
         meta.owner_uid = Some(owner_uid);
@@ -227,8 +143,8 @@ fn create_task_session_with_client(
     })
     .map_err(|err| err.to_string())?;
     let caps = super::system_caps::system_agent_caps(owner_uid, owner_home);
-    session::set_caps(&sid, &caps).map_err(|err| err.to_string())?;
-    Ok(sid.into_string())
+    session::set_caps(sid, &caps).map_err(|err| err.to_string())?;
+    Ok(())
 }
 
 fn prepare_task_session(
@@ -248,9 +164,8 @@ fn prepare_task_session_with_client(
     session_id: &str,
     owner_uid: u32,
     owner_home: &std::path::Path,
-    mut client: SessionClient,
+    client: SessionClient,
 ) -> Result<(), String> {
-    client.attended = false;
     let sid = session_id
         .parse::<session::SessionId>()
         .map_err(|err| format!("invalid task session id: {err}"))?;
@@ -270,19 +185,6 @@ fn prepare_task_session_with_client(
     }
     if meta.creator_runtime.as_deref() != Some("clawd") {
         return Err(format!("session is not a system-agent task: {session_id}"));
-    }
-
-    let db = crate::agent::memory::sqlite_fts::MemoryDb::open(
-        crate::paths::clawd_user_memory_db_path(owner_uid),
-    )
-    .map_err(|err| format!("open memory: {err}"))?;
-    if !db
-        .has_session(session_id)
-        .map_err(|err| format!("read memory session: {err}"))?
-    {
-        return Err(format!(
-            "task session has no conversation history: {session_id}"
-        ));
     }
 
     let caps = super::system_caps::system_agent_caps(owner_uid, owner_home);
@@ -311,6 +213,10 @@ pub fn list(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     let owner_uid = owner_filter(client)?;
     let status = optional_status(&params)?;
     let limit = optional_limit(&params)?;
+    let summary = params
+        .get("summary")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let mut jobs = Vec::new();
 
     match status {
@@ -325,6 +231,14 @@ pub fn list(params: Value, client: &ClientIdentity) -> Result<Value, String> {
         Some(JobStatus::Running) => collect_jobs(
             &store,
             JobStatus::Running,
+            status,
+            limit,
+            owner_uid,
+            &mut jobs,
+        )?,
+        Some(JobStatus::WaitingApproval) => collect_jobs(
+            &store,
+            JobStatus::WaitingApproval,
             status,
             limit,
             owner_uid,
@@ -350,12 +264,30 @@ pub fn list(params: Value, client: &ClientIdentity) -> Result<Value, String> {
                 owner_uid,
                 &mut jobs,
             )?;
+            collect_jobs(
+                &store,
+                JobStatus::WaitingApproval,
+                None,
+                limit,
+                owner_uid,
+                &mut jobs,
+            )?;
             collect_jobs(&store, JobStatus::Ok, None, limit, owner_uid, &mut jobs)?;
         }
     }
 
-    if jobs.len() > limit {
-        jobs.truncate(limit);
+    jobs.sort_by(|left, right| {
+        right
+            .get("created_at")
+            .and_then(Value::as_str)
+            .cmp(&left.get("created_at").and_then(Value::as_str))
+    });
+    jobs.truncate(limit);
+    if summary {
+        jobs = jobs
+            .into_iter()
+            .map(|job| task_summary_value(&job))
+            .collect();
     }
 
     Ok(json!({ "jobs": jobs }))
@@ -498,6 +430,53 @@ pub fn cancel(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     }))
 }
 
+pub fn retry(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+    let id = required_string(&params, "id")?;
+    let store = Store::open_default().map_err(|err| err.to_string())?;
+    let Some((_bucket, original)) = store
+        .locate_for_owner(&id, owner_filter(client)?)
+        .map_err(|err| err.to_string())?
+    else {
+        return Err(format!("task not found: {id}"));
+    };
+    if !matches!(
+        original.status,
+        JobStatus::Ok | JobStatus::Error | JobStatus::Cancelled
+    ) {
+        return Err(format!(
+            "task is not terminal and cannot be retried: {}",
+            original.status.as_str()
+        ));
+    }
+    let owner_uid = original
+        .owner_uid
+        .ok_or_else(|| "task has no recorded owner and cannot be retried".to_string())?;
+    if owner_uid == 0 {
+        return Err(crate::agentd::spawn::ROOT_OWNER_REFUSAL.to_string());
+    }
+    let owner_home = super::system_caps::verified_owner_home(owner_uid)?;
+    let session_client = SessionClient::new(SessionSource::BrokerTask, false, true);
+    if let Some(session_id) = original.session_id.as_deref() {
+        prepare_task_session_with_client(session_id, owner_uid, &owner_home, session_client)?;
+    }
+    let mut retried = Job::new_pending_with_client(
+        original.prompt,
+        original.context,
+        original.branch_context,
+        original.session_id,
+        original.max_turns,
+        Some(owner_uid),
+        Some(owner_home.to_string_lossy().into_owned()),
+        session_client,
+    );
+    retried.use_memory = original.use_memory;
+    let task_id = retried.id.clone();
+    let retried =
+        with_presence_publication(&task_id, client, unix_now_ms(), || store.publish(retried))
+            .map_err(|err| err.to_string())?;
+    Ok(job_value(retried))
+}
+
 pub fn counts(client: &ClientIdentity) -> Result<Value, String> {
     let store = Store::open_default().map_err(|err| err.to_string())?;
     let owner_uid = owner_filter(client)?;
@@ -507,6 +486,10 @@ pub fn counts(client: &ClientIdentity) -> Result<Value, String> {
         .len();
     let running = store
         .list_bucket_for_owner(JobStatus::Running, None, owner_uid)
+        .map_err(|err| err.to_string())?
+        .len();
+    let waiting_approval = store
+        .list_bucket_for_owner(JobStatus::WaitingApproval, None, owner_uid)
         .map_err(|err| err.to_string())?
         .len();
     let done = store
@@ -529,6 +512,7 @@ pub fn counts(client: &ClientIdentity) -> Result<Value, String> {
     Ok(json!({
         "pending": pending,
         "running": running,
+        "waiting_approval": waiting_approval,
         "done": done_total,
         "ok": ok,
         "error": error,
@@ -561,6 +545,94 @@ fn owner_filter(client: &ClientIdentity) -> Result<Option<u32>, String> {
     Ok((uid != 0).then_some(uid))
 }
 
+fn with_presence_publication<T, E>(
+    task_id: &str,
+    client: &ClientIdentity,
+    now_ms: u64,
+    publish: impl FnOnce() -> Result<T, E>,
+) -> Result<T, E> {
+    let mut leases = presence_leases()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    leases.retain(|_, lease| lease.expires_at_ms >= now_ms);
+    let (Some(owner_uid), Some(pid), Some(start_time_ticks)) =
+        (client.uid, client.pid, client.start_time_ticks)
+    else {
+        return publish();
+    };
+    if client.attended_local {
+        leases.insert(
+            task_id.to_string(),
+            PendingPresence {
+                owner_uid,
+                pid,
+                start_time_ticks,
+                expires_at_ms: now_ms.saturating_add(SUBMISSION_PRESENCE_TTL_MS),
+            },
+        );
+    }
+
+    let result = publish();
+    if result.is_err() {
+        leases.remove(task_id);
+    }
+    result
+}
+
+pub(crate) fn claim_job_with_presence(
+    store: &Store,
+    execution_ttl: Duration,
+) -> std::io::Result<Option<(Job, Option<crate::session::SessionPresence>)>> {
+    claim_job_with_presence_at(
+        store,
+        unix_now_ms(),
+        execution_ttl.as_millis() as u64,
+        crate::proc::process_identity_is_live,
+    )
+}
+
+fn claim_job_with_presence_at(
+    store: &Store,
+    now_ms: u64,
+    execution_ttl_ms: u64,
+    process_is_live: impl Fn(u32, u64, u32) -> bool,
+) -> std::io::Result<Option<(Job, Option<crate::session::SessionPresence>)>> {
+    let mut leases = presence_leases()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    leases.retain(|_, lease| lease.expires_at_ms >= now_ms);
+    let Some(job) = store.claim_one()? else {
+        return Ok(None);
+    };
+    let presence = leases.remove(&job.id).and_then(|pending| {
+        (job.recovery_count == 0
+            && job.owner_uid == Some(pending.owner_uid)
+            && now_ms <= pending.expires_at_ms
+            && process_is_live(pending.pid, pending.start_time_ticks, pending.owner_uid))
+        .then_some(crate::session::SessionPresence {
+            owner_uid: pending.owner_uid,
+            pid: pending.pid,
+            start_time_ticks: pending.start_time_ticks,
+            expires_at_ms: now_ms.saturating_add(execution_ttl_ms),
+        })
+    });
+    Ok(Some((job, presence)))
+}
+
+fn unix_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn drop_presence(task_id: &str) {
+    presence_leases()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(task_id);
+}
+
 #[cfg(test)]
 mod tests {
     include!(concat!(
@@ -575,6 +647,30 @@ fn job_value(job: Job) -> Value {
             "status": "error",
             "error": format!("failed to serialize job: {err}"),
         })
+    })
+}
+
+fn task_summary_value(job: &Value) -> Value {
+    json!({
+        "id": job.get("id").cloned().unwrap_or(Value::Null),
+        "title": job
+            .get("prompt")
+            .and_then(Value::as_str)
+            .map(|prompt| preview(prompt, 80))
+            .unwrap_or_else(|| "Agent task".to_string()),
+        "status": job.get("status").cloned().unwrap_or(Value::Null),
+        "created_at": job.get("created_at").cloned().unwrap_or(Value::Null),
+        "started_at": job.get("started_at").cloned().unwrap_or(Value::Null),
+        "finished_at": job.get("finished_at").cloned().unwrap_or(Value::Null),
+        "session_id": job.get("session_id").cloned().unwrap_or(Value::Null),
+        "waiting_on": job.get("waiting_on").cloned().unwrap_or_else(|| json!([])),
+        "cancel_requested": job
+            .get("cancel_requested_at")
+            .is_some_and(|value| !value.is_null()),
+        "error": job
+            .get("error")
+            .and_then(Value::as_str)
+            .map(|error| preview(error, 512)),
     })
 }
 
@@ -598,6 +694,7 @@ fn optional_status(params: &Value) -> Result<Option<JobStatus>, String> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "pending" => Ok(Some(JobStatus::Pending)),
         "running" => Ok(Some(JobStatus::Running)),
+        "waiting" | "waiting_approval" | "approval" => Ok(Some(JobStatus::WaitingApproval)),
         "ok" | "done" | "success" => Ok(Some(JobStatus::Ok)),
         "error" | "failed" => Ok(Some(JobStatus::Error)),
         "cancelled" | "canceled" => Ok(Some(JobStatus::Cancelled)),

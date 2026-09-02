@@ -7,7 +7,7 @@ fn binding() -> AbiBinding {
         owner_uid: 1000,
         extension_id: "observer".to_string(),
         extension_version: "1.0.0".to_string(),
-        package_digest: "a".repeat(64),
+        package_digest: format!("sha256:{}", "a".repeat(64)),
         manifest_digest: "b".repeat(64),
         entry_digest: "c".repeat(64),
         capability_generation: "d".repeat(16),
@@ -107,7 +107,10 @@ async fn framing_rejects_malformed_and_oversized_frames_before_allocation() {
 
     let (mut writer, mut reader) = tokio::io::duplex(64);
     let malformed = tokio::spawn(async move {
-        writer.write_all(b"BAD!\x01\x00\x00\x00\x00\x02{}").await.unwrap();
+        writer
+            .write_all(b"BAD!\x01\x00\x00\x00\x00\x02{}")
+            .await
+            .unwrap();
     });
     assert!(read_request(&mut reader)
         .await

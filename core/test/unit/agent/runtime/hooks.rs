@@ -36,12 +36,7 @@ impl Hook for CountingHook {
         self.pre_tool.fetch_add(1, Ordering::SeqCst);
         ToolDecision::Allow
     }
-    fn post_tool(
-        &self,
-        _ctx: &HookContext,
-        _t: &ToolCall,
-        _r: &ToolResultSummary,
-    ) -> HookOutcome {
+    fn post_tool(&self, _ctx: &HookContext, _t: &ToolCall, _r: &ToolResultSummary) -> HookOutcome {
         self.post_tool.fetch_add(1, Ordering::SeqCst);
         HookOutcome::Continue
     }
@@ -71,6 +66,7 @@ fn tool_result_ok() -> ToolResultSummary {
         success: true,
         latency_ms: 1,
         bytes_returned: 12,
+        result_digest: crate::crypto::sha256_hex(b"tool result"),
         error: None,
     }
 }
@@ -89,6 +85,19 @@ fn hook_context_builder_sets_fields() {
     assert_eq!(c.turn_index, 7);
     assert_eq!(c.started_at_ms, 1_000);
     assert!(c.is_delegated);
+}
+
+#[test]
+fn public_hook_context_struct_literal_remains_compatible() {
+    let context = HookContext {
+        session_id: "literal".into(),
+        turn_index: 2,
+        provider: "mock".into(),
+        model: "mock-model".into(),
+        started_at_ms: 42,
+        is_delegated: true,
+    };
+    assert!(context.is_delegated);
 }
 
 #[test]
@@ -597,8 +606,7 @@ fn checkpoint_hook_with(
     audit: std::path::PathBuf,
     dangerous: &[&str],
 ) -> CheckpointHook {
-    let set: std::collections::HashSet<String> =
-        dangerous.iter().map(|s| s.to_string()).collect();
+    let set: std::collections::HashSet<String> = dangerous.iter().map(|s| s.to_string()).collect();
     CheckpointHook::with_overrides(creator, audit, set)
 }
 

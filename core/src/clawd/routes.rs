@@ -13,11 +13,11 @@
 //! compile. Audit field rules live in those same rows, so there is no
 //! second command-name table to synchronize.
 //!
-//! Access classes are the historical allowlist, unchanged:
-//! `context.update` is root-only and everything else is reachable by an
-//! authenticated non-root peer. Reaching a route is not the same as
-//! being allowed to act: the route still derives identity, session and
-//! capability from the peer the kernel named.
+//! Access classes are an explicit allowlist: `context.update` is root-only
+//! and the remaining registered routes are reachable by an authenticated
+//! non-root peer. Reaching a route is not the same as being allowed to act:
+//! each route still derives identity, session and capability from the peer
+//! the kernel named.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -39,9 +39,9 @@ use super::wire::{Fault, RequestId};
 use super::{
     accessibility, app_sessions, audio, backup, bluetooth, camera, clipboard, config_editor,
     containers, context, context_events, crash, credentials, desktop, display, event_center,
-    firewall, hardware, location, memory, network, packages, permissions, power, printer,
-    scheduler, security, snapshots, storage, system_journal, systemd, tasks, transactions,
-    usb_guard, users,
+    firewall, hardware, journal as journal_ops, location, memory, network, notifications, packages,
+    permissions, power, printer, scheduler, security, snapshots, storage, system_journal, systemd,
+    tasks, transactions, usage, usb_guard, users,
 };
 
 /// Who may reach a route at all.
@@ -113,6 +113,14 @@ impl Budget {
     const fn query() -> Self {
         Self {
             max_in_flight: 32,
+            deadline: Deadline::Interruptible(Duration::from_secs(120)),
+        }
+    }
+
+    /// Bounded scans that may still parse several MiB before returning.
+    const fn log_query() -> Self {
+        Self {
+            max_in_flight: 2,
             deadline: Deadline::Interruptible(Duration::from_secs(120)),
         }
     }
@@ -312,6 +320,9 @@ fn decode_body<T: DeserializeOwned + Serialize>(params: Value) -> Result<Value, 
     let params = if params.is_null() {
         Value::Object(serde_json::Map::new())
     } else {
+        if !params.is_object() {
+            return Err(Fault::InvalidParams);
+        }
         params
     };
     let typed = serde_json::from_value::<T>(params).map_err(|error| {
@@ -517,6 +528,16 @@ routes! {
         audit: &[("id", FieldRule::Token)],
         run: |c| tasks::cancel(c.params, c.client).map_err(BrokerError::from),
     }
+    TaskRetry {
+        name: "task.retry",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Task),
+        body: body::TaskId,
+        audit: &[("id", FieldRule::Token)],
+        run: |c| tasks::retry(c.params, c.client).map_err(BrokerError::from),
+    }
     TaskStream {
         name: "task.stream",
         access: Access::User,
@@ -573,6 +594,16 @@ routes! {
         audit: &[("limit", FieldRule::Count)],
         run: |c| memory::sessions(c.params, c.client).map_err(BrokerError::from),
     }
+    AgentUsage {
+        name: "agent.usage",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::log_query(),
+        authority: peer(Audience::Context),
+        body: body::AgentUsage,
+        audit: &[("args", FieldRule::Size)],
+        run: |c| usage::query(c.params, c.client).await.map_err(BrokerError::from),
+    }
     ContextSnapshot {
         name: "context.snapshot",
         access: Access::User,
@@ -580,7 +611,7 @@ routes! {
         budget: Budget::query(),
         authority: peer(Audience::Context),
         body: body::NoBody,
-        run: |c| context::snapshot_for_client(c.state, c.client).map_err(BrokerError::from),
+        run: |c| context::snapshot_for_client(c.state, c.client),
     }
     ContextSources {
         name: "context.sources",
@@ -589,7 +620,7 @@ routes! {
         budget: Budget::query(),
         authority: peer(Audience::Context),
         body: body::NoBody,
-        run: |c| context::sources_for_client(c.state, c.client).map_err(BrokerError::from),
+        run: |c| context::sources_for_client(c.state, c.client),
     }
     ContextUpdate {
         name: "context.update",
@@ -599,14 +630,41 @@ routes! {
         authority: peer(Audience::Context),
         body: body::ContextUpdate,
         audit: &[("source", FieldRule::Token)],
-        run: |c| context::update(c.state, c.params).map_err(BrokerError::from),
+        run: |c| context::update(c.state, c.params),
+    }
+
+    // -----------------------------------------------------------------
+    // Session journal
+    // -----------------------------------------------------------------
+    JournalStatus {
+        name: "journal.status",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Daemon),
+        body: body::JournalStatus,
+        audit: &[("session_id", FieldRule::Token)],
+        run: |c| journal_ops::status(&c.params, c.client).map_err(BrokerError::from),
+    }
+    JournalResolveMutation {
+        name: "journal.mutation.resolve",
+        access: Access::Root,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Daemon),
+        body: body::JournalResolveMutation,
+        audit: &[
+            ("partition", FieldRule::Identifier),
+            ("operation", FieldRule::Token),
+            ("outcome", FieldRule::Enum(&["abandoned", "committed", "rolled-back"])),
+        ],
+        run: |c| journal_ops::resolve(&c.params, c.client).map_err(BrokerError::from),
     }
     ContextEventAppend {
         name: "context.event.append",
         access: Access::User,
         kind: Kind::Mutation,
-        budget: Budget::mutation(),
-        authority: peer(Audience::Context),
+        budget: Budget::mutation(),        authority: peer(Audience::Context),
         body: body::ContextEventAppend,
         audit: &[
             ("source", FieldRule::Token),
@@ -646,6 +704,134 @@ routes! {
             ("limit", FieldRule::Count),
         ],
         run: |c| system_journal::query_for_client(c.params, c.client).map_err(BrokerError::from),
+    }
+
+    // -----------------------------------------------------------------
+    // Notifications
+    // -----------------------------------------------------------------
+    NotificationPublish {
+        name: "notification.publish",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Notification),
+        body: body::NotificationPublish,
+        audit: &[
+            ("source", FieldRule::Identifier),
+            ("kind", FieldRule::Identifier),
+            ("severity", FieldRule::Token),
+            ("title", FieldRule::Size),
+            ("body", FieldRule::Size),
+            ("task_id", FieldRule::Token),
+            ("session_id", FieldRule::Token),
+            ("job_id", FieldRule::Token),
+        ],
+        run: |c| notifications::publish(c.params, c.client).map_err(BrokerError::from),
+    }
+    NotificationList {
+        name: "notification.list",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Notification),
+        body: body::NotificationList,
+        audit: &[("limit", FieldRule::Count)],
+        run: |c| notifications::list(c.params, c.client).map_err(BrokerError::from),
+    }
+    NotificationSubscribe {
+        name: "notification.subscribe",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::poll(),
+        authority: peer(Audience::Notification),
+        body: body::NotificationSubscribe,
+        audit: &[
+            ("cursor", FieldRule::Count),
+            ("limit", FieldRule::Count),
+        ],
+        run: |c| notifications::subscribe(c.params, c.client).await.map_err(BrokerError::from),
+    }
+    NotificationRead {
+        name: "notification.read",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Notification),
+        body: body::NotificationId,
+        audit: &[("id", FieldRule::Token)],
+        run: |c| notifications::mark_read(c.params, c.client).map_err(BrokerError::from),
+    }
+    NotificationAcknowledge {
+        name: "notification.acknowledge",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Notification),
+        body: body::NotificationId,
+        audit: &[("id", FieldRule::Token)],
+        run: |c| notifications::acknowledge(c.params, c.client).map_err(BrokerError::from),
+    }
+    NotificationDismiss {
+        name: "notification.dismiss",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Notification),
+        body: body::NotificationId,
+        audit: &[("id", FieldRule::Token)],
+        run: |c| notifications::dismiss(c.params, c.client).map_err(BrokerError::from),
+    }
+    NotificationPreferencesGet {
+        name: "notification.preferences.get",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::fast(),
+        authority: peer(Audience::Notification),
+        body: body::NoBody,
+        run: |c| notifications::get_preferences(c.client).map_err(BrokerError::from),
+    }
+    NotificationPreferencesSet {
+        name: "notification.preferences.set",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Notification),
+        body: body::NotificationPreferencesSet,
+        audit: &[
+            ("web_enabled", FieldRule::Flag),
+            ("desktop_enabled", FieldRule::Flag),
+            ("ntfy_enabled", FieldRule::Flag),
+            ("retention_days", FieldRule::Count),
+        ],
+        run: |c| notifications::set_preferences(c.params, c.client).map_err(BrokerError::from),
+    }
+    NotificationDeliveryClaim {
+        name: "notification.delivery.claim",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Notification),
+        body: body::NotificationDeliveryClaim,
+        audit: &[
+            ("channel", FieldRule::Token),
+            ("limit", FieldRule::Count),
+        ],
+        run: |c| notifications::claim_deliveries(c.params, c.client).map_err(BrokerError::from),
+    }
+    NotificationDeliveryComplete {
+        name: "notification.delivery.complete",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Notification),
+        body: body::NotificationDeliveryComplete,
+        audit: &[
+            ("id", FieldRule::Token),
+            ("channel", FieldRule::Token),
+            ("status", FieldRule::Token),
+            ("error_code", FieldRule::Token),
+        ],
+        run: |c| notifications::complete_delivery(c.params, c.client).map_err(BrokerError::from),
     }
 
     // -----------------------------------------------------------------
@@ -736,7 +922,7 @@ routes! {
         budget: Budget::mutation(),
         authority: peer(Audience::Transaction),
         body: body::TransactionBegin,
-        run: |c| transactions::begin(c.state, c.params, c.client).map_err(BrokerError::from),
+        run: |c| transactions::begin(c.state, c.params, c.client),
     }
     TransactionList {
         name: "transaction.list",
@@ -745,7 +931,7 @@ routes! {
         budget: Budget::query(),
         authority: peer(Audience::Transaction),
         body: body::NoBody,
-        run: |c| transactions::list(c.state, c.client).map_err(BrokerError::from),
+        run: |c| transactions::list(c.state, c.client),
     }
     TransactionCommit {
         name: "transaction.commit",
@@ -755,7 +941,7 @@ routes! {
         authority: peer(Audience::Transaction),
         body: body::TransactionId,
         audit: &[("id", FieldRule::Token)],
-        run: |c| transactions::commit(c.state, c.params, c.client).map_err(BrokerError::from),
+        run: |c| transactions::commit(c.state, c.params, c.client),
     }
     TransactionRollback {
         name: "transaction.rollback",
@@ -766,9 +952,7 @@ routes! {
         body: body::TransactionId,
         audit: &[("id", FieldRule::Token)],
         run: |c| {
-            transactions::rollback(c.state, c.params, c.client)
-                .await
-                .map_err(BrokerError::from)
+            transactions::rollback(c.state, c.params, c.client).await
         },
     }
 
@@ -862,6 +1046,25 @@ routes! {
         audit: &[("session_id", FieldRule::Token)],
         run: |c| {
             app_sessions::deregister(c.params, c.client)
+                .await
+                .map_err(BrokerError::from)
+        },
+    }
+
+    AppSessionRelay {
+        name: "app_session.relay",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: handle(Audience::AppRelay),
+        body: body::AppSessionRelay,
+        audit: &[
+            ("session_id", FieldRule::Token),
+            ("command", FieldRule::Token),
+        ],
+        run: |c| {
+            let authority = c.authority()?;
+            app_sessions::relay(c.state, c.params.clone(), c.client, authority)
                 .await
                 .map_err(BrokerError::from)
         },

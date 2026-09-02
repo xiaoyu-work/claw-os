@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use clawd_client::Client;
-use serde::Serialize;
+use cos_agent_protocol::{BridgeEndpoint, MIN_SUPPORTED_PROTOCOL_VERSION, ProtocolVersion};
 
 const DISCOVERY_FILE: &str = "endpoint.json";
 
@@ -113,12 +113,6 @@ fn validate_private_directory(dir: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[derive(Serialize)]
-struct Discovery<'a> {
-    port: u16,
-    token: &'a str,
-}
-
 /// Atomically publish the bound endpoint and bearer token inside the
 /// current user's private runtime directory.
 pub fn publish_endpoint(port: u16, token: &str) -> anyhow::Result<()> {
@@ -129,8 +123,13 @@ pub fn publish_endpoint(port: u16, token: &str) -> anyhow::Result<()> {
         std::process::id(),
         &token[..token.len().min(16)]
     ));
-    let body = serde_json::to_vec(&Discovery { port, token })
-        .context("serializing bridge discovery state")?;
+    let body = serde_json::to_vec(&BridgeEndpoint {
+        port,
+        token: token.to_string(),
+        protocol_version: ProtocolVersion::CURRENT,
+        min_protocol_version: ProtocolVersion(MIN_SUPPORTED_PROTOCOL_VERSION),
+    })
+    .context("serializing bridge discovery state")?;
 
     #[cfg(unix)]
     {

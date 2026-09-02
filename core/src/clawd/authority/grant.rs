@@ -53,6 +53,8 @@ pub enum Audience {
     AgentWorker,
     /// Memory, context and journal reads.
     Context,
+    /// Owner-scoped notification state and delivery leases.
+    Notification,
     /// The consent surface itself.
     Permission,
     /// Privileged-mutation transactions.
@@ -65,6 +67,15 @@ pub enum Audience {
     Credential,
     /// Privileged system providers (audio, packages, users, …).
     SystemService,
+    /// The trusted launcher relaying one App-session system-service
+    /// call on behalf of a worker it sandboxed.
+    ///
+    /// A relay grant carries no capabilities of its own. It is the
+    /// right to *present* an already-issued App session grant from the
+    /// launcher process, which is the only process outside the sandbox
+    /// that legitimately speaks for that session. Every effect is still
+    /// authorized against the session grant on the inner route.
+    AppRelay,
 }
 
 impl Audience {
@@ -74,12 +85,14 @@ impl Audience {
             Audience::Task => "task",
             Audience::AgentWorker => "agent-worker",
             Audience::Context => "context",
+            Audience::Notification => "notification",
             Audience::Permission => "permission",
             Audience::Transaction => "transaction",
             Audience::AppLaunch => "app-launch",
             Audience::Scheduler => "scheduler",
             Audience::Credential => "credential",
             Audience::SystemService => "system-service",
+            Audience::AppRelay => "app-relay",
         }
     }
 
@@ -133,6 +146,7 @@ impl AudienceSet {
             Audience::Task,
             Audience::AgentWorker,
             Audience::Context,
+            Audience::Notification,
             Audience::Permission,
             Audience::Transaction,
             Audience::AppLaunch,

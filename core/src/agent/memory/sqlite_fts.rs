@@ -7,16 +7,13 @@
 //! Schema:
 //! - `messages(id, session_id, role, content, ts_ms)` — durable rows.
 //! - `messages_fts(content)` — FTS5 contentless virtual table indexed by triggers.
-//! - `session_compactions` + `compaction_summaries` — verified projections;
-//!   raw message rows remain the authoritative searchable/exportable source.
 //!
 //! The DB lives at `data_dir/agent/memory.db` by default and uses WAL mode so
 //! concurrent readers (e.g. the `cos_recall` tool) don't block writers.
 //!
-//! Transient recording failures are non-fatal: callers log and continue when
-//! a new message cannot be appended. Integrity failures are different:
-//! damaged content-addressed prompts are never returned to the model, and
-//! schema corruption requires explicit diagnosis/repair.
+//! Failures are designed to be non-fatal: if `record_message` errors, the
+//! caller is expected to log and continue — losing a memory record is better
+//! than crashing the agent loop.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -30,6 +27,12 @@ use super::compaction::COMPACTION_SCHEMA;
 use super::recovery::{self, MemoryLifecycleLock};
 
 pub(crate) const INJECTED_ROLE: &str = "injected";
+
+/// How long an opener waits for a lock held by a concurrent opener.
+///
+/// Armed on the connection before any statement runs, so the WAL switch
+/// and the provenance migration both wait instead of failing.
+const OPEN_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 #[derive(Debug, thiserror::Error)]
 pub enum MemoryError {
@@ -79,6 +82,64 @@ pub struct MessageRow {
     pub role: String,
     pub content: String,
     pub ts_ms: i64,
+    /// Provenance recorded when the row was written.
+    ///
+    /// `None` for every row written before provenance columns existed.
+    /// A legacy row therefore resolves to
+    /// [`TrustClass::LegacyUnknown`](crate::agent::trust::TrustClass::LegacyUnknown)
+    /// via [`MessageRow::trust_class`], never to a trusted class.
+    pub trust_class: Option<String>,
+    pub trust_source: Option<String>,
+    pub trust_lineage: Option<String>,
+}
+
+impl MessageRow {
+    /// The row's trust class.
+    ///
+    /// Stored tags go through
+    /// [`TrustClass::from_stored_label`](crate::agent::trust::TrustClass::from_stored_label),
+    /// so a row whose column was tampered with to read `system-policy`
+    /// still resolves to `LegacyUnknown`. A missing column is a legacy
+    /// row and resolves the same way.
+    pub fn trust_class(&self) -> crate::agent::trust::TrustClass {
+        match &self.trust_class {
+            Some(tag) => crate::agent::trust::TrustClass::from_stored_label(tag),
+            None => crate::agent::trust::TrustClass::LegacyUnknown,
+        }
+    }
+
+    /// The row's source kind. An unrecognised or missing tag is
+    /// [`SourceKind::LegacyStoredRow`](crate::agent::trust::SourceKind::LegacyStoredRow).
+    pub fn trust_source(&self) -> crate::agent::trust::SourceKind {
+        match &self.trust_source {
+            Some(tag) => crate::agent::trust::SourceKind::from_tag(tag),
+            None => crate::agent::trust::SourceKind::LegacyStoredRow,
+        }
+    }
+
+    /// Ordered source lineage, oldest contributor first.
+    pub fn trust_lineage(&self) -> Vec<crate::agent::trust::SourceKind> {
+        self.trust_lineage
+            .as_deref()
+            .unwrap_or_default()
+            .split(',')
+            .filter(|tag| !tag.is_empty())
+            .map(crate::agent::trust::SourceKind::from_tag)
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ToolInvocationRow {
+    pub session_id: String,
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub input: String,
+    pub started_at_ms: i64,
+    pub completed_at_ms: Option<i64>,
+    pub success: Option<bool>,
+    pub latency_ms: Option<u64>,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -170,12 +231,27 @@ CREATE TABLE IF NOT EXISTS messages (
     content     TEXT NOT NULL,
     ts_ms       INTEGER NOT NULL
 );
-
 CREATE INDEX IF NOT EXISTS messages_session_ts
     ON messages(session_id, ts_ms);
 
 CREATE INDEX IF NOT EXISTS messages_ts
     ON messages(ts_ms);
+
+CREATE TABLE IF NOT EXISTS tool_invocations (
+    session_id      TEXT NOT NULL,
+    tool_call_id    TEXT NOT NULL,
+    tool_name       TEXT NOT NULL,
+    input           TEXT NOT NULL,
+    started_at_ms   INTEGER NOT NULL,
+    completed_at_ms INTEGER,
+    success         INTEGER,
+    latency_ms      INTEGER,
+    error           TEXT,
+    PRIMARY KEY (session_id, tool_call_id)
+);
+
+CREATE INDEX IF NOT EXISTS tool_invocations_session_started
+    ON tool_invocations(session_id, started_at_ms);
 
 CREATE TABLE IF NOT EXISTS session_titles (
     session_id  TEXT PRIMARY KEY,
@@ -251,25 +327,34 @@ impl MemoryDb {
             path,
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
         )?;
-        if initialize || recovery::database_has_no_user_schema(&conn)? {
+        // The schema batch begins by switching the journal to WAL,
+        // which needs an exclusive lock, and the provenance migration
+        // needs one too. The broker, the worker and a CLI can all open
+        // this database at once, so the busy timeout has to be armed
+        // *before* either — a `PRAGMA busy_timeout` inside the batch is
+        // too late to protect the statements ahead of it.
+        let no_schema = recovery::database_has_no_user_schema(&conn)?;
+        let legacy_schema = !no_schema
+            && !conn
+                .prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name = 'trust_class'")?
+                .exists([])?;
+        if initialize || no_schema || legacy_schema {
             initialize_connection(&conn)?;
         } else {
             conn.execute_batch(CONNECTION_PRAGMAS)?;
-            // Durable compaction is an additive projection over authoritative
-            // message rows. Create it automatically for pre-compaction
-            // databases, while still refusing incompatible existing objects.
             conn.execute_batch(COMPACTION_SCHEMA).map_err(|error| {
                 MemoryError::Integrity(format!(
                     "durable compaction schema migration failed: {error}"
                 ))
             })?;
-            let issues = recovery::runtime_schema_issues(&conn)?;
-            if !issues.is_empty() {
-                return Err(MemoryError::Integrity(format!(
-                    "{}; run `cos agent sessions repair --dry-run`",
-                    issues.join("; ")
-                )));
-            }
+            migrate_provenance_columns(&conn)?;
+        }
+        let issues = recovery::runtime_schema_issues(&conn)?;
+        if !issues.is_empty() {
+            return Err(MemoryError::Integrity(format!(
+                "{}; run `cos agent sessions repair --dry-run`",
+                issues.join("; ")
+            )));
         }
         crate::storage::set_private_file(path)?;
         Ok(Self {
@@ -280,10 +365,25 @@ impl MemoryDb {
         })
     }
 
+    /// Open an existing memory DB without creating files or applying
+    /// migrations. Read-only UI routes use this so inspecting history
+    /// cannot create or migrate agent state.
+    pub fn open_read_only(path: impl AsRef<Path>) -> Result<Self, MemoryError> {
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        conn.busy_timeout(OPEN_BUSY_TIMEOUT)?;
+        Ok(Self {
+            conn: Arc::new(Mutex::new(conn)),
+            path: None,
+            compaction_locks: Arc::new(Mutex::new(HashSet::new())),
+            _lifecycle_lock: None,
+        })
+    }
+
     /// In-memory DB — used for tests and ephemeral sessions.
     #[allow(dead_code)]
     pub fn open_in_memory() -> Result<Self, MemoryError> {
         let conn = Connection::open_in_memory()?;
+        conn.busy_timeout(OPEN_BUSY_TIMEOUT)?;
         initialize_connection(&conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -298,7 +398,62 @@ impl MemoryDb {
         Self::open(default_path())
     }
 
+    /// Wrap a caller-provided connection, applying the provenance
+    /// migration. Used by migration tests to model an upgrade in place.
+    #[cfg(test)]
+    pub(crate) fn from_connection_for_test(conn: Connection) -> Self {
+        migrate_provenance_columns(&conn).expect("migrate");
+        Self {
+            conn: Arc::new(Mutex::new(conn)),
+            path: None,
+            compaction_locks: Arc::new(Mutex::new(HashSet::new())),
+            _lifecycle_lock: None,
+        }
+    }
+
+    /// Re-run the provenance migration, to prove it is idempotent.
+    #[cfg(test)]
+    pub(crate) fn run_provenance_migration_for_test(&self) -> Result<(), MemoryError> {
+        let conn = self.lock_conn()?;
+        migrate_provenance_columns(&conn)
+    }
+
+    /// Overwrite a stored trust class, to prove reads re-clamp it.
+    #[cfg(test)]
+    pub(crate) fn set_trust_class_for_test(
+        &self,
+        session_id: &str,
+        value: &str,
+    ) -> Result<(), MemoryError> {
+        let conn = self.lock_conn()?;
+        conn.execute(
+            "UPDATE messages SET trust_class = ? WHERE session_id = ?",
+            params![value, session_id],
+        )?;
+        Ok(())
+    }
+
+    /// Overwrite a stored source tag, to prove reads re-clamp it.
+    #[cfg(test)]
+    pub(crate) fn set_trust_source_for_test(
+        &self,
+        session_id: &str,
+        value: &str,
+    ) -> Result<(), MemoryError> {
+        let conn = self.lock_conn()?;
+        conn.execute(
+            "UPDATE messages SET trust_source = ? WHERE session_id = ?",
+            params![value, session_id],
+        )?;
+        Ok(())
+    }
+
     /// Insert a single message. Returns the row id.
+    ///
+    /// The row carries no provenance, so replay resolves it as
+    /// [`TrustClass::LegacyUnknown`](crate::agent::trust::TrustClass::LegacyUnknown).
+    /// Prefer [`record_labeled_message`](Self::record_labeled_message)
+    /// wherever the writer knows which source produced the bytes.
     pub fn record_message(
         &self,
         session_id: &str,
@@ -306,6 +461,34 @@ impl MemoryDb {
         content: &str,
     ) -> Result<i64, MemoryError> {
         self.record_message_at(session_id, role, content, current_ts_ms())
+    }
+
+    /// Insert a message together with its immutable provenance.
+    ///
+    /// The class is written from the segment, not from the caller, and
+    /// is re-clamped on read, so a tampered column cannot upgrade a row.
+    pub fn record_labeled_message(
+        &self,
+        session_id: &str,
+        role: &str,
+        segment: &crate::agent::trust::LabeledSegment,
+        content: &str,
+    ) -> Result<i64, MemoryError> {
+        let lineage = segment
+            .lineage()
+            .iter()
+            .map(|kind| kind.tag())
+            .collect::<Vec<_>>()
+            .join(",");
+        self.record_message_labeled_at(
+            session_id,
+            role,
+            content,
+            current_ts_ms(),
+            Some(segment.class().wire_tag()),
+            Some(segment.kind().tag()),
+            Some(&lineage),
+        )
     }
 
     /// Record a message with an explicit timestamp. Surfaces the
@@ -319,6 +502,19 @@ impl MemoryDb {
         role: &str,
         content: &str,
         ts_ms: i64,
+    ) -> Result<i64, MemoryError> {
+        self.record_message_labeled_at(session_id, role, content, ts_ms, None, None, None)
+    }
+
+    fn record_message_labeled_at(
+        &self,
+        session_id: &str,
+        role: &str,
+        content: &str,
+        ts_ms: i64,
+        trust_class: Option<&str>,
+        trust_source: Option<&str>,
+        trust_lineage: Option<&str>,
     ) -> Result<i64, MemoryError> {
         // Cap stored message bodies. A run-away tool that streams a
         // multi-MB blob into the conversation log would otherwise
@@ -334,8 +530,18 @@ impl MemoryDb {
         };
         let conn = self.lock_conn()?;
         conn.execute(
-            "INSERT INTO messages (session_id, role, content, ts_ms) VALUES (?, ?, ?, ?)",
-            params![session_id, role, &*stored, ts_ms],
+            "INSERT INTO messages
+                 (session_id, role, content, ts_ms, trust_class, trust_source, trust_lineage)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            params![
+                session_id,
+                role,
+                &*stored,
+                ts_ms,
+                trust_class,
+                trust_source,
+                trust_lineage
+            ],
         )?;
         Ok(conn.last_insert_rowid())
     }
@@ -362,7 +568,106 @@ impl MemoryDb {
         content: &str,
     ) -> Result<i64, MemoryError> {
         let body = format!("[{source}]\n{content}");
-        self.record_message_at(session_id, INJECTED_ROLE, &body, current_ts_ms())
+        let kind = crate::agent::trust::SourceKind::from_tag(source);
+        self.record_message_labeled_at(
+            session_id,
+            INJECTED_ROLE,
+            &body,
+            current_ts_ms(),
+            Some(kind.class().wire_tag()),
+            Some(kind.tag()),
+            Some(kind.tag()),
+        )
+    }
+
+    pub fn record_tool_start(
+        &self,
+        session_id: &str,
+        tool_call_id: &str,
+        tool_name: &str,
+        input: &str,
+    ) -> Result<(), MemoryError> {
+        const MAX_INPUT_CHARS: usize = 16 * 1024;
+        let input = truncate_chars(input, MAX_INPUT_CHARS);
+        let conn = self.lock_conn()?;
+        conn.execute(
+            "INSERT INTO tool_invocations (
+                 session_id, tool_call_id, tool_name, input, started_at_ms,
+                 completed_at_ms, success, latency_ms, error
+             ) VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, NULL)
+             ON CONFLICT(session_id, tool_call_id) DO UPDATE SET
+                 tool_name = excluded.tool_name,
+                 input = excluded.input,
+                 started_at_ms = excluded.started_at_ms,
+                 completed_at_ms = NULL,
+                 success = NULL,
+                 latency_ms = NULL,
+                 error = NULL",
+            params![session_id, tool_call_id, tool_name, input, current_ts_ms()],
+        )?;
+        Ok(())
+    }
+
+    pub fn record_tool_result(
+        &self,
+        session_id: &str,
+        tool_call_id: &str,
+        success: bool,
+        latency_ms: u64,
+        error: Option<&str>,
+    ) -> Result<(), MemoryError> {
+        const MAX_ERROR_CHARS: usize = 16 * 1024;
+        let error = error.map(|value| truncate_chars(value, MAX_ERROR_CHARS));
+        let conn = self.lock_conn()?;
+        conn.execute(
+            "UPDATE tool_invocations
+             SET completed_at_ms = ?, success = ?, latency_ms = ?, error = ?
+             WHERE session_id = ? AND tool_call_id = ?",
+            params![
+                current_ts_ms(),
+                success,
+                latency_ms.min(i64::MAX as u64) as i64,
+                error,
+                session_id,
+                tool_call_id
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn recent_tool_invocations(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<ToolInvocationRow>, MemoryError> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT session_id, tool_call_id, tool_name, input, started_at_ms,
+                    completed_at_ms, success, latency_ms, error
+             FROM tool_invocations
+             WHERE session_id = ?
+             ORDER BY started_at_ms DESC
+             LIMIT ?",
+        )?;
+        let mut rows = stmt
+            .query_map(params![session_id, limit as i64], |row| {
+                Ok(ToolInvocationRow {
+                    session_id: row.get(0)?,
+                    tool_call_id: row.get(1)?,
+                    tool_name: row.get(2)?,
+                    input: row.get(3)?,
+                    started_at_ms: row.get(4)?,
+                    completed_at_ms: row.get(5)?,
+                    success: row.get(6)?,
+                    latency_ms: row
+                        .get::<_, Option<i64>>(7)?
+                        .map(|value| value.max(0) as u64),
+                    error: row.get(8)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.reverse();
+        Ok(rows)
     }
 
     /// Return the canonical system prompt frozen for `session_id`.
@@ -378,9 +683,9 @@ impl MemoryDb {
         let stored = conn
             .query_row(
                 "SELECT s.prompt_hash, s.prompt_version, p.prompt
-             FROM session_system_prompts AS s
-             LEFT JOIN system_prompts AS p ON p.hash = s.prompt_hash
-             WHERE s.session_id = ?",
+                 FROM session_system_prompts AS s
+                 LEFT JOIN system_prompts AS p ON p.hash = s.prompt_hash
+                 WHERE s.session_id = ?",
                 params![session_id],
                 |row| {
                     Ok((
@@ -506,9 +811,9 @@ impl MemoryDb {
         // Use id as a tiebreaker — ts_ms granularity is milliseconds, but
         // inserts on a fast machine can collide. id is monotonic.
         let mut stmt = conn.prepare(
-            "SELECT id, session_id, role, content, ts_ms
+            "SELECT id, session_id, role, content, ts_ms, trust_class, trust_source, trust_lineage
              FROM (
-                 SELECT id, session_id, role, content, ts_ms
+                 SELECT id, session_id, role, content, ts_ms, trust_class, trust_source, trust_lineage
                  FROM messages
                  WHERE session_id = ?
                  ORDER BY ts_ms DESC, id DESC
@@ -534,9 +839,9 @@ impl MemoryDb {
     ) -> Result<Vec<MessageRow>, MemoryError> {
         let conn = self.lock_conn()?;
         let mut stmt = conn.prepare(
-            "SELECT id, session_id, role, content, ts_ms
+            "SELECT id, session_id, role, content, ts_ms, trust_class, trust_source, trust_lineage
              FROM (
-                 SELECT id, session_id, role, content, ts_ms
+                 SELECT id, session_id, role, content, ts_ms, trust_class, trust_source, trust_lineage
                  FROM messages
                  WHERE session_id = ? AND role <> ?
                  ORDER BY ts_ms DESC, id DESC
@@ -564,7 +869,7 @@ impl MemoryDb {
         }
         let conn = self.lock_conn()?;
         let mut stmt = conn.prepare(
-            "SELECT m.id, m.session_id, m.role, m.content, m.ts_ms, bm25(messages_fts) AS rank
+            "SELECT m.id, m.session_id, m.role, m.content, m.ts_ms, m.trust_class, m.trust_source, m.trust_lineage, bm25(messages_fts) AS rank
              FROM messages_fts
              JOIN messages m ON m.id = messages_fts.rowid
              WHERE messages_fts MATCH ?
@@ -575,7 +880,7 @@ impl MemoryDb {
             .query_map(params![escaped, limit as i64], |row| {
                 Ok(SearchHit {
                     row: row_to_message(row)?,
-                    rank: row.get::<_, f64>(5)?,
+                    rank: row.get::<_, f64>(8)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -595,7 +900,7 @@ impl MemoryDb {
         }
         let conn = self.lock_conn()?;
         let mut stmt = conn.prepare(
-            "SELECT m.id, m.session_id, m.role, m.content, m.ts_ms, bm25(messages_fts) AS rank
+            "SELECT m.id, m.session_id, m.role, m.content, m.ts_ms, m.trust_class, m.trust_source, m.trust_lineage, bm25(messages_fts) AS rank
              FROM messages_fts
              JOIN messages m ON m.id = messages_fts.rowid
              WHERE messages_fts MATCH ?
@@ -607,7 +912,7 @@ impl MemoryDb {
             .query_map(params![escaped, session_id, limit as i64], |row| {
                 Ok(SearchHit {
                     row: row_to_message(row)?,
-                    rank: row.get::<_, f64>(5)?,
+                    rank: row.get::<_, f64>(8)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -660,6 +965,10 @@ impl MemoryDb {
         )?;
         let n = tx.execute(
             "DELETE FROM messages WHERE session_id = ?",
+            params![session_id],
+        )?;
+        tx.execute(
+            "DELETE FROM tool_invocations WHERE session_id = ?",
             params![session_id],
         )?;
         tx.execute(
@@ -718,6 +1027,10 @@ impl MemoryDb {
         )?;
         let messages_deleted = tx.execute(
             "DELETE FROM messages WHERE ts_ms < ?",
+            params![cutoff_ts_ms],
+        )?;
+        tx.execute(
+            "DELETE FROM tool_invocations WHERE started_at_ms < ?",
             params![cutoff_ts_ms],
         )?;
         let sessions_after: usize = tx
@@ -1071,7 +1384,82 @@ pub(crate) fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Messag
         role: row.get(2)?,
         content: row.get(3)?,
         ts_ms: row.get(4)?,
+        trust_class: row.get(5).unwrap_or(None),
+        trust_source: row.get(6).unwrap_or(None),
+        trust_lineage: row.get(7).unwrap_or(None),
     })
+}
+
+/// Add the provenance columns to a database created before they
+/// existed.
+///
+/// Adding a nullable column is the whole migration: existing rows keep
+/// `NULL`, and `NULL` reads back as
+/// [`TrustClass::LegacyUnknown`](crate::agent::trust::TrustClass::LegacyUnknown).
+/// A legacy transcript therefore degrades to "provenance unknown",
+/// never to "trusted", which is the fail-safe direction.
+///
+/// Several processes open this database concurrently — the broker, the
+/// worker and a CLI can all migrate at once — so the check-then-alter
+/// is inherently racy. Rather than lock, the `ALTER` is attempted and a
+/// "duplicate column" failure is treated as success: another process
+/// already did the work, and the end state is identical.
+pub(super) fn initialize_connection(conn: &Connection) -> Result<(), MemoryError> {
+    conn.execute_batch(CONNECTION_PRAGMAS)?;
+    conn.execute_batch(BASE_SCHEMA)?;
+    conn.execute_batch(COMPACTION_SCHEMA)?;
+    conn.execute_batch(FTS_SCHEMA)?;
+    migrate_provenance_columns(conn)?;
+    Ok(())
+}
+
+fn migrate_provenance_columns(conn: &Connection) -> Result<(), MemoryError> {
+    for column in ["trust_class", "trust_source", "trust_lineage"] {
+        let exists: bool = conn
+            .prepare("SELECT 1 FROM pragma_table_info('messages') WHERE name = ?")?
+            .exists(params![column])?;
+        if exists {
+            continue;
+        }
+        add_column_with_retry(conn, column)?;
+    }
+    Ok(())
+}
+
+/// `ALTER TABLE` needs an exclusive lock, and the broker, the worker
+/// and a CLI can all be opening this database at once. Retry a bounded
+/// number of times on a busy/locked database, and treat "duplicate
+/// column" as success because it means a racing process finished the
+/// same work first.
+fn add_column_with_retry(conn: &Connection, column: &str) -> Result<(), MemoryError> {
+    const ATTEMPTS: u32 = 5;
+    let statement = format!("ALTER TABLE messages ADD COLUMN {column} TEXT");
+    for attempt in 0..ATTEMPTS {
+        match conn.execute_batch(&statement) {
+            Ok(()) => return Ok(()),
+            Err(error) if is_duplicate_column(&error) => return Ok(()),
+            Err(error) if is_busy(&error) && attempt + 1 < ATTEMPTS => {
+                std::thread::sleep(std::time::Duration::from_millis(20 * (attempt as u64 + 1)));
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
+/// Whether `error` is SQLite reporting that the column another process
+/// added a moment ago already exists.
+fn is_duplicate_column(error: &rusqlite::Error) -> bool {
+    error.to_string().contains("duplicate column name")
+}
+
+/// Whether `error` is transient lock contention rather than a real
+/// schema problem.
+fn is_busy(error: &rusqlite::Error) -> bool {
+    matches!(
+        error.sqlite_error_code(),
+        Some(rusqlite::ErrorCode::DatabaseBusy) | Some(rusqlite::ErrorCode::DatabaseLocked)
+    )
 }
 
 fn current_ts_ms() -> i64 {
@@ -1079,6 +1467,15 @@ fn current_ts_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+    let mut truncated = value.chars().take(max_chars).collect::<String>();
+    truncated.push_str("\n…[truncated]");
+    truncated
 }
 
 pub(super) fn system_prompt_hash(prompt: &str) -> String {
@@ -1094,14 +1491,6 @@ fn verify_system_prompt_hash(hash: &str, prompt: &str) -> Result<(), MemoryError
             "system prompt blob {hash} failed SHA-256 verification (computed {actual})"
         )))
     }
-}
-
-pub(super) fn initialize_connection(conn: &Connection) -> Result<(), MemoryError> {
-    conn.execute_batch(CONNECTION_PRAGMAS)?;
-    conn.execute_batch(BASE_SCHEMA)?;
-    conn.execute_batch(COMPACTION_SCHEMA)?;
-    conn.execute_batch(FTS_SCHEMA)?;
-    Ok(())
 }
 
 fn default_path() -> PathBuf {
@@ -1154,11 +1543,14 @@ pub fn render_message_content(msg: &crate::agent::llm::Message) -> String {
                 out.push_str(text);
             }
             crate::agent::llm::ContentBlock::ToolUse { name, input, .. } => {
+                let (name, input) =
+                    crate::agent::tools::progressive::resolve_visible_identity(name, input)
+                        .unwrap_or_else(|| (name.clone(), input.clone()));
                 if !out.is_empty() {
                     out.push('\n');
                 }
                 out.push_str("[tool_use:");
-                out.push_str(name);
+                out.push_str(&name);
                 out.push_str("] ");
                 out.push_str(&input.to_string());
             }

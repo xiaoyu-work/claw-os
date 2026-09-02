@@ -89,6 +89,28 @@ fn cooldown_is_per_key() {
 }
 
 #[test]
+fn severity_changes_and_recovery_bypass_the_cooldown() {
+    let mut state = CooldownState::default();
+    let cooldown = Duration::from_secs(900);
+    let now = Instant::now();
+    assert!(state.enter_or_refire("memory_low", Severity::Warn, cooldown, now));
+    assert!(!state.enter_or_refire(
+        "memory_low",
+        Severity::Warn,
+        cooldown,
+        now + Duration::from_secs(10)
+    ));
+    assert!(state.enter_or_refire(
+        "memory_low",
+        Severity::Critical,
+        cooldown,
+        now + Duration::from_secs(20)
+    ));
+    assert!(state.recover("memory_low"));
+    assert!(!state.recover("memory_low"));
+}
+
+#[test]
 fn from_env_default_is_enabled_60s() {
     let c = HeartbeatConfig::default();
     assert!(c.enabled);

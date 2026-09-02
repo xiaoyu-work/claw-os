@@ -217,7 +217,7 @@ impl IsolationOptions {
     const fn dynamic_extension() -> Self {
         Self {
             verified_owner_source: false,
-            expose_provider_authority: true,
+            expose_provider_authority: false,
         }
     }
 
@@ -406,6 +406,10 @@ fn prepare_impl(
             authority.authorize_root(root)?
         };
         let snapshot = child_root.join("snapshot").join(index.to_string());
+        // Mount boundaries are forbidden within one authorized tree, but
+        // independent approved roots may legitimately live on different
+        // filesystems.
+        budget.root_dev = None;
         snapshot_path(
             &canonical,
             &snapshot,

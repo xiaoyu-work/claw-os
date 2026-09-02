@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`agent_extensions/` activates explicitly selected, signed out-of-process
+`agent_extensions/` activates explicitly selected, authenticated out-of-process
 observers without giving extension code prompt, credential, broker, or
 authorization-policy access.
 
@@ -29,7 +29,7 @@ authorization-policy access.
 | `runtime.rs` | Observation hook, per-extension backpressure, lifecycle, and action mediation |
 | `../extension_host/abi.rs` | Framed child protocol |
 | `../extension_host/agent_extension.rs` | Host-side process and cleanup |
-| `../provenance.rs` | Signed immutable package snapshots |
+| `../provenance/` | Shared `VerifiedPackage` authentication and pinned package snapshots |
 
 ## Tests
 

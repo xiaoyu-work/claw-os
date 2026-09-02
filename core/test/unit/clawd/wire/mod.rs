@@ -13,7 +13,7 @@ fn a_request_id_is_bounded_and_charset_checked() {
 
 #[test]
 fn an_envelope_is_closed() {
-    let ok = json!({"v": 1, "id": "r1", "command": "daemon.health", "params": {}});
+    let ok = json!({"v": PROTOCOL_VERSION, "id": "r1", "command": "daemon.health", "params": {}});
     let envelope: InboundRequest = serde_json::from_value(ok).unwrap();
     assert_eq!(envelope.v, PROTOCOL_VERSION);
     assert_eq!(envelope.command.as_str(), "daemon.health");
@@ -21,7 +21,7 @@ fn an_envelope_is_closed() {
     // A field the envelope never declared is a decode failure, not a
     // field the daemon ignores.
     let extra = json!({
-        "v": 1,
+        "v": PROTOCOL_VERSION,
         "id": "r1",
         "command": "daemon.health",
         "params": {},
@@ -37,9 +37,13 @@ fn an_envelope_is_closed() {
 #[test]
 fn params_default_to_null_but_the_command_is_required() {
     let envelope: InboundRequest =
-        serde_json::from_value(json!({"v": 1, "id": "r1", "command": "task.count"})).unwrap();
+        serde_json::from_value(json!({"v": PROTOCOL_VERSION, "id": "r1", "command": "task.count"}))
+            .unwrap();
     assert!(envelope.params.is_null());
-    assert!(serde_json::from_value::<InboundRequest>(json!({"v": 1, "id": "r1"})).is_err());
+    assert!(
+        serde_json::from_value::<InboundRequest>(json!({"v": PROTOCOL_VERSION, "id": "r1"}))
+            .is_err()
+    );
 }
 
 #[test]
@@ -55,7 +59,7 @@ fn an_in_repo_request_names_a_route_the_registry_knows() {
 #[test]
 fn a_command_that_does_not_exist_does_not_deserialize() {
     assert!(serde_json::from_value::<Request>(json!({
-        "v": 1,
+        "v": PROTOCOL_VERSION,
         "id": "r1",
         "command": "vendor.debug.dump",
         "params": {},

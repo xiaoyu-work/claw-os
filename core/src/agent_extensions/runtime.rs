@@ -25,9 +25,11 @@ use super::registry::{installed_root, ExtensionRegistry, RegisteredExtension};
 
 const DISABLE_AFTER_DROPS: usize = 8;
 const ACTION_TIMEOUT: Duration = Duration::from_secs(30);
+const TRUST_RECHECK_INTERVAL: Duration = Duration::from_secs(5);
 
 pub struct ExtensionRuntime {
     hook_name: Option<String>,
+    hooks: Option<crate::agent::runtime::hooks::HookRegistry>,
     controls: Vec<ExtensionControl>,
 }
 
@@ -71,10 +73,12 @@ impl ExtensionRuntime {
         configured: &[String],
         exposure: &mut ToolExposureContext,
         tools: Arc<ToolRegistry>,
+        hooks: crate::agent::runtime::hooks::HookRegistry,
     ) -> Self {
         if configured.is_empty() {
             return Self {
                 hook_name: None,
+                hooks: None,
                 controls: Vec::new(),
             };
         }
@@ -84,6 +88,7 @@ impl ExtensionRuntime {
             );
             return Self {
                 hook_name: None,
+                hooks: None,
                 controls: Vec::new(),
             };
         };
@@ -122,6 +127,7 @@ impl ExtensionRuntime {
         if sinks.is_empty() {
             return Self {
                 hook_name: None,
+                hooks: None,
                 controls,
             };
         }
@@ -130,7 +136,7 @@ impl ExtensionRuntime {
             name: hook_name.clone(),
             sinks,
         });
-        crate::agent::runtime::hooks::global_registry().register(observer.clone());
+        hooks.register(observer.clone());
         observer.publish(EventPayload::SessionStart {
             source: exposure.client().source.as_str().to_string(),
             attended: exposure.is_attended_local(),
@@ -138,6 +144,7 @@ impl ExtensionRuntime {
         });
         Self {
             hook_name: Some(hook_name),
+            hooks: Some(hooks),
             controls,
         }
     }
@@ -150,7 +157,9 @@ impl ExtensionRuntime {
         error: Option<&str>,
     ) {
         if let Some(name) = self.hook_name.take() {
-            crate::agent::runtime::hooks::global_registry().unregister(&name);
+            if let Some(hooks) = self.hooks.as_ref() {
+                hooks.unregister(&name);
+            }
         }
         let answer = answer.unwrap_or_default();
         let payload = EventPayload::Completion {
@@ -201,20 +210,23 @@ async fn activate_one(
     client: Arc<ExtensionHostClient>,
     refs: Arc<CapabilityReferenceStore>,
 ) -> Result<(ExtensionSink, ExtensionControl), String> {
-    let manifest = extension.manifest;
+    let RegisteredExtension {
+        manifest,
+        manifest_digest,
+        package,
+    } = extension;
+    assert_package_current(&package)?;
     let registration = AgentExtensionRegistration {
         extension_id: manifest.identity.id.clone(),
         extension_version: manifest.identity.version.clone(),
-        package_digest: extension.package.digest().to_string(),
-        manifest_digest: extension.manifest_digest.clone(),
+        package_digest: package.content_digest().to_string(),
+        manifest_digest: manifest_digest.clone(),
         content_digest: manifest.identity.content_digest.clone(),
     };
     let started = Instant::now();
-    let binding = client
-        .attach_agent_extension(registration, extension.package.snapshot())
-        .await;
+    let binding = client.attach_agent_extension(registration).await;
     let audit = audit_metadata(
-        extension.package.digest(),
+        package.content_digest(),
         exposure.capability_generation(),
         None,
         None,
@@ -227,7 +239,7 @@ async fn activate_one(
     client.emit_agent_extension(
         LifecycleAction::Initialize,
         &manifest.identity.id,
-        &extension.manifest_digest,
+        &manifest_digest,
         audit.clone(),
         binding.is_ok(),
         started.elapsed(),
@@ -237,7 +249,7 @@ async fn activate_one(
     client.emit_agent_extension(
         LifecycleAction::Ready,
         &manifest.identity.id,
-        &extension.manifest_digest,
+        &manifest_digest,
         audit,
         true,
         started.elapsed(),
@@ -248,8 +260,8 @@ async fn activate_one(
     let disabled = Arc::new(AtomicBool::new(false));
     let sink = ExtensionSink {
         id: manifest.identity.id.clone(),
-        manifest_digest: extension.manifest_digest.clone(),
-        package_digest: extension.package.digest().to_string(),
+        manifest_digest: manifest_digest.clone(),
+        package_digest: package.content_digest().to_string(),
         capability_generation: exposure.capability_generation().to_string(),
         subscriptions: manifest.subscriptions.iter().copied().collect(),
         sender,
@@ -261,8 +273,9 @@ async fn activate_one(
     let timeout = Duration::from_millis(manifest.limits.event_timeout_ms);
     let worker = tokio::spawn(run_extension(
         manifest,
-        extension.manifest_digest,
-        extension.package.digest().to_string(),
+        manifest_digest,
+        package.content_digest().to_string(),
+        package,
         binding,
         exposure.clone(),
         tools,
@@ -287,6 +300,7 @@ async fn run_extension(
     manifest: ExtensionManifest,
     manifest_digest: String,
     package_digest: String,
+    package: Arc<crate::provenance::VerifiedPackage>,
     binding: crate::extension_host::abi::AbiBinding,
     exposure: ToolExposureContext,
     tools: Arc<ToolRegistry>,
@@ -296,16 +310,22 @@ async fn run_extension(
     mut events: mpsc::Receiver<EventPayload>,
     mut controls: mpsc::Receiver<Control>,
 ) {
+    let mut trust_check = tokio::time::interval(TRUST_RECHECK_INTERVAL);
     loop {
         tokio::select! {
             biased;
             control = controls.recv() => match control {
                 Some(Control::Completion { payload, done }) => {
                     if !disabled.load(Ordering::Acquire) {
-                        let _ = process_event(
-                            &manifest, &manifest_digest, &package_digest, &binding,
+                        if let Err(error) = process_event(
+                            &manifest, &manifest_digest, &package_digest, &package, &binding,
                             &exposure, &tools, &client, &refs, &disabled, payload,
-                        ).await;
+                        ).await {
+                            disable_extension(
+                                &manifest, &manifest_digest, &package_digest, &binding,
+                                &exposure, &client, &disabled, &error,
+                            ).await;
+                        }
                     }
                     let _ = done.send(());
                 }
@@ -339,28 +359,23 @@ async fn run_extension(
                     continue;
                 }
                 if let Err(error) = process_event(
-                    &manifest, &manifest_digest, &package_digest, &binding,
+                    &manifest, &manifest_digest, &package_digest, &package, &binding,
                     &exposure, &tools, &client, &refs, &disabled, event,
                 ).await {
-                    disabled.store(true, Ordering::Release);
-                    client.emit_agent_extension(
-                        LifecycleAction::Disable,
-                        &manifest.identity.id,
-                        &manifest_digest,
-                        audit_metadata(
-                            &package_digest,
-                            exposure.capability_generation(),
-                            None, None, None, None, None, None, None,
-                        ),
-                        false,
-                        Duration::ZERO,
-                        Some(&error),
-                    );
-                    let _ = client.detach_agent_extension(
-                        manifest.identity.id.clone(),
-                        binding.clone(),
-                        ShutdownReason::ProtocolFailure,
+                    disable_extension(
+                        &manifest, &manifest_digest, &package_digest, &binding,
+                        &exposure, &client, &disabled, &error,
                     ).await;
+                }
+            },
+            _ = trust_check.tick() => {
+                if !disabled.load(Ordering::Acquire) {
+                    if let Err(error) = assert_package_current(&package) {
+                        disable_extension(
+                            &manifest, &manifest_digest, &package_digest, &binding,
+                            &exposure, &client, &disabled, &error,
+                        ).await;
+                    }
                 }
             }
         }
@@ -368,10 +383,57 @@ async fn run_extension(
 }
 
 #[allow(clippy::too_many_arguments)]
+async fn disable_extension(
+    manifest: &ExtensionManifest,
+    manifest_digest: &str,
+    package_digest: &str,
+    binding: &crate::extension_host::abi::AbiBinding,
+    exposure: &ToolExposureContext,
+    client: &ExtensionHostClient,
+    disabled: &AtomicBool,
+    error: &str,
+) {
+    disabled.store(true, Ordering::Release);
+    client.emit_agent_extension(
+        LifecycleAction::Disable,
+        &manifest.identity.id,
+        manifest_digest,
+        audit_metadata(
+            package_digest,
+            exposure.capability_generation(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ),
+        false,
+        Duration::ZERO,
+        Some(error),
+    );
+    let _ = client
+        .detach_agent_extension(
+            manifest.identity.id.clone(),
+            binding.clone(),
+            ShutdownReason::Disabled,
+        )
+        .await;
+}
+
+fn assert_package_current(package: &crate::provenance::VerifiedPackage) -> Result<(), String> {
+    package
+        .assert_current(&crate::provenance::trust_store())
+        .map_err(|error| format!("Agent extension package is no longer trusted: {error}"))
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn process_event(
     manifest: &ExtensionManifest,
     manifest_digest: &str,
     package_digest: &str,
+    package: &crate::provenance::VerifiedPackage,
     binding: &crate::extension_host::abi::AbiBinding,
     exposure: &ToolExposureContext,
     tools: &ToolRegistry,
@@ -380,6 +442,7 @@ async fn process_event(
     disabled: &AtomicBool,
     payload: EventPayload,
 ) -> Result<(), String> {
+    assert_package_current(package)?;
     let event_id = uuid::Uuid::new_v4().simple().to_string();
     let timeout = Duration::from_millis(manifest.limits.event_timeout_ms);
     let expires_at_ms = now_ms().saturating_add(manifest.limits.event_timeout_ms);
@@ -448,6 +511,7 @@ async fn process_event(
         return Ok(());
     }
     for action in result.proposed_actions {
+        assert_package_current(package)?;
         let requested = manifest
             .requested_capabilities
             .get(action.capability_ref.requested_index)
@@ -635,10 +699,6 @@ impl Hook for ExtensionObserver {
         tool_call: &crate::agent::llm::ToolCall,
         result: &ToolResultSummary,
     ) -> HookOutcome {
-        let summary = format!(
-            "{}:{}:{}",
-            result.success, result.bytes_returned, result.latency_ms
-        );
         self.publish(EventPayload::PostTool {
             turn_index: ctx.turn_index,
             tool: tool_call.name.clone(),
@@ -646,7 +706,7 @@ impl Hook for ExtensionObserver {
             success: result.success,
             latency_ms: result.latency_ms,
             result_bytes: result.bytes_returned,
-            result_digest: crate::crypto::sha256_hex(summary.as_bytes()),
+            result_digest: result.result_digest.clone(),
             error: crate::audit_policy::optional_text_digest(result.error.as_deref()),
         });
         HookOutcome::Continue

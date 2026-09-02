@@ -25,8 +25,10 @@ from email.mime.text import MIMEText
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from _shared.credentials import load_credential  # noqa: E402
+from _shared.safe_http import open_url  # noqa: E402
 from claw_os_sdk import ai  # noqa: E402
 from cos_runtime import memory, policy  # noqa: E402
+from cos_runtime import smtp as cos_smtp  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +179,27 @@ _DRAFT_SYSTEMS = {
 # SMTP send
 # ---------------------------------------------------------------------------
 
+def _smtp_connection(host, port, timeout=30):
+    """Open an SMTP session over whatever transport this worker has.
+
+    Inside a sandbox the process cannot dial TCP at all, so the session
+    is carried by the brokered egress tunnel: the broker checks
+    ``host:port`` against the operation's exact ``net.dial`` grant,
+    resolves the name itself and refuses any address that is not
+    globally routable. `cos_runtime.smtp` substitutes the transport at
+    `smtplib`'s own extension point, so there is no path left that could
+    fall back to a direct dial. Outside a sandbox it is the ordinary
+    :class:`smtplib.SMTP` dial, unchanged.
+    """
+    return cos_smtp.connect(
+        host,
+        port,
+        timeout=timeout,
+        implicit_tls=port == 465,
+        starttls=port == 587,
+    )
+
+
 def _send_smtp(to, subject, body, cc=None, host=None):
     """Send an email via SMTP."""
     host = host or os.environ.get("SMTP_HOST", "localhost")
@@ -194,9 +217,7 @@ def _send_smtp(to, subject, body, cc=None, host=None):
         msg["Cc"] = cc
     msg.attach(MIMEText(body, "plain"))
 
-    with smtplib.SMTP(host, port) as server:
-        if port == 587:
-            server.starttls()
+    with _smtp_connection(host, port) as server:
         if user and password:
             server.login(user, password)
         server.send_message(msg)
@@ -229,7 +250,7 @@ def _gmail_request(url, method="GET", data=None):
         data = json.dumps(data).encode("utf-8") if isinstance(data, dict) else data
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with open_url(req, timeout=30)[0] as resp:
             raw = resp.read().decode("utf-8", errors="replace")
             return json.loads(raw) if raw.strip() else {}
     except urllib.error.HTTPError as e:
@@ -427,7 +448,7 @@ def _outlook_request(url, method="GET", data=None):
         data = json.dumps(data).encode("utf-8") if isinstance(data, dict) else data
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with open_url(req, timeout=30)[0] as resp:
             raw = resp.read().decode("utf-8", errors="replace")
             return json.loads(raw) if raw.strip() else {}
     except urllib.error.HTTPError as e:

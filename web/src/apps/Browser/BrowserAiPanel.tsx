@@ -61,9 +61,8 @@ export default function BrowserAiPanel({
       };
     }
     if (normalized.includes('demo') || normalized.includes('try') || normalized.includes('体验')) {
-      onNavigateSection('demo');
       return {
-        text: 'I opened the interactive Agent demo so you can try system health, crash analysis, workflows, models, memory, and app access.',
+        text: 'The interactive Agent demo lives in the Claw OS Agent app on the desktop. Close this browser and open that app to try the guided system tasks.',
       };
     }
     if (normalized.includes('safe') || normalized.includes('permission') || normalized.includes('安全')) {
@@ -84,7 +83,7 @@ export default function BrowserAiPanel({
       };
     }
     return {
-      text: 'Ask me to summarize the page, explain agent-native design or safety, open the interactive demo, find installation options, or jump to the FAQ.',
+      text: 'Ask me to summarize the page, explain agent-native design or safety, find installation options, or jump to the FAQ.',
     };
   };
 

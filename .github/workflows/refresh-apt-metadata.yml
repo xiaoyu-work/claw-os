@@ -1,0 +1,140 @@
+name: Refresh APT repository metadata
+
+# `Valid-Until` bounds how long a mirror may keep serving a published
+# snapshot, and APT refuses an expired `Release`. That protection only
+# works if the metadata is re-signed before it expires: a repository
+# that publishes packages rarely would otherwise expire and every
+# installed system would stop receiving updates — including security
+# updates — until someone noticed.
+#
+# This workflow re-signs the *existing* package bytes on a schedule.
+# It never builds or changes a package. It preserves the
+# release-security baseline and refuses to publish unsigned metadata.
+
+on:
+  schedule:
+    # Weekly, well inside the 30-day Valid-Until window, so three
+    # consecutive failures still leave time to react.
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    if: github.repository == 'xiaoyu-work/claw-os'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: claw-os-apt-pages
+      cancel-in-progress: false
+    permissions:
+      actions: read
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build website
+        run: |
+          npm ci --prefix web --no-audit --no-fund \
+            --registry=https://registry.npmjs.org \
+            --replace-registry-host=always
+          npm run build --prefix web
+
+      # An unsigned refresh would be worse than an expired one: it would
+      # replace a repository clients trust with one they must reject, or
+      # tempt an operator into disabling the check. Fail loudly instead.
+      - name: Require the signing secret
+        env:
+          CLAW_OS_APT_SIGNING_PRIVATE_KEY: ${{ secrets.CLAW_OS_APT_SIGNING_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CLAW_OS_APT_SIGNING_PRIVATE_KEY:-}" ]; then
+            echo "::error title=APT metadata refresh cannot run::the repository" \
+              "signing key is unavailable, so Release/InRelease cannot be" \
+              "re-signed. Restore CLAW_OS_APT_SIGNING_PRIVATE_KEY before" \
+              "Valid-Until expires or installed systems will stop updating."
+            exit 1
+          fi
+
+      - name: Re-sign repository metadata
+        env:
+          CLAW_OS_APT_SIGNING_PRIVATE_KEY: ${{ secrets.CLAW_OS_APT_SIGNING_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.CLAW_OS_APT_SIGNING_PASSPHRASE }}
+          CLAW_OS_WEB_DIST_DIR: ${{ github.workspace }}/web/dist
+          # A metadata refresh is never a migration. The one-time
+          # bootstrap is only reachable from the package publication
+          # workflows' explicit input.
+          COS_RELEASE_SECURITY_BOOTSTRAP: "0"
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq apt-utils gnupg
+          export GNUPGHOME="$RUNNER_TEMP/claw-os-apt-gnupg"
+          trap 'rm -rf "$GNUPGHOME"' EXIT
+          mkdir -m 700 -p "$GNUPGHOME"
+          printf '%s' "$CLAW_OS_APT_SIGNING_PRIVATE_KEY" | gpg --batch --import
+          GPG_KEY_ID="$(gpg --batch --with-colons --list-secret-keys \
+            | awk -F: '$1 == "sec" { print $5; exit }')"
+          test -n "$GPG_KEY_ID"
+          export GNUPGHOME GPG_KEY_ID GPG_PASSPHRASE
+
+          gpg --batch --export "$GPG_KEY_ID" > "$RUNNER_TEMP/claw-os-existing-repo.gpg"
+
+          # No package artifacts are downloaded, so the sync brings the
+          # published pool forward unchanged and preserves the signed
+          # release-security metadata. Its freshness and baseline checks
+          # still apply: a stale or unauthenticated origin aborts here.
+          mkdir -p build/debs
+          EXISTING_APT_REPO_URL="https://xiaoyu-work.github.io/claw-os" \
+            APT_PUBLIC_KEYRING="$RUNNER_TEMP/claw-os-existing-repo.gpg" \
+            bash ./packaging/apt-repo/sync-existing-packages.sh
+          ./packaging/apt-repo/build-repo.sh
+
+      - name: Confirm the refresh preserved release-security metadata
+        run: |
+          set -euo pipefail
+          release="build/apt-repo/dists/trixie/Release"
+          test -s "$release"
+          test -s "build/apt-repo/dists/trixie/InRelease"
+          grep -q '^Valid-Until:' "$release"
+          # Whatever protection state the published repository had must
+          # survive a refresh: a refresh may not quietly drop the
+          # baseline marker and reopen the pre-protection path.
+          if [ -f build/release-security-previous/.baseline-established ]; then
+            grep -q '^Claw-Os-Release-Security-Baseline: 1$' "$release"
+            test -s "build/apt-repo/dists/trixie/release-security/baseline.json"
+            test -s "build/apt-repo/dists/trixie/release-security/baseline.json.asc"
+          fi
+
+      - name: Upload APT repository
+        uses: actions/upload-pages-artifact@v3
+        with:
+          name: github-pages-metadata-refresh
+          path: build/apt-repo
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+        with:
+          artifact_name: github-pages-metadata-refresh
+
+      - name: Report a failed refresh
+        if: failure()
+        run: |
+          echo "::error title=APT metadata refresh failed::Release/InRelease was" \
+            "not re-signed. Valid-Until will expire and installed systems will" \
+            "stop receiving updates. Investigate before the next scheduled run."

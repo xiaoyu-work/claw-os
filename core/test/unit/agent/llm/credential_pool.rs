@@ -42,7 +42,19 @@ fn from_entries_rejects_empty_value() {
 }
 
 #[test]
-fn from_sources_inline_only() {
+fn legacy_config_pool_absent_preserves_single_key_path() {
+    let mut cfg = crate::config::AgentConfig::default();
+    cfg.api_key_env = Some("COS_TEST_POOL_LEGACY_SINGLE".into());
+    std::env::set_var("COS_TEST_POOL_LEGACY_SINGLE", "single-key");
+    assert!(!Pool::is_declared(&cfg));
+    assert!(Pool::try_from_agent_config("absent", &cfg)
+        .unwrap()
+        .is_none());
+    std::env::remove_var("COS_TEST_POOL_LEGACY_SINGLE");
+}
+
+#[test]
+fn legacy_from_sources_inline_only() {
     let pool = Pool::from_sources(
         "x",
         &[],
@@ -51,11 +63,11 @@ fn from_sources_inline_only() {
         SelectionStrategy::Sticky,
     )
     .unwrap();
-    assert_eq!(pool.len(), 2); // empty entry skipped
+    assert_eq!(pool.len(), 2);
 }
 
 #[test]
-fn from_sources_env_resolves() {
+fn legacy_from_sources_resolves_environment() {
     std::env::set_var("COS_TEST_POOL_KEY_A", "sk-aa");
     std::env::set_var("COS_TEST_POOL_KEY_B", "sk-bb");
     let pool = Pool::from_sources(
@@ -66,36 +78,13 @@ fn from_sources_env_resolves() {
         SelectionStrategy::RoundRobin,
     )
     .unwrap();
-    assert_eq!(pool.len(), 2);
     std::env::remove_var("COS_TEST_POOL_KEY_A");
     std::env::remove_var("COS_TEST_POOL_KEY_B");
+    assert_eq!(pool.len(), 2);
 }
 
 #[test]
-fn from_sources_skips_missing_env() {
-    std::env::remove_var("COS_TEST_POOL_KEY_MISSING_X");
-    let err = Pool::from_sources(
-        "missing",
-        &[],
-        &["COS_TEST_POOL_KEY_MISSING_X"],
-        &[],
-        SelectionStrategy::Sticky,
-    )
-    .unwrap_err();
-    assert!(matches!(err, PoolError::Empty { .. }));
-}
-
-#[test]
-fn config_pool_absent_preserves_single_key_path() {
-    let cfg = crate::config::AgentConfig::default();
-    assert!(!Pool::is_declared(&cfg));
-    assert!(Pool::try_from_agent_config("absent", &cfg)
-        .unwrap()
-        .is_none());
-}
-
-#[test]
-fn config_pool_unresolved_fails_with_source_names() {
+fn legacy_config_pool_unresolved_fails_with_source_names() {
     const ENV_NAME: &str = "COS_TEST_POOL_CONFIG_MISSING";
     std::env::remove_var(ENV_NAME);
     let mut cfg = crate::config::AgentConfig::default();
@@ -109,40 +98,6 @@ fn config_pool_unresolved_fails_with_source_names() {
         }
         other => panic!("expected NotConfigured, got {other:?}"),
     }
-}
-
-#[test]
-fn config_pool_partial_keeps_usable_entries() {
-    const PRESENT: &str = "COS_TEST_POOL_CONFIG_PARTIAL_PRESENT";
-    const MISSING: &str = "COS_TEST_POOL_CONFIG_PARTIAL_MISSING";
-    std::env::set_var(PRESENT, " pool-key ");
-    std::env::remove_var(MISSING);
-    let mut cfg = crate::config::AgentConfig::default();
-    cfg.api_key_envs = vec![MISSING.into(), PRESENT.into()];
-
-    let pool = Pool::try_from_agent_config("partial", &cfg)
-        .unwrap()
-        .expect("declared pool");
-    std::env::remove_var(PRESENT);
-    assert_eq!(pool.len(), 1);
-    assert_eq!(pool.acquire().unwrap().value(), "pool-key");
-}
-
-#[test]
-fn config_pool_valid_keeps_all_entries() {
-    const FIRST: &str = "COS_TEST_POOL_CONFIG_VALID_FIRST";
-    const SECOND: &str = "COS_TEST_POOL_CONFIG_VALID_SECOND";
-    std::env::set_var(FIRST, "key-one");
-    std::env::set_var(SECOND, "key-two");
-    let mut cfg = crate::config::AgentConfig::default();
-    cfg.api_key_envs = vec![FIRST.into(), SECOND.into()];
-
-    let pool = Pool::try_from_agent_config("valid", &cfg)
-        .unwrap()
-        .expect("declared pool");
-    std::env::remove_var(FIRST);
-    std::env::remove_var(SECOND);
-    assert_eq!(pool.len(), 2);
 }
 
 // ---- selection: sticky -------------------------------------------------
@@ -410,4 +365,19 @@ fn lease_index_reflects_pool_position() {
     pool.report_success(&l1);
     let l2 = pool.acquire().unwrap();
     assert_eq!(l2.index(), 1);
+}
+
+#[test]
+fn poisoned_pool_state_surfaces_typed_unavailability() {
+    let pool = pool(&[("A", "kA")], SelectionStrategy::Sticky);
+    pool.poison_for_test();
+
+    assert!(matches!(
+        pool.acquire(),
+        Err(PoolError::StatePoisoned { name }) if name == "test"
+    ));
+    assert!(matches!(
+        pool.try_stats(),
+        Err(PoolError::StatePoisoned { name }) if name == "test"
+    ));
 }

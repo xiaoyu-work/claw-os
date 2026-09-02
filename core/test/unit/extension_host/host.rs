@@ -20,6 +20,7 @@ fn state() -> HostState {
         owner_gid,
         capability_generation: "a".repeat(16),
         approved_paths: approved_paths.clone(),
+        agent_extensions: Vec::new(),
         worker_pid: pid,
         worker_start_time_ticks: crate::proc::read_start_time_ticks_pub(pid),
         host_pid: pid,

@@ -4,7 +4,9 @@
 //! evidence markers because the runtime needs them for tool execution,
 //! memory, audit, and evidence verification. User-facing sinks receive this
 //! projection instead: answer text without evidence markers, tool identity
-//! without arguments, and lifecycle status without result bodies.
+//! without arguments, and lifecycle status without successful result bodies.
+//! Failed result previews are redacted and bounded so users can understand
+//! why a tool failed without exposing secrets or dumping arbitrary output.
 
 use std::sync::{Arc, Mutex};
 
@@ -12,6 +14,7 @@ use serde_json::Value;
 
 use crate::agent::llm::accumulate::{SinkReady, StreamSink};
 use crate::agent::llm::{ContentBlock, StreamEvent};
+use crate::agent::tools::progressive;
 
 use super::evidence;
 use super::progress::{ProgressReady, ProgressSink};
@@ -52,9 +55,15 @@ impl StreamSink for UserVisibleStreamSink {
                         .on_event(&StreamEvent::TextDelta { text: visible });
                 }
             }
+            StreamEvent::ToolUseStart { name, .. } if name == progressive::TOOL_CALL => {}
             StreamEvent::ToolInputDelta { .. } => {}
             StreamEvent::ToolUse(call) => {
                 let mut visible = call.clone();
+                if let Some((name, _)) =
+                    progressive::resolve_visible_identity(&visible.name, &visible.input)
+                {
+                    visible.name = name;
+                }
                 visible.input = Value::Null;
                 self.inner.on_event(&StreamEvent::ToolUse(visible));
             }
@@ -65,13 +74,23 @@ impl StreamSink for UserVisibleStreamSink {
                         ContentBlock::Text { text } => {
                             *text = evidence::strip_markers(text);
                         }
-                        ContentBlock::ToolUse { input, .. } => {
+                        ContentBlock::ToolUse { name, input, .. } => {
+                            if let Some((resolved_name, _)) =
+                                progressive::resolve_visible_identity(name, input)
+                            {
+                                *name = resolved_name;
+                            }
                             *input = Value::Null;
                         }
                         _ => {}
                     }
                 }
                 for call in &mut visible.tool_calls {
+                    if let Some((name, _)) =
+                        progressive::resolve_visible_identity(&call.name, &call.input)
+                    {
+                        call.name = name;
+                    }
                     call.input = Value::Null;
                 }
                 self.inner.on_event(&StreamEvent::Message(visible));
@@ -113,10 +132,17 @@ impl ProgressSink for UserVisibleProgressSink {
         ok: bool,
         latency_ms: u64,
         bytes_returned: usize,
-        _content_preview: &str,
+        content_preview: &str,
     ) {
+        let visible_preview = if ok {
+            String::new()
+        } else {
+            let redacted =
+                crate::agent::safety::redact::Redactor::default_set().redact(content_preview);
+            super::progress::preview_with_limit(&redacted, super::progress::DEFAULT_PREVIEW_BYTES)
+        };
         self.inner
-            .on_tool_result(id, name, ok, latency_ms, bytes_returned, "");
+            .on_tool_result(id, name, ok, latency_ms, bytes_returned, &visible_preview);
     }
 }
 

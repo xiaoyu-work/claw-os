@@ -4,6 +4,7 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
+use super::attempt_observer::ProviderAttemptObserver;
 use super::credential_pool::FailureClass;
 use super::{
     error_classifier, ChatRequest, ChatResponse, EngineInfo, LlmError, Provider, Result,
@@ -61,17 +62,22 @@ struct ChainState {
 pub struct ProviderChain {
     slots: Vec<ProviderSlot>,
     state: Mutex<ChainState>,
-    audit_path: Option<std::path::PathBuf>,
+    observer: Arc<dyn ProviderAttemptObserver>,
 }
 
 impl ProviderChain {
+    /// Legacy constructor using a no-op observer. Runtime composition uses
+    /// [`Self::new_with_observer`] to inject audit observation.
     pub fn new(slots: Vec<ProviderSlot>) -> Result<Self> {
-        Self::with_audit_path(slots, Some(crate::paths::agent_audit_log_path()))
+        Self::new_with_observer(
+            slots,
+            Arc::new(super::attempt_observer::NoopProviderAttemptObserver),
+        )
     }
 
-    fn with_audit_path(
+    pub fn new_with_observer(
         slots: Vec<ProviderSlot>,
-        audit_path: Option<std::path::PathBuf>,
+        observer: Arc<dyn ProviderAttemptObserver>,
     ) -> Result<Self> {
         if slots.is_empty() {
             return Err(LlmError::NotConfigured(
@@ -90,7 +96,7 @@ impl ProviderChain {
                 active: 0,
                 switches: Vec::new(),
             }),
-            audit_path,
+            observer,
         })
     }
 
@@ -124,24 +130,7 @@ impl ProviderChain {
         if let Ok(mut state) = self.state.lock() {
             state.switches.push(record.clone());
         }
-        let mut event = serde_json::json!({
-            "kind": "provider_fallback",
-            "from_provider": record.from_provider,
-            "from_model": record.from_model,
-            "to_provider": record.to_provider,
-            "to_model": record.to_model,
-            "failure_class": record.failure_class,
-            "reason": record.reason,
-            "switched_at": record.switched_at,
-        });
-        if let Ok(session_id) = std::env::var("COS_SESSION") {
-            if !session_id.is_empty() {
-                event["session_id"] = serde_json::json!(session_id);
-            }
-        }
-        if let Some(path) = &self.audit_path {
-            crate::audit::log_chained_event(path, event);
-        }
+        self.observer.observe_switch(&record);
         record
     }
 
@@ -308,9 +297,10 @@ fn fallback_class(error: &LlmError) -> Option<&'static str> {
         LlmError::Parse(_) | LlmError::UpstreamMalformed(_) | LlmError::Stream(_) => {
             Some("upstream-malformed")
         }
-        LlmError::CredentialStore { .. } | LlmError::InvalidRequest(_) | LlmError::Internal(_) => {
-            None
-        }
+        LlmError::CredentialStore { .. }
+        | LlmError::Infrastructure(_)
+        | LlmError::InvalidRequest(_)
+        | LlmError::Internal(_) => None,
     }
 }
 

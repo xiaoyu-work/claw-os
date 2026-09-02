@@ -152,8 +152,9 @@ impl Tool for CosRecallSemanticTool {
                             "hits": hits.iter().map(hit_to_json).collect::<Vec<_>>(),
                         });
                         let body = serde_json::to_string(&v).unwrap_or_else(|_| v.to_string());
-                        ToolResult::ok(crate::agent::safety::untrusted::wrap_untrusted(
-                            crate::agent::safety::untrusted::MEMORY_TAG,
+                        ToolResult::ok(crate::agent::safety::untrusted::wrap_labeled(
+                            crate::agent::trust::SourceKind::RecalledMemory,
+                            None,
                             &body,
                         ))
                     }

@@ -2,14 +2,15 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use super::manifest::ExtensionManifest;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct RegisteredExtension {
     pub manifest: ExtensionManifest,
     pub manifest_digest: String,
-    pub package: crate::provenance::VerifiedPackage,
+    pub package: Arc<crate::provenance::VerifiedPackage>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,7 +19,7 @@ pub struct QuarantinedExtension {
     pub diagnostic: String,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct ExtensionRegistry {
     pub registered: BTreeMap<String, RegisteredExtension>,
     pub quarantined: Vec<QuarantinedExtension>,
@@ -26,6 +27,21 @@ pub struct ExtensionRegistry {
 
 impl ExtensionRegistry {
     pub fn load_selected(root: &Path, selected: &[String]) -> Self {
+        let trust = crate::provenance::trust_store();
+        Self::load_selected_with_trust(root, selected, &trust)
+    }
+
+    pub fn load_selected_for_owner(root: &Path, selected: &[String], owner_uid: u32) -> Self {
+        let roots = crate::provenance::TrustStore::roots_for_owner(owner_uid);
+        let trust = crate::provenance::TrustStore::load_roots(&roots);
+        Self::load_selected_with_trust(root, selected, &trust)
+    }
+
+    fn load_selected_with_trust(
+        root: &Path,
+        selected: &[String],
+        trust: &crate::provenance::TrustStore,
+    ) -> Self {
         let mut registry = Self::default();
         let mut seen = BTreeSet::new();
         for id in selected {
@@ -40,7 +56,7 @@ impl ExtensionRegistry {
                 continue;
             }
             let path = root.join(id);
-            match load_one(&path, id) {
+            match load_one(&path, id, trust) {
                 Ok(extension) => {
                     registry.registered.insert(id.clone(), extension);
                 }
@@ -62,8 +78,24 @@ pub fn installed_root() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/usr/lib/cos/extensions"))
 }
 
-fn load_one(path: &Path, selected_id: &str) -> Result<RegisteredExtension, String> {
-    let package = crate::provenance::verify(path, crate::provenance::PackageKind::AgentExtension)?;
+fn load_one(
+    path: &Path,
+    selected_id: &str,
+    trust: &crate::provenance::TrustStore,
+) -> Result<RegisteredExtension, String> {
+    let mut options =
+        crate::provenance::VerifyOptions::new(crate::provenance::PackageKind::AgentExtension)
+            .expect_id(selected_id);
+    options.allow_developer = false;
+    let package = crate::provenance::verify::verify_package_cached(path, &options, trust).map_err(
+        |error| {
+            crate::provenance::quarantine_reason(
+                crate::provenance::PackageKind::AgentExtension,
+                selected_id,
+                &error,
+            )
+        },
+    )?;
     if package.id() != selected_id {
         return Err("verified package id does not match the selected directory".to_string());
     }

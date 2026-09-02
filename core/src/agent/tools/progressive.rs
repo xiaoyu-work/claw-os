@@ -393,30 +393,22 @@ fn search_response(
 }
 
 fn search_metadata(entry: &CatalogEntry) -> (Value, bool) {
-    let (name, name_truncated) =
-        truncate(&entry.descriptor.name, MAX_RESULT_TOOL_NAME_CHARS);
+    let (name, name_truncated) = truncate(&entry.descriptor.name, MAX_RESULT_TOOL_NAME_CHARS);
     let (remote_name, remote_name_truncated) = truncate_optional(
         entry.disclosure.remote_name.as_deref(),
         MAX_RESULT_REMOTE_NAME_CHARS,
     );
-    let (description, description_truncated) = truncate(
-        &entry.descriptor.description,
-        MAX_RESULT_DESCRIPTION_CHARS,
+    let (description, description_truncated) =
+        truncate(&entry.descriptor.description, MAX_RESULT_DESCRIPTION_CHARS);
+    let (source, source_truncated) =
+        truncate_optional(entry.disclosure.source.as_deref(), MAX_RESULT_SOURCE_CHARS);
+    let (server, server_truncated) =
+        truncate_optional(entry.disclosure.server.as_deref(), MAX_RESULT_SERVER_CHARS);
+    let (tags, tags_total, tags_truncated_count, tag_value_truncated_count) = bounded_strings(
+        &entry.disclosure.tags,
+        MAX_RESULT_TAGS,
+        MAX_RESULT_TAG_CHARS,
     );
-    let (source, source_truncated) = truncate_optional(
-        entry.disclosure.source.as_deref(),
-        MAX_RESULT_SOURCE_CHARS,
-    );
-    let (server, server_truncated) = truncate_optional(
-        entry.disclosure.server.as_deref(),
-        MAX_RESULT_SERVER_CHARS,
-    );
-    let (tags, tags_total, tags_truncated_count, tag_value_truncated_count) =
-        bounded_strings(
-            &entry.disclosure.tags,
-            MAX_RESULT_TAGS,
-            MAX_RESULT_TAG_CHARS,
-        );
     let (required, required_total, required_truncated_count, required_value_truncated_count) =
         required_fields(&entry.descriptor);
     let metadata_truncated = name_truncated
@@ -509,6 +501,42 @@ pub(crate) fn describe_tool(
     }))
 }
 
+pub fn describe_tools(deferred: &[LlmTool], input: &Value) -> ToolResult {
+    let Some(names) = input.get("names").and_then(Value::as_array) else {
+        return ToolResult::err("`names` must be an array of tool names");
+    };
+    if names.is_empty() || names.len() > 16 {
+        return ToolResult::err("`names` must contain between 1 and 16 tool names");
+    }
+    let by_name = deferred
+        .iter()
+        .map(|tool| (tool.name.as_str(), tool))
+        .collect::<std::collections::HashMap<_, _>>();
+    let mut tools = serde_json::Map::new();
+    let mut not_found = Vec::new();
+    for name in names {
+        let Some(name) = name.as_str().filter(|name| !name.is_empty()) else {
+            return ToolResult::err("every `names` entry must be a non-empty string");
+        };
+        match by_name.get(name) {
+            Some(tool) => {
+                tools.insert(
+                    name.to_string(),
+                    json!({
+                        "description": tool.description,
+                        "parameters": tool.input_schema,
+                    }),
+                );
+            }
+            None => not_found.push(name),
+        }
+    }
+    ToolResult::ok(catalog_content(&json!({
+        "tools": tools,
+        "not_found": not_found,
+    })))
+}
+
 pub fn resolve_call_envelope(input: &Value) -> Result<(String, Value), String> {
     let object = input_object(input, &[("name", true), ("arguments", true)])?;
     let name = bounded_string(object, "name", MAX_TOOL_NAME_CHARS, true)?;
@@ -543,8 +571,9 @@ fn catalog_result(value: Value) -> ToolResult {
 }
 
 fn catalog_content(value: &Value) -> String {
-    crate::agent::safety::untrusted::wrap_untrusted(
-        crate::agent::safety::untrusted::TOOL_RESULT_TAG,
+    crate::agent::safety::untrusted::wrap_labeled(
+        crate::agent::trust::SourceKind::McpToolMetadata,
+        None,
         &value.to_string(),
     )
 }
@@ -725,11 +754,7 @@ fn searchable(value: &str) -> String {
 }
 
 fn required_fields(tool: &LlmTool) -> (Vec<String>, usize, usize, usize) {
-    let Some(required) = tool
-        .input_schema
-        .get("required")
-        .and_then(Value::as_array)
-    else {
+    let Some(required) = tool.input_schema.get("required").and_then(Value::as_array) else {
         return (Vec::new(), 0, 0, 0);
     };
     let mut value_truncated_count = 0usize;

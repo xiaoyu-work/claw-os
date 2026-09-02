@@ -1,0 +1,89 @@
+{
+  "abi": 1,
+  "components": [
+    {
+      "critical": true,
+      "name": "clawd",
+      "package": "claw-os-agent",
+      "path": "/usr/local/bin/clawd"
+    },
+    {
+      "critical": true,
+      "name": "claw-agentd",
+      "package": "claw-os-agent",
+      "path": "/usr/local/bin/claw-agentd"
+    },
+    {
+      "critical": true,
+      "name": "claw-extension-host",
+      "package": "claw-os-agent",
+      "path": "/usr/local/bin/claw-extension-host"
+    },
+    {
+      "critical": true,
+      "name": "claw-approval-helper",
+      "package": "claw-os-agent",
+      "path": "/usr/local/bin/claw-approval-helper"
+    },
+    {
+      "critical": true,
+      "name": "claw-app-runner",
+      "package": "claw-os-agent",
+      "path": "/usr/local/bin/claw-app-runner"
+    },
+    {
+      "critical": true,
+      "name": "claw-security-floor",
+      "package": "claw-os-agent",
+      "path": "/usr/lib/cos/bin/claw-security-floor"
+    },
+    {
+      "critical": true,
+      "name": "cos",
+      "package": "claw-os-agent",
+      "path": "/usr/local/bin/cos"
+    },
+    {
+      "critical": false,
+      "name": "cos-init",
+      "package": "claw-os-base",
+      "path": "/usr/local/bin/cos-init"
+    },
+    {
+      "critical": false,
+      "name": "cos-agent-bridge",
+      "package": "claw-os-desktop",
+      "path": "/usr/local/bin/cos-agent-bridge"
+    },
+    {
+      "critical": false,
+      "name": "cos-agent-ui",
+      "package": "claw-os-desktop",
+      "path": "/usr/local/bin/cos-agent-ui"
+    },
+    {
+      "critical": false,
+      "name": "cos-ask-claw-launcher",
+      "package": "claw-os-desktop",
+      "path": "/usr/local/bin/cos-ask-claw-launcher"
+    }
+  ],
+  "format": "claw.release-security-policy/v1",
+  "manifest_validity_days": 400,
+  "minimum_compatible": {
+    "claw-os-agent": "1:0.2.0",
+    "claw-os-base": "1:0.2.0",
+    "claw-os-desktop": "1:0.2.0"
+  },
+  "packages": [
+    "claw-os-agent",
+    "claw-os-base",
+    "claw-os-desktop"
+  ],
+  "protocols": {
+    "agentd_worker": 9,
+    "broker_envelope": 2,
+    "extension_host_control": 7
+  },
+  "security_epoch": 1
+}

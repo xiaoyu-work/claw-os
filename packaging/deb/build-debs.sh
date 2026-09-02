@@ -28,7 +28,7 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 source "$PROJECT_DIR/scripts/lib/arch.sh"
 
-OUT_DIR="$PROJECT_DIR/build/debs"
+OUT_DIR="${COS_DEB_OUT_DIR:-$PROJECT_DIR/build/debs}"
 STAGE_DIR="${COS_DEB_STAGE_DIR:-$PROJECT_DIR/build/deb-staging}"
 
 source "$PROJECT_DIR/scripts/lib/package-version.sh"
@@ -64,6 +64,11 @@ else
     echo "         be owned by uid=$(id -u). Install 'fakeroot' to fix." >&2
     FAKEROOT=""
 fi
+
+# The security epoch travels as the Debian epoch, so APT orders an
+# emergency release above everything published before it. Debian
+# encodes the epoch colon as %3a in artifact file names.
+FILE_VERSION="${VERSION//:/%3a}"
 
 echo ":: claw-os deb build — version $VERSION arch $DEB_ARCH"
 
@@ -249,8 +254,95 @@ ensure_bin() {
 render_control() {
     local src="$1"
     local dst="$2"
-    sed -e "s/__VERSION__/$VERSION/g" -e "s/__ARCH__/$DEB_ARCH/g" "$src" > "$dst"
+    sed -e "s/__VERSION__/$VERSION/g" \
+        -e "s/__ARCH__/$DEB_ARCH/g" \
+        -e "s/__ABI__/$SECURITY_ABI/g" \
+        -e "s/__SECURITY_EPOCH__/$SECURITY_EPOCH/g" \
+        -e "s/__MIN_AGENT__/$MIN_AGENT_VERSION/g" \
+        -e "s/__MIN_BASE__/$MIN_BASE_VERSION/g" \
+        -e "s/__MIN_DESKTOP__/$MIN_DESKTOP_VERSION/g" \
+        "$src" > "$dst"
 }
+
+###############################################################################
+# Release-security metadata.
+#
+# APT signatures answer "did the publisher produce these bytes?". They
+# cannot answer "is this the current release?" — an old artifact stays
+# validly signed forever. Every package therefore carries a canonical,
+# signed release manifest binding its security epoch, version, component
+# digests and compatibility window, and a preinst that refuses to unpack
+# a release this machine has already moved past.
+#
+# See packaging/release-security/ and docs/updating.md.
+###############################################################################
+RELEASE_SECURITY_DIR="$PROJECT_DIR/packaging/release-security"
+RELEASE_SECURITY_POLICY="$RELEASE_SECURITY_DIR/policy.json"
+MAKE_MANIFEST="$RELEASE_SECURITY_DIR/make-manifest.py"
+
+policy_field() {
+    python3 - "$RELEASE_SECURITY_POLICY" "$1" <<'PY'
+import json, sys
+document = json.load(open(sys.argv[1], encoding="utf-8"))
+cursor = document
+for key in sys.argv[2].split("."):
+    cursor = cursor[key]
+print(cursor)
+PY
+}
+
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "error: python3 is required to generate release-security metadata" >&2
+    exit 1
+fi
+SECURITY_EPOCH="$(policy_field security_epoch)"
+SECURITY_ABI="$(policy_field abi)"
+MIN_AGENT_VERSION="$(policy_field minimum_compatible.claw-os-agent)"
+MIN_BASE_VERSION="$(policy_field minimum_compatible.claw-os-base)"
+MIN_DESKTOP_VERSION="$(policy_field minimum_compatible.claw-os-desktop)"
+RELEASE_SECURITY_SUITE="${SUITE:-trixie}"
+# Fail-closed key resolution and manifest emission are shared with the
+# desktop build, so both make the same decision and the decision itself
+# is directly testable.
+source "$RELEASE_SECURITY_DIR/sign-manifest.sh"
+# The passphrase is needed by exactly one child command. Hold it in a
+# shell-local and drop it from the exported environment immediately, so
+# no unrelated build step inherits it.
+RELEASE_SECURITY_PASSPHRASE="${GPG_PASSPHRASE:-}"
+unset GPG_PASSPHRASE
+RELEASE_SECURITY_KEY_ID="$(claw_resolve_signing_key)" || exit 1
+
+# Reproducible timestamps: two builds of the same commit must produce
+# byte-identical manifests, so the embedded digests are stable.
+if [ -z "${SOURCE_DATE_EPOCH:-}" ]; then
+    SOURCE_DATE_EPOCH="$(git_readonly -C "$PROJECT_DIR" log -1 --pretty=%ct 2>/dev/null || true)"
+    [ -n "$SOURCE_DATE_EPOCH" ] && export SOURCE_DATE_EPOCH
+fi
+
+# Emit <stage>/usr/lib/cos/release-security/<package>/manifest.json{,.asc}.
+#
+# Every package writes into its **own** subdirectory. Two packages must
+# never own the same regular file: dpkg would let whichever unpacked
+# last decide what the others' maintainer scripts read.
+write_release_manifest() {
+    local package="$1" stage="$2" arch="$3"
+    install -d -m 0755 "$stage/usr/lib/cos/release-security"
+    claw_write_release_manifest \
+        "$RELEASE_SECURITY_KEY_ID" "$RELEASE_SECURITY_PASSPHRASE" \
+        "$MAKE_MANIFEST" "$package" "$VERSION" "$arch" \
+        "$RELEASE_SECURITY_SUITE" "$stage" "$RELEASE_SECURITY_POLICY" \
+        "$stage/usr/lib/cos/release-security/$package/manifest.json" || exit 1
+}
+
+# Render the shared preinst with this package's identity and its signed
+# release manifest embedded verbatim: a preinst runs before any of its
+# own package's files exist, so the candidate has to carry its evidence.
+render_security_preinst() {
+    local package="$1" stage="$2"
+    "$RELEASE_SECURITY_DIR/render-preinst.sh" \
+        "$package" "$VERSION" "$SECURITY_EPOCH" "$stage" "$stage/DEBIAN/preinst"
+}
+
 
 SYSTEM_UNITS_SRC="$PROJECT_DIR/rootfs/features/systemd/overlay/usr/lib/systemd/system"
 
@@ -262,28 +354,58 @@ echo "===> staging claw-os-agent"
 AGENT_STAGE="$STAGE_DIR/claw-os-agent"
 mkdir -p \
     "$AGENT_STAGE/DEBIAN" \
+    "$AGENT_STAGE/etc/apt/apt.conf.d" \
     "$AGENT_STAGE/etc/cos" \
+    "$AGENT_STAGE/etc/cos/trust/publishers.d" \
     "$AGENT_STAGE/usr/lib/cos/apps" \
-    "$AGENT_STAGE/usr/lib/cos/extensions" \
+    "$AGENT_STAGE/usr/lib/cos/apt" \
+    "$AGENT_STAGE/usr/lib/cos/bin" \
     "$AGENT_STAGE/usr/lib/cos/python" \
+    "$AGENT_STAGE/usr/lib/cos/release-security" \
     "$AGENT_STAGE/usr/lib/cos/skills" \
+    "$AGENT_STAGE/usr/lib/cos/trust/publishers.d" \
     "$AGENT_STAGE/usr/lib/systemd/system" \
     "$AGENT_STAGE/usr/lib/systemd/user" \
     "$AGENT_STAGE/usr/local/bin" \
     "$AGENT_STAGE/usr/share/polkit-1/actions"
 chmod 0755 "$AGENT_STAGE/DEBIAN"
 
+# Extension-provenance trust roots.
+#
+#   /usr/lib/cos/trust/publishers.d — vendor keys shipped by this package
+#   /etc/cos/trust/publishers.d     — operator-managed keys (never shipped)
+#
+# Both must be root-owned and free of group/world write bits; the loader
+# refuses a root that fails those checks and reports it as a diagnostic
+# rather than silently widening trust. Ownership is asserted by dpkg
+# (packages install as root); the modes are set explicitly here.
+chmod 0755 \
+    "$AGENT_STAGE/usr/lib/cos/trust" \
+    "$AGENT_STAGE/usr/lib/cos/trust/publishers.d" \
+    "$AGENT_STAGE/etc/cos/trust" \
+    "$AGENT_STAGE/etc/cos/trust/publishers.d"
+VENDOR_TRUST_SRC="$SCRIPT_DIR/claw-os-agent/trust/publishers.d"
+if [ -d "$VENDOR_TRUST_SRC" ]; then
+    for trust_file in "$VENDOR_TRUST_SRC"/*.json; do
+        [ -e "$trust_file" ] || continue
+        # Refuse to ship anything that looks like private key material.
+        if grep -q '"private_key"' "$trust_file"; then
+            echo "error: vendor trust file carries private key material: $trust_file" >&2
+            exit 1
+        fi
+        install -m 0644 "$trust_file" \
+            "$AGENT_STAGE/usr/lib/cos/trust/publishers.d/$(basename "$trust_file")"
+    done
+fi
+
 render_control "$SCRIPT_DIR/claw-os-agent/control" "$AGENT_STAGE/DEBIAN/control"
 install -m 644 "$SCRIPT_DIR/claw-os-agent/conffiles" "$AGENT_STAGE/DEBIAN/conffiles"
+render_control "$SCRIPT_DIR/claw-os-agent/postinst" "$AGENT_STAGE/DEBIAN/postinst.body"
 {
     cat "$SCRIPT_DIR/claw-os-agent/extension-identities.sh"
-    tail -n +2 "$SCRIPT_DIR/claw-os-agent/preinst"
-} > "$AGENT_STAGE/DEBIAN/preinst"
-chmod 0755 "$AGENT_STAGE/DEBIAN/preinst"
-{
-    cat "$SCRIPT_DIR/claw-os-agent/extension-identities.sh"
-    tail -n +2 "$SCRIPT_DIR/claw-os-agent/postinst"
+    tail -n +2 "$AGENT_STAGE/DEBIAN/postinst.body"
 } > "$AGENT_STAGE/DEBIAN/postinst"
+rm -f "$AGENT_STAGE/DEBIAN/postinst.body"
 chmod 0755 "$AGENT_STAGE/DEBIAN/postinst"
 install -m 755 "$SCRIPT_DIR/claw-os-agent/prerm" "$AGENT_STAGE/DEBIAN/prerm"
 {
@@ -292,6 +414,7 @@ install -m 755 "$SCRIPT_DIR/claw-os-agent/prerm" "$AGENT_STAGE/DEBIAN/prerm"
 } > "$AGENT_STAGE/DEBIAN/postrm"
 chmod 0755 "$AGENT_STAGE/DEBIAN/postrm"
 install -d -m 755 "$AGENT_STAGE/usr/lib/sysusers.d"
+install -d -m 755 "$AGENT_STAGE/usr/lib/cos/extensions"
 install -m 644 "$SCRIPT_DIR/claw-os-agent/claw-os-agent.sysusers" \
     "$AGENT_STAGE/usr/lib/sysusers.d/claw-os-agent.conf"
 install -m 755 "$SCRIPT_DIR/claw-os-agent/extension-gid-scan.py" \
@@ -311,6 +434,11 @@ APP_RUNNER_BIN="$(ensure_bin claw-app-runner cos)" || {
     echo "error: claw-app-runner binary not built" >&2; exit 1; }
 MAIL_AI_HOST_BIN="$(ensure_bin claw-mail-ai-host cos)" || {
     echo "error: claw-mail-ai-host binary not built" >&2; exit 1; }
+# The update downgrade-protection verifier. Maintainer scripts, the APT
+# pre-install hook and operators all call this one binary instead of
+# re-deriving Debian version ordering in shell.
+SECURITY_FLOOR_BIN="$(ensure_bin claw-security-floor cos)" || {
+    echo "error: claw-security-floor binary not built" >&2; exit 1; }
 
 echo "  :: cos                    <- $COS_BIN"
 echo "  :: clawd                  <- $CLAWD_BIN"
@@ -319,6 +447,7 @@ echo "  :: claw-extension-host    <- $EXTENSION_HOST_BIN"
 echo "  :: claw-approval-helper   <- $APPROVAL_HELPER_BIN"
 echo "  :: claw-app-runner        <- $APP_RUNNER_BIN"
 echo "  :: claw-mail-ai-host      <- $MAIL_AI_HOST_BIN"
+echo "  :: claw-security-floor    <- $SECURITY_FLOOR_BIN"
 install -m 755 "$COS_BIN" "$AGENT_STAGE/usr/local/bin/cos"
 install -m 755 "$CLAWD_BIN" "$AGENT_STAGE/usr/local/bin/clawd"
 install -m 755 "$AGENTD_BIN" "$AGENT_STAGE/usr/local/bin/claw-agentd"
@@ -326,6 +455,11 @@ install -m 755 "$EXTENSION_HOST_BIN" "$AGENT_STAGE/usr/local/bin/claw-extension-
 install -m 755 "$APPROVAL_HELPER_BIN" "$AGENT_STAGE/usr/local/bin/claw-approval-helper"
 install -m 755 "$APP_RUNNER_BIN" "$AGENT_STAGE/usr/local/bin/claw-app-runner"
 install -m 755 "$MAIL_AI_HOST_BIN" "$AGENT_STAGE/usr/lib/cos/claw-mail-ai-host"
+install -m 755 "$SECURITY_FLOOR_BIN" "$AGENT_STAGE/usr/lib/cos/bin/claw-security-floor"
+install -m 755 "$SCRIPT_DIR/common/security-floor-hook" \
+    "$AGENT_STAGE/usr/lib/cos/apt/security-floor-hook"
+install -m 644 "$SCRIPT_DIR/common/50claw-os-security-floor" \
+    "$AGENT_STAGE/etc/apt/apt.conf.d/50claw-os-security-floor"
 install -m 644 \
     "$PROJECT_DIR/rootfs/overlay/usr/share/polkit-1/actions/org.clawos.approval.policy" \
     "$AGENT_STAGE/usr/share/polkit-1/actions/org.clawos.approval.policy"
@@ -433,8 +567,18 @@ install -m 644 "$USER_UNITS_SRC/claw-semantic.service" \
     "$AGENT_STAGE/usr/lib/systemd/user/claw-semantic.service"
 
 echo "  :: dpkg-deb --build claw-os-agent"
+write_release_manifest claw-os-agent "$AGENT_STAGE" "$DEB_ARCH"
+render_security_preinst claw-os-agent "$AGENT_STAGE"
+mv "$AGENT_STAGE/DEBIAN/preinst" "$AGENT_STAGE/DEBIAN/preinst.security"
+{
+    cat "$SCRIPT_DIR/claw-os-agent/extension-identities.sh"
+    sed '1d;$d' "$SCRIPT_DIR/claw-os-agent/preinst"
+    tail -n +2 "$AGENT_STAGE/DEBIAN/preinst.security"
+} > "$AGENT_STAGE/DEBIAN/preinst"
+rm -f "$AGENT_STAGE/DEBIAN/preinst.security"
+chmod 0755 "$AGENT_STAGE/DEBIAN/preinst"
 $FAKEROOT $DPKG_DEB --root-owner-group --build "$AGENT_STAGE" \
-    "$OUT_DIR/claw-os-agent_${VERSION}_${DEB_ARCH}.deb" >/dev/null
+    "$OUT_DIR/claw-os-agent_${FILE_VERSION}_${DEB_ARCH}.deb" >/dev/null
 fi
 
 ###############################################################################
@@ -447,13 +591,15 @@ mkdir -p \
     "$BASE_STAGE/DEBIAN" \
     "$BASE_STAGE/etc/default" \
     "$BASE_STAGE/usr/lib/cos/init" \
+    "$BASE_STAGE/usr/lib/cos/release-security" \
     "$BASE_STAGE/usr/lib/systemd/system" \
     "$BASE_STAGE/usr/local/bin"
 chmod 0755 "$BASE_STAGE/DEBIAN"
 
 render_control "$SCRIPT_DIR/claw-os-base/control" "$BASE_STAGE/DEBIAN/control"
 install -m 644 "$SCRIPT_DIR/claw-os-base/conffiles" "$BASE_STAGE/DEBIAN/conffiles"
-install -m 755 "$SCRIPT_DIR/claw-os-base/postinst" "$BASE_STAGE/DEBIAN/postinst"
+render_control "$SCRIPT_DIR/claw-os-base/postinst" "$BASE_STAGE/DEBIAN/postinst"
+chmod 0755 "$BASE_STAGE/DEBIAN/postinst"
 install -m 755 "$SCRIPT_DIR/claw-os-base/prerm" "$BASE_STAGE/DEBIAN/prerm"
 install -m 755 "$SCRIPT_DIR/claw-os-base/postrm" "$BASE_STAGE/DEBIAN/postrm"
 
@@ -469,13 +615,17 @@ install -m 644 "$PROJECT_DIR/rootfs/features/systemd/overlay/etc/default/cos-hom
     "$BASE_STAGE/etc/default/cos-home"
 
 echo "  :: dpkg-deb --build claw-os-base"
+write_release_manifest claw-os-base "$BASE_STAGE" all
+render_security_preinst claw-os-base "$BASE_STAGE"
 $FAKEROOT $DPKG_DEB --root-owner-group --build "$BASE_STAGE" \
-    "$OUT_DIR/claw-os-base_${VERSION}_all.deb" >/dev/null
+    "$OUT_DIR/claw-os-base_${FILE_VERSION}_all.deb" >/dev/null
 fi
 
 ###############################################################################
 # Done.
 ###############################################################################
+# The signing material has done its job; drop the shell-local copy.
+unset RELEASE_SECURITY_PASSPHRASE
 echo ""
 echo ":: produced:"
 ls -1 "$OUT_DIR"/*.deb | sed 's|^|     |'

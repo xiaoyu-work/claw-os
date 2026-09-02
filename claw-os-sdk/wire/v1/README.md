@@ -71,10 +71,14 @@ be added in v1; existing codes keep their meaning.
 
 | Family   | Route                                   | Schema                  |
 |----------|-----------------------------------------|-------------------------|
-| `policy` | internal capability check              | `perms.schema.json`     |
+| `policy` | OS-internal capability check; no public SDK API | `perms.schema.json` |
 | `ai`     | `cos ai chat --app <id> [...] `         | `ai.schema.json`        |
 | `tool`   | `cos ai tool <name> --app <id> --args <json>` | `tool.schema.json` |
 | `app`    | `cos app <id> <verb> [...]`             | `app.schema.json`       |
+
+The `policy` wire family is consumed only by the OS-internal
+`cos-runtime` package. It is not an importable API in any public SDK;
+third-party SDK calls are capability-checked by the `cos` kernel.
 
 App manifests (`app.json`) are validated against `manifest.schema.json`.
 

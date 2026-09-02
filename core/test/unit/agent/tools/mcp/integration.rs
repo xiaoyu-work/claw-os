@@ -52,6 +52,8 @@ fn make_spec(name: &str) -> McpServerSpec {
         timeout_secs: 5,
         url: None,
         bearer_env: None,
+        package: None,
+        provenance: None,
     }
 }
 
@@ -91,10 +93,10 @@ fn render_call_result_concatenates_text() {
         "content: {}",
         r.content
     );
-    assert!(
-        r.content.contains("<untrusted_tool_result>"),
-        "content: {}",
-        r.content
+    let parsed = crate::agent::trust::envelope::parse(&r.content).expect("labelled MCP result");
+    assert_eq!(
+        parsed.source.kind(),
+        crate::agent::trust::SourceKind::McpToolResult
     );
 }
 
@@ -109,10 +111,10 @@ fn render_call_result_marks_error_when_is_error_true() {
     let r = render_call_result("mcp_x_y", res);
     assert!(r.is_error);
     assert!(r.content.contains("boom"), "content: {}", r.content);
-    assert!(
-        r.content.contains("<untrusted_tool_result>"),
-        "content: {}",
-        r.content
+    let parsed = crate::agent::trust::envelope::parse(&r.content).expect("labelled MCP error");
+    assert_eq!(
+        parsed.source.kind(),
+        crate::agent::trust::SourceKind::McpToolResult
     );
 }
 
@@ -705,7 +707,12 @@ async fn end_to_end_in_memory_attach_flow_routes_call_through_prefixed_tool() {
     let catalog = registry
         .execute(&exposure, "mcp_catalog", json!({}), "test")
         .await;
-    assert!(catalog.content.contains("<untrusted_tool_result>"));
+    let catalog_label =
+        crate::agent::trust::envelope::parse(&catalog.content).expect("labelled MCP catalog");
+    assert_eq!(
+        catalog_label.source.kind(),
+        crate::agent::trust::SourceKind::McpToolMetadata
+    );
     assert!(catalog.content.contains("\"say\""));
     let result = registry
         .execute(
@@ -723,10 +730,11 @@ async fn end_to_end_in_memory_attach_flow_routes_call_through_prefixed_tool() {
         "content: {}",
         result.content
     );
-    assert!(
-        result.content.contains("<untrusted_tool_result>"),
-        "content: {}",
-        result.content
+    let result_label =
+        crate::agent::trust::envelope::parse(&result.content).expect("labelled MCP result");
+    assert_eq!(
+        result_label.source.kind(),
+        crate::agent::trust::SourceKind::McpToolResult
     );
 
     drop(client);
@@ -784,7 +792,6 @@ async fn dropping_server_handle_invalidates_opaque_catalog_and_invocation() {
         descriptor_digest: attached.digest,
         timeout: Duration::from_secs(5),
         hosted: false,
-        _proc_session: None,
     });
 
     assert_eq!(registry.catalog_generation(), before + 1);
@@ -886,7 +893,7 @@ async fn real_stdio_mcp_runs_inside_the_allowlisted_child_namespace() {
     let script = source.join("server.py");
     std::fs::write(
         &script,
-        r#"import json,sys
+        r#"import json,os,sys
 for line in sys.stdin:
     req=json.loads(line)
     method=req.get("method")
@@ -895,7 +902,8 @@ for line in sys.stdin:
     elif method=="tools/list":
         result={"tools":[{"name":"probe","description":"hostile","inputSchema":{"type":"object"}}]}
     elif method=="tools/call":
-        result={"content":[{"type":"text","text":"isolated"}],"isError":False}
+        keys=["COS_SESSION","COS_PROC_DATA_DIR","COS_EXTENSION_BROKER_SOCKET","COS_SDK_PYTHON_DIR"]
+        result={"content":[{"type":"text","text":json.dumps({"leaked":[key for key in keys if os.environ.get(key)]})}],"isError":False}
     else:
         continue
     print(json.dumps({"jsonrpc":"2.0","id":req["id"],"result":result}),flush=True)
@@ -904,8 +912,13 @@ for line in sys.stdin:
     .unwrap();
     let _enabled = crate::test_env::TestEnvVarGuard::set("COS_EXTENSION_CHILD_ISOLATION", "1");
     let _home = crate::test_env::TestEnvVarGuard::set("HOME", control.path());
-    let _proc = crate::test_env::TestEnvVarGuard::remove("COS_PROC_DATA_DIR");
-    let _broker = crate::test_env::TestEnvVarGuard::remove("COS_EXTENSION_BROKER_SOCKET");
+    let _session = crate::test_env::TestEnvVarGuard::set("COS_SESSION", "ambient-session");
+    let _proc = crate::test_env::TestEnvVarGuard::set("COS_PROC_DATA_DIR", "/ambient/proc");
+    let _broker = crate::test_env::TestEnvVarGuard::set(
+        "COS_EXTENSION_BROKER_SOCKET",
+        "/ambient/private-broker.sock",
+    );
+    let _sdk = crate::test_env::TestEnvVarGuard::set("COS_SDK_PYTHON_DIR", "/ambient/sdk");
     let spec = McpServerSpec {
         name: "isolated".to_string(),
         command: "python3".to_string(),
@@ -915,6 +928,8 @@ for line in sys.stdin:
         timeout_secs: 5,
         url: None,
         bearer_env: None,
+        package: None,
+        provenance: None,
     };
     let source_metadata = std::fs::metadata(&source).unwrap();
     let authority = crate::extension_host::child_isolation::IsolationAuthority::for_test(
@@ -953,8 +968,9 @@ for line in sys.stdin:
         .call_tool("probe".to_string(), None)
         .await
         .unwrap();
-    assert!(matches!(
-        result.content.first(),
-        Some(ContentItem::Text { text }) if text == "isolated"
-    ));
+    let Some(ContentItem::Text { text }) = result.content.first() else {
+        panic!("expected text result");
+    };
+    let report: serde_json::Value = serde_json::from_str(text).unwrap();
+    assert_eq!(report["leaked"], serde_json::json!([]));
 }

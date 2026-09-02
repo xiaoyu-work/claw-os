@@ -25,11 +25,11 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use ed25519_dalek::{Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
 use super::loader::LoadedSkill;
-use super::manifest::{canonical_signing_input, ManifestSignature, SkillManifest};
+use super::manifest::SkillManifest;
+use crate::provenance::TrustSource;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -47,6 +47,18 @@ pub enum Provenance {
 }
 
 impl Provenance {
+    /// Map an authenticated package's trust source onto the display /
+    /// guard provenance. Only content that actually verified reaches
+    /// this function, so `Vendor` here means "root-owned system
+    /// package", not "found under a directory that looked official".
+    pub fn from_trust_source(source: &TrustSource) -> Self {
+        match source {
+            TrustSource::Vendor => Self::Vendor,
+            TrustSource::Publisher { .. } => Self::Hub,
+            TrustSource::Developer => Self::Local,
+        }
+    }
+
     /// True if this provenance is considered "trusted" — bundled
     /// with cos, or user-authored. Hub + Unknown go through the
     /// stricter guard checks.
@@ -265,220 +277,18 @@ fn manifest_allowed_tools_empty(m: &SkillManifest) -> bool {
     m.allowed_tools.is_empty()
 }
 
-// --------------- ed25519 signature verification ---------------
-
-/// Environment variable controlling whether unsigned manifests are
-/// rejected at install time. Anything other than `0`/`false`/empty
-/// switches signature enforcement *on*.
-pub const ENV_REQUIRE_SIGNATURE: &str = "COS_SKILLS_REQUIRE_SIGNATURE";
-/// Colon-separated list of hex-encoded ed25519 verifying keys (32
-/// bytes / 64 hex chars each). When set, a manifest's
-/// `signature.public_key` must appear in the list to be accepted.
-pub const ENV_TRUSTED_KEYS: &str = "COS_SKILLS_TRUSTED_KEYS";
-
-#[derive(Debug, thiserror::Error)]
-pub enum SignatureError {
-    #[error("signature required but manifest is unsigned")]
-    Required,
-    #[error("unsupported signature algorithm: {0} (only `ed25519` is accepted)")]
-    UnsupportedAlgorithm(String),
-    #[error("signature field `{field}` is not valid hex: {reason}")]
-    InvalidHex { field: &'static str, reason: String },
-    #[error("signature field `{field}` has wrong length: expected {expected} bytes, got {actual}")]
-    WrongLength {
-        field: &'static str,
-        expected: usize,
-        actual: usize,
-    },
-    #[error("ed25519 verifying key is invalid: {0}")]
-    InvalidVerifyingKey(String),
-    #[error("signature verification failed: {0}")]
-    BadSignature(String),
-    #[error(
-        "signature was made with key {public_key} which is not in the trusted-keys allow-list"
-    )]
-    UntrustedKey { public_key: String },
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum SignatureConfigError {
-    #[error("COS_SKILLS_TRUSTED_KEYS is invalid: {0}")]
-    InvalidTrustedKeys(#[source] SignatureError),
-    #[error("COS_SKILLS_TRUSTED_KEYS contains non-Unicode data")]
-    NonUnicodeTrustedKeys,
-}
-
-/// Outcome of attempting to verify a skill's signature.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SignatureCheck {
-    /// Manifest carried a well-formed signature and it verified
-    /// (and matched the trusted-keys list if one was configured).
-    /// `public_key_hex` is the lower-case hex of the verifying
-    /// key that signed the manifest.
-    Verified { public_key_hex: String },
-    /// Manifest carried no signature block and the policy allowed
-    /// it. Callers should log a warning so the operator can spot
-    /// unsigned installs in audit logs.
-    Unsigned,
-}
-
-/// Policy knobs for [`verify_signature`]. Construct via
-/// [`SignatureVerifyConfig::from_env`] to pick up env-var driven
-/// production defaults and reject invalid configuration.
-#[derive(Debug, Clone, Default)]
-pub struct SignatureVerifyConfig {
-    /// When `true`, an unsigned manifest is rejected. When `false`,
-    /// unsigned manifests pass through (with [`SignatureCheck::Unsigned`])
-    /// so existing skills keep installing during rollout.
-    pub require_signature: bool,
-    /// When `Some`, the signature's `public_key` must be one of the
-    /// supplied 32-byte ed25519 keys. When `None`, any well-formed
-    /// signature with a valid key passes (trust-on-first-use).
-    pub trusted_keys: Option<Vec<[u8; 32]>>,
-}
-
-impl SignatureVerifyConfig {
-    /// Resolve the active config from process environment.
-    ///
-    /// * `COS_SKILLS_REQUIRE_SIGNATURE` truthy → `require_signature = true`.
-    /// * `COS_SKILLS_TRUSTED_KEYS` set       → parse colon-separated
-    ///   hex keys; any unparseable entry returns an error so a typo
-    ///   can never silently widen trust.
-    pub fn from_env() -> Result<Self, SignatureConfigError> {
-        let require = match std::env::var(ENV_REQUIRE_SIGNATURE) {
-            Ok(v) => matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"),
-            Err(_) => false,
-        };
-        let trusted_keys = match std::env::var(ENV_TRUSTED_KEYS) {
-            Ok(v) if !v.trim().is_empty() => {
-                Some(parse_trusted_keys(&v).map_err(SignatureConfigError::InvalidTrustedKeys)?)
-            }
-            Ok(_) | Err(std::env::VarError::NotPresent) => None,
-            Err(std::env::VarError::NotUnicode(_)) => {
-                return Err(SignatureConfigError::NonUnicodeTrustedKeys);
-            }
-        };
-        Ok(Self {
-            require_signature: require,
-            trusted_keys,
-        })
-    }
-}
-
-fn parse_trusted_keys(raw: &str) -> Result<Vec<[u8; 32]>, SignatureError> {
-    let mut out = Vec::new();
-    for entry in raw.split(':') {
-        let s = entry.trim();
-        if s.is_empty() {
-            continue;
-        }
-        let bytes = hex::decode(s).map_err(|e| SignatureError::InvalidHex {
-            field: "trusted_keys",
-            reason: e.to_string(),
-        })?;
-        let arr: [u8; 32] = bytes.as_slice().try_into().map_err(|_| {
-            SignatureError::WrongLength {
-                field: "trusted_keys",
-                expected: 32,
-                actual: bytes.len(),
-            }
-        })?;
-        out.push(arr);
-    }
-    Ok(out)
-}
-
-/// Verify a skill manifest's optional ed25519 signature against the
-/// supplied policy.
-///
-/// On success returns one of:
-///   * [`SignatureCheck::Verified`] — manifest was signed and the
-///     signature checked out (and was in the trusted-keys list if
-///     one was configured).
-///   * [`SignatureCheck::Unsigned`] — manifest is unsigned and the
-///     policy doesn't require a signature.
-///
-/// On any verification failure returns [`SignatureError`]; callers
-/// (notably [`crate::agent::skills::sync`]) must treat these as
-/// hard install failures.
-pub fn verify_signature(
-    manifest: &SkillManifest,
-    config: &SignatureVerifyConfig,
-) -> Result<SignatureCheck, SignatureError> {
-    let Some(sig) = manifest.signature.as_ref() else {
-        if config.require_signature {
-            return Err(SignatureError::Required);
-        }
-        return Ok(SignatureCheck::Unsigned);
-    };
-    verify_signature_block(manifest, sig, config)
-}
-
-fn verify_signature_block(
-    manifest: &SkillManifest,
-    sig: &ManifestSignature,
-    config: &SignatureVerifyConfig,
-) -> Result<SignatureCheck, SignatureError> {
-    if !sig.algorithm.eq_ignore_ascii_case("ed25519") {
-        return Err(SignatureError::UnsupportedAlgorithm(sig.algorithm.clone()));
-    }
-
-    let pk_bytes = hex::decode(sig.public_key.trim()).map_err(|e| SignatureError::InvalidHex {
-        field: "public_key",
-        reason: e.to_string(),
-    })?;
-    let pk_arr: [u8; 32] = pk_bytes
-        .as_slice()
-        .try_into()
-        .map_err(|_| SignatureError::WrongLength {
-            field: "public_key",
-            expected: 32,
-            actual: pk_bytes.len(),
-        })?;
-
-    if let Some(trusted) = &config.trusted_keys {
-        if !trusted.iter().any(|k| k == &pk_arr) {
-            return Err(SignatureError::UntrustedKey {
-                public_key: hex::encode(pk_arr),
-            });
-        }
-    }
-
-    let sig_bytes = hex::decode(sig.value.trim()).map_err(|e| SignatureError::InvalidHex {
-        field: "value",
-        reason: e.to_string(),
-    })?;
-    let sig_arr: [u8; 64] =
-        sig_bytes
-            .as_slice()
-            .try_into()
-            .map_err(|_| SignatureError::WrongLength {
-                field: "value",
-                expected: 64,
-                actual: sig_bytes.len(),
-            })?;
-
-    let vk = VerifyingKey::from_bytes(&pk_arr)
-        .map_err(|e| SignatureError::InvalidVerifyingKey(e.to_string()))?;
-    let signature = Signature::from_bytes(&sig_arr);
-
-    // Match the signing scheme described on `canonical_signing_input`:
-    // signer commits to SHA-256(canonical bytes), not the raw bytes,
-    // so the verifier hashes too before handing the digest to
-    // ed25519. Using the in-tree SHA-256 stream avoids adding a
-    // second hash dep just for this code path.
-    let canonical = canonical_signing_input(manifest);
-    let mut hasher = crate::crypto::Sha256Stream::new();
-    hasher.update(&canonical);
-    let digest = hasher.finalize_bytes();
-
-    vk.verify_strict(&digest, &signature)
-        .map_err(|e| SignatureError::BadSignature(e.to_string()))?;
-
-    Ok(SignatureCheck::Verified {
-        public_key_hex: hex::encode(pk_arr),
-    })
-}
+// The skill-local ed25519 stack (a manifest-only signature plus the
+// `COS_SKILLS_REQUIRE_SIGNATURE` / `COS_SKILLS_TRUSTED_KEYS` env
+// opt-in) is gone. It authenticated the frontmatter but not the skill
+// body, its scripts or its resources, and it let an environment
+// variable decide whether verification happened at all.
+//
+// Skills now go through the same gate as every other extension:
+// [`crate::provenance::verify::verify_package`] with
+// [`crate::provenance::PackageKind::Skill`]. Verification is
+// mandatory, trust roots are root-owned system stores plus the
+// owner's per-user store, and unsigned local development needs an
+// explicit `cos provenance dev-trust` decision.
 
 /// Walk the skill dir recursively (bounded by [`MAX_GUARD_WALK_FILES`]
 /// and [`MAX_GUARD_WALK_DEPTH`]) and return the first sibling file
@@ -512,6 +322,14 @@ fn oversized_sibling(dir: &Path, cap: u64) -> Option<(PathBuf, u64)> {
                 break;
             }
             let path = entry.path();
+            // The provenance envelope is runtime metadata, not skill
+            // payload; it must not be reported as an oversized sibling.
+            if depth == 0
+                && entry.file_name().to_string_lossy()
+                    == crate::provenance::envelope::ENVELOPE_FILE
+            {
+                continue;
+            }
             // `symlink_metadata` does NOT follow symlinks — we never
             // hop out of the skill dir through a symlink, even if
             // the target would canonicalise outside `dir_canon`.

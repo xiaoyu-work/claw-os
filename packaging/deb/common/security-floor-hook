@@ -1,0 +1,56 @@
+#!/bin/sh
+# APT pre-install hook: inspect a whole Claw OS candidate set before
+# dpkg unpacks any of it.
+#
+# This is the only gate that sees the *complete* transaction, so it is
+# where `apt install claw-os-agent=<old>` is caught before dpkg unpacks
+# anything — including the case an old package's own maintainer scripts
+# cannot cover, because they predate downgrade protection.
+#
+# APT aborts the transaction when this hook exits non-zero;
+# packaging/deb/tests/test-security-floor-install.sh proves that
+# against the APT in use rather than assuming it, and the maintainer
+# scripts and the Claw OS binaries enforce the same floor
+# independently.
+#
+# APT registers a hook by its exact command string, so this file is a
+# single executable token — not a shell fragment in apt.conf — and all
+# of the conditional behaviour lives here. Registered under
+# `DPkg::Tools::Options::<this path>::Version "2"`, so APT sends the
+# version 2 protocol (package names, both versions, and the archive
+# path) rather than the version 1 list of bare filenames.
+#
+# Absence of the verifier is decided against the floor, not assumed
+# harmless:
+#
+#   * no verifier *and* no security floor  -> genuine pre-install
+#     bootstrap. Drain APT's package list and succeed, so installing
+#     Claw OS for the first time (and every unrelated package
+#     operation on a machine where Claw OS was removed) still works.
+#   * no verifier but a floor exists       -> the verifier was removed
+#     from a protected machine. Report and exit non-zero; the
+#     maintainer scripts refuse the same transaction outright.
+
+set -e
+
+HELPER=/usr/lib/cos/bin/claw-security-floor
+FLOOR=/var/lib/cos/security/floor.json
+RUNTIME_FLOOR=/var/lib/cos-security/runtime-floor.json
+
+if [ -x "$HELPER" ]; then
+    exec "$HELPER" apt-hook
+fi
+
+if [ -e "$FLOOR" ] || [ -e "$RUNTIME_FLOOR" ]; then
+    # Drain the package list first: APT writes it to our stdin and a
+    # short read would surface as a confusing broken-pipe error rather
+    # than the refusal below.
+    cat > /dev/null
+    echo "claw-os: refusing this transaction: $HELPER is missing but this" >&2
+    echo "         system has recorded update-security state. Reinstall" >&2
+    echo "         claw-os-agent from the signed repository first." >&2
+    exit 1
+fi
+
+cat > /dev/null
+exit 0

@@ -4,8 +4,16 @@
 set -e
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-command -v identity_finalize >/dev/null 2>&1 ||
+if ! command -v identity_finalize >/dev/null 2>&1 &&
+    [ -f "$SCRIPT_DIR/extension-identities.sh" ]; then
     . "$SCRIPT_DIR/extension-identities.sh"
+fi
+
+DPKG_ROOT="${DPKG_ROOT:-}"
+ROOT_ARG="${DPKG_ROOT:-/}"
+SECURITY_HELPER="$DPKG_ROOT/usr/lib/cos/bin/claw-security-floor"
+RELEASE_MANIFEST="$DPKG_ROOT/usr/lib/cos/release-security/claw-os-agent/manifest.json"
+RELEASE_SIGNATURE="$RELEASE_MANIFEST.asc"
 
 enable_if_previously_enabled() {
     unit="$1"
@@ -17,54 +25,127 @@ enable_if_previously_enabled() {
     fi
 }
 
+# Advance the update-security floor only after the package's own files
+# are on disk with the content its signed release manifest declares. A
+# partial or failed unpack therefore cannot record a success, and the
+# floor is committed *before* any service starts so the daemon's own
+# startup check sees the release it is about to run.
+commit_security_floor() {
+    if [ ! -x "$SECURITY_HELPER" ] || [ ! -f "$RELEASE_MANIFEST" ]; then
+        echo "error: claw-os-agent is missing its update-security metadata" >&2
+        return 1
+    fi
+    if [ -f "$RELEASE_SIGNATURE" ]; then
+        "$SECURITY_HELPER" commit \
+            --root "$ROOT_ARG" \
+            --package claw-os-agent \
+            --version "__VERSION__" \
+            --manifest "$RELEASE_MANIFEST" \
+            --signature "$RELEASE_SIGNATURE" \
+            --reason "claw-os-agent configure"
+    else
+        "$SECURITY_HELPER" commit \
+            --root "$ROOT_ARG" \
+            --package claw-os-agent \
+            --version "__VERSION__" \
+            --manifest "$RELEASE_MANIFEST" \
+            --reason "claw-os-agent configure"
+    fi
+}
+
+# During an ordered multi-package transaction the installed set can be
+# legitimately mixed for a moment. Starting the broker into that window
+# would run new and old protocol peers together, so the start is
+# deferred to whichever package is configured last.
+security_set_is_runnable() {
+    [ -x "$SECURITY_HELPER" ] || return 1
+    "$SECURITY_HELPER" service-gate \
+        --root "$ROOT_ARG" \
+        --package claw-os-agent \
+        --manifest "$RELEASE_MANIFEST" >/dev/null 2>&1
+}
+
 case "$1" in
     configure)
-        if [ -n "$2" ]; then
-            identity_provision upgrade "$2"
-        else
-            identity_provision install
+        if [ -z "$DPKG_ROOT" ]; then
+            command -v identity_finalize >/dev/null 2>&1 || {
+                echo "error: claw-os-agent identity policy is unavailable" >&2
+                exit 1
+            }
+            if [ -n "$2" ]; then
+                identity_provision upgrade "$2"
+            else
+                identity_provision install
+            fi
+            if command -v systemd-sysusers >/dev/null 2>&1; then
+                systemd-sysusers /usr/lib/sysusers.d/claw-os-agent.conf
+            elif ! getent group cos-extension >/dev/null 2>&1; then
+                groupadd --system --gid 60999 cos-extension
+            fi
+            identity_finalize
+        elif command -v systemd-sysusers >/dev/null 2>&1 &&
+            [ -f "$DPKG_ROOT/usr/lib/sysusers.d/claw-os-agent.conf" ]; then
+            systemd-sysusers --root="$DPKG_ROOT"
         fi
-        if command -v systemd-sysusers >/dev/null 2>&1; then
-            systemd-sysusers /usr/lib/sysusers.d/claw-os-agent.conf
-        elif ! getent group cos-extension >/dev/null 2>&1; then
-            groupadd --system --gid 60999 cos-extension
-        fi
-        identity_finalize
-        install -d -m 0700 /var/lib/cos /var/log/cos
-        rmdir /var/log/aos 2>/dev/null || true
+        install -d -m 0700 "$DPKG_ROOT/var/lib/cos" "$DPKG_ROOT/var/log/cos"
+        # Session event journal: the ordered, signed record of session
+        # lifecycle and privileged mutations, plus the MAC keys that
+        # sign it. Created root-owned and 0700 here so the first daemon
+        # start never has to widen anything, and re-asserted on upgrade
+        # without touching an existing chain, anchor or key.
+        install -d -m 0700 -o root -g root "$DPKG_ROOT/var/lib/cos/journal"
+        install -d -m 0700 -o root -g root "$DPKG_ROOT/var/lib/cos/journal/keys"
+        rmdir "$DPKG_ROOT/var/log/aos" 2>/dev/null || true
 
-        if [ -f /etc/bash.bashrc ] && \
-           ! grep -q 'cos/profile.sh' /etc/bash.bashrc; then
+        if [ -f "$DPKG_ROOT/etc/bash.bashrc" ] && \
+           ! grep -q 'cos/profile.sh' "$DPKG_ROOT/etc/bash.bashrc"; then
             echo '[ -f /etc/cos/profile.sh ] && . /etc/cos/profile.sh' \
-                >> /etc/bash.bashrc
-        fi
-        if [ -x /usr/bin/deb-systemd-helper ]; then
-            enable_if_previously_enabled clawd.service
-            deb-systemd-helper unmask cos-browser.service >/dev/null || true
-            deb-systemd-helper update-state cos-browser.service >/dev/null || true
+                >> "$DPKG_ROOT/etc/bash.bashrc"
         fi
 
-        mkdir -p /etc/systemd/user/default.target.wants
+        mkdir -p "$DPKG_ROOT/etc/systemd/user/default.target.wants"
         for unit in claw-recoll-index.service claw-semantic.service; do
             ln -sf "/usr/lib/systemd/user/$unit" \
-                "/etc/systemd/user/default.target.wants/$unit"
+                "$DPKG_ROOT/etc/systemd/user/default.target.wants/$unit"
         done
 
-        rm -f /etc/systemd/user/default.target.wants/clawd.service
+        rm -f "$DPKG_ROOT/etc/systemd/user/default.target.wants/clawd.service"
 
-        if [ -d "$identity_systemd_dir" ]; then
-            systemctl --system daemon-reload >/dev/null || true
-            systemctl --global daemon-reload >/dev/null 2>&1 || true
-            if [ -n "$2" ]; then
-                deb-systemd-invoke try-restart clawd.service >/dev/null || true
-                deb-systemd-invoke try-restart cos-browser.service >/dev/null || true
-            else
-                deb-systemd-invoke start clawd.service >/dev/null || true
+        # The floor is committed before any service is touched, so the
+        # daemon's own startup check sees the release it is about to
+        # run. This is also the step that publishes the unprivileged
+        # runtime view every other Claw OS binary enforces against.
+        commit_security_floor
+
+        # Service management only applies to the running system. Under
+        # DPKG_ROOT — an image build, a staged root, a test — there is
+        # no init to talk to, and touching the host's units would be
+        # wrong.
+        if [ -z "$DPKG_ROOT" ]; then
+            if [ -x /usr/bin/deb-systemd-helper ]; then
+                enable_if_previously_enabled clawd.service
+                deb-systemd-helper unmask cos-browser.service >/dev/null || true
+                deb-systemd-helper update-state cos-browser.service >/dev/null || true
+            fi
+            if [ -d /run/systemd/system ]; then
+                systemctl --system daemon-reload >/dev/null || true
+                systemctl --global daemon-reload >/dev/null 2>&1 || true
+                if security_set_is_runnable; then
+                    if [ -n "$2" ]; then
+                        deb-systemd-invoke try-restart clawd.service >/dev/null || true
+                        deb-systemd-invoke try-restart cos-browser.service >/dev/null || true
+                    else
+                        deb-systemd-invoke start clawd.service >/dev/null || true
+                    fi
+                else
+                    echo "claw-os-agent: deferring clawd start until the rest of this" >&2
+                    echo "               Claw OS package set is configured" >&2
+                fi
             fi
         fi
         ;;
     abort-upgrade)
-        if [ -d "$identity_systemd_dir" ]; then
+        if [ -z "$DPKG_ROOT" ] && [ -d "$identity_systemd_dir" ]; then
             deb-systemd-invoke start clawd.service >/dev/null || true
         fi
         ;;

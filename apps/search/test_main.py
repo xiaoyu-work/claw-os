@@ -205,7 +205,7 @@ def test_web_google_success():
     fake_resp.__enter__ = mock.MagicMock(return_value=fake_resp)
     fake_resp.__exit__ = mock.MagicMock(return_value=False)
 
-    with mock.patch("urllib.request.urlopen", return_value=fake_resp):
+    with mock.patch.object(search_main, "open_url", return_value=(fake_resp, "https://example.test/", [])):
         result = run("web", ["example query"])
 
     assert "error" not in result
@@ -245,7 +245,7 @@ def test_web_brave_success():
     fake_resp.__enter__ = mock.MagicMock(return_value=fake_resp)
     fake_resp.__exit__ = mock.MagicMock(return_value=False)
 
-    with mock.patch("urllib.request.urlopen", return_value=fake_resp):
+    with mock.patch.object(search_main, "open_url", return_value=(fake_resp, "https://example.test/", [])):
         result = run("web", ["brave query"])
 
     assert "error" not in result
@@ -284,7 +284,7 @@ def test_image_google_success():
     fake_resp.__enter__ = mock.MagicMock(return_value=fake_resp)
     fake_resp.__exit__ = mock.MagicMock(return_value=False)
 
-    with mock.patch("urllib.request.urlopen", return_value=fake_resp):
+    with mock.patch.object(search_main, "open_url", return_value=(fake_resp, "https://example.test/", [])):
         result = run("image", ["cute cats"])
 
     assert "error" not in result
@@ -319,9 +319,9 @@ def test_web_google_failure_does_not_cross_into_brave_scope():
         fake_resp.read.return_value = _mock_brave_web_response()
         fake_resp.__enter__ = mock.MagicMock(return_value=fake_resp)
         fake_resp.__exit__ = mock.MagicMock(return_value=False)
-        return fake_resp
+        return fake_resp, req.full_url, []
 
-    with mock.patch("urllib.request.urlopen", side_effect=_side_effect):
+    with mock.patch.object(search_main, "open_url", side_effect=_side_effect):
         result = run("web", ["fallback test", "--provider", "google"])
 
     assert "error" in result
@@ -342,7 +342,7 @@ def test_multiword_query():
     fake_resp.__enter__ = mock.MagicMock(return_value=fake_resp)
     fake_resp.__exit__ = mock.MagicMock(return_value=False)
 
-    with mock.patch("urllib.request.urlopen", return_value=fake_resp):
+    with mock.patch.object(search_main, "open_url", return_value=(fake_resp, "https://example.test/", [])):
         result = run("web", ["rust", "async", "runtime", "--max-results", "3"])
 
     assert result["query"] == "rust async runtime"
@@ -361,7 +361,7 @@ def test_max_results_clamped_to_limit():
     fake_resp.__enter__ = mock.MagicMock(return_value=fake_resp)
     fake_resp.__exit__ = mock.MagicMock(return_value=False)
 
-    with mock.patch("urllib.request.urlopen", return_value=fake_resp) as mock_open:
+    with mock.patch.object(search_main, "open_url", return_value=(fake_resp, "https://example.test/", [])) as mock_open:
         run("web", ["test", "--max-results", "50"])
         # The URL should have num=10, not 50
         called_req = mock_open.call_args[0][0]

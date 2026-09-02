@@ -14,20 +14,36 @@
 //! Unknown methods return `ERR_METHOD_NOT_FOUND` so the spec-defined
 //! optional methods (resources/*, prompts/*) degrade cleanly.
 
+use std::collections::VecDeque;
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
+use futures_util::FutureExt;
 use serde_json::{json, Value};
+use tokio::task::{AbortHandle, JoinSet};
 
 use super::protocol::{
     CallToolParams, CallToolResult, ContentItem, Implementation, InitializeParams,
     InitializeResult, JsonRpcError, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
-    ListToolsResult, RequestId, ServerCapabilities, ToolDescriptor, ToolsCapability,
-    ERR_INTERNAL, ERR_INVALID_PARAMS, ERR_INVALID_REQUEST, ERR_METHOD_NOT_FOUND,
-    ERR_PARSE, JSONRPC_VERSION, PROTOCOL_VERSION,
+    ListToolsResult, RequestId, ServerCapabilities, ToolDescriptor, ToolsCapability, ERR_INTERNAL,
+    ERR_INVALID_PARAMS, ERR_INVALID_REQUEST, ERR_METHOD_NOT_FOUND, ERR_PARSE, JSONRPC_VERSION,
+    PROTOCOL_VERSION,
 };
 use super::transport::{Transport, TransportError};
 use crate::agent::tools::exposure::ToolExposureContext;
-use crate::agent::tools::registry::{ResolvedToolKind, ToolRegistry};
+use crate::agent::tools::registry::{ResolvedToolCall, ResolvedToolKind, ToolRegistry};
+use crate::agent::tools::ToolResult;
+
+/// Core-specific JSON-RPC server error used after a valid, authorized
+/// `tools/call` cannot enter the bounded execution queue.
+pub const ERR_SERVER_OVERLOADED: i64 = -32000;
+pub const SERVER_OVERLOADED_KIND: &str = "server_overloaded";
+pub const SERVER_OVERLOADED_HINT: &str = "retry the request with exponential backoff";
+
+pub const DEFAULT_MAX_ACTIVE_TOOL_CALLS: usize = 4;
+pub const DEFAULT_MAX_QUEUED_TOOL_CALLS: usize = 8;
+pub const MAX_ACTIVE_TOOL_CALLS: usize = 16;
+pub const MAX_QUEUED_TOOL_CALLS: usize = 32;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ServerError {
@@ -35,15 +51,65 @@ pub enum ServerError {
     Transport(#[from] TransportError),
 }
 
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum ServerLimitsError {
+    #[error("active tool-call limit must be between 1 and {MAX_ACTIVE_TOOL_CALLS}")]
+    Active,
+    #[error("queued tool-call limit must not exceed {MAX_QUEUED_TOOL_CALLS}")]
+    Queued,
+}
+
+/// Trusted composition-time limits for inbound tool execution.
+///
+/// Request fields never influence these values. The maxima keep even
+/// operator-selected limits within a predictable retention envelope.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct McpServerLimits {
+    max_active_tool_calls: usize,
+    max_queued_tool_calls: usize,
+}
+
+impl McpServerLimits {
+    pub fn new(
+        max_active_tool_calls: usize,
+        max_queued_tool_calls: usize,
+    ) -> Result<Self, ServerLimitsError> {
+        if !(1..=MAX_ACTIVE_TOOL_CALLS).contains(&max_active_tool_calls) {
+            return Err(ServerLimitsError::Active);
+        }
+        if max_queued_tool_calls > MAX_QUEUED_TOOL_CALLS {
+            return Err(ServerLimitsError::Queued);
+        }
+        Ok(Self {
+            max_active_tool_calls,
+            max_queued_tool_calls,
+        })
+    }
+}
+
+impl Default for McpServerLimits {
+    fn default() -> Self {
+        Self {
+            max_active_tool_calls: DEFAULT_MAX_ACTIVE_TOOL_CALLS,
+            max_queued_tool_calls: DEFAULT_MAX_QUEUED_TOOL_CALLS,
+        }
+    }
+}
+
 pub struct McpServer {
     name: String,
     version: String,
     registry: Arc<ToolRegistry>,
     exposure: ToolExposureContext,
+    limits: McpServerLimits,
+}
+
+struct PreparedToolCall {
+    id: RequestId,
+    resolved: ResolvedToolCall,
 }
 
 impl McpServer {
-    #[cfg(test)]
     pub fn new(
         name: impl Into<String>,
         version: impl Into<String>,
@@ -53,9 +119,7 @@ impl McpServer {
             name,
             version,
             registry,
-            ToolExposureContext::isolated(
-                crate::agent::tools::guardrails::Guardrails::permissive(),
-            ),
+            ToolExposureContext::isolated(crate::agent::tools::guardrails::Guardrails::permissive()),
         )
     }
 
@@ -70,162 +134,211 @@ impl McpServer {
             version: version.into(),
             registry,
             exposure,
+            limits: McpServerLimits::default(),
         }
+    }
+
+    /// Override execution bounds from trusted server composition.
+    pub fn with_limits(mut self, limits: McpServerLimits) -> Self {
+        self.limits = limits;
+        self
     }
 
     /// Run the read/dispatch/write loop until the transport closes
     /// or errors.
     ///
-    /// Each request is dispatched on its own `tokio::spawn`'d task so
-    /// a slow tool (e.g. a 30-second LLM call inside a `tools/call`)
-    /// does not head-of-line block subsequent requests. Responses are
-    /// serialized through the single transport `send` channel; the
-    /// `Transport` impls hold an internal mutex around the writer.
+    /// Valid, authorized `tools/call` requests enter a bounded active
+    /// set and bounded FIFO queue. Protocol-control methods stay on
+    /// the read loop, so tool load cannot starve them. Excess calls
+    /// receive [`ERR_SERVER_OVERLOADED`], while notifications are
+    /// never queued and remain response-free.
     ///
     /// MCP does not require strict request/response ordering (each
-    /// response carries the request id), so interleaving is safe and
-    /// well within spec.
+    /// response carries the request id), so completion-order responses
+    /// are safe and within spec.
     pub async fn serve(self, transport: impl Transport) -> Result<(), ServerError> {
         let t = Arc::new(transport);
         let me = Arc::new(self);
-        let mut handlers: Vec<tokio::task::JoinHandle<()>> = Vec::new();
-        loop {
-            let frame = match t.recv().await? {
-                Some(f) => f,
-                None => break,
-            };
-            // Reap finished handlers opportunistically so the vec
-            // doesn't grow unbounded for long-lived servers.
-            handlers.retain(|h| !h.is_finished());
+        let mut handlers = JoinSet::new();
+        let mut active_requests: Vec<(RequestId, AbortHandle)> = Vec::new();
+        let mut queued = VecDeque::new();
 
-            let raw: Value = match serde_json::from_str(&frame) {
-                Ok(value) => value,
-                Err(error) => {
-                    let response = JsonRpcResponse::err(
-                        RequestId::Null,
-                        JsonRpcError::new(ERR_PARSE, format!("parse error: {error}")),
-                    );
-                    t.send(encode_response(&response)).await?;
-                    continue;
+        let result = async {
+            loop {
+                while handlers.len() < me.limits.max_active_tool_calls {
+                    let Some(call) = queued.pop_front() else {
+                        break;
+                    };
+                    spawn_tool_call(&mut handlers, &mut active_requests, Arc::clone(&me), call);
                 }
-            };
-            if !raw.is_object() {
-                let response = JsonRpcResponse::err(
-                    RequestId::Null,
-                    JsonRpcError::new(ERR_INVALID_REQUEST, "request must be a JSON object"),
-                );
-                t.send(encode_response(&response)).await?;
-                continue;
-            }
-            if raw.get("jsonrpc").and_then(Value::as_str) != Some(JSONRPC_VERSION) {
-                let response = JsonRpcResponse::err(
-                    extract_id(&raw),
-                    JsonRpcError::new(
-                        ERR_INVALID_REQUEST,
-                        "missing or invalid jsonrpc 2.0 envelope",
-                    ),
-                );
-                t.send(encode_response(&response)).await?;
-                continue;
-            }
-            if raw.get("id").is_some()
-                && !matches!(
-                    raw.get("id"),
-                    Some(Value::Null | Value::String(_) | Value::Number(_))
-                )
-            {
-                let response = JsonRpcResponse::err(
-                    RequestId::Null,
-                    JsonRpcError::new(
-                        ERR_INVALID_REQUEST,
-                        "request id must be a string, number, or null",
-                    ),
-                );
-                t.send(encode_response(&response)).await?;
-                continue;
-            }
-            if raw
-                .get("params")
-                .is_some_and(|params| !params.is_object() && !params.is_array())
-                && raw.get("id").is_none()
-            {
-                let response = JsonRpcResponse::err(
-                    extract_id(&raw),
-                    JsonRpcError::new(
-                        ERR_INVALID_REQUEST,
-                        "request params must be an object or array",
-                    ),
-                );
-                t.send(encode_response(&response)).await?;
-                continue;
-            }
-            if raw.get("id").is_some()
-                && raw.get("params").is_some_and(Value::is_null)
-                && matches!(
-                    raw.get("method").and_then(Value::as_str),
-                    Some("ping" | "tools/list")
-                )
-            {
-                let response = JsonRpcResponse::err(
-                    extract_id(&raw),
-                    JsonRpcError::new(ERR_INVALID_PARAMS, "params must not be null"),
-                );
-                t.send(encode_response(&response)).await?;
-                continue;
-            }
-            if raw.get("id").is_none() {
-                match serde_json::from_value::<JsonRpcNotification>(raw) {
-                    Ok(_) => continue,
+
+                let frame = tokio::select! {
+                    biased;
+                    completed = handlers.join_next(), if !handlers.is_empty() => {
+                        active_requests.retain(|(_, handle)| !handle.is_finished());
+                        match completed {
+                            Some(Ok(response)) => t.send(encode_response(&response)).await?,
+                            Some(Err(error)) if error.is_cancelled() => {}
+                            Some(Err(error)) => {
+                                tracing::warn!("MCP tool-call handler failed: {error}");
+                            }
+                            None => {}
+                        }
+                        continue;
+                    }
+                    received = t.recv() => {
+                        match received {
+                            Ok(Some(frame)) => frame,
+                            Ok(None) => break Ok(()),
+                            Err(error) => break Err(error.into()),
+                        }
+                    }
+                };
+
+                let raw: Value = match serde_json::from_str(&frame) {
+                    Ok(value) => value,
                     Err(error) => {
                         let response = JsonRpcResponse::err(
                             RequestId::Null,
-                            JsonRpcError::new(
-                                ERR_INVALID_REQUEST,
-                                format!("invalid notification: {error}"),
-                            ),
+                            JsonRpcError::new(ERR_PARSE, format!("parse error: {error}")),
                         );
                         t.send(encode_response(&response)).await?;
                         continue;
                     }
+                };
+                if !raw.is_object() {
+                    let response = JsonRpcResponse::err(
+                        RequestId::Null,
+                        JsonRpcError::new(ERR_INVALID_REQUEST, "request must be a JSON object"),
+                    );
+                    t.send(encode_response(&response)).await?;
+                    continue;
                 }
-            }
-            let request: JsonRpcRequest = match serde_json::from_value(raw.clone()) {
-                Ok(request) => request,
-                Err(error) => {
+                if raw.get("jsonrpc").and_then(Value::as_str) != Some(JSONRPC_VERSION) {
                     let response = JsonRpcResponse::err(
                         extract_id(&raw),
                         JsonRpcError::new(
                             ERR_INVALID_REQUEST,
-                            format!("invalid request: {error}"),
+                            "missing or invalid jsonrpc 2.0 envelope",
                         ),
                     );
                     t.send(encode_response(&response)).await?;
                     continue;
                 }
-            };
-            let server = me.clone();
-            let t = t.clone();
-            handlers.push(tokio::spawn(async move {
-                let response = server.handle(request).await;
-                let _ = t.send(encode_response(&response)).await;
-            }));
+                if raw.get("id").is_some()
+                    && !matches!(
+                        raw.get("id"),
+                        Some(Value::Null | Value::String(_) | Value::Number(_))
+                    )
+                {
+                    let response = JsonRpcResponse::err(
+                        RequestId::Null,
+                        JsonRpcError::new(
+                            ERR_INVALID_REQUEST,
+                            "request id must be a string, number, or null",
+                        ),
+                    );
+                    t.send(encode_response(&response)).await?;
+                    continue;
+                }
+                if raw
+                    .get("params")
+                    .is_some_and(|params| !params.is_object() && !params.is_array())
+                    && raw.get("id").is_none()
+                {
+                    let response = JsonRpcResponse::err(
+                        extract_id(&raw),
+                        JsonRpcError::new(
+                            ERR_INVALID_REQUEST,
+                            "request params must be an object or array",
+                        ),
+                    );
+                    t.send(encode_response(&response)).await?;
+                    continue;
+                }
+                if raw.get("id").is_some()
+                    && raw.get("params").is_some_and(Value::is_null)
+                    && matches!(
+                        raw.get("method").and_then(Value::as_str),
+                        Some("ping" | "tools/list")
+                    )
+                {
+                    let response = JsonRpcResponse::err(
+                        extract_id(&raw),
+                        JsonRpcError::new(ERR_INVALID_PARAMS, "params must not be null"),
+                    );
+                    t.send(encode_response(&response)).await?;
+                    continue;
+                }
+                if raw.get("id").is_none() {
+                    match serde_json::from_value::<JsonRpcNotification>(raw) {
+                        Ok(notification) => {
+                            handle_notification(notification, &mut queued, &active_requests);
+                            continue;
+                        }
+                        Err(error) => {
+                            let response = JsonRpcResponse::err(
+                                RequestId::Null,
+                                JsonRpcError::new(
+                                    ERR_INVALID_REQUEST,
+                                    format!("invalid notification: {error}"),
+                                ),
+                            );
+                            t.send(encode_response(&response)).await?;
+                            continue;
+                        }
+                    }
+                }
+                let request: JsonRpcRequest = match serde_json::from_value(raw.clone()) {
+                    Ok(request) => request,
+                    Err(error) => {
+                        let response = JsonRpcResponse::err(
+                            extract_id(&raw),
+                            JsonRpcError::new(
+                                ERR_INVALID_REQUEST,
+                                format!("invalid request: {error}"),
+                            ),
+                        );
+                        t.send(encode_response(&response)).await?;
+                        continue;
+                    }
+                };
+
+                if request.method == "tools/call" {
+                    let call = match me.prepare_tools_call(request) {
+                        Ok(call) => call,
+                        Err(response) => {
+                            t.send(encode_response(&response)).await?;
+                            continue;
+                        }
+                    };
+                    if handlers.len() < me.limits.max_active_tool_calls {
+                        spawn_tool_call(&mut handlers, &mut active_requests, Arc::clone(&me), call);
+                    } else if queued.len() < me.limits.max_queued_tool_calls {
+                        queued.push_back(call);
+                    } else {
+                        t.send(encode_response(&overload_response(call.id))).await?;
+                    }
+                    continue;
+                }
+
+                let response = me.handle_control(request);
+                t.send(encode_response(&response)).await?;
+            }
         }
-        // Best-effort drain of in-flight handlers before returning so
-        // queued responses get a chance to flush before the transport
-        // closes.
-        for h in handlers {
-            let _ = h.await;
-        }
-        Ok(())
+        .await;
+
+        queued.clear();
+        shutdown_handlers(&mut handlers).await;
+        result
     }
 
-    async fn handle(&self, req: JsonRpcRequest) -> JsonRpcResponse {
+    fn handle_control(&self, req: JsonRpcRequest) -> JsonRpcResponse {
         let id = req.id.clone();
         match req.method.as_str() {
             "initialize" => self.handle_initialize(req),
             "ping" => self.handle_ping(req),
             "tools/list" => self.handle_tools_list(req),
-            "tools/call" => self.handle_tools_call(req).await,
             other => JsonRpcResponse::err(
                 id,
                 JsonRpcError::new(ERR_METHOD_NOT_FOUND, format!("method not found: {other}")),
@@ -237,10 +350,7 @@ impl McpServer {
         let id = req.id.clone();
         if let Some(params) = req.params.as_ref() {
             if let Err(error) = validate_initialize_params(params) {
-                return JsonRpcResponse::err(
-                    id,
-                    JsonRpcError::new(ERR_INVALID_PARAMS, error),
-                );
+                return JsonRpcResponse::err(id, JsonRpcError::new(ERR_INVALID_PARAMS, error));
             }
         }
         let _params: InitializeParams = match req.params {
@@ -310,7 +420,7 @@ impl McpServer {
                 );
             }
         }
-        let tools: Vec<ToolDescriptor> = self
+        let tools = self
             .registry
             .as_llm_tools_for(&self.exposure)
             .into_iter()
@@ -330,7 +440,10 @@ impl McpServer {
         }
     }
 
-    async fn handle_tools_call(&self, req: JsonRpcRequest) -> JsonRpcResponse {
+    fn prepare_tools_call(
+        &self,
+        req: JsonRpcRequest,
+    ) -> Result<PreparedToolCall, Box<JsonRpcResponse>> {
         let id = req.id.clone();
         let arguments_present = req
             .params
@@ -341,33 +454,33 @@ impl McpServer {
             Some(v) => match serde_json::from_value(v) {
                 Ok(p) => p,
                 Err(e) => {
-                    return JsonRpcResponse::err(
+                    return Err(Box::new(JsonRpcResponse::err(
                         id,
                         JsonRpcError::new(ERR_INVALID_PARAMS, e.to_string()),
-                    );
+                    )));
                 }
             },
             None => {
-                return JsonRpcResponse::err(
+                return Err(Box::new(JsonRpcResponse::err(
                     id,
                     JsonRpcError::new(ERR_INVALID_PARAMS, "missing params"),
-                );
+                )));
             }
         };
         let arguments = match params.arguments {
             Some(Value::Object(arguments)) => Value::Object(arguments),
             Some(_) => {
-                return JsonRpcResponse::err(
+                return Err(Box::new(JsonRpcResponse::err(
                     id,
                     JsonRpcError::new(ERR_INVALID_PARAMS, "`arguments` must be an object"),
-                );
+                )));
             }
             None if !arguments_present => json!({}),
             None => {
-                return JsonRpcResponse::err(
+                return Err(Box::new(JsonRpcResponse::err(
                     id,
                     JsonRpcError::new(ERR_INVALID_PARAMS, "`arguments` must be an object"),
-                );
+                )));
             }
         };
         let resolved = self.registry.resolve_model_call(
@@ -378,41 +491,47 @@ impl McpServer {
                 input: arguments,
             },
         );
-        let result = match &resolved.kind {
-            ResolvedToolKind::Rejected(reason) => {
-                return JsonRpcResponse::err(
-                    id,
-                    JsonRpcError::new(ERR_INVALID_PARAMS, reason.clone()),
-                )
-            }
+        if let ResolvedToolKind::Rejected(reason) = &resolved.kind {
+            return Err(Box::new(JsonRpcResponse::err(
+                id,
+                JsonRpcError::new(ERR_INVALID_PARAMS, reason.clone()),
+            )));
+        }
+        if matches!(resolved.kind, ResolvedToolKind::Registry)
+            && self
+                .registry
+                .get_for(&self.exposure, &resolved.call.name)
+                .is_none()
+        {
+            return Err(Box::new(JsonRpcResponse::err(
+                id,
+                JsonRpcError::new(
+                    ERR_INVALID_PARAMS,
+                    format!("tool not registered: {}", resolved.call.name),
+                ),
+            )));
+        }
+        Ok(PreparedToolCall { id, resolved })
+    }
+
+    async fn execute_tools_call(&self, call: PreparedToolCall) -> JsonRpcResponse {
+        let result = match call.resolved.kind {
             ResolvedToolKind::Catalog => self.registry.execute_catalog(
                 &self.exposure,
-                &resolved.call.name,
-                &resolved.call.input,
+                &call.resolved.call.name,
+                &call.resolved.call.input,
             ),
             ResolvedToolKind::Registry => {
-                if self
-                    .registry
-                    .get_for(&self.exposure, &resolved.call.name)
-                    .is_none()
-                {
-                    return JsonRpcResponse::err(
-                        id,
-                        JsonRpcError::new(
-                            ERR_INVALID_PARAMS,
-                            format!("tool not registered: {}", resolved.call.name),
-                        ),
-                    );
-                }
                 self.registry
                     .execute(
                         &self.exposure,
-                        &resolved.call.name,
-                        resolved.call.input.clone(),
+                        &call.resolved.call.name,
+                        call.resolved.call.input,
                         "policy: external_mcp",
                     )
                     .await
             }
+            ResolvedToolKind::Rejected(reason) => ToolResult::err(reason),
         };
         let body = CallToolResult {
             content: vec![ContentItem::Text {
@@ -421,10 +540,74 @@ impl McpServer {
             is_error: if result.is_error { Some(true) } else { None },
         };
         match serde_json::to_value(&body) {
-            Ok(v) => JsonRpcResponse::ok(id, v),
-            Err(e) => JsonRpcResponse::err(id, JsonRpcError::new(ERR_INTERNAL, e.to_string())),
+            Ok(v) => JsonRpcResponse::ok(call.id, v),
+            Err(e) => JsonRpcResponse::err(call.id, JsonRpcError::new(ERR_INTERNAL, e.to_string())),
         }
     }
+}
+
+fn spawn_tool_call(
+    handlers: &mut JoinSet<JsonRpcResponse>,
+    active_requests: &mut Vec<(RequestId, AbortHandle)>,
+    server: Arc<McpServer>,
+    call: PreparedToolCall,
+) {
+    let request_id = call.id.clone();
+    let panic_id = request_id.clone();
+    let handle = handlers.spawn(async move {
+        match AssertUnwindSafe(server.execute_tools_call(call))
+            .catch_unwind()
+            .await
+        {
+            Ok(response) => response,
+            Err(_) => JsonRpcResponse::err(
+                panic_id,
+                JsonRpcError::new(ERR_INTERNAL, "tool-call handler panicked"),
+            ),
+        }
+    });
+    active_requests.push((request_id, handle));
+}
+
+async fn shutdown_handlers(handlers: &mut JoinSet<JsonRpcResponse>) {
+    handlers.abort_all();
+    while handlers.join_next().await.is_some() {}
+}
+
+fn handle_notification(
+    notification: JsonRpcNotification,
+    queued: &mut VecDeque<PreparedToolCall>,
+    active_requests: &[(RequestId, AbortHandle)],
+) {
+    if notification.method != "notifications/cancelled" {
+        return;
+    }
+    let Some(request_id) = notification
+        .params
+        .and_then(|params| params.as_object().cloned())
+        .and_then(|params| params.get("requestId").cloned())
+        .and_then(|request_id| serde_json::from_value::<RequestId>(request_id).ok())
+    else {
+        return;
+    };
+
+    queued.retain(|call| call.id != request_id);
+    for (id, handle) in active_requests {
+        if *id == request_id {
+            handle.abort();
+        }
+    }
+}
+
+fn overload_response(id: RequestId) -> JsonRpcResponse {
+    JsonRpcResponse::err(
+        id,
+        JsonRpcError::new(ERR_SERVER_OVERLOADED, "server overloaded").with_data(json!({
+            "kind": SERVER_OVERLOADED_KIND,
+            "retryable": true,
+            "hint": SERVER_OVERLOADED_HINT,
+        })),
+    )
 }
 
 fn validate_initialize_params(params: &Value) -> Result<(), String> {

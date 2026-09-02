@@ -7,6 +7,12 @@
 
 fn main() {
     cos::storage::set_private_umask();
+    if let Err(refusal) =
+        cos::update::runtime::enforce_startup(cos::update::runtime::Scope::CompiledEpoch)
+    {
+        eprintln!("claw-agentd: {refusal}");
+        std::process::exit(1);
+    }
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     #[cfg(unix)]
     {

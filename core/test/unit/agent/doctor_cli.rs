@@ -191,6 +191,41 @@ fn check_log_file_reports_lines_when_present() {
 }
 
 #[test]
+fn run_log_and_insights_derive_from_the_owner_scoped_usage_snapshot() {
+    let usage = json!({
+        "status": "ok",
+        "scope": "overall",
+        "since": "2026-08-20T00:00:00Z",
+        "log": "/var/lib/cos/users/1000/logs/ai.jsonl",
+        "total": {
+            "calls": 3,
+            "input_tokens": 120,
+            "output_tokens": 30,
+            "finish_reasons": {"stop": 2, "tool_use": 1},
+            "errors": 1
+        },
+        "by_provider": {"anthropic": {"calls": 3}},
+        "by_model": {"claude-sonnet": {"calls": 3}},
+        "log_lines": 4,
+        "log_bytes": 1024,
+        "parse_errors": 0,
+    });
+
+    let run_log = check_run_log_from_usage(&usage);
+    let insights = check_insights_from_usage(&usage);
+
+    assert_eq!(run_log["path"], usage["log"]);
+    assert_eq!(run_log["lines"], 4);
+    assert_eq!(run_log["bytes"], 1024);
+    assert_eq!(run_log["records"], 3);
+    assert_eq!(insights["log"], usage["log"]);
+    assert_eq!(insights["providers_seen"], 1);
+    assert_eq!(insights["overall"], usage["total"]);
+    assert_eq!(insights["overall"]["finish_reasons"]["tool_use"], 1);
+    assert_eq!(insights["overall"]["errors"], 1);
+}
+
+#[test]
 fn check_skills_warns_on_load_errors_only() {
     let v = check_skills();
     let status = v.get("status").and_then(|s| s.as_str()).unwrap();

@@ -323,6 +323,25 @@ fn require_with_operation(
     let mode = Mode::from_env();
     let session_id = crate::proc::current_session_id();
     let consent_context = consent_context(session_id.as_deref());
+    if let Some(decision) = crate::worker::broker::sandbox_policy_check(verb, &scope) {
+        let result = decision.map_err(|reason| Denial {
+            verb,
+            requested_scope: scope.clone(),
+            granted_scopes: Vec::new(),
+            reason: DenialReason::ScopeOutOfRange,
+            hint: Some(reason),
+            approval: None,
+        });
+        crate::audit::log_cap_decision(build_cap_audit_record(
+            verb,
+            &scope,
+            mode,
+            session_id.as_deref(),
+            &result,
+            operation_digest,
+        ));
+        return result;
+    }
     let mut result = require_impl(
         verb,
         scope.clone(),
@@ -633,6 +652,19 @@ fn authorize_session_caps(
     consent_context: ConsentContext,
     operation_digest: Option<&str>,
 ) -> Result<(), Denial> {
+    let owner = crate::provenance::runtime::current_owner();
+    let trust = crate::provenance::trust_store();
+    let liveness = if is_app {
+        crate::provenance::runtime::assert_live_instance(owner, session_id, &trust)
+    } else {
+        crate::provenance::runtime::assert_live(owner, session_id, &trust)
+    };
+    if let Err(reason) = liveness {
+        return Err(Denial::verb_not_granted(verb, scope).with_hint(format!(
+            "the package backing session `{session_id}` is no longer trusted: {reason}"
+        )));
+    }
+
     let requested = Cap::new(verb, scope.clone());
     let ceiling = CAPABILITY_CEILING.try_with(Clone::clone).ok();
     if ceiling

@@ -5,18 +5,18 @@ The official Rust SDK for Claw OS. Use this crate to talk to the
 
 ## What's in it
 
-| Module    | Purpose                                                                        |
-|-----------|--------------------------------------------------------------------------------|
-| `ai`      | Stable `chat` / `chat-untrusted` access through `cos ai chat`.                 |
-| `policy`  | Capability checks before every gated side effect.                              |
-| `tools`   | `cos ai tool <name>` — fulfil catalog tools the model proposed.                |
-| `fs`      | `cos app fs ls / read / write / stat / search / recent`                        |
-| `exec`    | `cos app exec ...`                                                             |
-| `pkg`     | `cos app pkg has / list / install`                                             |
-| `notify`  | `cos app notify ...`                                                           |
-| `net`     | `cos app net ...`                                                              |
-| `envelope`| Wire-v1 envelope adapter; SDKs handle the migration to native v1 transparently.|
-| `generated` | Typed structs generated from `wire/v1/*.schema.json`.                        |
+| Module      | Purpose                                                                         |
+|-------------|---------------------------------------------------------------------------------|
+| `ai`        | Stable `chat` / `chat-untrusted` access through `cos ai chat`.                  |
+| `tools`     | `cos ai tool <name>` — fulfil catalog tools the model proposed.                 |
+| `gui`       | Desktop GUI bootstrap and kernel-provided launch context.                       |
+| `envelope`  | Wire-v1 envelope adapter; SDKs handle the migration to native v1 transparently. |
+| `generated` | Typed structs generated from `wire/v1/*.schema.json`.                          |
+
+The crate does not export `policy`, `fs`, `exec`, `pkg`, `notify`, or
+`net`. Those helpers belong to the unpublished, OS-internal
+`cos-runtime` crate and are unavailable to third-party SDK consumers.
+The `cos` kernel performs capability checks when public SDK operations run.
 
 ## Add it
 
@@ -31,10 +31,9 @@ claw-os-sdk = {
 ## Use it
 
 ```rust
-use claw_os_sdk::{ai, policy};
+use claw_os_sdk::ai;
 
 fn summarise_email(body: &str) -> Result<String, Box<dyn std::error::Error>> {
-    policy::require("ai.chat.untrusted", policy::Scope::Unscoped)?;
     let response = ai::chat(
         body,
         ai::ChatOpts::default()

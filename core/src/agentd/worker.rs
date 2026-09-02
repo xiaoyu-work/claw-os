@@ -124,7 +124,8 @@ fn run() -> Result<(), String> {
 
     let cancelled = io.state.cancelled.clone();
     let tx = io.state.tx.clone();
-    let outcome = runtime.block_on(execute(assignment, tx.clone(), cancelled.clone()));
+    let state = io.state.clone();
+    let outcome = runtime.block_on(execute(assignment, tx.clone(), cancelled.clone(), state));
     let outcome = if cancelled.load(Ordering::SeqCst) {
         WorkerOutcome::Cancelled
     } else {
@@ -284,6 +285,7 @@ struct ChannelState {
     tx: UnboundedSender<WorkerFrame>,
     cancelled: Arc<AtomicBool>,
     waiters: Mutex<HashMap<u64, ApprovalWaiter>>,
+    pending_approvals: Mutex<Vec<String>>,
     next_correlation: AtomicU64,
     asks_used: AtomicU32,
 }
@@ -341,6 +343,21 @@ impl ChannelState {
             });
         }
     }
+
+    fn record_pending_approval(&self, request_id: String) {
+        if let Ok(mut pending) = self.pending_approvals.lock() {
+            if !pending.contains(&request_id) {
+                pending.push(request_id);
+            }
+        }
+    }
+
+    fn pending_approvals(&self) -> Vec<String> {
+        self.pending_approvals
+            .lock()
+            .map(|pending| pending.clone())
+            .unwrap_or_default()
+    }
 }
 
 struct ChannelIo {
@@ -359,6 +376,7 @@ impl ChannelIo {
             tx,
             cancelled: Arc::new(AtomicBool::new(false)),
             waiters: Mutex::new(HashMap::new()),
+            pending_approvals: Mutex::new(Vec::new()),
             next_correlation: AtomicU64::new(1),
             asks_used: AtomicU32::new(0),
         });
@@ -481,6 +499,7 @@ async fn io_main(
 
     let hello = WorkerFrame::Hello(Box::new(WorkerHello {
         protocol: protocol::PROTOCOL_VERSION,
+        security_epoch: crate::update::SECURITY_EPOCH,
         grant: assignment.grant.clone(),
         pid: identity.pid,
         start_time_ticks: identity.start_time_ticks,
@@ -803,7 +822,7 @@ impl ApprovalGateway for ChannelApprovalGateway {
         scope: &Scope,
         operation_digest: Option<&str>,
     ) -> Result<PendingApproval, String> {
-        match self.ask(ApprovalAsk::Request {
+        let pending = match self.ask(ApprovalAsk::Request {
             verb: verb.as_str().to_string(),
             scope: scope.clone(),
             operation_digest: operation_digest.map(str::to_string),
@@ -814,7 +833,12 @@ impl ApprovalGateway for ChannelApprovalGateway {
             ApprovalReply::Granted => Ok(PendingApproval { request_id: None }),
             ApprovalReply::Pending { request_id } => Ok(PendingApproval { request_id }),
             ApprovalReply::Refused { message } => Err(message),
+        }?;
+        if let Some(request_id) = pending.request_id.as_ref() {
+            self.state.record_pending_approval(request_id.clone());
+            crate::agent::runtime::interrupt::signal(&self.task_id);
         }
+        Ok(pending)
     }
 }
 
@@ -826,11 +850,13 @@ async fn execute(
     assignment: Assignment,
     tx: UnboundedSender<WorkerFrame>,
     cancelled: Arc<AtomicBool>,
+    state: Arc<ChannelState>,
 ) -> WorkerOutcome {
     let job = assignment.job;
     let task_id = job.id.clone();
 
-    hooks::global_registry().register(Arc::new(WorkerAuditHook {
+    let hooks = hooks::HookRegistry::new();
+    hooks.register(Arc::new(WorkerAuditHook {
         task_id: task_id.clone(),
         tx: tx.clone(),
     }));
@@ -851,14 +877,16 @@ async fn execute(
         branch_context: job.branch_context,
         session_id: job.session_id,
         max_turns: job.max_turns,
+        use_memory: job.use_memory,
         presence: assignment.presence,
     };
 
     let home = std::path::PathBuf::from(&job.owner_home);
-    let config = crate::config::intern_for_home(&home);
-    let scoped = crate::agent::service::execute_job(request, stream_sink, progress_sink);
+    let config = crate::config::load_for_home(&home);
+    let scoped =
+        crate::agent::service::execute_job_with_hooks(request, stream_sink, progress_sink, hooks);
     let scoped = with_session(assignment.session, scoped);
-    let scoped = crate::config::with_override(config, scoped);
+    let scoped = crate::config::with_snapshot(config, scoped);
     // The same per-owner scoping the in-process worker installed, so
     // config, credentials, consents and memory resolve inside the
     // owner's own account.
@@ -887,6 +915,10 @@ async fn execute(
     if cancelled.load(Ordering::SeqCst) {
         return WorkerOutcome::Cancelled;
     }
+    let request_ids = state.pending_approvals();
+    if !request_ids.is_empty() {
+        return WorkerOutcome::WaitingApproval { request_ids };
+    }
     match outcome {
         FinishOutcome::Ok {
             response,
@@ -906,6 +938,9 @@ async fn execute(
         FinishOutcome::Error(message) => WorkerOutcome::Error { message },
         FinishOutcome::Indeterminate(message) => WorkerOutcome::Error { message },
         FinishOutcome::Cancelled => WorkerOutcome::Cancelled,
+        FinishOutcome::WaitingApproval { request_ids } => {
+            WorkerOutcome::WaitingApproval { request_ids }
+        }
     }
 }
 

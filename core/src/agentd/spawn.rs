@@ -496,6 +496,13 @@ pub fn spawn_worker(
     if broker_is_root() {
         validate_root_owned_executable(&binary)?;
     }
+    // Freshness, not just ownership: a root-owned worker binary that no
+    // longer matches the release this system accepted is a downgrade,
+    // and it is refused before `execve` rather than after the process
+    // has vouched for itself over its own channel.
+    if let Err(refusal) = crate::update::runtime::enforce_worker_binary(&binary) {
+        return Err(refusal.message);
+    }
 
     let (broker_end, worker_end) = std::os::unix::net::UnixStream::pair()
         .map_err(|error| format!("create agentd channel: {error}"))?;

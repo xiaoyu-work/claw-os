@@ -1,0 +1,97 @@
+#!/bin/sh
+# __PACKAGE__ preinst -- refuse a superseded release before it is unpacked.
+#
+# Rendered from packaging/deb/common/security-floor.preinst. The
+# candidate's own epoch, version and signed release manifest are
+# embedded at package build time, because a preinst runs before any of
+# its package's files exist on disk.
+#
+# This is one of four independent gates; see docs/updating.md.
+#
+#   1. the APT pre-install hook validates the whole candidate set;
+#   2. the *installed* package's prerm refuses an older incoming
+#      version — the only gate a downgrade candidate cannot supply
+#      itself;
+#   3. this preinst refuses a superseded candidate before unpack;
+#   4. the binaries refuse to run below the floor even when dpkg was
+#      bypassed entirely.
+
+set -e
+
+PACKAGE="__PACKAGE__"
+VERSION="__VERSION__"
+SECURITY_EPOCH="__SECURITY_EPOCH__"
+
+DPKG_ROOT="${DPKG_ROOT:-}"
+ROOT_ARG="${DPKG_ROOT:-/}"
+STATE_DIR="$DPKG_ROOT/var/lib/cos/security"
+HELPER="$DPKG_ROOT/usr/lib/cos/bin/claw-security-floor"
+STAGING="$STATE_DIR/staging"
+
+case "$1" in
+    install)
+        OPERATION="install"
+        ;;
+    upgrade)
+        OPERATION="upgrade"
+        ;;
+    abort-upgrade)
+        exit 0
+        ;;
+    *)
+        echo "preinst called with unknown argument '$1'" >&2
+        exit 1
+        ;;
+esac
+
+# The candidate manifest is staged inside the root-owned floor
+# directory rather than a world-writable temporary directory, so
+# verification never reads a path an unprivileged account could swap.
+(umask 077; mkdir -p "$STAGING")
+MANIFEST="$STAGING/candidate-$PACKAGE.json"
+SIGNATURE="$STAGING/candidate-$PACKAGE.json.asc"
+rm -f "$MANIFEST" "$SIGNATURE"
+cat > "$MANIFEST" <<'CLAW_OS_RELEASE_MANIFEST'
+__RELEASE_SECURITY_MANIFEST__
+CLAW_OS_RELEASE_MANIFEST
+
+cat > "$SIGNATURE" <<'CLAW_OS_RELEASE_SIGNATURE'
+__RELEASE_SECURITY_SIGNATURE__
+CLAW_OS_RELEASE_SIGNATURE
+
+if [ ! -s "$SIGNATURE" ]; then
+    rm -f "$SIGNATURE"
+fi
+
+if [ ! -x "$HELPER" ]; then
+    if [ -e "$STATE_DIR/floor.json" ]; then
+        echo "error: $PACKAGE $VERSION (security epoch $SECURITY_EPOCH) cannot be" >&2
+        echo "       installed: this system has recorded update-security state but" >&2
+        echo "       the verifier $HELPER is missing. Reinstall claw-os-agent from" >&2
+        echo "       the signed repository before continuing." >&2
+        exit 1
+    fi
+    # First install on a machine that has never had Claw OS: there is
+    # nothing to be newer than, and the postinst seeds the floor from
+    # this release.
+    exit 0
+fi
+
+if [ -s "$SIGNATURE" ]; then
+    "$HELPER" check-candidate \
+        --root "$ROOT_ARG" \
+        --package "$PACKAGE" \
+        --version "$VERSION" \
+        --manifest "$MANIFEST" \
+        --signature "$SIGNATURE" \
+        --operation "$OPERATION"
+else
+    "$HELPER" check-candidate \
+        --root "$ROOT_ARG" \
+        --package "$PACKAGE" \
+        --version "$VERSION" \
+        --manifest "$MANIFEST" \
+        --operation "$OPERATION"
+fi
+
+exit 0

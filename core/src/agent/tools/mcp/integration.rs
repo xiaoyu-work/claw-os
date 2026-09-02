@@ -56,7 +56,7 @@ tokio::task_local! {
 /// The lifetime of this struct is the agent's config lifetime — it is
 /// read once at startup. Per-call data (handles, clients) lives on
 /// [`McpServerHandle`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct McpServerSpec {
     /// Stable, snake_case identifier. Becomes the prefix in registered
@@ -80,7 +80,47 @@ pub struct McpServerSpec {
     /// authenticated remote server. Kept as a var name (not the token)
     /// so secrets never sit in a manifest on disk.
     pub bearer_env: Option<String>,
+    /// Serializable identity the extension host re-verifies before launch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<McpPackageBinding>,
+    /// Pinned package snapshot used by direct-process attachment.
+    #[serde(skip)]
+    pub provenance: Option<Arc<crate::provenance::VerifiedPackage>>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpPackageBinding {
+    pub id: String,
+    pub content_digest: String,
+    pub path: String,
+}
+
+impl McpPackageBinding {
+    pub fn of(package: &crate::provenance::VerifiedPackage) -> Self {
+        Self {
+            id: package.id().to_string(),
+            content_digest: package.content_digest().to_string(),
+            path: package.dir().to_string_lossy().into_owned(),
+        }
+    }
+}
+
+impl PartialEq for McpServerSpec {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.command == other.command
+            && self.args == other.args
+            && self.env == other.env
+            && self.cwd == other.cwd
+            && self.timeout_secs == other.timeout_secs
+            && self.url == other.url
+            && self.bearer_env == other.bearer_env
+            && self.package == other.package
+    }
+}
+
+impl Eq for McpServerSpec {}
 
 impl McpServerSpec {
     fn timeout_duration(&self) -> Duration {
@@ -111,7 +151,6 @@ pub struct McpServerHandle {
     descriptor_digest: String,
     timeout: Duration,
     hosted: bool,
-    _proc_session: Option<crate::bridge::McpProcSession>,
 }
 
 impl McpServerHandle {
@@ -505,8 +544,9 @@ impl Tool for McpRemoteTool {
         };
         match res {
             Ok(call_result) => render_call_result(&self.name, call_result),
-            Err(error) => ToolResult::err(crate::agent::safety::untrusted::wrap_untrusted(
-                crate::agent::safety::untrusted::TOOL_RESULT_TAG,
+            Err(error) => ToolResult::err(crate::agent::safety::untrusted::wrap_labeled(
+                crate::agent::trust::SourceKind::McpToolResult,
+                server_prefix(&self.name),
                 &format!("MCP `{}` failed: {error}", self.name),
             )),
         }
@@ -561,8 +601,9 @@ impl Tool for McpCatalogTool {
             Ok(payload) => payload,
             Err(_) => return ToolResult::err("MCP catalog encoding failed"),
         };
-        ToolResult::ok(crate::agent::safety::untrusted::wrap_untrusted(
-            crate::agent::safety::untrusted::TOOL_RESULT_TAG,
+        ToolResult::ok(crate::agent::safety::untrusted::wrap_labeled(
+            crate::agent::trust::SourceKind::McpToolMetadata,
+            None,
             &payload,
         ))
     }
@@ -743,11 +784,9 @@ fn render_call_result(tool_name: &str, res: super::protocol::CallToolResult) -> 
     } else {
         chunks.join("\n\n")
     };
-    // MCP servers are third parties; their output is untrusted. Wrap it
-    // so a hostile server can't inject instructions into a kernel-
-    // resident agent via its tool result.
-    let wrapped = crate::agent::safety::untrusted::wrap_untrusted(
-        crate::agent::safety::untrusted::TOOL_RESULT_TAG,
+    let wrapped = crate::agent::safety::untrusted::wrap_labeled(
+        crate::agent::trust::SourceKind::McpToolResult,
+        server_prefix(tool_name),
         &body,
     );
     if res.is_error.unwrap_or(false) {
@@ -755,6 +794,45 @@ fn render_call_result(tool_name: &str, res: super::protocol::CallToolResult) -> 
     } else {
         ToolResult::ok(wrapped)
     }
+}
+
+fn server_prefix(tool_name: &str) -> Option<&str> {
+    tool_name
+        .strip_prefix("mcp_")
+        .and_then(|rest| rest.split('_').next())
+        .filter(|prefix| !prefix.is_empty())
+}
+
+#[cfg(test)]
+pub(crate) fn render_call_result_for_test(
+    tool_name: &str,
+    text: &str,
+    is_error: bool,
+) -> ToolResult {
+    use super::protocol::{CallToolResult, ContentItem};
+    render_call_result(
+        tool_name,
+        CallToolResult {
+            content: vec![ContentItem::Text {
+                text: text.to_string(),
+            }],
+            is_error: Some(is_error),
+        },
+    )
+}
+
+const MAX_REMOTE_DESCRIPTION_CHARS: usize = 4096;
+
+pub(crate) fn sanitise_remote_description(description: &str) -> String {
+    let defanged = crate::agent::trust::envelope::defang(description);
+    let mut bounded = defanged
+        .chars()
+        .take(MAX_REMOTE_DESCRIPTION_CHARS)
+        .collect::<String>();
+    if defanged.chars().count() > MAX_REMOTE_DESCRIPTION_CHARS {
+        bounded.push('…');
+    }
+    bounded
 }
 
 /// Spawn one server, run the handshake, register every tool it
@@ -817,7 +895,6 @@ async fn attach_server_into(
             descriptor_digest: attached.digest,
             timeout,
             hosted: true,
-            _proc_session: None,
         });
     }
     if crate::paths::is_routed_job() {
@@ -866,20 +943,9 @@ async fn attach_server_local_with_attachment(
     if spec.url.is_some() {
         return attach_http_server(spec, disclosure, attachment).await;
     }
-    let proc_session = crate::bridge::McpProcSession::for_current_parent(&spec.command)?;
-    let (program, initial_args) = if proc_session.is_some() {
-        let mut args = vec![
-            std::ffi::OsString::from("--"),
-            std::ffi::OsString::from(&spec.command),
-        ];
-        args.extend(spec.args.iter().map(std::ffi::OsString::from));
-        (crate::bridge::app_runner_path().into_os_string(), args)
-    } else {
-        (
-            std::ffi::OsString::from(&spec.command),
-            spec.args.iter().map(std::ffi::OsString::from).collect(),
-        )
-    };
+    let program = std::ffi::OsString::from(&spec.command);
+    let initial_args: Vec<std::ffi::OsString> =
+        spec.args.iter().map(std::ffi::OsString::from).collect();
     let authorized_root = if let Some(home) = crate::paths::current_home_override() {
         let canonical_home = home
             .canonicalize()
@@ -913,18 +979,6 @@ async fn attach_server_local_with_attachment(
         validate_configured_environment(key, value)?;
         inner_env.push((key.clone().into(), value.clone().into()));
     }
-    if let Some(session) = proc_session.as_ref() {
-        inner_env.push(("COS_SESSION".into(), session.id().into()));
-        inner_env.push((
-            "COS_PROC_DATA_DIR".into(),
-            session.proc_data_dir().as_os_str().to_os_string(),
-        ));
-    } else if crate::paths::current_home_override().is_some() {
-        inner_env.push((
-            "COS_PROC_DATA_DIR".into(),
-            crate::paths::proc_data_dir().into_os_string(),
-        ));
-    }
     let launch = crate::extension_host::child_isolation::prepare_with_clean_env(
         program,
         initial_args,
@@ -950,16 +1004,6 @@ async fn attach_server_local_with_attachment(
     let mut child = command
         .spawn()
         .map_err(|e| format!("spawn `{}`: {e}", spec.command))?;
-    if let Some(session) = proc_session.as_ref() {
-        let Some(pid) = child.id() else {
-            kill_and_reap(child);
-            return Err("spawned MCP server has no pid".to_string());
-        };
-        if let Err(error) = session.bind_process(pid) {
-            kill_and_reap(child);
-            return Err(format!("bind MCP child session: {error}"));
-        }
-    }
     let stdin = child
         .stdin
         .take()
@@ -1086,7 +1130,6 @@ async fn attach_server_local_with_attachment(
         descriptor_digest: attached.digest,
         timeout: timeout_dur,
         hosted: false,
-        _proc_session: proc_session,
     })
 }
 
@@ -1188,7 +1231,6 @@ pub(crate) async fn attach_http_server(
         descriptor_digest: attached.digest,
         timeout: timeout_dur,
         hosted: false,
-        _proc_session: None,
     })
 }
 
@@ -1201,17 +1243,7 @@ fn safe_env_allowlist() -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
         ("LC_ALL".into(), "C.UTF-8".into()),
         ("TZ".into(), "UTC".into()),
     ];
-    const SAFE_COS: &[&str] = &[
-        "COS_TRACE_ID",
-        "COS_SPAN_ID",
-        "COS_BIN",
-        "COS_VERSION",
-        "COS_SDK_PYTHON_DIR",
-        "COS_SNAPSHOT",
-        "COS_PERMS_MODE",
-        "COS_EXTENSION_CHILD_ISOLATION",
-        crate::extension_host::protocol::BROKER_SOCKET_ENV,
-    ];
+    const SAFE_COS: &[&str] = &["COS_TRACE_ID", "COS_SPAN_ID", "COS_VERSION"];
     for key in SAFE_COS {
         if let Ok(value) = std::env::var(key) {
             out.push(((*key).into(), value.into()));

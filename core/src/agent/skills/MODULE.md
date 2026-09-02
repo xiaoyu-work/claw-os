@@ -27,6 +27,16 @@ Skills contribute instructions, not authority. Tool access still comes from the
 guarded registry and capabilities. Synced content is external/untrusted input
 until validated and wrapped for prompt use.
 
+Every skill package is authenticated by `crate::provenance` before it is
+loaded: install requires a valid signature from a trusted, non-revoked
+publisher key, and there is no environment variable that relaxes this.
+Layered shadowing compares the verified publisher key id, not directory
+precedence. The catalog, the disclosed `SKILL.md` body and every child
+resource are read from the verified snapshot and re-checked against
+their signed digests at disclosure time, so a file changed after the
+catalog was built fails the disclosure instead of injecting new text
+into the model.
+
 ## Tests
 
 ```bash

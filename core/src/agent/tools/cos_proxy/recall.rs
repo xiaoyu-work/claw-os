@@ -232,8 +232,9 @@ impl Tool for CosRecallTool {
                 // Wrap it so an injected instruction can't be read as a
                 // command to this agent.
                 let body = serde_json::to_string(&v).unwrap_or_else(|_| v.to_string());
-                ToolResult::ok(crate::agent::safety::untrusted::wrap_untrusted(
-                    crate::agent::safety::untrusted::MEMORY_TAG,
+                ToolResult::ok(crate::agent::safety::untrusted::wrap_labeled(
+                    crate::agent::trust::SourceKind::RecalledMemory,
+                    None,
                     &body,
                 ))
             }

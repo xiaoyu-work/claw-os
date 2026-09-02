@@ -1,6 +1,47 @@
 use super::*;
 
 #[test]
+fn recording_progress_persists_tool_start_before_result() {
+    let db = crate::agent::memory::sqlite_fts::MemoryDb::open_in_memory().unwrap();
+    let sink = recording_progress(null_progress(), db.clone(), "session-1", true);
+
+    sink.on_tool_start(
+        "call-1",
+        "cos_app_run",
+        &serde_json::json!({"app": "exec", "command": "ps"}),
+    );
+
+    let rows = db.recent_tool_invocations("session-1", 10).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].session_id, "session-1");
+    assert_eq!(rows[0].tool_call_id, "call-1");
+    assert_eq!(rows[0].tool_name, "cos_app_run");
+    assert!(rows[0].input.contains("\"command\":\"ps\""));
+    assert!(rows[0].completed_at_ms.is_none());
+    assert!(rows[0].success.is_none());
+    assert!(db.recent("session-1", 10).unwrap().is_empty());
+}
+
+#[test]
+fn recording_progress_completes_tool_invocation() {
+    let db = crate::agent::memory::sqlite_fts::MemoryDb::open_in_memory().unwrap();
+    let sink = recording_progress(null_progress(), db.clone(), "session-1", true);
+    sink.on_tool_start(
+        "call-1",
+        "cos_proc",
+        &serde_json::json!({"command": "list"}),
+    );
+    sink.on_tool_result("call-1", "cos_proc", false, 42, 128, "permission denied");
+
+    let rows = db.recent_tool_invocations("session-1", 10).unwrap();
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].completed_at_ms.is_some());
+    assert_eq!(rows[0].success, Some(false));
+    assert_eq!(rows[0].latency_ms, Some(42));
+    assert_eq!(rows[0].error.as_deref(), Some("permission denied"));
+}
+
+#[test]
 fn null_sink_is_silent() {
     let sink = NullProgressSink;
     // No state is mutated; the test asserts via "compiles + no

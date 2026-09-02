@@ -64,6 +64,45 @@ tokio::task_local! {
     static ROUTED_JOB_OVERRIDE: bool;
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RoutedPathContext {
+    home: Option<PathBuf>,
+    owner_uid: Option<u32>,
+    routed_job: bool,
+}
+
+impl RoutedPathContext {
+    pub fn capture() -> Self {
+        Self {
+            home: current_home_override(),
+            owner_uid: current_owner_uid_override(),
+            routed_job: is_routed_job(),
+        }
+    }
+
+    pub async fn scope<F, R>(self, future: F) -> R
+    where
+        F: Future<Output = R>,
+    {
+        match (self.owner_uid, self.home, self.routed_job) {
+            (Some(uid), Some(home), true) => {
+                with_routed_job(with_user_override(uid, home, future)).await
+            }
+            (Some(uid), Some(home), false) => with_user_override(uid, home, future).await,
+            (Some(uid), None, true) => {
+                with_routed_job(with_owner_override(uid, future)).await
+            }
+            (Some(uid), None, false) => with_owner_override(uid, future).await,
+            (None, Some(home), true) => {
+                with_routed_job(with_home_override(home, future)).await
+            }
+            (None, Some(home), false) => with_home_override(home, future).await,
+            (None, None, true) => with_routed_job(future).await,
+            (None, None, false) => future.await,
+        }
+    }
+}
+
 /// Run `fut` with `home` installed as the per-task user-home override
 /// visible to every per-user resolver polled inside `fut`. A separately
 /// spawned Tokio task does not inherit this scope and must install its own
@@ -82,6 +121,13 @@ where
     OWNER_UID_OVERRIDE
         .scope(uid, HOME_OVERRIDE.scope(home, fut))
         .await
+}
+
+async fn with_owner_override<F, R>(uid: u32, fut: F) -> R
+where
+    F: Future<Output = R>,
+{
+    OWNER_UID_OVERRIDE.scope(uid, fut).await
 }
 
 pub async fn with_routed_job<F, R>(fut: F) -> R
@@ -426,7 +472,7 @@ pub fn agent_notes_dir() -> PathBuf {
 }
 
 /// Path to the agent's SQLite FTS5 conversation history database.
-/// A clawd-routed user job uses a root-owned, UID-partitioned database under
+/// A clawd-routed user job uses an owner-owned, UID-partitioned database under
 /// `data_dir/users/<uid>/agent/`; a non-daemon home-only override uses the
 /// user's XDG data directory. Otherwise it remains under `data_dir/agent/`.
 /// Created on first write.
@@ -452,6 +498,24 @@ pub fn clawd_user_memory_db_path(uid: u32) -> PathBuf {
     clawd_user_agent_state_dir(uid).join("memory.db")
 }
 
+/// Owner-readable system-agent memory from a non-daemon process.
+///
+/// Tests that redirect `COS_DATA_DIR` keep using that explicit root;
+/// installed user processes otherwise address the daemon partition at
+/// `/var/lib/cos/users/<uid>/agent`.
+pub fn system_agent_memory_db_path(uid: u32) -> PathBuf {
+    #[cfg(test)]
+    let root = std::env::var_os("COS_DATA_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/var/lib/cos"));
+    #[cfg(not(test))]
+    let root = PathBuf::from("/var/lib/cos");
+    root.join("users")
+        .join(uid.to_string())
+        .join("agent")
+        .join("memory.db")
+}
+
 pub fn clawd_user_agent_state_dir(uid: u32) -> PathBuf {
     clawd_user_state_dir(uid).join("agent")
 }
@@ -461,7 +525,7 @@ pub fn clawd_user_agent_state_dir(uid: u32) -> PathBuf {
 /// Owned by that account and `0700`, because the agent runtime now
 /// executes as the task owner in `claw-agentd` and has to be able to
 /// write its own conversation memory, notes and budget counters. The
-/// daemon (root) still reads it; no other account can.
+/// user-owned Web surfaces can read it; no other unprivileged account can.
 pub fn clawd_user_state_dir(uid: u32) -> PathBuf {
     data_dir().join("users").join(uid.to_string())
 }
@@ -492,6 +556,12 @@ pub fn agent_semantic_db_path() -> PathBuf {
 /// `data_dir/agent/nudges.json`. Created on first add.
 pub fn agent_nudges_path() -> PathBuf {
     routed_agent_state_dir().join("nudges.json")
+}
+
+pub fn agent_curation_log_path() -> PathBuf {
+    routed_agent_state_dir()
+        .join("memory")
+        .join("curation_log.json")
 }
 
 /// Path to the persistent agent-hooks config file. Lives at
@@ -544,6 +614,26 @@ pub fn context_events_log_path() -> PathBuf {
     data_dir().join("clawd").join("context-events.jsonl")
 }
 
+/// Root of the authoritative session event journal.
+///
+/// Root-owned and never written by an unprivileged process: the MAC
+/// keys, the writer lease and every partition chain live here, and
+/// `clawd` is the only writer. See [`crate::session::journal`] for the
+/// layout and the integrity rules.
+pub fn session_journal_dir() -> PathBuf {
+    data_dir().join("journal")
+}
+
+/// Durable, daemon-owned notification state.
+///
+/// Notifications are partitioned by `owner_uid` inside the database and are
+/// exposed only through owner-scoped `clawd` routes. Keeping the database
+/// under the daemon tree prevents an unprivileged Agent worker from rewriting
+/// delivery, acknowledgement, or preference state.
+pub fn notifications_db_path() -> PathBuf {
+    data_dir().join("clawd").join("notifications.db")
+}
+
 /// Directory for agent's per-session todo lists. Lives under
 /// `data_dir/agent/todos/`. Each session writes a JSON file named
 /// `<session_id>.json`.
@@ -567,6 +657,37 @@ pub fn agent_skills_dir() -> PathBuf {
 /// changing the writable user skill root returned by [`agent_skills_dir`].
 pub fn system_skills_dir() -> PathBuf {
     from_env_or_default("COS_SYSTEM_SKILLS_DIR", "/usr/lib/cos/skills", "skills")
+}
+
+/// Root for extension-provenance state.
+///
+/// Note that nothing under here is a *trust* root: publisher keys live
+/// only in the compiled-in roots resolved by
+/// [`crate::provenance::trust::TrustStore::default_roots`], which no
+/// environment variable can redirect. This tree holds derived state
+/// (retained artifacts, vendor pins) that is re-verified before use.
+pub fn provenance_dir() -> PathBuf {
+    data_dir().join("provenance")
+}
+
+/// Content-addressed store of verified extension artifacts. An update
+/// publishes here first, so a rollback can only land on content that
+/// already passed verification.
+pub fn provenance_artifacts_dir() -> PathBuf {
+    provenance_dir().join("artifacts")
+}
+
+/// Pinned content digests for vendor (Debian/rootfs) packages. A
+/// mismatch means the installed tree changed after the last use and is
+/// surfaced through the provenance audit log.
+pub fn vendor_pin_path() -> PathBuf {
+    provenance_dir().join("vendor-pins.json")
+}
+
+/// Append-only provenance audit log: install, activate, reject, revoke
+/// and use records referencing publisher key ids and package digests.
+pub fn provenance_audit_path() -> PathBuf {
+    log_dir().join("provenance.jsonl")
 }
 
 /// Output sink for media-tool-generated artifacts (TTS audio,

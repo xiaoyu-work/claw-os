@@ -46,7 +46,7 @@ use super::protocol::ErrorBody;
 use super::routes::Command;
 
 /// Wire protocol both ends must agree on.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Frame magic. Also the version marker: a future incompatible framing
 /// changes these bytes, so an old daemon rejects a new client at the
@@ -203,7 +203,7 @@ pub enum Fault {
     MalformedBody,
     /// A second frame arrived on a connection that is allowed one.
     ExtraFrame,
-    /// The body parsed as JSON but is not a v1 envelope.
+    /// The body parsed as JSON but is not a broker envelope.
     InvalidEnvelope,
     /// A well-formed envelope naming another protocol version.
     UnsupportedVersion,
@@ -237,6 +237,9 @@ pub enum Fault {
     NotAuthorized,
     /// The route did not finish inside its declared budget.
     RouteTimeout,
+    /// The session journal could not record the start of a durable
+    /// mutation, so the route was refused before it could run.
+    JournalUnavailable,
 }
 
 impl Fault {
@@ -265,6 +268,7 @@ impl Fault {
             Fault::DuplicateRequest => "duplicate_request",
             Fault::NotAuthorized => "command_not_authorized",
             Fault::RouteTimeout => "route_timeout",
+            Fault::JournalUnavailable => "journal_unavailable",
         }
     }
 
@@ -280,6 +284,7 @@ impl Fault {
             | Fault::TooManyRequests
             | Fault::RouteBusy
             | Fault::RouteTimeout => "unavailable",
+            Fault::JournalUnavailable => "unavailable",
             _ => "protocol_error",
         }
     }
@@ -296,7 +301,7 @@ impl Fault {
             Fault::MalformedBody => "request frame is not valid JSON",
             Fault::ExtraFrame => "clawd serves one request per connection",
             Fault::InvalidEnvelope => "request is not a valid broker envelope",
-            Fault::UnsupportedVersion => "clawd speaks broker protocol v1; upgrade the client",
+            Fault::UnsupportedVersion => "clawd protocol version mismatch; upgrade the client",
             Fault::UnknownCommand => "unknown clawd command",
             Fault::InvalidParams => "request parameters are not valid for this command",
             Fault::MissingCredentials => "kernel reported no credentials for this message",
@@ -314,6 +319,9 @@ impl Fault {
             Fault::DuplicateRequest => "this request id was already served",
             Fault::NotAuthorized => "clawd command requires root",
             Fault::RouteTimeout => "clawd command exceeded its time budget",
+            Fault::JournalUnavailable => {
+                "clawd could not record this mutation in the session journal and refused to run it"
+            }
         }
     }
 

@@ -233,7 +233,7 @@ pub fn serve(args: &[String]) -> Result<Value, String> {
         );
     }
 
-    let cfg = crate::config::get().agent.clone();
+    let cfg = crate::config::current_snapshot().agent.clone();
     // Deliberately do *not* short-circuit on `is_ready`: the UI itself
     // remains useful for inspecting tasks, approvals, inbox, sysinfo,
     // and serves as the place a user discovers they still need to run

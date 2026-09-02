@@ -13,6 +13,7 @@ console = ["tokio/tracing"]
 [dependencies]
 anyhow = "1"
 async-trait = "0.1"
+cos-runtime = { path = "../../cos-runtime/rust" }
 cos-mcp-serve = { path = "../../crates/cos-mcp-serve" }
 console-subscriber = "0.5.0"
 futures = "0.3.31"

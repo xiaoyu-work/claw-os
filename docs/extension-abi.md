@@ -70,8 +70,9 @@ The manifest schema is:
 }
 ```
 
-Identity and version must match `provenance.json`. The content digest covers
-all signed payload files except `extension.json`, avoiding a self-referential
+Identity and version must match the authenticated `.provenance.json` envelope
+(or the root-owned vendor package metadata). The content digest covers all
+verified payload files except `extension.json`, avoiding a self-referential
 digest while still binding the executable and assets. The entry is a signed
 executable file. ABI v1 permits 50–5000 ms event deadlines, 1–32 queued events,
 1–8192 bytes of output, at most four proposed actions, and exactly one
@@ -86,12 +87,21 @@ seccomp, finite rlimits, mandatory cgroup-v2 CPU/memory/PID bounds, private
 mount/PID/network namespaces, empty root, private writable state, and verified
 tree cleanup.
 
-The host re-verifies the transported package snapshot and materializes it under
-task-private storage. Only the signed package snapshot, exact system
-interpreter/ELF dependency closure, minimal account files, and private state
-enter the child. Agent extension children do **not** receive the private
-extension broker socket, the routed session registry, the primary broker,
-credentials, provider state, owner home, live package path, or ambient network.
+Before the host drops to its dedicated uid, `clawd` verifies configured
+packages with the task owner's trust roots and binds exact package receipts
+into the private host bootstrap. The host cannot read the owner's mode-0600
+trust files; it uses that broker-authenticated receipt to independently
+re-open the installed path, verify the embedded publisher signature and
+complete file tree through `crate::provenance::verify`, and materialize only
+the resulting `VerifiedPackage` snapshot under task-private storage. A receipt
+names the exact kind, id, version, content digest, signer-key digest, trust
+tier, and trust generation. No package bytes or worker-selected trust roots
+cross the worker control protocol. Only the authenticated package snapshot,
+exact system interpreter/ELF dependency closure, minimal account files, and
+private state enter the child. Agent extension children do **not** receive the
+private extension broker socket, the routed session registry, the primary
+broker, credentials, provider state, owner home, live package path, or ambient
+network.
 
 Every ABI binding includes the exact owner uid, task id, session id, extension
 id/version, package/manifest/entry digests, capability generation, host lease
@@ -167,6 +177,12 @@ treated as untrusted, represented by a keyed digest in audit/session mutation
 records, and never inserted into system/developer prompts or the conversation.
 A future model-visible surface must use a fixed trusted local tool-result
 envelope and the normal untrusted-data wrapper.
+
+The worker retains the authenticated `VerifiedPackage` snapshot for the active
+instance and rechecks it before every event, immediately before every proposed
+action, and at least every five seconds while idle. Trust-generation changes,
+package replacement, or revocation disable and detach only that extension; a
+running task never continues to invoke code whose package is no longer current.
 
 ## Proposed actions and capability references
 

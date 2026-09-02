@@ -10,10 +10,10 @@ web UI.
 - Authenticate local browser/desktop requests.
 - Map HTTP routes to agent/session/setup operations.
 - Stream text, tools, reasoning presentation, usage, and terminal state.
-- Reuse frozen session prompts and the same verified durable compaction
-  projection as CLI and task continuations through the shared runtime.
-- Give each conversation turn a unique invocation identity and let response
-  disconnect abort and revoke that turn's approval state.
+- Subscribe to owner-scoped notifications and expose live unread,
+  acknowledgement, dismissal, and delivery-preference UI.
+- Reuse frozen session prompts and configured history compression through the
+  shared runtime.
 - Serve built UI assets without exposing credentials.
 
 ## Key Files
@@ -21,6 +21,7 @@ web UI.
 | Path | Role |
 | --- | --- |
 | `routes/` | HTTP and SSE endpoint handlers |
+| `routes/notifications.rs` | Notification list, SSE, state, and preference bridge to `clawd` |
 | `ui/` | TypeScript/React source and generated distribution assets |
 | `mod.rs` | Server/router assembly |
 

@@ -62,9 +62,10 @@ fn cache_is_isolated_per_token() {
             base_url: "https://api.individual.githubcopilot.com".into(),
             expires_at_unix: u64::MAX,
         },
-    );
-    assert!(lookup_cached(fp_a).is_some());
-    assert!(lookup_cached(fp_b).is_none());
+    )
+    .unwrap();
+    assert!(lookup_cached(fp_a).unwrap().is_some());
+    assert!(lookup_cached(fp_b).unwrap().is_none());
 }
 
 fn model(value: serde_json::Value) -> CopilotModel {
@@ -206,9 +207,9 @@ fn truncate_handles_non_ascii() {
 /// different fingerprints get different locks.
 #[tokio::test]
 async fn exchange_lock_is_per_fingerprint() {
-    let a1 = exchange_lock_for(1);
-    let a2 = exchange_lock_for(1);
-    let b = exchange_lock_for(2);
+    let a1 = exchange_lock_for(1).unwrap();
+    let a2 = exchange_lock_for(1).unwrap();
+    let b = exchange_lock_for(2).unwrap();
     assert!(Arc::ptr_eq(&a1, &a2), "same fingerprint must share lock");
     assert!(!Arc::ptr_eq(&a1, &b), "different fingerprints must NOT share lock");
 
@@ -235,12 +236,13 @@ async fn rejected_token_refresh_invalidates_token_and_model_catalog_once() {
         base_url: "https://api.business.githubcopilot.com".into(),
         expires_at_unix: u64::MAX,
     };
-    store_cached(token_fingerprint(github_token), rejected.clone());
+    store_cached(token_fingerprint(github_token), rejected.clone()).unwrap();
     let rejected_fingerprint = token_fingerprint(&rejected.bearer);
     store_model_catalog(
         rejected_fingerprint,
         Arc::new(vec![model(serde_json::json!({"id": "stale-model"}))]),
-    );
+    )
+    .unwrap();
 
     let exchanges = Arc::new(AtomicUsize::new(0));
     let exchanges_for_call = exchanges.clone();
@@ -262,11 +264,12 @@ async fn rejected_token_refresh_invalidates_token_and_model_catalog_once() {
     assert_eq!(
         lookup_cached(token_fingerprint(github_token))
             .unwrap()
+            .unwrap()
             .bearer,
         fresh.bearer
     );
     assert!(
-        lookup_model_catalog(rejected_fingerprint).is_none(),
+        lookup_model_catalog(rejected_fingerprint).unwrap().is_none(),
         "the catalogue belongs to the rejected short-lived token"
     );
 }
@@ -291,12 +294,14 @@ async fn rejected_token_refresh_preserves_concurrent_replacement() {
     store_model_catalog(
         rejected_fingerprint,
         Arc::new(vec![model(serde_json::json!({"id": "stale-model"}))]),
-    );
+    )
+    .unwrap();
     store_model_catalog(
         replacement_fingerprint,
         Arc::new(vec![model(serde_json::json!({"id": "fresh-model"}))]),
-    );
-    store_cached(token_fingerprint(github_token), replacement.clone());
+    )
+    .unwrap();
+    store_cached(token_fingerprint(github_token), replacement.clone()).unwrap();
 
     let exchanges = Arc::new(AtomicUsize::new(0));
     let exchanges_for_call = exchanges.clone();
@@ -311,9 +316,9 @@ async fn rejected_token_refresh_preserves_concurrent_replacement() {
 
     assert_eq!(actual.bearer, replacement.bearer);
     assert_eq!(exchanges.load(Ordering::SeqCst), 0);
-    assert!(lookup_model_catalog(rejected_fingerprint).is_none());
+    assert!(lookup_model_catalog(rejected_fingerprint).unwrap().is_none());
     assert!(
-        lookup_model_catalog(replacement_fingerprint).is_some(),
+        lookup_model_catalog(replacement_fingerprint).unwrap().is_some(),
         "only the rejected token's catalogue should be invalidated"
     );
 }

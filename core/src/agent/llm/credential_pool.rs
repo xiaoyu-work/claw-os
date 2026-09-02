@@ -6,8 +6,7 @@
 //! `api_key_env` field is too narrow. This module provides a typed
 //! pool that:
 //!
-//!   * Loads N keys at construction (eagerly, from
-//!     `crate::credential::try_load` and/or `std::env::var`).
+//!   * Receives N pre-resolved keys at construction.
 //!   * Hands one out per call via a [`SelectionStrategy`].
 //!   * Tracks per-key health: success count, failure count, last
 //!     error class, and an optional `cooldown_until` timestamp that
@@ -56,7 +55,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use thiserror::Error;
@@ -184,6 +183,17 @@ pub enum PoolError {
 
     #[error("credential pool '{name}' rejected entry: {reason}")]
     InvalidEntry { name: String, reason: String },
+
+    #[error("credential pool '{name}' state is unavailable because its lock was poisoned")]
+    StatePoisoned { name: String },
+
+    #[error("credential pool '{name}' could not load credential '{credential}'")]
+    CredentialSource {
+        name: String,
+        credential: String,
+        #[source]
+        source: crate::credential::CredentialError,
+    },
 }
 
 /// Per-key health snapshot. Returned from [`Pool::stats`].
@@ -228,10 +238,7 @@ impl fmt::Debug for Pool {
             .field("name", &self.name)
             .field("strategy", &self.strategy)
             .field("cooldown", &self.cooldown)
-            .field(
-                "len",
-                &self.state.lock().map(|s| s.entries.len()).unwrap_or(0),
-            )
+            .field("len", &self.state.lock().ok().map(|s| s.entries.len()))
             .finish()
     }
 }
@@ -282,14 +289,9 @@ impl Pool {
         })
     }
 
-    /// Build a pool by resolving credential names + env-var names
-    /// against the active credential store + process env. Empty /
-    /// missing entries are silently dropped; the order of arguments
-    /// is preserved (`credential_names` first, then `env_names`).
-    /// Inline keys are appended last.
-    ///
-    /// Returns `PoolError::Empty` only if **none** of the sources
-    /// resolved to a non-empty value.
+    /// Legacy process-backed constructor. New provider composition resolves
+    /// sources through `construction::resolve_api_credentials` and passes
+    /// entries to [`Self::from_entries`].
     pub fn from_sources(
         name: impl Into<String>,
         credential_names: &[&str],
@@ -297,44 +299,56 @@ impl Pool {
         inline: &[&str],
         strategy: SelectionStrategy,
     ) -> Result<Self, PoolError> {
+        use crate::agent::llm::construction::CredentialSource;
+
+        let source = crate::agent::llm::construction::ProcessCredentialSource;
         let mut entries = Vec::new();
-        for cname in credential_names {
-            if let Ok(Some(value)) = crate::credential::try_load(cname, "agent") {
-                let v = value.trim();
-                if !v.is_empty() {
-                    entries.push(PoolEntry::from_credential(*cname, v.to_string()));
+        let name = name.into();
+        for credential in credential_names {
+            match source.load_stored(credential) {
+                Ok(Some(value)) => {
+                    let value = value.trim();
+                    if !value.is_empty() {
+                        entries.push(PoolEntry::from_credential(*credential, value.to_string()));
+                    }
+                }
+                Ok(None) => {}
+                Err(source) => {
+                    return Err(PoolError::CredentialSource {
+                        name,
+                        credential: (*credential).to_string(),
+                        source: crate::credential::CredentialError::external(
+                            "credential.source",
+                            source,
+                        ),
+                    })
                 }
             }
         }
-        for ename in env_names {
-            if let Ok(value) = std::env::var(ename) {
-                let v = value.trim();
-                if !v.is_empty() {
-                    entries.push(PoolEntry::from_env(*ename, v.to_string()));
+        for environment in env_names {
+            if let Some(value) = source.load_environment(environment) {
+                let value = value.trim();
+                if !value.is_empty() {
+                    entries.push(PoolEntry::from_env(*environment, value.to_string()));
                 }
             }
         }
-        for raw in inline {
-            let v = raw.trim();
-            if !v.is_empty() {
-                entries.push(PoolEntry::inline(v.to_string()));
+        for value in inline {
+            let value = value.trim();
+            if !value.is_empty() {
+                entries.push(PoolEntry::inline(value.to_string()));
             }
         }
         Self::from_entries(name, entries, strategy)
     }
 
-    /// Whether either multi-key source list was declared. Only an absent
-    /// pool permits callers to resolve the legacy single-key fields.
+    /// Legacy declaration helper retained for source compatibility.
     pub fn is_declared(cfg: &crate::config::AgentConfig) -> bool {
-        !cfg.api_key_credentials.is_empty() || !cfg.api_key_envs.is_empty()
+        crate::agent::llm::construction::ApiCredentialConfig::from_agent_config(cfg).pool_declared()
     }
 
-    /// Build a pool from an [`crate::config::AgentConfig`] block. Returns
-    /// `Ok(None)` only when neither multi-key source list is declared.
-    /// Declared pools resolve eagerly and fail closed when every source is
-    /// missing or blank. Credential-store failures remain typed so callers
-    /// can distinguish corruption from an absent entry. Cooldown picks up
-    /// `pool_cooldown_secs` (0 → disabled).
+    /// Legacy public constructor with source-preserving process resolution.
+    /// New provider composition injects `TypedCredentialSource` directly.
     pub fn try_from_agent_config(
         name: impl Into<String>,
         cfg: &crate::config::AgentConfig,
@@ -342,50 +356,20 @@ impl Pool {
         if !Self::is_declared(cfg) {
             return Ok(None);
         }
-
-        let name = name.into();
-        let mut entries = Vec::new();
-        for credential in &cfg.api_key_credentials {
-            match crate::credential::try_load(credential, "agent").map_err(|message| {
-                crate::agent::llm::LlmError::CredentialStore {
-                    credential: credential.clone(),
-                    message,
-                }
-            })? {
-                Some(value) if !value.trim().is_empty() => entries.push(
-                    PoolEntry::from_credential(credential.clone(), value.trim().to_string()),
-                ),
-                Some(_) | None => {}
-            }
+        let source = crate::agent::llm::construction::ProcessCredentialSource;
+        let resolved = crate::agent::llm::construction::try_resolve_api_credentials(
+            name,
+            crate::agent::llm::construction::ApiCredentialConfig::from_agent_config(cfg),
+            &source,
+        )?;
+        match resolved.pool {
+            Some(pool) => Arc::try_unwrap(pool).map(Some).map_err(|_| {
+                crate::agent::llm::LlmError::Internal(
+                    "newly resolved credential pool was unexpectedly shared".to_string(),
+                )
+            }),
+            None => Ok(None),
         }
-        for env_name in &cfg.api_key_envs {
-            if let Ok(value) = std::env::var(env_name) {
-                let value = value.trim();
-                if !value.is_empty() {
-                    entries.push(PoolEntry::from_env(env_name.clone(), value.to_string()));
-                }
-            }
-        }
-
-        if entries.is_empty() {
-            return Err(crate::agent::llm::LlmError::NotConfigured(format!(
-                "credential pool '{name}' was declared but no usable key resolved; \
-                 unresolved credential names: {:?}; unresolved environment variables: {:?}. \
-                 Store a listed credential with `cos credential store <name> <key> \
-                 --namespace agent` or set a listed environment variable",
-                cfg.api_key_credentials, cfg.api_key_envs
-            )));
-        }
-
-        let strategy = SelectionStrategy::from_str_lossy(&cfg.pool_strategy);
-        let mut pool = Self::from_entries(name, entries, strategy).map_err(|error| {
-            crate::agent::llm::LlmError::NotConfigured(format!(
-                "{error}. Fix the declared pool sources, then run \
-                 `cos agent setup text --verify-only`"
-            ))
-        })?;
-        pool.set_cooldown(Duration::from_secs(cfg.pool_cooldown_secs));
-        Ok(Some(pool))
     }
 
     pub fn name(&self) -> &str {
@@ -408,11 +392,22 @@ impl Pool {
     }
 
     pub fn len(&self) -> usize {
-        self.state.lock().unwrap().entries.len()
+        self.try_len().unwrap_or_else(|error| {
+            tracing::error!(error = %error, "credential pool length unavailable");
+            0
+        })
+    }
+
+    pub fn try_len(&self) -> Result<usize, PoolError> {
+        Ok(self.lock_state()?.entries.len())
     }
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    pub fn try_is_empty(&self) -> Result<bool, PoolError> {
+        self.try_len().map(|len| len == 0)
     }
 
     /// Acquire a lease for the next request. The lease is a value +
@@ -425,7 +420,7 @@ impl Pool {
     /// Same as [`Pool::acquire`] but with an explicit clock for
     /// testing.
     pub fn acquire_at(&self, now: Instant) -> Result<Lease, PoolError> {
-        let mut st = self.state.lock().unwrap();
+        let mut st = self.lock_state()?;
         let total = st.entries.len();
         if total == 0 {
             return Err(PoolError::Empty {
@@ -476,7 +471,13 @@ impl Pool {
 
     /// Tell the pool that the request using this lease succeeded.
     pub fn report_success(&self, lease: &Lease) {
-        let mut st = self.state.lock().unwrap();
+        if let Err(error) = self.try_report_success(lease) {
+            tracing::error!(error = %error, "credential pool success accounting unavailable");
+        }
+    }
+
+    pub fn try_report_success(&self, lease: &Lease) -> Result<(), PoolError> {
+        let mut st = self.lock_state()?;
         if let Some(e) = st.entries.get_mut(lease.index) {
             e.successes = e.successes.saturating_add(1);
             // A success clears any past failure class so subsequent
@@ -485,16 +486,34 @@ impl Pool {
             // for diagnostics.)
             e.last_failure_class = None;
         }
+        Ok(())
     }
 
     /// Tell the pool that the request using this lease failed.
     /// Cooldown is applied if `class == CooldownWorthy`.
     pub fn report_failure(&self, lease: &Lease, class: FailureClass) {
-        self.report_failure_at(lease, class, Instant::now())
+        if let Err(error) = self.try_report_failure(lease, class) {
+            tracing::error!(error = %error, "credential pool failure accounting unavailable");
+        }
+    }
+
+    pub fn try_report_failure(&self, lease: &Lease, class: FailureClass) -> Result<(), PoolError> {
+        self.try_report_failure_at(lease, class, Instant::now())
     }
 
     pub fn report_failure_at(&self, lease: &Lease, class: FailureClass, now: Instant) {
-        let mut st = self.state.lock().unwrap();
+        if let Err(error) = self.try_report_failure_at(lease, class, now) {
+            tracing::error!(error = %error, "credential pool failure accounting unavailable");
+        }
+    }
+
+    pub fn try_report_failure_at(
+        &self,
+        lease: &Lease,
+        class: FailureClass,
+        now: Instant,
+    ) -> Result<(), PoolError> {
+        let mut st = self.lock_state()?;
         let cooldown = self.cooldown;
         if let Some(e) = st.entries.get_mut(lease.index) {
             match class {
@@ -515,16 +534,32 @@ impl Pool {
                 }
             }
         }
+        Ok(())
     }
 
     /// Snapshot of every key's health.
     pub fn stats(&self) -> Vec<KeyStats> {
-        self.stats_at(Instant::now())
+        self.try_stats().unwrap_or_else(|error| {
+            tracing::error!(error = %error, "credential pool stats unavailable");
+            Vec::new()
+        })
+    }
+
+    pub fn try_stats(&self) -> Result<Vec<KeyStats>, PoolError> {
+        self.try_stats_at(Instant::now())
     }
 
     pub fn stats_at(&self, now: Instant) -> Vec<KeyStats> {
-        let st = self.state.lock().unwrap();
-        st.entries
+        self.try_stats_at(now).unwrap_or_else(|error| {
+            tracing::error!(error = %error, "credential pool stats unavailable");
+            Vec::new()
+        })
+    }
+
+    pub fn try_stats_at(&self, now: Instant) -> Result<Vec<KeyStats>, PoolError> {
+        let st = self.lock_state()?;
+        Ok(st
+            .entries
             .iter()
             .map(|e| KeyStats {
                 source: e.entry.source.clone(),
@@ -536,12 +571,24 @@ impl Pool {
                     .filter(|u| *u > now)
                     .map(|u| (u - now).as_millis()),
             })
-            .collect()
+            .collect())
     }
 
     /// Group lifetime totals across the whole pool.
     pub fn aggregate(&self) -> AggregateStats {
-        let st = self.state.lock().unwrap();
+        self.try_aggregate().unwrap_or_else(|error| {
+            tracing::error!(error = %error, "credential pool aggregate unavailable");
+            AggregateStats {
+                size: 0,
+                total_successes: 0,
+                total_failures: 0,
+                last_failure_by_class: HashMap::new(),
+            }
+        })
+    }
+
+    pub fn try_aggregate(&self) -> Result<AggregateStats, PoolError> {
+        let st = self.lock_state()?;
         let mut total_successes = 0u64;
         let mut total_failures = 0u64;
         let mut by_class: HashMap<&'static str, u64> = HashMap::new();
@@ -558,12 +605,26 @@ impl Pool {
                     .or_insert(0) += 1;
             }
         }
-        AggregateStats {
+        Ok(AggregateStats {
             size: st.entries.len(),
             total_successes,
             total_failures,
             last_failure_by_class: by_class,
-        }
+        })
+    }
+
+    fn lock_state(&self) -> Result<std::sync::MutexGuard<'_, PoolState>, PoolError> {
+        self.state.lock().map_err(|_| PoolError::StatePoisoned {
+            name: self.name.clone(),
+        })
+    }
+
+    #[cfg(test)]
+    fn poison_for_test(&self) {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = self.state.lock().unwrap();
+            panic!("poison credential pool");
+        }));
     }
 }
 

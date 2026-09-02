@@ -9,6 +9,74 @@ fn write(path: &Path, body: &str) {
     fs::write(path, body).unwrap();
 }
 
+/// Manifest *shape* checks, with the trust decision factored out.
+///
+/// `load_manifest` additionally requires the file to be root-owned
+/// content under an approved system package root — that rule has its
+/// own test below. These cases only exercise parsing/validation.
+fn parse_shape(path: &Path) -> Result<Option<McpServerSpec>, ManifestError> {
+    let body = fs::read_to_string(path).unwrap();
+    let m: AgentApiManifest = match serde_json::from_str(&body) {
+        Ok(m) => m,
+        Err(source) => {
+            return Err(ManifestError::Parse {
+                path: path.to_path_buf(),
+                source,
+            })
+        }
+    };
+    spec_from_manifest(path, m)
+}
+
+#[test]
+fn loose_manifest_outside_a_package_root_is_refused() {
+    // Being reachable from an XDG search path is not authority to
+    // execute: a user-writable drop-in must never spawn a server.
+    let dir = tempdir().unwrap();
+    let p = dir.path().join("drop-in.json");
+    write(
+        &p,
+        r#"{"id":"x","name":"x","transport":"mcp+stdio","command":"true"}"#,
+    );
+    let err = load_manifest(&p).unwrap_err();
+    assert!(
+        matches!(err, ManifestError::Provenance { .. }),
+        "got {err:?}"
+    );
+    assert!(format!("{err}").contains("signed package directory"));
+}
+
+#[test]
+fn unsigned_package_directory_is_quarantined() {
+    let dir = tempdir().unwrap();
+    let pkg = dir.path().join("org.example");
+    write(
+        &pkg.join("agent-api.json"),
+        r#"{"id":"org.example","name":"example","transport":"mcp+stdio","command":"true"}"#,
+    );
+    let err = load_package(&pkg).unwrap_err();
+    assert!(
+        matches!(err, ManifestError::Provenance { .. }),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn signed_package_directory_attaches_with_its_snapshot() {
+    let dir = tempdir().unwrap();
+    let pkg = dir.path().join("org.example");
+    write(
+        &pkg.join("agent-api.json"),
+        r#"{"id":"org.example","name":"example","transport":"mcp+stdio","command":"true"}"#,
+    );
+    crate::test_env::sign_test_package(&pkg, crate::provenance::PackageKind::Mcp, "org.example");
+    let spec = load_package(&pkg).unwrap().expect("enabled by default");
+    assert_eq!(spec.name, "example");
+    let provenance = spec.provenance.expect("verified package attached");
+    assert_eq!(provenance.id(), "org.example");
+    assert!(provenance.content_digest().starts_with("sha256:"));
+}
+
 #[test]
 fn parses_minimal_manifest_and_substitutes_manifest_dir() {
     let dir = tempdir().unwrap();
@@ -25,7 +93,7 @@ fn parses_minimal_manifest_and_substitutes_manifest_dir() {
           "env": {"PYTHONPATH": "${manifest_dir}/lib"}
         }"#,
     );
-    let spec = load_manifest(&p).unwrap().expect("enabled by default");
+    let spec = parse_shape(&p).unwrap().expect("enabled by default");
     assert_eq!(spec.name, "tesseract");
     assert_eq!(spec.command, "python3");
     assert_eq!(
@@ -47,7 +115,7 @@ fn rejects_unknown_schema() {
         &p,
         r#"{"schema":"other/v9","id":"x","name":"x","transport":"mcp+stdio","command":"true"}"#,
     );
-    let err = load_manifest(&p).unwrap_err();
+    let err = parse_shape(&p).unwrap_err();
     assert!(matches!(err, ManifestError::Schema { .. }), "got {err:?}");
 }
 
@@ -59,7 +127,7 @@ fn rejects_unsupported_transport() {
         &p,
         r#"{"id":"x","name":"x","transport":"mcp+carrier-pigeon","command":"true"}"#,
     );
-    let err = load_manifest(&p).unwrap_err();
+    let err = parse_shape(&p).unwrap_err();
     assert!(matches!(err, ManifestError::Transport { .. }), "got {err:?}");
 }
 
@@ -71,7 +139,7 @@ fn disabled_manifest_returns_none() {
         &p,
         r#"{"id":"x","name":"x","transport":"mcp+stdio","command":"true","enabled":false}"#,
     );
-    assert!(load_manifest(&p).unwrap().is_none());
+    assert!(parse_shape(&p).unwrap().is_none());
 }
 
 #[test]
@@ -83,7 +151,7 @@ fn callable_by_ai_false_returns_none() {
         r#"{"id":"x","name":"x","transport":"mcp+stdio","command":"true",
             "ai":{"callable_by_ai":false}}"#,
     );
-    assert!(load_manifest(&p).unwrap().is_none());
+    assert!(parse_shape(&p).unwrap().is_none());
 }
 
 #[test]

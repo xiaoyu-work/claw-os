@@ -35,6 +35,17 @@ use std::path::Path;
 /// contents (rename hadn't taken effect) or the new contents (rename
 /// succeeded + parent dir fsync committed the dirent).
 pub(crate) fn atomic_write_with_fsync(path: &Path, data: &[u8]) -> io::Result<()> {
+    atomic_write_with_fsync_and_prepare(path, data, |_| Ok(()))
+}
+
+pub(crate) fn atomic_write_with_fsync_and_prepare<F>(
+    path: &Path,
+    data: &[u8],
+    prepare: F,
+) -> io::Result<()>
+where
+    F: FnOnce(&Path) -> io::Result<()>,
+{
     let parent = path
         .parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no parent dir"))?;
@@ -74,6 +85,20 @@ pub(crate) fn atomic_write_with_fsync(path: &Path, data: &[u8]) -> io::Result<()
                 return Err(io::Error::new(
                     cleanup.kind(),
                     format!("staging failed: {error}; temporary cleanup failed: {cleanup}"),
+                ));
+            }
+            Err(_) => {}
+        }
+        return Err(error);
+    }
+
+    if let Err(error) = prepare(&tmp) {
+        match fs::remove_file(&tmp) {
+            Ok(()) => sync_dir(parent)?,
+            Err(cleanup) if cleanup.kind() != io::ErrorKind::NotFound => {
+                return Err(io::Error::new(
+                    cleanup.kind(),
+                    format!("prepare failed: {error}; temporary cleanup failed: {cleanup}"),
                 ));
             }
             Err(_) => {}

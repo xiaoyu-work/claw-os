@@ -18,7 +18,8 @@
 use std::path::Path;
 
 use base64::Engine as _;
-use cos_runtime::{BridgeError, call, exec, fs as bridge_fs};
+use cos_runtime::{ask_claw, BridgeError, call, exec, fs as bridge_fs};
+use serde::Serialize;
 
 /// Format a [`BridgeError`] for end-user display. Permission denials
 /// from the kernel get a friendlier blurb that points the user back
@@ -114,4 +115,63 @@ pub fn fs_rm(path: &Path) -> Result<(), BridgeError> {
 /// to apply to the child.
 pub fn exec_start(argv: &[&str]) -> Result<exec::StartResult, BridgeError> {
     exec::start(argv)
+}
+
+#[derive(Serialize)]
+struct StoreViewContext<'a> {
+    view: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    app_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<&'a str>,
+}
+
+impl ask_claw::Context for StoreViewContext<'_> {
+    const APP_ID: &'static str = "cosmic-store";
+}
+
+#[derive(Serialize)]
+struct StoreSearchContext<'a> {
+    mode: &'static str,
+    query: &'a str,
+}
+
+impl ask_claw::Context for StoreSearchContext<'_> {
+    const APP_ID: &'static str = "cosmic-store";
+}
+
+pub fn ask_claw_home() -> Result<(), ask_claw::LaunchError> {
+    ask_claw::launch(&StoreViewContext {
+        view: "home",
+        page: None,
+        app_id: None,
+        name: None,
+    })
+}
+
+pub fn ask_claw_explore(page: &str) -> Result<(), ask_claw::LaunchError> {
+    ask_claw::launch(&StoreViewContext {
+        view: "explore",
+        page: Some(page),
+        app_id: None,
+        name: None,
+    })
+}
+
+pub fn ask_claw_app(app_id: &str, name: &str) -> Result<(), ask_claw::LaunchError> {
+    ask_claw::launch(&StoreViewContext {
+        view: "app",
+        page: None,
+        app_id: Some(app_id),
+        name: Some(name),
+    })
+}
+
+pub fn ask_claw_search(query: &str) -> Result<(), ask_claw::LaunchError> {
+    ask_claw::launch(&StoreSearchContext {
+        mode: "search",
+        query,
+    })
 }

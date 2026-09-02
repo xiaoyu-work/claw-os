@@ -11,8 +11,6 @@ library API exported by `core/src/lib.rs`.
 - Implement system primitives, capability enforcement, audit, and sessions.
 - Host the agent runtime and `clawd` broker.
 - Connect apps, packages, services, browser, process, and model subsystems.
-- Verify and host signed out-of-process Agent extensions without widening the
-  broker or prompt-authority boundary.
 
 ## Key Files
 
@@ -20,20 +18,29 @@ library API exported by `core/src/lib.rs`.
 | --- | --- |
 | `main.rs`, `router.rs` | `cos` entry and top-level dispatch |
 | `router/app_commands.rs` | App lint/install/create/tool/consent management |
-| `router/help.rs` | User help, built-in catalog, and command schemas |
+| `cli_catalog.rs`, `cli_help.rs` | Shared public command tree and schemas for terminal/model discovery |
 | `../test/unit/router.rs` | Router help/schema/app/dispatch regression tests |
 | `lib.rs` | Library module surface |
 | `bin/` | `clawd` and helper binary entries |
 | `agent/` | Agent runtime and AI-facing tools |
-| `agent_extensions/`, `extension_host/` | Signed Agent extension ABI, isolation, event fanout, and action mediation |
-| `provenance.rs` | Compiled-root package verification and immutable snapshots |
 | `clawd/` | Privileged broker services |
 | `caps/` | Capability model and enforcement |
-| `proc.rs`, `proc/proc_spawn_allowlist.rs` | Session-scoped process lifecycle and root-owned, versioned, descriptor-pinned launch policy |
+| `credential/` | Encrypted store, crypto/master-key boundary, authorization, OAuth, lifecycle, and CLI facade; see [`credential/MODULE.md`](credential/MODULE.md) |
+| `provenance/` | Extension package signing, trust roots, verification, install |
 | `model/` | Local/cloud model tasks and engines |
 | `session/` | Session persistence |
-| `apps.rs`, `bridge.rs` | App discovery and subprocess bridge |
+| `notifications/` | Durable owner-scoped notification model, store, policy, and external delivery adapters |
+| `apps.rs`, `bridge.rs` | App discovery (provenance-gated) and subprocess bridge |
 | `service.rs`, `../test/unit/service.rs` | Managed service lifecycle and regressions |
+
+## Command Errors
+
+`router::dispatch_typed` and `dispatch_with_stdin_typed` are the command
+ownership boundaries. Credential commands retain `CredentialError` as their
+source and classify invalid input, authorization, unavailable state, and
+execution separately. The historical `dispatch` functions remain
+source-compatible wrappers and render the same CLI strings/JSON once at the
+outer boundary.
 
 ## Dependencies
 

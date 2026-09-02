@@ -86,6 +86,10 @@ pub struct Request {
     /// Required whenever `context` is present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution: Option<ApprovalExecutionBinding>,
+    /// Deadline for redeeming this request after the originating supervised
+    /// worker exits into the durable waiting-approval state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resumable_until: Option<u64>,
     /// SHA-256 of the validated operation inputs when the capability alone is
     /// not specific enough to identify what will execute.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -167,6 +171,12 @@ pub struct ApprovalAuthorization {
     pub context: Option<ConsentContext>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution: Option<ApprovalExecutionBinding>,
+    /// Exact durable request that may be rebound to a replacement worker for
+    /// the same task after approval.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_request_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resumable_until: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation_digest: Option<String>,
 }
@@ -209,12 +219,15 @@ pub struct ConsumedGrant {
 
 impl ConsumedGrant {
     pub fn expires_in(&self) -> Duration {
-        let execution_expiry = self
-            .authorization
-            .execution
-            .as_ref()
-            .map(|execution| execution.expires_at)
-            .unwrap_or(self.expires_at);
+        let execution_expiry = if self.authorization.resume_request_id.is_some() {
+            self.expires_at
+        } else {
+            self.authorization
+                .execution
+                .as_ref()
+                .map(|execution| execution.expires_at)
+                .unwrap_or(self.expires_at)
+        };
         Duration::from_secs(
             self.expires_at
                 .min(execution_expiry)
@@ -434,6 +447,43 @@ impl ApprovalExecutionBinding {
             Ok(current) if current == self.generation
         )
     }
+
+    fn is_resumable_for(
+        &self,
+        expected: &ApprovalExecutionIdentity,
+        owner_uid: Option<u32>,
+        session: &str,
+        resumable_until: u64,
+        now: u64,
+    ) -> bool {
+        self.identity.task_id == expected.task_id
+            && expected.worker_pid != 0
+            && expected.worker_start_time_ticks.is_some()
+            && expected.lease_nonce.len() >= 16
+            && expected.lease_nonce.len() <= 128
+            && crate::proc::read_start_time_ticks_pub(expected.worker_pid)
+                == expected.worker_start_time_ticks
+            && self.can_wait_for_resume(owner_uid, session, resumable_until, now)
+    }
+
+    fn can_wait_for_resume(
+        &self,
+        owner_uid: Option<u32>,
+        session: &str,
+        resumable_until: u64,
+        now: u64,
+    ) -> bool {
+        !self.identity.task_id.is_empty()
+            && self.identity.task_id.len() <= 128
+            && self.identity.lease_nonce.len() >= 16
+            && self.identity.lease_nonce.len() <= 128
+            && now < resumable_until
+            && !execution_is_revoked(&self.identity)
+            && matches!(
+                generations::current(owner_uid, session),
+                Ok(current) if current == self.generation
+            )
+    }
 }
 
 fn local_execution_identity() -> Result<ApprovalExecutionIdentity, String> {
@@ -443,8 +493,7 @@ fn local_execution_identity() -> Result<ApprovalExecutionIdentity, String> {
         }
         context.state.touched.store(true, Ordering::SeqCst);
         if context.state.ended.load(Ordering::SeqCst) {
-            let _ =
-                invalidate_local_execution(&context.identity, "local Agent invocation ended");
+            let _ = invalidate_local_execution(&context.identity, "local Agent invocation ended");
             return Err("Agent approval invocation has ended".to_string());
         }
         Ok(context.identity.clone())
@@ -504,6 +553,7 @@ impl GrantBinding {
         now: u64,
         expected: &ApprovalAuthorization,
         expected_execution: Option<&ApprovalExecutionIdentity>,
+        resumed_request_ids: &[String],
     ) -> bool {
         if self.uses_remaining == 0 || now >= self.expires_at {
             return false;
@@ -522,12 +572,32 @@ impl GrantBinding {
         }
         match (authorization.execution.as_ref(), expected_execution) {
             (Some(execution), Some(expected)) => {
-                if !execution.is_live_for(
+                let exact_live = execution.is_live_for(
                     expected,
                     authorization.owner_uid,
                     &authorization.session,
                     now,
+                );
+                let resumed_live = match (
+                    authorization.resume_request_id.as_deref(),
+                    authorization.resumable_until,
                 ) {
+                    (Some(request_id), Some(resumable_until))
+                        if resumed_request_ids
+                            .iter()
+                            .any(|allowed| allowed == request_id) =>
+                    {
+                        execution.is_resumable_for(
+                            expected,
+                            authorization.owner_uid,
+                            &authorization.session,
+                            resumable_until,
+                            now,
+                        )
+                    }
+                    _ => false,
+                };
+                if !exact_live && !resumed_live {
                     return false;
                 }
             }
@@ -873,15 +943,24 @@ fn authorization_for_request(request: &Request) -> Result<ApprovalAuthorization,
             request.verb
         ));
     }
+    let now = now_secs();
+    let mut resume_request_id = None;
     match (request.context, request.execution.as_ref()) {
         (Some(_), Some(execution)) => {
-            if !execution.is_live_for(
+            let live = execution.is_live_for(
                 &execution.identity,
                 request.owner_uid,
                 &request.session,
-                now_secs(),
-            ) {
+                now,
+            );
+            let resumable = request.resumable_until.is_some_and(|until| {
+                execution.can_wait_for_resume(request.owner_uid, &request.session, until, now)
+            });
+            if !live && !resumable {
                 return Err("approval request no longer matches a live execution".to_string());
+            }
+            if request.resumable_until.is_some() {
+                resume_request_id = Some(request.id.clone());
             }
         }
         (Some(_), None) => {
@@ -899,6 +978,8 @@ fn authorization_for_request(request: &Request) -> Result<ApprovalAuthorization,
         risk,
         context: request.context,
         execution: request.execution.clone(),
+        resume_request_id,
+        resumable_until: request.resumable_until,
         operation_digest: canonical_operation_digest(request.operation_digest.as_deref())?,
     })
 }
@@ -995,6 +1076,7 @@ pub(crate) fn submit_owned_with_context_for_operation(
         context,
         execution,
         operation_digest,
+        None,
     )
 }
 
@@ -1063,6 +1145,7 @@ pub(crate) fn submit_worker_request_for_operation(
         Some(ConsentContext::Attended),
         Some(execution),
         operation_digest,
+        Some(now_secs().saturating_add(SESSION_GRANT_SECS)),
     )
 }
 
@@ -1078,7 +1161,7 @@ pub fn submit_owned_with_execution(
     execution: Option<ApprovalExecutionBinding>,
 ) -> Result<String, String> {
     submit_owned_with_execution_for_operation(
-        verb, scope, session, reason, requester, owner_uid, context, execution, None,
+        verb, scope, session, reason, requester, owner_uid, context, execution, None, None,
     )
 }
 
@@ -1093,6 +1176,7 @@ fn submit_owned_with_execution_for_operation(
     context: Option<ConsentContext>,
     execution: Option<ApprovalExecutionBinding>,
     operation_digest: Option<&str>,
+    resumable_until: Option<u64>,
 ) -> Result<String, String> {
     let session = session.into();
     if context == Some(ConsentContext::Unattended) {
@@ -1122,6 +1206,7 @@ fn submit_owned_with_execution_for_operation(
         risk: Some(risk),
         context,
         execution,
+        resumable_until,
         operation_digest,
         requester,
     };
@@ -1180,6 +1265,25 @@ pub fn deny_for_owner(
     owner_uid: Option<u32>,
 ) -> Result<Resolved, String> {
     resolve(id, Outcome::Denied, None, decided_by, note, owner_uid)
+}
+
+pub fn deny_if_pending_for_owner(
+    id: &str,
+    decided_by: Option<String>,
+    note: Option<String>,
+    owner_uid: Option<u32>,
+) -> Result<RequestStatus, String> {
+    validate_approval_id(id)?;
+    ensure_dirs().map_err(|error| format!("approvals dir: {error}"))?;
+    crate::filelock::with_exclusive_path_lock(&grant_lock_path(), || {
+        match status_for_owner(id, owner_uid) {
+            RequestStatus::Pending => {
+                resolve_locked(id, Outcome::Denied, None, decided_by, note, owner_uid)?;
+                Ok(RequestStatus::Denied)
+            }
+            status => Ok(status),
+        }
+    })
 }
 
 fn resolve(
@@ -1595,6 +1699,7 @@ pub(crate) fn redeem_matching_grant_for_owner_operation(
         context,
         execution.as_ref(),
         operation_digest,
+        &[],
     )
 }
 
@@ -1614,6 +1719,7 @@ pub fn redeem_matching_grant_for_execution(
         context,
         execution,
         None,
+        &[],
     )
 }
 
@@ -1626,6 +1732,7 @@ fn redeem_matching_grant_for_execution_operation(
     context: Option<ConsentContext>,
     execution: Option<&ApprovalExecutionIdentity>,
     operation_digest: Option<&str>,
+    resumed_request_ids: &[String],
 ) -> Result<Option<ConsumedGrant>, String> {
     let (capability, risk) = canonical_capability(verb, requested_scope.clone())?;
     let operation_digest = canonical_operation_digest(operation_digest)?;
@@ -1636,6 +1743,8 @@ fn redeem_matching_grant_for_execution_operation(
         risk,
         context,
         execution: None,
+        resume_request_id: None,
+        resumable_until: None,
         operation_digest,
     };
     ensure_dirs().map_err(|e| format!("approvals dir: {e}"))?;
@@ -1644,7 +1753,9 @@ fn redeem_matching_grant_for_execution_operation(
     // last use of the same grant.
     crate::filelock::with_exclusive_path_lock(&grant_lock_path(), || {
         for path in list_dir(&approved_dir()) {
-            let Some(resolved) = load_matching_grant(&path, &expected, execution) else {
+            let Some(resolved) =
+                load_matching_grant_with_resumes(&path, &expected, execution, resumed_request_ids)
+            else {
                 continue;
             };
             if let Some(grant) = spend_grant(&path, resolved)? {
@@ -1688,6 +1799,29 @@ pub(crate) fn redeem_matching_worker_grant_for_owner_operation(
         Some(ConsentContext::Attended),
         Some(execution),
         operation_digest,
+        &[],
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn redeem_resumed_worker_grant_for_owner_operation(
+    session: &str,
+    verb: Verb,
+    requested_scope: &Scope,
+    owner_uid: u32,
+    execution: &ApprovalExecutionIdentity,
+    operation_digest: Option<&str>,
+    resumed_request_ids: &[String],
+) -> Result<Option<ConsumedGrant>, String> {
+    redeem_matching_grant_for_execution_operation(
+        session,
+        verb,
+        requested_scope,
+        Some(owner_uid),
+        Some(ConsentContext::Attended),
+        Some(execution),
+        operation_digest,
+        resumed_request_ids,
     )
 }
 
@@ -1775,14 +1909,7 @@ pub fn has_approved_grant_for_execution(
     context: Option<ConsentContext>,
     execution: Option<&ApprovalExecutionIdentity>,
 ) -> Result<bool, String> {
-    has_approved_grant_for_execution_operation(
-        session,
-        cap,
-        owner_uid,
-        context,
-        execution,
-        None,
-    )
+    has_approved_grant_for_execution_operation(session, cap, owner_uid, context, execution, None)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1803,6 +1930,8 @@ fn has_approved_grant_for_execution_operation(
         risk,
         context,
         execution: None,
+        resume_request_id: None,
+        resumable_until: None,
         operation_digest,
     };
     ensure_dirs().map_err(|e| format!("approvals dir: {e}"))?;
@@ -1852,14 +1981,7 @@ pub fn find_pending_exact_for_execution(
     context: Option<ConsentContext>,
     execution: Option<&ApprovalExecutionIdentity>,
 ) -> Option<Request> {
-    find_pending_exact_for_execution_operation(
-        session,
-        cap,
-        owner_uid,
-        context,
-        execution,
-        None,
-    )
+    find_pending_exact_for_execution_operation(session, cap, owner_uid, context, execution, None)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1936,6 +2058,7 @@ fn execution_matches(
 #[serde(rename_all = "snake_case")]
 pub enum RequestStatus {
     Pending,
+    Resolving,
     Approved,
     /// Approved earlier and already spent.
     Consumed,
@@ -1948,6 +2071,7 @@ impl RequestStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             RequestStatus::Pending => "pending",
+            RequestStatus::Resolving => "resolving",
             RequestStatus::Approved => "approved",
             RequestStatus::Consumed => "consumed",
             RequestStatus::Denied => "denied",
@@ -1983,7 +2107,31 @@ pub fn status_for_owner(id: &str, owner_uid: Option<u32>) -> RequestStatus {
             return status;
         }
     }
+    if scratch_request_visible(id, owner_uid) {
+        return RequestStatus::Resolving;
+    }
     RequestStatus::Unknown
+}
+
+fn scratch_request_visible(id: &str, owner_uid: Option<u32>) -> bool {
+    let Ok(entries) = fs::read_dir(scratch_dir()) else {
+        return false;
+    };
+    let prefix = format!("{id}.");
+    entries.flatten().map(|entry| entry.path()).any(|path| {
+        let matches = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(&prefix) && name.ends_with(".json"));
+        matches && request_file_visible(&path, owner_uid)
+    })
+}
+
+fn request_file_visible(path: &Path, owner_uid: Option<u32>) -> bool {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|data| serde_json::from_str::<Request>(&data).ok())
+        .is_some_and(|request| request_visible_to(&request, owner_uid))
 }
 
 /// Retire a whole set of approved grants for one action, all or none.
@@ -2019,6 +2167,8 @@ pub fn consume_grant_set_once_for_owner(
                 risk,
                 context: None,
                 execution: None,
+                resume_request_id: None,
+                resumable_until: None,
                 operation_digest: None,
             };
             let found = list_dir(&approved_dir()).into_iter().find(|path| {
@@ -2079,6 +2229,15 @@ fn load_matching_grant(
     expected: &ApprovalAuthorization,
     expected_execution: Option<&ApprovalExecutionIdentity>,
 ) -> Option<Resolved> {
+    load_matching_grant_with_resumes(path, expected, expected_execution, &[])
+}
+
+fn load_matching_grant_with_resumes(
+    path: &Path,
+    expected: &ApprovalAuthorization,
+    expected_execution: Option<&ApprovalExecutionIdentity>,
+    resumed_request_ids: &[String],
+) -> Option<Resolved> {
     let data = fs::read_to_string(path).ok()?;
     let resolved = serde_json::from_str::<Resolved>(&data).ok()?;
     if resolved.request.session != expected.session {
@@ -2108,11 +2267,22 @@ fn load_matching_grant(
     let grant = resolved.decision.grant.as_ref()?;
     let authorization = grant.authorization.as_ref()?;
     if authorization.execution != resolved.request.execution
+        || authorization.resume_request_id
+            != resolved
+                .request
+                .resumable_until
+                .map(|_| resolved.request.id.clone())
+        || authorization.resumable_until != resolved.request.resumable_until
         || authorization.operation_digest != resolved.request.operation_digest
     {
         return None;
     }
-    if !grant.is_live(now_secs(), expected, expected_execution) {
+    if !grant.is_live(
+        now_secs(),
+        expected,
+        expected_execution,
+        resumed_request_ids,
+    ) {
         return None;
     }
     Some(resolved)

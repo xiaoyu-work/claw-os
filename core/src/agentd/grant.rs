@@ -210,6 +210,28 @@ impl GrantClaims {
                     push_u64(&mut buf, approved.owner_uid as u64);
                     push_u64(&mut buf, approved.mode as u64);
                 }
+                push_u64(&mut buf, extension.agent_extensions.len() as u64);
+                for receipt in &extension.agent_extensions {
+                    push_bytes(&mut buf, receipt.kind.as_str().as_bytes());
+                    push_bytes(&mut buf, receipt.id.as_bytes());
+                    push_bytes(&mut buf, receipt.version.as_bytes());
+                    push_bytes(&mut buf, receipt.content_digest.as_bytes());
+                    push_bytes(&mut buf, receipt.tier.as_str().as_bytes());
+                    push_bytes(&mut buf, receipt.trust_generation.as_bytes());
+                    match &receipt.trust {
+                        crate::provenance::verify::PackageReceiptTrust::Publisher {
+                            key_id,
+                            public_key_sha256,
+                        } => {
+                            push_u64(&mut buf, 1);
+                            push_bytes(&mut buf, key_id.as_bytes());
+                            push_bytes(&mut buf, public_key_sha256.as_bytes());
+                        }
+                        crate::provenance::verify::PackageReceiptTrust::Vendor => {
+                            push_u64(&mut buf, 2);
+                        }
+                    }
+                }
                 push_u64(&mut buf, extension.worker_pid as u64);
                 push_optional_u64(&mut buf, extension.worker_start_time_ticks);
                 push_u64(&mut buf, extension.host_pid as u64);

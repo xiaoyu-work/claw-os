@@ -787,12 +787,10 @@ impl cosmic::Application for CosmicAppLibrary {
             }
             Message::AskAi => {
                 let query = self.search_value.trim().to_string();
-                if !query.is_empty() {
-                    let mut cmd = std::process::Command::new("cos");
-                    cmd.args(["app", "agent", "overlay", "--query", &query]);
-                    if let Err(err) = cmd.spawn() {
-                        error!("failed to launch cos app agent overlay: {err}");
-                    }
+                if !query.is_empty()
+                    && let Err(err) = crate::claw_glue::ask_claw(&query)
+                {
+                    error!("failed to launch Ask Claw overlay: {err}");
                 }
                 return self.hide();
             }

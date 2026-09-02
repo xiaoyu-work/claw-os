@@ -99,32 +99,51 @@ fn unrelated_tool_use_does_not_force_evidence() {
 }
 
 #[test]
-fn progressive_call_records_underlying_tool_identity() {
-    let messages = vec![
-        Message {
-            role: Role::Assistant,
-            content: vec![ContentBlock::ToolUse {
-                id: "call_1".to_string(),
-                name: crate::agent::tools::progressive::TOOL_CALL.to_string(),
-                input: json!({
-                    "name": "mcp_alpha_status",
-                    "arguments": {"detail": true},
-                }),
-            }],
-        },
-        Message {
-            role: Role::User,
-            content: vec![ContentBlock::ToolResult {
-                tool_use_id: "call_1".to_string(),
-                is_error: false,
-                content: "ok".to_string(),
-            }],
-        },
-    ];
+fn bridged_tool_preserves_underlying_evidence_identity() {
+    let messages = trajectory(
+        "call_1",
+        crate::agent::tools::progressive::TOOL_CALL,
+        "{\"load\":2}",
+        false,
+    );
+    let mut messages = messages;
+    if let ContentBlock::ToolUse { input, .. } = &mut messages[0].content[0] {
+        *input = json!({
+            "name": "cos_sysinfo",
+            "arguments": {"command": "loadavg", "args": []},
+        });
+    }
+
     let report = verify_answer(
-        "what is the current status?",
-        "It is healthy. [evidence:call_1 confidence=0.9]",
+        "why is my computer slow?",
+        "Load is elevated. [evidence:call_1 confidence=0.9]",
         &messages,
     );
-    assert_eq!(report.sources[0].tool_name, "mcp_alpha_status");
+    assert_eq!(report.status, EvidenceStatus::Verified);
+    assert_eq!(report.sources[0].tool_name, "cos_sysinfo");
+    assert!(report.sources[0].binding_relevant);
+}
+
+#[test]
+fn gemini_wire_id_suffix_verifies_against_internal_tool_id() {
+    let mut messages = trajectory(
+        "cos_tool_call::upstream-call-123",
+        crate::agent::tools::progressive::TOOL_CALL,
+        "{\"load\":2}",
+        false,
+    );
+    if let ContentBlock::ToolUse { input, .. } = &mut messages[0].content[0] {
+        *input = json!({
+            "name": "cos_sysinfo",
+            "arguments": {"command": "loadavg", "args": []},
+        });
+    }
+
+    let report = verify_answer(
+        "why is my computer slow?",
+        "Load is elevated. [evidence:upstream-call-123 confidence=0.9]",
+        &messages,
+    );
+    assert_eq!(report.status, EvidenceStatus::Verified);
+    assert_eq!(report.verified_claims, 1);
 }

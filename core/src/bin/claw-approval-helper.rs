@@ -7,6 +7,13 @@ fn main() {
     if unsafe { libc::geteuid() } != 0 {
         fail("claw-approval-helper must be launched through pkexec");
     }
+    // A privileged helper reached through polkit: refuse to act when
+    // this build is behind the security floor this system accepted.
+    if let Err(refusal) =
+        cos::update::runtime::enforce_startup(cos::update::runtime::Scope::CompiledEpoch)
+    {
+        fail(&refusal.message);
+    }
 
     let owner_uid = std::env::var("PKEXEC_UID")
         .ok()

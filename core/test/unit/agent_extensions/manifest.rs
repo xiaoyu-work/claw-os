@@ -1,27 +1,53 @@
 use super::*;
-use base64::Engine;
-use ed25519_dalek::{Signer, SigningKey};
-
-const TEST_SEED: [u8; 32] = [
-    0xd4, 0x0f, 0x95, 0xd1, 0xf9, 0x6d, 0x42, 0xac, 0x5e, 0x00, 0x00, 0x4e, 0x04, 0x21,
-    0xc7, 0x0d, 0xd4, 0xf2, 0x91, 0xb4, 0x71, 0x8e, 0x1a, 0x94, 0xf8, 0xe0, 0xd5, 0xee,
-    0x20, 0xd5, 0x87, 0x1d,
-];
+use crate::provenance::sign::{self, SignRequest, SigningKeyFile};
+use crate::provenance::trust::{
+    TrustRootSpec, TrustStore, TrustTier, TRUST_SCHEMA_V1, USAGE_PACKAGE_SIGNING,
+};
+use crate::provenance::verify::{verify_package, MAX_PACKAGE_BYTES};
 
 fn package(mut mutate: impl FnMut(&mut serde_json::Value)) -> crate::provenance::VerifiedPackage {
-    let entry = b"#!/bin/sh\nexit 0\n".to_vec();
-    let content_file = SignedFile {
+    let root = crate::test_env::secure_scratch_dir(&format!(
+        "agent-extension-manifest-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let package_dir = root.join("observer");
+    let trust_dir = root.join("trust");
+    std::fs::create_dir_all(package_dir.join("bin")).unwrap();
+    std::fs::create_dir_all(&trust_dir).unwrap();
+    let entry = b"#!/bin/sh\nexit 0\n";
+    std::fs::write(package_dir.join("bin/observer"), entry).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            package_dir.join("bin/observer"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+    }
+    let content_file = FileEntry {
         path: "bin/observer".to_string(),
-        sha256: crate::crypto::sha256_hex(&entry),
+        kind: NodeKind::File,
+        mode: 0o755,
         size: entry.len() as u64,
-        executable: true,
+        digest: format!("sha256:{}", crate::crypto::sha256_hex(entry)),
     };
+    let content_entries = vec![
+        FileEntry {
+            path: "bin".to_string(),
+            kind: NodeKind::Dir,
+            mode: 0o755,
+            size: 0,
+            digest: String::new(),
+        },
+        content_file,
+    ];
     let mut manifest = serde_json::json!({
         "schema_version": 1,
         "identity": {
             "id": "observer",
             "version": "1.0.0",
-            "content_digest": package_digest(std::slice::from_ref(&content_file))
+            "content_digest": tree_content_digest(&content_entries)
         },
         "entry": "bin/observer",
         "protocol": {
@@ -43,49 +69,64 @@ fn package(mut mutate: impl FnMut(&mut serde_json::Value)) -> crate::provenance:
         }
     });
     mutate(&mut manifest);
-    let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
-    let files = vec![
-        content_file,
-        SignedFile {
-            path: MANIFEST_FILE.to_string(),
-            sha256: crate::crypto::sha256_hex(&manifest_bytes),
-            size: manifest_bytes.len() as u64,
-            executable: false,
+    std::fs::write(
+        package_dir.join(MANIFEST_FILE),
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    let key = SigningKeyFile::generate(None).unwrap();
+    sign::sign_directory(
+        &package_dir,
+        &SignRequest {
+            kind: crate::provenance::PackageKind::AgentExtension,
+            id: "observer".to_string(),
+            version: "1.0.0".to_string(),
+            manifest_schema: "claw.agent-extension/v1".to_string(),
+            manifest_path: MANIFEST_FILE.to_string(),
+            entrypoints: vec!["bin/observer".to_string()],
+            resources: Vec::new(),
         },
-    ];
-    let mut provenance = crate::provenance::PackageProvenance {
-        schema_version: 1,
-        kind: crate::provenance::PackageKind::AgentExtension,
-        publisher: "claw-os-test".to_string(),
-        key_id: "debug-1".to_string(),
-        package_id: "observer".to_string(),
-        package_version: "1.0.0".to_string(),
-        package_digest: package_digest(&files),
-        files,
-        signature: "0".repeat(128),
-    };
-    provenance.signature = hex::encode(
-        SigningKey::from_bytes(&TEST_SEED)
-            .sign(&crate::provenance::signing_input(&provenance))
-            .to_bytes(),
-    );
-    crate::provenance::verify_snapshot(
-        &crate::provenance::PackageSnapshot {
-            provenance,
-            files: vec![
-                crate::provenance::SnapshotFile {
-                    path: "bin/observer".to_string(),
-                    executable: true,
-                    bytes_base64: base64::engine::general_purpose::STANDARD.encode(entry),
-                },
-                crate::provenance::SnapshotFile {
-                    path: MANIFEST_FILE.to_string(),
-                    executable: false,
-                    bytes_base64: base64::engine::general_purpose::STANDARD.encode(manifest_bytes),
-                },
-            ],
+        &key,
+    )
+    .unwrap();
+    let trust_file = serde_json::json!({
+        "schema": TRUST_SCHEMA_V1,
+        "keys": [{
+            "key_id": key.key_id,
+            "algorithm": "ed25519",
+            "public_key": key.public_key,
+            "usages": [USAGE_PACKAGE_SIGNING],
+            "kinds": ["extension"],
+            "status": "active",
+        }]
+    });
+    let trust_path = trust_dir.join("keys.json");
+    std::fs::write(&trust_path, serde_json::to_vec_pretty(&trust_file).unwrap()).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&trust_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let roots = vec![TrustRootSpec {
+        path: trust_dir,
+        tier: TrustTier::User,
+        allowed_uids: vec![crate::provenance::fsec::effective_uid()],
+        domain: crate::provenance::state::TrustDomain::Owner(
+            crate::provenance::fsec::effective_uid(),
+        ),
+    }];
+    crate::test_env::record_trust_state(&roots);
+    let trust = TrustStore::load_roots(&roots);
+    verify_package(
+        &package_dir,
+        &crate::provenance::VerifyOptions {
+            kind: crate::provenance::PackageKind::AgentExtension,
+            expect_id: Some("observer".to_string()),
+            allow_vendor: false,
+            allow_developer: false,
+            max_bytes: MAX_PACKAGE_BYTES,
         },
-        crate::provenance::PackageKind::AgentExtension,
+        &trust,
     )
     .unwrap()
 }

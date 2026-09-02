@@ -32,21 +32,46 @@ pub(crate) struct HostedAgentExtension {
 
 impl HostedAgentExtension {
     pub async fn attach(
-        snapshot: crate::provenance::PackageSnapshot,
         registration: &AgentExtensionRegistration,
         host_binding: &ExtensionBinding,
         isolation: &super::child_isolation::IsolationAuthority,
     ) -> Result<Self, String> {
-        let package = crate::provenance::verify_snapshot(
-            &snapshot,
-            crate::provenance::PackageKind::AgentExtension,
-        )?;
-        let manifest = ExtensionManifest::parse_verified(&package)?;
         registration.validate()?;
+        let package_path =
+            crate::agent_extensions::registry::installed_root().join(&registration.extension_id);
+        let receipt = host_binding
+            .agent_extensions
+            .iter()
+            .find(|receipt| {
+                receipt.id == registration.extension_id
+                    && receipt.version == registration.extension_version
+                    && receipt.content_digest == registration.package_digest
+            })
+            .ok_or_else(|| {
+                "extension registration was not authenticated by the owner-qualified broker"
+                    .to_string()
+            })?;
+        let mut options =
+            crate::provenance::VerifyOptions::new(crate::provenance::PackageKind::AgentExtension)
+                .expect_id(&registration.extension_id);
+        options.allow_developer = false;
+        let package = crate::provenance::verify::verify_package_with_receipt(
+            &package_path,
+            &options,
+            receipt,
+        )
+        .map_err(|error| {
+            crate::provenance::quarantine_reason(
+                crate::provenance::PackageKind::AgentExtension,
+                &registration.extension_id,
+                &error,
+            )
+        })?;
+        let manifest = ExtensionManifest::parse_verified(&package)?;
         let manifest_digest = ExtensionManifest::manifest_digest(&package)?;
         if registration.extension_id != manifest.identity.id
             || registration.extension_version != manifest.identity.version
-            || registration.package_digest != package.digest()
+            || registration.package_digest != package.content_digest()
             || registration.manifest_digest != manifest_digest
             || registration.content_digest != manifest.identity.content_digest
         {
@@ -56,10 +81,16 @@ impl HostedAgentExtension {
             .session_id
             .clone()
             .ok_or_else(|| "Agent extensions require a durable session".to_string())?;
+        package
+            .assert_tree_current()
+            .map_err(|error| format!("extension package changed before launch: {error}"))?;
         let entry_bytes = package
-            .file_bytes(&manifest.entry)
-            .ok_or_else(|| "verified extension entry disappeared".to_string())?;
+            .read_verified(&manifest.entry)
+            .map_err(|error| format!("read verified extension entry: {error}"))?;
         let materialized_root = materialize(&package)?;
+        package
+            .assert_tree_current()
+            .map_err(|error| format!("extension package changed during launch: {error}"))?;
         let entry = materialized_root.join(&manifest.entry);
         let binding = AbiBinding {
             task_id: host_binding.task_id.clone(),
@@ -67,9 +98,9 @@ impl HostedAgentExtension {
             owner_uid: host_binding.owner_uid,
             extension_id: manifest.identity.id.clone(),
             extension_version: manifest.identity.version.clone(),
-            package_digest: package.digest().to_string(),
+            package_digest: package.content_digest().to_string(),
             manifest_digest,
-            entry_digest: crate::crypto::sha256_hex(entry_bytes),
+            entry_digest: crate::crypto::sha256_hex(&entry_bytes),
             capability_generation: host_binding.capability_generation.clone(),
             lease_digest: crate::crypto::sha256_hex(host_binding.lease_nonce.as_bytes()),
             instance_nonce: random_nonce()?,
@@ -355,15 +386,22 @@ fn materialize(package: &crate::provenance::VerifiedPackage) -> Result<PathBuf, 
     let root = parent.join(format!(
         "{}-{}-{}",
         package.id(),
-        &package.digest()[..16],
+        package.short_digest(),
         uuid::Uuid::new_v4().simple()
     ));
     std::fs::create_dir(&root)
         .map_err(|error| format!("create verified package instance: {error}"))?;
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))
         .map_err(|error| format!("protect verified package instance: {error}"))?;
-    for signed in package.signed_files() {
+    for signed in package.files() {
         let destination = root.join(&signed.path);
+        if signed.kind == crate::provenance::envelope::NodeKind::Dir {
+            std::fs::create_dir_all(&destination)
+                .map_err(|error| format!("create verified package directory: {error}"))?;
+            std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o700))
+                .map_err(|error| format!("protect verified package directory: {error}"))?;
+            continue;
+        }
         if let Some(parent) = destination.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|error| format!("create verified package directory: {error}"))?;
@@ -377,17 +415,20 @@ fn materialize(package: &crate::provenance::VerifiedPackage) -> Result<PathBuf, 
             .open(&destination)
             .map_err(|error| format!("create verified package file: {error}"))?;
         use std::io::Write;
-        file.write_all(
-            package
-                .file_bytes(&signed.path)
-                .ok_or_else(|| "verified package inventory drifted".to_string())?,
-        )
-        .map_err(|error| format!("write verified package file: {error}"))?;
+        let bytes = package
+            .read_verified(&signed.path)
+            .map_err(|error| format!("read verified package file: {error}"))?;
+        file.write_all(&bytes)
+            .map_err(|error| format!("write verified package file: {error}"))?;
         file.sync_all()
             .map_err(|error| format!("sync verified package file: {error}"))?;
         std::fs::set_permissions(
             &destination,
-            std::fs::Permissions::from_mode(if signed.executable { 0o500 } else { 0o400 }),
+            std::fs::Permissions::from_mode(if signed.mode & 0o111 != 0 {
+                0o500
+            } else {
+                0o400
+            }),
         )
         .map_err(|error| format!("protect verified package file: {error}"))?;
     }

@@ -664,7 +664,8 @@ fn replayable_after_locked(
     after_id: i64,
 ) -> Result<Vec<MessageRow>, MemoryError> {
     let mut statement = conn.prepare(
-        "SELECT id, session_id, role, content, ts_ms
+        "SELECT id, session_id, role, content, ts_ms,
+                trust_class, trust_source, trust_lineage
          FROM messages
          WHERE session_id = ? AND role <> ? AND id > ?
          ORDER BY id",
@@ -939,8 +940,7 @@ fn validate_lineage(conn: &Connection, record: &CompactionRecord) -> Result<(), 
             MemoryError::Integrity("compaction predecessor summary is missing".to_string())
         })?;
         validate_completed_intrinsic(conn, &previous, &summary)?;
-        if previous.recovery_metadata.previous_compaction_id
-            != previous.previous_compaction_id
+        if previous.recovery_metadata.previous_compaction_id != previous.previous_compaction_id
             || previous.session_id != child.session_id
             || previous.generation >= child.generation
             || previous.source_start_id != child.source_start_id
@@ -1021,7 +1021,8 @@ fn next_replayable_after(
     id: i64,
 ) -> Result<Option<MessageRow>, MemoryError> {
     conn.query_row(
-        "SELECT id, session_id, role, content, ts_ms
+        "SELECT id, session_id, role, content, ts_ms,
+                trust_class, trust_source, trust_lineage
          FROM messages
          WHERE session_id = ? AND role <> ? AND id > ?
          ORDER BY id
@@ -1033,10 +1034,7 @@ fn next_replayable_after(
     .map_err(MemoryError::from)
 }
 
-fn earliest_replayable_id(
-    conn: &Connection,
-    session_id: &str,
-) -> Result<Option<i64>, MemoryError> {
+fn earliest_replayable_id(conn: &Connection, session_id: &str) -> Result<Option<i64>, MemoryError> {
     conn.query_row(
         "SELECT MIN(id) FROM messages WHERE session_id = ? AND role <> ?",
         params![session_id, INJECTED_ROLE],
@@ -1051,7 +1049,8 @@ fn message_row_by_id(
     id: i64,
 ) -> Result<Option<MessageRow>, MemoryError> {
     conn.query_row(
-        "SELECT id, session_id, role, content, ts_ms
+        "SELECT id, session_id, role, content, ts_ms,
+                trust_class, trust_source, trust_lineage
          FROM messages
          WHERE id = ? AND session_id = ? AND role <> ?",
         params![id, session_id, INJECTED_ROLE],
@@ -1097,7 +1096,8 @@ fn source_rows_for_range(
         ));
     }
     let mut statement = conn.prepare(
-        "SELECT id, session_id, role, content, ts_ms
+        "SELECT id, session_id, role, content, ts_ms,
+                trust_class, trust_source, trust_lineage
          FROM messages
          WHERE session_id = ? AND role <> ? AND id BETWEEN ? AND ?
          ORDER BY id",
@@ -1287,9 +1287,10 @@ pub(super) fn repair_projection(conn: &Connection) -> Result<(), MemoryError> {
             continue;
         }
         if record.state == CompactionState::Completed {
-            if summary.as_deref().is_some_and(|summary| {
-                validate_completed_intrinsic(conn, record, summary).is_ok()
-            }) {
+            if summary
+                .as_deref()
+                .is_some_and(|summary| validate_completed_intrinsic(conn, record, summary).is_ok())
+            {
                 intrinsic_valid.insert(record.id);
             } else {
                 invalid.insert(record.id);
@@ -1318,8 +1319,9 @@ pub(super) fn repair_projection(conn: &Connection) -> Result<(), MemoryError> {
                     && previous.source_end_id < record.source_end_id
                     && previous.generation < record.generation
             }),
-            None => earliest_replayable_id(conn, &record.session_id)?
-                == Some(record.source_start_id),
+            None => {
+                earliest_replayable_id(conn, &record.session_id)? == Some(record.source_start_id)
+            }
         };
         if !lineage_ok {
             invalid.insert(record.id);
@@ -1384,10 +1386,7 @@ pub(super) fn repair_projection(conn: &Connection) -> Result<(), MemoryError> {
     }
 
     for id in invalid {
-        conn.execute(
-            "DELETE FROM session_compactions WHERE id = ?",
-            params![id],
-        )?;
+        conn.execute("DELETE FROM session_compactions WHERE id = ?", params![id])?;
     }
 
     let mut broken_after_reroot = HashSet::new();
@@ -1501,10 +1500,7 @@ fn delete_dependent_chains(
         }
     }
     for id in delete_ids.iter() {
-        conn.execute(
-            "DELETE FROM session_compactions WHERE id = ?",
-            params![id],
-        )?;
+        conn.execute("DELETE FROM session_compactions WHERE id = ?", params![id])?;
     }
     Ok(())
 }
@@ -1651,8 +1647,9 @@ pub(super) fn recover_projection(
                     && previous.source_end_id < record.source_end_id
                     && previous.generation < record.generation
             }),
-            None => earliest_replayable_id(&tx, &record.session_id)?
-                == Some(record.source_start_id),
+            None => {
+                earliest_replayable_id(&tx, &record.session_id)? == Some(record.source_start_id)
+            }
         };
         if !lineage_ok {
             skipped += 1;

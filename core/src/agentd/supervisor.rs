@@ -40,6 +40,7 @@ const DEFAULT_POLL_MS: u64 = 500;
 const DEFAULT_LEASE_SECS: u64 = 900;
 const DEFAULT_HEARTBEAT_GRACE_SECS: u64 = 120;
 const RECONCILE_INTERVAL: Duration = Duration::from_secs(60);
+const APPROVAL_RECONCILE_INTERVAL: Duration = Duration::from_secs(1);
 const PUMP_TICK: Duration = Duration::from_millis(250);
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 /// How long a cancelled worker gets to unwind its provider call and
@@ -216,7 +217,7 @@ pub fn spawn_supervisor(
 
 pub async fn run(config: SupervisorConfig, shutdown: Arc<AtomicBool>) -> Result<(), String> {
     let broker = BrokerContext::new(
-        DaemonState::try_new()?,
+        DaemonState::try_new().map_err(|error| error.to_string())?,
         Admission::new(Limits::default()),
         crate::paths::clawd_socket_path(),
     )?;
@@ -242,7 +243,7 @@ pub async fn run_with_store(
     store: Store,
 ) -> Result<(), String> {
     let broker = BrokerContext::new(
-        DaemonState::try_new()?,
+        DaemonState::try_new().map_err(|error| error.to_string())?,
         Admission::new(Limits::default()),
         crate::paths::clawd_socket_path(),
     )?;
@@ -269,7 +270,9 @@ pub async fn run_with_store_and_broker(
     // belongs to a dead worker. Reconciling before the first claim is
     // what makes a restart or upgrade self-healing.
     reconcile(&store);
+    reconcile_approvals(&store);
     let mut last_reconcile = Instant::now();
+    let mut last_approval_reconcile = Instant::now();
 
     tracing::info!(
         max_workers = config.max_workers,
@@ -286,8 +289,12 @@ pub async fn run_with_store_and_broker(
             reconcile(&store);
             last_reconcile = Instant::now();
         }
+        if last_approval_reconcile.elapsed() >= APPROVAL_RECONCILE_INTERVAL {
+            reconcile_approvals(&store);
+            last_approval_reconcile = Instant::now();
+        }
         if let Some(wait) = throttle.lock().map(|t| t.wait()).unwrap_or(None) {
-            sleep_interruptible(wait, &shutdown).await;
+            sleep_interruptible(wait.min(APPROVAL_RECONCILE_INTERVAL), &shutdown).await;
             continue;
         }
         let Ok(permit) = permits.clone().acquire_owned().await else {
@@ -298,13 +305,13 @@ pub async fn run_with_store_and_broker(
             Err(error) => {
                 tracing::warn!(error = %error, "agentd supervisor failed to claim a task");
                 drop(permit);
-                sleep_interruptible(config.poll, &shutdown).await;
+                sleep_interruptible(config.poll.min(APPROVAL_RECONCILE_INTERVAL), &shutdown).await;
                 continue;
             }
         };
         let Some((job, presence)) = claimed else {
             drop(permit);
-            sleep_interruptible(config.poll, &shutdown).await;
+            sleep_interruptible(config.poll.min(APPROVAL_RECONCILE_INTERVAL), &shutdown).await;
             continue;
         };
 
@@ -358,6 +365,41 @@ fn reconcile(store: &Store) {
         Ok(_) => {}
         Err(error) => tracing::warn!(error = %error, "agentd lease reconciliation failed"),
     }
+    reconcile_revoked_instances();
+}
+
+fn reconcile_revoked_instances() {
+    let owner = crate::provenance::runtime::current_owner();
+    let trust = crate::provenance::trust_store();
+    let report = crate::provenance::runtime::lifecycle_tick(
+        owner,
+        &trust,
+        crate::provenance::runtime::SHUTDOWN_GRACE,
+    );
+    if report.is_empty() {
+        return;
+    }
+    tracing::warn!(
+        target: "provenance",
+        marked = report.marked.len(),
+        terminated = report.terminated.len(),
+        released = report.released.len(),
+        "agentd stopped extension instances whose package is no longer trusted"
+    );
+}
+
+fn reconcile_approvals(store: &Store) {
+    match store.reconcile_waiting_approvals() {
+        Ok((resumed, failed)) if resumed > 0 || failed > 0 => {
+            tracing::info!(
+                resumed,
+                failed,
+                "agentd reconciled tasks waiting for approval"
+            );
+        }
+        Ok(_) => {}
+        Err(error) => tracing::warn!(error = %error, "agentd approval reconciliation failed"),
+    }
 }
 
 #[derive(Debug, Default)]
@@ -406,6 +448,7 @@ struct Lease {
     approval_expires_at: u64,
     approval_nonce: String,
     consent_context: ConsentContext,
+    resumed_after_approval: Vec<String>,
 }
 
 impl Lease {
@@ -526,7 +569,7 @@ async fn supervise(
             if let Ok(mut throttle) = throttle.lock() {
                 throttle.record_failure();
             }
-            release_or_fail(
+            let _ = release_or_fail(
                 &store,
                 &job,
                 &format!("failed to start agent worker: {error}"),
@@ -575,7 +618,7 @@ async fn supervise(
         Ok(extension) => extension,
         Err(error) => {
             reap(&mut child, pid).await;
-            release_or_fail(
+            let _ = release_or_fail(
                 &store,
                 &job,
                 &format!("failed to start extension host: {error}"),
@@ -610,6 +653,7 @@ async fn supervise(
         approval_expires_at: approval_deadline(config.lease),
         approval_nonce: uuid::Uuid::new_v4().to_string(),
         consent_context,
+        resumed_after_approval: job.resumed_after_approval.clone(),
     };
     let approval_identity = lease.approval_identity();
 
@@ -666,52 +710,67 @@ async fn supervise(
         },
         extension_cleanup.is_ok(),
     );
-    // The worker's lease is over, so every grant its session accrued
-    // goes with it — including any reusable approval the user made
-    // "for this session". A grant outliving the process it was bound to
-    // is exactly what the authority exists to prevent.
-    if let Some(session_id) = job.session_id.as_deref() {
-        if let Err(error) = crate::approvals::invalidate_pending_for_execution(
-            Some(owner_uid),
-            session_id,
-            &approval_identity,
-            "agent task or worker lease ended before approval",
-        ) {
-            tracing::error!(
-                task = %job.id,
-                error = %error,
-                "could not invalidate pending approvals for a finished worker"
-            );
-        }
-        crate::clawd::authority::revoke_session_for_owner(session_id, owner_uid);
-    }
-
     let outcome = apply_containment_cleanup(outcome, extension_cleanup);
-    finish_task_outcome(&store, &job, outcome);
+    let resulting_status = finish_task_outcome(&store, &job, outcome);
+    if resulting_status != Some(crate::agent::service::JobStatus::WaitingApproval) {
+        if let Some(session_id) = job.session_id.as_deref() {
+            if let Err(error) = crate::approvals::invalidate_pending_for_execution(
+                Some(owner_uid),
+                session_id,
+                &approval_identity,
+                "agent task or worker lease ended before approval",
+            ) {
+                tracing::error!(
+                    task = %job.id,
+                    error = %error,
+                    "could not invalidate pending approvals for a finished worker"
+                );
+            }
+            crate::clawd::authority::revoke_session_for_owner(session_id, owner_uid);
+        }
+    }
     Ok(())
 }
 
-fn finish_task_outcome(store: &Store, job: &Job, outcome: TaskOutcome) {
+fn finish_task_outcome(
+    store: &Store,
+    job: &Job,
+    outcome: TaskOutcome,
+) -> Option<crate::agent::service::JobStatus> {
     match outcome {
         TaskOutcome::Reported(outcome) => {
             let finish: FinishOutcome = (*outcome).into();
-            if let Err(error) = store.finish(job.clone(), finish) {
-                tracing::warn!(task = %job.id, error = %error, "failed to persist agent task result");
+            match store.finish(job.clone(), finish) {
+                Ok(finished) => Some(finished.status),
+                Err(error) => {
+                    tracing::warn!(task = %job.id, error = %error, "failed to persist agent task result");
+                    None
+                }
             }
         }
-        TaskOutcome::Cancelled => {
-            if let Err(error) = store.finish(job.clone(), FinishOutcome::Cancelled) {
+        TaskOutcome::Cancelled => match store.finish(job.clone(), FinishOutcome::Cancelled) {
+            Ok(finished) => Some(finished.status),
+            Err(error) => {
                 tracing::warn!(task = %job.id, error = %error, "failed to persist agent task cancellation");
+                None
             }
-        }
+        },
         TaskOutcome::Failed(message) => {
-            if let Err(error) = store.finish(job.clone(), FinishOutcome::Error(message)) {
-                tracing::warn!(task = %job.id, error = %error, "failed to persist agent task failure");
+            match store.finish(job.clone(), FinishOutcome::Error(message)) {
+                Ok(finished) => Some(finished.status),
+                Err(error) => {
+                    tracing::warn!(task = %job.id, error = %error, "failed to persist agent task failure");
+                    None
+                }
             }
         }
         TaskOutcome::Indeterminate(message) => {
-            if let Err(error) = store.finish(job.clone(), FinishOutcome::Indeterminate(message)) {
-                tracing::warn!(task = %job.id, error = %error, "failed to persist indeterminate agent task");
+            match store.finish(job.clone(), FinishOutcome::Indeterminate(message)) {
+                Ok(finished) => Some(finished.status),
+                Err(error) => {
+                    tracing::warn!(task = %job.id, error = %error, "failed to persist indeterminate agent task");
+                    None
+                }
             }
         }
         TaskOutcome::Retry(reason) => release_or_fail(store, job, &reason),
@@ -758,6 +817,13 @@ struct ExtensionRuntime {
     lease: Arc<crate::extension_host::broker::ExtensionLease>,
     broker_task: tokio::task::JoinHandle<()>,
     host_session_id: Option<String>,
+}
+
+fn configured_extension_ids(owner_home: &std::path::Path) -> Vec<String> {
+    crate::config::load_for_home(owner_home)
+        .agent
+        .extensions
+        .clone()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -833,6 +899,26 @@ async fn start_extension_host(
     let lease_nonce = uuid::Uuid::new_v4().simple().to_string();
     let expires_at_ms = super::grant::now_ms().saturating_add(lease_duration.as_millis() as u64);
     let approved_paths = extension_approved_paths(identity, session)?;
+    let configured_extensions = configured_extension_ids(&identity.home);
+    let extension_registry =
+        crate::agent_extensions::registry::ExtensionRegistry::load_selected_for_owner(
+            &crate::agent_extensions::registry::installed_root(),
+            &configured_extensions,
+            identity.uid,
+        );
+    for quarantined in &extension_registry.quarantined {
+        tracing::warn!(
+            extension = %quarantined.id,
+            diagnostic = %quarantined.diagnostic,
+            "Agent extension omitted from authenticated host bootstrap"
+        );
+    }
+
+    let agent_extensions = extension_registry
+        .registered
+        .into_values()
+        .map(|extension| extension.package.verification_receipt())
+        .collect::<Result<Vec<_>, _>>()?;
     let cleanup_paths = paths.clone();
     let mut host = match crate::extension_host::spawn::spawn_host(
         identity,
@@ -848,6 +934,7 @@ async fn start_extension_host(
         expires_at_ms,
         capability_generation,
         approved_paths,
+        agent_extensions,
         paths,
     ) {
         Ok(host) => host,
@@ -956,7 +1043,11 @@ fn extension_approved_paths(
             candidates.push(path);
         }
     }
-    for key in ["COS_APPS_DIR", "COS_SDK_PYTHON_DIR"] {
+    for key in [
+        "COS_APPS_DIR",
+        "COS_SDK_PYTHON_DIR",
+        "COS_AGENT_EXTENSIONS_DIR",
+    ] {
         if let Some(path) = std::env::var_os(key).map(std::path::PathBuf::from) {
             if path.exists() {
                 candidates.push(path);
@@ -965,7 +1056,10 @@ fn extension_approved_paths(
     }
     if let Some(caps) = session.and_then(|session| session.caps.as_ref()) {
         for cap in caps.iter() {
-            if !matches!(cap.verb, crate::caps::Verb::FS_READ | crate::caps::Verb::FS_EXEC) {
+            if !matches!(
+                cap.verb,
+                crate::caps::Verb::FS_READ | crate::caps::Verb::FS_EXEC
+            ) {
                 continue;
             }
             let crate::caps::Scope::Path(path) = &cap.scope else {
@@ -1021,11 +1115,12 @@ async fn pump(
         grant: signer.issue(claims_for(broker_pid, &lease, config.lease)),
         job: JobSpec {
             id: job.id.clone(),
-            prompt: job.prompt.clone(),
+            prompt: execution_prompt(job),
             context: job.context.clone(),
             branch_context: job.branch_context.clone(),
             session_id: job.session_id.clone(),
             max_turns: job.max_turns,
+            use_memory: job.use_memory,
             owner_uid: lease.owner_uid,
             owner_home: job.owner_home.clone().unwrap_or_default(),
         },
@@ -1131,6 +1226,7 @@ async fn pump(
             "execution commit delivery was ambiguous; refusing replay: {error}"
         ));
     }
+    journal_prompt_snapshot(&lease, job);
     if assignment_failpoint("after_commit_send") {
         return TaskOutcome::Indeterminate(
             "broker stopped after execution commit delivery; outcome is indeterminate".to_string(),
@@ -1197,8 +1293,31 @@ async fn pump(
                             exchange,
                             ..
                         } => {
-                            let reply =
+                            let mut reply =
                                 mediate_approval(&mut approvals_used, &lease, &exchange.ask);
+                            if let ApprovalReply::Pending {
+                                request_id: Some(request_id),
+                            } = &reply
+                            {
+                                if let Err(error) =
+                                    store.record_waiting_approval(&job.id, request_id)
+                                {
+                                    let _ = crate::approvals::deny_for_owner(
+                                        request_id,
+                                        Some("clawd".to_string()),
+                                        Some(
+                                            "The task could not persist its approval wait."
+                                                .to_string(),
+                                        ),
+                                        Some(lease.owner_uid),
+                                    );
+                                    reply = ApprovalReply::Refused {
+                                        message: format!(
+                                            "could not persist task approval state: {error}"
+                                        ),
+                                    };
+                                }
+                            }
                             let _ = send(
                                 &mut writer,
                                 &BrokerFrame::ApprovalReply {
@@ -1497,13 +1616,14 @@ fn mediate_approval(used: &mut u32, lease: &Lease, ask: &ApprovalAsk) -> Approva
 
     match ask {
         ApprovalAsk::Consume { .. } => {
-            match crate::approvals::redeem_matching_worker_grant_for_owner_operation(
+            match crate::approvals::redeem_resumed_worker_grant_for_owner_operation(
                 session_id,
                 verb,
                 scope,
                 lease.owner_uid,
                 &execution,
                 ask.operation_digest(),
+                &lease.resumed_after_approval,
             ) {
                 Ok(Some(grant)) => {
                     let lease_remaining = lease.deadline.saturating_duration_since(Instant::now());
@@ -1672,6 +1792,94 @@ fn audit_approval(
         grant.map(|grant| grant.generation),
         authority_grant,
     );
+    journal_approval(lease, verb, scope, action, grant);
+}
+
+fn journal_approval(
+    lease: &Lease,
+    verb: crate::caps::Verb,
+    scope: &crate::caps::Scope,
+    action: &'static str,
+    grant: Option<&crate::approvals::ConsumedGrant>,
+) {
+    use crate::session::journal::{self, JournalEvent, Label, Reference};
+
+    let Some(session_id) = lease.session_id.as_deref() else {
+        return;
+    };
+    let Ok(sid) = session_id.parse::<crate::session::SessionId>() else {
+        return;
+    };
+    let generation = grant
+        .map(|grant| grant.generation)
+        .or_else(|| crate::approvals::generations::current(Some(lease.owner_uid), session_id).ok())
+        .unwrap_or(0);
+    let event = match action {
+        "consumed" => JournalEvent::ApprovalConsumed {
+            approval: grant.map(|grant| Reference::new(&grant.reference)),
+            verb: Label::new(verb.as_str()),
+            scope: Reference::new(&scope.to_string()),
+            generation,
+        },
+        _ => JournalEvent::ApprovalRequested {
+            approval: Reference::new(action),
+            verb: Label::new(verb.as_str()),
+            scope: Reference::new(&scope.to_string()),
+        },
+    };
+    crate::clawd::journal::record_approval(
+        &journal::Partition::Session(sid),
+        lease.owner_uid,
+        event,
+    );
+}
+
+fn journal_prompt_snapshot(lease: &Lease, job: &Job) {
+    use crate::session::journal::{self, ContentRef, ContentStore, JournalEvent};
+
+    let Some(session_id) = lease.session_id.as_deref() else {
+        return;
+    };
+    let Ok(sid) = session_id.parse::<crate::session::SessionId>() else {
+        return;
+    };
+    let mut assembled = Vec::new();
+    let mut segments = 1u32;
+    assembled.extend_from_slice(execution_prompt(job).as_bytes());
+    for extra in [job.context.as_deref(), job.branch_context.as_deref()]
+        .into_iter()
+        .flatten()
+    {
+        assembled.push(0);
+        assembled.extend_from_slice(extra.as_bytes());
+        segments += 1;
+    }
+    journal::record_best_effort(
+        &journal::Partition::Session(sid),
+        lease.owner_uid,
+        journal::EventSource::Kernel,
+        JournalEvent::PromptSnapshotRecorded {
+            turn: 0,
+            snapshot: ContentRef::of(ContentStore::PromptSnapshot, &assembled),
+            segments,
+        },
+    );
+}
+
+fn execution_prompt(job: &Job) -> String {
+    if job.resumed_after_approval.is_empty() {
+        return job.prompt.clone();
+    }
+    let resume = format!(
+        "Continue the current task. The user approved permission request(s) {}. \
+         Retry the blocked operation and complete the original request.",
+        job.resumed_after_approval.join(", ")
+    );
+    if job.use_memory {
+        resume
+    } else {
+        format!("{resume}\n\nOriginal request:\n{}", job.prompt)
+    }
 }
 
 fn check_hello(hello: &WorkerHello, lease: &Lease) -> Result<(), String> {
@@ -1690,6 +1898,11 @@ fn check_hello_with(
             hello.protocol,
             protocol::PROTOCOL_VERSION
         ));
+    }
+    if let Err(refusal) =
+        crate::update::runtime::check_peer_epoch("claw-agentd", hello.security_epoch)
+    {
+        return Err(refusal.message);
     }
     if hello.pid != lease.worker_pid {
         return Err(format!(
@@ -1766,8 +1979,7 @@ fn record_worker_audit(lease: &Lease, record: &RuntimeAuditRecord) {
             return;
         }
         if mcp.as_ref().is_some_and(|mcp| {
-            mcp.validate().is_err()
-                || mcp.capability_generation != lease.capability_generation
+            mcp.validate().is_err() || mcp.capability_generation != lease.capability_generation
         }) {
             tracing::warn!(task = %lease.task_id, "discarding MCP audit for a substituted capability generation");
             return;
@@ -1780,6 +1992,85 @@ fn record_worker_audit(lease: &Lease, record: &RuntimeAuditRecord) {
         }
     }
     crate::clawd::audit::record_worker_runtime(&lease.task_id, lease.owner_uid, record);
+    journal_worker_audit(lease, session_id, record);
+}
+
+fn journal_worker_audit(lease: &Lease, session_id: &str, record: &RuntimeAuditRecord) {
+    use crate::session::journal::{self, JournalEvent, Label};
+
+    let Ok(sid) = session_id.parse::<crate::session::SessionId>() else {
+        return;
+    };
+    let partition = journal::Partition::Session(sid);
+    let event = match record {
+        RuntimeAuditRecord::ToolStarted {
+            turn_index,
+            tool,
+            tool_use_id,
+            ..
+        } => {
+            let facts = crate::audit_policy::reproject_tool_facts(tool);
+            JournalEvent::ToolStarted {
+                turn: *turn_index,
+                tool: Label::new(&facts.tool),
+                tool_use_id: Label::new(tool_use_id),
+                known: facts.known,
+            }
+        }
+        RuntimeAuditRecord::ToolFinished {
+            turn_index,
+            tool,
+            tool_use_id,
+            success,
+            latency_ms,
+            bytes_returned,
+            error,
+            ..
+        } => {
+            let facts = crate::audit_policy::reproject_tool_facts(tool);
+            JournalEvent::ToolFinished {
+                turn: *turn_index,
+                tool: Label::new(&facts.tool),
+                tool_use_id: Label::new(tool_use_id),
+                known: facts.known,
+                success: *success,
+                latency_ms: *latency_ms,
+                bytes_returned: *bytes_returned as u64,
+                error: error.clone(),
+            }
+        }
+        RuntimeAuditRecord::TurnFinished {
+            turn_index,
+            provider,
+            model,
+            success,
+            latency_ms,
+            input_tokens,
+            output_tokens,
+            tool_calls_made,
+            stop_reason,
+            error,
+            ..
+        } => JournalEvent::ModelTurnCompleted {
+            turn: *turn_index,
+            provider: Label::new(provider),
+            model: Label::new(model),
+            success: *success,
+            latency_ms: *latency_ms,
+            input_tokens: *input_tokens,
+            output_tokens: *output_tokens,
+            tool_calls: *tool_calls_made,
+            stop_reason: Label::new(stop_reason),
+            error: error.clone(),
+        },
+        RuntimeAuditRecord::ExtensionLifecycle { .. } => return,
+    };
+    journal::record_best_effort(
+        &partition,
+        lease.owner_uid,
+        journal::EventSource::Worker,
+        event,
+    );
 }
 
 fn broker_session_info(
@@ -2007,16 +2298,27 @@ fn finish_error(store: &Store, job: Job, message: &str) {
 
 /// Retryable failure: hand the task back to the queue, or fail it once
 /// it has burned through its recovery budget.
-fn release_or_fail(store: &Store, job: &Job, reason: &str) {
+fn release_or_fail(
+    store: &Store,
+    job: &Job,
+    reason: &str,
+) -> Option<crate::agent::service::JobStatus> {
     match store.release_for_retry(&job.id, reason) {
-        Ok(Some(released)) => tracing::warn!(
-            task = %job.id,
-            status = released.status.as_str(),
-            "agent task released after worker failure: {reason}"
-        ),
-        Ok(None) => tracing::warn!(task = %job.id, "agent task was already resolved: {reason}"),
+        Ok(Some(released)) => {
+            tracing::warn!(
+                task = %job.id,
+                status = released.status.as_str(),
+                "agent task released after worker failure: {reason}"
+            );
+            Some(released.status)
+        }
+        Ok(None) => {
+            tracing::warn!(task = %job.id, "agent task was already resolved: {reason}");
+            None
+        }
         Err(error) => {
-            tracing::warn!(task = %job.id, error = %error, "failed to release agent task")
+            tracing::warn!(task = %job.id, error = %error, "failed to release agent task");
+            None
         }
     }
 }

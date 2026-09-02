@@ -25,7 +25,7 @@ pub const CGROUP_ROOT_ENV: &str = "CLAWD_EXTENSION_CGROUP_ROOT";
 
 const HOST_PATH: &str = "/usr/local/bin/claw-extension-host";
 const SAFE_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
-const HOST_NOFILE_LIMIT: libc::rlim_t = 128;
+const HOST_NOFILE_LIMIT: libc::rlim_t = 512;
 const HOST_NPROC_LIMIT: libc::rlim_t = 512;
 const HOST_ADDRESS_SPACE_LIMIT: libc::rlim_t = 2 * 1024 * 1024 * 1024;
 const HOST_FILE_SIZE_LIMIT: libc::rlim_t = 256 * 1024 * 1024;
@@ -41,6 +41,7 @@ const CGROUP_LIMITS: [(&str, &str); 4] = [
 const BROKER_CGROUP: &str = "cos-broker";
 
 const INHERITED_ENV_KEYS: &[&str] = &[
+    "COS_AGENT_EXTENSIONS_DIR",
     "COS_APPS_DIR",
     "COS_BIN",
     "COS_SDK_PYTHON_DIR",
@@ -663,6 +664,7 @@ pub fn spawn_host(
     expires_at_ms: u64,
     capability_generation: &str,
     approved_paths: Vec<ApprovedPath>,
+    agent_extensions: Vec<crate::provenance::verify::PackageVerificationReceipt>,
     paths: HostPaths,
 ) -> Result<SpawnedExtensionHost, String> {
     if extension.uid == 0
@@ -700,6 +702,16 @@ pub fn spawn_host(
             paths.cleanup(),
         ));
     }
+    if let Err(refusal) =
+        crate::update::runtime::enforce_component_binary("claw-extension-host", &binary)
+    {
+        let cleanup = cgroup.cleanup_blocking();
+        return Err(combine_cleanup_error(
+            refusal.message,
+            cleanup,
+            paths.cleanup(),
+        ));
+    }
     if crate::agentd::spawn::broker_is_root() {
         if let Err(error) = crate::agentd::spawn::validate_root_owned_executable(&binary) {
             let cleanup = cgroup.cleanup_blocking();
@@ -723,6 +735,7 @@ pub fn spawn_host(
         control_socket: paths.control_socket.to_string_lossy().into_owned(),
         broker_socket: paths.broker_socket.to_string_lossy().into_owned(),
         approved_paths,
+        agent_extensions,
     };
     let bootstrap_fd = create_bootstrap_pipe(&bootstrap)?;
 
@@ -737,7 +750,9 @@ pub fn spawn_host(
     command.current_dir(&paths.control_dir);
     command.env_clear();
     command.env("HOME", &paths.control_dir);
-    command.env("XDG_RUNTIME_DIR", paths.control_dir.join("runtime"));
+    // The host runs with a private /tmp mount. Keep nested worker socket paths
+    // below AF_UNIX's small SUN_LEN ceiling without exposing them cross-task.
+    command.env("XDG_RUNTIME_DIR", "/tmp");
     command.env("USER", &extension.username);
     command.env("LOGNAME", &extension.username);
     command.env("PATH", SAFE_PATH);
@@ -787,10 +802,7 @@ pub fn spawn_host(
             attach_current_process(cgroup_procs_fd)?;
             libc::umask(0o077);
             place_bootstrap_fd(bootstrap_raw_fd)?;
-            crate::agentd::spawn::mark_inherited_descriptors_cloexec_except(
-                3,
-                bootstrap_raw_fd,
-            );
+            crate::agentd::spawn::mark_inherited_descriptors_cloexec_except(3, bootstrap_raw_fd);
             setup_private_mount_namespace(&writable_task_path)?;
             if try_namespaces {
                 // IPC and UTS isolation do not change filesystem or network
@@ -863,6 +875,7 @@ pub fn spawn_host(
         owner_gid: gid,
         capability_generation: capability_generation.to_string(),
         approved_paths: bootstrap.approved_paths,
+        agent_extensions: bootstrap.agent_extensions,
         worker_pid,
         worker_start_time_ticks,
         host_pid: pid,

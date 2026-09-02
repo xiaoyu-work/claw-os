@@ -24,6 +24,9 @@ transports, discovery, and tool-registry integration.
 - Expose only the external client's session-projected local tools and repeat
   the same projection check on `tools/call`.
 - Bound frames, handshakes, requests, and optional-server failures.
+- Keep inbound tool execution to 4 active calls plus 8 queued calls by
+  default. Trusted composition may lower or raise those bounds only within
+  the compiled maxima of 16 active and 32 queued calls.
 
 ## Key Files
 
@@ -36,6 +39,20 @@ transports, discovery, and tool-registry integration.
 | `server.rs` | Local tools/list/tools/call server |
 | `integration.rs` | Process/URL attachment and registry adapters |
 | `discover.rs` | XDG agent-API sidecar discovery |
+
+## Provenance
+
+Presence in an XDG search path is not authority to execute. A discovered
+agent-API package must be a directory carrying a `claw.provenance/v1`
+envelope signed by a trusted publisher, root-owned content under an
+approved system package root, or covered by an explicit developer grant.
+Loose `*.json` manifests are honoured only under an approved,
+root-owned package root. The manifest is read from the verified
+snapshot, and the command, its arguments and any package-relative env
+paths are re-verified immediately before spawn; a package may otherwise
+run only a root-owned distribution interpreter, never a writable one
+found earlier on `PATH`. Tool names, descriptions and results stay
+untrusted model input even when the package is signed.
 
 ## Dependencies
 
@@ -55,6 +72,27 @@ registry is reachable only through `mcp_catalog` and `mcp_invoke`, preserving
 one exposure, approval, timeout, audit, and execution path.
 Equivalent first-party MCP failures use the generated codes owned by
 `claw-os-sdk/wire/v1/contract.json`.
+
+The inbound core server reserves JSON-RPC code `-32000` for overload after a
+`tools/call` has passed envelope, parameter, registry, and guardrail checks.
+Its stable data is `{"kind":"server_overloaded","retryable":true,
+"hint":"retry the request with exponential backoff"}`. Notifications never
+enter the tool queue and never receive overload responses;
+`notifications/cancelled` instead drops matching queued work or aborts the
+matching active handler. Closing the transport aborts all active work and
+drops the queue rather than waiting on tools during shutdown.
+
+A stdio server is third-party code and is launched through the shared
+hostile-worker sandbox in [`crate::worker`](../../../worker/MODULE.md),
+never with a local `Command`. It gets a read-only system image, the
+configured working directory (checked against the owner's home), no App
+data directory, no network namespace of the host's, no inherited
+environment, and a per-launch broker endpoint that shadows the real
+broker socket and admits nothing by default. Its authority arrives per
+call as transient capabilities the kernel sets on the session, so a
+`tools/list` or `tools/call` result can never become authority. Keep the
+`LaunchResources` on the server handle: dropping the handle is what
+tears the sandbox and its endpoints down.
 
 ## Tests
 

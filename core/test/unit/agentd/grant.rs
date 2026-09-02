@@ -80,6 +80,15 @@ fn extension(
             owner_uid: 1000,
             mode: 0o40755,
         }],
+        agent_extensions: vec![crate::provenance::verify::PackageVerificationReceipt {
+            kind: crate::provenance::PackageKind::AgentExtension,
+            id: "observer".to_string(),
+            version: "1.0.0".to_string(),
+            content_digest: format!("sha256:{}", "b".repeat(64)),
+            trust: crate::provenance::verify::PackageReceiptTrust::Vendor,
+            tier: crate::provenance::TrustTier::Vendor,
+            trust_generation: "c".repeat(64),
+        }],
         worker_pid: 77,
         worker_start_time_ticks: Some(99),
         host_pid,
@@ -165,6 +174,9 @@ fn an_extension_binding_cannot_be_replayed_for_another_host_or_session() {
         },
         |binding: &mut crate::extension_host::protocol::ExtensionBinding| {
             binding.approved_paths[0].inode += 1;
+        },
+        |binding: &mut crate::extension_host::protocol::ExtensionBinding| {
+            binding.agent_extensions[0].content_digest = format!("sha256:{}", "d".repeat(64));
         },
     ] {
         let mut substituted = grant.clone();

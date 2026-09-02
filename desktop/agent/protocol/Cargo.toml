@@ -1,0 +1,11 @@
+[package]
+name = "cos-agent-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Versioned presentation protocol shared by the ClawOS desktop Agent UI and bridge."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }

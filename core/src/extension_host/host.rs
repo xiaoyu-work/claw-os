@@ -386,16 +386,12 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
             validate_text(&command, "App command", 256)?;
             validate_args(&args)?;
             let apps_root = apps_root();
-            let app_dir = crate::apps::find(&apps_root, &app_id)
-                .map(|app| app.dir)
-                .ok_or_else(|| format!("App `{app_id}` is not installed"))?;
+            let app = crate::apps::find_verified(&apps_root, &app_id)?;
+            let launch = crate::bridge::AppLaunch::new(app.require_verified()?.clone())?;
             let data = crate::paths::user_data_dir().to_string_lossy().into_owned();
             let apps = apps_root.to_string_lossy().into_owned();
-            let isolation = state.isolation.clone();
             let output = tokio::task::spawn_blocking(move || {
-                crate::bridge::run_app_with_isolation(
-                    &app_dir, &command, &args, &data, &apps, isolation,
-                )
+                crate::bridge::run_app(&launch, &command, &args, &data, &apps)
             })
             .await
             .map_err(|error| format!("App host task failed: {error}"))??;
@@ -410,8 +406,7 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
         HostAction::AppOpen { app_id } => {
             validate_name(&app_id, "App id")?;
             let tool_count =
-                crate::agent::tools::cos_apps_session::host_open_session(&app_id, &state.isolation)
-                    .await?;
+                crate::agent::tools::cos_apps_session::host_open_session(&app_id).await?;
             Ok(HostResult::AppOpened { tool_count })
         }
         HostAction::AppCall {
@@ -461,10 +456,9 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
             let detached = state.mcp.lock().await.remove(&server).is_some();
             Ok(HostResult::McpDetached { detached })
         }
-        HostAction::AgentExtensionAttach {
-            registration,
-            package,
-        } => attach_agent_extension(registration, package, &state).await,
+        HostAction::AgentExtensionAttach { registration } => {
+            attach_agent_extension(registration, &state).await
+        }
         HostAction::AgentExtensionEvent {
             extension_id,
             binding,
@@ -524,7 +518,6 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
 
 async fn attach_agent_extension(
     registration: super::protocol::AgentExtensionRegistration,
-    package: crate::provenance::PackageSnapshot,
     state: &HostState,
 ) -> Result<HostResult, String> {
     validate_name(&registration.extension_id, "Agent extension")?;
@@ -554,7 +547,6 @@ async fn attach_agent_extension(
     }
     let _spawn = state.agent_extension_spawn.lock().await;
     let hosted = super::agent_extension::HostedAgentExtension::attach(
-        package,
         &registration,
         &state.binding,
         &state.isolation,
@@ -578,12 +570,35 @@ async fn attach_agent_extension(
     })
 }
 
-async fn attach_mcp(spec: McpServerSpec, state: &HostState) -> Result<HostResult, String> {
+async fn attach_mcp(mut spec: McpServerSpec, state: &HostState) -> Result<HostResult, String> {
     validate_name(&spec.name, "MCP server")?;
     validate_text(&spec.command, "MCP command", 4096)?;
     validate_args(&spec.args)?;
     if spec.env.len() > 64 {
         return Err("MCP environment exceeds 64 entries".to_string());
+    }
+    if let Some(binding) = spec.package.clone() {
+        let trust = crate::provenance::trust_store();
+        let mut options =
+            crate::provenance::VerifyOptions::new(crate::provenance::PackageKind::Mcp)
+                .expect_id(&binding.id);
+        options.allow_developer = false;
+        let package = crate::provenance::verify::verify_package_cached(
+            std::path::Path::new(&binding.path),
+            &options,
+            &trust,
+        )
+        .map_err(|error| {
+            crate::provenance::quarantine_reason(
+                crate::provenance::PackageKind::Mcp,
+                &binding.id,
+                &error,
+            )
+        })?;
+        if package.content_digest() != binding.content_digest {
+            return Err("MCP package content changed before hosted attachment".to_string());
+        }
+        spec.provenance = Some(package);
     }
     {
         let mcp = state.mcp.lock().await;

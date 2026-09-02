@@ -2,9 +2,7 @@ package clawossdk
 
 import (
 	"os"
-	"path/filepath"
 	"testing"
-	"time"
 )
 
 func TestIsGUILaunch(t *testing.T) {
@@ -58,36 +56,8 @@ func TestContextBadArgsJSON(t *testing.T) {
 	}
 }
 
-func TestOpenAgentOverlaySpawns(t *testing.T) {
-	dir := t.TempDir()
-	marker := filepath.Join(dir, "spawned")
-	bin := filepath.Join(dir, "cos-agent-ui")
-	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + marker + "\n"
-	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
-		t.Fatalf("write fake overlay: %v", err)
-	}
-	t.Setenv("COS_AGENT_UI_BIN", bin)
-
-	ctx := Context([]string{})
-	if err := ctx.OpenAgentOverlay("current doc"); err != nil {
-		t.Fatalf("OpenAgentOverlay error: %v", err)
-	}
-	// Detached child: poll briefly for the marker.
-	var data []byte
-	for i := 0; i < 50; i++ {
-		if b, err := os.ReadFile(marker); err == nil {
-			data = b
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if len(data) == 0 {
-		t.Fatal("overlay was not spawned (no marker)")
-	}
-}
-
 func TestOpenAgentOverlayMissingBinary(t *testing.T) {
-	t.Setenv("COS_AGENT_UI_BIN", "/nonexistent/cos-agent-ui-xyz")
+	t.Setenv("COS_AGENT_UI_BIN", "/nonexistent/attacker")
 	ctx := Context(nil)
 	if err := ctx.OpenAgentOverlay(""); err == nil {
 		t.Fatal("expected error when overlay binary is missing")

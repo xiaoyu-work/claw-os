@@ -34,7 +34,7 @@ pub enum ClientError {
     UnsupportedFrame,
     #[error("clawd response declares {actual} bytes; maximum is {maximum}")]
     ResponseTooLarge { actual: usize, maximum: usize },
-    #[error("clawd response is not a valid v1 envelope")]
+    #[error("clawd response is not a valid broker envelope")]
     MalformedResponse(#[source] serde_json::Error),
     #[error("clawd responded with protocol v{actual}; this client speaks v{expected}")]
     UnsupportedVersion { actual: u32, expected: u32 },

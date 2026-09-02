@@ -1,10 +1,9 @@
 /**
- * Tasks page. Lists durable agent tasks from `/api/tasks`. Each task has
- * stop/undo/resume actions (POST /api/tasks/{id}/{action}).
+ * Tasks page. Lists the durable clawd queue from `/api/tasks`.
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { Loader2, Pause, Play, RotateCcw } from "lucide-react";
+import { Loader2, RotateCcw, Square } from "lucide-react";
 
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -22,10 +21,13 @@ type Task = {
   id: string;
   title?: string;
   status?: string;
-  state?: string;
-  created_at?: number | string;
-  updated_at?: number | string;
-  description?: string;
+  prompt?: string;
+  session_id?: string;
+  created_at?: string;
+  started_at?: string;
+  finished_at?: string;
+  waiting_on?: string[];
+  error?: string;
 };
 
 export function TasksPage() {
@@ -34,28 +36,37 @@ export function TasksPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setErr(null);
+  const load = useCallback(async (foreground = true) => {
+    if (foreground) {
+      setLoading(true);
+      setErr(null);
+    }
     try {
       const r = await api.get<{ tasks?: Task[] } | Task[]>("/api/tasks");
       setTasks(Array.isArray(r) ? r : r?.tasks || []);
     } catch (e: any) {
       setErr(e?.message || "Failed to load tasks");
     } finally {
-      setLoading(false);
+      if (foreground) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    load();
+    void load();
+    const refresh = () => void load(false);
+    const timer = window.setInterval(refresh, 3_000);
+    window.addEventListener("cos:notifications-changed", refresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("cos:notifications-changed", refresh);
+    };
   }, [load]);
 
-  async function act(id: string, action: "stop" | "undo" | "resume") {
+  async function act(id: string, action: "stop" | "resume") {
     setBusy(id);
     try {
       await api.post(`/api/tasks/${id}/${action}`);
-      await load();
+      await load(false);
     } catch (e: any) {
       setErr(e?.message || `Failed to ${action}`);
     } finally {
@@ -70,7 +81,7 @@ export function TasksPage() {
           <h1 className="text-xl font-semibold">Tasks</h1>
           <p className="text-xs text-muted-foreground">Durable background jobs.</p>
         </div>
-        <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+        <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
           {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Refresh"}
         </Button>
       </div>
@@ -96,34 +107,43 @@ export function TasksPage() {
               tasks.map((t) => (
                 <TableRow key={t.id}>
                   <TableCell className="font-mono text-xs">{t.id.slice(0, 12)}</TableCell>
-                  <TableCell className="text-sm">{t.title || t.description || "—"}</TableCell>
-                  <TableCell className="text-xs">{t.status || t.state || "—"}</TableCell>
+                  <TableCell className="text-sm">
+                    <div>{t.title || t.prompt || "Agent task"}</div>
+                    {t.error ? (
+                      <div className="mt-1 max-w-xl text-xs text-destructive">{t.error}</div>
+                    ) : null}
+                    {t.status === "waiting_approval" && t.waiting_on?.length ? (
+                      <div className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                        Waiting for approval {t.waiting_on.join(", ")}
+                      </div>
+                    ) : null}
+                  </TableCell>
+                  <TableCell className="text-xs">
+                    <span className={statusClass(t.status)}>{formatStatus(t.status)}</span>
+                  </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        disabled={busy === t.id}
-                        onClick={() => act(t.id, "stop")}
-                      >
-                        <Pause className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        disabled={busy === t.id}
-                        onClick={() => act(t.id, "resume")}
-                      >
-                        <Play className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        disabled={busy === t.id}
-                        onClick={() => act(t.id, "undo")}
-                      >
-                        <RotateCcw className="h-3.5 w-3.5" />
-                      </Button>
+                      {isActive(t.status) ? (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={busy === t.id}
+                          onClick={() => act(t.id, "stop")}
+                          title="Cancel task"
+                        >
+                          <Square className="h-3.5 w-3.5" />
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={busy === t.id}
+                          onClick={() => act(t.id, "resume")}
+                          title="Retry task"
+                        >
+                          <RotateCcw className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -134,4 +154,19 @@ export function TasksPage() {
       </Card>
     </div>
   );
+}
+
+function isActive(status?: string) {
+  return status === "pending" || status === "running" || status === "waiting_approval";
+}
+
+function formatStatus(status?: string) {
+  return (status || "unknown").replace(/_/g, " ");
+}
+
+function statusClass(status?: string) {
+  if (status === "ok") return "text-emerald-500";
+  if (status === "error" || status === "cancelled") return "text-destructive";
+  if (status === "waiting_approval") return "text-amber-600 dark:text-amber-400";
+  return "text-muted-foreground";
 }

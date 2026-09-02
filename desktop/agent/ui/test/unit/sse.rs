@@ -13,8 +13,8 @@ async fn parses_delta_then_done() {
         .map(|r| r.unwrap())
         .collect();
     assert_eq!(collected.len(), 3);
-    assert!(matches!(&collected[0], StreamEvent::Delta(t) if t == "Hello"));
-    assert!(matches!(&collected[1], StreamEvent::Delta(t) if t == " world"));
+    assert!(matches!(&collected[0], StreamEvent::Delta(payload) if payload.text == "Hello"));
+    assert!(matches!(&collected[1], StreamEvent::Delta(payload) if payload.text == " world"));
     assert!(matches!(&collected[2], StreamEvent::Done(_)));
 }
 
@@ -52,7 +52,7 @@ async fn handles_multibyte_char_split_across_chunks() {
         .map(|r| r.unwrap())
         .collect();
     assert_eq!(collected.len(), 1);
-    assert!(matches!(&collected[0], StreamEvent::Delta(t) if t == "😀"));
+    assert!(matches!(&collected[0], StreamEvent::Delta(payload) if payload.text == "😀"));
 }
 
 #[tokio::test]
@@ -67,11 +67,11 @@ async fn parses_crlf_and_final_event_without_separator() {
         .collect::<Vec<_>>();
     assert!(matches!(
         &collected[0],
-        StreamEvent::TaskStarted { task_id, .. } if task_id == "job-1"
+        StreamEvent::TaskStarted(payload) if payload.task_id == "job-1"
     ));
     assert!(matches!(
         &collected[1],
-        StreamEvent::Warning(message) if message == "careful"
+        StreamEvent::Warning(payload) if payload.message == "careful"
     ));
 }
 

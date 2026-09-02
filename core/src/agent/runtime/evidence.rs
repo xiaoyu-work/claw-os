@@ -131,12 +131,38 @@ pub fn verify_answer(user_prompt: &str, answer: &str, messages: &[Message]) -> E
         .iter()
         .map(|source| (source.tool_call_id.as_str(), source))
         .collect::<BTreeMap<_, _>>();
+    let mut source_aliases = BTreeMap::<&str, Option<&EvidenceSource>>::new();
+    for source in &sources {
+        let Some((_, suffix)) = source.tool_call_id.split_once("::") else {
+            continue;
+        };
+        if suffix.is_empty() {
+            continue;
+        }
+        match source_aliases.entry(suffix) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(Some(source));
+            }
+            std::collections::btree_map::Entry::Occupied(mut entry) => {
+                entry.insert(None);
+            }
+        }
+    }
     let mut claims = parse_claims(answer);
     let required = sources.iter().any(|source| source.binding_relevant)
         || looks_like_live_system_request(user_prompt);
 
     for claim in &mut claims {
-        let Some(source) = source_map.get(claim.tool_call_id.as_str()) else {
+        let source = source_map
+            .get(claim.tool_call_id.as_str())
+            .copied()
+            .or_else(|| {
+                source_aliases
+                    .get(claim.tool_call_id.as_str())
+                    .copied()
+                    .flatten()
+            });
+        let Some(source) = source else {
             claim.issue =
                 Some("tool call id was not present in this runtime trajectory".to_string());
             continue;
@@ -245,18 +271,18 @@ fn collect_sources(messages: &[Message]) -> (Vec<EvidenceSource>, Vec<String>) {
     for message in messages {
         for block in &message.content {
             if let ContentBlock::ToolUse { id, name, input } = block {
-                let (visible_name, visible_input) =
+                let (name, input) =
                     crate::agent::tools::progressive::resolve_visible_identity(name, input)
                         .unwrap_or_else(|| (name.clone(), input.clone()));
                 match tools.get(id) {
-                    Some((existing, _)) if existing != &visible_name => {
+                    Some((existing, _)) if existing != &name => {
                         ambiguous.insert(id.clone());
                     }
                     Some(_) => {
                         ambiguous.insert(id.clone());
                     }
                     None => {
-                        tools.insert(id.clone(), (visible_name, visible_input));
+                        tools.insert(id.clone(), (name, input));
                     }
                 }
             }
@@ -419,7 +445,10 @@ fn looks_like_live_system_request(prompt: &str) -> bool {
 }
 
 fn tool_requires_binding(name: &str, input: &serde_json::Value) -> bool {
-    if matches!(name, "cos_diagnose" | "cos_sysinfo" | "cos_doctor") {
+    if matches!(
+        name,
+        "cos_diagnose" | "cos_sysinfo" | "cos_doctor" | "cos_usage"
+    ) {
         return true;
     }
     let command = input

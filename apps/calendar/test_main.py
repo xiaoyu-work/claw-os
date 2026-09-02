@@ -345,16 +345,16 @@ class TestProviderAuthorization(unittest.TestCase):
         response.__enter__.return_value.status = 200
         response.__enter__.return_value.read.return_value = b'{"items":[]}'
         with mock.patch.object(
-            calendar_main.urllib.request,
-            "urlopen",
-            return_value=response,
-        ) as urlopen:
+            calendar_main,
+            "open_url",
+            return_value=(response, "https://www.googleapis.com/calendar/v3/test", []),
+        ) as open_url:
             calendar_main._google_request(
                 "GET",
                 "https://www.googleapis.com/calendar/v3/test",
                 token="access-token",
             )
-        request = urlopen.call_args.args[0]
+        request = open_url.call_args.args[0]
         self.assertEqual(request.get_header("Authorization"), "Bearer access-token")
 
     def test_google_401_is_non_retryable_auth_error(self):

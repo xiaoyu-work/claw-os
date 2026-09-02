@@ -12,8 +12,8 @@ use crate::clawd::wire::RequestId;
 
 use super::protocol::{
     ControlRequest, ControlResponse, ExtensionBinding, ExtensionErrorCategory, HostAction,
-    HostResult,
-    DEFAULT_REQUEST_TIMEOUT_MS, MAX_CONTROL_FRAME_BYTES, PROTOCOL_VERSION, READY_TIMEOUT_MS,
+    HostResult, DEFAULT_REQUEST_TIMEOUT_MS, MAX_CONTROL_FRAME_BYTES, PROTOCOL_VERSION,
+    READY_TIMEOUT_MS,
 };
 
 #[derive(Debug, Clone)]
@@ -439,14 +439,10 @@ impl ExtensionHostClient {
     pub async fn attach_agent_extension(
         &self,
         registration: super::protocol::AgentExtensionRegistration,
-        package: crate::provenance::PackageSnapshot,
     ) -> Result<super::abi::AbiBinding, String> {
         let result = self
             .request_with_timeout(
-                HostAction::AgentExtensionAttach {
-                    registration,
-                    package,
-                },
+                HostAction::AgentExtensionAttach { registration },
                 Duration::from_secs(15),
                 false,
             )
@@ -532,11 +528,12 @@ impl ExtensionHostClient {
         timeout: Duration,
         cancel_on_timeout: bool,
     ) -> ClientResult<HostResult> {
-        self.binding.validate_worker(
-            std::process::id(),
-            crate::proc::read_start_time_ticks_pub(std::process::id()),
-        )
-        .map_err(ClientFault::protocol)?;
+        self.binding
+            .validate_worker(
+                std::process::id(),
+                crate::proc::read_start_time_ticks_pub(std::process::id()),
+            )
+            .map_err(ClientFault::protocol)?;
         let request = ControlRequest::new(
             &self.binding,
             action,
@@ -565,18 +562,17 @@ impl ExtensionHostClient {
 
     async fn exchange(&self, request: ControlRequest) -> ClientResult<HostResult> {
         let path = Path::new(&self.binding.control_socket);
-        let mut stream = UnixStream::connect(path)
-            .await
-            .map_err(|error| {
-                ClientFault::new(
-                    ExtensionErrorCategory::Connect,
-                    format!("connect extension host {}: {error}", path.display()),
-                )
-            })?;
+        let mut stream = UnixStream::connect(path).await.map_err(|error| {
+            ClientFault::new(
+                ExtensionErrorCategory::Connect,
+                format!("connect extension host {}: {error}", path.display()),
+            )
+        })?;
         verify_host_peer(&stream, &self.binding)
             .map_err(|error| ClientFault::new(ExtensionErrorCategory::Crash, error))?;
-        let body = serde_json::to_vec(&request)
-            .map_err(|error| ClientFault::protocol(format!("encode extension-host request: {error}")))?;
+        let body = serde_json::to_vec(&request).map_err(|error| {
+            ClientFault::protocol(format!("encode extension-host request: {error}"))
+        })?;
         if body.len() > MAX_CONTROL_FRAME_BYTES {
             return Err(ClientFault::protocol(
                 "extension-host request exceeds its frame limit",
@@ -602,8 +598,9 @@ impl ExtensionHostClient {
                 format!("read extension-host response: {}", fault.message()),
             )
         })?;
-        let response: ControlResponse = serde_json::from_slice(&body)
-            .map_err(|_| ClientFault::protocol("extension-host response is not a valid envelope"))?;
+        let response: ControlResponse = serde_json::from_slice(&body).map_err(|_| {
+            ClientFault::protocol("extension-host response is not a valid envelope")
+        })?;
         if response.protocol != PROTOCOL_VERSION {
             return Err(ClientFault::protocol(format!(
                 "extension-host response protocol is v{}, expected v{}",

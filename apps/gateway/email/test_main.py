@@ -102,15 +102,15 @@ class StartTLSMandatoryTests(unittest.TestCase):
         # reach into it.
         self._last_smtp: _FakeSMTP | None = None
 
-        smtplib = main.smtplib
-        self._orig_SMTP = smtplib.SMTP
+        transport = main.cos_smtp
+        self._orig_SMTP = transport.SafeSMTP
 
         def _factory(host, port, timeout=None):
             inst = _FakeSMTP(host, port, timeout, advertises_starttls=False)
             self._last_smtp = inst
             return inst
 
-        smtplib.SMTP = _factory  # type: ignore[assignment]
+        transport.SafeSMTP = _factory  # type: ignore[assignment]
 
     def tearDown(self):
         for k, v in self._saved.items():
@@ -119,7 +119,7 @@ class StartTLSMandatoryTests(unittest.TestCase):
             else:
                 os.environ[k] = v
         main.policy = self._orig_policy
-        main.smtplib.SMTP = self._orig_SMTP
+        main.cos_smtp.SafeSMTP = self._orig_SMTP
 
     def test_587_without_starttls_aborts_before_login(self):
         result = main._send(
@@ -161,15 +161,15 @@ class StartTLSAdvertisedSucceedsTests(unittest.TestCase):
         self._orig_policy = main.policy
         main.policy = None
         self._last_smtp: _FakeSMTP | None = None
-        smtplib = main.smtplib
-        self._orig_SMTP = smtplib.SMTP
+        transport = main.cos_smtp
+        self._orig_SMTP = transport.SafeSMTP
 
         def _factory(host, port, timeout=None):
             inst = _FakeSMTP(host, port, timeout, advertises_starttls=True)
             self._last_smtp = inst
             return inst
 
-        smtplib.SMTP = _factory  # type: ignore[assignment]
+        transport.SafeSMTP = _factory  # type: ignore[assignment]
 
     def tearDown(self):
         for k, v in self._saved.items():
@@ -178,7 +178,7 @@ class StartTLSAdvertisedSucceedsTests(unittest.TestCase):
             else:
                 os.environ[k] = v
         main.policy = self._orig_policy
-        main.smtplib.SMTP = self._orig_SMTP
+        main.cos_smtp.SafeSMTP = self._orig_SMTP
 
     def test_starttls_advertised_path_succeeds(self):
         result = main._send(

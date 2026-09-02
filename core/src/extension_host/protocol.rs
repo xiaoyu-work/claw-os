@@ -5,7 +5,7 @@ use crate::agent::tools::mcp::integration::McpServerSpec;
 use crate::agent::tools::mcp::protocol::{CallToolResult, ToolDescriptor};
 use crate::clawd::wire::RequestId;
 
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 7;
 pub const MAX_CONTROL_FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_CONTROL_CONNECTIONS: usize = 8;
 pub const MAX_REQUEST_TIMEOUT_MS: u64 = 180_000;
@@ -44,6 +44,7 @@ pub struct HostBootstrap {
     pub control_socket: String,
     pub broker_socket: String,
     pub approved_paths: Vec<ApprovedPath>,
+    pub agent_extensions: Vec<crate::provenance::verify::PackageVerificationReceipt>,
 }
 
 impl HostBootstrap {
@@ -78,6 +79,7 @@ impl HostBootstrap {
             owner_gid: self.execution_gid,
             capability_generation: self.capability_generation,
             approved_paths: self.approved_paths,
+            agent_extensions: self.agent_extensions,
             worker_pid: self.worker_pid,
             worker_start_time_ticks: self.worker_start_time_ticks,
             host_pid,
@@ -256,18 +258,15 @@ impl AgentExtensionRegistration {
         {
             return Err("Agent extension registration identity is invalid".to_string());
         }
-        for digest in [
-            &self.package_digest,
-            &self.manifest_digest,
-            &self.content_digest,
-        ] {
-            if digest.len() != 64
-                || !digest
-                    .bytes()
-                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-            {
-                return Err("Agent extension registration digest is invalid".to_string());
-            }
+        if !crate::provenance::envelope::is_sha256_ref(&self.package_digest)
+            || !crate::provenance::envelope::is_sha256_ref(&self.content_digest)
+            || self.manifest_digest.len() != 64
+            || !self
+                .manifest_digest
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            return Err("Agent extension registration digest is invalid".to_string());
         }
         Ok(())
     }
@@ -305,17 +304,14 @@ pub struct AgentExtensionAudit {
 
 impl AgentExtensionAudit {
     pub fn validate(&self) -> Result<(), String> {
-        for (digest, len) in [
-            (&self.package_digest, 64),
-            (&self.capability_generation, 16),
-        ] {
-            if digest.len() != len
-                || !digest
-                    .bytes()
-                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-            {
-                return Err("Agent extension audit digest is invalid".to_string());
-            }
+        if !crate::provenance::envelope::is_sha256_ref(&self.package_digest)
+            || self.capability_generation.len() != 16
+            || !self
+                .capability_generation
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            return Err("Agent extension audit digest is invalid".to_string());
         }
         if self.tool.as_ref().is_some_and(|tool| {
             tool.is_empty()
@@ -356,6 +352,7 @@ pub struct ExtensionBinding {
     pub owner_gid: u32,
     pub capability_generation: String,
     pub approved_paths: Vec<ApprovedPath>,
+    pub agent_extensions: Vec<crate::provenance::verify::PackageVerificationReceipt>,
     pub worker_pid: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worker_start_time_ticks: Option<u64>,
@@ -428,6 +425,17 @@ impl ExtensionBinding {
                 || approved.mode & 0o022 != 0
             {
                 return Err("extension-host binding has an invalid approved path".to_string());
+            }
+        }
+        if self.agent_extensions.len() > 64 {
+            return Err("extension-host binding has too many Agent extension receipts".to_string());
+        }
+        for receipt in &self.agent_extensions {
+            receipt.validate()?;
+            if receipt.kind != crate::provenance::PackageKind::AgentExtension {
+                return Err(
+                    "extension-host binding carries a non-extension package receipt".to_string(),
+                );
             }
         }
         Ok(())
@@ -540,7 +548,6 @@ pub enum HostAction {
     },
     AgentExtensionAttach {
         registration: AgentExtensionRegistration,
-        package: crate::provenance::PackageSnapshot,
     },
     AgentExtensionEvent {
         extension_id: String,

@@ -49,6 +49,19 @@ invoked.
 | `gateway/` | External messaging gateways and shared gateway safety helpers |
 | [`../docs/app-development.md`](../docs/app-development.md) | Normative app/manifest development contract |
 
+## Provenance
+
+An App package is authenticated before its manifest can influence
+capability grants or App identity. Bundled apps installed to
+`/usr/lib/cos/apps` inherit Debian/rootfs (vendor) trust with their
+content digest pinned; anything installed by a user needs a publisher
+signature. A structurally valid App whose provenance fails is
+quarantined — listed with its reason, refused by capability derivation,
+session binding and dispatch. In-tree development trees are not vendor
+content: use `cos app install <dir> --dev-trust` to record an explicit,
+digest-bound developer decision. See
+[`../docs/extension-provenance.md`](../docs/extension-provenance.md).
+
 ## Dependencies
 
 Apps do not import model-provider SDKs or own provider credentials. AI calls go

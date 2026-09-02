@@ -82,10 +82,7 @@ pub(crate) fn build_request_body(
             }
         }
         for (key, value) in request.provider_extra_fields() {
-            if matches!(
-                key,
-                "model" | "input" | "stream" | "store" | "include"
-            ) {
+            if matches!(key, "model" | "input" | "stream" | "store" | "include") {
                 continue;
             }
             object.insert(key.to_owned(), value.clone());
@@ -968,7 +965,9 @@ impl ResponsesStream {
         }
         self.accounted = true;
         if let (Some(pool), Some(lease)) = (&self.pool, &self.lease) {
-            pool.report_failure(lease, class);
+            if let Err(error) = pool.try_report_failure(lease, class) {
+                tracing::error!(error = %error, "failed to account Responses stream failure");
+            }
         }
     }
 
@@ -978,7 +977,9 @@ impl ResponsesStream {
         }
         self.accounted = true;
         if let (Some(pool), Some(lease)) = (&self.pool, &self.lease) {
-            pool.report_success(lease);
+            if let Err(error) = pool.try_report_success(lease) {
+                tracing::error!(error = %error, "failed to account Responses stream success");
+            }
         }
     }
 

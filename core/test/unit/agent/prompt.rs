@@ -1,5 +1,4 @@
 use super::*;
-use std::io::Write;
 
 struct EnvVarGuard {
     key: &'static str,
@@ -62,6 +61,15 @@ fn scaffold_explains_progressive_app_disclosure() {
 }
 
 #[test]
+fn scaffold_requires_recursive_cli_discovery_before_claiming_unsupported() {
+    let prompt = build_system_prompt(None);
+    assert!(prompt.contains("call `cos_help` with `path=[]`"));
+    assert!(prompt.contains("one level at a time"));
+    assert!(prompt.contains("Never claim that a Claw capability is unsupported"));
+    assert!(prompt.contains("never executes them"));
+}
+
+#[test]
 fn scaffold_requires_runtime_evidence_citations() {
     let prompt = build_system_prompt(None);
     assert!(prompt.contains("[evidence:<tool_call_id>"));
@@ -80,14 +88,30 @@ fn scaffold_orchestrates_supported_oauth_setup() {
 }
 
 #[test]
-fn extra_file_appended_when_provided() {
-    let dir = std::env::temp_dir();
-    let path = dir.join(format!("cos-prompt-{}.md", std::process::id()));
-    let mut f = fs::File::create(&path).unwrap();
-    writeln!(f, "EXTRA_BLOCK").unwrap();
-    let p = build_system_prompt(Some(&path));
-    assert!(p.contains("EXTRA_BLOCK"));
-    let _ = fs::remove_file(&path);
+fn owner_writable_extra_file_is_prelude_data_not_policy() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("preface.md");
+    fs::write(&path, "EXTRA_BLOCK\n").unwrap();
+
+    // The temp dir belongs to the test user, so ownership verification
+    // refuses to promote it into the policy channel.
+    let policy = build_system_prompt(Some(&path));
+    assert!(!policy.contains("EXTRA_BLOCK"));
+
+    let skills = crate::agent::skills::loader::LoadResult::default();
+    let notes = crate::agent::memory::notes::NotesStore::at(dir.path());
+    let projection = build_projection(Some(&path), None, &skills, &notes);
+    assert!(projection.channels_are_separated());
+    let prelude = projection
+        .prelude_segments()
+        .iter()
+        .find(|segment| segment.kind() == crate::agent::trust::SourceKind::OperatorPromptFile)
+        .expect("owner-writable prompt file is prelude data");
+    assert_eq!(prelude.content(), "EXTRA_BLOCK");
+    assert_eq!(
+        prelude.class(),
+        crate::agent::trust::TrustClass::UserControlledContext
+    );
 }
 
 #[test]
@@ -123,8 +147,16 @@ fn due_nudges_are_request_local_not_canonical_system_prompt() {
 
     assert!(!canonical.contains("check the backup"));
     assert_eq!(turn_segments.len(), 1);
-    assert_eq!(turn_segments[0].source, INJECTED_SOURCE_DUE_NUDGES);
+    assert_eq!(turn_segments[0].source(), INJECTED_SOURCE_DUE_NUDGES);
+    assert_eq!(
+        turn_segments[0].class(),
+        crate::agent::trust::TrustClass::UserControlledContext
+    );
     assert!(turn_segments[0].content.contains("check the backup"));
+    // Owner-authored reminders are data, not operator rules.
+    assert!(crate::agent::trust::envelope::looks_enveloped(
+        &turn_segments[0].content
+    ));
 }
 
 #[test]
@@ -138,22 +170,40 @@ fn skill_catalog_is_metadata_only_and_traced() {
         "---\nname: claw-os\ndescription: Claw system operations\n---\nHIDDEN_BODY\n",
     )
     .unwrap();
+    crate::test_env::sign_test_package(&dir, crate::provenance::PackageKind::Skill, "claw-os");
     let skills = crate::agent::skills::loader::load_layered(
         system.path(),
         user.path(),
         &crate::agent::skills::loader::LoadOptions::default(),
     );
-    let mut prompt = String::new();
-    let mut segments = Vec::new();
+    let notes = crate::agent::memory::notes::NotesStore::at(
+        tempfile::tempdir().unwrap().path().to_path_buf(),
+    );
 
-    append_skill_catalog(&mut prompt, &mut segments, &skills);
+    let (prompt, segments) = build_system_prompt_traced_with(None, None, &skills, &notes);
 
-    assert!(prompt.contains("Claw system operations"));
-    assert!(prompt.contains("cos_skill"));
+    // The catalogue is extension metadata, so it is *not* in the policy
+    // channel — it is prelude data carried in a fenced user message.
+    assert!(!prompt.contains("Claw system operations"));
     assert!(!prompt.contains("HIDDEN_BODY"));
     assert_eq!(segments.len(), 1);
-    assert_eq!(segments[0].source, INJECTED_SOURCE_SKILLS_CATALOG);
-    assert!(prompt.ends_with(&segments[0].content));
+    assert_eq!(segments[0].source(), INJECTED_SOURCE_SKILLS_CATALOG);
+    assert!(segments[0].content.contains("Claw system operations"));
+    assert!(segments[0].content.contains("cos_skill"));
+    assert!(!segments[0].content.contains("HIDDEN_BODY"));
+    // A Skill's own metadata is extension metadata, never policy, even
+    // when the package is vendor-signed.
+    assert_eq!(
+        segments[0].class(),
+        crate::agent::trust::TrustClass::ExtensionMetadata
+    );
+    assert!(crate::agent::trust::envelope::looks_enveloped(
+        &segments[0].content
+    ));
+
+    let projection = build_projection(None, None, &skills, &notes);
+    assert!(projection.channels_are_separated());
+    assert_eq!(projection.prelude_segments().len(), 1);
 }
 
 #[test]
@@ -167,15 +217,24 @@ fn traced_prompt_builder_discovers_configured_system_skills() {
         "---\nname: configured-skill\ndescription: DISCOVERED_METADATA\n---\nHIDDEN_BODY\n",
     )
     .unwrap();
+    crate::test_env::sign_test_package(
+        &dir,
+        crate::provenance::PackageKind::Skill,
+        "configured-skill",
+    );
     let _system_guard = EnvVarGuard::set("COS_SYSTEM_SKILLS_DIR", system.path());
     let _data_guard = EnvVarGuard::set("COS_DATA_DIR", data.path());
     let _user_data_guard = EnvVarGuard::set("COS_USER_DATA_DIR", data.path());
 
     let (prompt, segments) = build_system_prompt_traced(None, Some("use configured skill"));
 
-    assert!(prompt.contains("DISCOVERED_METADATA"));
+    // Discovered Skill metadata is prelude data, never policy.
+    assert!(!prompt.contains("DISCOVERED_METADATA"));
     assert!(!prompt.contains("HIDDEN_BODY"));
-    assert!(segments
+    let catalog = segments
         .iter()
-        .any(|segment| segment.source == INJECTED_SOURCE_SKILLS_CATALOG));
+        .find(|segment| segment.source() == INJECTED_SOURCE_SKILLS_CATALOG)
+        .expect("skill catalogue traced");
+    assert!(catalog.content.contains("DISCOVERED_METADATA"));
+    assert!(!catalog.content.contains("HIDDEN_BODY"));
 }

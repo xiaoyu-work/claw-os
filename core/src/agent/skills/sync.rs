@@ -33,9 +33,6 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use super::manifest::{self, ManifestError};
-use super::provenance::{
-    self, SignatureCheck, SignatureConfigError, SignatureError, SignatureVerifyConfig,
-};
 
 /// Hard cap on how much *uncompressed* data a single zip may produce,
 /// regardless of advertised entry sizes. Defends against zip bombs.
@@ -98,41 +95,41 @@ pub enum SyncError {
     ZipPathTooDeep { name: String, cap: usize },
     #[error("archive integrity check failed: expected sha256 {expected}, got {actual}")]
     ChecksumMismatch { expected: String, actual: String },
-    #[error("skill signature configuration error: {0}")]
-    SignatureConfig(#[from] SignatureConfigError),
-    #[error("manifest signature rejected: {0}")]
-    Signature(#[from] SignatureError),
+    #[error("skill bundle rejected: {0}")]
+    Bundle(#[from] crate::provenance::install::InstallError),
 }
 
 /// Install a skill bundle into the default agent skills directory.
+///
+/// A valid signature from a trusted, non-revoked publisher key is
+/// required. There is no environment variable that relaxes this; an
+/// unsigned local bundle needs an explicit `cos provenance dev-trust`
+/// decision after it is placed on disk.
 pub fn install_from_archive(archive: &Path, force: bool) -> Result<SyncResult, SyncError> {
-    let signature_config = SignatureVerifyConfig::from_env()?;
-    install_into_with_policy_reserved(
+    install_into_reserved(
         archive,
         &crate::paths::agent_skills_dir(),
         force,
         None,
-        &signature_config,
         Some(&crate::paths::system_skills_dir()),
     )
 }
 
 /// Install with an optional SHA-256 integrity check. The expected
 /// digest is the lower-case hex sha256 of the archive bytes (as
-/// published by the catalogue). Use [`install_into`] when the caller
-/// has no expected digest to verify against.
+/// published by the catalogue). The transport digest is an early
+/// reject, not an authentication step: the package envelope is what
+/// authenticates the content.
 pub fn install_from_archive_verified(
     archive: &Path,
     force: bool,
     expected_sha256: Option<&str>,
 ) -> Result<SyncResult, SyncError> {
-    let signature_config = SignatureVerifyConfig::from_env()?;
-    install_into_with_policy_reserved(
+    install_into_reserved(
         archive,
         &crate::paths::agent_skills_dir(),
         force,
         expected_sha256,
-        &signature_config,
         Some(&crate::paths::system_skills_dir()),
     )
 }
@@ -148,55 +145,21 @@ pub fn install_into(
 }
 
 /// Install into an explicit `skills_root` with an optional SHA-256
-/// integrity check. When `expected_sha256` is `Some(_)` the archive
-/// bytes are hashed and the install is rejected on mismatch.
-///
-/// Signature policy is read from the process environment via
-/// [`SignatureVerifyConfig::from_env`]. Tests can dial the policy
-/// explicitly through [`install_into_with_policy`].
+/// integrity check on the archive bytes.
 pub fn install_into_verified(
     archive: &Path,
     skills_root: &Path,
     force: bool,
     expected_sha256: Option<&str>,
 ) -> Result<SyncResult, SyncError> {
-    let signature_config = SignatureVerifyConfig::from_env()?;
-    install_into_with_policy(
-        archive,
-        skills_root,
-        force,
-        expected_sha256,
-        &signature_config,
-    )
+    install_into_reserved(archive, skills_root, force, expected_sha256, None)
 }
 
-/// Install with an explicit signature policy. The other knobs
-/// (`force`, `expected_sha256`) work as in [`install_into_verified`].
-/// Pulled out so unit tests can drive the signature flow without
-/// having to mutate process env state.
-pub fn install_into_with_policy(
+fn install_into_reserved(
     archive: &Path,
     skills_root: &Path,
     force: bool,
     expected_sha256: Option<&str>,
-    signature_config: &SignatureVerifyConfig,
-) -> Result<SyncResult, SyncError> {
-    install_into_with_policy_reserved(
-        archive,
-        skills_root,
-        force,
-        expected_sha256,
-        signature_config,
-        None,
-    )
-}
-
-fn install_into_with_policy_reserved(
-    archive: &Path,
-    skills_root: &Path,
-    force: bool,
-    expected_sha256: Option<&str>,
-    signature_config: &SignatureVerifyConfig,
     reserved_root: Option<&Path>,
 ) -> Result<SyncResult, SyncError> {
     if !archive.exists() {
@@ -234,7 +197,15 @@ fn install_into_with_policy_reserved(
 
     fs::create_dir_all(skills_root)?;
     let staging = skills_root.join(format!(".staging-{}", Uuid::new_v4()));
-    fs::create_dir_all(&staging)?;
+    // Private *before* a single archive byte lands in it, and the
+    // failure propagates. A staging directory holds unverified,
+    // attacker-supplied content while its signature is still being
+    // checked; created world-readable and narrowed afterwards, there is
+    // a window in which another local user can read it — or, worse,
+    // add to it before the tree is re-scanned. `create_dir` with the
+    // mode applied at creation closes that window, and a
+    // `set_permissions` that failed silently would reopen it.
+    create_private_dir(&staging)?;
 
     // Track a backup directory created when `force=true`. We move
     // the live install aside (atomic rename) instead of deleting it
@@ -266,29 +237,32 @@ fn install_into_with_policy_reserved(
         let raw = fs::read_to_string(&manifest_path)?;
         let doc = manifest::parse(&raw)?;
 
-        // Authenticate the manifest before we let it influence the
-        // install destination. Unsigned manifests log a warning
-        // (operator can spot them in audit) but go through when the
-        // policy allows it.
-        match provenance::verify_signature(&doc.manifest, signature_config)? {
-            SignatureCheck::Verified { public_key_hex } => {
-                tracing::info!(
-                    skill = %doc.manifest.name,
-                    key = %public_key_hex,
-                    "skill manifest signature verified"
-                );
-            }
-            SignatureCheck::Unsigned => {
-                tracing::warn!(
-                    skill = %doc.manifest.name,
-                    "installing skill without a signature — set \
-                     COS_SKILLS_REQUIRE_SIGNATURE=1 to refuse unsigned manifests"
-                );
-            }
-        }
-
         let safe_id = sanitize_skill_id(&doc.manifest.name)
             .ok_or_else(|| SyncError::UnsafeSkillName(doc.manifest.name.clone()))?;
+
+        // Re-scan the extracted tree with the shared installer bounds.
+        // The extractors already reject traversal and bombs; this second
+        // pass catches anything that reached disk anyway — symlinks,
+        // hard links, device/FIFO/socket nodes, case-colliding names —
+        // before the package is authenticated.
+        let limits = crate::provenance::install::Limits::default();
+        crate::provenance::install::assert_safe_tree(&bundle_root, &limits)?;
+
+        // Authenticate the whole extracted package: envelope signature,
+        // publisher trust, and every file digest. A staging directory is
+        // private scratch space, so only a publisher signature counts
+        // there — neither vendor nor developer trust applies.
+        let trust = crate::provenance::trust_store();
+        let options = crate::provenance::VerifyOptions::new(
+            crate::provenance::PackageKind::Skill,
+        )
+        .expect_id(&safe_id)
+        .signature_only();
+        let verified = crate::provenance::verify::verify_package(&bundle_root, &options, &trust)
+            .map_err(|e| {
+                crate::provenance::install::InstallError::Provenance(e)
+            })?;
+        crate::provenance::audit("provenance.skill_installed", verified.audit_facts());
 
         if let Some(root) = reserved_root {
             let reserved = root.join(&safe_id);
@@ -518,6 +492,26 @@ fn extract_zip(archive: &Path, dest: &Path) -> Result<ExtractStats, SyncError> {
 /// non-regular-file entry (symlinks, hard links, devices) so a hostile
 /// bundle can't plant a link that subsequent writes follow out of `dest`.
 /// Hub assets ship as `.tar.gz`, so this is the path hub installs take.
+/// Create a directory that only its owner can traverse, atomically.
+///
+/// The mode is applied by `mkdir` itself rather than by a follow-up
+/// `chmod`, so the directory is never briefly group- or world-readable.
+/// `umask` can only remove bits, so the result is at most `0700`.
+fn create_private_dir(path: &Path) -> Result<(), SyncError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(path)
+            .map_err(SyncError::from)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::create_dir(path).map_err(SyncError::from)
+    }
+}
+
 fn extract_tar_gz(archive: &Path, dest: &Path) -> Result<ExtractStats, SyncError> {
     let file = File::open(archive)?;
     let decoder = flate2::read::GzDecoder::new(file);

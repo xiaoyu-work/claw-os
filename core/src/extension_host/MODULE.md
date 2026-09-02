@@ -24,7 +24,8 @@ extensions.
   App/MCP session.
 - Run one-shot Apps, stateful App MCP servers, and configured MCP servers;
   never run their code in `clawd` or `claw-agentd`.
-- Reverify signed Agent extension snapshots, negotiate the versioned ABI, and
+- Reverify installed Agent extension packages into `VerifiedPackage` snapshots,
+  negotiate the versioned ABI, and
   contain each observer in its own broker-less PID/mount/network sandbox.
 - Launch every dynamic child through the trusted isolation wrapper in its own
   PID and mount namespaces with private procfs. The child sees an empty

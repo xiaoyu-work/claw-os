@@ -18,6 +18,7 @@ detail:
 | `cos_runtime::pkg` | (not applicable) | Route `pkg.*` ops similarly |
 | `cos_runtime::notify` | (not applicable) | Route `notify.*` ops similarly |
 | `cos_runtime::net` | (not applicable) | Route `net.*` ops similarly |
+| `cos_runtime::ask_claw` | (not applicable) | Serialize bounded typed desktop context and directly supervise a transient Agent overlay |
 | (not applicable) | `cos_runtime.snapshot` | Copy-on-write before every gated fs mutation |
 
 These modules talk wire-v1 too, but they're the *kernel side* of that wire —
@@ -32,6 +33,55 @@ the consumers are the bundled apps in this repo, not external apps.
   where someone installs `cos-runtime` separately.
 - Importing `cos_runtime` from a non-claw-os process **will fail loudly**
   (`cos` binary not on PATH, no `COS_SESSION` env, etc.) — by design.
+
+## Ask Claw desktop integration
+
+Bundled desktop apps implement `cos_runtime::ask_claw::Context` on a narrow
+app-local `Serialize` type, then call `ask_claw::launch`. The runtime inserts
+the app identity, serializes with `serde_json`, rejects non-object/reserved or
+larger-than-32-KiB contexts, wraps it in a typed activation, and sends it over
+an inherited AF_UNIX socketpair directly to a transient Agent UI. The call runs on a
+dedicated launcher/reaper thread. A readiness channel prevents the parent from
+writing any payload until the child has configured private-overlay mode,
+verified process isolation, and become non-dumpable. Startup and writes share
+a five-second deadline; failures kill and reap the exact child. No context
+content enters argv, D-Bus, audit records, a process registry, the environment,
+or the filesystem.
+
+Launcher-style surfaces that already own a user query call
+`ask_claw::launch_query`; the same typed activation, bounds, background worker,
+and private socket handoff apply. Reducers never construct an Agent command.
+
+Production launches use only the packaged absolute
+`/usr/local/bin/cos-agent-ui`. The runtime rejects missing, symlinked,
+non-regular, non-executable, non-root-owned, or group/other-writable targets.
+There is no environment or `PATH` override and no shell evaluation.
+
+The Agent UI imports the same activation type and CLI parser from this module.
+It reads the inherited socket only when `--context-socket --activation-fd` is explicitly present, enforces the
+activation and context bounds, validates the typed activation and embedded
+context, and closes the socket. Context-bearing overlays deliberately run as
+independent transient instances rather than forwarding plaintext through the
+unauthenticated well-known D-Bus name; context-free global shortcut activation
+continues to use the single instance. Payload-bearing `--context` and `--query`
+arguments are rejected; the inherited socket is the only supported private input
+path, and combining context sources rejects the entire activation.
+
+Public SDKs use the packaged `/usr/local/bin/cos-ask-claw-launcher`, which
+publishes an abstract Unix endpoint and accepts only the captured direct parent
+PID and UID verified with `SO_PEERCRED`. Anonymous handoff fails closed unless Linux Yama
+`kernel.yama.ptrace_scope >= 2`. The host and Agent UI are marked non-dumpable;
+the parent withholds bytes until the child confirms that hardening is complete.
+
+Keep these typed adapters in each app's `claw_glue` module. Reducers should
+only select the user intent and pass the already-visible page, query, path, or
+terminal output fields; they must not build JSON or know the Agent UI command.
+The Terminal adapter uses the runtime's encoded-size predicate to drop oldest
+lines first and then truncate at a UTF-8 boundary, retaining `app`, `mode`,
+`cwd`, and `truncated` metadata while still opening the overlay.
+
+The Ask Claw path does not alter or depend on the generic `cos_runtime::exec`
+start/stop contract.
 
 ## Relationship to `claw-os-sdk`
 

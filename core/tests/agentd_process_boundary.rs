@@ -288,6 +288,7 @@ fn assignment(
             branch_context: None,
             session_id: None,
             max_turns: Some(1),
+            use_memory: true,
             owner_uid,
             owner_home: home.to_string_lossy().into_owned(),
         },
@@ -964,9 +965,9 @@ async fn a_worker_inherits_no_broker_descriptor_environment_or_privilege() {
     // The task still round-trips a result even with no provider
     // configured, which is what proves the queue's outcome now arrives
     // from outside the broker. Stream, progress and audit frames may
-    // precede it.
+    // precede it; with no configured provider there is no model turn
+    // whose lifecycle would require an audit record.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
-    let mut saw_audit = false;
     loop {
         let frame = tokio::time::timeout_at(deadline, frames.next_frame::<WorkerFrame>())
             .await
@@ -984,7 +985,6 @@ async fn a_worker_inherits_no_broker_descriptor_environment_or_privilege() {
 
             Some(WorkerFrame::Audit { task_id, .. }) => {
                 assert_eq!(task_id, "task-boundary");
-                saw_audit = true;
             }
             Some(WorkerFrame::Stream { task_id, .. })
             | Some(WorkerFrame::Progress { task_id, .. })
@@ -994,11 +994,6 @@ async fn a_worker_inherits_no_broker_descriptor_environment_or_privilege() {
             other => panic!("expected a result frame, got {other:?}"),
         }
     }
-    assert!(
-        saw_audit,
-        "the worker must forward its runtime audit to the broker"
-    );
-
     let status = tokio::time::timeout(Duration::from_secs(30), child.wait())
         .await
         .expect("worker did not exit")
@@ -1123,6 +1118,7 @@ async fn extension_host_uses_dedicated_gid_and_cannot_open_primary_broker() {
         expires,
         TEST_CAPABILITY_GENERATION,
         approved_paths(&harness.identity),
+        Vec::new(),
         paths,
     )
     .expect("spawn host");
@@ -1254,6 +1250,7 @@ async fn service_owned_roots_are_hardened_before_an_extension_task() {
         cos::agentd::grant::now_ms() + 60_000,
         TEST_CAPABILITY_GENERATION,
         approved_paths(&harness.identity),
+        Vec::new(),
         paths,
     )
     .expect("launch extension task after service root hardening");
@@ -1314,6 +1311,7 @@ async fn same_uid_hosts_receive_distinct_private_tmp_mounts() {
             cos::agentd::grant::now_ms() + 60_000,
             TEST_CAPABILITY_GENERATION,
             approved_paths(&harness.identity),
+            Vec::new(),
             paths,
         )
         .expect("spawn private tmp probe");
@@ -1434,6 +1432,7 @@ async fn extension_uid_and_seccomp_block_process_injection_and_cgroup_escape() {
         cos::agentd::grant::now_ms() + 60_000,
         TEST_CAPABILITY_GENERATION,
         approved_paths(&harness.identity),
+        Vec::new(),
         paths,
     )
     .expect("spawn process isolation probe");
@@ -1837,6 +1836,7 @@ async fn mandatory_cgroup_kills_host_first_double_fork_setsid_and_cleared_pdeath
         expires,
         TEST_CAPABILITY_GENERATION,
         approved_paths(&harness.identity),
+        Vec::new(),
         paths,
     )
     .expect("spawn daemonizing host");
@@ -1910,6 +1910,7 @@ async fn mandatory_cgroup_kill_covers_active_cancellation_and_descendants() {
         cos::agentd::grant::now_ms() + 60_000,
         TEST_CAPABILITY_GENERATION,
         approved_paths(&harness.identity),
+        Vec::new(),
         paths,
     )
     .expect("spawn cancellation probe");

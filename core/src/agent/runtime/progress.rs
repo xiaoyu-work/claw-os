@@ -114,6 +114,87 @@ pub fn null_progress() -> Arc<dyn ProgressSink> {
     Arc::new(NullProgressSink)
 }
 
+struct RecordingProgressSink {
+    inner: Arc<dyn ProgressSink>,
+    db: crate::agent::memory::sqlite_fts::MemoryDb,
+    session_id: String,
+    redact: bool,
+}
+
+impl ProgressSink for RecordingProgressSink {
+    fn wait_ready(&self) -> Option<ProgressReady<'_>> {
+        self.inner.wait_ready()
+    }
+
+    fn on_tool_start(&self, id: &str, name: &str, input: &Value) {
+        let payload = serde_json::json!({
+            "tool_call_id": id,
+            "tool_name": name,
+            "input": input,
+        })
+        .to_string();
+        let payload = if self.redact {
+            crate::agent::safety::redact::Redactor::default_set().redact(&payload)
+        } else {
+            payload
+        };
+        if let Err(error) = self
+            .db
+            .record_tool_start(&self.session_id, id, name, &payload)
+        {
+            tracing::warn!(
+                session_id = %self.session_id,
+                tool = name,
+                tool_call_id = id,
+                "memory: failed to record in-flight tool call: {error}"
+            );
+        }
+        self.inner.on_tool_start(id, name, input);
+    }
+
+    fn on_tool_result(
+        &self,
+        id: &str,
+        name: &str,
+        ok: bool,
+        latency_ms: u64,
+        bytes_returned: usize,
+        content_preview: &str,
+    ) {
+        let error = (!ok).then_some(content_preview);
+        if let Err(record_error) =
+            self.db
+                .record_tool_result(&self.session_id, id, ok, latency_ms, error)
+        {
+            tracing::warn!(
+                session_id = %self.session_id,
+                tool = name,
+                tool_call_id = id,
+                "memory: failed to complete tool invocation record: {record_error}"
+            );
+        }
+        self.inner
+            .on_tool_result(id, name, ok, latency_ms, bytes_returned, content_preview);
+    }
+}
+
+/// Wrap a progress sink so the effective tool identity and input are stored
+/// before execution begins. The invocation table is separate from conversation
+/// messages, so pending calls remain diagnosable without affecting model replay.
+pub fn recording_progress(
+    inner: Arc<dyn ProgressSink>,
+    db: crate::agent::memory::sqlite_fts::MemoryDb,
+    session_id: impl Into<String>,
+    redact: bool,
+) -> Arc<dyn ProgressSink> {
+    Arc::new(RecordingProgressSink {
+        inner,
+        db,
+        session_id: session_id.into(),
+        redact,
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Preview / truncation helpers
 // ---------------------------------------------------------------------------

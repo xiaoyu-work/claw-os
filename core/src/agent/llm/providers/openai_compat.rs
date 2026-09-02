@@ -33,6 +33,9 @@ use std::time::Duration;
 
 pub(crate) use super::openai_responses as responses_wire;
 
+use crate::agent::llm::construction::{
+    resolve_process_api_key, HttpTransport, ProcessCredentialSource,
+};
 use crate::agent::llm::{
     ChatRequest, ChatResponse, ContentBlock, LlmError, Provider, Result, StreamEvent,
 };
@@ -134,40 +137,12 @@ fn alias_is_copilot(alias: &str) -> bool {
     matches!(alias, "copilot")
 }
 
-/// Resolve an API key from the credential store, then env var, then None.
-/// Missing and blank entries fall through; unreadable stored credentials
-/// produce a typed error so construction cannot silently drop corruption.
+/// Legacy process-backed key resolver retained for source compatibility.
 pub fn resolve_api_key(
     api_key_credential: Option<&str>,
     api_key_env: Option<&str>,
 ) -> Result<Option<String>> {
-    if let Some(name) = api_key_credential {
-        match crate::credential::try_load(name, "agent").map_err(|message| {
-            LlmError::CredentialStore {
-                credential: name.to_string(),
-                message,
-            }
-        })? {
-            Some(value) => {
-                let value = value.trim();
-                if !value.is_empty() {
-                    return Ok(Some(value.to_string()));
-                }
-            }
-            None => {
-                // Fall through to env.
-            }
-        }
-    }
-    if let Some(env_name) = api_key_env {
-        if let Ok(value) = std::env::var(env_name) {
-            let value = value.trim();
-            if !value.is_empty() {
-                return Ok(Some(value.to_string()));
-            }
-        }
-    }
-    Ok(None)
+    resolve_process_api_key(api_key_credential, api_key_env)
 }
 
 #[derive(Clone)]
@@ -205,62 +180,41 @@ impl std::fmt::Debug for OpenAICompatConfig {
 }
 
 impl OpenAICompatConfig {
-    /// Build from a registered alias + the agent config block.
     pub fn try_from_agent_config(alias: &str, model: &str, agent: &AgentConfig) -> Result<Self> {
-        let base_url = agent
-            .base_url
-            .clone()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| default_base_url_for(alias).to_string());
+        crate::agent::llm::registry::openai_config(alias, model, agent, &ProcessCredentialSource)
+    }
 
-        // Strip a trailing slash so the request path concat is clean.
-        let base_url = base_url.trim_end_matches('/').to_string();
-
-        let request_timeout = if agent.request_timeout == 0 {
-            Duration::from_secs(0)
-        } else {
-            Duration::from_secs(agent.request_timeout)
-        };
-
-        // A declared pool is authoritative. Resolve it before touching the
-        // legacy fields so stale single-key credentials can neither rescue
-        // nor interfere with pool configuration.
-        let pool = crate::agent::llm::credential_pool::Pool::try_from_agent_config(
-            format!("provider:{alias}"),
-            agent,
-        )?
-        .map(Arc::new);
-        let api_key = if pool.is_some() {
-            None
-        } else {
-            resolve_api_key(
-                agent.api_key_credential.as_deref(),
-                agent.api_key_env.as_deref(),
-            )?
-        };
-
-        Ok(Self {
-            alias: alias.to_string(),
-            base_url,
-            api_key,
-            model: model.to_string(),
-            extra_headers: agent.extra_headers.clone(),
-            request_timeout,
-            pool,
+    pub fn from_agent_config(alias: &str, model: &str, agent: &AgentConfig) -> Self {
+        Self::try_from_agent_config(alias, model, agent).unwrap_or_else(|error| {
+            tracing::error!(error = %error, "legacy OpenAI-compatible configuration failed");
+            Self::unconfigured(alias, model, agent)
         })
     }
 
-    #[cfg(test)]
-    pub fn from_agent_config(alias: &str, model: &str, agent: &AgentConfig) -> Self {
-        Self::try_from_agent_config(alias, model, agent)
-            .expect("test credential configuration should resolve")
+    fn unconfigured(alias: &str, model: &str, agent: &AgentConfig) -> Self {
+        Self {
+            alias: alias.to_string(),
+            base_url: agent
+                .base_url
+                .clone()
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| default_base_url_for(alias).to_string())
+                .trim_end_matches('/')
+                .to_string(),
+            api_key: None,
+            model: model.to_string(),
+            extra_headers: agent.extra_headers.clone(),
+            request_timeout: Duration::from_secs(agent.request_timeout),
+            pool: None,
+        }
     }
 }
 
 pub struct OpenAICompatProvider {
     cfg: OpenAICompatConfig,
-    client: reqwest::Client,
-    copilot_auth: Arc<dyn CopilotAuthSource>,
+    transport: Option<HttpTransport>,
+    copilot_auth: Option<Arc<dyn CopilotAuthSource>>,
+    initialization_error: Option<Arc<crate::agent::llm::ProviderInitializationError>>,
 }
 
 struct RequestTarget {
@@ -298,7 +252,30 @@ trait CopilotAuthSource: Send + Sync {
     ) -> CopilotAuthResult<super::copilot_auth::CopilotWireApi>;
 }
 
-struct LiveCopilotAuthSource;
+struct LiveCopilotAuthSource {
+    transport: HttpTransport,
+    endpoints: super::copilot_auth::CopilotAuthEndpoints,
+}
+
+impl LiveCopilotAuthSource {
+    fn new(transport: HttpTransport) -> Self {
+        Self {
+            transport,
+            endpoints: super::copilot_auth::CopilotAuthEndpoints::default(),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_endpoints(
+        transport: HttpTransport,
+        endpoints: super::copilot_auth::CopilotAuthEndpoints,
+    ) -> Self {
+        Self {
+            transport,
+            endpoints,
+        }
+    }
+}
 
 #[async_trait]
 impl CopilotAuthSource for LiveCopilotAuthSource {
@@ -306,7 +283,12 @@ impl CopilotAuthSource for LiveCopilotAuthSource {
         &self,
         github_token: &str,
     ) -> CopilotAuthResult<super::copilot_auth::CopilotToken> {
-        super::copilot_auth::ensure_copilot_token(github_token).await
+        super::copilot_auth::ensure_copilot_token_with_transport(
+            github_token,
+            &self.transport,
+            &self.endpoints,
+        )
+        .await
     }
 
     async fn refresh_rejected_token(
@@ -314,7 +296,13 @@ impl CopilotAuthSource for LiveCopilotAuthSource {
         github_token: &str,
         rejected_token: &super::copilot_auth::CopilotToken,
     ) -> CopilotAuthResult<super::copilot_auth::CopilotToken> {
-        super::copilot_auth::refresh_rejected_copilot_token(github_token, rejected_token).await
+        super::copilot_auth::refresh_rejected_copilot_token_with_transport(
+            github_token,
+            rejected_token,
+            &self.transport,
+            &self.endpoints,
+        )
+        .await
     }
 
     async fn wire_api_for_model(
@@ -322,28 +310,31 @@ impl CopilotAuthSource for LiveCopilotAuthSource {
         token: &super::copilot_auth::CopilotToken,
         model: &str,
     ) -> CopilotAuthResult<super::copilot_auth::CopilotWireApi> {
-        super::copilot_auth::wire_api_for_model(token, model).await
+        super::copilot_auth::wire_api_for_model_with_transport(token, model, &self.transport).await
     }
 }
 
 impl OpenAICompatProvider {
     pub fn new(cfg: OpenAICompatConfig) -> Self {
-        let mut builder = reqwest::Client::builder()
-            .user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")))
-            // MEDIUM-14: per-phase timeouts. `request_timeout` covers
-            // the whole call; `connect_timeout` bounds just the TCP +
-            // TLS handshake so a black-holed DNS / firewalled host
-            // can't tie up a worker for the full request budget.
-            .connect_timeout(Duration::from_secs(5))
-            .pool_idle_timeout(Duration::from_secs(60));
-        if cfg.request_timeout > Duration::from_secs(0) {
-            builder = builder.timeout(cfg.request_timeout);
-        }
-        let client = builder.build().unwrap_or_else(|_| reqwest::Client::new());
+        let (transport, initialization_error) =
+            crate::agent::llm::legacy_provider_transport("openai_compat");
+        let copilot_auth = transport.as_ref().map(|transport| {
+            Arc::new(LiveCopilotAuthSource::new(transport.clone())) as Arc<dyn CopilotAuthSource>
+        });
         Self {
             cfg,
-            client,
-            copilot_auth: Arc::new(LiveCopilotAuthSource),
+            transport,
+            copilot_auth,
+            initialization_error,
+        }
+    }
+
+    pub fn new_with_transport(cfg: OpenAICompatConfig, transport: HttpTransport) -> Self {
+        Self {
+            cfg,
+            transport: Some(transport.clone()),
+            copilot_auth: Some(Arc::new(LiveCopilotAuthSource::new(transport))),
+            initialization_error: None,
         }
     }
 
@@ -353,22 +344,49 @@ impl OpenAICompatProvider {
         copilot_auth: Arc<dyn CopilotAuthSource>,
     ) -> Self {
         let mut provider = Self::new(cfg);
-        provider.copilot_auth = copilot_auth;
+        provider.copilot_auth = Some(copilot_auth);
         provider
     }
 
-    /// Convenience constructor that pulls everything from `AgentConfig`.
-    /// Used by the registry.
-    pub fn try_from_agent_config(alias: &str, model: &str, agent: &AgentConfig) -> Result<Self> {
-        Ok(Self::new(OpenAICompatConfig::try_from_agent_config(
-            alias, model, agent,
-        )?))
+    #[cfg(test)]
+    fn new_with_copilot_endpoints(
+        cfg: OpenAICompatConfig,
+        transport: HttpTransport,
+        endpoints: super::copilot_auth::CopilotAuthEndpoints,
+    ) -> Self {
+        Self {
+            cfg,
+            transport: Some(transport.clone()),
+            copilot_auth: Some(Arc::new(LiveCopilotAuthSource::with_endpoints(
+                transport, endpoints,
+            ))),
+            initialization_error: None,
+        }
     }
 
-    #[cfg(test)]
+    pub fn try_from_agent_config(alias: &str, model: &str, agent: &AgentConfig) -> Result<Self> {
+        let config = OpenAICompatConfig::try_from_agent_config(alias, model, agent)?;
+        Ok(Self::new_with_transport(config, HttpTransport::new()?))
+    }
+
     pub fn from_agent_config(alias: &str, model: &str, agent: &AgentConfig) -> Self {
-        Self::try_from_agent_config(alias, model, agent)
-            .expect("test credential configuration should resolve")
+        match Self::try_from_agent_config(alias, model, agent) {
+            Ok(provider) => provider,
+            Err(error) => {
+                tracing::error!(
+                    error = %error,
+                    "legacy OpenAI-compatible provider initialization failed"
+                );
+                Self {
+                    cfg: OpenAICompatConfig::unconfigured(alias, model, agent),
+                    transport: None,
+                    copilot_auth: None,
+                    initialization_error: Some(Arc::new(
+                        crate::agent::llm::ProviderInitializationError::new("openai_compat", error),
+                    )),
+                }
+            }
+        }
     }
 
     fn endpoint(&self) -> String {
@@ -391,6 +409,7 @@ impl OpenAICompatProvider {
                 Some(q) => {
                     format!("{base}/openai/deployments/{deployment}/chat/completions?{q}")
                 }
+
                 None => format!("{base}/openai/deployments/{deployment}/chat/completions"),
             };
         }
@@ -400,6 +419,30 @@ impl OpenAICompatProvider {
         // `/chat/completions` plus any trailing query string the
         // user may have configured for a proxy.
         endpoint_from_base(&self.cfg.base_url)
+    }
+
+    fn transport(&self) -> Result<&HttpTransport> {
+        match &self.initialization_error {
+            Some(error) => Err(crate::agent::llm::deferred_initialization_error(error)),
+            None => self.transport.as_ref().ok_or_else(|| {
+                crate::agent::llm::ProviderInfrastructureError::StatePoisoned {
+                    component: "openai_compat.transport",
+                }
+                .into()
+            }),
+        }
+    }
+
+    fn copilot_auth(&self) -> Result<&dyn CopilotAuthSource> {
+        match &self.initialization_error {
+            Some(error) => Err(crate::agent::llm::deferred_initialization_error(error)),
+            None => self.copilot_auth.as_deref().ok_or_else(|| {
+                crate::agent::llm::ProviderInfrastructureError::StatePoisoned {
+                    component: "openai_compat.copilot_auth",
+                }
+                .into()
+            }),
+        }
     }
 
     async fn request_target(
@@ -419,7 +462,7 @@ impl OpenAICompatProvider {
                 })?,
             };
             let token = self
-                .copilot_auth
+                .copilot_auth()?
                 .ensure_token(&github_token)
                 .await
                 .map_err(map_copilot_error)?;
@@ -446,7 +489,7 @@ impl OpenAICompatProvider {
     ) -> Result<RequestTarget> {
         loop {
             match self
-                .copilot_auth
+                .copilot_auth()?
                 .wire_api_for_model(&token, &self.cfg.model)
                 .await
             {
@@ -464,7 +507,7 @@ impl OpenAICompatProvider {
                 }
                 Err(error) if copilot_api_rejected_token(&error) && !refresh_used => {
                     token = self
-                        .copilot_auth
+                        .copilot_auth()?
                         .refresh_rejected_token(&github_token, &token)
                         .await
                         .map_err(map_copilot_error)?;
@@ -486,7 +529,7 @@ impl OpenAICompatProvider {
             return Ok(None);
         }
         let token = self
-            .copilot_auth
+            .copilot_auth()?
             .refresh_rejected_token(&auth.github_token, &auth.token)
             .await
             .map_err(map_copilot_error)?;
@@ -534,6 +577,12 @@ fn map_copilot_error(error: super::copilot_auth::CopilotAuthError) -> LlmError {
         }
         CopilotAuthError::UnexpectedBody(message) => LlmError::UpstreamMalformed(message),
         CopilotAuthError::NotAuthorized(message) => LlmError::NotConfigured(message),
+        CopilotAuthError::StateUnavailable { resource } => LlmError::from(
+            crate::agent::llm::ProviderInfrastructureError::StatePoisoned {
+                component: resource,
+            },
+        ),
+        CopilotAuthError::Infrastructure(error) => LlmError::from(error),
     }
 }
 
@@ -658,17 +707,21 @@ impl Provider for OpenAICompatProvider {
     }
 
     fn is_configured(&self) -> bool {
+        if self.initialization_error.is_some() || self.transport.is_none() {
+            return false;
+        }
         // Azure requires both a key and the deployment URL — no
         // sensible default base.
         if self.cfg.alias == "azure" && self.cfg.base_url.is_empty() {
             return false;
         }
         self.cfg.api_key.is_some()
-            || self.cfg.pool.as_ref().is_some_and(|p| !p.is_empty())
+            || self.cfg.pool.as_ref().is_some_and(|pool| !pool.is_empty())
             || alias_is_local_default(&self.cfg.alias)
     }
 
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
+        let transport = self.transport()?;
         if self.cfg.alias == "azure" && self.cfg.base_url.is_empty() {
             return Err(LlmError::NotConfigured(
                 "azure provider needs `agent.base_url` set to the Azure OpenAI \
@@ -684,10 +737,7 @@ impl Provider for OpenAICompatProvider {
         // A declared pool is authoritative. Its lease snapshots the value so
         // concurrent cooldown updates do not invalidate this call.
         let lease = if let Some(pool) = &self.cfg.pool {
-            match pool.acquire() {
-                Ok(l) => Some(l),
-                Err(e) => return Err(LlmError::NotConfigured(format!("pool: {e}"))),
-            }
+            Some(pool.acquire()?)
         } else {
             None
         };
@@ -698,7 +748,7 @@ impl Provider for OpenAICompatProvider {
             Ok(target) => target,
             Err(error) => {
                 if let (Some(pool), Some(lease)) = (&self.cfg.pool, &lease) {
-                    pool.report_failure(lease, pool_failure_class(&error));
+                    pool.try_report_failure(lease, pool_failure_class(&error))?;
                 }
                 return Err(error);
             }
@@ -715,15 +765,14 @@ impl Provider for OpenAICompatProvider {
                 Ok(body) => body,
                 Err(error) => {
                     if let (Some(pool), Some(lease)) = (&self.cfg.pool, &lease) {
-                        pool.report_failure(lease, pool_failure_class(&error));
+                        pool.try_report_failure(lease, pool_failure_class(&error))?;
                     }
                     return Err(error);
                 }
             };
 
-            let mut http = self
-                .client
-                .post(&target.endpoint_url)
+            let mut http = transport
+                .post(&target.endpoint_url, self.cfg.request_timeout)
                 .header("Content-Type", "application/json")
                 .json(&body);
 
@@ -749,10 +798,10 @@ impl Provider for OpenAICompatProvider {
                 Ok(r) => r,
                 Err(e) => {
                     if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
-                        pool.report_failure(
+                        pool.try_report_failure(
                             l,
                             crate::agent::llm::error_classifier::classify_network_error(),
-                        );
+                        )?;
                     }
                     return Err(LlmError::Transport(e));
                 }
@@ -775,7 +824,7 @@ impl Provider for OpenAICompatProvider {
                     Ok(None) => {}
                     Err(error) => {
                         if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
-                            pool.report_failure(l, pool_failure_class(&error));
+                            pool.try_report_failure(l, pool_failure_class(&error))?;
                         }
                         return Err(error);
                     }
@@ -795,7 +844,7 @@ impl Provider for OpenAICompatProvider {
                             }
                             _ => crate::agent::llm::error_classifier::classify_network_error(),
                         };
-                        pool.report_failure(l, cls);
+                        pool.try_report_failure(l, cls)?;
                     }
                     return Err(e);
                 }
@@ -807,7 +856,7 @@ impl Provider for OpenAICompatProvider {
                     let body_str = std::str::from_utf8(&bytes).unwrap_or("");
                     let cls =
                         crate::agent::llm::error_classifier::classify(status.as_u16(), body_str);
-                    pool.report_failure(l, cls);
+                    pool.try_report_failure(l, cls)?;
                 }
                 return Err(err);
             }
@@ -824,7 +873,7 @@ impl Provider for OpenAICompatProvider {
             };
             if result.is_ok() {
                 if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
-                    pool.report_success(l);
+                    pool.try_report_success(l)?;
                 }
             }
             return result;
@@ -835,6 +884,7 @@ impl Provider for OpenAICompatProvider {
         &self,
         request: ChatRequest,
     ) -> Result<BoxStream<'static, Result<StreamEvent>>> {
+        let transport = self.transport()?;
         // HIGH-4: real SSE delta streaming. Build the request body
         // with stream:true, POST it, validate the HTTP status
         // synchronously (so 401/429/5xx surface immediately), then
@@ -848,10 +898,7 @@ impl Provider for OpenAICompatProvider {
             ));
         }
         let lease = if let Some(pool) = &self.cfg.pool {
-            match pool.acquire() {
-                Ok(l) => Some(l),
-                Err(e) => return Err(LlmError::NotConfigured(format!("pool: {e}"))),
-            }
+            Some(pool.acquire()?)
         } else {
             None
         };
@@ -862,7 +909,7 @@ impl Provider for OpenAICompatProvider {
             Ok(target) => target,
             Err(error) => {
                 if let (Some(pool), Some(lease)) = (&self.cfg.pool, &lease) {
-                    pool.report_failure(lease, pool_failure_class(&error));
+                    pool.try_report_failure(lease, pool_failure_class(&error))?;
                 }
                 return Err(error);
             }
@@ -879,15 +926,14 @@ impl Provider for OpenAICompatProvider {
                 Ok(body) => body,
                 Err(error) => {
                     if let (Some(pool), Some(lease)) = (&self.cfg.pool, &lease) {
-                        pool.report_failure(lease, pool_failure_class(&error));
+                        pool.try_report_failure(lease, pool_failure_class(&error))?;
                     }
                     return Err(error);
                 }
             };
 
-            let mut http = self
-                .client
-                .post(&target.endpoint_url)
+            let mut http = transport
+                .post(&target.endpoint_url, self.cfg.request_timeout)
                 .header("Content-Type", "application/json")
                 .header("Accept", "text/event-stream")
                 .json(&body);
@@ -910,10 +956,10 @@ impl Provider for OpenAICompatProvider {
                 Ok(r) => r,
                 Err(e) => {
                     if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
-                        pool.report_failure(
+                        pool.try_report_failure(
                             l,
                             crate::agent::llm::error_classifier::classify_network_error(),
-                        );
+                        )?;
                     }
                     return Err(LlmError::Transport(e));
                 }
@@ -938,7 +984,7 @@ impl Provider for OpenAICompatProvider {
                         Ok(None) => {}
                         Err(error) => {
                             if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
-                                pool.report_failure(l, pool_failure_class(&error));
+                                pool.try_report_failure(l, pool_failure_class(&error))?;
                             }
                             return Err(error);
                         }
@@ -949,7 +995,7 @@ impl Provider for OpenAICompatProvider {
                     let body_str = std::str::from_utf8(&bytes).unwrap_or("");
                     let cls =
                         crate::agent::llm::error_classifier::classify(status.as_u16(), body_str);
-                    pool.report_failure(l, cls);
+                    pool.try_report_failure(l, cls)?;
                 }
                 return Err(err);
             }
@@ -986,7 +1032,6 @@ pub fn is_alias(name: &str) -> bool {
     PROVIDER_ALIASES.contains(&name)
 }
 
-// Construction helper used by the registry.
 pub fn build_provider(alias: &str, model: &str, agent: &AgentConfig) -> Result<Arc<dyn Provider>> {
     Ok(Arc::new(OpenAICompatProvider::try_from_agent_config(
         alias, model, agent,

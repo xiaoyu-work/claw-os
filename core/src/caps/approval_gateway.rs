@@ -28,9 +28,9 @@ pub struct PendingApproval {
 }
 
 /// Consent mediation for a process that cannot touch the approvals
-/// store. Both calls are short, bounded round-trips; neither waits for
-/// a human decision, matching the in-process behaviour where a denial
-/// files a request and the caller retries later.
+/// store. Both calls are short, bounded round-trips; neither holds the
+/// worker while a human decides. The worker reports the filed request
+/// to `clawd`, which persists and resumes the task through its queue.
 pub trait ApprovalGateway: Send + Sync + std::fmt::Debug {
     /// Trusted execution context supplied by the broker assignment.
     /// The broker independently enforces the same value.

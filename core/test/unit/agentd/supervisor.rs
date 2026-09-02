@@ -25,7 +25,25 @@ fn new_lease() -> Lease {
         approval_expires_at: approval_deadline(Duration::from_secs(60)),
         approval_nonce: "0123456789abcdef".to_string(),
         consent_context: crate::caps::ConsentContext::Attended,
+        resumed_after_approval: Vec::new(),
     }
+}
+
+#[test]
+fn extension_receipts_use_the_authenticated_owner_config() {
+    let owner_home = tempfile::tempdir().unwrap();
+    let config_path = crate::paths::user_config_path_for(owner_home.path());
+    std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        config_path,
+        r#"{"agent":{"extensions":["owner-observer"]}}"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        configured_extension_ids(owner_home.path()),
+        vec!["owner-observer"]
+    );
 }
 
 fn signer_and_hello(lease: &Lease) -> (GrantSigner, WorkerFrame) {
@@ -37,6 +55,7 @@ fn signer_and_hello(lease: &Lease) -> (GrantSigner, WorkerFrame) {
     ));
     let hello = WorkerFrame::Hello(Box::new(WorkerHello {
         protocol: protocol::PROTOCOL_VERSION,
+        security_epoch: crate::update::SECURITY_EPOCH,
         grant,
         pid: lease.worker_pid,
         start_time_ticks: lease.worker_start_time_ticks,
@@ -88,6 +107,7 @@ fn a_grant_for_a_different_worker_is_refused_at_the_handshake() {
     claims.worker_pid = lease.worker_pid.wrapping_add(1);
     let hello = WorkerFrame::Hello(Box::new(WorkerHello {
         protocol: protocol::PROTOCOL_VERSION,
+        security_epoch: crate::update::SECURITY_EPOCH,
         grant: signer.issue(claims),
         pid: lease.worker_pid,
         start_time_ticks: lease.worker_start_time_ticks,
@@ -184,6 +204,7 @@ fn a_worker_that_did_not_shed_privilege_is_rejected() {
     let lease = new_lease();
     let mut hello = WorkerHello {
         protocol: protocol::PROTOCOL_VERSION,
+        security_epoch: crate::update::SECURITY_EPOCH,
         grant: GrantSigner::from_secret([9u8; 32]).issue(claims_for(
             std::process::id(),
             &lease,
@@ -531,6 +552,63 @@ fn an_approved_grant_is_spent_once_for_the_leased_session_and_owner() {
     assert_eq!(
         mediate_approval(&mut used, &lease, &consume_ask(&scope)),
         ApprovalReply::Pending { request_id: None }
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn durable_approval_rebinds_only_to_the_resumed_task() {
+    let _store = ConsentStore::new();
+    let scope = crate::caps::Scope::path("/home/user/notes.txt");
+    let mut original = new_lease();
+    let mut old_worker = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .expect("spawn old worker");
+    original.worker_pid = old_worker.id();
+    original.worker_start_time_ticks = crate::proc::read_start_time_ticks_pub(original.worker_pid);
+    let session = original.session_id.as_deref().unwrap();
+    let request_id = crate::approvals::submit_worker_request(
+        crate::caps::Verb::FS_READ,
+        scope.clone(),
+        session,
+        "test",
+        Some("test".to_string()),
+        original.owner_uid,
+        original.task_id.clone(),
+        original.worker_pid,
+        original.worker_start_time_ticks,
+        original.approval_nonce.clone(),
+        original.approval_expires_at,
+    )
+    .expect("submit");
+    old_worker.kill().unwrap();
+    old_worker.wait().unwrap();
+    crate::approvals::approve_for_owner(
+        &request_id,
+        crate::approvals::GrantDuration::Once,
+        Some("test".to_string()),
+        None,
+        Some(original.owner_uid),
+    )
+    .expect("approve");
+
+    let mut substituted = new_lease();
+    substituted.task_id = "task-b".to_string();
+    substituted.approval_nonce = "substituted-worker-nonce".to_string();
+    substituted.resumed_after_approval = vec![request_id.clone()];
+    let mut used = 0;
+    assert_eq!(
+        mediate_approval(&mut used, &substituted, &consume_ask(&scope)),
+        ApprovalReply::Pending { request_id: None }
+    );
+
+    let mut resumed = new_lease();
+    resumed.approval_nonce = "replacement-worker-nonce".to_string();
+    resumed.resumed_after_approval = vec![request_id];
+    assert_eq!(
+        mediate_approval(&mut used, &resumed, &consume_ask(&scope)),
+        ApprovalReply::Granted
     );
 }
 

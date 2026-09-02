@@ -6,15 +6,12 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::caps::{require_or_json, Scope, Verb};
-
-#[cfg(target_os = "linux")]
-mod proc_spawn_allowlist;
 
 tokio::task_local! {
     static SESSION_OVERRIDE: String;
@@ -106,9 +103,8 @@ pub struct SessionInfo {
     /// at spawn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start_time_ticks: Option<u64>,
-    /// Authenticated frontend and user-presence metadata. This is copied from
-    /// root-owned durable session metadata for broker tasks, or set by a
-    /// trusted local entry point for in-process runtimes.
+    /// Authenticated frontend and user-presence metadata. Trusted entry points
+    /// populate this; request or model input never selects it.
     #[serde(default)]
     pub client: crate::session::SessionClient,
 }
@@ -270,6 +266,17 @@ pub fn session_id_is_bound_for_app(session_id: &str, expected_app_id: Option<&st
     })
 }
 
+/// Read one session row from the launcher's own registry view.
+///
+/// The worker sandbox's broker endpoint runs inside the launcher, which
+/// is the owner of the routed registry partition the row lives in, so
+/// this is the same read `caps::require` and the daemon's authority
+/// perform — including the transient capabilities a session tool call
+/// installs for exactly one invocation.
+pub(crate) fn session_row_for_launcher(session_id: &str) -> Option<SessionInfo> {
+    session_info_by_id(session_id)
+}
+
 /// Snapshot every row in the registry resolved for the currently
 /// active owner/home override.
 ///
@@ -285,12 +292,34 @@ pub(crate) fn registry_sessions() -> Vec<SessionInfo> {
         .unwrap_or_default()
 }
 
-/// Resolve the nearest live registered session containing `pid` in one
-/// owner's root-maintained registry.
-///
-/// The extension broker uses this before dispatching a proxied request so a
-/// child cannot name its host session (or a sibling extension session) and
-/// borrow that session's broader authority.
+/// True only after the current process has been bound to the expected
+/// session identity. Used by the launcher shim to keep third-party code
+/// from running during the pid-binding window.
+pub fn current_session_is_bound(expected_app_id: Option<&str>) -> bool {
+    let Some(session) = current_session_info_for_caps() else {
+        return false;
+    };
+    if session.app_id.as_deref() != expected_app_id
+        || session.pending_bind
+        || session.pid != std::process::id()
+    {
+        return false;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let Some(expected_start) = session.start_time_ticks else {
+            return false;
+        };
+        read_start_time_ticks(session.pid) == Some(expected_start)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        true
+    }
+}
+
+/// Resolve the nearest live registered session in one owner's process tree.
 pub(crate) fn nearest_session_for_owner(uid: u32, mut pid: u32) -> Option<SessionInfo> {
     let path = owner_registry_path(uid);
     let data = crate::filelock::read_locked(&path).ok()??;
@@ -320,29 +349,16 @@ pub(crate) fn nearest_session_for_owner(uid: u32, mut pid: u32) -> Option<Sessio
     None
 }
 
-/// True only after the current process has been bound to the expected
-/// session identity. Used by the launcher shim to keep third-party code
-/// from running during the pid-binding window.
-pub fn current_session_is_bound(expected_app_id: Option<&str>) -> bool {
-    let Some(session) = current_session_info_for_caps() else {
-        return false;
-    };
-    if session.app_id.as_deref() != expected_app_id
-        || session.pending_bind
-        || session.pid != std::process::id()
-    {
-        return false;
-    }
+pub(crate) fn process_identity_is_live(pid: u32, start_time_ticks: u64, owner_uid: u32) -> bool {
     #[cfg(target_os = "linux")]
     {
-        let Some(expected_start) = session.start_time_ticks else {
-            return false;
-        };
-        read_start_time_ticks(session.pid) == Some(expected_start)
+        read_start_time_ticks(pid) == Some(start_time_ticks)
+            && read_real_uid(pid) == Some(owner_uid)
     }
     #[cfg(not(target_os = "linux"))]
     {
-        true
+        let _ = (pid, start_time_ticks, owner_uid);
+        false
     }
 }
 
@@ -362,19 +378,12 @@ where
     F: FnOnce(Registry) -> Registry,
 {
     let path = registry_path();
-    let owner_uid = if std::env::var_os("COS_PROC_DATA_DIR").is_some() {
-        None
-    } else {
-        crate::paths::current_owner_uid_override()
-    };
+    let owner_uid = crate::paths::current_owner_uid_override();
     prepare_registry_path(&path, owner_uid)?;
     update_registry_path(&path, owner_uid, transform)
 }
 
 fn owner_registry_path(uid: u32) -> PathBuf {
-    if let Some(path) = std::env::var_os("COS_PROC_DATA_DIR") {
-        return PathBuf::from(path).join("proc").join("registry.json");
-    }
     PathBuf::from("/run/cos/caps")
         .join(uid.to_string())
         .join("proc")
@@ -382,13 +391,6 @@ fn owner_registry_path(uid: u32) -> PathBuf {
 }
 
 fn prepare_registry_path(path: &std::path::Path, owner_uid: Option<u32>) -> Result<(), String> {
-    if std::env::var_os("COS_PROC_DATA_DIR").is_some() {
-        let parent = path
-            .parent()
-            .ok_or_else(|| "registry path has no parent".to_string())?;
-        return crate::storage::ensure_private_dir(parent)
-            .map_err(|error| format!("create overridden proc registry dir: {error}"));
-    }
     if let Some(uid) = owner_uid {
         let root = path
             .parent()
@@ -440,10 +442,7 @@ where
 {
     let path = owner_registry_path(uid);
     prepare_registry_path(&path, Some(uid))?;
-    let owner = std::env::var_os("COS_PROC_DATA_DIR")
-        .is_none()
-        .then_some(uid);
-    update_registry_path(&path, owner, transform)
+    update_registry_path(&path, Some(uid), transform)
 }
 
 /// Register a freshly-built [`SessionInfo`] into the on-disk registry.
@@ -495,9 +494,6 @@ pub fn deregister_session_for_owner(session_id: &str, uid: u32) {
 }
 
 /// Remove every App/MCP session directly owned by one extension host.
-///
-/// Returns the removed ids so the broker can revoke the matching capability
-/// grants even when the host crashed before its RAII teardown ran.
 pub(crate) fn deregister_child_sessions_for_owner(parent: &str, uid: u32) -> Vec<String> {
     let mut removed = Vec::new();
     let _ = update_owner_registry(uid, |mut registry| {
@@ -665,19 +661,6 @@ pub fn swap_app_session_transient_caps(
 /// crashed. See [`is_alive`] for the EPERM rationale.
 pub fn is_pid_alive(pid: u32) -> bool {
     is_alive(pid)
-}
-
-pub(crate) fn process_identity_is_live(pid: u32, start_time_ticks: u64, owner_uid: u32) -> bool {
-    #[cfg(target_os = "linux")]
-    {
-        read_start_time_ticks(pid) == Some(start_time_ticks)
-            && read_real_uid(pid) == Some(owner_uid)
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = (pid, start_time_ticks, owner_uid);
-        false
-    }
 }
 
 /// Cross-uid safe aliveness check. `kill(pid, 0)` alone returns
@@ -1052,835 +1035,19 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
     }
 }
 
-#[cfg(target_os = "linux")]
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-struct SpawnFileIdentity {
-    device: u64,
-    inode: u64,
-    mode: u32,
-    owner_uid: u32,
-    owner_gid: u32,
+fn session_not_found(identifier: &str) -> String {
+    if !identifier.is_empty() && identifier.bytes().all(|byte| byte.is_ascii_digit()) {
+        return format!(
+            "session not found: {identifier}. `{identifier}` looks like an OS PID, but cos_proc \
+             commands operate on registered cos session ids. Inspect the PID with cos_sysinfo \
+             command `process` and args [`{identifier}`]."
+        );
+    }
+    format!("session not found: {identifier}")
 }
 
-#[cfg(target_os = "linux")]
-#[derive(Debug, Clone, Serialize)]
-struct SpawnResourceBinding {
-    path: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    identity: Option<SpawnFileIdentity>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    content_sha256: Option<String>,
-}
-
-#[cfg(target_os = "linux")]
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct SpawnFileVersion {
-    identity: SpawnFileIdentity,
-    size: u64,
-    modified_secs: i64,
-    modified_nanos: i64,
-    changed_secs: i64,
-    changed_nanos: i64,
-}
-
-#[cfg(target_os = "linux")]
-impl SpawnFileVersion {
-    fn from_metadata(metadata: &fs::Metadata) -> Self {
-        use std::os::unix::fs::MetadataExt;
-
-        Self {
-            identity: SpawnFileIdentity {
-                device: metadata.dev(),
-                inode: metadata.ino(),
-                mode: metadata.mode(),
-                owner_uid: metadata.uid(),
-                owner_gid: metadata.gid(),
-            },
-            size: metadata.len(),
-            modified_secs: metadata.mtime(),
-            modified_nanos: metadata.mtime_nsec(),
-            changed_secs: metadata.ctime(),
-            changed_nanos: metadata.ctime_nsec(),
-        }
-    }
-}
-
-#[cfg(target_os = "linux")]
-struct SpawnExecutionIdentity {
-    uid: u32,
-    gid: u32,
-    supplementary_groups: Vec<u32>,
-}
-
-#[cfg(target_os = "linux")]
-impl SpawnExecutionIdentity {
-    fn current() -> Result<Self, String> {
-        let count = unsafe { libc::getgroups(0, std::ptr::null_mut()) };
-        if count < 0 {
-            return Err(format!(
-                "read supplementary groups: {}",
-                std::io::Error::last_os_error()
-            ));
-        }
-        let mut groups = vec![0 as libc::gid_t; count as usize];
-        if count > 0 && unsafe { libc::getgroups(count, groups.as_mut_ptr()) } < 0 {
-            return Err(format!(
-                "read supplementary groups: {}",
-                std::io::Error::last_os_error()
-            ));
-        }
-        Ok(Self {
-            uid: unsafe { libc::geteuid() as u32 },
-            gid: unsafe { libc::getegid() as u32 },
-            supplementary_groups: groups,
-        })
-    }
-
-    fn routed(uid: u32, gid: u32) -> Self {
-        Self {
-            uid,
-            gid,
-            supplementary_groups: Vec::new(),
-        }
-    }
-
-    fn permission_bits(&self, identity: &SpawnFileIdentity) -> u32 {
-        if self.uid == identity.owner_uid {
-            (identity.mode >> 6) & 0o7
-        } else if self.gid == identity.owner_gid
-            || self.supplementary_groups.contains(&identity.owner_gid)
-        {
-            (identity.mode >> 3) & 0o7
-        } else {
-            identity.mode & 0o7
-        }
-    }
-
-    fn can_execute(&self, identity: &SpawnFileIdentity) -> bool {
-        if self.uid == 0 {
-            identity.mode & 0o111 != 0
-        } else {
-            self.permission_bits(identity) & 0o1 != 0
-        }
-    }
-
-    fn validate_owner(&self, identity: &SpawnFileIdentity, kind: &str) -> Result<(), String> {
-        if self.uid != 0 && identity.owner_uid != 0 && identity.owner_uid != self.uid {
-            return Err(format!(
-                "{kind} is owned by uid {}, not root or execution uid {}",
-                identity.owner_uid, self.uid
-            ));
-        }
-        Ok(())
-    }
-}
-
-#[cfg(target_os = "linux")]
-struct PinnedSpawnDirectory {
-    path: PathBuf,
-    descriptor: fs::File,
-    identity: SpawnFileIdentity,
-}
-
-#[cfg(target_os = "linux")]
-impl PinnedSpawnDirectory {
-    fn open(path: &Path, execution: &SpawnExecutionIdentity) -> Result<Self, String> {
-        use std::os::fd::FromRawFd;
-        use std::os::unix::ffi::OsStrExt;
-        use std::os::unix::fs::MetadataExt;
-
-        let path = path
-            .canonicalize()
-            .map_err(|error| format!("canonicalize process workdir: {error}"))?;
-        let encoded = std::ffi::CString::new(path.as_os_str().as_bytes())
-            .map_err(|_| "process workdir contains NUL".to_string())?;
-        let fd = unsafe {
-            libc::open(
-                encoded.as_ptr(),
-                libc::O_PATH | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
-            )
-        };
-        if fd < 0 {
-            return Err(format!(
-                "pin process workdir {}: {}",
-                path.display(),
-                std::io::Error::last_os_error()
-            ));
-        }
-        let descriptor = unsafe { fs::File::from_raw_fd(fd) };
-        let metadata = descriptor
-            .metadata()
-            .map_err(|error| format!("inspect pinned process workdir: {error}"))?;
-        if !metadata.is_dir() {
-            return Err(format!(
-                "process workdir {} is not a directory",
-                path.display()
-            ));
-        }
-        let identity = SpawnFileVersion::from_metadata(&metadata).identity;
-        execution.validate_owner(&identity, "process workdir")?;
-        if !execution.can_execute(&identity) {
-            return Err(format!(
-                "process workdir {} is not searchable by execution uid {}",
-                path.display(),
-                execution.uid
-            ));
-        }
-        let current = fs::symlink_metadata(&path)
-            .map_err(|error| format!("revalidate process workdir {}: {error}", path.display()))?;
-        if current.file_type().is_symlink()
-            || current.dev() != identity.device
-            || current.ino() != identity.inode
-        {
-            return Err("process workdir changed while it was being pinned".to_string());
-        }
-        Ok(Self {
-            path,
-            descriptor,
-            identity,
-        })
-    }
-
-    fn resolution_path(&self) -> PathBuf {
-        use std::os::fd::AsRawFd;
-        PathBuf::from(format!("/proc/self/fd/{}", self.descriptor.as_raw_fd()))
-    }
-
-    fn binding(&self) -> SpawnResourceBinding {
-        SpawnResourceBinding {
-            path: self.path.to_string_lossy().into_owned(),
-            identity: Some(self.identity.clone()),
-            content_sha256: None,
-        }
-    }
-}
-
-#[cfg(target_os = "linux")]
-struct PinnedSpawnExecutable {
-    path: PathBuf,
-    _source: fs::File,
-    snapshot: fs::File,
-    identity: SpawnFileIdentity,
-    content_sha256: String,
-}
-
-#[cfg(target_os = "linux")]
-#[derive(Clone, Copy)]
-enum ElfByteOrder {
-    Little,
-    Big,
-}
-
-#[cfg(target_os = "linux")]
-impl ElfByteOrder {
-    fn u16(self, bytes: &[u8]) -> u16 {
-        let bytes: [u8; 2] = bytes.try_into().expect("validated ELF u16 slice");
-        match self {
-            Self::Little => u16::from_le_bytes(bytes),
-            Self::Big => u16::from_be_bytes(bytes),
-        }
-    }
-
-    fn u32(self, bytes: &[u8]) -> u32 {
-        let bytes: [u8; 4] = bytes.try_into().expect("validated ELF u32 slice");
-        match self {
-            Self::Little => u32::from_le_bytes(bytes),
-            Self::Big => u32::from_be_bytes(bytes),
-        }
-    }
-
-    fn u64(self, bytes: &[u8]) -> u64 {
-        let bytes: [u8; 8] = bytes.try_into().expect("validated ELF u64 slice");
-        match self {
-            Self::Little => u64::from_le_bytes(bytes),
-            Self::Big => u64::from_be_bytes(bytes),
-        }
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn native_elf_machine() -> Option<u16> {
-    #[cfg(target_arch = "x86")]
-    {
-        return Some(3);
-    }
-    #[cfg(target_arch = "x86_64")]
-    {
-        return Some(62);
-    }
-    #[cfg(target_arch = "arm")]
-    {
-        return Some(40);
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        return Some(183);
-    }
-    #[cfg(target_arch = "powerpc64")]
-    {
-        return Some(21);
-    }
-    #[cfg(target_arch = "s390x")]
-    {
-        return Some(22);
-    }
-    #[cfg(target_arch = "riscv64")]
-    {
-        return Some(243);
-    }
-    #[allow(unreachable_code)]
-    None
-}
-
-#[cfg(target_os = "linux")]
-fn interpreter_refusal(path: &Path, detail: &str) -> String {
-    format!(
-        "proc spawn refuses interpreter-driven executable {} ({detail}); use cos_sandbox",
-        path.display()
-    )
-}
-
-#[cfg(target_os = "linux")]
-fn validate_static_native_elf(
-    snapshot: &mut fs::File,
-    size: u64,
-    path: &Path,
-) -> Result<(), String> {
-    use std::io::{Read, Seek};
-
-    const ELF_HEADER_MAX: usize = 64;
-    const PT_DYNAMIC: u32 = 2;
-    const PT_INTERP: u32 = 3;
-    const PT_LOAD: u32 = 1;
-    const PT_GNU_STACK: u32 = 0x6474_e551;
-    const PF_X: u32 = 1;
-
-    let mut header = [0u8; ELF_HEADER_MAX];
-    let header_len = usize::try_from(size.min(ELF_HEADER_MAX as u64)).unwrap_or(0);
-    snapshot
-        .read_exact(&mut header[..header_len])
-        .map_err(|error| format!("read executable header {}: {error}", path.display()))?;
-    if header.starts_with(b"#!") {
-        return Err(interpreter_refusal(path, "shebang script"));
-    }
-    if header_len < 20 || &header[..4] != b"\x7fELF" {
-        return Err(interpreter_refusal(path, "not a native ELF binary"));
-    }
-    let class = header[4];
-    let order = match header[5] {
-        1 => ElfByteOrder::Little,
-        2 => ElfByteOrder::Big,
-        _ => return Err(interpreter_refusal(path, "unknown ELF byte order")),
-    };
-    if header[6] != 1 {
-        return Err(interpreter_refusal(path, "unsupported ELF version"));
-    }
-    let expected_header = match class {
-        1 => 52,
-        2 => 64,
-        _ => return Err(interpreter_refusal(path, "unsupported ELF class")),
-    };
-    if header_len < expected_header {
-        return Err(interpreter_refusal(path, "truncated ELF header"));
-    }
-    if order.u16(&header[16..18]) != 2 {
-        return Err(interpreter_refusal(
-            path,
-            "ELF is not a fixed-address native executable",
-        ));
-    }
-    let machine = order.u16(&header[18..20]);
-    if native_elf_machine() != Some(machine) {
-        return Err(interpreter_refusal(
-            path,
-            "ELF architecture does not match this host",
-        ));
-    }
-
-    let (program_offset, entry_size, entry_count, minimum_entry_size, flags_offset) = if class == 1
-    {
-        (
-            u64::from(order.u32(&header[28..32])),
-            u64::from(order.u16(&header[42..44])),
-            u64::from(order.u16(&header[44..46])),
-            32u64,
-            24usize,
-        )
-    } else {
-        (
-            order.u64(&header[32..40]),
-            u64::from(order.u16(&header[54..56])),
-            u64::from(order.u16(&header[56..58])),
-            56u64,
-            4usize,
-        )
-    };
-    if entry_count == 0 || entry_count > 1024 || entry_size < minimum_entry_size || entry_size > 256
-    {
-        return Err(interpreter_refusal(
-            path,
-            "invalid ELF program-header table",
-        ));
-    }
-    let table_size = entry_size
-        .checked_mul(entry_count)
-        .ok_or_else(|| interpreter_refusal(path, "oversized ELF program-header table"))?;
-    if program_offset
-        .checked_add(table_size)
-        .is_none_or(|end| end > size)
-    {
-        return Err(interpreter_refusal(
-            path,
-            "ELF program headers escape the executable",
-        ));
-    }
-
-    let mut entry = vec![0u8; entry_size as usize];
-    let mut executable_load = false;
-    for index in 0..entry_count {
-        snapshot
-            .seek(std::io::SeekFrom::Start(
-                program_offset + index * entry_size,
-            ))
-            .map_err(|error| format!("seek executable program header: {error}"))?;
-        snapshot
-            .read_exact(&mut entry)
-            .map_err(|error| format!("read executable program header: {error}"))?;
-        let kind = order.u32(&entry[..4]);
-        let flags = order.u32(&entry[flags_offset..flags_offset + 4]);
-        if kind == PT_INTERP {
-            return Err(interpreter_refusal(
-                path,
-                "ELF requires a mutable program interpreter",
-            ));
-        }
-        if kind == PT_DYNAMIC {
-            return Err(interpreter_refusal(
-                path,
-                "ELF may load mutable shared libraries",
-            ));
-        }
-        if kind == PT_GNU_STACK && flags & PF_X != 0 {
-            return Err(interpreter_refusal(
-                path,
-                "ELF requests an executable stack",
-            ));
-        }
-        executable_load |= kind == PT_LOAD && flags & PF_X != 0;
-    }
-    if !executable_load {
-        return Err(interpreter_refusal(
-            path,
-            "ELF has no executable load segment",
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-fn validate_native_invocation(
-    executable: &Path,
-    args: &[String],
-    _workdir: &Path,
-) -> Result<(), String> {
-    let name = executable
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    let known_runtime = matches!(
-        name.as_str(),
-        "sh" | "bash"
-            | "dash"
-            | "ash"
-            | "zsh"
-            | "ksh"
-            | "fish"
-            | "busybox"
-            | "env"
-            | "perl"
-            | "ruby"
-            | "node"
-            | "nodejs"
-            | "deno"
-            | "bun"
-            | "php"
-            | "lua"
-            | "luajit"
-            | "java"
-            | "jjs"
-            | "qjs"
-            | "wasmtime"
-            | "wasmer"
-    ) || name.starts_with("python")
-        || name.starts_with("pypy");
-    if known_runtime {
-        return Err(interpreter_refusal(executable, "shell or language runtime"));
-    }
-
-    const CODE_EXTENSIONS: &[&str] = &[
-        "sh", "bash", "zsh", "py", "pyc", "pyo", "js", "mjs", "cjs", "ts", "rb", "pl", "pm", "php",
-        "lua", "jar", "class", "wasm",
-    ];
-    for arg in args {
-        if matches!(
-            arg.as_str(),
-            "-c" | "-e" | "-m" | "-jar" | "--eval" | "--exec" | "--module"
-        ) {
-            return Err(interpreter_refusal(
-                executable,
-                "argument requests interpreter evaluation",
-            ));
-        }
-        let candidate = arg
-            .strip_prefix('@')
-            .unwrap_or(arg)
-            .rsplit_once('=')
-            .map_or(arg.as_str(), |(_, value)| value);
-        let path = Path::new(candidate);
-        if path
-            .extension()
-            .and_then(|value| value.to_str())
-            .is_some_and(|extension| {
-                CODE_EXTENSIONS
-                    .iter()
-                    .any(|known| extension.eq_ignore_ascii_case(known))
-            })
-        {
-            return Err(interpreter_refusal(
-                executable,
-                "argument names a script or runtime module",
-            ));
-        }
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-impl PinnedSpawnExecutable {
-    const MAX_BYTES: u64 = 512 * 1024 * 1024;
-
-    fn open(path: &Path, execution: &SpawnExecutionIdentity) -> Result<Self, String> {
-        use std::io::{Read, Seek, Write};
-        use std::os::fd::FromRawFd;
-        use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-
-        let path = path.to_path_buf();
-        let mut source = fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
-            .open(&path)
-            .map_err(|error| format!("pin process executable {}: {error}", path.display()))?;
-        let before = source
-            .metadata()
-            .map_err(|error| format!("inspect pinned process executable: {error}"))?;
-        if !before.is_file() {
-            return Err(format!(
-                "process executable {} is not a regular file",
-                path.display()
-            ));
-        }
-        let version = SpawnFileVersion::from_metadata(&before);
-        execution.validate_owner(&version.identity, "process executable")?;
-        if !execution.can_execute(&version.identity) {
-            return Err(format!(
-                "process executable {} is not executable by uid {}",
-                path.display(),
-                execution.uid
-            ));
-        }
-        if version.identity.mode & (libc::S_ISUID | libc::S_ISGID) != 0 {
-            return Err("setuid and setgid process executables are not supported".to_string());
-        }
-        if version.size > Self::MAX_BYTES {
-            return Err(format!(
-                "process executable is too large to pin safely ({} bytes, max {})",
-                version.size,
-                Self::MAX_BYTES
-            ));
-        }
-        let current = fs::symlink_metadata(&path).map_err(|error| {
-            format!("revalidate process executable {}: {error}", path.display())
-        })?;
-        if current.file_type().is_symlink()
-            || current.dev() != version.identity.device
-            || current.ino() != version.identity.inode
-        {
-            return Err("process executable changed while it was being pinned".to_string());
-        }
-
-        let label = std::ffi::CString::new("cos-proc-executable").expect("static string");
-        const MFD_EXEC: libc::c_uint = 0x0010;
-        let base_flags = libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING;
-        let mut fd = unsafe { libc::memfd_create(label.as_ptr(), base_flags | MFD_EXEC) };
-        if fd < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINVAL) {
-            fd = unsafe { libc::memfd_create(label.as_ptr(), base_flags) };
-        }
-        if fd < 0 {
-            return Err(format!(
-                "create pinned executable snapshot: {}",
-                std::io::Error::last_os_error()
-            ));
-        }
-        let mut snapshot = unsafe { fs::File::from_raw_fd(fd) };
-        let mut hasher = crate::crypto::Sha256Stream::new();
-        let mut copied = 0u64;
-        let mut buffer = [0u8; 64 * 1024];
-        loop {
-            let read = source
-                .read(&mut buffer)
-                .map_err(|error| format!("read pinned process executable: {error}"))?;
-            if read == 0 {
-                break;
-            }
-            copied = copied.saturating_add(read as u64);
-            if copied > Self::MAX_BYTES {
-                return Err("process executable grew beyond the pinning limit".to_string());
-            }
-            hasher.update(&buffer[..read]);
-            snapshot
-                .write_all(&buffer[..read])
-                .map_err(|error| format!("snapshot process executable: {error}"))?;
-        }
-        let after = source
-            .metadata()
-            .map_err(|error| format!("reinspect pinned process executable: {error}"))?;
-        if SpawnFileVersion::from_metadata(&after) != version || copied != version.size {
-            return Err("process executable changed while its snapshot was created".to_string());
-        }
-        snapshot
-            .seek(std::io::SeekFrom::Start(0))
-            .map_err(|error| format!("rewind pinned executable for validation: {error}"))?;
-        validate_static_native_elf(&mut snapshot, version.size, &path)?;
-        let effective_uid = unsafe { libc::geteuid() as u32 };
-        if effective_uid == 0
-            && (execution.uid != 0 || execution.gid != unsafe { libc::getegid() as u32 })
-            && unsafe { libc::fchown(fd, execution.uid, execution.gid) } != 0
-        {
-            return Err(format!(
-                "assign pinned executable ownership: {}",
-                std::io::Error::last_os_error()
-            ));
-        }
-        if unsafe { libc::fchmod(fd, 0o500) } != 0 {
-            return Err(format!(
-                "set pinned executable mode: {}",
-                std::io::Error::last_os_error()
-            ));
-        }
-        snapshot
-            .seek(std::io::SeekFrom::Start(0))
-            .map_err(|error| format!("rewind pinned executable: {error}"))?;
-        let seals =
-            libc::F_SEAL_SEAL | libc::F_SEAL_SHRINK | libc::F_SEAL_GROW | libc::F_SEAL_WRITE;
-        if unsafe { libc::fcntl(fd, libc::F_ADD_SEALS, seals) } < 0 {
-            return Err(format!(
-                "seal pinned executable snapshot: {}",
-                std::io::Error::last_os_error()
-            ));
-        }
-
-        Ok(Self {
-            path,
-            _source: source,
-            snapshot,
-            identity: version.identity,
-            content_sha256: hasher.finalize_hex(),
-        })
-    }
-
-    fn binding(&self) -> SpawnResourceBinding {
-        SpawnResourceBinding {
-            path: self.path.to_string_lossy().into_owned(),
-            identity: Some(self.identity.clone()),
-            content_sha256: Some(self.content_sha256.clone()),
-        }
-    }
-}
-
-#[cfg(all(target_os = "linux", test))]
-static PRE_SPAWN_TEST_HOOK: std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>> =
-    std::sync::Mutex::new(None);
-
-#[cfg(all(target_os = "linux", test))]
-fn set_pre_spawn_test_hook(hook: impl FnOnce() + Send + 'static) {
-    *PRE_SPAWN_TEST_HOOK
-        .lock()
-        .unwrap_or_else(|error| error.into_inner()) = Some(Box::new(hook));
-}
-
-#[cfg(all(target_os = "linux", test))]
-fn run_pre_spawn_test_hook() {
-    let hook = PRE_SPAWN_TEST_HOOK
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .take();
-    if let Some(hook) = hook {
-        hook();
-    }
-}
-
-#[cfg(all(target_os = "linux", not(test)))]
-fn run_pre_spawn_test_hook() {}
-
-#[cfg(target_os = "linux")]
-fn spawn_fd_limit() -> i32 {
-    let mut limit: libc::rlimit = unsafe { std::mem::zeroed() };
-    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } != 0 {
-        return 4096;
-    }
-    let current = if limit.rlim_cur == libc::RLIM_INFINITY {
-        1_048_576
-    } else {
-        limit.rlim_cur.min(1_048_576)
-    };
-    i32::try_from(current).unwrap_or(1_048_576).max(3)
-}
-
-#[cfg(target_os = "linux")]
-fn mark_spawn_fds_cloexec(limit: i32) -> std::io::Result<()> {
-    const CLOSE_RANGE_CLOEXEC: libc::c_uint = 4;
-    if unsafe {
-        libc::syscall(
-            libc::SYS_close_range,
-            3 as libc::c_uint,
-            libc::c_uint::MAX,
-            CLOSE_RANGE_CLOEXEC,
-        )
-    } == 0
-    {
-        return Ok(());
-    }
-
-    let mut fd = 3;
-    while fd < limit {
-        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
-        if flags >= 0 {
-            if unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) } < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-        } else if std::io::Error::last_os_error().raw_os_error() != Some(libc::EBADF) {
-            return Err(std::io::Error::last_os_error());
-        }
-        fd += 1;
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-fn canonical_executable(candidate: &Path) -> Option<PathBuf> {
-    let canonical = candidate.canonicalize().ok()?;
-    let metadata = canonical.metadata().ok()?;
-    if !metadata.is_file() {
-        return None;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if metadata.permissions().mode() & 0o111 == 0 {
-            return None;
-        }
-    }
-    Some(canonical)
-}
-
-#[cfg(target_os = "linux")]
-fn resolve_spawn_executable(program: &str, execution_workdir: &Path) -> Result<PathBuf, String> {
-    if program.is_empty() || program.contains('\0') {
-        return Err("process executable is invalid".to_string());
-    }
-    let requested = Path::new(program);
-    if requested.is_absolute() || requested.components().count() > 1 {
-        let candidate = if requested.is_absolute() {
-            requested.to_path_buf()
-        } else {
-            execution_workdir.join(requested)
-        };
-        return canonical_executable(&candidate).ok_or_else(|| {
-            format!(
-                "process executable `{}` is missing or not executable",
-                candidate.display()
-            )
-        });
-    }
-
-    let path = std::env::var_os("PATH")
-        .ok_or_else(|| format!("process executable `{program}` cannot be resolved without PATH"))?;
-    for directory in std::env::split_paths(&path) {
-        let directory = if directory.is_absolute() {
-            directory
-        } else {
-            execution_workdir.join(directory)
-        };
-        let candidate = directory.join(requested);
-        if let Some(canonical) = canonical_executable(&candidate) {
-            return Ok(canonical);
-        }
-        #[cfg(windows)]
-        if requested.extension().is_none() {
-            let extensions =
-                std::env::var_os("PATHEXT").unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".into());
-            for extension in extensions.to_string_lossy().split(';') {
-                let candidate = directory.join(format!("{program}{extension}"));
-                if let Some(canonical) = canonical_executable(&candidate) {
-                    return Ok(canonical);
-                }
-            }
-        }
-    }
-    Err(format!(
-        "process executable `{program}` was not found as an executable file on PATH"
-    ))
-}
-
-#[cfg(target_os = "linux")]
-#[allow(clippy::too_many_arguments)]
-fn spawn_operation_digest(
-    allowlist: &proc_spawn_allowlist::Authorization,
-    outputs: &[proc_spawn_allowlist::OutputBinding],
-    executable: &SpawnResourceBinding,
-    argv: &[String],
-    requested_session: Option<&str>,
-    group: Option<&str>,
-    parent: &str,
-    workdir: &SpawnResourceBinding,
-    tier: Option<u8>,
-    scope: Option<&str>,
-    priority: Option<&str>,
-    role: Option<&str>,
-    caps: Option<&crate::caps::CapSet>,
-    isolated_workspace: bool,
-) -> Result<String, String> {
-    let canonical = serde_json::to_vec(&json!({
-        "allowlist": allowlist,
-        "outputs": outputs,
-        "executable": executable,
-        "argv": argv,
-        "requested_session": requested_session,
-        "group": group,
-        "parent": parent,
-        "workdir": workdir,
-        "tier": tier,
-        "scope": scope,
-        "priority": priority,
-        "role": role,
-        "caps": caps,
-        "isolated_workspace": isolated_workspace,
-    }))
-    .map_err(|error| format!("serialize process invocation: {error}"))?;
-    Ok(crate::crypto::sha256_hex(&canonical))
-}
-
-#[cfg(not(target_os = "linux"))]
-fn cmd_spawn(_args: &[String]) -> Result<Value, String> {
-    Err(
-        "proc spawn is unavailable on this platform because descriptor-pinned execution is not implemented; use cos_sandbox"
-            .to_string(),
-    )
-}
-
-#[cfg(target_os = "linux")]
 fn cmd_spawn(args: &[String]) -> Result<Value, String> {
+    require_or_json(Verb::PROC_SPAWN, Scope::wild()).map_err(|v| v.to_string())?;
     let parent_info = current_session_info_for_caps()
         .ok_or_else(|| "proc spawn requires a registered parent session".to_string())?;
     crate::caps::enforcement::require_current_session_identity(
@@ -2102,9 +1269,17 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
         role_name = parent_info.role.clone();
     }
 
-    let requested_session = session_id.clone();
+    // Guardrails: check for rapid respawn and destructive commands
+    let reg_check = load_registry();
+    let rapid_warning = check_rapid_respawn(&reg_check, command_args);
+    let destructive_warning = check_destructive(command_args);
+    drop(reg_check);
+
     let sid = session_id.unwrap_or_else(|| format!("proc-{}", short_id()));
     validate_session_identifier(&sid)?;
+    let dir = proc_dir();
+    fs::create_dir_all(&dir)
+        .map_err(|error| format!("create proc directory {}: {error}", dir.display()))?;
 
     #[cfg(unix)]
     let routed_identity = match crate::paths::current_owner_uid_override() {
@@ -2140,121 +1315,16 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
         _ => None,
     };
 
-    if !isolated_workspace {
-        if let Some(path) = workdir.as_deref() {
-            let canonical = PathBuf::from(path)
-                .canonicalize()
-                .map_err(|error| format!("canonicalize proc workdir: {error}"))?;
-            if !canonical.is_dir() {
-                return Err(format!(
-                    "proc workdir {} is not a directory",
-                    canonical.display()
-                ));
-            }
-            workdir = Some(canonical.to_string_lossy().into_owned());
-        }
-    }
-
-    let execution_workdir = if isolated_workspace {
-        crate::paths::data_dir()
+    // Handle isolated workspace
+    if isolated_workspace {
+        let ws_dir = crate::paths::data_dir()
             .join("sessions")
             .join(&sid)
-            .join("workspace")
-    } else if let Some(path) = workdir.as_deref() {
-        PathBuf::from(path)
-    } else {
-        std::env::current_dir()
-            .and_then(|path| path.canonicalize())
-            .map_err(|error| format!("resolve process working directory: {error}"))?
-    };
-    if isolated_workspace {
-        fs::create_dir_all(&execution_workdir)
-            .map_err(|error| format!("failed to create isolated workspace: {error}"))?;
-        workdir = Some(execution_workdir.to_string_lossy().into_owned());
+            .join("workspace");
+        fs::create_dir_all(&ws_dir)
+            .map_err(|e| format!("failed to create isolated workspace: {e}"))?;
+        workdir = Some(ws_dir.to_string_lossy().to_string());
     }
-
-    #[cfg(target_os = "linux")]
-    let execution_identity = match routed_identity.as_ref() {
-        Some((uid, gid, _)) => SpawnExecutionIdentity::routed(*uid, *gid),
-        None => SpawnExecutionIdentity::current()?,
-    };
-    #[cfg(target_os = "linux")]
-    let pinned_workdir = PinnedSpawnDirectory::open(&execution_workdir, &execution_identity)?;
-    #[cfg(target_os = "linux")]
-    let executable = resolve_spawn_executable(&command_args[0], &pinned_workdir.resolution_path())?;
-    #[cfg(not(target_os = "linux"))]
-    let executable = resolve_spawn_executable(&command_args[0], &execution_workdir)?;
-    #[cfg(target_os = "linux")]
-    let pinned_executable = PinnedSpawnExecutable::open(&executable, &execution_identity)?;
-    #[cfg(target_os = "linux")]
-    validate_native_invocation(
-        &pinned_executable.path,
-        &command_args[1..],
-        &pinned_workdir.path,
-    )?;
-    #[cfg(target_os = "linux")]
-    let executable_binding = pinned_executable.binding();
-    #[cfg(not(target_os = "linux"))]
-    let executable_binding = SpawnResourceBinding {
-        path: executable.to_string_lossy().into_owned(),
-        identity: None,
-        content_sha256: None,
-    };
-    #[cfg(target_os = "linux")]
-    let workdir_binding = pinned_workdir.binding();
-    #[cfg(not(target_os = "linux"))]
-    let workdir_binding = SpawnResourceBinding {
-        path: execution_workdir.to_string_lossy().into_owned(),
-        identity: None,
-        content_sha256: None,
-    };
-    #[cfg(target_os = "linux")]
-    let allowed = proc_spawn_allowlist::authorize(
-        &executable_binding,
-        &command_args[1..],
-        &pinned_workdir,
-        &execution_identity,
-    )?;
-    let operation_digest = spawn_operation_digest(
-        &allowed.authorization,
-        &allowed.output_bindings,
-        &executable_binding,
-        &command_args[1..],
-        requested_session.as_deref(),
-        group.as_deref(),
-        &parent_info.session_id,
-        &workdir_binding,
-        tier,
-        scope.as_deref(),
-        priority.as_deref(),
-        role_name.as_deref(),
-        cap_set.as_ref(),
-        isolated_workspace,
-    )?;
-
-    // Guardrails: check for rapid respawn and destructive commands
-    let reg_check = load_registry();
-    let rapid_warning = check_rapid_respawn(&reg_check, command_args);
-    let destructive_warning = check_destructive(command_args);
-    drop(reg_check);
-
-    crate::caps::enforcement::require_or_json_for_operation(
-        Verb::PROC_SPAWN,
-        Scope::self_ref("children"),
-        &operation_digest,
-    )
-    .map_err(|v| v.to_string())?;
-    crate::caps::enforcement::require_or_json_for_operation(
-        Verb::FS_EXEC,
-        Scope::path(executable.to_string_lossy()),
-        &operation_digest,
-    )
-    .map_err(|v| v.to_string())?;
-    run_pre_spawn_test_hook();
-
-    let dir = proc_dir();
-    fs::create_dir_all(&dir)
-        .map_err(|error| format!("create proc directory {}: {error}", dir.display()))?;
 
     let stdout_path = dir.join(format!("{sid}.stdout"));
     let stderr_path = dir.join(format!("{sid}.stderr"));
@@ -2270,131 +1340,73 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
         }
     };
 
-    #[cfg(target_os = "linux")]
-    let (exec_fd, workdir_fd) = {
-        use std::os::fd::AsRawFd;
-        (
-            pinned_executable.snapshot.as_raw_fd(),
-            pinned_workdir.descriptor.as_raw_fd(),
-        )
+    // Apply process priority via nice (Unix only)
+    #[cfg(unix)]
+    let (actual_cmd, actual_args) = if let Some(ref prio) = priority {
+        let nice_val = match prio.as_str() {
+            "low" => "10",
+            "normal" => "0",
+            "high" => "-5",
+            "realtime" => "-10",
+            _ => "0",
+        };
+        let mut nice_args = vec!["-n".to_string(), nice_val.to_string()];
+        nice_args.extend_from_slice(command_args);
+        ("nice".to_string(), nice_args)
+    } else {
+        (command_args[0].clone(), command_args[1..].to_vec())
     };
-    // The procfs descriptor path is a kernel reference to the inherited,
-    // sealed memfd. It lets Command keep its stdio/environment handling
-    // without reopening the user-controlled executable pathname.
-    #[cfg(target_os = "linux")]
-    let mut cmd = Command::new(format!("/proc/self/fd/{exec_fd}"));
-    #[cfg(not(target_os = "linux"))]
-    let mut cmd = Command::new(&executable);
-    #[cfg(target_os = "linux")]
-    {
-        use std::os::unix::process::CommandExt;
-        cmd.arg0(&executable);
-    }
-    cmd.args(&allowed.argv)
+
+    #[cfg(not(unix))]
+    let (actual_cmd, actual_args) = (command_args[0].clone(), command_args[1..].to_vec());
+
+    let mut cmd = Command::new(&actual_cmd);
+    cmd.args(&actual_args)
         .stdin(Stdio::null())
         .stdout(stdout_file)
         .stderr(stderr_file)
-        .env_clear()
-        .env("HOME", &workdir_binding.path)
-        .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
-        .env("LANG", "C")
-        .env("LC_ALL", "C")
+        // Agent-native: suppress all interactive prompts
+        .env("DEBIAN_FRONTEND", "noninteractive")
+        .env("GIT_TERMINAL_PROMPT", "0")
         .env("CI", "true")
-        .env("COS_SESSION", &sid)
+        .env("PAGER", "cat")
+        .env("GIT_PAGER", "cat")
+        .env("PIP_NO_INPUT", "1")
+        .env("NPM_CONFIG_YES", "true")
+        .env("PYTHONDONTWRITEBYTECODE", "1");
+
+    if let Some(ref wd) = workdir {
+        cmd.current_dir(wd);
+    }
+    #[cfg(unix)]
+    if let Some((_, _, home)) = routed_identity.as_ref() {
+        cmd.env("HOME", home).env("COS_HOME", home);
+    }
+
+    // Inject session ID so child process can be identified by policy module
+    cmd.env("COS_SESSION", &sid)
         .env("COS_PROC_DATA_DIR", crate::paths::proc_data_dir());
 
-    #[cfg(not(target_os = "linux"))]
-    cmd.current_dir(&execution_workdir);
-
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     unsafe {
         use std::os::unix::process::CommandExt;
         let identity = routed_identity.as_ref().map(|(uid, gid, _)| (*uid, *gid));
-        let nice_adjustment = priority.as_deref().map(|priority| match priority {
-            "low" => 10,
-            "normal" => 0,
-            "high" => -5,
-            "realtime" => -10,
-            _ => 0,
-        });
         let euid = libc::geteuid() as u32;
-        let fd_limit = spawn_fd_limit();
-        let output_fds = allowed.output_fds();
         cmd.pre_exec(move || {
             if libc::setsid() < 0 {
                 return Err(std::io::Error::last_os_error());
             }
-            mark_spawn_fds_cloexec(fd_limit)?;
             if let Some((uid, gid)) = identity {
                 if euid == 0
                     && (libc::setgroups(0, std::ptr::null()) != 0
                         || libc::setgid(gid) != 0
                         || libc::setuid(uid) != 0)
-                {
-                    return Err(std::io::Error::last_os_error());
-                }
-            }
-            if let Some(adjustment) = nice_adjustment {
-                let current = libc::getpriority(libc::PRIO_PROCESS, 0);
-                let target = current.saturating_add(adjustment).clamp(-20, 19);
-                if libc::setpriority(libc::PRIO_PROCESS, 0, target) != 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-            }
-            if libc::fchdir(workdir_fd) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            let fd_flags = libc::fcntl(exec_fd, libc::F_GETFD);
-            if fd_flags < 0 || libc::fcntl(exec_fd, libc::F_SETFD, fd_flags & !libc::FD_CLOEXEC) < 0
-            {
-                return Err(std::io::Error::last_os_error());
-            }
-            for output_fd in &output_fds {
-                let flags = libc::fcntl(*output_fd, libc::F_GETFD);
-                if flags < 0
-                    || libc::fcntl(*output_fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0
                 {
                     return Err(std::io::Error::last_os_error());
                 }
             }
             if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
                 return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-
-    #[cfg(all(unix, not(target_os = "linux")))]
-    unsafe {
-        use std::os::unix::process::CommandExt;
-        let identity = routed_identity.as_ref().map(|(uid, gid, _)| (*uid, *gid));
-        let nice_adjustment = priority.as_deref().map(|priority| match priority {
-            "low" => 10,
-            "normal" => 0,
-            "high" => -5,
-            "realtime" => -10,
-            _ => 0,
-        });
-        let euid = libc::geteuid() as u32;
-        cmd.pre_exec(move || {
-            if libc::setsid() < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            if let Some((uid, gid)) = identity {
-                if euid == 0
-                    && (libc::setgroups(0, std::ptr::null()) != 0
-                        || libc::setgid(gid) != 0
-                        || libc::setuid(uid) != 0)
-                {
-                    return Err(std::io::Error::last_os_error());
-                }
-            }
-            if let Some(adjustment) = nice_adjustment {
-                let current = libc::getpriority(libc::PRIO_PROCESS, 0);
-                let target = current.saturating_add(adjustment).clamp(-20, 19);
-                if libc::setpriority(libc::PRIO_PROCESS, 0, target) != 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
             }
             Ok(())
         });
@@ -2432,7 +1444,11 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
         app_id: None,
         pending_bind: false,
         start_time_ticks,
-        client: spawned_child_client(&parent_info),
+        client: crate::session::SessionClient::new(
+            crate::session::SessionSource::ChildProcess,
+            false,
+            true,
+        ),
     };
 
     let info_for_registry = info.clone();
@@ -2461,7 +1477,6 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
     if let Some(g) = group {
         result["group"] = json!(g);
     }
-
     if let Some(p) = parent {
         result["parent"] = json!(p);
     }
@@ -2497,20 +1512,15 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
     Ok(result)
 }
 
-fn spawned_child_client(_parent: &SessionInfo) -> crate::session::SessionClient {
-    crate::session::SessionClient::new(crate::session::SessionSource::ChildProcess, false, true)
-}
-
 fn cmd_status(args: &[String]) -> Result<Value, String> {
+    require_or_json(Verb::PROC_OBSERVE, Scope::wild()).map_err(|v| v.to_string())?;
     let sid = args.first().ok_or("usage: cos proc status <session-id>")?;
-    validate_session_identifier(sid)?;
     let mut reg = load_registry();
     let idx = reg
         .sessions
         .iter()
         .position(|s| &s.session_id == sid)
-        .ok_or_else(|| format!("session not found: {sid}"))?;
-    require_or_json(Verb::PROC_OBSERVE, Scope::self_ref(sid)).map_err(|v| v.to_string())?;
+        .ok_or_else(|| session_not_found(sid))?;
 
     let binding = pending_bind_is_fresh(&reg.sessions[idx]);
     let alive = is_alive_for_info(&reg.sessions[idx]);
@@ -2564,8 +1574,8 @@ fn cmd_status(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_output(args: &[String]) -> Result<Value, String> {
+    require_or_json(Verb::PROC_OBSERVE, Scope::wild()).map_err(|v| v.to_string())?;
     let sid = args.first().ok_or("usage: cos proc output <session-id>")?;
-    validate_session_identifier(sid)?;
     let mut tail_lines: Option<usize> = None;
     let mut stream = "both".to_string();
     let mut follow = false;
@@ -2599,8 +1609,7 @@ fn cmd_output(args: &[String]) -> Result<Value, String> {
         .sessions
         .iter()
         .find(|s| &s.session_id == sid)
-        .ok_or_else(|| format!("session not found: {sid}"))?;
-    require_or_json(Verb::PROC_OBSERVE, Scope::self_ref(sid)).map_err(|v| v.to_string())?;
+        .ok_or_else(|| session_not_found(sid))?;
 
     // --since-offset mode: incremental reading from byte offset
     if let Some(offset) = since_offset {
@@ -2665,6 +1674,7 @@ fn cmd_output(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_kill(args: &[String]) -> Result<Value, String> {
+    require_or_json(Verb::PROC_SIGNAL, Scope::wild()).map_err(|v| v.to_string())?;
     // --group mode: kill all sessions in a group
     if args.len() >= 2 && args[0] == "--group" {
         let group_name = &args[1];
@@ -2677,11 +1687,6 @@ fn cmd_kill(args: &[String]) -> Result<Value, String> {
         if group_sessions.is_empty() {
             return Err(format!("no sessions in group: {group_name}"));
         }
-        require_or_json(
-            Verb::PROC_SIGNAL,
-            Scope::self_ref(format!("group:{group_name}")),
-        )
-        .map_err(|v| v.to_string())?;
 
         // Per-leader UID scope check. `kill_process` sends
         // `kill(-pid, SIGTERM)` which fans the signal across the
@@ -2733,16 +1738,14 @@ fn cmd_kill(args: &[String]) -> Result<Value, String> {
     }
 
     let sid = args.first().ok_or("usage: cos proc kill <session-id>")?;
-    validate_session_identifier(sid)?;
     let reg = load_registry();
     let info = reg
         .sessions
         .iter()
         .find(|s| &s.session_id == sid)
-        .ok_or_else(|| format!("session not found: {sid}"))?;
+        .ok_or_else(|| session_not_found(sid))?;
 
     validate_signal_target(info, true)?;
-    require_or_json(Verb::PROC_SIGNAL, Scope::self_ref(sid)).map_err(|v| v.to_string())?;
     kill_process(info.pid)?;
 
     Ok(json!({
@@ -2753,6 +1756,8 @@ fn cmd_kill(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_list(args: &[String]) -> Result<Value, String> {
+    require_or_json(Verb::PROC_OBSERVE, Scope::wild()).map_err(|v| v.to_string())?;
+    let reg = load_registry();
     let mut group_filter: Option<&str> = None;
 
     let mut i = 0;
@@ -2765,12 +1770,6 @@ fn cmd_list(args: &[String]) -> Result<Value, String> {
             _ => i += 1,
         }
     }
-
-    let scope = group_filter
-        .map(|group| Scope::self_ref(format!("group:{group}")))
-        .unwrap_or_else(|| Scope::self_ref("children"));
-    require_or_json(Verb::PROC_OBSERVE, scope).map_err(|v| v.to_string())?;
-    let reg = load_registry();
 
     let infos: Vec<Value> = reg
         .sessions
@@ -2855,6 +1854,7 @@ fn kill_process(pid: u32) -> Result<(), String> {
 }
 
 fn cmd_wait(args: &[String]) -> Result<Value, String> {
+    require_or_json(Verb::PROC_OBSERVE, Scope::wild()).map_err(|v| v.to_string())?;
     let mut timeout: Option<u64> = None;
     let mut group_name: Option<&str> = None;
     let mut session_id: Option<&str> = None;
@@ -2879,14 +1879,6 @@ fn cmd_wait(args: &[String]) -> Result<Value, String> {
         }
     }
 
-    let requested_scope = if let Some(group) = group_name {
-        Scope::self_ref(format!("group:{group}"))
-    } else if let Some(session) = session_id {
-        validate_session_identifier(session)?;
-        Scope::self_ref(session)
-    } else {
-        return Err("usage: cos proc wait <session-id> [--timeout N] or --group <name>".into());
-    };
     let reg = load_registry();
 
     // Collect PIDs and session IDs to wait on
@@ -2901,10 +1893,10 @@ fn cmd_wait(args: &[String]) -> Result<Value, String> {
             .sessions
             .iter()
             .find(|s| s.session_id == sid)
-            .ok_or_else(|| format!("session not found: {sid}"))?;
+            .ok_or_else(|| session_not_found(sid))?;
         vec![(info.session_id.clone(), info.pid)]
     } else {
-        unreachable!("target validation above requires a session or group")
+        return Err("usage: cos proc wait <session-id> [--timeout N] or --group <name>".into());
     };
 
     drop(reg);
@@ -2912,7 +1904,6 @@ fn cmd_wait(args: &[String]) -> Result<Value, String> {
     if targets.is_empty() {
         return Err("no matching sessions to wait on".into());
     }
-    require_or_json(Verb::PROC_OBSERVE, requested_scope).map_err(|v| v.to_string())?;
 
     let start = SystemTime::now();
     let timeout_dur = timeout.map(Duration::from_secs);
@@ -2992,11 +1983,11 @@ fn cmd_wait(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_signal(args: &[String]) -> Result<Value, String> {
+    require_or_json(Verb::PROC_SIGNAL, Scope::wild()).map_err(|v| v.to_string())?;
     if args.len() < 2 {
         return Err("usage: cos proc signal <session-id> <signal-name>".into());
     }
     let sid = &args[0];
-    validate_session_identifier(sid)?;
     let signal_name = args[1].to_uppercase();
 
     let reg = load_registry();
@@ -3004,7 +1995,7 @@ fn cmd_signal(args: &[String]) -> Result<Value, String> {
         .sessions
         .iter()
         .find(|s| &s.session_id == sid)
-        .ok_or_else(|| format!("session not found: {sid}"))?;
+        .ok_or_else(|| session_not_found(sid))?;
 
     let pid = info.pid;
     validate_signal_target(info, false)?;
@@ -3023,7 +2014,6 @@ fn cmd_signal(args: &[String]) -> Result<Value, String> {
                 "unsupported signal: {signal_name}. Supported: TERM, KILL, HUP, USR1, USR2, STOP, CONT"
             )),
         };
-        require_or_json(Verb::PROC_SIGNAL, Scope::self_ref(sid)).map_err(|v| v.to_string())?;
         let ret = unsafe { libc::kill(pid as i32, signum) };
         if ret != 0 {
             return Err(format!(
@@ -3035,7 +2025,6 @@ fn cmd_signal(args: &[String]) -> Result<Value, String> {
 
     #[cfg(not(unix))]
     {
-        require_or_json(Verb::PROC_SIGNAL, Scope::self_ref(sid)).map_err(|v| v.to_string())?;
         match signal_name.as_str() {
             "TERM" | "KILL" => {
                 let _ = Command::new("taskkill")
@@ -3055,15 +2044,14 @@ fn cmd_signal(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_result(args: &[String]) -> Result<Value, String> {
+    require_or_json(Verb::PROC_OBSERVE, Scope::wild()).map_err(|v| v.to_string())?;
     let sid = args.first().ok_or("usage: cos proc result <session-id>")?;
-    validate_session_identifier(sid)?;
     let mut reg = load_registry();
     let idx = reg
         .sessions
         .iter()
         .position(|s| &s.session_id == sid)
-        .ok_or_else(|| format!("session not found: {sid}"))?;
-    require_or_json(Verb::PROC_OBSERVE, Scope::self_ref(sid)).map_err(|v| v.to_string())?;
+        .ok_or_else(|| session_not_found(sid))?;
 
     let binding = pending_bind_is_fresh(&reg.sessions[idx]);
     let alive = is_alive_for_info(&reg.sessions[idx]);
@@ -3148,16 +2136,15 @@ fn cmd_result(args: &[String]) -> Result<Value, String> {
 /// Reads from /proc/<pid>/stat and /proc/<pid>/status on Linux.
 /// Usage: cos proc stats <session-id>
 fn cmd_stats(args: &[String]) -> Result<Value, String> {
+    require_or_json(Verb::PROC_OBSERVE, Scope::wild()).map_err(|v| v.to_string())?;
     let sid = args.first().ok_or("usage: cos proc stats <session-id>")?;
-    validate_session_identifier(sid)?;
 
     let reg = load_registry();
     let info = reg
         .sessions
         .iter()
         .find(|s| &s.session_id == sid)
-        .ok_or_else(|| format!("session not found: {sid}"))?;
-    require_or_json(Verb::PROC_OBSERVE, Scope::self_ref(sid)).map_err(|v| v.to_string())?;
+        .ok_or_else(|| session_not_found(sid))?;
 
     let pid = info.pid;
     let alive = is_alive(pid);
@@ -3256,6 +2243,8 @@ fn cmd_stats(args: &[String]) -> Result<Value, String> {
 ///
 /// Usage: cos proc renice <session-id> --priority low|normal|high|realtime
 fn cmd_renice(args: &[String]) -> Result<Value, String> {
+    require_or_json(Verb::PROC_SIGNAL, Scope::wild()).map_err(|v| v.to_string())?;
+
     let mut session_id: Option<&str> = None;
     let mut priority: Option<String> = None;
 
@@ -3280,7 +2269,6 @@ fn cmd_renice(args: &[String]) -> Result<Value, String> {
     }
 
     let sid = session_id.ok_or("usage: cos proc renice <session-id> --priority <level>")?;
-    validate_session_identifier(sid)?;
     let prio = priority.ok_or("--priority is required")?;
 
     let reg = load_registry();
@@ -3288,13 +2276,12 @@ fn cmd_renice(args: &[String]) -> Result<Value, String> {
         .sessions
         .iter()
         .find(|s| s.session_id == sid)
-        .ok_or_else(|| format!("session not found: {sid}"))?;
+        .ok_or_else(|| session_not_found(sid))?;
 
     let pid = info.pid;
     if !is_alive(pid) {
         return Err(format!("session {sid} is not running"));
     }
-    require_or_json(Verb::PROC_SIGNAL, Scope::self_ref(sid)).map_err(|v| v.to_string())?;
 
     #[cfg(unix)]
     {
