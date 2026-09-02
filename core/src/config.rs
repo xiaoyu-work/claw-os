@@ -233,6 +233,11 @@ pub struct AgentConfig {
     #[serde(default = "default_tool_schema_budget_tokens")]
     pub tool_schema_budget_tokens: u32,
 
+    /// Explicit ids of installed, signed Agent extension packages to activate
+    /// for each supervised task. Installation alone never activates code.
+    #[serde(default)]
+    pub extensions: Vec<String>,
+
     /// Deprecated tool-name approval filter for tools that do not
     /// expose a capability-aware execution boundary. Core proxies that
     /// declare that boundary ignore this coarse prompt and derive
@@ -943,6 +948,7 @@ impl Default for AgentConfig {
             tool_allow: None,
             tool_deny: Vec::new(),
             tool_schema_budget_tokens: default_tool_schema_budget_tokens(),
+            extensions: Vec::new(),
             dangerous_tools: Vec::new(),
             auto_approve_tools: Vec::new(),
             auto_deny_tools: Vec::new(),

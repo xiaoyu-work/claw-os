@@ -7,6 +7,10 @@
 //! lease.
 
 #[cfg(unix)]
+pub mod abi;
+#[cfg(unix)]
+pub(crate) mod agent_extension;
+#[cfg(unix)]
 pub mod broker;
 pub(crate) mod child_isolation;
 #[cfg(unix)]

@@ -9,13 +9,19 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use base64::Engine;
 use cos::caps::{Cap, CapSet, Scope, Verb};
 use cos::extension_host::{broker, client, spawn};
+use ed25519_dalek::{Signer, SigningKey};
 
 const HOST_BIN: &str = env!("CARGO_BIN_EXE_claw-extension-host");
 const APP_RUNNER_BIN: &str = env!("CARGO_BIN_EXE_claw-app-runner");
 const LEAK_MARKER: &str = "COS_EXTENSION_TEST_BROKER_SECRET";
 const TEST_CAPABILITY_GENERATION: &str = "aaaaaaaaaaaaaaaa";
+const TEST_EXTENSION_SEED: [u8; 32] = [
+    0xd4, 0x0f, 0x95, 0xd1, 0xf9, 0x6d, 0x42, 0xac, 0x5e, 0x00, 0x00, 0x4e, 0x04, 0x21, 0xc7, 0x0d,
+    0xd4, 0xf2, 0x91, 0xb4, 0x71, 0x8e, 0x1a, 0x94, 0xf8, 0xe0, 0xd5, 0xee, 0x20, 0xd5, 0x87, 0x1d,
+];
 const TEST_MCP_SERVER: &str = r#"import json
 import sys
 
@@ -54,6 +60,239 @@ for line in sys.stdin:
         result = {}
     print(json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": result}), flush=True)
 "#;
+
+const TEST_AGENT_EXTENSION: &str = r#"#!/usr/bin/python3
+import json
+import os
+import socket
+import struct
+import subprocess
+import sys
+import time
+
+MAGIC = b"CEX1"
+MAX = 65536
+MODE = "__MODE__"
+
+def read_exact(size):
+    data = b""
+    while len(data) < size:
+        part = sys.stdin.buffer.read(size - len(data))
+        if not part:
+            raise EOFError()
+        data += part
+    return data
+
+def read_frame():
+    header = read_exact(10)
+    if header[:4] != MAGIC or header[4] != 1 or header[5] != 0:
+        raise RuntimeError("bad request")
+    length = struct.unpack(">I", header[6:])[0]
+    if length <= 0 or length > MAX:
+        raise RuntimeError("bad length")
+    return json.loads(read_exact(length))
+
+def write_frame(message):
+    body = json.dumps(message, separators=(",", ":")).encode()
+    sys.stdout.buffer.write(MAGIC + bytes([2, 0]) + struct.pack(">I", len(body)) + body)
+    sys.stdout.buffer.flush()
+
+while True:
+    request = read_frame()
+    lifecycle = request["message"]["lifecycle"]
+    if lifecycle == "initialize":
+        selected = 0 if MODE == "downgrade" else 1
+        write_frame({
+            "protocol": selected,
+            "binding": request["binding"],
+            "sequence": request["sequence"],
+            "message": {
+                "lifecycle": "ready",
+                "selected_version": selected,
+                "accepted_features": request["message"]["required_features"],
+            },
+        })
+        if MODE == "downgrade":
+            break
+    elif lifecycle == "event":
+        if MODE == "malformed":
+            sys.stdout.buffer.write(b"BAD!" + bytes([2, 0]) + struct.pack(">I", 2) + b"{}")
+            sys.stdout.buffer.flush()
+            break
+        if MODE == "oversize":
+            sys.stdout.buffer.write(MAGIC + bytes([2, 0]) + struct.pack(">I", MAX + 1))
+            sys.stdout.buffer.flush()
+            break
+        if MODE == "hang":
+            time.sleep(10)
+        if MODE == "crash":
+            os._exit(19)
+        network_blocked = False
+        try:
+            socket.socket().connect(("127.0.0.1", 9))
+        except OSError:
+            network_blocked = True
+        if MODE == "descendant":
+            subprocess.Popen(["/usr/bin/python3", "-c", "import time; time.sleep(60)"])
+        refs = request["message"].get("capability_refs", [])
+        handle = "f" * 64 if MODE == "forged-ref" else (refs[0]["handle"] if refs else "f" * 64)
+        actions = []
+        if MODE in ("normal", "forged-ref"):
+            actions = [{
+                "action_id": "notify",
+                "capability_ref": {"requested_index": 0, "handle": handle},
+                "tool": "echo",
+                "input": {"text": "extension action"},
+            }]
+        output = json.dumps({
+            "mode": MODE,
+            "broker_env": os.environ.get("COS_EXTENSION_BROKER_SOCKET"),
+            "registry_env": os.environ.get("COS_PROC_DATA_DIR"),
+            "secret_env": os.environ.get("COS_EXTENSION_TEST_BROKER_SECRET"),
+            "network_blocked": network_blocked,
+            "host_root_absent": not os.path.exists("/root/.ssh"),
+        }, separators=(",", ":"))
+        write_frame({
+            "protocol": 1,
+            "binding": request["binding"],
+            "sequence": request["sequence"],
+            "message": {
+                "lifecycle": "result",
+                "event_id": request["message"]["event_id"],
+                "output": output,
+                "proposed_actions": actions,
+            },
+        })
+    elif lifecycle == "shutdown":
+        write_frame({
+            "protocol": 1,
+            "binding": request["binding"],
+            "sequence": request["sequence"],
+            "message": {"lifecycle": "shutdown-ack"},
+        })
+        break
+"#;
+
+fn signed_agent_extension(
+    id: &str,
+    mode: &str,
+    timeout_ms: u64,
+) -> (
+    cos::extension_host::protocol::AgentExtensionRegistration,
+    cos::provenance::PackageSnapshot,
+) {
+    let entry = TEST_AGENT_EXTENSION.replace("__MODE__", mode).into_bytes();
+    let content_file = cos::provenance::SignedFile {
+        path: "bin/observer.py".to_string(),
+        sha256: cos::crypto::sha256_hex(&entry),
+        size: entry.len() as u64,
+        executable: true,
+    };
+    let content_digest = cos::provenance::package_digest(std::slice::from_ref(&content_file));
+    let manifest = serde_json::json!({
+        "schema_version": 1,
+        "identity": {
+            "id": id,
+            "version": "1.0.0",
+            "content_digest": content_digest,
+        },
+        "entry": "bin/observer.py",
+        "protocol": {
+            "min_version": 1,
+            "max_version": 1,
+            "required_features": ["observational-events", "proposed-actions"],
+        },
+        "subscriptions": ["session-start"],
+        "requested_capabilities": [{
+            "verb": "ui.notify",
+            "scope": {"kind": "wild"},
+        }],
+        "limits": {
+            "event_timeout_ms": timeout_ms,
+            "queue_capacity": 2,
+            "max_output_bytes": 4096,
+            "max_actions_per_event": 1,
+            "max_in_flight": 1,
+        },
+    });
+    let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
+    let files = vec![
+        content_file,
+        cos::provenance::SignedFile {
+            path: "extension.json".to_string(),
+            sha256: cos::crypto::sha256_hex(&manifest_bytes),
+            size: manifest_bytes.len() as u64,
+            executable: false,
+        },
+    ];
+    let mut provenance = cos::provenance::PackageProvenance {
+        schema_version: 1,
+        kind: cos::provenance::PackageKind::AgentExtension,
+        publisher: "claw-os-test".to_string(),
+        key_id: "debug-1".to_string(),
+        package_id: id.to_string(),
+        package_version: "1.0.0".to_string(),
+        package_digest: cos::provenance::package_digest(&files),
+        files,
+        signature: "0".repeat(128),
+    };
+    provenance.signature = hex::encode(
+        SigningKey::from_bytes(&TEST_EXTENSION_SEED)
+            .sign(&cos::provenance::signing_input(&provenance))
+            .to_bytes(),
+    );
+    let manifest_digest = cos::crypto::sha256_hex(&manifest_bytes);
+    (
+        cos::extension_host::protocol::AgentExtensionRegistration {
+            extension_id: id.to_string(),
+            extension_version: "1.0.0".to_string(),
+            package_digest: provenance.package_digest.clone(),
+            manifest_digest,
+            content_digest,
+        },
+        cos::provenance::PackageSnapshot {
+            provenance,
+            files: vec![
+                cos::provenance::SnapshotFile {
+                    path: "bin/observer.py".to_string(),
+                    executable: true,
+                    bytes_base64: base64::engine::general_purpose::STANDARD.encode(entry),
+                },
+                cos::provenance::SnapshotFile {
+                    path: "extension.json".to_string(),
+                    executable: false,
+                    bytes_base64: base64::engine::general_purpose::STANDARD.encode(manifest_bytes),
+                },
+            ],
+        },
+    )
+}
+
+fn install_snapshot(root: &std::path::Path, snapshot: &cos::provenance::PackageSnapshot) {
+    let package = root.join(&snapshot.provenance.package_id);
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::set_permissions(&package, std::fs::Permissions::from_mode(0o755)).unwrap();
+    for file in &snapshot.files {
+        let path = package.join(&file.path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&file.bytes_base64)
+            .unwrap();
+        std::fs::write(&path, bytes).unwrap();
+        std::fs::set_permissions(
+            &path,
+            std::fs::Permissions::from_mode(if file.executable { 0o555 } else { 0o444 }),
+        )
+        .unwrap();
+    }
+    let provenance = package.join("provenance.json");
+    std::fs::write(
+        &provenance,
+        serde_json::to_vec(&snapshot.provenance).unwrap(),
+    )
+    .unwrap();
+    std::fs::set_permissions(&provenance, std::fs::Permissions::from_mode(0o444)).unwrap();
+}
 
 fn env_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: Mutex<()> = Mutex::new(());
@@ -112,11 +351,7 @@ impl TestEnvironment {
             .unwrap_or_else(|| HOST_BIN.into());
         let host_bin = runtime.path().join("claw-extension-host");
         std::fs::copy(host_source, &host_bin).ok()?;
-        std::fs::set_permissions(
-            &host_bin,
-            std::fs::Permissions::from_mode(0o755),
-        )
-        .ok()?;
+        std::fs::set_permissions(&host_bin, std::fs::Permissions::from_mode(0o755)).ok()?;
         let app_runner = runtime.path().join("claw-app-runner");
         std::fs::copy(APP_RUNNER_BIN, &app_runner).ok()?;
         if !std::process::Command::new("strip")
@@ -162,32 +397,32 @@ impl TestEnvironment {
 }
 
 fn make_owner_writable(path: &std::path::Path, uid: u32, gid: u32) -> std::io::Result<()> {
-        use std::os::unix::ffi::OsStrExt;
-        use std::os::unix::fs::PermissionsExt;
-        let raw = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
-        if unsafe { libc::chown(raw.as_ptr(), uid, gid) } != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o770))
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::PermissionsExt;
+    let raw = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+    if unsafe { libc::chown(raw.as_ptr(), uid, gid) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o770))
 }
 
 fn make_root_readable(path: &std::path::Path) -> std::io::Result<()> {
-        use std::os::unix::fs::PermissionsExt;
-        let metadata = std::fs::symlink_metadata(path)?;
-        if metadata.is_dir() {
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))?;
-            for entry in std::fs::read_dir(path)? {
-                make_root_readable(&entry?.path())?;
-            }
-        } else {
-            let mode = if metadata.permissions().mode() & 0o111 != 0 {
-                0o555
-            } else {
-                0o444
-            };
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))?;
+    use std::os::unix::fs::PermissionsExt;
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata.is_dir() {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))?;
+        for entry in std::fs::read_dir(path)? {
+            make_root_readable(&entry?.path())?;
         }
-        Ok(())
+    } else {
+        let mode = if metadata.permissions().mode() & 0o111 != 0 {
+            0o555
+        } else {
+            0o444
+        };
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))?;
+    }
+    Ok(())
 }
 
 fn write_mcp_server(root: &std::path::Path) -> PathBuf {
@@ -297,6 +532,31 @@ fn process_start(pid: u32) -> Option<u64> {
         .ok()
 }
 
+async fn send_agent_extension_probe(
+    host: &client::ExtensionHostClient,
+    id: &str,
+    binding: cos::extension_host::abi::AbiBinding,
+    handle: String,
+    timeout: Duration,
+) -> Result<cos::extension_host::protocol::AgentExtensionResult, String> {
+    host.send_agent_extension_event(
+        id.to_string(),
+        binding,
+        uuid::Uuid::new_v4().simple().to_string(),
+        cos::extension_host::abi::EventPayload::SessionStart {
+            source: "boundary-test".to_string(),
+            attended: false,
+            delegated: false,
+        },
+        vec![cos::agent_extensions::capability_ref::CapabilityReference {
+            requested_index: 0,
+            handle,
+        }],
+        timeout,
+    )
+    .await
+}
+
 async fn worker_child() {
     let binding_path = PathBuf::from(std::env::var("COS_EXTENSION_BOUNDARY_BINDING").unwrap());
     let replay = std::env::var("COS_EXTENSION_BOUNDARY_MODE").as_deref() == Ok("replay");
@@ -392,11 +652,8 @@ async fn worker_child() {
         .await
         .expect("attach hosted MCP");
     let descriptor_digest =
-        cos::agent::tools::mcp::integration::sanitized_descriptor_digest_for_test(
-            mcp_name,
-            tools,
-        )
-        .expect("descriptor digest");
+        cos::agent::tools::mcp::integration::sanitized_descriptor_digest_for_test(mcp_name, tools)
+            .expect("descriptor digest");
     let audit = cos::extension_host::protocol::McpInvocationAudit {
         policy_identity: "mcp_hosted_echo_ping".to_string(),
         server_identity: mcp_name.to_string(),
@@ -426,6 +683,199 @@ async fn worker_child() {
         .detach_mcp(mcp_name.to_string())
         .await
         .expect("detach hosted MCP"));
+
+    let (registration, package) = signed_agent_extension("observer", "normal", 1000);
+    let mut drift = registration.clone();
+    drift.manifest_digest = "f".repeat(64);
+    let drift_error = client
+        .attach_agent_extension(drift, package.clone())
+        .await
+        .expect_err("manifest drift must fail");
+    assert!(drift_error.contains("registration"), "{drift_error}");
+
+    let binding = client
+        .attach_agent_extension(registration.clone(), package)
+        .await
+        .expect("attach generic Agent extension");
+    let refs = cos::agent_extensions::capability_ref::CapabilityReferenceStore::default();
+    let expires_at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+        + 1000;
+    let reference_context = cos::agent_extensions::capability_ref::ReferenceContext {
+        owner_uid: binding.owner_uid,
+        session_id: &binding.session_id,
+        task_id: &binding.task_id,
+        extension_id: &binding.extension_id,
+        manifest_digest: &binding.manifest_digest,
+        capability_generation: &binding.capability_generation,
+        event_id: "normal-event",
+        expires_at_ms,
+    };
+    let issued = refs
+        .issue(&reference_context, &[Cap::unscoped(Verb::UI_NOTIFY)])
+        .expect("issue capability reference");
+    let result = client
+        .send_agent_extension_event(
+            "observer".to_string(),
+            binding.clone(),
+            "normal-event".to_string(),
+            cos::extension_host::abi::EventPayload::SessionStart {
+                source: "boundary-test".to_string(),
+                attended: false,
+                delegated: false,
+            },
+            issued,
+            Duration::from_secs(2),
+        )
+        .await
+        .expect("observe session start");
+    let output: serde_json::Value =
+        serde_json::from_str(result.output.as_deref().expect("bounded output")).unwrap();
+    assert!(output["broker_env"].is_null(), "{output}");
+    assert!(output["registry_env"].is_null(), "{output}");
+    assert!(output["secret_env"].is_null(), "{output}");
+    assert_eq!(output["network_blocked"], true);
+    assert_eq!(output["host_root_absent"], true);
+    let action = result
+        .proposed_actions
+        .first()
+        .expect("explicit proposed action");
+    assert_eq!(
+        refs.consume(&reference_context, &action.capability_ref)
+            .expect("resolve exact reference"),
+        Cap::unscoped(Verb::UI_NOTIFY)
+    );
+    assert!(refs
+        .consume(&reference_context, &action.capability_ref)
+        .expect_err("reference replay must fail")
+        .contains("invalid or expired"));
+
+    let mut cross_session_binding = binding.clone();
+    cross_session_binding.session_id = "other-session".to_string();
+    let cross_session = send_agent_extension_probe(
+        &client,
+        "observer",
+        cross_session_binding,
+        "a".repeat(64),
+        Duration::from_secs(2),
+    )
+    .await
+    .expect_err("cross-session event must fail");
+    assert!(cross_session.contains("binding"), "{cross_session}");
+
+    let (downgrade_registration, downgrade_package) =
+        signed_agent_extension("downgrade", "downgrade", 500);
+    let downgrade = client
+        .attach_agent_extension(downgrade_registration, downgrade_package)
+        .await
+        .expect_err("protocol downgrade must fail");
+    assert!(downgrade.contains("downgrade"), "{downgrade}");
+
+    let (steady_registration, steady_package) = signed_agent_extension("steady", "normal", 1000);
+    let steady = client
+        .attach_agent_extension(steady_registration, steady_package)
+        .await
+        .expect("attach unaffected extension");
+    for (id, mode) in [
+        ("malformed", "malformed"),
+        ("oversize", "oversize"),
+        ("hung", "hang"),
+        ("crashed", "crash"),
+    ] {
+        let (registration, package) = signed_agent_extension(id, mode, 200);
+        let hostile = client
+            .attach_agent_extension(registration, package)
+            .await
+            .unwrap_or_else(|error| panic!("attach {mode}: {error}"));
+        let error = send_agent_extension_probe(
+            &client,
+            id,
+            hostile,
+            "b".repeat(64),
+            Duration::from_secs(2),
+        )
+        .await
+        .expect_err("hostile extension event must fail");
+        assert!(
+            error.contains("ABI")
+                || error.contains("timed out")
+                || error.contains("header")
+                || error.contains("body"),
+            "{mode}: {error}"
+        );
+        send_agent_extension_probe(
+            &client,
+            "steady",
+            steady.clone(),
+            "c".repeat(64),
+            Duration::from_secs(2),
+        )
+        .await
+        .unwrap_or_else(|error| panic!("hostile {mode} affected steady extension: {error}"));
+    }
+
+    let (forged_registration, forged_package) =
+        signed_agent_extension("forged", "forged-ref", 1000);
+    let forged_binding = client
+        .attach_agent_extension(forged_registration, forged_package)
+        .await
+        .expect("attach forged-ref probe");
+    let forged = send_agent_extension_probe(
+        &client,
+        "forged",
+        forged_binding.clone(),
+        "d".repeat(64),
+        Duration::from_secs(2),
+    )
+    .await
+    .expect("receive forged proposal");
+    let forged_action = forged.proposed_actions.first().expect("forged action");
+    assert!(refs
+        .consume(&reference_context, &forged_action.capability_ref)
+        .expect_err("forged secret/capability reference must fail")
+        .contains("invalid or expired"));
+    client
+        .detach_agent_extension(
+            "forged".to_string(),
+            forged_binding,
+            cos::extension_host::abi::ShutdownReason::Disabled,
+        )
+        .await
+        .expect("detach forged probe");
+
+    let (descendant_registration, descendant_package) =
+        signed_agent_extension("descendant", "descendant", 1000);
+    let descendant_binding = client
+        .attach_agent_extension(descendant_registration, descendant_package)
+        .await
+        .expect("attach descendant probe");
+    send_agent_extension_probe(
+        &client,
+        "descendant",
+        descendant_binding.clone(),
+        "e".repeat(64),
+        Duration::from_secs(2),
+    )
+    .await
+    .expect("spawn extension descendant");
+    client
+        .detach_agent_extension(
+            "descendant".to_string(),
+            descendant_binding,
+            cos::extension_host::abi::ShutdownReason::TaskComplete,
+        )
+        .await
+        .expect("detach descendant probe");
+    client
+        .detach_agent_extension(
+            "steady".to_string(),
+            steady,
+            cos::extension_host::abi::ShutdownReason::TaskComplete,
+        )
+        .await
+        .expect("detach steady extension");
 }
 
 fn worker_command(
@@ -497,6 +947,20 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
         cos::apps::find(env._apps.path(), "echo-app").is_some(),
         "echo App fixture is not discoverable"
     );
+    let installed_root = env._runtime.path().join("installed-extensions");
+    std::fs::create_dir(&installed_root).expect("create installed extension root");
+    std::fs::set_permissions(&installed_root, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let (_, installed_snapshot) = signed_agent_extension("installed-observer", "normal", 1000);
+    install_snapshot(&installed_root, &installed_snapshot);
+    let installed = cos::agent_extensions::registry::ExtensionRegistry::load_selected(
+        &installed_root,
+        &["installed-observer".to_string()],
+    );
+    assert!(
+        installed.registered.contains_key("installed-observer"),
+        "root-owned signed installed package did not register: {:?}",
+        installed.quarantined
+    );
     let binding_path = env._sync.path().join("binding.json");
     let worker = worker_command(&identity, execution_gid, &binding_path, &env, "run")
         .spawn()
@@ -514,18 +978,14 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
         std::os::unix::net::UnixListener::bind(&primary_path).expect("primary broker fixture");
     std::fs::set_permissions(&primary_path, std::fs::Permissions::from_mode(0o660))
         .expect("protect primary broker fixture");
-    let primary_raw =
-        std::ffi::CString::new(primary_path.to_string_lossy().as_bytes()).unwrap();
+    let primary_raw = std::ffi::CString::new(primary_path.to_string_lossy().as_bytes()).unwrap();
     assert_eq!(
         unsafe { libc::chown(primary_raw.as_ptr(), 0, identity.gid) },
         0
     );
-    let isolation = cos::agentd::spawn::ExecutionIsolation::capture(
-        &primary_path,
-        identity.uid,
-        execution_gid,
-    )
-    .expect("capture execution isolation");
+    let isolation =
+        cos::agentd::spawn::ExecutionIsolation::capture(&primary_path, identity.uid, execution_gid)
+            .expect("capture execution isolation");
     let paths = spawn::HostPaths::create(&identity).expect("host paths");
     let listener =
         broker::bind_listener(&paths, extension_identity.uid, execution_gid).expect("listener");
@@ -561,33 +1021,36 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
     .expect("spawn host");
 
     let caps = CapSet::from_caps([Cap::new(Verb::AGENT_INVOKE, Scope::name("echo-app"))]);
-    cos::proc::register_session_for_owner(cos::proc::SessionInfo {
-        session_id: host_session.to_string(),
-        pid: host.pid,
-        command: vec!["claw-extension-host".to_string()],
-        started_at: chrono::Utc::now().to_rfc3339(),
-        stdout_path: String::new(),
-        stderr_path: String::new(),
-        group: Some(cos::extension_host::protocol::EXTENSION_HOST_GROUP.to_string()),
-        parent: Some(task_session.to_string()),
-        workdir: Some(identity.home.to_string_lossy().into_owned()),
-        exit_code: None,
-        ended_at: None,
-        tier: None,
-        scope: None,
-        priority: None,
-        caps: Some(caps),
-        transient_caps: None,
-        role: Some("worker".to_string()),
-        app_id: None,
-        pending_bind: false,
-        start_time_ticks: host.start_time_ticks,
-        client: cos::session::SessionClient::new(
-            cos::session::SessionSource::BrokerTask,
-            false,
-            true,
-        ),
-    }, uid)
+    cos::proc::register_session_for_owner(
+        cos::proc::SessionInfo {
+            session_id: host_session.to_string(),
+            pid: host.pid,
+            command: vec!["claw-extension-host".to_string()],
+            started_at: chrono::Utc::now().to_rfc3339(),
+            stdout_path: String::new(),
+            stderr_path: String::new(),
+            group: Some(cos::extension_host::protocol::EXTENSION_HOST_GROUP.to_string()),
+            parent: Some(task_session.to_string()),
+            workdir: Some(identity.home.to_string_lossy().into_owned()),
+            exit_code: None,
+            ended_at: None,
+            tier: None,
+            scope: None,
+            priority: None,
+            caps: Some(caps),
+            transient_caps: None,
+            role: Some("worker".to_string()),
+            app_id: None,
+            pending_bind: false,
+            start_time_ticks: host.start_time_ticks,
+            client: cos::session::SessionClient::new(
+                cos::session::SessionSource::BrokerTask,
+                false,
+                true,
+            ),
+        },
+        uid,
+    )
     .expect("register host session");
     let lease = Arc::new(broker::ExtensionLease::new(
         task_id.to_string(),
@@ -624,8 +1087,8 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
         .await
         .expect("worker boundary timed out")
         .expect("wait worker boundary");
-    let audit = std::fs::read_to_string(env._data.path().join("clawd/audit.jsonl"))
-        .unwrap_or_default();
+    let audit =
+        std::fs::read_to_string(env._data.path().join("clawd/audit.jsonl")).unwrap_or_default();
     assert!(
         output.status.success(),
         "worker stdout:\n{}\nworker stderr:\n{}\naudit:\n{}",

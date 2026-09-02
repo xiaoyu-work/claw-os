@@ -10,6 +10,7 @@
 )]
 
 pub mod agent;
+pub mod agent_extensions;
 pub mod agentd;
 pub mod ai;
 pub mod approvals;
@@ -37,6 +38,7 @@ pub mod paths;
 pub mod perms;
 pub mod policy;
 pub mod proc;
+pub mod provenance;
 pub mod router;
 pub mod mem_bridge;
 pub mod sandbox;

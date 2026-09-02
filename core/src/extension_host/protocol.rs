@@ -5,7 +5,7 @@ use crate::agent::tools::mcp::integration::McpServerSpec;
 use crate::agent::tools::mcp::protocol::{CallToolResult, ToolDescriptor};
 use crate::clawd::wire::RequestId;
 
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 pub const MAX_CONTROL_FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_CONTROL_CONNECTIONS: usize = 8;
 pub const MAX_REQUEST_TIMEOUT_MS: u64 = 180_000;
@@ -64,8 +64,7 @@ impl HostBootstrap {
         let Some(worker_start_time_ticks) = self.worker_start_time_ticks else {
             return Err("extension-host bootstrap omitted worker start time".to_string());
         };
-        if crate::proc::read_start_time_ticks_pub(self.worker_pid)
-            != Some(worker_start_time_ticks)
+        if crate::proc::read_start_time_ticks_pub(self.worker_pid) != Some(worker_start_time_ticks)
         {
             return Err("extension-host bootstrap worker identity is stale".to_string());
         }
@@ -99,13 +98,20 @@ pub enum ExtensionKind {
     Host,
     App,
     Mcp,
+    AgentExtension,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum LifecycleAction {
     Attach,
+    Initialize,
     Ready,
+    Event,
+    Result,
+    BackpressureDrop,
+    Disable,
+    Action,
     Call,
     Cancel,
     Crash,
@@ -114,6 +120,7 @@ pub enum LifecycleAction {
     RemoteCallFailure,
     Timeout,
     Detach,
+    Shutdown,
     TaskComplete,
 }
 
@@ -181,7 +188,13 @@ impl LifecycleAction {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Attach => "attach",
+            Self::Initialize => "initialize",
             Self::Ready => "ready",
+            Self::Event => "event",
+            Self::Result => "result",
+            Self::BackpressureDrop => "backpressure-drop",
+            Self::Disable => "disable",
+            Self::Action => "action",
             Self::Call => "call",
             Self::Cancel => "cancel",
             Self::Crash => "crash",
@@ -190,6 +203,7 @@ impl LifecycleAction {
             Self::RemoteCallFailure => "remote-call-failure",
             Self::Timeout => "timeout",
             Self::Detach => "detach",
+            Self::Shutdown => "shutdown",
             Self::TaskComplete => "task-complete",
         }
     }
@@ -212,7 +226,121 @@ impl ExtensionKind {
             Self::Host => "host",
             Self::App => "app",
             Self::Mcp => "mcp",
+            Self::AgentExtension => "agent-extension",
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentExtensionRegistration {
+    pub extension_id: String,
+    pub extension_version: String,
+    pub package_digest: String,
+    pub manifest_digest: String,
+    pub content_digest: String,
+}
+
+impl AgentExtensionRegistration {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.extension_id.is_empty()
+            || self.extension_id.len() > 128
+            || !self.extension_id.bytes().all(|byte| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || matches!(byte, b'-' | b'_' | b'.')
+            })
+            || semver::Version::parse(&self.extension_version)
+                .map(|version| version.to_string() != self.extension_version)
+                .unwrap_or(true)
+        {
+            return Err("Agent extension registration identity is invalid".to_string());
+        }
+        for digest in [
+            &self.package_digest,
+            &self.manifest_digest,
+            &self.content_digest,
+        ] {
+            if digest.len() != 64
+                || !digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            {
+                return Err("Agent extension registration digest is invalid".to_string());
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentExtensionResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<String>,
+    #[serde(default)]
+    pub proposed_actions: Vec<super::abi::ProposedAction>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentExtensionAudit {
+    pub package_digest: String,
+    pub capability_generation: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_kind: Option<crate::agent_extensions::manifest::EventKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<crate::audit_policy::TextDigest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<crate::audit_policy::TextDigest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action_id: Option<crate::audit_policy::TextDigest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability_ref: Option<crate::audit_policy::TextDigest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue_depth: Option<usize>,
+}
+
+impl AgentExtensionAudit {
+    pub fn validate(&self) -> Result<(), String> {
+        for (digest, len) in [
+            (&self.package_digest, 64),
+            (&self.capability_generation, 16),
+        ] {
+            if digest.len() != len
+                || !digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            {
+                return Err("Agent extension audit digest is invalid".to_string());
+            }
+        }
+        if self.tool.as_ref().is_some_and(|tool| {
+            tool.is_empty()
+                || tool.len() > 128
+                || !tool
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        }) || self.queue_depth.is_some_and(|depth| depth > 32)
+        {
+            return Err("Agent extension audit metadata is invalid".to_string());
+        }
+        for text in [
+            self.event_id.as_ref(),
+            self.output.as_ref(),
+            self.action_id.as_ref(),
+            self.capability_ref.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if text.bytes > 64 * 1024 || text.digest.is_empty() {
+                return Err("Agent extension audit text digest is invalid".to_string());
+            }
+        }
+        Ok(())
     }
 }
 
@@ -410,6 +538,22 @@ pub enum HostAction {
     McpDetach {
         server: String,
     },
+    AgentExtensionAttach {
+        registration: AgentExtensionRegistration,
+        package: crate::provenance::PackageSnapshot,
+    },
+    AgentExtensionEvent {
+        extension_id: String,
+        binding: super::abi::AbiBinding,
+        event_id: String,
+        payload: super::abi::EventPayload,
+        capability_refs: Vec<crate::agent_extensions::capability_ref::CapabilityReference>,
+    },
+    AgentExtensionDetach {
+        extension_id: String,
+        binding: super::abi::AbiBinding,
+        reason: super::abi::ShutdownReason,
+    },
     Cancel {
         request_id: RequestId,
     },
@@ -488,6 +632,15 @@ pub enum HostResult {
         value: CallToolResult,
     },
     McpDetached {
+        detached: bool,
+    },
+    AgentExtensionReady {
+        binding: Box<super::abi::AbiBinding>,
+    },
+    AgentExtensionEvent {
+        value: AgentExtensionResult,
+    },
+    AgentExtensionDetached {
         detached: bool,
     },
     Cancelled,

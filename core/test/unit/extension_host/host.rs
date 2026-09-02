@@ -46,6 +46,8 @@ fn state() -> HostState {
         recent: Mutex::new(VecDeque::new()),
         active: Mutex::new(HashMap::new()),
         mcp: tokio::sync::Mutex::new(HashMap::new()),
+        agent_extensions: tokio::sync::Mutex::new(HashMap::new()),
+        agent_extension_spawn: tokio::sync::Mutex::new(()),
         shutting_down: AtomicBool::new(false),
         fatal_shutdown: AtomicBool::new(false),
         shutdown: Notify::new(),

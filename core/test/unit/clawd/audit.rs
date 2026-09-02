@@ -45,6 +45,14 @@ fn mcp_lifecycle_audit_is_exact_without_remote_text_or_arguments() {
         descriptor_digest: Some("descriptor-ref".to_string()),
         capability_generation: Some("generation-ref".to_string()),
         untrusted_remote_name: Some(audit_policy::text_digest(remote_name)),
+        package_digest: None,
+        event_kind: None,
+        event_id: None,
+        output: None,
+        action_id: None,
+        tool: None,
+        capability_ref: None,
+        queue_depth: None,
         manifest_digest: Some("manifest-ref".to_string()),
         success: false,
         latency_ms: 2,
@@ -57,6 +65,47 @@ fn mcp_lifecycle_audit_is_exact_without_remote_text_or_arguments() {
     assert_eq!(value["policy_identity"], "mcp_server_tool");
     assert_eq!(value["stage"], "gateway");
     assert!(value["untrusted_remote_name"]["digest"].is_string());
+}
+
+#[test]
+fn agent_extension_output_and_capability_references_are_digest_only() {
+    let output = "untrusted extension output ya29.oauth-access-token";
+    let capability_ref = "d34db33f-launch-handle";
+    let record = WorkerExtensionAudit {
+        ts: Utc::now(),
+        event: "clawd.agent.extension.lifecycle",
+        job_id: "task-a",
+        owner_uid: 1000,
+        session_id: "session-a".to_string(),
+        kind: "agent-extension",
+        action: "action",
+        extension_id: "observer".to_string(),
+        binding_digest: "binding-ref".to_string(),
+        lease_digest: "lease-ref".to_string(),
+        stage: None,
+        policy_identity: None,
+        server_identity: None,
+        handle_digest: None,
+        descriptor_digest: None,
+        capability_generation: None,
+        untrusted_remote_name: None,
+        package_digest: Some("package-ref".to_string()),
+        event_kind: Some("post-tool"),
+        event_id: Some(audit_policy::text_digest("event-a")),
+        output: Some(audit_policy::text_digest(output)),
+        action_id: Some(audit_policy::text_digest("action-a")),
+        tool: Some("cos_notify".to_string()),
+        capability_ref: Some(audit_policy::text_digest(capability_ref)),
+        queue_depth: None,
+        manifest_digest: Some("manifest-ref".to_string()),
+        success: true,
+        latency_ms: 3,
+        error: None,
+    };
+    let rendered = serde_json::to_string(&record).unwrap();
+    assert!(!rendered.contains(output), "{rendered}");
+    assert!(!rendered.contains(capability_ref), "{rendered}");
+    assert!(rendered.contains("\"digest\""), "{rendered}");
 }
 
 fn request_audit(command: &str, params: Value, response: &Response) -> String {

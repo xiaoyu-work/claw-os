@@ -136,6 +136,35 @@ fn allows_when_session_caps_cover_request() {
     assert!(require(Verb::FS_READ, Scope::path("/home/jay/notes.md")).is_ok());
 }
 
+#[tokio::test]
+async fn extension_capability_ceiling_can_only_attenuate_session_authority() {
+    let _lock = env_lock();
+    let caps = r#"[
+      {"verb":"fs.read","scope":{"kind":"path","value":"/home/jay/**"}},
+      {"verb":"fs.delete","scope":{"kind":"path","value":"/home/jay/**"}}
+    ]"#;
+    let reg = registry_with_caps("s1", caps);
+    let _g = EnvGuard::new(&reg, Some("s1"), Some("strict"));
+    let ceiling = CapSet::from_caps([Cap::new(
+        Verb::FS_READ,
+        Scope::path("/home/jay/docs/**"),
+    )]);
+    with_capability_ceiling(ceiling, async {
+        assert!(require(
+            Verb::FS_READ,
+            Scope::path("/home/jay/docs/note.md")
+        )
+        .is_ok());
+        let outside = require(Verb::FS_READ, Scope::path("/home/jay/private")).unwrap_err();
+        assert!(matches!(outside.reason, DenialReason::ScopeOutOfRange));
+        let wrong_verb =
+            require(Verb::FS_DELETE, Scope::path("/home/jay/docs/note.md")).unwrap_err();
+        assert!(matches!(wrong_verb.reason, DenialReason::ScopeOutOfRange));
+        assert!(wrong_verb.approval.is_none());
+    })
+    .await;
+}
+
 #[test]
 fn denies_with_scope_out_of_range_when_verb_held_but_path_outside() {
     let _lock = env_lock();

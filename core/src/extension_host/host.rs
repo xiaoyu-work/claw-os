@@ -47,6 +47,10 @@ struct HostState {
     recent: Mutex<VecDeque<String>>,
     active: Mutex<HashMap<String, tokio::task::AbortHandle>>,
     mcp: tokio::sync::Mutex<HashMap<String, HostedMcp>>,
+    agent_extensions: tokio::sync::Mutex<
+        HashMap<String, Arc<tokio::sync::Mutex<super::agent_extension::HostedAgentExtension>>>,
+    >,
+    agent_extension_spawn: tokio::sync::Mutex<()>,
     shutting_down: AtomicBool,
     fatal_shutdown: AtomicBool,
     shutdown: Notify,
@@ -78,11 +82,7 @@ fn run() -> Result<(), String> {
     let bootstrap = read_bootstrap()?;
     let enforce_groups = bootstrap.enforce_groups;
     let binding = bootstrap.into_current_binding()?;
-    require_hardened_identity(
-        binding.extension_uid,
-        binding.owner_gid,
-        enforce_groups,
-    )?;
+    require_hardened_identity(binding.extension_uid, binding.owner_gid, enforce_groups)?;
     let isolation = super::child_isolation::IsolationAuthority::from_binding(&binding)?;
     let control_socket = PathBuf::from(&binding.control_socket);
 
@@ -117,6 +117,8 @@ fn run() -> Result<(), String> {
             recent: Mutex::new(VecDeque::new()),
             active: Mutex::new(HashMap::new()),
             mcp: tokio::sync::Mutex::new(HashMap::new()),
+            agent_extensions: tokio::sync::Mutex::new(HashMap::new()),
+            agent_extension_spawn: tokio::sync::Mutex::new(()),
             shutting_down: AtomicBool::new(false),
             fatal_shutdown: AtomicBool::new(false),
             shutdown: Notify::new(),
@@ -152,6 +154,20 @@ fn run() -> Result<(), String> {
         }
         crate::agent::tools::cos_apps_session::host_close_all_sessions().await;
         state.mcp.lock().await.clear();
+        let extensions = state
+            .agent_extensions
+            .lock()
+            .await
+            .drain()
+            .map(|(_, extension)| extension)
+            .collect::<Vec<_>>();
+        for extension in extensions {
+            let _ = extension
+                .lock()
+                .await
+                .shutdown(super::abi::ShutdownReason::TaskComplete)
+                .await;
+        }
         let _ = std::fs::remove_file(&control_socket);
         if state.fatal_shutdown.load(Ordering::SeqCst) {
             unsafe {
@@ -378,12 +394,7 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
             let isolation = state.isolation.clone();
             let output = tokio::task::spawn_blocking(move || {
                 crate::bridge::run_app_with_isolation(
-                    &app_dir,
-                    &command,
-                    &args,
-                    &data,
-                    &apps,
-                    isolation,
+                    &app_dir, &command, &args, &data, &apps, isolation,
                 )
             })
             .await
@@ -398,11 +409,9 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
         }
         HostAction::AppOpen { app_id } => {
             validate_name(&app_id, "App id")?;
-            let tool_count = crate::agent::tools::cos_apps_session::host_open_session(
-                &app_id,
-                &state.isolation,
-            )
-            .await?;
+            let tool_count =
+                crate::agent::tools::cos_apps_session::host_open_session(&app_id, &state.isolation)
+                    .await?;
             Ok(HostResult::AppOpened { tool_count })
         }
         HostAction::AppCall {
@@ -436,24 +445,137 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
             descriptor_digest,
             audit,
             arguments,
-        } => call_mcp(
-            &server,
-            &tool,
-            &descriptor_digest,
-            &audit,
-            arguments,
-            &state,
-        )
-        .await,
+        } => {
+            call_mcp(
+                &server,
+                &tool,
+                &descriptor_digest,
+                &audit,
+                arguments,
+                &state,
+            )
+            .await
+        }
         HostAction::McpDetach { server } => {
             validate_name(&server, "MCP server")?;
             let detached = state.mcp.lock().await.remove(&server).is_some();
             Ok(HostResult::McpDetached { detached })
         }
+        HostAction::AgentExtensionAttach {
+            registration,
+            package,
+        } => attach_agent_extension(registration, package, &state).await,
+        HostAction::AgentExtensionEvent {
+            extension_id,
+            binding,
+            event_id,
+            payload,
+            capability_refs,
+        } => {
+            validate_name(&extension_id, "Agent extension")?;
+            let extension = state
+                .agent_extensions
+                .lock()
+                .await
+                .get(&extension_id)
+                .cloned()
+                .ok_or_else(|| format!("Agent extension `{extension_id}` is not attached"))?;
+            let result = extension
+                .lock()
+                .await
+                .event(&binding, event_id, payload, capability_refs)
+                .await;
+            match result {
+                Ok(value) => Ok(HostResult::AgentExtensionEvent { value }),
+                Err(error) => {
+                    let mut extensions = state.agent_extensions.lock().await;
+                    if extensions
+                        .get(&extension_id)
+                        .is_some_and(|current| Arc::ptr_eq(current, &extension))
+                    {
+                        extensions.remove(&extension_id);
+                    }
+                    Err(error)
+                }
+            }
+        }
+        HostAction::AgentExtensionDetach {
+            extension_id,
+            binding,
+            reason,
+        } => {
+            validate_name(&extension_id, "Agent extension")?;
+            let Some(extension) = state.agent_extensions.lock().await.remove(&extension_id) else {
+                return Ok(HostResult::AgentExtensionDetached { detached: false });
+            };
+            let mut extension = extension.lock().await;
+            if extension.binding() != &binding {
+                extension.abort().await;
+                return Err("Agent extension detach binding does not match".to_string());
+            }
+            extension.shutdown(reason).await?;
+            Ok(HostResult::AgentExtensionDetached { detached: true })
+        }
         HostAction::Cancel { .. } | HostAction::Shutdown => {
             Err("control action was handled before dispatch".to_string())
         }
     }
+}
+
+async fn attach_agent_extension(
+    registration: super::protocol::AgentExtensionRegistration,
+    package: crate::provenance::PackageSnapshot,
+    state: &HostState,
+) -> Result<HostResult, String> {
+    validate_name(&registration.extension_id, "Agent extension")?;
+    registration.validate()?;
+    let existing = state
+        .agent_extensions
+        .lock()
+        .await
+        .get(&registration.extension_id)
+        .cloned();
+    if let Some(existing) = existing {
+        let existing = existing.lock().await;
+        let binding = existing.binding();
+        if binding.extension_id != registration.extension_id
+            || binding.extension_version != registration.extension_version
+            || binding.package_digest != registration.package_digest
+            || binding.manifest_digest != registration.manifest_digest
+        {
+            return Err(
+                "Agent extension is already attached with a different verified registration"
+                    .to_string(),
+            );
+        }
+        return Ok(HostResult::AgentExtensionReady {
+            binding: Box::new(binding.clone()),
+        });
+    }
+    let _spawn = state.agent_extension_spawn.lock().await;
+    let hosted = super::agent_extension::HostedAgentExtension::attach(
+        package,
+        &registration,
+        &state.binding,
+        &state.isolation,
+    )
+    .await?;
+    let binding = hosted.binding().clone();
+    let hosted = Arc::new(tokio::sync::Mutex::new(hosted));
+    let mut extensions = state.agent_extensions.lock().await;
+    if extensions.contains_key(&registration.extension_id) {
+        drop(extensions);
+        let _ = hosted
+            .lock()
+            .await
+            .shutdown(super::abi::ShutdownReason::Disabled)
+            .await;
+        return Err("Agent extension was concurrently attached".to_string());
+    }
+    extensions.insert(registration.extension_id, hosted);
+    Ok(HostResult::AgentExtensionReady {
+        binding: Box::new(binding),
+    })
 }
 
 async fn attach_mcp(spec: McpServerSpec, state: &HostState) -> Result<HostResult, String> {

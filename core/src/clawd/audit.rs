@@ -226,6 +226,7 @@ pub fn record_extension_host_event(
             None,
             None,
             None,
+            None,
             success,
         );
     }
@@ -337,6 +338,7 @@ pub fn record_worker_runtime(
             lease_digest,
             stage,
             mcp,
+            abi,
             manifest_digest,
             success,
             latency_ms,
@@ -372,6 +374,20 @@ pub fn record_worker_runtime(
                 untrusted_remote_name: mcp
                     .as_ref()
                     .map(|mcp| mcp.untrusted_remote_name.clone()),
+                package_digest: abi
+                    .as_ref()
+                    .map(|abi| audit_policy::safe_reference(&abi.package_digest)),
+                event_kind: abi
+                    .as_ref()
+                    .and_then(|abi| abi.event_kind.map(|kind| kind.as_str())),
+                event_id: abi.as_ref().and_then(|abi| abi.event_id.clone()),
+                output: abi.as_ref().and_then(|abi| abi.output.clone()),
+                action_id: abi.as_ref().and_then(|abi| abi.action_id.clone()),
+                tool: abi
+                    .as_ref()
+                    .and_then(|abi| abi.tool.as_deref().map(audit_policy::safe_identity)),
+                capability_ref: abi.as_ref().and_then(|abi| abi.capability_ref.clone()),
+                queue_depth: abi.as_ref().and_then(|abi| abi.queue_depth),
                 manifest_digest: manifest_digest.as_deref().map(audit_policy::safe_reference),
                 success: *success,
                 latency_ms: *latency_ms,
@@ -387,6 +403,7 @@ pub fn record_worker_runtime(
                 Some(lease_digest),
                 *stage,
                 mcp.as_ref(),
+                abi.as_deref(),
                 manifest_digest.as_deref(),
                 *success,
             );
@@ -579,6 +596,22 @@ struct WorkerExtensionAudit<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     untrusted_remote_name: Option<TextDigest>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    package_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    event_kind: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    event_id: Option<TextDigest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output: Option<TextDigest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    action_id: Option<TextDigest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    capability_ref: Option<TextDigest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    queue_depth: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     manifest_digest: Option<String>,
     success: bool,
     latency_ms: u64,
@@ -595,6 +628,7 @@ fn record_extension_mutation(
     lease_digest: Option<&str>,
     stage: Option<crate::extension_host::protocol::AuditStage>,
     mcp: Option<&crate::extension_host::protocol::McpInvocationAudit>,
+    abi: Option<&crate::extension_host::protocol::AgentExtensionAudit>,
     manifest_digest: Option<&str>,
     success: bool,
 ) {
@@ -618,6 +652,14 @@ fn record_extension_mutation(
             "descriptor_digest": mcp.map(|mcp| audit_policy::safe_reference(&mcp.descriptor_digest)),
             "capability_generation": mcp.map(|mcp| audit_policy::safe_reference(&mcp.capability_generation)),
             "untrusted_remote_name": mcp.map(|mcp| mcp.untrusted_remote_name.clone()),
+            "package_digest": abi.map(|abi| audit_policy::safe_reference(&abi.package_digest)),
+            "event_kind": abi.and_then(|abi| abi.event_kind.map(|kind| kind.as_str())),
+            "event_id": abi.and_then(|abi| abi.event_id.clone()),
+            "output": abi.and_then(|abi| abi.output.clone()),
+            "action_id": abi.and_then(|abi| abi.action_id.clone()),
+            "tool": abi.and_then(|abi| abi.tool.as_deref().map(audit_policy::safe_identity)),
+            "capability_ref": abi.and_then(|abi| abi.capability_ref.clone()),
+            "queue_depth": abi.and_then(|abi| abi.queue_depth),
             "manifest_digest": manifest_digest.map(audit_policy::safe_reference),
             "success": success,
         }),

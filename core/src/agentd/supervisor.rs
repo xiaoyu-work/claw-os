@@ -1745,6 +1745,7 @@ fn record_worker_audit(lease: &Lease, record: &RuntimeAuditRecord) {
         binding_digest,
         lease_digest,
         mcp,
+        abi,
         ..
     } = record
     {
@@ -1769,6 +1770,12 @@ fn record_worker_audit(lease: &Lease, record: &RuntimeAuditRecord) {
                 || mcp.capability_generation != lease.capability_generation
         }) {
             tracing::warn!(task = %lease.task_id, "discarding MCP audit for a substituted capability generation");
+            return;
+        }
+        if abi.as_ref().is_some_and(|abi| {
+            abi.validate().is_err() || abi.capability_generation != lease.capability_generation
+        }) {
+            tracing::warn!(task = %lease.task_id, "discarding Agent extension audit for a substituted capability generation");
             return;
         }
     }

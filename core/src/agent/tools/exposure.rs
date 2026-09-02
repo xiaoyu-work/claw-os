@@ -260,6 +260,14 @@ impl ToolExposureContext {
         self.enabled_extensions.insert(extension.into());
     }
 
+    pub(crate) fn attenuated_for_extension(&self, extension: &str, requested: &CapSet) -> Self {
+        let mut context = self.clone();
+        context.capabilities = self.capabilities.intersect(requested);
+        context.enabled_extensions.clear();
+        context.enabled_extensions.insert(extension.to_string());
+        context
+    }
+
     pub(crate) fn set_tool_schema_budget_tokens(&mut self, budget: u32) {
         self.tool_schema_budget_tokens = budget;
     }

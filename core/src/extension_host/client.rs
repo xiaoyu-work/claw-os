@@ -436,6 +436,87 @@ impl ExtensionHostClient {
         result.map_err(|error| error.message)
     }
 
+    pub async fn attach_agent_extension(
+        &self,
+        registration: super::protocol::AgentExtensionRegistration,
+        package: crate::provenance::PackageSnapshot,
+    ) -> Result<super::abi::AbiBinding, String> {
+        let result = self
+            .request_with_timeout(
+                HostAction::AgentExtensionAttach {
+                    registration,
+                    package,
+                },
+                Duration::from_secs(15),
+                false,
+            )
+            .await
+            .and_then(|result| match result {
+                HostResult::AgentExtensionReady { binding } => Ok(*binding),
+                _ => Err(ClientFault::protocol(
+                    "extension host returned the wrong Agent-extension attach result",
+                )),
+            });
+        result.map_err(|error| error.message)
+    }
+
+    pub async fn send_agent_extension_event(
+        &self,
+        extension_id: String,
+        binding: super::abi::AbiBinding,
+        event_id: String,
+        payload: super::abi::EventPayload,
+        capability_refs: Vec<crate::agent_extensions::capability_ref::CapabilityReference>,
+        timeout: Duration,
+    ) -> Result<super::protocol::AgentExtensionResult, String> {
+        let result = self
+            .request_with_timeout(
+                HostAction::AgentExtensionEvent {
+                    extension_id,
+                    binding,
+                    event_id,
+                    payload,
+                    capability_refs,
+                },
+                timeout.saturating_add(Duration::from_secs(2)),
+                false,
+            )
+            .await
+            .and_then(|result| match result {
+                HostResult::AgentExtensionEvent { value } => Ok(value),
+                _ => Err(ClientFault::protocol(
+                    "extension host returned the wrong Agent-extension event result",
+                )),
+            });
+        result.map_err(|error| error.message)
+    }
+
+    pub async fn detach_agent_extension(
+        &self,
+        extension_id: String,
+        binding: super::abi::AbiBinding,
+        reason: super::abi::ShutdownReason,
+    ) -> Result<bool, String> {
+        let result = self
+            .request_with_timeout(
+                HostAction::AgentExtensionDetach {
+                    extension_id,
+                    binding,
+                    reason,
+                },
+                Duration::from_secs(5),
+                false,
+            )
+            .await
+            .and_then(|result| match result {
+                HostResult::AgentExtensionDetached { detached } => Ok(detached),
+                _ => Err(ClientFault::protocol(
+                    "extension host returned the wrong Agent-extension detach result",
+                )),
+            });
+        result.map_err(|error| error.message)
+    }
+
     async fn request(&self, action: HostAction) -> ClientResult<HostResult> {
         self.request_with_timeout(
             action,
@@ -599,6 +680,7 @@ impl ExtensionHostClient {
                     lease_digest: self.lease_digest.clone(),
                     stage: None,
                     mcp: None,
+                    abi: None,
                     manifest_digest: manifest_digest.map(str::to_string),
                     success,
                     latency_ms: latency.as_millis().min(u128::from(u64::MAX)) as u64,
@@ -653,6 +735,7 @@ impl ExtensionHostClient {
                     lease_digest: self.lease_digest.clone(),
                     stage: Some(stage),
                     mcp: Some(mcp.clone()),
+                    abi: None,
                     manifest_digest: Some(mcp.descriptor_digest.clone()),
                     success,
                     latency_ms: latency.as_millis().min(u128::from(u64::MAX)) as u64,
@@ -700,6 +783,47 @@ impl ExtensionHostClient {
             latency,
             result.as_ref().err().map(|error| error.message.as_str()),
         );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn emit_agent_extension(
+        &self,
+        action: super::protocol::LifecycleAction,
+        extension_id: &str,
+        manifest_digest: &str,
+        abi: super::protocol::AgentExtensionAudit,
+        success: bool,
+        latency: Duration,
+        error: Option<&str>,
+    ) {
+        let (Some(audit), Some(session_id)) =
+            (self.audit.as_ref(), self.binding.session_id.as_ref())
+        else {
+            return;
+        };
+        if abi.validate().is_err() {
+            return;
+        }
+        let _ = audit.send(crate::agentd::protocol::WorkerFrame::Audit {
+            task_id: self.binding.task_id.clone(),
+            record: Box::new(
+                crate::agentd::protocol::RuntimeAuditRecord::ExtensionLifecycle {
+                    session_id: session_id.clone(),
+                    kind: super::protocol::ExtensionKind::AgentExtension,
+                    action,
+                    extension_id: super::protocol::clamp_text(extension_id, 128),
+                    binding_digest: self.binding_digest.clone(),
+                    lease_digest: self.lease_digest.clone(),
+                    stage: None,
+                    mcp: None,
+                    abi: Some(Box::new(abi)),
+                    manifest_digest: Some(manifest_digest.to_string()),
+                    success,
+                    latency_ms: latency.as_millis().min(u128::from(u64::MAX)) as u64,
+                    error: crate::audit_policy::optional_text_digest(error),
+                },
+            ),
+        });
     }
 }
 

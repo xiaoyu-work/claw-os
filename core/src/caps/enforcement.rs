@@ -36,6 +36,7 @@
 //! must not silently allow operations from contexts the policy layer
 //! cannot describe.
 
+use std::future::Future;
 use std::path::PathBuf;
 
 use serde::Deserialize;
@@ -45,6 +46,20 @@ use super::consent::ConsentContext;
 use super::denial::{ApprovalInfo, ApprovalStatus, Denial, DenialReason};
 use super::scope::Scope;
 use super::verb::Verb;
+
+tokio::task_local! {
+    static CAPABILITY_CEILING: CapSet;
+}
+
+/// Run one extension-originated action beneath an explicit capability
+/// ceiling. The ordinary session, approval gateway, provider checks, and
+/// audit path remain active; the ceiling can only remove authority.
+pub(crate) async fn with_capability_ceiling<F, R>(ceiling: CapSet, future: F) -> R
+where
+    F: Future<Output = R>,
+{
+    CAPABILITY_CEILING.scope(ceiling, future).await
+}
 
 // ---------------------------------------------------------------------------
 // Mode
@@ -360,6 +375,13 @@ fn attach_approval_request(
     context: ConsentContext,
     operation_digest: Option<&str>,
 ) {
+    let requested = Cap::new(denial.verb, denial.requested_scope.clone());
+    if CAPABILITY_CEILING
+        .try_with(|ceiling| !ceiling.covers(&requested))
+        .unwrap_or(false)
+    {
+        return;
+    }
     if mode != Mode::Strict
         || matches!(
             denial.reason,
@@ -612,6 +634,18 @@ fn authorize_session_caps(
     operation_digest: Option<&str>,
 ) -> Result<(), Denial> {
     let requested = Cap::new(verb, scope.clone());
+    let ceiling = CAPABILITY_CEILING.try_with(Clone::clone).ok();
+    if ceiling
+        .as_ref()
+        .is_some_and(|ceiling| !ceiling.covers(&requested))
+    {
+        return Err(Denial::scope_out_of_range(
+            verb,
+            scope,
+            ceiling.as_ref().expect("checked capability ceiling"),
+        )
+        .with_hint("extension-originated action exceeded its declared capability reference"));
+    }
     let mut caps = match caps {
         Some(c) => c.clone(),
         None => {
@@ -626,6 +660,9 @@ fn authorize_session_caps(
     };
     if let Some(transient) = transient_caps {
         caps.extend(transient.iter().cloned());
+    }
+    if let Some(ceiling) = ceiling {
+        caps = caps.intersect(&ceiling);
     }
 
     if caps.covers(&requested)

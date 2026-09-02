@@ -763,7 +763,7 @@ fn extract_text(response: &ChatResponse) -> String {
 /// model omits the id the tool defaults to `"default"` and silently
 /// writes to the wrong list (see `tools::todo`). When the runtime knows
 /// the session id we override whatever the model supplied.
-fn effective_tool_input(
+pub(crate) fn effective_tool_input(
     call: &ToolCall,
     session_id: Option<&str>,
     exposure: &ToolExposureContext,

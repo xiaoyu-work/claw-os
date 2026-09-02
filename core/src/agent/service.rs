@@ -2600,6 +2600,13 @@ pub async fn execute_job(
     tools.set_approval(loop_::approval_from_cfg(&cfg));
     // MCP attach (best-effort) — handles dropped at end of fn.
     let _mcp_handles = loop_::attach_mcp_servers_for_cli(&mut tools, &cfg, &mut exposure).await;
+    let tools = Arc::new(tools);
+    let extension_runtime = crate::agent_extensions::runtime::ExtensionRuntime::activate(
+        &cfg.extensions,
+        &mut exposure,
+        tools.clone(),
+    )
+    .await;
 
     let result = if let Some(sid) = job.session_id.as_deref() {
         match crate::agent::memory::sqlite_fts::MemoryDb::open_default() {
@@ -2625,7 +2632,7 @@ pub async fn execute_job(
                     &cfg,
                     &job.prompt,
                     job.context.as_deref(),
-                    &tools,
+                    tools.as_ref(),
                     &exposure,
                     &db,
                     sid,
@@ -2642,7 +2649,7 @@ pub async fn execute_job(
                     &cfg,
                     &job.prompt,
                     job.context.as_deref(),
-                    &tools,
+                    tools.as_ref(),
                     &exposure,
                     None,
                     stream_sink.clone(),
@@ -2658,7 +2665,7 @@ pub async fn execute_job(
             &cfg,
             &job.prompt,
             job.context.as_deref(),
-            &tools,
+            tools.as_ref(),
             &exposure,
             None,
             stream_sink,
@@ -2667,6 +2674,19 @@ pub async fn execute_job(
         )
         .await
     };
+
+    match &result {
+        Ok(value) => {
+            extension_runtime
+                .finish(true, value.turns, Some(&value.answer), None)
+                .await;
+        }
+        Err(error) => {
+            extension_runtime
+                .finish(false, 0, None, Some(&error.to_string()))
+                .await;
+        }
+    }
 
     match result {
         Ok(r) => FinishOutcome::Ok {

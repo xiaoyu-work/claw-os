@@ -46,6 +46,7 @@ use super::protocol;
 /// else is dropped: the worker starts from an empty environment.
 const INHERITED_ENV_KEYS: &[&str] = &[
     "COS_APPS_DIR",
+    "COS_AGENT_EXTENSIONS_DIR",
     "COS_BIN",
     "COS_CACHE_DIR",
     "COS_CONFIG_DIR",
