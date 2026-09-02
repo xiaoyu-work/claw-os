@@ -56,11 +56,192 @@ fn make_spec(name: &str) -> McpServerSpec {
     }
 }
 
+async fn test_http_mcp(
+    axum::Json(request): axum::Json<serde_json::Value>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    let Some(id) = request.get("id").cloned() else {
+        return axum::http::StatusCode::ACCEPTED.into_response();
+    };
+    let result = match request.get("method").and_then(serde_json::Value::as_str) {
+        Some("initialize") => json!({
+            "protocolVersion": crate::agent::tools::mcp::protocol::PROTOCOL_VERSION,
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "test-http-mcp", "version": "1.0.0"}
+        }),
+        Some("tools/list") => json!({
+            "tools": [{
+                "name": "ping",
+                "description": "Ping.",
+                "inputSchema": {"type": "object"}
+            }]
+        }),
+        Some("tools/call") => json!({
+            "content": [{"type": "text", "text": "pong"}]
+        }),
+        other => {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                axum::Json(json!({"unexpected_method": other})),
+            )
+                .into_response();
+        }
+    };
+    axum::Json(json!({"jsonrpc": "2.0", "id": id, "result": result})).into_response()
+}
+
 #[test]
 fn timeout_duration_zero_means_unbounded() {
     let mut spec = make_spec("s");
     spec.timeout_secs = 0;
     assert_eq!(spec.timeout_duration(), Duration::from_secs(u64::MAX));
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn package_backed_http_mcp_is_registered_and_revoked_before_dispatch() {
+    let _lock = crate::test_env::lock_env();
+    let runtime = tempfile::tempdir().unwrap();
+    let _runtime =
+        crate::test_env::TestEnvVarGuard::set("COS_PROVENANCE_RUNTIME_DIR", runtime.path());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}/mcp", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            axum::Router::new().route("/mcp", axum::routing::post(test_http_mcp)),
+        )
+        .await
+        .unwrap();
+    });
+
+    let root = tempfile::tempdir().unwrap();
+    let package = root.path().join("org.http-test");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(
+        package.join("agent-api.json"),
+        json!({
+            "id": "org.http-test",
+            "name": "http-test",
+            "transport": "mcp+http",
+            "url": endpoint
+        })
+        .to_string(),
+    )
+    .unwrap();
+    crate::test_env::sign_test_package(
+        &package,
+        crate::provenance::PackageKind::Mcp,
+        "org.http-test",
+    );
+    let spec = super::super::discover::load_package(&package)
+        .unwrap()
+        .unwrap();
+    let package_digest = spec
+        .provenance
+        .as_ref()
+        .unwrap()
+        .content_digest()
+        .to_string();
+    let tool_name = "mcp_http_test_ping";
+    let mut exposure = crate::agent::tools::exposure::ToolExposureContext::isolated(
+        crate::agent::tools::guardrails::Guardrails::permissive(),
+    )
+    .with_transport(ToolTransport::McpHttp, true);
+    exposure.enable_extension("mcp:http-test");
+    let disclosure = McpDisclosureState::new(&exposure);
+    let handle = attach_http_server(&spec, Some(&disclosure), None, ToolAttachment::standalone())
+        .await
+        .expect("attach package-backed HTTP MCP");
+    let instance_session = handle
+        ._instance
+        .as_ref()
+        .expect("HTTP MCP instance")
+        .session_id()
+        .to_string();
+    crate::provenance::runtime::assert_live_instance_now(
+        crate::provenance::runtime::current_owner(),
+        &instance_session,
+    )
+    .expect("HTTP MCP runtime record");
+    let second_disclosure = McpDisclosureState::new(&exposure);
+    let second_handle = attach_http_server(
+        &spec,
+        Some(&second_disclosure),
+        None,
+        ToolAttachment::standalone(),
+    )
+    .await
+    .expect("attach second package-backed HTTP MCP");
+    let second_session = second_handle
+        ._instance
+        .as_ref()
+        .expect("second HTTP MCP instance")
+        .session_id()
+        .to_string();
+    assert_ne!(instance_session, second_session);
+    drop(handle);
+    crate::provenance::runtime::assert_live_instance_now(
+        crate::provenance::runtime::current_owner(),
+        &second_session,
+    )
+    .expect("dropping one attachment must not deregister another");
+    let tool = second_disclosure
+        .policy_registry
+        .lock()
+        .unwrap()
+        .get(tool_name)
+        .expect("second HTTP MCP tool");
+
+    crate::test_env::revoke_test_package(&package_digest);
+    let result = tool.exec(json!({})).await;
+    assert!(result.is_error);
+    assert!(result.content.contains("revoked"), "{}", result.content);
+    assert!(second_handle.assert_live().is_err());
+    drop(second_handle);
+    assert!(crate::provenance::runtime::assert_live_instance_now(
+        crate::provenance::runtime::current_owner(),
+        &second_session,
+    )
+    .is_err());
+    server.abort();
+}
+
+#[test]
+fn hosted_mcp_spec_reverifies_package_and_rejects_substitution() {
+    let _lock = crate::test_env::lock_env();
+    let root = tempfile::tempdir().unwrap();
+    let package = root.path().join("org.example");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(
+        package.join("agent-api.json"),
+        r#"{"id":"org.example","name":"example","transport":"mcp+stdio","command":"true"}"#,
+    )
+    .unwrap();
+    crate::test_env::sign_test_package(
+        &package,
+        crate::provenance::PackageKind::Mcp,
+        "org.example",
+    );
+    let spec = super::super::discover::load_package(&package)
+        .unwrap()
+        .unwrap();
+    let encoded = serde_json::to_value(&spec).unwrap();
+    let decoded: McpServerSpec = serde_json::from_value(encoded.clone()).unwrap();
+    assert_eq!(decoded, spec);
+    assert!(decoded.provenance.is_some());
+
+    let mut substituted = encoded;
+    substituted["command"] = serde_json::json!("false");
+    assert!(serde_json::from_value::<McpServerSpec>(substituted).is_err());
+
+    let mut downgraded = serde_json::to_value(&spec).unwrap();
+    downgraded["source"] = serde_json::json!("operator");
+    assert!(
+        serde_json::from_value::<McpServerSpec>(downgraded).is_err(),
+        "a package control message must not downgrade to operator configuration"
+    );
 }
 
 #[test]
@@ -786,6 +967,7 @@ async fn dropping_server_handle_invalidates_opaque_catalog_and_invocation() {
         timeout: Duration::from_secs(5),
         hosted: false,
         _proc_session: None,
+        _instance: None,
     });
 
     assert_eq!(registry.catalog_generation(), before + 1);
@@ -884,10 +1066,12 @@ async fn real_stdio_mcp_runs_inside_the_allowlisted_child_namespace() {
     let control = tempfile::tempdir().unwrap();
     let source = control.path().join("source");
     std::fs::create_dir(&source).unwrap();
-    let script = source.join("server.py");
+    let work = source.join("work");
+    std::fs::create_dir(&work).unwrap();
+    let script = work.join("server.py");
     std::fs::write(
         &script,
-        r#"import json,sys
+        r#"import json,os,sys
 for line in sys.stdin:
     req=json.loads(line)
     method=req.get("method")
@@ -896,27 +1080,35 @@ for line in sys.stdin:
     elif method=="tools/list":
         result={"tools":[{"name":"probe","description":"hostile","inputSchema":{"type":"object"}}]}
     elif method=="tools/call":
-        result={"content":[{"type":"text","text":"isolated"}],"isError":False}
+        result={"content":[{"type":"text","text":os.getcwd()}],"isError":False}
     else:
         continue
     print(json.dumps({"jsonrpc":"2.0","id":req["id"],"result":result}),flush=True)
 "#,
     )
     .unwrap();
+    std::fs::write(
+        source.join("agent-api.json"),
+        json!({
+            "id": "source",
+            "name": "isolated",
+            "transport": "mcp+stdio",
+            "command": "python3",
+            "args": ["${manifest_dir}/work/server.py"],
+            "cwd": "${manifest_dir}/work",
+            "timeout_secs": 5
+        })
+        .to_string(),
+    )
+    .unwrap();
+    crate::test_env::sign_test_package(&source, crate::provenance::PackageKind::Mcp, "source");
     let _enabled = crate::test_env::TestEnvVarGuard::set("COS_EXTENSION_CHILD_ISOLATION", "1");
     let _home = crate::test_env::TestEnvVarGuard::set("HOME", control.path());
     let _proc = crate::test_env::TestEnvVarGuard::remove("COS_PROC_DATA_DIR");
     let _broker = crate::test_env::TestEnvVarGuard::remove("COS_EXTENSION_BROKER_SOCKET");
-    let spec = McpServerSpec {
-        name: "isolated".to_string(),
-        command: "python3".to_string(),
-        args: vec![script.to_string_lossy().into_owned()],
-        env: HashMap::new(),
-        cwd: Some(source.to_string_lossy().into_owned()),
-        timeout_secs: 5,
-        url: None,
-        bearer_env: None,
-    };
+    let spec = super::super::discover::load_package(&source)
+        .unwrap()
+        .unwrap();
     let source_metadata = std::fs::metadata(&source).unwrap();
     let authority = crate::extension_host::child_isolation::IsolationAuthority::for_test(
         unsafe { libc::geteuid() as u32 },
@@ -936,7 +1128,7 @@ for line in sys.stdin:
     let handle = crate::paths::with_user_override(
         unsafe { libc::geteuid() as u32 },
         control.path().to_path_buf(),
-        attach_server_local(&spec, None, Some(&authority)),
+        attach_server_local(&spec, None, Some(&authority), None),
     )
     .await
     .unwrap();
@@ -954,8 +1146,9 @@ for line in sys.stdin:
         .call_tool("probe".to_string(), None)
         .await
         .unwrap();
+    let expected_work = work.canonicalize().unwrap().to_string_lossy().into_owned();
     assert!(matches!(
         result.content.first(),
-        Some(ContentItem::Text { text }) if text == "isolated"
+        Some(ContentItem::Text { text }) if text == &expected_work
     ));
 }

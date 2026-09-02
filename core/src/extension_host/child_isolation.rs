@@ -110,7 +110,6 @@ impl IsolationAuthority {
             if canonical.starts_with(approved_path) {
                 return Ok(canonical);
             }
-
         }
         Err(format!(
             "extension root {} is outside broker-approved owner/package paths",
@@ -164,9 +163,30 @@ pub(crate) fn prepare(
         program,
         initial_args,
         authorized_root,
+        authorized_root,
         Vec::new(),
         false,
         authority,
+        None,
+    )
+}
+
+pub(crate) fn prepare_verified(
+    program: impl AsRef<OsStr>,
+    initial_args: impl IntoIterator<Item = OsString>,
+    authorized_root: Option<&Path>,
+    authority: Option<&IsolationAuthority>,
+    package: &crate::provenance::VerifiedPackage,
+) -> Result<IsolatedLaunch, String> {
+    prepare_impl(
+        program,
+        initial_args,
+        authorized_root,
+        authorized_root,
+        Vec::new(),
+        false,
+        authority,
+        Some(package),
     )
 }
 
@@ -182,9 +202,33 @@ pub(crate) fn prepare_with_clean_env(
         program,
         initial_args,
         authorized_root,
+        authorized_root,
         inner_env,
         true,
         authority,
+        None,
+    )
+}
+
+pub(crate) fn prepare_verified_with_clean_env(
+    program: impl AsRef<OsStr>,
+    initial_args: impl IntoIterator<Item = OsString>,
+    authorized_root: Option<&Path>,
+    working_dir: Option<&Path>,
+    inner_env: Vec<(OsString, OsString)>,
+    authority: Option<&IsolationAuthority>,
+    package: &crate::provenance::VerifiedPackage,
+) -> Result<IsolatedLaunch, String> {
+    validate_inner_environment(&inner_env)?;
+    prepare_impl(
+        program,
+        initial_args,
+        authorized_root,
+        working_dir,
+        inner_env,
+        true,
+        authority,
+        Some(package),
     )
 }
 
@@ -192,9 +236,11 @@ fn prepare_impl(
     program: impl AsRef<OsStr>,
     initial_args: impl IntoIterator<Item = OsString>,
     authorized_root: Option<&Path>,
+    working_dir: Option<&Path>,
     inner_env: Vec<(OsString, OsString)>,
     clear_inner_environment: bool,
     authority: Option<&IsolationAuthority>,
+    verified_package: Option<&crate::provenance::VerifiedPackage>,
 ) -> Result<IsolatedLaunch, String> {
     let program = program.as_ref().to_os_string();
     let mut initial_args = initial_args.into_iter().collect::<Vec<_>>();
@@ -225,6 +271,46 @@ fn prepare_impl(
     let authorized_root = authorized_root
         .map(|root| authority.authorize_root(root))
         .transpose()?;
+    let working_dir = working_dir
+        .map(|path| authority.authorize_root(path))
+        .transpose()?;
+    if let (Some(root), Some(cwd)) = (authorized_root.as_deref(), working_dir.as_deref()) {
+        if !cwd.starts_with(root) {
+            return Err(format!(
+                "extension working directory {} escapes its authorized root {}",
+                cwd.display(),
+                root.display()
+            ));
+        }
+    }
+    let verified_root = if let Some(package) = verified_package {
+        let canonical = package
+            .dir()
+            .canonicalize()
+            .map_err(|error| format!("canonicalize verified package root: {error}"))?;
+        let metadata = fs::metadata(&canonical)
+            .map_err(|error| format!("inspect verified package root: {error}"))?;
+        if (metadata.dev(), metadata.ino()) != package.dir_identity() {
+            return Err("verified package root identity changed before isolation".to_string());
+        }
+        if authorized_root.as_deref() != Some(canonical.as_path()) {
+            return Err(
+                "verified package does not match the authorized extension root".to_string(),
+            );
+        }
+        Some(canonical)
+    } else {
+        None
+    };
+    let verified_snapshot = if let (Some(package), Some(_)) = (verified_package, &verified_root) {
+        let snapshot = child_root.join("snapshot").join("package");
+        package
+            .materialize_snapshot(&snapshot)
+            .map_err(|error| format!("materialize verified extension snapshot: {error}"))?;
+        Some(snapshot)
+    } else {
+        None
+    };
     let resolved_program =
         resolve_runtime_program(Path::new(&program), authorized_root.as_deref(), authority)?;
     let mut runtime_programs = vec![resolved_program.clone()];
@@ -242,6 +328,21 @@ fn prepare_impl(
             runtime_programs.push(resolve_runtime_program(&cos_bin, None, authority)?);
         }
     }
+    let runtime_inspection_programs = runtime_programs
+        .iter()
+        .map(|program| {
+            let Some(root) = verified_root.as_deref() else {
+                return program.clone();
+            };
+            let Some(snapshot) = verified_snapshot.as_deref() else {
+                return program.clone();
+            };
+            match program.strip_prefix(root) {
+                Ok(relative) => snapshot.join(relative),
+                Err(_) => program.clone(),
+            }
+        })
+        .collect::<Vec<_>>();
 
     let mut args = vec![
         "--die-with-parent".into(),
@@ -305,7 +406,7 @@ fn prepare_impl(
         }
     }
     add_minimal_runtime(
-        &runtime_programs,
+        &runtime_inspection_programs,
         &child_root.join("runtime"),
         &mut args,
         authority,
@@ -321,7 +422,12 @@ fn prepare_impl(
 
     let mut roots = Vec::new();
     let program_path = PathBuf::from(&program);
-    if program_path.is_absolute() && !program_path.starts_with("/usr") {
+    if program_path.is_absolute()
+        && !program_path.starts_with("/usr")
+        && !verified_root
+            .as_ref()
+            .is_some_and(|root| program_path.starts_with(root))
+    {
         roots.push(program_path);
     }
     if let Some(root) = authorized_root.as_deref() {
@@ -339,6 +445,7 @@ fn prepare_impl(
         bytes: 0,
         root_dev: None,
     };
+    let mut verified_root_bound = false;
     for (index, root) in roots.iter().enumerate() {
         if fs::symlink_metadata(root)
             .map_err(|error| format!("inspect authorized extension root: {error}"))?
@@ -348,13 +455,29 @@ fn prepare_impl(
             return Err("authorized extension root must not be a symlink".to_string());
         }
         let canonical = authority.authorize_root(root)?;
-        let snapshot = child_root.join("snapshot").join(index.to_string());
-        snapshot_path(&canonical, &snapshot, 0, &mut budget, authority)?;
+        if verified_root.as_ref().is_some_and(|package_root| {
+            canonical.starts_with(package_root) && canonical != *package_root
+        }) {
+            continue;
+        }
+        let snapshot = if verified_root.as_deref() == Some(canonical.as_path()) {
+            verified_root_bound = true;
+            verified_snapshot
+                .clone()
+                .ok_or_else(|| "verified package snapshot is unavailable".to_string())?
+        } else {
+            let snapshot = child_root.join("snapshot").join(index.to_string());
+            snapshot_path(&canonical, &snapshot, 0, &mut budget, authority)?;
+            snapshot
+        };
         args.extend([
             "--ro-bind".into(),
             snapshot.as_os_str().to_os_string(),
             canonical.as_os_str().to_os_string(),
         ]);
+    }
+    if verified_package.is_some() && !verified_root_bound {
+        return Err("verified package root was not bound into the child".to_string());
     }
 
     if let Some(path) = std::env::var_os("COS_PROC_DATA_DIR").map(PathBuf::from) {
@@ -376,7 +499,7 @@ fn prepare_impl(
     ] {
         args.extend(["--setenv".into(), key.into(), value.into()]);
     }
-    let inner_cwd = match authorized_root {
+    let inner_cwd = match working_dir.or(authorized_root) {
         Some(root) => root,
         None => PathBuf::from("/state"),
     };
@@ -477,8 +600,7 @@ fn resolve_runtime_program(
             candidate.display()
         )
     })?;
-    let authorized = authorized_root
-        .is_some_and(|root| canonical.starts_with(root));
+    let authorized = authorized_root.is_some_and(|root| canonical.starts_with(root));
     if !authorized && !is_system_runtime_path(&canonical) {
         authority.authorize_root(&canonical)?;
     }
@@ -804,13 +926,7 @@ fn snapshot_runtime_tree(
         ));
     }
     let mut budget = RuntimeSnapshotBudget { files: 0, bytes: 0 };
-    snapshot_runtime_entry(
-        &canonical,
-        snapshot,
-        root.dev(),
-        &mut budget,
-        authority,
-    )?;
+    snapshot_runtime_entry(&canonical, snapshot, root.dev(), &mut budget, authority)?;
     let after = fs::symlink_metadata(&canonical)
         .map_err(|error| format!("recheck runtime tree {}: {error}", canonical.display()))?;
     if after.dev() != root.dev() || after.ino() != root.ino() {
@@ -955,13 +1071,7 @@ fn validate_and_bind_runtime_tree(
         ));
     }
     let mut count = 0usize;
-    validate_runtime_tree_entry(
-        &canonical,
-        &canonical,
-        root.dev(),
-        &mut count,
-        authority,
-    )?;
+    validate_runtime_tree_entry(&canonical, &canonical, root.dev(), &mut count, authority)?;
     let after = fs::symlink_metadata(&canonical)
         .map_err(|error| format!("recheck runtime tree {}: {error}", canonical.display()))?;
     if after.dev() != root.dev() || after.ino() != root.ino() {

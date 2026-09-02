@@ -784,6 +784,7 @@ routes! {
         body: body::AppSessionRegister,
         audit: &[
             ("app_id", FieldRule::Token),
+            ("package", FieldRule::Size),
             ("kind", FieldRule::Token),
             ("operation", FieldRule::Token),
             ("tool", FieldRule::Token),
@@ -798,7 +799,10 @@ routes! {
         budget: Budget::launch(),
         authority: peer(Audience::AppLaunch),
         body: body::AppSessionRegisterNative,
-        audit: &[("app_id", FieldRule::Token)],
+        audit: &[
+            ("app_id", FieldRule::Token),
+            ("package", FieldRule::Size),
+        ],
         run: |c| {
             app_sessions::register_native(c.params, c.client)
                 .await
@@ -812,11 +816,43 @@ routes! {
         budget: Budget::launch(),
         authority: peer(Audience::AppLaunch),
         body: body::McpSessionRegister,
-        audit: &[("command", FieldRule::Size)],
+        audit: &[
+            ("command", FieldRule::Size),
+            ("package", FieldRule::Size),
+        ],
         run: |c| {
             app_sessions::register_mcp(c.params, c.client)
                 .await
                 .map_err(BrokerError::from)
+        },
+    }
+    ProvenancePackageLive {
+        name: "provenance.package-live",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::AppLaunch),
+        body: body::ProvenancePackageLive,
+        audit: &[("package", FieldRule::Size)],
+        run: |c| {
+            let owner_uid = c.client.require_uid()?;
+            let package = c
+                .params
+                .get("package")
+                .cloned()
+                .ok_or_else(|| BrokerError::execution("package identity is missing"))
+                .and_then(|value| {
+                    serde_json::from_value::<crate::provenance::runtime::PackageRef>(value)
+                        .map_err(|error| {
+                            BrokerError::execution(format!(
+                                "package identity is invalid: {error}"
+                            ))
+                        })
+                })?;
+            package
+                .is_live(&crate::provenance::trust_store_for_owner(owner_uid))
+                .map_err(BrokerError::authorization)?;
+            Ok(json!({"live": true}))
         },
     }
     AppSessionBind {

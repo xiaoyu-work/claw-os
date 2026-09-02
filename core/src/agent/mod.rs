@@ -7363,6 +7363,7 @@ fn mcp_cmd(args: &[String]) -> Result<Value, String> {
                         timeout_secs: s.timeout_secs,
                         url: None,
                         bearer_env: None,
+                        provenance: None,
                     };
                     let mut throwaway_registry =
                         crate::agent::tools::registry::ToolRegistry::new();

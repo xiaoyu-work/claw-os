@@ -81,6 +81,7 @@ async fn service_calls_share_one_lock_and_restart_backoff_is_bounded() {
     for _ in 0..10 {
         record_host_failure(&slot).await;
     }
+
     let restart = slot.restart.lock().await;
     assert_eq!(restart.failures, 10);
     assert!(
@@ -90,4 +91,22 @@ async fn service_calls_share_one_lock_and_restart_backoff_is_bounded() {
             .saturating_duration_since(Instant::now())
             <= APP_RESTART_MAX
     );
+}
+
+#[tokio::test]
+async fn two_tasks_for_one_owner_share_one_persistent_host_slot() {
+    let runtime = tempfile::tempdir().unwrap();
+    let manager = PersistentAppHostManager::new(
+        DaemonState::try_new().unwrap(),
+        Admission::new(crate::clawd::transport::limits::Limits::default()),
+        runtime.path().join("clawd.sock"),
+        unsafe { libc::getegid() as u32 },
+    );
+    let home = PathBuf::from("/home/owner");
+    let first = manager.owner_slot(1000, &home).await.unwrap();
+    let second = manager.owner_slot(1000, &home).await.unwrap();
+    assert!(Arc::ptr_eq(&first, &second));
+    assert_eq!(manager.hosts.lock().await.len(), 1);
+    let replaced = PathBuf::from("/home/replaced");
+    assert!(manager.owner_slot(1000, &replaced).await.is_err());
 }

@@ -697,10 +697,16 @@ async fn supervise(
     extension.lease.close();
     extension.broker_task.abort();
     reap(&mut child, pid).await;
+    let mut runtime_cleanup_errors = Vec::new();
     if let Some(session_id) = extension.host_session_id.as_deref() {
         for child_session in crate::proc::deregister_child_sessions_for_owner(session_id, owner_uid)
         {
             crate::clawd::authority::revoke_session_for_owner(&child_session, owner_uid);
+            if let Err(error) =
+                crate::provenance::runtime::deregister_checked(owner_uid, &child_session)
+            {
+                runtime_cleanup_errors.push(error);
+            }
         }
         crate::proc::deregister_session_for_owner(session_id, owner_uid);
         crate::clawd::authority::revoke_session_for_owner(session_id, owner_uid);
@@ -712,6 +718,12 @@ async fn supervise(
         }
         Err(error) => Err(error),
     };
+    if extension_cleanup.is_ok() && !runtime_cleanup_errors.is_empty() {
+        extension_cleanup = Err(format!(
+            "persistent extension runtime cleanup failed: {}",
+            runtime_cleanup_errors.join("; ")
+        ));
+    }
     if extension_cleanup.is_ok() {
         if let Some(identity) = extension.identity.take() {
             extension_cleanup = identity.release();
@@ -1029,7 +1041,10 @@ fn extension_approved_paths(
     }
     if let Some(caps) = session.and_then(|session| session.caps.as_ref()) {
         for cap in caps.iter() {
-            if !matches!(cap.verb, crate::caps::Verb::FS_READ | crate::caps::Verb::FS_EXEC) {
+            if !matches!(
+                cap.verb,
+                crate::caps::Verb::FS_READ | crate::caps::Verb::FS_EXEC
+            ) {
                 continue;
             }
             let crate::caps::Scope::Path(path) = &cap.scope else {
@@ -1547,8 +1562,11 @@ fn approval_deadline(ttl: Duration) -> u64 {
 }
 
 fn unix_deadline_ms(deadline: Instant) -> u64 {
-    super::grant::now_ms()
-        .saturating_add(deadline.saturating_duration_since(Instant::now()).as_millis() as u64)
+    super::grant::now_ms().saturating_add(
+        deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis() as u64,
+    )
 }
 
 fn grant_expectation(broker_pid: u32, lease: &Lease, route: &str) -> GrantExpectation {
@@ -1992,8 +2010,7 @@ fn record_worker_audit(lease: &Lease, record: &RuntimeAuditRecord) {
             return;
         }
         if mcp.as_ref().is_some_and(|mcp| {
-            mcp.validate().is_err()
-                || mcp.capability_generation != lease.capability_generation
+            mcp.validate().is_err() || mcp.capability_generation != lease.capability_generation
         }) {
             tracing::warn!(task = %lease.task_id, "discarding MCP audit for a substituted capability generation");
             return;

@@ -942,10 +942,7 @@ fn merge_mcp_overrides_preserves_base_and_denies_attended_tools() {
     assert_eq!(merged.tool_allow, base.tool_allow);
     assert_eq!(
         merged.tool_deny,
-        vec![
-            "cos_sandbox".to_string(),
-            "cos_oauth_login".to_string()
-        ]
+        vec!["cos_sandbox".to_string(), "cos_oauth_login".to_string()]
     );
 }
 
@@ -975,16 +972,9 @@ fn merge_mcp_overrides_deny_appends_to_base() {
 #[test]
 fn merge_mcp_overrides_cannot_allow_attended_oauth_tool() {
     let base = crate::config::AgentConfig::default();
-    let merged = merge_mcp_overrides(
-        &base,
-        Some(vec!["cos_oauth_login".into()]),
-        Vec::new(),
-    );
+    let merged = merge_mcp_overrides(&base, Some(vec!["cos_oauth_login".into()]), Vec::new());
 
-    assert_eq!(
-        merged.tool_allow,
-        Some(vec!["cos_oauth_login".to_string()])
-    );
+    assert_eq!(merged.tool_allow, Some(vec!["cos_oauth_login".to_string()]));
     assert!(merged
         .tool_deny
         .iter()
@@ -1455,12 +1445,23 @@ fn provider_doctor_non_numeric_timeout_rejected() {
     assert!(err.contains("--timeout"));
 }
 
-#[test]
-fn provider_doctor_skips_probe_for_unconfigured_provider() {
+#[tokio::test(flavor = "current_thread")]
+async fn provider_doctor_skips_probe_for_unconfigured_provider() {
+    let _lock = crate::test_env::lock_env();
+    let config = tempfile::tempdir().unwrap();
+    let _config = crate::test_env::TestEnvVarGuard::set(
+        "COS_CONFIG_PATH",
+        config.path().join("missing.json"),
+    );
     // The default test config now has provider="" (not configured).
     // Verify --probe-network is gracefully skipped without spinning a
     // tokio runtime or hitting the network.
-    let v = provider_doctor_cmd(&["--probe-network".into()]).expect("doctor ok");
+    let config = crate::config::intern_user_config();
+    let v = crate::config::with_override(config, async {
+        provider_doctor_cmd(&["--probe-network".into()])
+    })
+    .await
+    .expect("doctor ok");
     let probe = v
         .get("doctor")
         .and_then(|d| d.get("active_probe"))
@@ -1477,7 +1478,7 @@ fn provider_doctor_skips_probe_for_unconfigured_provider() {
     );
     let reason = probe.get("reason").and_then(|r| r.as_str()).unwrap_or("");
     assert!(
-        reason.contains("no LLM provider configured"),
+        reason.contains("no text-model provider configured"),
         "expected unconfigured-skip reason, got {reason:?}"
     );
 }
@@ -2697,7 +2698,10 @@ fn write_test_skill(
         format!("---\nname: {id}\ndescription: test\n{allowed}---\n# body\n"),
     )
     .unwrap();
+    crate::test_env::sign_test_package(&sd, crate::provenance::PackageKind::Skill, id);
     let doc = crate::agent::skills::manifest::parse(&fs::read_to_string(&mp).unwrap()).unwrap();
+    let provenance = crate::agent::skills::loader::verify_skill_dir(id, &sd)
+        .unwrap_or_else(|error| panic!("verify test skill {id}: {error}"));
     LoadedSkill {
         id: id.to_string(),
         dir: sd,
@@ -2706,6 +2710,7 @@ fn write_test_skill(
         body_bytes: doc.body.len(),
         body: doc.body,
         origin: crate::agent::skills::loader::SkillOrigin::Local,
+        provenance,
     }
 }
 

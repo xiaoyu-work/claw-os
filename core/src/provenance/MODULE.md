@@ -12,6 +12,8 @@ schemas or model-visible metadata are trusted.
   its deterministic canonical signing bytes.
 - Load publisher trust roots with ownership/mode gating, enforce key
   usage constraints, rotation and revocation.
+- Resolve trust by authenticated owner uid and publish a root-owned,
+  read-only routed projection for isolated Extension Hosts.
 - Verify a package's signature and its complete file tree, returning a
   snapshot bound to an open directory descriptor.
 - Stage, verify and atomically publish untrusted bundles, retaining
@@ -36,11 +38,11 @@ schemas or model-visible metadata are trusted.
 
 ## Dependencies
 
-Depends only on `crypto` (SHA-256), `ed25519-dalek`, `paths` and
-`audit`. It must not depend on `apps`, `agent` or `clawd`: those are
+Depends only on `crypto` (SHA-256), `ed25519-dalek`, `paths`, `storage`
+and `audit`. It must not depend on `apps`, `agent` or `clawd`: those are
 consumers. Trust roots are compiled-in absolute paths plus the passwd
-home of the effective uid — never environment-derived, so no caller can
-widen trust by setting a variable.
+home of the authenticated owner uid — never environment-derived, so no
+caller can widen trust by setting a variable.
 
 ## Tests
 

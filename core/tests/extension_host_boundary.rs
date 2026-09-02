@@ -11,6 +11,8 @@ use std::time::Duration;
 
 use cos::caps::{Cap, CapSet, Scope, Verb};
 use cos::extension_host::{broker, client, spawn};
+use cos::provenance::sign::{self, SigningKeyFile};
+use cos::provenance::trust::{TrustRootSpec, TrustTier, TRUST_SCHEMA_V1, USAGE_PACKAGE_SIGNING};
 
 const HOST_BIN: &str = env!("CARGO_BIN_EXE_claw-extension-host");
 const APP_RUNNER_BIN: &str = env!("CARGO_BIN_EXE_claw-app-runner");
@@ -66,6 +68,7 @@ struct TestEnvironment {
     _sync: tempfile::TempDir,
     _data: tempfile::TempDir,
     _apps: tempfile::TempDir,
+    _trust: tempfile::TempDir,
     mcp_server: PathBuf,
     leaked_path: PathBuf,
     leaked_fd: i32,
@@ -108,15 +111,15 @@ impl TestEnvironment {
             .prefix("ca-")
             .tempdir_in("/run")
             .ok()?;
+        let trust = tempfile::Builder::new()
+            .prefix("ct-")
+            .tempdir_in("/run")
+            .ok()?;
         let host_source = std::env::var_os("COS_PRIVILEGED_EXTENSION_HOST_BIN")
             .unwrap_or_else(|| HOST_BIN.into());
         let host_bin = runtime.path().join("claw-extension-host");
         std::fs::copy(host_source, &host_bin).ok()?;
-        std::fs::set_permissions(
-            &host_bin,
-            std::fs::Permissions::from_mode(0o755),
-        )
-        .ok()?;
+        std::fs::set_permissions(&host_bin, std::fs::Permissions::from_mode(0o755)).ok()?;
         let app_runner = runtime.path().join("claw-app-runner");
         std::fs::copy(APP_RUNNER_BIN, &app_runner).ok()?;
         if !std::process::Command::new("strip")
@@ -145,6 +148,61 @@ impl TestEnvironment {
             return None;
         }
         write_echo_app(apps.path());
+        let key = SigningKeyFile::generate(Some("extension boundary".to_string())).ok()?;
+        sign::sign_directory(
+            &apps.path().join("echo-app"),
+            &sign::SignRequest {
+                kind: cos::provenance::PackageKind::App,
+                id: "echo-app".to_string(),
+                version: "1.0.0".to_string(),
+                manifest_schema: "integration".to_string(),
+                manifest_path: "app.json".to_string(),
+                entrypoints: vec!["main.py".to_string(), "server.py".to_string()],
+                resources: Vec::new(),
+            },
+            &key,
+        )
+        .ok()?;
+        let publishers = trust.path().join("publishers.d");
+        std::fs::create_dir(&publishers).ok()?;
+        std::fs::write(
+            publishers.join("test.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "schema": TRUST_SCHEMA_V1,
+                "keys": [{
+                    "key_id": key.key_id,
+                    "algorithm": "ed25519",
+                    "public_key": key.public_key,
+                    "usages": [USAGE_PACKAGE_SIGNING],
+                    "kinds": ["app"],
+                    "status": "active"
+                }]
+            }))
+            .ok()?,
+        )
+        .ok()?;
+        std::fs::set_permissions(&publishers, std::fs::Permissions::from_mode(0o700)).ok()?;
+        std::fs::set_permissions(
+            &publishers.join("test.json"),
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .ok()?;
+        cos::provenance::state::bump(
+            trust.path(),
+            cos::provenance::state::TrustDomain::Owner(owner_uid),
+            std::slice::from_ref(&publishers),
+        )
+        .ok()?;
+        let roots = vec![TrustRootSpec {
+            path: publishers,
+            tier: TrustTier::System,
+            allowed_uids: vec![0],
+            domain: cos::provenance::state::TrustDomain::Owner(owner_uid),
+        }];
+        cos::provenance::set_trust_store_for_roots(
+            cos::provenance::TrustStore::load_roots(&roots),
+            roots,
+        );
         let mcp_server = write_mcp_server(apps.path());
         make_owner_writable(sync.path(), owner_uid, execution_gid).ok()?;
         make_root_readable(apps.path()).ok()?;
@@ -154,6 +212,7 @@ impl TestEnvironment {
             _sync: sync,
             _data: data,
             _apps: apps,
+            _trust: trust,
             mcp_server,
             leaked_path,
             leaked_fd,
@@ -162,32 +221,32 @@ impl TestEnvironment {
 }
 
 fn make_owner_writable(path: &std::path::Path, uid: u32, gid: u32) -> std::io::Result<()> {
-        use std::os::unix::ffi::OsStrExt;
-        use std::os::unix::fs::PermissionsExt;
-        let raw = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
-        if unsafe { libc::chown(raw.as_ptr(), uid, gid) } != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o770))
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::PermissionsExt;
+    let raw = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+    if unsafe { libc::chown(raw.as_ptr(), uid, gid) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o770))
 }
 
 fn make_root_readable(path: &std::path::Path) -> std::io::Result<()> {
-        use std::os::unix::fs::PermissionsExt;
-        let metadata = std::fs::symlink_metadata(path)?;
-        if metadata.is_dir() {
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))?;
-            for entry in std::fs::read_dir(path)? {
-                make_root_readable(&entry?.path())?;
-            }
-        } else {
-            let mode = if metadata.permissions().mode() & 0o111 != 0 {
-                0o555
-            } else {
-                0o444
-            };
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))?;
+    use std::os::unix::fs::PermissionsExt;
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata.is_dir() {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))?;
+        for entry in std::fs::read_dir(path)? {
+            make_root_readable(&entry?.path())?;
         }
-        Ok(())
+    } else {
+        let mode = if metadata.permissions().mode() & 0o111 != 0 {
+            0o555
+        } else {
+            0o444
+        };
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))?;
+    }
+    Ok(())
 }
 
 fn write_mcp_server(root: &std::path::Path) -> PathBuf {
@@ -338,12 +397,11 @@ async fn worker_child() {
             .expect("open hosted App session"),
         1
     );
-    let context =
-        cos::agent::tools::app_gateway::McpCallContext::for_extension_system_agent(
-            &binding,
-            Duration::from_secs(5),
-        )
-        .expect("bound App call context");
+    let context = cos::agent::tools::app_gateway::McpCallContext::for_extension_system_agent(
+        &binding,
+        Duration::from_secs(5),
+    )
+    .expect("bound App call context");
     let app_call = client
         .call_app(
             "echo-app".to_string(),
@@ -395,15 +453,13 @@ async fn worker_child() {
             timeout_secs: 5,
             url: None,
             bearer_env: None,
+            provenance: None,
         })
         .await
         .expect("attach hosted MCP");
     let descriptor_digest =
-        cos::agent::tools::mcp::integration::sanitized_descriptor_digest_for_test(
-            mcp_name,
-            tools,
-        )
-        .expect("descriptor digest");
+        cos::agent::tools::mcp::integration::sanitized_descriptor_digest_for_test(mcp_name, tools)
+            .expect("descriptor digest");
     let audit = cos::extension_host::protocol::McpInvocationAudit {
         policy_identity: "mcp_hosted_echo_ping".to_string(),
         server_identity: mcp_name.to_string(),
@@ -521,18 +577,14 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
         std::os::unix::net::UnixListener::bind(&primary_path).expect("primary broker fixture");
     std::fs::set_permissions(&primary_path, std::fs::Permissions::from_mode(0o660))
         .expect("protect primary broker fixture");
-    let primary_raw =
-        std::ffi::CString::new(primary_path.to_string_lossy().as_bytes()).unwrap();
+    let primary_raw = std::ffi::CString::new(primary_path.to_string_lossy().as_bytes()).unwrap();
     assert_eq!(
         unsafe { libc::chown(primary_raw.as_ptr(), 0, identity.gid) },
         0
     );
-    let isolation = cos::agentd::spawn::ExecutionIsolation::capture(
-        &primary_path,
-        identity.uid,
-        execution_gid,
-    )
-    .expect("capture execution isolation");
+    let isolation =
+        cos::agentd::spawn::ExecutionIsolation::capture(&primary_path, identity.uid, execution_gid)
+            .expect("capture execution isolation");
     let paths = spawn::HostPaths::create(&identity).expect("host paths");
     let listener =
         broker::bind_listener(&paths, extension_identity.uid, execution_gid).expect("listener");
@@ -568,33 +620,36 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
     .expect("spawn host");
 
     let caps = CapSet::from_caps([Cap::new(Verb::AGENT_INVOKE, Scope::name("echo-app"))]);
-    cos::proc::register_session_for_owner(cos::proc::SessionInfo {
-        session_id: host_session.to_string(),
-        pid: host.pid,
-        command: vec!["claw-extension-host".to_string()],
-        started_at: chrono::Utc::now().to_rfc3339(),
-        stdout_path: String::new(),
-        stderr_path: String::new(),
-        group: Some(cos::extension_host::protocol::EXTENSION_HOST_GROUP.to_string()),
-        parent: Some(task_session.to_string()),
-        workdir: Some(identity.home.to_string_lossy().into_owned()),
-        exit_code: None,
-        ended_at: None,
-        tier: None,
-        scope: None,
-        priority: None,
-        caps: Some(caps),
-        transient_caps: None,
-        role: Some("worker".to_string()),
-        app_id: None,
-        pending_bind: false,
-        start_time_ticks: host.start_time_ticks,
-        client: cos::session::SessionClient::new(
-            cos::session::SessionSource::BrokerTask,
-            false,
-            true,
-        ),
-    }, uid)
+    cos::proc::register_session_for_owner(
+        cos::proc::SessionInfo {
+            session_id: host_session.to_string(),
+            pid: host.pid,
+            command: vec!["claw-extension-host".to_string()],
+            started_at: chrono::Utc::now().to_rfc3339(),
+            stdout_path: String::new(),
+            stderr_path: String::new(),
+            group: Some(cos::extension_host::protocol::EXTENSION_HOST_GROUP.to_string()),
+            parent: Some(task_session.to_string()),
+            workdir: Some(identity.home.to_string_lossy().into_owned()),
+            exit_code: None,
+            ended_at: None,
+            tier: None,
+            scope: None,
+            priority: None,
+            caps: Some(caps),
+            transient_caps: None,
+            role: Some("worker".to_string()),
+            app_id: None,
+            pending_bind: false,
+            start_time_ticks: host.start_time_ticks,
+            client: cos::session::SessionClient::new(
+                cos::session::SessionSource::BrokerTask,
+                false,
+                true,
+            ),
+        },
+        uid,
+    )
     .expect("register host session");
     let lease = Arc::new(broker::ExtensionLease::new(
         task_id.to_string(),
@@ -631,8 +686,8 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
         .await
         .expect("worker boundary timed out")
         .expect("wait worker boundary");
-    let audit = std::fs::read_to_string(env._data.path().join("clawd/audit.jsonl"))
-        .unwrap_or_default();
+    let audit =
+        std::fs::read_to_string(env._data.path().join("clawd/audit.jsonl")).unwrap_or_default();
     assert!(
         output.status.success(),
         "worker stdout:\n{}\nworker stderr:\n{}\naudit:\n{}",

@@ -308,8 +308,14 @@ pub(crate) fn gateway_operation_id(
         || !capability_generation
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-        || package_digest.len() != 64
+        || package_digest
+            .strip_prefix("sha256:")
+            .unwrap_or(package_digest)
+            .len()
+            != 64
         || !package_digest
+            .strip_prefix("sha256:")
+            .unwrap_or(package_digest)
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
     {

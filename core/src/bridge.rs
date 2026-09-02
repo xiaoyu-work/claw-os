@@ -40,17 +40,179 @@ pub(crate) fn app_runner_path() -> std::path::PathBuf {
     "/usr/local/bin/claw-app-runner".into()
 }
 
-fn app_command(program: impl AsRef<std::ffi::OsStr>, app_dir: &Path) -> Result<Command, String> {
+#[derive(Clone, Debug)]
+pub struct AppLaunch {
+    package: std::sync::Arc<crate::provenance::VerifiedPackage>,
+    manifest: Manifest,
+    owner_uid: u32,
+}
+
+impl AppLaunch {
+    pub fn new(
+        package: std::sync::Arc<crate::provenance::VerifiedPackage>,
+    ) -> Result<Self, String> {
+        let text = package
+            .manifest_text()
+            .map_err(|error| format!("read verified manifest for `{}`: {error}", package.id()))?;
+        let manifest = Manifest::from_json(&text)
+            .map_err(|error| format!("parse verified manifest for `{}`: {error}", package.id()))?;
+        if manifest.id != package.id() {
+            return Err(format!(
+                "verified manifest declares id `{}` but the package is `{}`",
+                manifest.id,
+                package.id()
+            ));
+        }
+        manifest
+            .validate_tools_against_catalog(&crate::ai::tools::list_names())
+            .map_err(|error| {
+                format!(
+                    "verified manifest for `{}` has an invalid AI tool allowlist: {error}",
+                    package.id()
+                )
+            })?;
+        let owner_uid = crate::provenance::current_trust_owner()
+            .unwrap_or_else(crate::provenance::runtime::current_owner);
+        Ok(Self {
+            package,
+            manifest,
+            owner_uid,
+        })
+    }
+
+    pub fn package(&self) -> &std::sync::Arc<crate::provenance::VerifiedPackage> {
+        &self.package
+    }
+
+    pub fn manifest(&self) -> &Manifest {
+        &self.manifest
+    }
+
+    pub fn dir(&self) -> &Path {
+        self.package.dir()
+    }
+
+    pub fn app_id(&self) -> &str {
+        &self.manifest.id
+    }
+
+    pub fn ceiling(&self) -> crate::provenance::Ceiling {
+        self.package.ceiling()
+    }
+
+    pub fn package_ref(&self) -> crate::provenance::runtime::PackageRef {
+        crate::provenance::runtime::PackageRef::of(&self.package)
+    }
+
+    pub fn bind(&self, entrypoints: &[String]) -> Result<LaunchBindingRef, String> {
+        let trust = crate::provenance::trust_store_for_owner(self.owner_uid);
+        self.package.assert_current(&trust).map_err(|error| {
+            format!(
+                "App `{}` failed its pre-launch provenance check: {error}",
+                self.manifest.id
+            )
+        })?;
+        let mut required = vec![self.package.manifest_path().to_string()];
+        for entry in entrypoints {
+            if !required.contains(entry) {
+                required.push(entry.clone());
+            }
+        }
+        #[cfg(unix)]
+        {
+            let inner = self
+                .package
+                .bind_for_launch(&required)
+                .map_err(|error| format!("bind App `{}` for launch: {error}", self.manifest.id))?;
+            Ok(LaunchBindingRef::new(inner))
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = required;
+            Err("App execution requires a Unix host".to_string())
+        }
+    }
+}
+
+pub struct LaunchBindingRef {
+    #[cfg(unix)]
+    inner: crate::provenance::verify::LaunchBinding,
+}
+
+impl LaunchBindingRef {
+    #[cfg(unix)]
+    pub fn new(inner: crate::provenance::verify::LaunchBinding) -> Self {
+        Self { inner }
+    }
+
+    #[cfg(unix)]
+    pub fn dir_identity(&self) -> Option<(u64, u64)> {
+        Some(self.inner.dir_identity())
+    }
+
+    #[cfg(unix)]
+    pub fn dir(&self) -> &Path {
+        self.inner.dir()
+    }
+
+    #[cfg(unix)]
+    pub fn is_developer(&self) -> bool {
+        self.inner.ceiling().is_developer()
+    }
+
+    #[cfg(not(unix))]
+    pub fn is_developer(&self) -> bool {
+        false
+    }
+
+    #[cfg(unix)]
+    pub fn package_ref(&self) -> Option<crate::provenance::runtime::PackageRef> {
+        Some(self.inner.package_ref())
+    }
+
+    #[cfg(not(unix))]
+    pub fn package_ref(&self) -> Option<crate::provenance::runtime::PackageRef> {
+        None
+    }
+
+    #[cfg(unix)]
+    pub fn entries(&self) -> Vec<(std::path::PathBuf, (u64, u64))> {
+        self.inner.entries()
+    }
+
+    #[cfg(not(unix))]
+    pub fn dir_identity(&self) -> Option<(u64, u64)> {
+        None
+    }
+
+    #[cfg(not(unix))]
+    pub fn entries(&self) -> Vec<(std::path::PathBuf, (u64, u64))> {
+        Vec::new()
+    }
+}
+
+#[cfg(not(unix))]
+impl Default for LaunchBindingRef {
+    fn default() -> Self {
+        Self {}
+    }
+}
+
+fn app_command(
+    program: impl AsRef<std::ffi::OsStr>,
+    launch: &AppLaunch,
+) -> Result<Command, String> {
     let launch = APP_ISOLATION_AUTHORITY.with(|authority| {
         let authority = authority.borrow();
-        crate::extension_host::child_isolation::prepare(
+        crate::extension_host::child_isolation::prepare_verified(
             app_runner_path(),
             vec![
                 std::ffi::OsString::from("--"),
                 program.as_ref().to_os_string(),
             ],
-            Some(app_dir),
+            Some(launch.dir()),
             authority.as_ref(),
+            launch.package(),
         )
     })?;
     let mut command = Command::new(launch.program);
@@ -59,26 +221,36 @@ fn app_command(program: impl AsRef<std::ffi::OsStr>, app_dir: &Path) -> Result<C
     Ok(command)
 }
 
-fn manifest_app_id(app_dir: &Path) -> Result<String, String> {
-    let path = app_dir.join("app.json");
-    match std::fs::read_to_string(&path) {
-        Ok(body) => crate::apps::AppManifest::from_json(&body)
-            .map(|manifest| manifest.id)
-            .map_err(|error| format!("parse {}: {error}", path.display())),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => app_dir
-            .file_name()
-            .and_then(|value| value.to_str())
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-            .ok_or_else(|| format!("App directory has no UTF-8 id: {}", app_dir.display())),
-        Err(error) => Err(format!("read {}: {error}", path.display())),
-    }
-}
-
 pub(crate) struct AppIdentitySession {
     session_id: String,
     backend: AppSessionBackend,
     parent_caps: Option<CapSet>,
+    owner_uid: u32,
+}
+
+struct AppRuntimeRegistration {
+    owner: u32,
+    session_id: String,
+}
+
+impl AppRuntimeRegistration {
+    fn register(
+        owner: u32,
+        session_id: &str,
+        package: &crate::provenance::VerifiedPackage,
+    ) -> Self {
+        crate::provenance::runtime::register(owner, session_id, package);
+        Self {
+            owner,
+            session_id: session_id.to_string(),
+        }
+    }
+}
+
+impl Drop for AppRuntimeRegistration {
+    fn drop(&mut self) {
+        crate::provenance::runtime::deregister(self.owner, &self.session_id);
+    }
 }
 
 #[derive(Clone)]
@@ -170,24 +342,48 @@ pub(crate) struct McpProcSession {
     session_id: String,
     proc_data_dir: std::path::PathBuf,
     handle: String,
+    owner_uid: u32,
 }
 
 impl McpProcSession {
-    pub fn for_current_parent(command: &str) -> Result<Option<Self>, String> {
+    pub fn for_current_parent(
+        command: &str,
+        package: Option<&crate::provenance::VerifiedPackage>,
+    ) -> Result<Option<Self>, String> {
         #[cfg(unix)]
-        if crate::paths::current_owner_uid_override().is_none() && unsafe { libc::geteuid() } != 0 {
+        if std::env::var_os(crate::extension_host::protocol::BROKER_SOCKET_ENV).is_some()
+            && crate::paths::current_owner_uid_override().is_none()
+            && unsafe { libc::geteuid() } != 0
+        {
             let parent = crate::proc::current_session_info_for_caps()
                 .ok_or_else(|| "MCP launch requires a registered parent session".to_string())?;
             if parent.caps.is_none() {
                 return Err("MCP parent session has no capabilities".to_string());
             }
-            let result = clawd_request(
-                ClawdCommand::McpSessionRegister,
+            if let Some(package) = package {
+                let ceiling = package.ceiling();
+                if !ceiling.allows_mcp_attach() {
+                    return Err(format!(
+                        "MCP package `{}` is {}-trusted and may not attach a server",
+                        package.id(),
+                        ceiling.label()
+                    ));
+                }
+            }
+            let package_binding = package.map(|package| {
                 serde_json::json!({
-                    "command": command,
-                    "parent_caps": parent.caps,
-                }),
-            )?;
+                    "dir": package.dir(),
+                    "package": crate::provenance::runtime::PackageRef::of(package),
+                })
+            });
+            let mut params = serde_json::json!({
+                "command": command,
+                "parent_caps": parent.caps,
+            });
+            if let Some(package) = package_binding {
+                params["package"] = package;
+            }
+            let result = clawd_request(ClawdCommand::McpSessionRegister, params)?;
             let session_id = result
                 .get("session_id")
                 .and_then(serde_json::Value::as_str)
@@ -203,10 +399,29 @@ impl McpProcSession {
                 .and_then(serde_json::Value::as_str)
                 .map(ToOwned::to_owned)
                 .ok_or_else(|| "clawd MCP session response omitted handle".to_string())?;
+            let owner_uid = result
+                .get("owner_uid")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|value| u32::try_from(value).ok())
+                .ok_or_else(|| "clawd MCP session response omitted owner_uid".to_string())?;
+            let authorized_package = result
+                .get("package")
+                .filter(|value| !value.is_null())
+                .cloned()
+                .map(serde_json::from_value::<crate::provenance::runtime::PackageRef>)
+                .transpose()
+                .map_err(|error| {
+                    format!("clawd returned an unreadable MCP package identity: {error}")
+                })?;
+            let expected_package = package.map(crate::provenance::runtime::PackageRef::of);
+            if authorized_package != expected_package {
+                return Err("clawd authorized a different package for the MCP session".to_string());
+            }
             return Ok(Some(Self {
                 session_id,
                 proc_data_dir,
                 handle,
+                owner_uid,
             }));
         }
         Ok(None)
@@ -218,6 +433,10 @@ impl McpProcSession {
 
     pub fn proc_data_dir(&self) -> &Path {
         &self.proc_data_dir
+    }
+
+    pub fn owner_uid(&self) -> u32 {
+        self.owner_uid
     }
 
     pub fn bind_process(&self, pid: u32) -> Result<(), String> {
@@ -263,11 +482,22 @@ impl AppSessionControl {
     }
 }
 
+fn response_owner_uid(result: &serde_json::Value, label: &str) -> Result<u32, String> {
+    result
+        .get("owner_uid")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+        .ok_or_else(|| format!("clawd {label} session response omitted owner_uid"))
+}
+
 impl AppIdentitySession {
-    pub fn for_native_host(app_id: &str) -> Result<Self, String> {
+    pub fn for_native_host(launch: &AppLaunch) -> Result<Self, String> {
         let result = clawd_request(
             ClawdCommand::AppSessionRegisterNative,
-            serde_json::json!({"app_id": app_id}),
+            serde_json::json!({
+                "app_id": launch.app_id(),
+                "package": launch.package_ref(),
+            }),
         )?;
         let session_id = result
             .get("session_id")
@@ -284,6 +514,23 @@ impl AppIdentitySession {
             .and_then(serde_json::Value::as_str)
             .map(ToOwned::to_owned)
             .ok_or_else(|| "clawd native App session response omitted handle".to_string())?;
+        let owner_uid = response_owner_uid(&result, "native App")?;
+        let authorized_package = result
+            .get("package")
+            .cloned()
+            .ok_or_else(|| "clawd native App session response omitted package identity".to_string())
+            .and_then(|value| {
+                serde_json::from_value::<crate::provenance::runtime::PackageRef>(value).map_err(
+                    |error| {
+                        format!("clawd returned an unreadable native package identity: {error}")
+                    },
+                )
+            })?;
+        if authorized_package != launch.package_ref() {
+            return Err(
+                "clawd authorized a different package for the native App session".to_string(),
+            );
+        }
         Ok(Self {
             session_id,
             backend: AppSessionBackend::Clawd {
@@ -291,6 +538,7 @@ impl AppIdentitySession {
                 handle,
             },
             parent_caps: None,
+            owner_uid,
         })
     }
 
@@ -345,6 +593,7 @@ impl AppIdentitySession {
                 operation,
                 args: &effective_args,
             },
+            launch.package(),
             Some(ceiling),
             |parent_caps| match declared {
                 Some(declared) => {
@@ -370,6 +619,7 @@ impl AppIdentitySession {
         Self::start(
             app_id,
             LaunchRequest::Gui { exec },
+            launch.package(),
             Some(ceiling),
             move |parent_caps| {
                 let needs = manifest
@@ -385,25 +635,26 @@ impl AppIdentitySession {
 
     /// Register an MCP identity. Session tools receive their authority
     /// per call through [`AppSessionControl::set_transient_call`].
-    pub fn for_mcp(
-        app_id: &str,
-        manifest: &Manifest,
-        tool: Option<&str>,
-    ) -> Result<Self, String> {
+    pub fn for_mcp(launch: &AppLaunch, tool: Option<&str>) -> Result<Self, String> {
+        let app_id = launch.app_id();
+        let manifest = launch.manifest();
         let tool = if let Some(service) = manifest.mcp.as_ref() {
-            let tool = tool.ok_or_else(|| {
-                format!("MCP-first App `{app_id}` launch requires an exact tool")
-            })?;
+            let tool = tool
+                .ok_or_else(|| format!("MCP-first App `{app_id}` launch requires an exact tool"))?;
             if !service.tools.iter().any(|declared| declared.name == tool) {
-                return Err(format!(
-                    "MCP-first App `{app_id}` has no tool `{tool}`"
-                ));
+                return Err(format!("MCP-first App `{app_id}` has no tool `{tool}`"));
             }
             Some(tool)
         } else {
             None
         };
-        Self::start(app_id, LaunchRequest::Mcp { tool }, |_| Ok(CapSet::new()))
+        Self::start(
+            app_id,
+            LaunchRequest::Mcp { tool },
+            launch.package(),
+            Some(launch.ceiling()),
+            |_| Ok(CapSet::new()),
+        )
     }
 
     /// Shared launch path.
@@ -417,6 +668,7 @@ impl AppIdentitySession {
     fn start<F>(
         app_id: &str,
         request: LaunchRequest<'_>,
+        package: &crate::provenance::VerifiedPackage,
         ceiling: Option<crate::provenance::Ceiling>,
         local_caps: F,
     ) -> Result<Self, String>
@@ -435,15 +687,16 @@ impl AppIdentitySession {
         if !parent_caps.covers(&invoke) {
             return Err(format!("parent session cannot invoke App `{app_id}`"));
         }
-        let mcp_first = matches!(
-            &request,
-            LaunchRequest::Mcp {
-                tool: Some(_)
-            }
-        );
+        let mcp_first = matches!(&request, LaunchRequest::Mcp { tool: Some(_) });
 
         if use_clawd_app_session_backend() {
-            return Self::register_with_clawd(app_id, &request, parent_caps);
+            return Self::register_with_clawd(
+                app_id,
+                &request,
+                package,
+                parent_caps,
+                ceiling.as_ref(),
+            );
         }
 
         let mut caps = local_caps(&parent_caps)?;
@@ -456,7 +709,9 @@ impl AppIdentitySession {
     fn register_with_clawd(
         app_id: &str,
         request: &LaunchRequest<'_>,
+        package: &crate::provenance::VerifiedPackage,
         parent_caps: CapSet,
+        ceiling: Option<&crate::provenance::Ceiling>,
     ) -> Result<Self, String> {
         // Only `parent_caps` crosses the wire, and only ever to narrow
         // what the daemon already resolved. The launcher's identity —
@@ -466,6 +721,7 @@ impl AppIdentitySession {
             "app_id": app_id,
             "kind": request.kind(),
             "parent_caps": parent_caps,
+            "package": crate::provenance::runtime::PackageRef::of(package),
         });
         match request {
             LaunchRequest::Operation { operation, args } => {
@@ -511,7 +767,6 @@ impl AppIdentitySession {
         // the approvals and applies the provenance ceiling itself.
         // Adopting its answer is what keeps the isolation shape and the
         // live grant describing the same world.
-        let _ = granted_caps;
         let granted_caps = result
             .get("caps")
             .ok_or_else(|| {
@@ -521,6 +776,20 @@ impl AppIdentitySession {
                 serde_json::from_value::<CapSet>(value.clone())
                     .map_err(|error| format!("clawd granted an unreadable capability set: {error}"))
             })?;
+        let granted_package = result
+            .get("package")
+            .ok_or_else(|| "clawd App session response omitted package identity".to_string())
+            .and_then(|value| {
+                serde_json::from_value::<crate::provenance::runtime::PackageRef>(value.clone())
+                    .map_err(|error| {
+                        format!("clawd returned an unreadable package identity: {error}")
+                    })
+            })?;
+        if granted_package != crate::provenance::runtime::PackageRef::of(package) {
+            return Err(format!(
+                "clawd authorized a different package for App `{app_id}`"
+            ));
+        }
         // Defence in depth, not the enforcement point. A difference
         // here means the two sides disagree about the package's trust
         // tier, so the launch is refused rather than reconciled.
@@ -541,6 +810,7 @@ impl AppIdentitySession {
                 handle,
             },
             parent_caps: Some(parent_caps),
+            owner_uid: response_owner_uid(&result, "App")?,
         })
     }
 
@@ -592,6 +862,7 @@ impl AppIdentitySession {
                 proc_data_dir: crate::paths::proc_data_dir(),
             },
             parent_caps: Some(parent_caps),
+            owner_uid: crate::provenance::runtime::current_owner(),
         })
     }
 
@@ -607,6 +878,14 @@ impl AppIdentitySession {
 
     pub fn id(&self) -> &str {
         &self.session_id
+    }
+
+    pub fn owner_uid(&self) -> u32 {
+        self.owner_uid
+    }
+
+    pub fn daemon_managed(&self) -> bool {
+        matches!(&self.backend, AppSessionBackend::Clawd { .. })
     }
 
     pub fn bind_process(&mut self, pid: u32) -> Result<(), String> {
@@ -664,12 +943,20 @@ pub fn run_native_app_host(
     let app_dir = app_dir
         .canonicalize()
         .map_err(|error| format!("canonicalize native App directory: {error}"))?;
-    if app_dir != Path::new("/usr/lib/cos/mail-ai") {
+    if app_dir != Path::new("/usr/lib/cos/apps/mail-ai") {
         return Err(format!(
-            "native mail-ai host must run from /usr/lib/cos/mail-ai, got {}",
+            "native mail-ai host must run from /usr/lib/cos/apps/mail-ai, got {}",
             app_dir.display()
         ));
     }
+    let package = crate::provenance::verify::verify_package_cached(
+        &app_dir,
+        &crate::provenance::VerifyOptions::new(crate::provenance::PackageKind::App)
+            .expect_id(app_id),
+        &crate::provenance::trust_store(),
+    )
+    .map_err(|error| format!("verify native App package: {error}"))?;
+    let app_launch = AppLaunch::new(package)?;
     let program_path = Path::new(program)
         .canonicalize()
         .map_err(|error| format!("canonicalize native App program: {error}"))?;
@@ -693,16 +980,20 @@ pub fn run_native_app_host(
     validate_root_owned_executable(&runner)?;
     validate_root_owned_executable(&program_path)?;
     validate_root_owned_executable(&expected_host)?;
-    let manifest_id = manifest_app_id(&app_dir)?;
-    if manifest_id != app_id {
+    app_launch
+        .package()
+        .read_verified_text("native_host.py")
+        .map_err(|error| format!("verify native App host entrypoint: {error}"))?;
+    if app_launch.app_id() != app_id {
         return Err(format!(
-            "native host App id `{app_id}` does not match manifest `{manifest_id}`"
+            "native host App id `{app_id}` does not match manifest `{}`",
+            app_launch.app_id()
         ));
     }
-    let mut app_session = AppIdentitySession::for_native_host(app_id)?;
-    let launch = APP_ISOLATION_AUTHORITY.with(|authority| {
+    let mut app_session = AppIdentitySession::for_native_host(&app_launch)?;
+    let isolated_launch = APP_ISOLATION_AUTHORITY.with(|authority| {
         let authority = authority.borrow();
-        crate::extension_host::child_isolation::prepare(
+        crate::extension_host::child_isolation::prepare_verified(
             &runner,
             vec![
                 std::ffi::OsString::from("--"),
@@ -710,11 +1001,15 @@ pub fn run_native_app_host(
             ],
             Some(&app_dir),
             authority.as_ref(),
+            app_launch.package(),
         )
     })?;
-    let mut command = Command::new(launch.program);
+    let mut command = Command::new(isolated_launch.program);
     crate::extension_host::child_isolation::close_unallowlisted_fds(&mut command);
-    command.env_clear().args(launch.args).envs(launch.env);
+    command
+        .env_clear()
+        .args(isolated_launch.args)
+        .envs(isolated_launch.env);
     reset_app_environment(&mut command, false);
     command
         .args(args)
@@ -824,7 +1119,9 @@ fn use_clawd_app_session_backend() -> bool {
     }
     #[cfg(unix)]
     {
-        crate::paths::current_owner_uid_override().is_none() && unsafe { libc::geteuid() } != 0
+        std::env::var_os(crate::extension_host::protocol::BROKER_SOCKET_ENV).is_some()
+            && crate::paths::current_owner_uid_override().is_none()
+            && unsafe { libc::geteuid() } != 0
     }
     #[cfg(not(unix))]
     {
@@ -887,9 +1184,7 @@ fn clawd_request_with_approval_wait(
                 return Err(error.message);
             }
             wait_for_approvals(&ids, deadline_unix_ms)?;
-            if deadline_unix_ms
-                .is_some_and(|deadline| crate::agentd::grant::now_ms() >= deadline)
-            {
+            if deadline_unix_ms.is_some_and(|deadline| crate::agentd::grant::now_ms() >= deadline) {
                 return Err("MCP App call deadline expired while waiting for approval".to_string());
             }
             clawd_request(command, params).map_err(String::from)
@@ -947,9 +1242,7 @@ fn wait_for_approvals(ids: &[String], deadline_unix_ms: Option<u64>) -> Result<(
         if APPROVAL_WAIT_CANCELLED.swap(false, Ordering::SeqCst) {
             return Err("waiting for App launch approval was cancelled".to_string());
         }
-        if deadline_unix_ms
-            .is_some_and(|deadline| crate::agentd::grant::now_ms() >= deadline)
-        {
+        if deadline_unix_ms.is_some_and(|deadline| crate::agentd::grant::now_ms() >= deadline) {
             return Err("MCP App call deadline expired while waiting for approval".to_string());
         }
         let result = clawd_request(
@@ -1061,35 +1354,35 @@ fn constrained_operation_caps(
             continue;
         }
         if matches!(need.scope, ScopeBinding::Wild) {
-                let inherited = parent
-                    .iter()
-                    .filter(|cap| cap.verb == need.verb)
-                    .cloned()
-                    .collect::<Vec<_>>();
-                if inherited.iter().any(|cap| cap.scope.is_wildcard())
-                    && matches!(
-                        crate::caps::lookup_meta(need.verb).map(|meta| meta.scope_kind),
-                        Some(
-                            crate::caps::ScopeKind::Path
-                                | crate::caps::ScopeKind::Host
-                                | crate::caps::ScopeKind::Name
-                        ) | None
-                    )
-                {
-                    return Err(format!(
-                        "wildcard `{}` need cannot inherit unbounded authority",
-                        need.verb.as_str()
-                    ));
-                }
-                if inherited.is_empty() && !parent_is_app {
-                    let requested = Cap::new(need.verb, Scope::Wild);
-                    crate::caps::require(requested.verb, requested.scope.clone())
-                        .map_err(|denial| denial.to_string())?;
-                    caps.insert(requested);
-                } else {
-                    caps.extend(inherited);
-                }
-                continue;
+            let inherited = parent
+                .iter()
+                .filter(|cap| cap.verb == need.verb)
+                .cloned()
+                .collect::<Vec<_>>();
+            if inherited.iter().any(|cap| cap.scope.is_wildcard())
+                && matches!(
+                    crate::caps::lookup_meta(need.verb).map(|meta| meta.scope_kind),
+                    Some(
+                        crate::caps::ScopeKind::Path
+                            | crate::caps::ScopeKind::Host
+                            | crate::caps::ScopeKind::Name
+                    ) | None
+                )
+            {
+                return Err(format!(
+                    "wildcard `{}` need cannot inherit unbounded authority",
+                    need.verb.as_str()
+                ));
+            }
+            if inherited.is_empty() && !parent_is_app {
+                let requested = Cap::new(need.verb, Scope::Wild);
+                crate::caps::require(requested.verb, requested.scope.clone())
+                    .map_err(|denial| denial.to_string())?;
+                caps.insert(requested);
+            } else {
+                caps.extend(inherited);
+            }
+            continue;
         }
         for requested in requested_caps {
             if parent.covers(requested) {
@@ -1151,9 +1444,7 @@ fn trusted_pre_dispatch_args(
             .iter()
             .take_while(|arg| arg.as_str() != "--")
             .any(|arg| arg == &format!("--{flag}") || arg.starts_with(&format!("--{flag}=")));
-        if supplied
-            && resolver == crate::caps::manifest::TrustedArgResolver::EmailHost
-        {
+        if supplied && resolver == crate::caps::manifest::TrustedArgResolver::EmailHost {
             return Err("`--host` is reserved for trusted email resolution".to_string());
         }
         if supplied {
@@ -1164,12 +1455,13 @@ fn trusted_pre_dispatch_args(
                 resolve_email_provider(operation, selector)?.to_string()
             }
             crate::caps::manifest::TrustedArgResolver::EmailHost => {
-                let bound =
-                    crate::caps::args::bind_supplied_cli_args(&operation.args, &resolved)?;
+                let bound = crate::caps::args::bind_supplied_cli_args(&operation.args, &resolved)?;
                 let provider = bound
                     .get("provider")
                     .and_then(serde_json::Value::as_str)
-                    .ok_or_else(|| "email host resolver requires provider resolution".to_string())?;
+                    .ok_or_else(|| {
+                        "email host resolver requires provider resolution".to_string()
+                    })?;
                 resolve_email_host(provider)?
             }
             crate::caps::manifest::TrustedArgResolver::CalendarProvider => {
@@ -1379,10 +1671,11 @@ fn raw_operation_positionals(operation: &Operation, raw: &[String]) -> Vec<Strin
         if options && token == "--" {
             options = false;
         } else if options && token.starts_with('-') {
-            let option = token.split_once('=').map_or(token.as_str(), |(name, _)| name);
+            let option = token
+                .split_once('=')
+                .map_or(token.as_str(), |(name, _)| name);
             if let Some(declaration) = operation.args.iter().find(|declaration| {
-                (declaration.effective_binding()
-                    == crate::caps::manifest::ArgBinding::Flag
+                (declaration.effective_binding() == crate::caps::manifest::ArgBinding::Flag
                     && option == format!("--{}", crate::caps::args::flag_name(declaration)))
                     || declaration.aliases.iter().any(|alias| alias == option)
             }) {
@@ -1777,13 +2070,13 @@ pub fn run_python_app_with_stdin(
     // descriptor open. The sandbox binds that exact inode, so replacing
     // `main.py` between here and `execve` is either refused or has no
     // effect on what runs.
-    let binding = launch.bind(&["main.py".to_string()])?;
+    let _binding = launch.bind(&["main.py".to_string()])?;
     let (mut app_session, effective_args) =
         AppIdentitySession::for_operation(launch, &app_id, command, args)?;
     let wrapper = python_wrapper(&main_py, command, &effective_args, data_dir, apps_dir)?;
     let stdin_data = validated_operation_stdin(launch, command, stdin_data)?;
 
-    let mut command = app_command(python, app_dir)?;
+    let mut command = app_command(python, launch)?;
     reset_app_environment(&mut command, false);
     command
         .arg("-c")
@@ -1951,7 +2244,7 @@ pub fn run_app(
 }
 
 pub(crate) fn run_app_with_isolation(
-    app_dir: &Path,
+    launch: &AppLaunch,
     command: &str,
     args: &[String],
     data_dir: &str,
@@ -1964,7 +2257,7 @@ pub(crate) fn run_app_with_isolation(
         }
         *slot.borrow_mut() = Some(authority);
         let _guard = AppIsolationGuard;
-        run_app(app_dir, command, args, data_dir, apps_dir)
+        run_app(launch, command, args, data_dir, apps_dir)
     })
 }
 
@@ -1982,32 +2275,13 @@ pub fn run_app_with_stdin(
                 .to_string(),
         );
     }
-    // Load the manifest if present so we can pick a runtime. Apps
-    // that ship without app.json default to the Python runtime — this
-    // lets ad-hoc `main.py` apps in development still run.
-    let manifest_path = app_dir.join("app.json");
-    let (runtime, entry) = if manifest_path.is_file() {
-        let body = std::fs::read_to_string(&manifest_path)
-            .map_err(|e| format!("read {}: {}", manifest_path.display(), e))?;
-        let manifest = crate::apps::AppManifest::from_json(&body)
-            .map_err(|e| format!("parse {}: {}", manifest_path.display(), e))?;
-        // Reject app launches whose `ai.tools[]` references a tool
-        // the kernel doesn't know. Catches typoed allowlists before
-        // the model ever sees a tool definition. The catalog is
-        // passed in so the caps crate stays free of an `ai`
-        // dependency (would create a cycle).
-        let catalog = crate::ai::tools::list_names();
-        manifest
-            .validate_tools_against_catalog(&catalog)
-            .map_err(|e| format!("parse {}: {}", manifest_path.display(), e))?;
-        let rt = manifest.runtime;
-        let entry = manifest
-            .entry
-            .unwrap_or_else(|| rt.default_entry().to_string());
-        (rt, entry)
-    } else {
-        (Runtime::Python, Runtime::Python.default_entry().to_string())
-    };
+    let app_dir = launch.dir();
+    let manifest = launch.manifest();
+    let runtime = manifest.runtime;
+    let entry = manifest
+        .entry
+        .clone()
+        .unwrap_or_else(|| runtime.default_entry().to_string());
 
     if matches!(runtime, Runtime::Python) {
         // Pythonic apps always run through the shared wrapper which
@@ -2027,57 +2301,58 @@ pub fn run_app_with_stdin(
     if !entry_path.is_file() {
         return Err(format!("app entry not found: {}", entry_path.display()));
     }
+    let _binding = launch.bind(std::slice::from_ref(&entry))?;
 
     let mut cmd = match runtime {
         Runtime::Node => {
-            let mut c = app_command("node", app_dir)?;
+            let mut c = app_command("node", launch)?;
             c.arg(&entry_path);
             c
         }
         Runtime::Shell => {
             if cfg!(windows) {
-                let mut c = app_command("cmd", app_dir)?;
+                let mut c = app_command("cmd", launch)?;
                 c.arg("/c").arg(&entry_path);
                 c
             } else {
-                let mut c = app_command("bash", app_dir)?;
+                let mut c = app_command("bash", launch)?;
                 c.arg(&entry_path);
                 c
             }
         }
-        Runtime::Binary => app_command(&entry_path, app_dir)?,
+        Runtime::Binary => app_command(&entry_path, launch)?,
         Runtime::Python => unreachable!("python handled above"),
     };
-    let app_id = manifest_app_id(app_dir)?;
+    let app_id = launch.app_id().to_string();
     let (mut app_session, effective_args) =
         AppIdentitySession::for_operation(launch, &app_id, command, args)?;
     let args_json = serde_json::to_string(&effective_args)
         .map_err(|e| format!("failed to serialize args: {e}"))?;
     reset_app_environment(&mut cmd, false);
 
-    let stdin_data = validated_operation_stdin(app_dir, command, stdin_data)?;
+    let stdin_data = validated_operation_stdin(launch, command, stdin_data)?;
     cmd.stdin(if stdin_data.is_some() {
         Stdio::piped()
     } else {
         Stdio::null()
     })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .env("COS_COMMAND", command)
-        .env("COS_ARGS_JSON", &args_json)
-        .env("COS_DATA_DIR", data_dir)
-        .env("COS_PROC_DATA_DIR", app_session.proc_data_dir())
-        .env("COS_APPS_DIR", apps_dir)
-        .env("COS_APP_ID", &app_id)
-        .env("COS_SESSION", app_session.id())
-        .env("DEBIAN_FRONTEND", "noninteractive")
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("CI", "true")
-        .env("PAGER", "cat")
-        .env("GIT_PAGER", "cat")
-        .env("PIP_NO_INPUT", "1")
-        .env("NPM_CONFIG_YES", "true")
-        .envs(crate::config::as_env_vars());
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .env("COS_COMMAND", command)
+    .env("COS_ARGS_JSON", &args_json)
+    .env("COS_DATA_DIR", data_dir)
+    .env("COS_PROC_DATA_DIR", app_session.proc_data_dir())
+    .env("COS_APPS_DIR", apps_dir)
+    .env("COS_APP_ID", &app_id)
+    .env("COS_SESSION", app_session.id())
+    .env("DEBIAN_FRONTEND", "noninteractive")
+    .env("GIT_TERMINAL_PROMPT", "0")
+    .env("CI", "true")
+    .env("PAGER", "cat")
+    .env("GIT_PAGER", "cat")
+    .env("PIP_NO_INPUT", "1")
+    .env("NPM_CONFIG_YES", "true")
+    .envs(crate::config::as_env_vars());
     if let Some(home) = crate::paths::current_home_override() {
         cmd.env("HOME", &home).env("COS_HOME", home);
     }
@@ -2158,17 +2433,17 @@ pub fn launch_gui(
         .unwrap_or_else(|| runtime.default_entry().to_string());
 
     let app_id = launch.app_id().to_string();
-    let binding = launch.bind(std::slice::from_ref(&entry))?;
+    let _binding = launch.bind(std::slice::from_ref(&entry))?;
     let mut app_session = AppIdentitySession::for_gui(launch, &app_id, exec)?;
 
     let mut cmd = if matches!(runtime, Runtime::Python) {
-        let main_py = app_dir.join("main.py");
-        if !main_py.is_file() {
-            return Err(format!("app has no main.py at {}", main_py.display()));
+        let entry_path = app_dir.join(&entry);
+        if !entry_path.is_file() {
+            return Err(format!("app entry not found: {}", entry_path.display()));
         }
-        let wrapper = python_wrapper(&main_py, exec, files, data_dir, apps_dir)?;
+        let wrapper = python_wrapper(&entry_path, exec, files, data_dir, apps_dir)?;
         let python = if cfg!(windows) { "python" } else { "python3" };
-        let mut c = app_command(python, app_dir)?;
+        let mut c = app_command(python, launch)?;
         c.arg("-c").arg(wrapper);
         c
     } else {
@@ -2178,22 +2453,22 @@ pub fn launch_gui(
         }
         match runtime {
             Runtime::Node => {
-                let mut c = app_command("node", app_dir)?;
+                let mut c = app_command("node", launch)?;
                 c.arg(&entry_path);
                 c
             }
             Runtime::Shell => {
                 if cfg!(windows) {
-                    let mut c = app_command("cmd", app_dir)?;
+                    let mut c = app_command("cmd", launch)?;
                     c.arg("/c").arg(&entry_path);
                     c
                 } else {
-                    let mut c = app_command("bash", app_dir)?;
+                    let mut c = app_command("bash", launch)?;
                     c.arg(&entry_path);
                     c
                 }
             }
-            Runtime::Binary => app_command(&entry_path, app_dir)?,
+            Runtime::Binary => app_command(&entry_path, launch)?,
             Runtime::Python => unreachable!("python handled above"),
         }
     };
@@ -2226,14 +2501,20 @@ pub fn launch_gui(
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("failed to launch {runtime:?} GUI: {e}"))?;
-    let owner = crate::provenance::runtime::current_owner();
-        crate::provenance::runtime::register(owner, app_session.id(), launch.package());
-    crate::provenance::runtime::bind_process(
-        crate::provenance::runtime::current_owner(),
-        app_session.id(),
-        child.id(),
-    );
     bind_child_session(&mut app_session, &mut child)?;
+    let _runtime_registration = (!app_session.daemon_managed()).then(|| {
+        let registration = AppRuntimeRegistration::register(
+            app_session.owner_uid(),
+            app_session.id(),
+            launch.package(),
+        );
+        crate::provenance::runtime::bind_process(
+            app_session.owner_uid(),
+            app_session.id(),
+            child.id(),
+        );
+        registration
+    });
     let status = child
         .wait()
         .map_err(|e| format!("failed to wait for {runtime:?} GUI: {e}"))?;

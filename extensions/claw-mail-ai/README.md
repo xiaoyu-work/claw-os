@@ -73,7 +73,7 @@ All forwarded to `apps/mail-ai/main.py`:
 tools/install-mail-ai.sh
 ```
 
-This copies the Python host into `/usr/lib/cos/mail-ai`, drops the
+This copies the Python host into `/usr/lib/cos/apps/mail-ai`, drops the
 Native Messaging manifest under `~/.thunderbird/native-messaging-hosts/`
 (per-user) or `/etc/thunderbird/native-messaging-hosts/` (system), and
 sideloads the extension as an unpacked add-on.

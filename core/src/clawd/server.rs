@@ -166,7 +166,7 @@ async fn sweep_revoked_instances() {
         // by an ambient path view: the same file the owner's own CLI
         // and `agentd` would read.
         let report = tokio::task::spawn_blocking(move || {
-            let trust = crate::provenance::trust_store();
+            let trust = crate::provenance::trust_store_for_owner(uid);
             crate::provenance::runtime::lifecycle_tick(
                 uid,
                 &trust,
@@ -684,10 +684,7 @@ fn set_socket_permissions(
     let before = std::fs::symlink_metadata(socket_path)
         .map_err(|error| format!("inspect broker socket: {error}"))?;
     let euid = unsafe { libc::geteuid() as u32 };
-    if before.file_type().is_symlink()
-        || !before.file_type().is_socket()
-        || before.uid() != euid
-    {
+    if before.file_type().is_symlink() || !before.file_type().is_socket() || before.uid() != euid {
         return Err("broker socket has unsafe identity".to_string());
     }
     let expected_gid = match group {

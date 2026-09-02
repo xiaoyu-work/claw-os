@@ -37,8 +37,8 @@ MAX_FRAME = 8 * 1024 * 1024  # 8 MiB — matches apps/browser-attached/native_ho
 # Make `from claw_os_sdk import …` resolve when running as a system script.
 # ---------------------------------------------------------------------------
 # Layout when shipped via the rootfs feature:
-#     /usr/lib/cos/mail-ai/native_host.py            (this file)
-#     /usr/lib/cos/mail-ai/main.py                   (copy of apps/mail-ai/main.py)
+#     /usr/lib/cos/apps/mail-ai/native_host.py       (this file)
+#     /usr/lib/cos/apps/mail-ai/main.py              (copy of apps/mail-ai/main.py)
 #     /usr/lib/cos/python/claw_os_sdk/               (system copy of the Python SDK)
 # Layout when running from a source checkout (dev / tests):
 #     <repo>/apps/mail-ai/native_host.py

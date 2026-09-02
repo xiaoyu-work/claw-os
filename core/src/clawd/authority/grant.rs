@@ -53,6 +53,8 @@ pub enum Audience {
     AgentWorker,
     /// Memory, context and journal reads.
     Context,
+    /// Owner-scoped notification state and delivery leases.
+    Notification,
     /// The consent surface itself.
     Permission,
     /// Privileged-mutation transactions.
@@ -67,6 +69,8 @@ pub enum Audience {
     Credential,
     /// Privileged system providers (audio, packages, users, …).
     SystemService,
+    /// A trusted launcher relaying a call for its sandboxed App session.
+    AppRelay,
 }
 
 impl Audience {
@@ -76,6 +80,7 @@ impl Audience {
             Audience::Task => "task",
             Audience::AgentWorker => "agent-worker",
             Audience::Context => "context",
+            Audience::Notification => "notification",
             Audience::Permission => "permission",
             Audience::Transaction => "transaction",
             Audience::AppLaunch => "app-launch",
@@ -83,6 +88,7 @@ impl Audience {
             Audience::Scheduler => "scheduler",
             Audience::Credential => "credential",
             Audience::SystemService => "system-service",
+            Audience::AppRelay => "app-relay",
         }
     }
 
@@ -136,6 +142,7 @@ impl AudienceSet {
             Audience::Task,
             Audience::AgentWorker,
             Audience::Context,
+            Audience::Notification,
             Audience::Permission,
             Audience::Transaction,
             Audience::AppLaunch,
@@ -143,6 +150,7 @@ impl AudienceSet {
             Audience::Scheduler,
             Audience::Credential,
             Audience::SystemService,
+            Audience::AppRelay,
         ]
         .into_iter()
         .filter(|audience| self.contains(*audience))
@@ -220,6 +228,7 @@ pub struct Subject {
     pub app_id: Option<String>,
     pub task_id: Option<String>,
     pub operation_id: Option<String>,
+    pub package: Option<crate::provenance::runtime::PackageRef>,
 }
 
 impl Subject {
@@ -242,6 +251,11 @@ impl Subject {
 
     pub fn with_operation(mut self, operation_id: Option<String>) -> Self {
         self.operation_id = operation_id;
+        self
+    }
+
+    pub fn with_package(mut self, package: Option<crate::provenance::runtime::PackageRef>) -> Self {
+        self.package = package;
         self
     }
 }

@@ -116,9 +116,21 @@ pub fn discover_verified(apps_dir: &Path) -> BTreeMap<String, App> {
     discover_all(apps_dir).verified
 }
 
+pub(crate) fn discover_verified_with_trust(
+    apps_dir: &Path,
+    trust: &provenance::TrustStore,
+) -> BTreeMap<String, App> {
+    discover_all_with_trust(apps_dir, trust).verified
+}
+
 pub fn discover_all(apps_dir: &Path) -> Discovery {
+    let trust = provenance::trust_store();
+    discover_all_with_trust(apps_dir, &trust)
+}
+
+fn discover_all_with_trust(apps_dir: &Path, trust: &provenance::TrustStore) -> Discovery {
     let mut apps = BTreeMap::new();
-    discover_dir(apps_dir, apps_dir, 0, &mut apps);
+    discover_dir(apps_dir, apps_dir, 0, &mut apps, trust);
     let mut out = Discovery::default();
     for (id, app) in apps {
         if app.is_verified() {
@@ -145,14 +157,41 @@ pub fn find_verified(apps_dir: &Path, app_id: &str) -> Result<App, String> {
     }
 }
 
-fn verify_app_dir(dir: &Path, id: &str) -> Result<Arc<VerifiedPackage>, String> {
-    let trust = provenance::trust_store();
+pub(crate) fn find_verified_with_trust(
+    apps_dir: &Path,
+    app_id: &str,
+    trust: &provenance::TrustStore,
+) -> Result<App, String> {
+    let mut discovery = discover_all_with_trust(apps_dir, trust);
+    if let Some(app) = discovery.verified.remove(app_id) {
+        return Ok(app);
+    }
+    if let Some(app) = discovery.quarantined.remove(app_id) {
+        return Err(app
+            .quarantine_reason()
+            .unwrap_or("App package is quarantined")
+            .to_string());
+    }
+    Err(format!("app `{app_id}` is not installed"))
+}
+
+fn verify_app_dir(
+    dir: &Path,
+    id: &str,
+    trust: &provenance::TrustStore,
+) -> Result<Arc<VerifiedPackage>, String> {
     let options = VerifyOptions::new(PackageKind::App).expect_id(id);
-    provenance::verify::verify_package_cached(dir, &options, &trust)
+    provenance::verify::verify_package_cached(dir, &options, trust)
         .map_err(|e| provenance::quarantine_reason(PackageKind::App, id, &e))
 }
 
-fn discover_dir(root: &Path, dir: &Path, depth: usize, apps: &mut BTreeMap<String, App>) {
+fn discover_dir(
+    root: &Path,
+    dir: &Path,
+    depth: usize,
+    apps: &mut BTreeMap<String, App>,
+    trust: &provenance::TrustStore,
+) {
     if depth > 8 {
         return;
     }
@@ -172,7 +211,7 @@ fn discover_dir(root: &Path, dir: &Path, depth: usize, apps: &mut BTreeMap<Strin
         }
         let manifest_path = path.join("app.json");
         if !manifest_path.is_file() {
-            discover_dir(root, &path, depth + 1, apps);
+            discover_dir(root, &path, depth + 1, apps, trust);
             continue;
         }
         let data = match fs::read_to_string(&manifest_path) {
@@ -194,7 +233,7 @@ fn discover_dir(root: &Path, dir: &Path, depth: usize, apps: &mut BTreeMap<Strin
         // verified App re-parses its manifest out of the verified
         // snapshot so the bytes used for capability derivation are the
         // bytes that were signed, not whatever the path holds now.
-        let provenance = verify_app_dir(&path, &structural.id);
+        let provenance = verify_app_dir(&path, &structural.id, trust);
         let manifest = match &provenance {
             Ok(pkg) => match pkg
                 .manifest_text()
@@ -239,11 +278,11 @@ fn normalized_relative_id(root: &Path, path: &Path) -> Option<String> {
     if parts.is_empty()
         || parts.iter().any(|part| {
             part.is_empty()
-                || !part
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase()
+                || !part.bytes().all(|byte| {
+                    byte.is_ascii_lowercase()
                         || byte.is_ascii_digit()
-                        || matches!(byte, b'-' | b'_'))
+                        || matches!(byte, b'-' | b'_')
+                })
         })
     {
         return None;
@@ -263,11 +302,7 @@ pub fn manifest_schema(manifest: &Manifest) -> Value {
 }
 
 pub fn operation_schema(operation: &Operation) -> Value {
-    let parameters = operation
-        .args
-        .iter()
-        .map(arg_schema)
-        .collect::<Vec<_>>();
+    let parameters = operation.args.iter().map(arg_schema).collect::<Vec<_>>();
     json!({
         "description": operation.summary.current(),
         "parameters": parameters,

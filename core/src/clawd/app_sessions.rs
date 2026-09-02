@@ -178,6 +178,13 @@ struct McpCallAuthority {
     deadline_unix_ms: u64,
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct McpPackageBinding {
+    dir: String,
+    package: crate::provenance::runtime::PackageRef,
+}
+
 #[derive(Clone)]
 pub(crate) struct AgentGatewayAuthority {
     pub owner_uid: u32,
@@ -228,8 +235,7 @@ pub(crate) async fn authorize_agent_gateway_call(
             != authority.worker_start_time_ticks
         || authority.capability_generation
             != crate::agent::tools::exposure::capability_generation(&authority.caps)
-        || context.caller.kind
-            != crate::agent::tools::app_gateway::McpPrincipalKind::SystemAgent
+        || context.caller.kind != crate::agent::tools::app_gateway::McpPrincipalKind::SystemAgent
         || context.caller.owner_uid != authority.owner_uid
         || context.caller.id != authority.session_id
         || context.session_id.as_deref() != Some(authority.session_id.as_str())
@@ -240,8 +246,14 @@ pub(crate) async fn authorize_agent_gateway_call(
         ));
     }
 
-    let app = installed_app(app_id).map_err(BrokerError::execution)?;
+    let app = installed_app(app_id, authority.owner_uid).map_err(BrokerError::execution)?;
     let package_digest = installed_manifest_digest(&app).map_err(BrokerError::execution)?;
+    let ceiling = app_ceiling(&app).map_err(BrokerError::execution)?;
+    if !ceiling.allows_mcp_attach() {
+        return Err(BrokerError::authorization(format!(
+            "App `{app_id}` trust tier may not attach an MCP service"
+        )));
+    }
     crate::agent::tools::app_gateway::authorize_manifest(&app.manifest, &context.caller)
         .map_err(BrokerError::authorization)?;
     let service = app
@@ -288,7 +300,7 @@ pub(crate) async fn authorize_agent_gateway_call(
             "agent task cannot invoke `{app_id}/{tool_name}`"
         )));
     }
-    let plan = derive_plan(&tool.needs, &effective.needs, &delegation)?;
+    let plan = derive_plan(&tool.needs, &effective.needs, &delegation, &ceiling, app_id)?;
     let arguments = Value::Object(effective.values.into_iter().collect());
     let deadline_unix_ms = context
         .deadline_unix_ms
@@ -313,6 +325,7 @@ pub(crate) async fn authorize_agent_gateway_call(
         app_id,
         tool_name,
         deadline_unix_ms,
+        &ceiling,
     )?;
     Ok(AuthorizedGatewayCall {
         arguments,
@@ -347,9 +360,117 @@ pub(crate) async fn verify_agent_gateway_authority(
 }
 
 fn installed_manifest_digest(app: &App) -> Result<String, String> {
-    let bytes = std::fs::read(app.dir.join("app.json"))
-        .map_err(|error| format!("read installed App manifest: {error}"))?;
-    Ok(crate::crypto::sha256_hex(&bytes))
+    Ok(app.require_verified()?.content_digest().to_string())
+}
+
+fn required_package_ref(
+    params: &Value,
+) -> Result<crate::provenance::runtime::PackageRef, BrokerError> {
+    let value = params
+        .get("package")
+        .cloned()
+        .ok_or_else(|| BrokerError::execution("App session omitted its verified package"))?;
+    serde_json::from_value(value)
+        .map_err(|error| BrokerError::execution(format!("invalid App package identity: {error}")))
+}
+
+fn verified_mcp_package(
+    params: &Value,
+    command: &str,
+    owner_uid: u32,
+) -> Result<
+    Option<(
+        std::sync::Arc<crate::provenance::VerifiedPackage>,
+        Ceiling,
+        crate::provenance::runtime::PackageRef,
+    )>,
+    String,
+> {
+    let Some(value) = params.get("package") else {
+        return Ok(None);
+    };
+    let binding: McpPackageBinding = serde_json::from_value(value.clone())
+        .map_err(|error| format!("invalid MCP package identity: {error}"))?;
+    let options = crate::provenance::VerifyOptions::new(crate::provenance::PackageKind::Mcp)
+        .expect_id(&binding.package.id);
+    let package = crate::provenance::verify::verify_package_cached(
+        std::path::Path::new(&binding.dir),
+        &options,
+        &crate::provenance::trust_store_for_owner(owner_uid),
+    )
+    .map_err(|error| format!("verify MCP package: {error}"))?;
+    let package_ref = crate::provenance::runtime::PackageRef::of(&package);
+    if package_ref != binding.package {
+        return Err("MCP package changed before session authorization".to_string());
+    }
+    let spec = crate::agent::tools::mcp::discover::spec_from_verified_package(
+        std::sync::Arc::clone(&package),
+    )
+    .map_err(|error| format!("load verified MCP package: {error}"))?
+    .ok_or_else(|| "verified MCP package does not declare an enabled server".to_string())?;
+    if spec.url.is_some() || spec.command != command {
+        return Err("MCP package session command does not match its verified manifest".to_string());
+    }
+    let ceiling = package.ceiling();
+    if !ceiling.allows_mcp_attach() {
+        return Err(format!(
+            "MCP package `{}` is {}-trusted and may not attach a server",
+            package.id(),
+            ceiling.label()
+        ));
+    }
+    Ok(Some((package, ceiling, package_ref)))
+}
+
+fn require_expected_package(
+    app: &App,
+    expected: &crate::provenance::runtime::PackageRef,
+) -> Result<std::sync::Arc<crate::provenance::VerifiedPackage>, BrokerError> {
+    let package = std::sync::Arc::clone(app.require_verified()?);
+    if crate::provenance::runtime::PackageRef::of(&package) != *expected {
+        return Err(BrokerError::execution(format!(
+            "App `{}` package changed before session authorization",
+            app.manifest.id
+        )));
+    }
+    Ok(package)
+}
+
+fn installed_app_for_session(
+    owner: u32,
+    session_id: &str,
+    app_id: &str,
+) -> Result<(App, Ceiling), String> {
+    let expected = crate::provenance::runtime::package_for(owner, session_id)?
+        .ok_or_else(|| "App session has no bound package identity".to_string())?;
+    installed_app_matching_package(owner, app_id, &expected)
+}
+
+fn installed_app_matching_package(
+    owner: u32,
+    app_id: &str,
+    expected: &crate::provenance::runtime::PackageRef,
+) -> Result<(App, Ceiling), String> {
+    if expected.kind != crate::provenance::PackageKind::App || expected.id != app_id {
+        return Err("App session package identity does not match its session".to_string());
+    }
+    let app = installed_app(app_id, owner)?;
+    let current = crate::provenance::runtime::PackageRef::of(app.require_verified()?);
+    if current != *expected {
+        return Err(format!(
+            "App `{app_id}` package changed after session authorization"
+        ));
+    }
+    let ceiling = app_ceiling(&app)?;
+    Ok((app, ceiling))
+}
+
+async fn remove_session_row(owner: u32, home: std::path::PathBuf, session_id: &str) {
+    let remove_id = session_id.to_string();
+    crate::paths::with_user_override(owner, home, async move {
+        crate::proc::deregister_session(&remove_id);
+    })
+    .await;
 }
 
 /// Identity an approval grant is bound to when the launcher belongs to
@@ -400,10 +521,7 @@ pub const COMMANDS: &[&str] = &[
     "app_session.deregister",
 ];
 
-fn mcp_launch_command_and_cap(
-    app: &App,
-    params: &Value,
-) -> Result<(String, Cap), BrokerError> {
+fn mcp_launch_command_and_cap(app: &App, params: &Value) -> Result<(String, Cap), BrokerError> {
     let app_id = &app.manifest.id;
     if let Some(service) = app.manifest.mcp.as_ref() {
         let tool = required_string(params, "tool")?;
@@ -430,11 +548,7 @@ fn mcp_launch_command_and_cap(
     }
 }
 
-fn target_session_caps(
-    authorized_caps: CapSet,
-    mcp_first: bool,
-    launch_invoke: &Cap,
-) -> CapSet {
+fn target_session_caps(authorized_caps: CapSet, mcp_first: bool, launch_invoke: &Cap) -> CapSet {
     if mcp_first {
         CapSet::from_caps(
             authorized_caps
@@ -448,13 +562,21 @@ fn target_session_caps(
 }
 
 pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, BrokerError> {
+    if client.execution_uid.is_none() {
+        return Err(BrokerError::authorization(
+            "package App sessions may be launched only by an authenticated Extension Host",
+        ));
+    }
     let uid = client.require_uid()?;
     let home = client.require_home_dir()?;
     let app_id = required_string(&params, "app_id")?;
+    let expected_package = required_package_ref(&params)?;
     let kind = launch_kind(&params)?;
     let launcher = authenticate_launcher(client, uid, home.clone()).await?;
     let delegation = Delegation::new(&launcher, uid, &home, &params)?;
-    let app = installed_app(&app_id)?;
+    let app = installed_app(&app_id, uid)?;
+    let package = require_expected_package(&app, &expected_package)?;
+    let package_ref = crate::provenance::runtime::PackageRef::of(&package);
     // Resolved before any plan is built: the ceiling decides whether
     // this launch kind is available at all, and every capability and
     // audience below is filtered through it.
@@ -477,7 +599,7 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
             }
             let operation = required_string(&params, "operation")?;
             let args = string_array(&params, "args")?;
-            let plan = operation_plan(&app, &operation, &args, &delegation)?;
+            let plan = operation_plan(&app, &operation, &args, &delegation, &ceiling)?;
             (
                 format!("cos app {app_id} {operation}"),
                 plan,
@@ -486,12 +608,10 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
         }
         LaunchKind::Gui => {
             if params.get("tool").is_some() {
-                return Err(BrokerError::execution(
-                    "GUI launch cannot name an MCP tool",
-                ));
+                return Err(BrokerError::execution("GUI launch cannot name an MCP tool"));
             }
             let exec = required_string(&params, "operation")?;
-            let plan = gui_plan(&app, &exec, &delegation)?;
+            let plan = gui_plan(&app, &exec, &delegation, &ceiling)?;
             (
                 format!("cos app {app_id} {exec}"),
                 plan,
@@ -506,7 +626,7 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
     let mcp_first = kind == LaunchKind::Mcp && app.manifest.mcp.is_some();
     let launch_invoke = invoke.clone();
     plan.require(invoke, &delegation);
-    let authorized_caps = authorize_plan(&delegation, plan)?;
+    let authorized_caps = authorize_plan(&delegation, plan, &ceiling, &app_id)?;
     let grant_caps = authorized_caps.clone();
     // The caller's exact invoke capability authorizes this launch but is not
     // target authority. MCP-first App sessions start empty and receive only
@@ -541,20 +661,29 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
         client: crate::session::SessionClient::new(crate::session::SessionSource::App, false, true),
     };
 
-    let proc_dir = install_session(uid, home, info).await?;
-    let handle = issue_launch_grant(
+    let proc_dir = install_session(uid, home.clone(), info).await?;
+    let handle = match issue_launch_grant(
         &session_id,
         Some(&app_id),
+        Some(&package_ref),
         uid,
         &launcher,
         &grant_caps,
         Some(&ceiling),
-    )?;
+    ) {
+        Ok(handle) => handle,
+        Err(error) => {
+            remove_session_row(uid, home, &session_id).await;
+            return Err(BrokerError::execution(error));
+        }
+    };
     Ok(json!({
         "session_id": session_id,
         "proc_data_dir": proc_dir,
         "app_id": app_id,
         "handle": handle,
+        "owner_uid": uid,
+        "package": package_ref,
         // What clawd actually granted, so the launcher builds its
         // sandbox from the daemon's decision instead of its own
         // resolution of the same manifest. A launcher that finds a
@@ -566,11 +695,15 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
 
 pub async fn register_native(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     let app_id = required_string(&params, "app_id")?;
+    let expected_package = required_package_ref(&params).map_err(|error| error.message)?;
     require_trusted_native_launcher(client)?;
     let uid = client.require_uid()?;
     let home = client.require_home_dir()?;
     let launcher = authenticate_launcher(client, uid, home.clone()).await?;
-    let app = installed_app(&app_id)?;
+    let app = installed_app(&app_id, uid)?;
+    let package =
+        require_expected_package(&app, &expected_package).map_err(|error| error.message)?;
+    let package_ref = crate::provenance::runtime::PackageRef::of(&package);
     // The native host is not an unauthenticated local launcher: its
     // executable and parent are pinned root-owned binaries, so its
     // authority is the installed manifest itself. `native_manifest_caps`
@@ -605,31 +738,53 @@ pub async fn register_native(params: Value, client: &ClientIdentity) -> Result<V
         start_time_ticks: None,
         client: crate::session::SessionClient::new(crate::session::SessionSource::App, false, true),
     };
-    let proc_dir = install_session(uid, home, info).await?;
-    let handle = issue_launch_grant(
+    let proc_dir = install_session(uid, home.clone(), info).await?;
+    let handle = match issue_launch_grant(
         &session_id,
         Some(&app_id),
+        Some(&package_ref),
         uid,
         &launcher,
         &caps,
         Some(&ceiling),
-    )?;
+    ) {
+        Ok(handle) => handle,
+        Err(error) => {
+            remove_session_row(uid, home, &session_id).await;
+            return Err(error);
+        }
+    };
     Ok(json!({
         "session_id": session_id,
         "proc_data_dir": proc_dir,
         "app_id": app_id,
         "handle": handle,
+        "owner_uid": uid,
+        "package": package_ref,
         "caps": caps,
         "trust_tier": ceiling.label(),
     }))
 }
 
 pub async fn register_mcp(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+    if client.execution_uid.is_none() {
+        return Err(
+            "MCP sessions may be launched only by an authenticated Extension Host".to_string(),
+        );
+    }
     let uid = client.require_uid()?;
     let home = client.require_home_dir()?;
     let command = required_string(&params, "command")?;
+    let package = verified_mcp_package(&params, &command, uid)?;
     let launcher = authenticate_launcher(client, uid, home.clone()).await?;
-    let caps = attenuated_ceiling(&launcher, &params)?;
+    let mut caps = attenuated_ceiling(&launcher, &params)?;
+    let (package_ref, ceiling) = match package.as_ref() {
+        Some((package, ceiling, package_ref)) => {
+            caps = clamp_to_ceiling(ceiling, package.id(), &caps, "register_mcp");
+            (Some(package_ref), Some(ceiling))
+        }
+        None => (None, None),
+    };
     if caps.is_empty() {
         return Err("launcher has no capabilities to delegate to an MCP child".to_string());
     }
@@ -661,12 +816,28 @@ pub async fn register_mcp(params: Value, client: &ClientIdentity) -> Result<Valu
             true,
         ),
     };
-    let proc_dir = install_session(uid, home, info).await?;
-    let handle = issue_launch_grant(&session_id, None, uid, &launcher, &caps, None)?;
+    let proc_dir = install_session(uid, home.clone(), info).await?;
+    let handle = match issue_launch_grant(
+        &session_id,
+        None,
+        package_ref,
+        uid,
+        &launcher,
+        &caps,
+        ceiling,
+    ) {
+        Ok(handle) => handle,
+        Err(error) => {
+            remove_session_row(uid, home, &session_id).await;
+            return Err(error);
+        }
+    };
     Ok(json!({
         "session_id": session_id,
         "proc_data_dir": proc_dir,
         "handle": handle,
+        "owner_uid": uid,
+        "package": package_ref,
     }))
 }
 
@@ -687,6 +858,17 @@ pub async fn bind(params: Value, client: &ClientIdentity) -> Result<Value, Strin
     if launch.issued_ago > BIND_WINDOW {
         return Err("App launch handle expired before binding a process".to_string());
     }
+    let serializer = session_lock(&session_id);
+    let transition = serializer.lock().await;
+    let lookup_id = session_id.clone();
+    let registered = crate::paths::with_user_override(uid, home.clone(), async move {
+        crate::proc::session_info_by_id(&lookup_id)
+    })
+    .await
+    .ok_or_else(|| "App session not found".to_string())?;
+    if !registered.pending_bind || registered.pid != 0 {
+        return Err("App session has already been bound".to_string());
+    }
     let child_pid = required_u32(&params, "pid")?;
     if child_pid == launcher_pid {
         return Err("App session must bind a child process".to_string());
@@ -702,19 +884,27 @@ pub async fn bind(params: Value, client: &ClientIdentity) -> Result<Value, Strin
             "App process {child_pid} is not owned by execution uid {execution_uid}"
         ));
     }
-    // Re-resolved from the installed package rather than remembered
-    // from `register`, so a revocation landing between the two is seen
-    // here and the session grant is never derived from a stale tier.
+    // Re-resolved from the installed package and compared with the
+    // package identity recorded at registration. A revocation or path
+    // swap landing between registration and bind therefore cannot
+    // derive authority for different bytes.
+    let package = launch.subject.package.clone();
     let ceiling = match launch.subject.app_id.as_deref() {
-        Some(app_id) => Some(app_ceiling(&installed_app(app_id)?)?),
+        Some(app_id) => {
+            let expected = package
+                .as_ref()
+                .ok_or_else(|| "App launch grant has no package identity".to_string())?;
+            Some(installed_app_matching_package(uid, app_id, expected)?.1)
+        }
         None => None,
     };
+    let bound_caps = registered
+        .caps
+        .clone()
+        .ok_or_else(|| "App session lost its capabilities during bind".to_string())?;
     let bind_id = session_id.clone();
-    let bound_caps = crate::paths::with_user_override(uid, home, async move {
-        crate::proc::bind_session_process(&bind_id, child_pid)?;
-        crate::proc::session_info_by_id(&bind_id)
-            .and_then(|session| session.caps)
-            .ok_or_else(|| "App session lost its capabilities during bind".to_string())
+    crate::paths::with_user_override(uid, home.clone(), async move {
+        crate::proc::bind_session_process(&bind_id, child_pid)
     })
     .await?;
     // The registry row was written by `register` under this same
@@ -730,18 +920,53 @@ pub async fn bind(params: Value, client: &ClientIdentity) -> Result<Value, Strin
         ),
         None => bound_caps,
     };
-    // Deriving the session grant is what makes `bind` one-shot: the
-    // store refuses a second claim on a session index, so two
-    // concurrent binds cannot both install one.
-    issue_session_grant(
-        &handle,
-        &session_id,
-        launch.subject.app_id.as_deref(),
-        uid,
-        child_pid,
-        &bound_caps,
-        ceiling.as_ref(),
-    )?;
+    let instance_class = if launch.subject.app_id.is_some() {
+        Some(crate::provenance::runtime::InstanceClass::App)
+    } else if registered.group.as_deref() == Some("mcp") {
+        Some(if package.is_some() {
+            crate::provenance::runtime::InstanceClass::McpPackage
+        } else {
+            crate::provenance::runtime::InstanceClass::McpOperatorConfig
+        })
+    } else {
+        None
+    };
+    let bind_authority = (|| {
+        if let Some(class) = instance_class {
+            if let Some(package) = package.as_ref() {
+                package.is_live(&crate::provenance::trust_store_for_owner(uid))?;
+            }
+            crate::provenance::runtime::register_bound_instance(
+                uid,
+                &session_id,
+                class,
+                package.clone(),
+            )?;
+            crate::provenance::runtime::bind_process_checked(uid, &session_id, child_pid)?;
+        }
+        // Deriving the session grant is the final commit: the store
+        // refuses a second claim on the session index.
+        issue_session_grant(
+            &handle,
+            &session_id,
+            launch.subject.app_id.as_deref(),
+            uid,
+            child_pid,
+            &bound_caps,
+            ceiling.as_ref(),
+        )
+    })();
+    if let Err(error) = bind_authority {
+        crate::provenance::runtime::deregister(uid, &session_id);
+        remove_session_row(uid, home, &session_id).await;
+        authority::authority().revoke(launch.id);
+        authority::revoke_indexed_session(&session_id);
+        drop(transition);
+        release_session_lock(&session_id);
+        return Err(error);
+    }
+    drop(transition);
+    release_session_lock(&session_id);
     Ok(json!({"bound": true}))
 }
 
@@ -834,21 +1059,18 @@ pub async fn set_transient(params: Value, client: &ClientIdentity) -> Result<Val
 
     let widening = !matches!(params.get("call"), None | Some(Value::Null));
 
-    // The same authoritative ceiling as `register`, resolved again from
-    // the installed package. A transient re-scope is the obvious way to
-    // widen an App after launch, so it is clamped by the identical
-    // rule: no MCP call, approval or parent capability can move a
-    // package above its tier once it is running.
+    // The same authoritative package and ceiling as `register`,
+    // resolved again and compared with the session-bound package
+    // identity. A transient re-scope is the obvious way to widen an App
+    // after launch, so a replacement package may not inherit the old
+    // session or its approvals.
     //
     // A package that can no longer be verified — uninstalled, revoked,
     // replaced — may not widen anything. Clearing a transient set is
     // still allowed, because refusing to *narrow* would strand exactly
     // the grant the caller was trying to give up.
-    let verified = match installed_app(&app_id) {
-        Ok(app) => {
-            let ceiling = app_ceiling(&app)?;
-            Some((app, ceiling))
-        }
+    let verified = match installed_app_for_session(uid, &session_id, &app_id) {
+        Ok((app, ceiling)) => Some((app, ceiling)),
         Err(error) if widening => return Err(error),
         Err(error) => {
             tracing::warn!(
@@ -876,6 +1098,14 @@ pub async fn set_transient(params: Value, client: &ClientIdentity) -> Result<Val
                         .to_string(),
                 );
             }
+            let current_digest = verified
+                .as_ref()
+                .and_then(|(app, _)| app.require_verified().ok())
+                .map(|package| package.content_digest())
+                .ok_or_else(|| "App package is unavailable for a Gateway call".to_string())?;
+            if call.get("package_digest").and_then(Value::as_str) != Some(current_digest) {
+                return Err("App package changed after Gateway authorization".to_string());
+            }
             let (caps, deadline) =
                 consume_gateway_dispatch_grant(client, gateway_handle, &app_id, call)?;
             (Some(caps), Some(deadline))
@@ -886,24 +1116,30 @@ pub async fn set_transient(params: Value, client: &ClientIdentity) -> Result<Val
             // process, so a denial is retried under the same
             // pid/start identity.
             let delegation = Delegation::new(&launcher, uid, &home, &params)?;
-            let (plan, caller_authority) =
-                session_tool_plan(&app_id, call, &delegation).map_err(|error| error.message)?;
-            let authorized =
-                authorize_plan(&delegation, plan).map_err(|error| error.message)?;
+            let (app, ceiling) = verified
+                .as_ref()
+                .ok_or_else(|| "App package is unavailable for a widening call".to_string())?;
+            let (plan, caller_authority) = session_tool_plan(app, call, &delegation, ceiling)
+                .map_err(|error| error.message)?;
+            let authorized = authorize_plan(&delegation, plan, ceiling, &app_id)
+                .map_err(|error| error.message)?;
             let deadline = caller_authority
                 .as_ref()
                 .map(|authority| authority.deadline_unix_ms);
             (
                 Some(match caller_authority {
-                    Some(authority) => {
-                        target_session_caps(authorized, true, &authority.invoke)
-                    }
+                    Some(authority) => target_session_caps(authorized, true, &authority.invoke),
                     None => authorized,
                 }),
                 deadline,
             )
         }
     };
+    let ceiling = verified.as_ref().map(|(_, ceiling)| ceiling);
+    let caps = caps.map(|caps| match ceiling {
+        Some(ceiling) => clamp_to_ceiling(ceiling, &app_id, &caps, "set_transient_call"),
+        None => caps,
+    });
 
     let mut effective = bound.caps.clone().unwrap_or_else(CapSet::new);
     if let Some(transient) = caps.as_ref() {
@@ -913,7 +1149,6 @@ pub async fn set_transient(params: Value, client: &ClientIdentity) -> Result<Val
     // transient set are each within the ceiling, but the merge is what
     // becomes the live grant, and that is the value that has to be
     // provably inside it.
-    let ceiling = verified.as_ref().map(|(_, ceiling)| ceiling);
     let effective = match ceiling {
         Some(ceiling) => clamp_to_ceiling(ceiling, &app_id, &effective, "set_transient"),
         None => effective,
@@ -942,6 +1177,7 @@ pub async fn set_transient(params: Value, client: &ClientIdentity) -> Result<Val
             child_pid,
             &effective,
             deadline_unix_ms,
+            ceiling,
         )
     } else {
         reissue_session_grant(
@@ -951,6 +1187,7 @@ pub async fn set_transient(params: Value, client: &ClientIdentity) -> Result<Val
             uid,
             child_pid,
             &effective,
+            ceiling,
         )
     };
     if let Err(error) = grant {
@@ -1013,6 +1250,7 @@ pub async fn deregister(params: Value, client: &ClientIdentity) -> Result<Value,
     // provider route in the same transaction.
     authority::authority().revoke(launch.id);
     authority::revoke_indexed_session(&session_id);
+    crate::provenance::runtime::deregister(uid, &session_id);
     super::authority::audit::record_revoked("app-session", Some(&session_id), 1);
     // Drop the guard before forgetting the entry, so a caller already
     // waiting on it is released rather than stranded on a mutex nothing
@@ -1132,7 +1370,11 @@ fn consume_gateway_dispatch_grant(
     }
     let caps = view.caps.clone();
     authority::authority()
-        .consume(view.id, &caps.iter().cloned().collect::<Vec<_>>(), &presentation)
+        .consume(
+            view.id,
+            &caps.iter().cloned().collect::<Vec<_>>(),
+            &presentation,
+        )
         .map_err(|error| error.to_string())?;
     Ok((caps, deadline_unix_ms))
 }
@@ -1306,14 +1548,15 @@ fn worker_floor(tier: Option<u8>) -> u8 {
 // Capability derivation
 // ---------------------------------------------------------------------------
 
-fn installed_app(app_id: &str) -> Result<App, String> {
+fn installed_app(app_id: &str, owner_uid: u32) -> Result<App, String> {
     let apps_dir = std::path::PathBuf::from(
         std::env::var("COS_APPS_DIR").unwrap_or_else(|_| "/usr/lib/cos/apps".to_string()),
     );
     // Authority path: a quarantined install may never reach capability
     // derivation or session binding, so the verified lookup is used
     // rather than the listing-oriented one.
-    let app = crate::apps::find_verified(&apps_dir, app_id)?;
+    let trust = crate::provenance::trust_store_for_owner(owner_uid);
+    let app = crate::apps::find_verified_with_trust(&apps_dir, app_id, &trust)?;
     if app.manifest.id != app_id {
         return Err(format!(
             "installed manifest declares id `{}`, not `{app_id}`",
@@ -1321,7 +1564,7 @@ fn installed_app(app_id: &str) -> Result<App, String> {
         ));
     }
     let pkg = app.require_verified()?;
-    pkg.assert_current(&crate::provenance::trust_store())
+    pkg.assert_current(&trust)
         .map_err(|e| format!("App `{app_id}` failed its pre-launch provenance check: {e}"))?;
     Ok(app)
 }
@@ -1406,6 +1649,7 @@ fn audience_facet(audience: authority::Audience) -> crate::provenance::ceiling::
     use crate::provenance::ceiling::Audience as Facet;
     match audience {
         authority::Audience::AppLaunch => Facet::AppLaunch,
+        authority::Audience::AppGateway | authority::Audience::AgentWorker => Facet::SystemService,
         authority::Audience::AppRelay => Facet::AppRelay,
         authority::Audience::SystemService => Facet::SystemService,
         authority::Audience::Credential => Facet::Credential,
@@ -1456,8 +1700,9 @@ fn session_tool_plan(
     app: &App,
     call: &Value,
     delegation: &Delegation,
+    ceiling: &Ceiling,
 ) -> Result<(LaunchPlan, Option<McpCallAuthority>), BrokerError> {
-    let app = installed_app(app_id)?;
+    let app_id = app.manifest.id.as_str();
     let tool_name = required_string(call, "tool")?;
     let args: BTreeMap<String, Value> = match call.get("args") {
         None | Some(Value::Null) => BTreeMap::new(),
@@ -1473,7 +1718,7 @@ fn session_tool_plan(
         .manifest
         .resolve_session_tool_call(&tool_name, &args, &delegation.paths)
         .map_err(|error| format!("resolve `{tool_name}` capabilities: {error}"))?;
-    let mut plan = derive_plan(&tool.needs, &effective.needs, delegation)?;
+    let mut plan = derive_plan(&tool.needs, &effective.needs, delegation, ceiling, app_id)?;
     let caller_authority = if app.manifest.mcp.is_some() {
         let invoke = crate::agent::tools::app_gateway::invoke_cap(app_id, &tool_name)
             .map_err(BrokerError::execution)?;
@@ -1599,7 +1844,14 @@ fn authorize_agent_gateway_plan(
     app_id: &str,
     tool_name: &str,
     deadline_unix_ms: u64,
+    ceiling: &Ceiling,
 ) -> Result<CapSet, BrokerError> {
+    let (caps, dropped_caps) = ceiling.clamp(&plan.caps);
+    let (missing, dropped_missing) = ceiling.clamp_vec(&plan.missing);
+    let mut dropped = dropped_caps;
+    dropped.extend(dropped_missing);
+    record_ceiling_drop(ceiling, app_id, "agent_gateway", &dropped);
+    let plan = LaunchPlan { caps, missing };
     if plan.missing.is_empty() {
         return Ok(plan.caps);
     }
@@ -1623,16 +1875,12 @@ fn authorize_agent_gateway_plan(
     ) {
         Ok(true) => return Ok(plan.caps),
         Ok(false) => {}
-        Err(error) => {
-            return Err(format!("could not settle App Gateway approvals: {error}").into())
-        }
+        Err(error) => return Err(format!("could not settle App Gateway approvals: {error}").into()),
     }
 
-    let expires_at = authority.approval_expires_at.min(
-        deadline_unix_ms
-            .saturating_add(999)
-            .saturating_div(1000),
-    );
+    let expires_at = authority
+        .approval_expires_at
+        .min(deadline_unix_ms.saturating_add(999).saturating_div(1000));
     let mut ids = Vec::new();
     let mut failures = Vec::new();
     for cap in &plan.missing {
@@ -1923,6 +2171,7 @@ async fn install_session(
 fn issue_launch_grant(
     session_id: &str,
     app_id: Option<&str>,
+    package: Option<&crate::provenance::runtime::PackageRef>,
     uid: u32,
     launcher: &LauncherAuthority,
     caps: &CapSet,
@@ -1939,16 +2188,20 @@ fn issue_launch_grant(
             principal,
             binding: authority::Binding::Process,
             subject: authority::Subject::session(session_id)
-                .with_app(app_id.map(ToOwned::to_owned)),
+                .with_app(app_id.map(ToOwned::to_owned))
+                .with_package(package.cloned()),
             // The launch grant is the parent of the session grant, so
             // it has to carry every audience that session will need;
             // `bind` narrows it to the provider audiences and drops
             // launch authority.
-            audience: authority::AudienceSet::of(&[
-                authority::Audience::AppLaunch,
-                authority::Audience::SystemService,
-                authority::Audience::Credential,
-            ]),
+            audience: permitted_audiences(
+                ceiling,
+                &[
+                    authority::Audience::AppLaunch,
+                    authority::Audience::SystemService,
+                    authority::Audience::Credential,
+                ],
+            ),
             caps: caps.clone(),
             lifetime: LAUNCH_GRANT_TTL,
             uses: authority::Uses::Unbounded,
@@ -2094,6 +2347,7 @@ fn issue_gateway_target_grant(
     child_pid: u32,
     caps: &CapSet,
     deadline_unix_ms: u64,
+    ceiling: Option<&Ceiling>,
 ) -> Result<(), String> {
     authority::revoke_indexed_session(session_id);
     let remaining = deadline_unix_ms
@@ -2108,10 +2362,13 @@ fn issue_gateway_target_grant(
             principal,
             binding: authority::Binding::ProcessTree,
             subject: authority::Subject::session(session_id).with_app(Some(app_id.to_string())),
-            audience: authority::AudienceSet::of(&[
-                authority::Audience::SystemService,
-                authority::Audience::Credential,
-            ]),
+            audience: permitted_audiences(
+                ceiling,
+                &[
+                    authority::Audience::SystemService,
+                    authority::Audience::Credential,
+                ],
+            ),
             caps: caps.clone(),
             lifetime: TARGET_CALL_GRANT_TTL.min(Duration::from_millis(remaining)),
             uses: authority::Uses::Unbounded,
@@ -2143,7 +2400,15 @@ fn reissue_session_grant(
     ceiling: Option<&Ceiling>,
 ) -> Result<(), String> {
     authority::authority().revoke_indexed_session(session_id);
-    issue_session_grant(launch_handle, session_id, app_id, uid, child_pid, caps)
+    issue_session_grant(
+        launch_handle,
+        session_id,
+        app_id,
+        uid,
+        child_pid,
+        caps,
+        ceiling,
+    )
 }
 
 // ---------------------------------------------------------------------------

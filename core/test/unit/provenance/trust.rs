@@ -27,9 +27,9 @@ fn user_root(path: &std::path::Path) -> TrustRootSpec {
         path: path.to_path_buf(),
         tier: TrustTier::User,
         allowed_uids: vec![me()],
-    domain: crate::provenance::state::TrustDomain::Owner(
-        crate::provenance::fsec::effective_uid(),
-    ),
+        domain: crate::provenance::state::TrustDomain::Owner(
+            crate::provenance::fsec::effective_uid(),
+        ),
     }
 }
 
@@ -39,9 +39,9 @@ fn dev_root(path: &std::path::Path) -> TrustRootSpec {
         path: path.to_path_buf(),
         tier: TrustTier::Developer,
         allowed_uids: vec![me()],
-    domain: crate::provenance::state::TrustDomain::Owner(
-        crate::provenance::fsec::effective_uid(),
-    ),
+        domain: crate::provenance::state::TrustDomain::Owner(
+            crate::provenance::fsec::effective_uid(),
+        ),
     }
 }
 
@@ -89,6 +89,29 @@ fn pk_of(key: &SigningKeyFile) -> [u8; 32] {
         .as_slice()
         .try_into()
         .unwrap()
+}
+
+#[cfg(unix)]
+#[test]
+fn routed_snapshot_preserves_the_validated_owner_trust_view() {
+    let root = tmpdir("routed-snapshot");
+    let key = SigningKeyFile::generate(None).unwrap();
+    write(
+        &root.join("publisher.json"),
+        &entry(&key, &["app", "mcp"], "active"),
+    );
+    let store = TrustStore::load_roots(&[user_root(&root)]);
+    assert!(store.key(&key.key_id).is_some());
+
+    let bytes = store.routed_snapshot_bytes(me()).unwrap();
+    let restored = TrustStore::from_routed_snapshot(me(), &bytes).unwrap();
+    assert_eq!(restored.generation(), store.generation());
+    assert_eq!(
+        restored.key(&key.key_id).map(|trusted| trusted.public_key),
+        store.key(&key.key_id).map(|trusted| trusted.public_key)
+    );
+    assert!(TrustStore::from_routed_snapshot(me().wrapping_add(1), &bytes).is_err());
+    let _ = fs::remove_dir_all(root);
 }
 
 fn now() -> chrono::DateTime<chrono::Utc> {
@@ -203,7 +226,11 @@ fn revoked_key_and_revoked_digest_fail_closed() {
 
     write(&dir.join("a.json"), &entry(&key, &["app"], "revoked"));
     let store = TrustStore::load_roots(&[user_root(&dir)]);
-    assert_ne!(store.generation(), before, "revocation must move the generation");
+    assert_ne!(
+        store.generation(),
+        before,
+        "revocation must move the generation"
+    );
     let err = store
         .authorize(&key.key_id, &pk, PackageKind::App, &digest(), now())
         .unwrap_err();
@@ -231,7 +258,13 @@ fn rotation_bounds_the_predecessor() {
     write(&dir.join("k.json"), &file);
     let store = TrustStore::load_roots(&[user_root(&dir)]);
     let err = store
-        .authorize(&key.key_id, &pk_of(&key), PackageKind::App, &digest(), now())
+        .authorize(
+            &key.key_id,
+            &pk_of(&key),
+            PackageKind::App,
+            &digest(),
+            now(),
+        )
         .unwrap_err();
     assert!(matches!(err, TrustError::OutsideValidity { .. }), "{err}");
     let _ = fs::remove_dir_all(&dir);
@@ -247,7 +280,13 @@ fn a_key_is_not_usable_before_its_not_before() {
     write(&dir.join("k.json"), &file);
     let store = TrustStore::load_roots(&[user_root(&dir)]);
     let err = store
-        .authorize(&key.key_id, &pk_of(&key), PackageKind::App, &digest(), now())
+        .authorize(
+            &key.key_id,
+            &pk_of(&key),
+            PackageKind::App,
+            &digest(),
+            now(),
+        )
         .unwrap_err();
     assert!(matches!(err, TrustError::OutsideValidity { .. }), "{err}");
     let _ = fs::remove_dir_all(&dir);
@@ -271,16 +310,16 @@ fn validity_windows_are_parsed_as_utc_normalised_rfc3339() {
     // Malformed, ambiguous or partial values are rejected outright —
     // never ignored, never treated as "no expiry".
     for bad in [
-        "2026-01-01",              // date only
-        "2026-01-01 00:00:00Z",    // space separator
-        "2026-01-01T00:00:00",     // no offset
-        "2026-13-01T00:00:00Z",    // impossible month
-        "2026-02-30T00:00:00Z",    // impossible day
-        "1999-01-01T00:00:00Z",    // out of supported range
-        "2400-01-01T00:00:00Z",    // out of supported range
+        "2026-01-01",           // date only
+        "2026-01-01 00:00:00Z", // space separator
+        "2026-01-01T00:00:00",  // no offset
+        "2026-13-01T00:00:00Z", // impossible month
+        "2026-02-30T00:00:00Z", // impossible day
+        "1999-01-01T00:00:00Z", // out of supported range
+        "2400-01-01T00:00:00Z", // out of supported range
         "not-a-time",
         "",
-        " 2026-01-01T00:00:00Z",   // padded
+        " 2026-01-01T00:00:00Z", // padded
     ] {
         assert!(
             Validity::parse(None, Some(bad)).is_err(),
@@ -292,11 +331,7 @@ fn validity_windows_are_parsed_as_utc_normalised_rfc3339() {
     assert!(Validity::parse(None, Some("2026-06-30T23:59:60Z")).is_ok());
 
     // An impossible window is refused at load time.
-    assert!(Validity::parse(
-        Some("2026-06-01T00:00:00Z"),
-        Some("2026-01-01T00:00:00Z")
-    )
-    .is_err());
+    assert!(Validity::parse(Some("2026-06-01T00:00:00Z"), Some("2026-01-01T00:00:00Z")).is_err());
 
     // No bounds means always valid.
     assert!(Validity::parse(None, None).unwrap().contains(boundary));
@@ -339,7 +374,10 @@ fn key_material_must_match_the_trusted_entry() {
             now(),
         )
         .unwrap_err();
-    assert!(matches!(err, TrustError::KeyMaterialMismatch { .. }), "{err}");
+    assert!(
+        matches!(err, TrustError::KeyMaterialMismatch { .. }),
+        "{err}"
+    );
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -403,9 +441,9 @@ fn cross_user_trust_root_is_refused() {
         path: dir.clone(),
         tier: TrustTier::User,
         allowed_uids: vec![me().wrapping_add(1)],
-    domain: crate::provenance::state::TrustDomain::Owner(
-        crate::provenance::fsec::effective_uid(),
-    ),
+        domain: crate::provenance::state::TrustDomain::Owner(
+            crate::provenance::fsec::effective_uid(),
+        ),
     };
     let store = TrustStore::load_roots(&[foreign]);
     assert!(store.is_empty());
@@ -464,7 +502,6 @@ fn key_id_helper_is_a_digest_not_an_alias() {
     assert_ne!(id, key_id_for(&[4u8; 32]));
 }
 
-
 #[cfg(unix)]
 #[test]
 fn a_domain_with_trust_files_but_no_state_fails_closed() {
@@ -486,7 +523,10 @@ fn a_domain_with_trust_files_but_no_state_fails_closed() {
     fs::remove_file(&state).expect("remove the recorded generation");
 
     let store = TrustStore::load_roots(&[user_root(&dir)]);
-    assert!(store.is_empty(), "a domain with no recorded generation must contribute nothing");
+    assert!(
+        store.is_empty(),
+        "a domain with no recorded generation must contribute nothing"
+    );
     assert!(
         store
             .diagnostics()

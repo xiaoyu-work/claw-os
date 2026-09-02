@@ -13,7 +13,7 @@ fn reference(digest: &str, key_id: Option<&str>) -> PackageRef {
         id: "notes".to_string(),
         content_digest: digest.to_string(),
         publisher_key_id: key_id.map(str::to_string),
-        tier: "user".to_string(),
+        tier: if key_id.is_some() { "user" } else { "vendor" }.to_string(),
     }
 }
 
@@ -37,7 +37,11 @@ fn app_instance(digest: &str, key_id: Option<&str>) -> Instance {
 }
 
 #[cfg(unix)]
-fn store_with(revoked_packages: &[String], revoked_keys: &[String], key: Option<&str>) -> TrustStore {
+fn store_with(
+    revoked_packages: &[String],
+    revoked_keys: &[String],
+    key: Option<&str>,
+) -> TrustStore {
     use std::os::unix::fs::PermissionsExt;
     let dir = tmpdir("trust");
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -107,8 +111,50 @@ fn a_revoked_or_removed_publisher_key_stops_a_running_instance() {
 
     // A key simply removed from the store is equally fatal.
     let gone = store_with(&[], &[], None);
-    let err = reference(&digest, Some(&key_id)).is_live(&gone).unwrap_err();
+    let err = reference(&digest, Some(&key_id))
+        .is_live(&gone)
+        .unwrap_err();
     assert!(err.contains("no longer trusted"), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn live_reference_rechecks_publisher_expiry_kind_and_tier() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tmpdir("expired-trust");
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let public_key = hex::encode([7u8; 32]);
+    let bytes: [u8; 32] = hex::decode(&public_key).unwrap().try_into().unwrap();
+    let key_id = crate::provenance::envelope::key_id_for(&bytes);
+    let body = serde_json::json!({
+        "schema": TRUST_SCHEMA_V1,
+        "keys": [{
+            "key_id": key_id,
+            "algorithm": "ed25519",
+            "public_key": public_key,
+            "usages": [USAGE_PACKAGE_SIGNING],
+            "kinds": ["mcp"],
+            "status": "active",
+            "not_after": "2020-01-01T00:00:00Z"
+        }]
+    });
+    let path = dir.join("expired.json");
+    std::fs::write(&path, serde_json::to_vec_pretty(&body).unwrap()).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let roots = vec![TrustRootSpec {
+        path: dir,
+        tier: TrustTier::System,
+        allowed_uids: vec![crate::provenance::fsec::effective_uid()],
+        domain: crate::provenance::state::TrustDomain::Owner(
+            crate::provenance::fsec::effective_uid(),
+        ),
+    }];
+    crate::test_env::record_trust_state(&roots);
+    let store = TrustStore::load_roots(&roots);
+    let mut package = reference(&format!("sha256:{}", "c".repeat(64)), Some(&key_id));
+    package.tier = "system".to_string();
+    assert!(package.is_live(&store).is_err());
 }
 
 #[cfg(unix)]
@@ -180,7 +226,6 @@ fn state_survives_a_process_restart() {
     let _ = std::fs::remove_dir_all(&data);
 }
 
-
 #[cfg(unix)]
 #[test]
 fn an_instance_records_its_class_and_its_exact_process() {
@@ -203,14 +248,21 @@ fn an_instance_records_its_class_and_its_exact_process() {
 
     // A package instance binds the exact process, not just a pid.
     let digest = format!("sha256:{}", "f".repeat(64));
-    seed(me, "app-bound", &digest);
-    bind_process(me, "app-bound", std::process::id());
-    let bound = instance_for(me, "app-bound")
+    let owner_partition = if me == 0 { 10_000 } else { me };
+    seed(owner_partition, "app-bound", &digest);
+    bind_process_checked(owner_partition, "app-bound", std::process::id()).unwrap();
+    let bound = instance_for(owner_partition, "app-bound")
         .expect("readable")
         .expect("recorded");
     let identity = bound.process.expect("process identity");
     assert_eq!(identity.pid, std::process::id());
-    assert_eq!(identity.uid, me);
+    assert_eq!(
+        identity.uid, me,
+        "the process identity must use the execution uid, not the runtime partition"
+    );
+    if me == 0 {
+        assert_ne!(identity.uid, owner_partition);
+    }
     assert!(identity.start_time_ticks.is_some());
     assert!(identity.still_matches(), "this process is still itself");
 
@@ -285,7 +337,6 @@ fn enforcing_a_shutdown_without_a_process_releases_the_record() {
     let _ = std::fs::remove_dir_all(&data);
 }
 
-
 #[cfg(unix)]
 #[test]
 fn every_context_addresses_the_same_owner_routed_record() {
@@ -306,7 +357,10 @@ fn every_context_addresses_the_same_owner_routed_record() {
     // A different owner is a different file, always.
     assert_ne!(state_path_for(owner), state_path_for(other));
     // The lock lives beside it, never inside a directory a caller named.
-    assert_eq!(a.parent(), state_path_for(owner).with_extension("lock").parent());
+    assert_eq!(
+        a.parent(),
+        state_path_for(owner).with_extension("lock").parent()
+    );
 
     // `current_owner` is the euid unless the daemon installed an
     // authenticated override; it is never read from the environment.
@@ -340,8 +394,7 @@ fn a_corrupt_or_insecure_record_denies_instead_of_reading_as_empty() {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).unwrap();
     }
-    let error =
-        assert_live_instance(me, "app-x", &clean).expect_err("insecure record denies");
+    let error = assert_live_instance(me, "app-x", &clean).expect_err("insecure record denies");
     assert!(error.contains("writable"), "unexpected: {error}");
 
     let _ = std::fs::remove_file(&path);
@@ -366,7 +419,10 @@ fn a_missing_record_denies_a_package_backed_session_but_not_a_shell() {
     // gone, so the answer is no.
     let error = assert_live_instance(me, "app-1", &clean)
         .expect_err("a package-backed session with no record must fail closed");
-    assert!(error.contains("no running-instance record"), "unexpected: {error}");
+    assert!(
+        error.contains("no running-instance record"),
+        "unexpected: {error}"
+    );
 
     let _ = std::fs::remove_dir_all(&data);
 }

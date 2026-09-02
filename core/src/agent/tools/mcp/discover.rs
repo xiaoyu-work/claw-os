@@ -278,12 +278,20 @@ pub fn load_package(dir: &Path) -> Result<Option<McpServerSpec>, ManifestError> 
         .to_ascii_lowercase();
     let trust = provenance::trust_store();
     let options = VerifyOptions::new(PackageKind::Mcp).expect_id(&id);
-    let verified = provenance::verify::verify_package_cached(dir, &options, &trust).map_err(
-        |source| ManifestError::Provenance {
-            path: dir.to_path_buf(),
-            detail: provenance::quarantine_reason(PackageKind::Mcp, &id, &source),
-        },
-    )?;
+    let verified =
+        provenance::verify::verify_package_cached(dir, &options, &trust).map_err(|source| {
+            ManifestError::Provenance {
+                path: dir.to_path_buf(),
+                detail: provenance::quarantine_reason(PackageKind::Mcp, &id, &source),
+            }
+        })?;
+    spec_from_verified_package(verified)
+}
+
+pub(crate) fn spec_from_verified_package(
+    verified: Arc<crate::provenance::VerifiedPackage>,
+) -> Result<Option<McpServerSpec>, ManifestError> {
+    let dir = verified.dir();
     let manifest_rel = verified.manifest_path().to_string();
     let body = verified
         .read_verified_text(&manifest_rel)
@@ -326,12 +334,10 @@ pub fn load_manifest(path: &Path) -> Result<Option<McpServerSpec>, ManifestError
 }
 
 fn require_vendor_manifest(path: &Path) -> Result<(), ManifestError> {
-    let canonical = path
-        .canonicalize()
-        .map_err(|source| ManifestError::Io {
-            path: path.to_path_buf(),
-            source,
-        })?;
+    let canonical = path.canonicalize().map_err(|source| ManifestError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
     if !provenance::verify::is_vendor_root_path(&canonical) {
         return Err(ManifestError::Provenance {
             path: path.to_path_buf(),
@@ -480,7 +486,9 @@ fn xdg_data_home() -> Option<PathBuf> {
             return Some(PathBuf::from(v));
         }
     }
-    std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".local/share"))
+    std::env::var("HOME")
+        .ok()
+        .map(|h| PathBuf::from(h).join(".local/share"))
 }
 
 fn xdg_data_dirs() -> Vec<PathBuf> {
@@ -521,10 +529,7 @@ pub fn discover_in(dirs: &[PathBuf]) -> Vec<(McpServerSpec, PathBuf)> {
             Ok(e) => e,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
             Err(e) => {
-                tracing::warn!(
-                    "agent-api: read_dir({}) failed: {e}",
-                    dir.display()
-                );
+                tracing::warn!("agent-api: read_dir({}) failed: {e}", dir.display());
                 continue;
             }
         };
@@ -541,10 +546,7 @@ pub fn discover_in(dirs: &[PathBuf]) -> Vec<(McpServerSpec, PathBuf)> {
                 continue;
             };
             if file_type.is_symlink() {
-                tracing::warn!(
-                    "agent-api: ignoring symlinked entry {}",
-                    path.display()
-                );
+                tracing::warn!("agent-api: ignoring symlinked entry {}", path.display());
                 continue;
             }
             if file_type.is_dir() {

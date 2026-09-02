@@ -115,12 +115,37 @@ impl PackageRef {
                     self.id
                 ));
             }
-            if trust.key(key_id).is_none() {
-                return Err(format!(
+            let key = trust.key(key_id).ok_or_else(|| {
+                format!(
                     "publisher key `{key_id}` for package `{}` is no longer trusted",
+                    self.id
+                )
+            })?;
+            if !key.usages.contains(super::trust::USAGE_PACKAGE_SIGNING)
+                || !key.kinds.contains(&self.kind)
+                || key.tier.as_str() != self.tier
+                || !key.validity.contains(chrono::Utc::now())
+            {
+                return Err(format!(
+                    "publisher key `{key_id}` no longer authorizes package `{}`",
                     self.id
                 ));
             }
+        } else if self.tier == super::TrustTier::Developer.as_str() {
+            let grant = trust
+                .dev_grant(self.kind, &self.id)
+                .ok_or_else(|| format!("developer trust for package `{}` was removed", self.id))?;
+            if grant.content_digest != self.content_digest {
+                return Err(format!(
+                    "developer trust for package `{}` no longer matches its content",
+                    self.id
+                ));
+            }
+        } else if self.tier != super::TrustTier::Vendor.as_str() {
+            return Err(format!(
+                "package `{}` has no publisher identity for trust tier `{}`",
+                self.id, self.tier
+            ));
         }
         Ok(())
     }
@@ -193,6 +218,10 @@ impl ProcessIdentity {
             start_time_ticks: Some(start_time_ticks),
             cgroup: read_cgroup(pid),
         })
+    }
+
+    fn of_live_process(pid: u32) -> Option<Self> {
+        Self::of_process(process_uid(pid)?, pid)
     }
 
     /// Is the process on the other end still the one that was recorded,
@@ -355,7 +384,7 @@ pub fn state_path_for(owner: u32) -> PathBuf {
     if let Some(path) = std::env::var_os(STATE_DIR_ENV) {
         return PathBuf::from(path).join(STATE_FILE);
     }
-    let routed = PathBuf::from("/run/cos/caps").join(owner.to_string());
+    let routed = routed_root(owner);
     if routed.is_dir() {
         return routed.join(STATE_FILE);
     }
@@ -364,6 +393,10 @@ pub fn state_path_for(owner: u32) -> PathBuf {
     // owners must never share a record even when they somehow share a
     // data directory.
     crate::paths::data_dir().join(format!("provenance-running.{owner}.json"))
+}
+
+fn routed_root(owner: u32) -> PathBuf {
+    PathBuf::from("/run/cos/caps").join(owner.to_string())
 }
 
 fn lock_path_for(owner: u32) -> PathBuf {
@@ -399,11 +432,44 @@ pub fn current_owner() -> u32 {
 /// normal case, not a rare one.
 struct StateLock {
     #[cfg(unix)]
-    file: std::fs::File,
+    file: Option<std::fs::File>,
 }
 
 impl StateLock {
-    fn acquire(owner: u32) -> Result<Self, String> {
+    fn acquire_shared(owner: u32) -> Result<Self, String> {
+        Self::acquire_shared_at(&lock_path_for(owner))
+    }
+
+    fn acquire_shared_at(path: &Path) -> Result<Self, String> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+
+            let file = match std::fs::OpenOptions::new().read(true).open(path) {
+                Ok(file) => file,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    return Ok(Self { file: None })
+                }
+                Err(error) => return Err(format!("open {}: {error}", path.display())),
+            };
+            let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_SH) };
+            if rc != 0 {
+                return Err(format!(
+                    "lock {}: {}",
+                    path.display(),
+                    std::io::Error::last_os_error()
+                ));
+            }
+            Ok(Self { file: Some(file) })
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = path;
+            Ok(Self {})
+        }
+    }
+
+    fn acquire_exclusive(owner: u32) -> Result<Self, String> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
@@ -430,7 +496,7 @@ impl StateLock {
                     std::io::Error::last_os_error()
                 ));
             }
-            Ok(Self { file })
+            Ok(Self { file: Some(file) })
         }
         #[cfg(not(unix))]
         {
@@ -445,8 +511,10 @@ impl Drop for StateLock {
         #[cfg(unix)]
         {
             use std::os::unix::io::AsRawFd;
-            unsafe {
-                libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
+            if let Some(file) = self.file.as_ref() {
+                unsafe {
+                    libc::flock(file.as_raw_fd(), libc::LOCK_UN);
+                }
             }
         }
     }
@@ -461,16 +529,19 @@ impl Drop for StateLock {
 /// needs to know whether a session is live treats that error as a
 /// denial rather than as "nothing recorded".
 fn load_state(owner: u32) -> Result<RuntimeState, String> {
-    let path = state_path_for(owner);
-    let meta = match std::fs::symlink_metadata(&path) {
+    load_state_at(owner, &state_path_for(owner))
+}
+
+fn load_state_at(owner: u32, path: &Path) -> Result<RuntimeState, String> {
+    let meta = match std::fs::symlink_metadata(path) {
         Ok(meta) => meta,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(RuntimeState::default())
         }
         Err(error) => return Err(format!("stat {}: {error}", path.display())),
     };
-    validate_record_file(&path, &meta, owner)?;
-    let raw = std::fs::read_to_string(&path)
+    validate_record_file(path, &meta, owner)?;
+    let raw = std::fs::read_to_string(path)
         .map_err(|error| format!("read {}: {error}", path.display()))?;
     serde_json::from_str(&raw).map_err(|error| {
         format!(
@@ -563,7 +634,7 @@ fn write_state(path: &Path, state: &RuntimeState) -> std::io::Result<()> {
 /// take a write lock for every authority check, and a process holding a
 /// stale in-memory copy would silently republish it over a newer one.
 fn with_read<R>(owner: u32, f: impl FnOnce(&RuntimeState) -> R) -> Result<R, String> {
-    let _lock = StateLock::acquire(owner)?;
+    let _lock = StateLock::acquire_shared(owner)?;
     let state = load_state(owner)?;
     Ok(f(&state))
 }
@@ -575,7 +646,7 @@ fn with_read<R>(owner: u32, f: impl FnOnce(&RuntimeState) -> R) -> Result<R, Str
 /// earlier. Two processes registering different instances therefore
 /// both survive.
 fn with_mutate<R>(owner: u32, f: impl FnOnce(&mut RuntimeState) -> R) -> Result<R, String> {
-    let _lock = StateLock::acquire(owner)?;
+    let _lock = StateLock::acquire_exclusive(owner)?;
     // A corrupt record is not silently reset: overwriting it would
     // erase whatever instances it still described, and those are
     // exactly the ones a sweep would otherwise have stopped.
@@ -583,6 +654,9 @@ fn with_mutate<R>(owner: u32, f: impl FnOnce(&mut RuntimeState) -> R) -> Result<
     let result = f(&mut state);
     let path = state_path_for(owner);
     write_state(&path, &state).map_err(|error| format!("persist {}: {error}", path.display()))?;
+    if path.starts_with("/run/cos/caps") {
+        crate::storage::refresh_routed_provenance_acl(owner)?;
+    }
     Ok(result)
 }
 
@@ -637,16 +711,51 @@ fn register_instance(
     class: InstanceClass,
     package: Option<PackageRef>,
 ) {
+    if let Err(error) = register_instance_checked(owner, session_id, class, package) {
+        tracing::error!(
+            target: "provenance",
+            owner,
+            %error,
+            "could not persist the running-instance record; \
+             authority checks for this owner will fail closed"
+        );
+    }
+}
+
+fn register_instance_checked(
+    owner: u32,
+    session_id: &str,
+    class: InstanceClass,
+    package: Option<PackageRef>,
+) -> Result<(), String> {
     let instance = Instance {
         class,
         package,
         process: None,
         started_at: chrono::Utc::now().to_rfc3339(),
     };
-    mutate_or_warn(owner, |state| {
+    with_mutate(owner, |state| {
         state.shutdown.remove(session_id);
         state.running.insert(session_id.to_string(), instance);
-    });
+    })
+}
+
+pub(crate) fn register_bound_instance(
+    owner: u32,
+    session_id: &str,
+    class: InstanceClass,
+    package: Option<PackageRef>,
+) -> Result<(), String> {
+    let valid = match (&class, &package) {
+        (InstanceClass::App, Some(package)) => package.kind == PackageKind::App,
+        (InstanceClass::McpPackage, Some(package)) => package.kind == PackageKind::Mcp,
+        (InstanceClass::McpOperatorConfig, None) => true,
+        _ => false,
+    };
+    if !valid {
+        return Err("runtime instance class does not match its package identity".to_string());
+    }
+    register_instance_checked(owner, session_id, class, package)
 }
 
 /// Bind the spawned child to its instance record.
@@ -655,23 +764,65 @@ fn register_instance(
 /// unreaped child, so the identity read here is the identity of that
 /// exact process and cannot already have been recycled.
 pub fn bind_process(owner: u32, session_id: &str, pid: u32) {
-    let identity = ProcessIdentity::of_process(owner, pid);
-    mutate_or_warn(owner, |state| {
+    if let Err(error) = bind_process_checked(owner, session_id, pid) {
+        tracing::error!(
+            target: "provenance",
+            owner,
+            %error,
+            "could not bind a running-instance process; \
+             authority checks for this owner will fail closed"
+        );
+    }
+}
+
+pub(crate) fn bind_process_checked(owner: u32, session_id: &str, pid: u32) -> Result<(), String> {
+    let identity = ProcessIdentity::of_live_process(pid)
+        .ok_or_else(|| format!("process {pid} could not be identified for provenance"))?;
+    let found = with_mutate(owner, |state| {
+        let mut found = false;
         if let Some(instance) = state.running.get_mut(session_id) {
-            instance.process = identity.clone();
+            instance.process = Some(identity.clone());
+            found = true;
         }
         if let Some(shutdown) = state.shutdown.get_mut(session_id) {
-            shutdown.process = identity.clone();
+            shutdown.process = Some(identity.clone());
+            found = true;
         }
-    });
+        found
+    })?;
+    if !found {
+        return Err(format!(
+            "running-instance record `{session_id}` disappeared before process bind"
+        ));
+    }
+    let recorded = instance_for(owner, session_id)?
+        .and_then(|instance| instance.process)
+        .ok_or_else(|| format!("running-instance record `{session_id}` has no process"))?;
+    if recorded != identity || !recorded.still_matches() {
+        return Err(format!(
+            "running-instance process for `{session_id}` could not be revalidated"
+        ));
+    }
+    Ok(())
 }
 
 /// Forget a session that has exited.
 pub fn deregister(owner: u32, session_id: &str) {
-    mutate_or_warn(owner, |state| {
+    if let Err(error) = deregister_checked(owner, session_id) {
+        tracing::error!(
+            target: "provenance",
+            owner,
+            %error,
+            "could not remove the running-instance record"
+        );
+    }
+}
+
+pub(crate) fn deregister_checked(owner: u32, session_id: &str) -> Result<(), String> {
+    with_mutate(owner, |state| {
         state.running.remove(session_id);
         state.shutdown.remove(session_id);
-    });
+    })
 }
 
 /// The package a session is running, if any.
@@ -794,6 +945,66 @@ pub fn assert_live_now(owner: u32, session_id: &str) -> Result<(), String> {
 /// [`assert_live_instance`] against a freshly resolved trust store.
 pub fn assert_live_instance_now(owner: u32, session_id: &str) -> Result<(), String> {
     assert_live_instance(owner, session_id, &super::trust_store())
+}
+
+pub fn assert_live_instance_for_owner_now(owner: u32, session_id: &str) -> Result<(), String> {
+    assert_live_instance(owner, session_id, &super::trust_store_for_owner(owner))
+}
+
+pub fn assert_recorded_instance(owner: u32, session_id: &str) -> Result<(), String> {
+    assert_recorded_snapshot(
+        session_id,
+        with_read(owner, |state| {
+            (
+                state.shutdown.get(session_id).cloned(),
+                state.running.get(session_id).cloned(),
+            )
+        })?,
+    )
+}
+
+pub fn assert_routed_recorded_instance(owner: u32, session_id: &str) -> Result<(), String> {
+    let root = routed_root(owner);
+    let state_path = root.join(STATE_FILE);
+    let lock_path = state_path.with_extension("lock");
+    let _lock = StateLock::acquire_shared_at(&lock_path)?;
+    let metadata = std::fs::symlink_metadata(&state_path)
+        .map_err(|error| format!("inspect routed running-instance record: {error}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if metadata.uid() != 0 {
+            return Err("routed running-instance record is not root-owned".to_string());
+        }
+    }
+    let state = load_state_at(owner, &state_path)?;
+    assert_recorded_snapshot(
+        session_id,
+        (
+            state.shutdown.get(session_id).cloned(),
+            state.running.get(session_id).cloned(),
+        ),
+    )
+}
+
+fn assert_recorded_snapshot(
+    session_id: &str,
+    (marked, running): (Option<Shutdown>, Option<Instance>),
+) -> Result<(), String> {
+    if let Some(marked) = marked {
+        return Err(marked.reason);
+    }
+    let instance = running
+        .ok_or_else(|| format!("no running-instance record for managed session `{session_id}`"))?;
+    let process = instance.process.ok_or_else(|| {
+        format!("managed session `{session_id}` has no recorded process identity")
+    })?;
+    if !process.still_matches() {
+        return Err(format!(
+            "managed session `{session_id}` no longer matches its recorded process"
+        ));
+    }
+    Ok(())
 }
 
 /// The shutdown record for a session, if it has been marked.

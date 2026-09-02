@@ -422,6 +422,25 @@ home/data/cache/log/tmp trees. The cgroup remains the outer kill/reap
 authority, while private procfs prevents same-UID siblings from observing or
 signalling one another.
 
+Only an authenticated Extension Host may register a package-backed App or MCP
+session with `clawd`; an ordinary user process cannot bind an arbitrary child
+to a trusted package identity. Registration carries the exact `PackageRef`,
+and bind serializes the pending session, verifies the child pid/start time and
+Host execution identity, then commits the runtime record and indexed grant
+together. Every provider-authority decision rechecks that root-owned runtime
+record against the authenticated owner's current trust; deregistration and
+capability narrowing remain available after revocation.
+
+Owner trust never becomes writable Host state. `clawd` validates the owner's
+passwd-derived roots and atomically publishes a root-owned, read-only public
+trust projection under `/run/cos/caps/<uid>/provenance-trust.json`. The Host
+uses that projection to reverify package control messages, while an
+owner-authenticated `provenance.package-live` broker query refreshes and checks
+the exact package immediately before remote MCP attach or dispatch. App/MCP
+children see only the sibling runtime record, not trust roots. Package trees
+are materialized from pinned directory descriptors into read-only snapshots;
+mutable source paths are never copied after verification.
+
 The runtime path is also part of the root boundary. `/run/cos/extension-hosts`,
 its per-owner directory, and each task directory remain root-owned and
 non-writable. `openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|

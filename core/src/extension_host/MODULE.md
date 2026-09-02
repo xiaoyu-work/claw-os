@@ -21,6 +21,9 @@ one daemon-controlled Host per owner and separate isolated children per App.
   descendants. The host may use only App/MCP lifecycle routes; descendants may
   use only session/peer-session provider routes for their nearest registered
   App/MCP session.
+- Admit package-backed App/MCP session registration only from the authenticated
+  Host execution identity. Bind the exact package reference and child process
+  before provider authority becomes live.
 - Run one-shot Apps, stateful App MCP servers, and configured MCP servers;
   never run their code in `clawd` or `claw-agentd`.
 - Launch every dynamic child through the trusted isolation wrapper in its own
@@ -31,6 +34,9 @@ one daemon-controlled Host per owner and separate isolated children per App.
 - Return only sanitized MCP descriptors and require every hosted MCP call to
   carry the exact canonical descriptor-set digest held by that host session.
   A relist mismatch blocks the call rather than substituting a new schema.
+- Reverify owner-scoped package trust from the root-owned routed trust
+  projection and ask `clawd` to refresh/check the exact package immediately
+  before hosted MCP attach and dispatch.
 - Require every persistent MCP-first call to present a one-use daemon grant
   bound to Host pid/start time, owner, task/session, exact App/tool/effective
   arguments, verified manifest digest, call id, capability generation, and
@@ -76,7 +82,8 @@ claw-agentd MCP-first call
   -> host starts/calls App or MCP child
   -> child policy check reads its root-maintained session row
   -> child privileged request uses COS_EXTENSION_BROKER_SOCKET
-  -> clawd verifies per-message credentials and nearest child session
+  -> clawd verifies per-message credentials, nearest child session, and live
+     package/runtime binding
   -> normal route registry, capability authority, provider check and audit
 ```
 

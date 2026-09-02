@@ -271,15 +271,14 @@ fn persistent_gateway_grant_is_exact_and_one_use() {
         control_socket: "/run/cos/test/control.sock".to_string(),
         broker_socket: "/run/cos/test/broker.sock".to_string(),
     };
-    let context = crate::agent::tools::app_gateway::McpCallContext::
-        for_authenticated_system_agent(
-            owner_uid,
-            "agent-session",
-            "agent-task",
-            Duration::from_secs(30),
-            expires_at_ms,
-        )
-        .unwrap();
+    let context = crate::agent::tools::app_gateway::McpCallContext::for_authenticated_system_agent(
+        owner_uid,
+        "agent-session",
+        "agent-task",
+        Duration::from_secs(30),
+        expires_at_ms,
+    )
+    .unwrap();
     let capability_generation = "0123456789abcdef";
     let package_digest = "a".repeat(64);
     let arguments = serde_json::json!({"query": "Acme"});
@@ -332,10 +331,195 @@ fn persistent_gateway_grant_is_exact_and_one_use() {
         consume_gateway_dispatch_grant(&client, &handle, "email", &substituted).is_err(),
         "a substituted target must not spend the exact grant"
     );
-    let (caps, _) =
-        consume_gateway_dispatch_grant(&client, &handle, "email", &call).unwrap();
+    let mut substituted = call.clone();
+    substituted["package_digest"] = serde_json::json!("b".repeat(64));
+    assert!(
+        consume_gateway_dispatch_grant(&client, &handle, "email", &substituted).is_err(),
+        "a substituted package must not spend the exact grant"
+    );
+    let (caps, _) = consume_gateway_dispatch_grant(&client, &handle, "email", &call).unwrap();
     assert!(caps.covers(&target));
     assert!(consume_gateway_dispatch_grant(&client, &handle, "email", &call).is_err());
+}
+
+#[test]
+fn app_session_registration_rejects_a_substituted_package_identity() {
+    let _lock = crate::test_env::lock_env();
+    let root = tempfile::tempdir().unwrap();
+    let app_dir = root.path().join("fs");
+    std::fs::create_dir_all(&app_dir).unwrap();
+    std::fs::write(app_dir.join("app.json"), FS_MANIFEST).unwrap();
+    std::fs::write(app_dir.join("main.py"), "print('ok')\n").unwrap();
+    crate::test_env::sign_test_package(&app_dir, crate::provenance::PackageKind::App, "fs");
+    let app = crate::apps::find_verified(root.path(), "fs").unwrap();
+    let expected = crate::provenance::runtime::PackageRef::of(app.require_verified().unwrap());
+    assert!(require_expected_package(&app, &expected).is_ok());
+
+    let mut substituted = expected;
+    substituted.content_digest = format!("sha256:{}", "0".repeat(64));
+    let error = require_expected_package(&app, &substituted).unwrap_err();
+    assert!(error.message.contains("package changed"), "{error:?}");
+}
+
+#[test]
+fn mcp_session_registration_reverifies_its_exact_package_and_command() {
+    let _lock = crate::test_env::lock_env();
+    let root = tempfile::tempdir().unwrap();
+    let package_dir = root.path().join("org.session-test");
+    std::fs::create_dir_all(&package_dir).unwrap();
+    std::fs::write(
+        package_dir.join("agent-api.json"),
+        r#"{"id":"org.session-test","name":"session-test","transport":"mcp+stdio","command":"true"}"#,
+    )
+    .unwrap();
+    crate::test_env::sign_test_package(
+        &package_dir,
+        crate::provenance::PackageKind::Mcp,
+        "org.session-test",
+    );
+    let package = crate::provenance::verify::verify_package_cached(
+        &package_dir,
+        &crate::provenance::VerifyOptions::new(crate::provenance::PackageKind::Mcp)
+            .expect_id("org.session-test"),
+        &crate::provenance::trust_store(),
+    )
+    .unwrap();
+    let package_ref = crate::provenance::runtime::PackageRef::of(&package);
+    let params = serde_json::json!({
+        "package": {
+            "dir": package.dir(),
+            "package": package_ref,
+        }
+    });
+    let owner = crate::provenance::fsec::effective_uid();
+    assert!(verified_mcp_package(&params, "true", owner)
+        .unwrap()
+        .is_some());
+    assert!(verified_mcp_package(&params, "false", owner).is_err());
+
+    let mut substituted = params;
+    substituted["package"]["package"]["content_digest"] =
+        serde_json::json!(format!("sha256:{}", "0".repeat(64)));
+    assert!(verified_mcp_package(&substituted, "true", owner).is_err());
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn repeated_bind_cannot_destroy_the_first_runtime_binding() {
+    let _lock = crate::test_env::lock_env();
+    let root = tempfile::tempdir().unwrap();
+    let app_dir = root.path().join("fs");
+    std::fs::create_dir_all(&app_dir).unwrap();
+    std::fs::write(app_dir.join("app.json"), FS_MANIFEST).unwrap();
+    std::fs::write(app_dir.join("main.py"), "print('ok')\n").unwrap();
+    crate::test_env::sign_test_package(&app_dir, crate::provenance::PackageKind::App, "fs");
+    let app = crate::apps::find_verified(root.path(), "fs").unwrap();
+    let package = crate::provenance::runtime::PackageRef::of(app.require_verified().unwrap());
+    let ceiling = app.require_verified().unwrap().ceiling();
+    let proc_dir = tempfile::tempdir().unwrap();
+    let runtime_dir = tempfile::tempdir().unwrap();
+    let _apps = crate::test_env::TestEnvVarGuard::set("COS_APPS_DIR", root.path());
+    let _proc = crate::test_env::TestEnvVarGuard::set("COS_PROC_DATA_DIR", proc_dir.path());
+    let _runtime =
+        crate::test_env::TestEnvVarGuard::set("COS_PROVENANCE_RUNTIME_DIR", runtime_dir.path());
+    let owner = this_uid();
+    let session_id = format!("app-bind-{}", uuid::Uuid::new_v4().simple());
+    let launcher = test_authority();
+    let caps = home_reader_ceiling();
+    let handle = issue_launch_grant(
+        &session_id,
+        Some("fs"),
+        Some(&package),
+        owner,
+        &launcher,
+        &caps,
+        Some(&ceiling),
+    )
+    .unwrap();
+    let mut row = e2e_row(&session_id, 0, None);
+    row.pid = 0;
+    row.pending_bind = true;
+    row.start_time_ticks = None;
+    row.caps = Some(caps);
+    crate::proc::register_session(row).unwrap();
+    let mut child = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .unwrap();
+    let params = serde_json::json!({
+        "session_id": session_id,
+        "handle": handle,
+        "pid": child.id(),
+    });
+    let client = test_client();
+    bind(params.clone(), &client).await.unwrap();
+    let first = crate::provenance::runtime::instance_for(owner, &session_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        first.process.as_ref().map(|process| process.pid),
+        Some(child.id())
+    );
+
+    assert!(bind(params, &client).await.is_err());
+    let after = crate::provenance::runtime::instance_for(owner, &session_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.process, first.process);
+
+    deregister(
+        serde_json::json!({"session_id": session_id, "handle": handle}),
+        &client,
+    )
+    .await
+    .unwrap();
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[test]
+fn gateway_authority_rechecks_live_session_narrowing_between_approval_polls() {
+    let harness = transient_harness();
+    let _proc = crate::test_env::TestEnvVarGuard::set(
+        "COS_PROC_DATA_DIR",
+        harness._data.path().join("proc"),
+    );
+    let (worker_pid, worker_start_time_ticks) = this_process();
+    let session_id = "agent-gateway-live-session";
+    let caps = e2e_app_caps();
+    let mut row = e2e_row(session_id, worker_pid, None);
+    row.group = Some("agent".to_string());
+    row.app_id = None;
+    row.caps = Some(caps.clone());
+    e2e_install_row(row);
+    let authority = AgentGatewayAuthority {
+        owner_uid: E2E_UID,
+        owner_home: std::path::PathBuf::from("/root"),
+        task_id: "task-live-session".to_string(),
+        session_id: session_id.to_string(),
+        worker_pid,
+        worker_start_time_ticks,
+        lease_deadline_ms: crate::agentd::grant::now_ms() + 60_000,
+        approval_nonce: "0123456789abcdef0123456789abcdef".to_string(),
+        approval_expires_at: chrono::Utc::now().timestamp() as u64 + 60,
+        consent_context: crate::caps::ConsentContext::Attended,
+        capability_generation: crate::agent::tools::exposure::capability_generation(&caps),
+        caps,
+    };
+    e2e_runtime()
+        .block_on(verify_agent_gateway_authority(&authority))
+        .expect("unchanged live authority");
+
+    let narrowed = CapSet::from_caps([Cap::new(Verb::AGENT_INVOKE, Scope::name("fs"))]);
+    let mut row = e2e_row(session_id, worker_pid, None);
+    row.group = Some("agent".to_string());
+    row.app_id = None;
+    row.caps = Some(narrowed);
+    e2e_install_row(row);
+    let error = e2e_runtime()
+        .block_on(verify_agent_gateway_authority(&authority))
+        .expect_err("narrowed session must invalidate an approval wait");
+    assert!(error.message.contains("capabilities changed"), "{error:?}");
 }
 
 #[test]
@@ -346,20 +530,20 @@ fn mcp_first_transient_plan_rechecks_and_removes_caller_invoke_cap() {
     std::fs::create_dir_all(&app_dir).unwrap();
     std::fs::write(app_dir.join("app.json"), EMAIL_MCP_MANIFEST).unwrap();
     let _apps = crate::test_env::TestEnvVarGuard::set("COS_APPS_DIR", apps.path());
-    let invoke = Cap::new(
-        Verb::AGENT_INVOKE,
-        Scope::name("email/email.search"),
-    );
+    let invoke = Cap::new(Verb::AGENT_INVOKE, Scope::name("email/email.search"));
     let delegation = delegation(CapSet::from_iter([invoke.clone()]));
+    let app = app_from(EMAIL_MCP_MANIFEST);
+    let ceiling = Ceiling::for_package(crate::provenance::TrustTier::Vendor, "email");
     let deadline = crate::agentd::grant::now_ms() + 1000;
     let (plan, caller_authority) = session_tool_plan(
-        "email",
+        &app,
         &serde_json::json!({
             "tool": "email.search",
             "args": {},
             "deadline_unix_ms": deadline
         }),
         &delegation,
+        &ceiling,
     )
     .unwrap();
     let caller_authority = caller_authority.expect("MCP call authority");
@@ -370,19 +554,21 @@ fn mcp_first_transient_plan_rechecks_and_removes_caller_invoke_cap() {
     let target = target_session_caps(plan.caps, true, &invoke);
     assert!(!target.covers(&invoke));
     assert!(session_tool_plan(
-        "email",
+        &app,
         &serde_json::json!({"tool": "email.search", "args": {}}),
         &delegation,
+        &ceiling,
     )
     .is_err());
     assert!(session_tool_plan(
-        "email",
+        &app,
         &serde_json::json!({
             "tool": "email.search",
             "args": {},
             "deadline_unix_ms": 1
         }),
         &delegation,
+        &ceiling,
     )
     .is_err());
 }
@@ -394,10 +580,7 @@ fn gateway_target_grant_can_exceed_invoke_only_launch_authority() {
     let uid = unsafe { libc::geteuid() as u32 };
     let pid = std::process::id();
     let session_id = format!("gateway-target-{}", uuid::Uuid::new_v4().simple());
-    let target = CapSet::from_caps([Cap::new(
-        Verb::FS_READ,
-        Scope::path("/srv/customer/**"),
-    )]);
+    let target = CapSet::from_caps([Cap::new(Verb::FS_READ, Scope::path("/srv/customer/**"))]);
     issue_gateway_target_grant(
         &session_id,
         "email",
@@ -405,6 +588,7 @@ fn gateway_target_grant_can_exceed_invoke_only_launch_authority() {
         pid,
         &target,
         crate::agentd::grant::now_ms() + 60_000,
+        None,
     )
     .unwrap();
     let view = authority::authority()
@@ -1423,6 +1607,7 @@ fn a_launch_grant_is_bound_to_its_session_and_launcher() {
     let handle = issue_launch_grant(
         "app-grant-1",
         Some("power-manager"),
+        None,
         this_uid(),
         &launcher,
         &caps,
@@ -1464,6 +1649,7 @@ fn a_session_grant_is_derived_from_the_launch_grant_exactly_once() {
     let handle = issue_launch_grant(
         "app-grant-2",
         Some("power-manager"),
+        None,
         this_uid(),
         &launcher,
         &caps,
@@ -1503,6 +1689,7 @@ fn a_session_grant_cannot_widen_the_launch_grant() {
     let handle = issue_launch_grant(
         "app-grant-3",
         Some("power-manager"),
+        None,
         this_uid(),
         &launcher,
         &home_reader_ceiling(),
@@ -1537,6 +1724,7 @@ fn a_launch_grant_for_an_unverifiable_launcher_is_refused() {
     issue_launch_grant(
         "app-grant-4",
         Some("power-manager"),
+        None,
         this_uid(),
         &launcher,
         &home_reader_ceiling(),
@@ -1557,6 +1745,17 @@ fn launch_kind_is_a_closed_set() {
     assert!(launch_kind(&serde_json::json!({"kind": "mcp"})).is_ok());
     assert!(launch_kind(&serde_json::json!({"kind": "root"})).is_err());
     assert!(launch_kind(&serde_json::json!({})).is_err());
+}
+
+#[tokio::test]
+async fn ordinary_user_process_cannot_mint_a_package_session_for_its_child() {
+    let client = test_client();
+    let app_error = register(serde_json::json!({}), &client).await.unwrap_err();
+    assert!(app_error.message.contains("Extension Host"));
+    let mcp_error = register_mcp(serde_json::json!({}), &client)
+        .await
+        .unwrap_err();
+    assert!(mcp_error.contains("Extension Host"));
 }
 
 #[test]
@@ -1757,6 +1956,7 @@ fn e2e_install_grants(session_id: &str, child_pid: u32) -> String {
     let handle = issue_launch_grant(
         session_id,
         Some("fs"),
+        None,
         E2E_UID,
         &launcher,
         &e2e_app_caps(),
@@ -1828,6 +2028,7 @@ fn gateway_target_grant_is_independent_of_caller_launch_ceiling() {
         child,
         &e2e_call_caps(),
         crate::agentd::grant::now_ms() + 60_000,
+        None,
     )
     .expect("Gateway target grant");
     let view = authority::authority()
@@ -1842,10 +2043,10 @@ fn gateway_target_grant_is_independent_of_caller_launch_ceiling() {
                 session_id: Some(session_id.to_string()),
             },
         )
-            .expect("target session grant");
-        assert_eq!(view.issuer, authority::Issuer::AppGateway);
-        let required = Cap::new(Verb::FS_READ, Scope::path("/srv/scratch/**"));
-        assert!(view.caps.covers(&required));
+        .expect("target session grant");
+    assert_eq!(view.issuer, authority::Issuer::AppGateway);
+    let required = Cap::new(Verb::FS_READ, Scope::path("/srv/scratch/**"));
+    assert!(view.caps.covers(&required));
 }
 
 #[test]

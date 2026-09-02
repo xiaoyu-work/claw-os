@@ -5,7 +5,10 @@ fn tool() -> CosAppMemoryTool {
     CosAppMemoryTool::new(MemoryDb::open_in_memory().unwrap())
 }
 
-fn memory_read_session(scope: crate::caps::Scope, app_id: Option<&str>) -> crate::proc::SessionInfo {
+fn memory_read_session(
+    scope: crate::caps::Scope,
+    app_id: Option<&str>,
+) -> crate::proc::SessionInfo {
     crate::proc::SessionInfo {
         session_id: "app-memory-session".to_string(),
         pid: std::process::id(),
@@ -103,7 +106,11 @@ async fn list_returns_recent_rows_across_sources() {
         &t,
         &[
             ("calendar", "Dentist appointment Tue 10am", Some("event")),
-            ("email", "Sent quarterly report to alice@example.com", Some("event")),
+            (
+                "email",
+                "Sent quarterly report to alice@example.com",
+                Some("event"),
+            ),
         ],
     )
     .await;
@@ -136,7 +143,11 @@ async fn search_finds_keyword_across_sources() {
     seed(
         &t,
         &[
-            ("calendar", "Hilton hotel reservation for Boston trip", Some("event")),
+            (
+                "calendar",
+                "Hilton hotel reservation for Boston trip",
+                Some("event"),
+            ),
             ("email", "Sent confirmation to airline", Some("event")),
         ],
     )
@@ -153,7 +164,11 @@ async fn kind_filter_post_filters_results() {
         &t,
         &[
             ("calendar", "Dentist appointment", Some("event")),
-            ("calendar", "I dislike going to the dentist", Some("preference")),
+            (
+                "calendar",
+                "I dislike going to the dentist",
+                Some("preference"),
+            ),
         ],
     )
     .await;
@@ -184,10 +199,26 @@ async fn show_returns_one_row_by_id() {
 #[tokio::test]
 async fn app_scoped_grant_cannot_read_other_sources_or_global_rows() {
     let _lock = crate::test_env::lock_env();
+    let package_root = tempfile::tempdir().unwrap();
+    let package = package_root.path().join("calendar");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(
+        package.join("app.json"),
+        r#"{"id":"calendar","version":"1.0.0","name":"Calendar","operations":{}}"#,
+    )
+    .unwrap();
+    std::fs::write(package.join("main.py"), "print('calendar')\n").unwrap();
+    let launch = crate::test_env::app_launch(&package, "calendar");
+    let provenance_owner = crate::provenance::runtime::current_owner();
+    crate::provenance::runtime::register(provenance_owner, "app-memory-session", launch.package());
+    crate::provenance::runtime::bind_process(
+        provenance_owner,
+        "app-memory-session",
+        std::process::id(),
+    );
     let caps_dir = tempfile::tempdir().unwrap();
     let _mode = crate::test_env::TestEnvVarGuard::set("COS_PERMS_MODE", "strict");
-    let _caps =
-        crate::test_env::TestEnvVarGuard::set("COS_CAPS_DATA_DIR", caps_dir.path());
+    let _caps = crate::test_env::TestEnvVarGuard::set("COS_CAPS_DATA_DIR", caps_dir.path());
     let db = MemoryDb::open_in_memory().unwrap();
     let tool = CosAppMemoryTool::new(db.clone());
     seed(
@@ -223,9 +254,7 @@ async fn app_scoped_grant_cannot_read_other_sources_or_global_rows() {
 
     assert!(registry.get_for(&context, "cos_app_memory").is_some());
     assert!(registry.get_for(&context, "cos_recall").is_none());
-    assert!(registry
-        .get_for(&context, "cos_recall_semantic")
-        .is_none());
+    assert!(registry.get_for(&context, "cos_recall_semantic").is_none());
     let (own, other, global, show_other) =
         crate::proc::with_trusted_session_override(session, async {
             let own = registry
@@ -269,4 +298,5 @@ async fn app_scoped_grant_cannot_read_other_sources_or_global_rows() {
         assert!(denied.is_error);
         assert!(!denied.content.contains("email-only"));
     }
+    crate::provenance::runtime::deregister(provenance_owner, "app-memory-session");
 }

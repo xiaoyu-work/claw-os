@@ -249,6 +249,7 @@ pub struct PermissionRevoke {
 #[serde(deny_unknown_fields)]
 pub struct AppSessionRegister {
     pub app_id: Name,
+    pub package: Structured,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<Token>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -267,6 +268,7 @@ pub struct AppSessionRegister {
 #[serde(deny_unknown_fields)]
 pub struct AppSessionRegisterNative {
     pub app_id: Name,
+    pub package: Structured,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -275,6 +277,8 @@ pub struct McpSessionRegister {
     pub command: Text<COMMAND_BYTES>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_caps: Option<Structured>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<Structured>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -300,6 +304,12 @@ pub struct AppSessionSetTransient {
     pub call: Option<Structured>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_caps: Option<Structured>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProvenancePackageLive {
+    pub package: Structured,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -56,8 +56,7 @@ tokio::task_local! {
 /// The lifetime of this struct is the agent's config lifetime — it is
 /// read once at startup. Per-call data (handles, clients) lives on
 /// [`McpServerHandle`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone)]
 pub struct McpServerSpec {
     /// Stable, snake_case identifier. Becomes the prefix in registered
     /// tool names: `mcp_<name>_<remote_tool_name>`. Must be unique
@@ -91,6 +90,141 @@ pub struct McpServerSpec {
     pub provenance: Option<Arc<crate::provenance::VerifiedPackage>>,
 }
 
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "source", rename_all = "kebab-case", deny_unknown_fields)]
+enum McpServerSpecWire {
+    Operator {
+        name: String,
+        command: String,
+        args: Vec<String>,
+        env: HashMap<String, String>,
+        cwd: Option<String>,
+        timeout_secs: u64,
+        url: Option<String>,
+        bearer_env: Option<String>,
+    },
+    Package {
+        package: McpPackageBinding,
+    },
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct McpPackageBinding {
+    dir: String,
+    package: crate::provenance::runtime::PackageRef,
+}
+
+impl Serialize for McpServerSpec {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let wire = match self.provenance.as_deref() {
+            Some(package) => {
+                let dir = package
+                    .dir()
+                    .to_str()
+                    .ok_or_else(|| serde::ser::Error::custom("MCP package path is not UTF-8"))?;
+                McpServerSpecWire::Package {
+                    package: McpPackageBinding {
+                        dir: dir.to_string(),
+                        package: crate::provenance::runtime::PackageRef::of(package),
+                    },
+                }
+            }
+            None => McpServerSpecWire::Operator {
+                name: self.name.clone(),
+                command: self.command.clone(),
+                args: self.args.clone(),
+                env: self.env.clone(),
+                cwd: self.cwd.clone(),
+                timeout_secs: self.timeout_secs,
+                url: self.url.clone(),
+                bearer_env: self.bearer_env.clone(),
+            },
+        };
+        wire.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for McpServerSpec {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        match McpServerSpecWire::deserialize(deserializer)? {
+            McpServerSpecWire::Operator {
+                name,
+                command,
+                args,
+                env,
+                cwd,
+                timeout_secs,
+                url,
+                bearer_env,
+            } => Ok(Self {
+                name,
+                command,
+                args,
+                env,
+                cwd,
+                timeout_secs,
+                url,
+                bearer_env,
+                provenance: None,
+            }),
+            McpServerSpecWire::Package { package } => {
+                let trust = crate::provenance::trust_store();
+                let options =
+                    crate::provenance::VerifyOptions::new(crate::provenance::PackageKind::Mcp)
+                        .expect_id(&package.package.id);
+                let verified = crate::provenance::verify::verify_package_cached(
+                    std::path::Path::new(&package.dir),
+                    &options,
+                    &trust,
+                )
+                .map_err(serde::de::Error::custom)?;
+                if crate::provenance::runtime::PackageRef::of(&verified) != package.package {
+                    return Err(serde::de::Error::custom(
+                        "MCP package changed after its control request was encoded",
+                    ));
+                }
+                super::discover::spec_from_verified_package(verified)
+                    .map_err(serde::de::Error::custom)?
+                    .ok_or_else(|| {
+                        serde::de::Error::custom(
+                            "verified MCP package does not declare an enabled server",
+                        )
+                    })
+            }
+        }
+    }
+}
+
+impl PartialEq for McpServerSpec {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.command == other.command
+            && self.args == other.args
+            && self.env == other.env
+            && self.cwd == other.cwd
+            && self.timeout_secs == other.timeout_secs
+            && self.url == other.url
+            && self.bearer_env == other.bearer_env
+            && self
+                .provenance
+                .as_deref()
+                .map(crate::provenance::runtime::PackageRef::of)
+                == other
+                    .provenance
+                    .as_deref()
+                    .map(crate::provenance::runtime::PackageRef::of)
+    }
+}
+
+impl Eq for McpServerSpec {}
+
 impl McpServerSpec {
     fn timeout_duration(&self) -> Duration {
         if self.timeout_secs == 0 {
@@ -111,8 +245,8 @@ impl McpServerSpec {
 /// leaving it running and merely declining to talk to it would keep it
 /// holding its sandbox, its cgroup and whatever it has already opened.
 pub(crate) struct McpInstance {
-    /// The session id the runtime record is keyed by. Synthetic
-    /// (`mcp:<name>`) when the server runs without a proc session.
+    /// The session id the runtime record is keyed by. A unique
+    /// synthetic id is used when the server runs without a proc session.
     session_id: String,
     name: String,
     class: crate::provenance::runtime::InstanceClass,
@@ -122,6 +256,7 @@ pub(crate) struct McpInstance {
     /// The owner this server's record belongs to, captured when it was
     /// attached rather than re-derived per call.
     owner: u32,
+    runtime_registered: bool,
     closed: std::sync::atomic::AtomicBool,
 }
 
@@ -130,6 +265,8 @@ impl McpInstance {
         session_id: String,
         name: String,
         package: Option<crate::provenance::runtime::PackageRef>,
+        owner: u32,
+        runtime_registered: bool,
     ) -> Self {
         let class = match package {
             Some(_) => crate::provenance::runtime::InstanceClass::McpPackage,
@@ -140,7 +277,8 @@ impl McpInstance {
             name,
             class,
             package,
-            owner: crate::provenance::runtime::current_owner(),
+            owner,
+            runtime_registered,
             closed: std::sync::atomic::AtomicBool::new(false),
         }
     }
@@ -162,19 +300,27 @@ impl McpInstance {
                 self.name
             ));
         }
-        let trust = crate::provenance::trust_store();
+        let trust = crate::provenance::trust_store_for_owner(self.owner);
         if let Some(package) = &self.package {
             package.is_live(&trust).inspect_err(|reason| {
                 crate::provenance::runtime::mark_for_shutdown(self.owner, &self.session_id, reason);
             })?;
             // Package-backed: a missing record is a denial.
-            return crate::provenance::runtime::assert_live_instance(
-                self.owner,
-                &self.session_id,
-                &trust,
-            );
+            return if self.runtime_registered {
+                crate::provenance::runtime::assert_live_instance(
+                    self.owner,
+                    &self.session_id,
+                    &trust,
+                )
+            } else {
+                Ok(())
+            };
         }
-        crate::provenance::runtime::assert_live(self.owner, &self.session_id, &trust)
+        if self.runtime_registered {
+            crate::provenance::runtime::assert_live(self.owner, &self.session_id, &trust)
+        } else {
+            Ok(())
+        }
     }
 
     /// Close this server for good: mark it, kill its process group and
@@ -186,7 +332,9 @@ impl McpInstance {
         if self.closed.swap(true, std::sync::atomic::Ordering::SeqCst) {
             return;
         }
-        crate::provenance::runtime::mark_for_shutdown(self.owner, &self.session_id, reason);
+        if self.runtime_registered {
+            crate::provenance::runtime::mark_for_shutdown(self.owner, &self.session_id, reason);
+        }
         crate::provenance::audit(
             "provenance.revoked_instance_denied",
             json!({
@@ -199,16 +347,46 @@ impl McpInstance {
                 "reason": reason,
             }),
         );
-        let session = self.session_id.clone();
-        let owner = self.owner;
-        let _ = tokio::task::spawn_blocking(move || {
-            crate::provenance::runtime::terminate(
-                owner,
-                &session,
-                crate::provenance::runtime::SHUTDOWN_GRACE,
-            )
-        })
-        .await;
+        if self.runtime_registered {
+            let session = self.session_id.clone();
+            let owner = self.owner;
+            let _ = tokio::task::spawn_blocking(move || {
+                crate::provenance::runtime::terminate(
+                    owner,
+                    &session,
+                    crate::provenance::runtime::SHUTDOWN_GRACE,
+                )
+            })
+            .await;
+        }
+    }
+}
+
+struct McpRuntimeRegistration {
+    owner: u32,
+    session_id: String,
+    armed: bool,
+}
+
+impl McpRuntimeRegistration {
+    fn new(owner: u32, session_id: String) -> Self {
+        Self {
+            owner,
+            session_id,
+            armed: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for McpRuntimeRegistration {
+    fn drop(&mut self) {
+        if self.armed {
+            crate::provenance::runtime::deregister(self.owner, &self.session_id);
+        }
     }
 }
 
@@ -232,6 +410,7 @@ pub struct McpServerHandle {
     timeout: Duration,
     hosted: bool,
     _proc_session: Option<crate::bridge::McpProcSession>,
+    _instance: Option<Arc<McpInstance>>,
 }
 
 impl McpServerHandle {
@@ -255,6 +434,19 @@ impl McpServerHandle {
         self.timeout
     }
 
+    pub(crate) fn assert_live(&self) -> Result<(), String> {
+        let Some(instance) = self._instance.as_ref() else {
+            return Ok(());
+        };
+        instance.assert_live()
+    }
+
+    pub(crate) fn instance_session_id(&self) -> Option<&str> {
+        self._instance
+            .as_ref()
+            .map(|instance| instance.session_id())
+    }
+
     /// Borrow a clone of the underlying MCP client. Callers that want
     /// to issue arbitrary `tools/call` invocations against this server
     /// (e.g. the app-session bridge) hold this `Arc` instead of going
@@ -273,6 +465,11 @@ impl McpServerHandle {
 impl Drop for McpServerHandle {
     fn drop(&mut self) {
         self.attachment.detach();
+        if let Some(instance) = self._instance.take() {
+            if instance.runtime_registered {
+                crate::provenance::runtime::deregister(instance.owner, &instance.session_id);
+            }
+        }
         if self.hosted {
             if let Some(client) = crate::extension_host::client::current() {
                 let name = self.name.clone();
@@ -321,6 +518,7 @@ pub struct McpRemoteTool {
     timeout: Duration,
     exposure: ToolExposure,
     attachment: ToolAttachment,
+    instance: Option<Arc<McpInstance>>,
 }
 
 enum McpToolBackend {
@@ -491,6 +689,29 @@ impl McpRemoteTool {
         attachment: ToolAttachment,
         descriptor_digest: String,
     ) -> Self {
+        Self::new_with_instance(
+            prefix,
+            descriptor,
+            client,
+            timeout,
+            transport,
+            attachment,
+            descriptor_digest,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_with_instance(
+        prefix: &str,
+        descriptor: ToolDescriptor,
+        client: Arc<McpClient>,
+        timeout: Duration,
+        transport: ToolTransport,
+        attachment: ToolAttachment,
+        descriptor_digest: String,
+        instance: Option<Arc<McpInstance>>,
+    ) -> Self {
         let name = model_tool_name(prefix, &descriptor.name)
             .expect("MCP descriptors are sanitized before tool construction");
         Self {
@@ -508,6 +729,7 @@ impl McpRemoteTool {
                 .requiring_transport(transport)
                 .requiring_extension(format!("mcp:{prefix}")),
             attachment,
+            instance,
         }
     }
 
@@ -535,6 +757,7 @@ impl McpRemoteTool {
                 .requiring_transport(transport)
                 .requiring_extension(format!("mcp:{prefix}")),
             attachment,
+            instance: None,
         }
     }
 }
@@ -565,6 +788,12 @@ impl Tool for McpRemoteTool {
         if !self.attachment.is_active() {
             return ToolResult::err(format!("MCP `{}` is detached", self.name));
         }
+        if let Some(instance) = self.instance.as_ref() {
+            if let Err(error) = instance.assert_live() {
+                instance.shut_down(&error).await;
+                return ToolResult::err(error);
+            }
+        }
         // MCP's `arguments` is `Option<Value>`. Treat empty/null
         // input as None so servers that pattern-match on absence
         // (vs. empty object) work correctly.
@@ -584,6 +813,15 @@ impl Tool for McpRemoteTool {
                         .await
                 {
                     return ToolResult::err(error);
+                }
+                if !self.attachment.is_active() {
+                    return ToolResult::err(format!("MCP `{}` is detached", self.name));
+                }
+                if let Some(instance) = self.instance.as_ref() {
+                    if let Err(error) = instance.assert_live() {
+                        instance.shut_down(&error).await;
+                        return ToolResult::err(error);
+                    }
                 }
                 let call = client.call_tool(self.remote_name.clone(), arguments);
                 match timeout(self.timeout, call).await {
@@ -938,6 +1176,7 @@ async fn attach_server_into(
             timeout,
             hosted: true,
             _proc_session: None,
+            _instance: None,
         });
     }
     if crate::paths::is_routed_job() {
@@ -946,7 +1185,7 @@ async fn attach_server_into(
                 .to_string(),
         );
     }
-    attach_server_local_with_attachment(spec, disclosure, None, attachment).await
+    attach_server_local_with_attachment(spec, disclosure, None, None, attachment).await
 }
 
 pub async fn attach_server(
@@ -965,15 +1204,23 @@ pub(crate) async fn attach_server_local(
     spec: &McpServerSpec,
     disclosure: Option<&Arc<McpDisclosureState>>,
     isolation: Option<&crate::extension_host::child_isolation::IsolationAuthority>,
+    runtime_owner: Option<u32>,
 ) -> Result<McpServerHandle, String> {
-    attach_server_local_with_attachment(spec, disclosure, isolation, ToolAttachment::standalone())
-        .await
+    attach_server_local_with_attachment(
+        spec,
+        disclosure,
+        isolation,
+        runtime_owner,
+        ToolAttachment::standalone(),
+    )
+    .await
 }
 
 async fn attach_server_local_with_attachment(
     spec: &McpServerSpec,
     disclosure: Option<&Arc<McpDisclosureState>>,
     isolation: Option<&crate::extension_host::child_isolation::IsolationAuthority>,
+    runtime_owner: Option<u32>,
     attachment: ToolAttachment,
 ) -> Result<McpServerHandle, String> {
     if crate::paths::is_routed_job() {
@@ -982,11 +1229,24 @@ async fn attach_server_local_with_attachment(
                 .to_string(),
         );
     }
+    if let Some(package) = spec.provenance.as_deref() {
+        let ceiling = package.ceiling();
+        if !ceiling.allows_mcp_attach() {
+            return Err(format!(
+                "MCP package `{}` is {}-trusted and may not attach a server",
+                package.id(),
+                ceiling.label()
+            ));
+        }
+    }
     // Remote (HTTP/SSE) servers take a separate, child-less path.
     if spec.url.is_some() {
-        return attach_http_server(spec, disclosure, attachment).await;
+        return attach_http_server(spec, disclosure, runtime_owner, attachment).await;
     }
-    let proc_session = crate::bridge::McpProcSession::for_current_parent(&spec.command)?;
+    let proc_session = crate::bridge::McpProcSession::for_current_parent(
+        &spec.command,
+        spec.provenance.as_deref(),
+    )?;
     let (program, initial_args) = if proc_session.is_some() {
         let mut args = vec![
             std::ffi::OsString::from("--"),
@@ -1000,7 +1260,9 @@ async fn attach_server_local_with_attachment(
             spec.args.iter().map(std::ffi::OsString::from).collect(),
         )
     };
-    let authorized_root = if let Some(home) = crate::paths::current_home_override() {
+    let authorized_root = if spec.provenance.is_some() {
+        None
+    } else if let Some(home) = crate::paths::current_home_override() {
         let canonical_home = home
             .canonicalize()
             .map_err(|e| format!("canonicalize MCP owner home {}: {e}", home.display()))?;
@@ -1045,20 +1307,73 @@ async fn attach_server_local_with_attachment(
             crate::paths::proc_data_dir().into_os_string(),
         ));
     }
-    let launch = crate::extension_host::child_isolation::prepare_with_clean_env(
-        program,
-        initial_args,
-        authorized_root.as_deref(),
-        inner_env,
-        isolation,
-    )?;
+    let _package_binding = spec
+        .provenance
+        .as_deref()
+        .map(|package| {
+            package
+                .bind_for_launch(package.entrypoints())
+                .map_err(|error| format!("bind MCP package `{}`: {error}", package.id()))
+        })
+        .transpose()?;
+    let package_working_dir = spec
+        .provenance
+        .as_deref()
+        .map(|package| {
+            let root = package
+                .dir()
+                .canonicalize()
+                .map_err(|error| format!("canonicalize MCP package root: {error}"))?;
+            let cwd = spec
+                .cwd
+                .as_deref()
+                .map(std::path::Path::new)
+                .unwrap_or(package.dir())
+                .canonicalize()
+                .map_err(|error| format!("canonicalize MCP package cwd: {error}"))?;
+            if !cwd.starts_with(&root) {
+                return Err(format!(
+                    "MCP package cwd {} escapes verified package {}",
+                    cwd.display(),
+                    root.display()
+                ));
+            }
+            Ok(cwd)
+        })
+        .transpose()?;
+    let launch = match spec.provenance.as_deref() {
+        Some(package) => crate::extension_host::child_isolation::prepare_verified_with_clean_env(
+            program,
+            initial_args,
+            Some(package.dir()),
+            package_working_dir.as_deref(),
+            inner_env,
+            isolation,
+            package,
+        )?,
+        None => crate::extension_host::child_isolation::prepare_with_clean_env(
+            program,
+            initial_args,
+            authorized_root.as_deref(),
+            inner_env,
+            isolation,
+        )?,
+    };
     let isolated = launch.isolated;
+    if spec.provenance.is_some() && !isolated {
+        return Err(
+            "package-backed stdio MCP execution requires Extension Host isolation".to_string(),
+        );
+    }
     let mut command = tokio::process::Command::new(launch.program);
     crate::extension_host::child_isolation::close_unallowlisted_fds(command.as_std_mut());
     command.env_clear();
     command.args(launch.args).envs(launch.env);
     if !isolated {
-        if let Some(cwd) = authorized_root.as_deref() {
+        if let Some(cwd) = package_working_dir
+            .as_deref()
+            .or(authorized_root.as_deref())
+        {
             command.current_dir(cwd);
         }
     }
@@ -1067,6 +1382,47 @@ async fn attach_server_local_with_attachment(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     crate::bridge::apply_routed_identity(command.as_std_mut())?;
+    if let Some(package) = spec.provenance.as_ref() {
+        package
+            .assert_current(&crate::provenance::trust_store())
+            .map_err(|error| {
+                format!(
+                    "MCP package `{}` is no longer trusted: {error}",
+                    package.id()
+                )
+            })?;
+    }
+    let instance_session = proc_session
+        .as_ref()
+        .map(|session| session.id().to_string())
+        .unwrap_or_else(|| format!("mcp:{}:{}", spec.name, uuid::Uuid::new_v4().simple()));
+    let owner = proc_session
+        .as_ref()
+        .map(crate::bridge::McpProcSession::owner_uid)
+        .or(runtime_owner)
+        .unwrap_or_else(crate::provenance::runtime::current_owner);
+    let package_ref = spec
+        .provenance
+        .as_deref()
+        .map(crate::provenance::runtime::PackageRef::of);
+    let mut registration = if proc_session.is_none() {
+        match spec.provenance.as_deref() {
+            Some(package) => {
+                crate::provenance::runtime::register_mcp_package(owner, &instance_session, package)
+            }
+            None => crate::provenance::runtime::register_operator_mcp(owner, &instance_session),
+        }
+        Some(McpRuntimeRegistration::new(owner, instance_session.clone()))
+    } else {
+        None
+    };
+    let instance = Arc::new(McpInstance::new(
+        instance_session.clone(),
+        spec.name.clone(),
+        package_ref,
+        owner,
+        true,
+    ));
     let mut child = command
         .spawn()
         .map_err(|e| format!("spawn `{}`: {e}", spec.command))?;
@@ -1078,13 +1434,14 @@ async fn attach_server_local_with_attachment(
     // Recorded while the child is still unreaped, so the identity read
     // here belongs to this process and cannot already have been
     // recycled onto something else.
-    crate::provenance::runtime::bind_process(owner, &instance_session, child_pid);
     if let Some(session) = proc_session.as_ref() {
         if let Err(error) = session.bind_process(child_pid) {
             crate::provenance::runtime::deregister(owner, &instance_session);
             kill_and_reap(child);
             return Err(format!("bind MCP child session: {error}"));
         }
+    } else {
+        crate::provenance::runtime::bind_process(owner, &instance_session, child_pid);
     }
     let stdin = child
         .stdin
@@ -1188,7 +1545,7 @@ async fn attach_server_local_with_attachment(
         if let Some(disclosure) = disclosure {
             if let Err(error) = disclosure.insert(
                 descriptor.clone(),
-                Arc::new(McpRemoteTool::new_with_transport(
+                Arc::new(McpRemoteTool::new_with_instance(
                     &spec.name,
                     descriptor,
                     client.clone(),
@@ -1196,6 +1553,7 @@ async fn attach_server_local_with_attachment(
                     ToolTransport::McpStdio,
                     attachment.clone(),
                     attached.digest.clone(),
+                    Some(Arc::clone(&instance)),
                 )),
             ) {
                 attachment.detach();
@@ -1206,6 +1564,9 @@ async fn attach_server_local_with_attachment(
         registered += 1;
     }
 
+    if let Some(registration) = registration.as_mut() {
+        registration.disarm();
+    }
     Ok(McpServerHandle {
         attachment,
         client: Some(client),
@@ -1217,6 +1578,7 @@ async fn attach_server_local_with_attachment(
         timeout: timeout_dur,
         hosted: false,
         _proc_session: proc_session,
+        _instance: Some(instance),
     })
 }
 
@@ -1229,6 +1591,7 @@ async fn attach_server_local_with_attachment(
 pub(crate) async fn attach_http_server(
     spec: &McpServerSpec,
     disclosure: Option<&Arc<McpDisclosureState>>,
+    runtime_owner: Option<u32>,
     attachment: ToolAttachment,
 ) -> Result<McpServerHandle, String> {
     let url_str = spec
@@ -1237,6 +1600,41 @@ pub(crate) async fn attach_http_server(
         .ok_or_else(|| "attach_http_server called without a url".to_string())?;
     let url =
         reqwest::Url::parse(url_str).map_err(|e| format!("invalid mcp url `{url_str}`: {e}"))?;
+    let owner = runtime_owner.unwrap_or_else(crate::provenance::runtime::current_owner);
+    if let Some(package) = spec.provenance.as_ref() {
+        package
+            .assert_current(&crate::provenance::trust_store_for_owner(owner))
+            .map_err(|error| {
+                format!(
+                    "MCP package `{}` is no longer trusted: {error}",
+                    package.id()
+                )
+            })?;
+    }
+    let instance_session = format!("mcp-http:{}:{}", spec.name, uuid::Uuid::new_v4().simple());
+    let package_ref = spec
+        .provenance
+        .as_deref()
+        .map(crate::provenance::runtime::PackageRef::of);
+    let runtime_registered = runtime_owner.is_none();
+    let mut registration = if runtime_registered {
+        match spec.provenance.as_deref() {
+            Some(package) => {
+                crate::provenance::runtime::register_mcp_package(owner, &instance_session, package)
+            }
+            None => crate::provenance::runtime::register_operator_mcp(owner, &instance_session),
+        }
+        Some(McpRuntimeRegistration::new(owner, instance_session.clone()))
+    } else {
+        None
+    };
+    let instance = Arc::new(McpInstance::new(
+        instance_session.clone(),
+        spec.name.clone(),
+        package_ref,
+        owner,
+        runtime_registered,
+    ));
     let bearer = spec
         .bearer_env
         .as_deref()
@@ -1291,7 +1689,7 @@ pub(crate) async fn attach_http_server(
         if let Some(disclosure) = disclosure {
             if let Err(error) = disclosure.insert(
                 descriptor.clone(),
-                Arc::new(McpRemoteTool::new_with_transport(
+                Arc::new(McpRemoteTool::new_with_instance(
                     &spec.name,
                     descriptor,
                     client.clone(),
@@ -1299,6 +1697,7 @@ pub(crate) async fn attach_http_server(
                     ToolTransport::McpHttp,
                     attachment.clone(),
                     attached.digest.clone(),
+                    Some(Arc::clone(&instance)),
                 )),
             ) {
                 attachment.detach();
@@ -1308,6 +1707,9 @@ pub(crate) async fn attach_http_server(
         registered += 1;
     }
 
+    if let Some(registration) = registration.as_mut() {
+        registration.disarm();
+    }
     Ok(McpServerHandle {
         attachment,
         client: Some(client),
@@ -1319,6 +1721,7 @@ pub(crate) async fn attach_http_server(
         timeout: timeout_dur,
         hosted: false,
         _proc_session: None,
+        _instance: Some(instance),
     })
 }
 

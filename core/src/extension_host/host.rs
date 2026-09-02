@@ -77,11 +77,7 @@ fn run() -> Result<(), String> {
     let bootstrap = read_bootstrap()?;
     let enforce_groups = bootstrap.enforce_groups;
     let binding = bootstrap.into_current_binding()?;
-    require_hardened_identity(
-        binding.extension_uid,
-        binding.owner_gid,
-        enforce_groups,
-    )?;
+    require_hardened_identity(binding.extension_uid, binding.owner_gid, enforce_groups)?;
     let isolation = super::child_isolation::IsolationAuthority::from_binding(&binding)?;
     let control_socket = PathBuf::from(&binding.control_socket);
 
@@ -133,7 +129,12 @@ fn run() -> Result<(), String> {
                     let state = state.clone();
                     tokio::spawn(async move {
                         let _permit = permit;
-                        serve_control(stream, state).await;
+                        let owner_uid = state.binding.owner_uid;
+                        crate::provenance::with_trust_owner(
+                            owner_uid,
+                            serve_control(stream, state),
+                        )
+                        .await;
                     });
                 }
             }
@@ -228,7 +229,10 @@ async fn serve_control(stream: UnixStream, state: Arc<HostState>) {
     let timeout = Duration::from_millis(request.timeout_ms.clamp(1, MAX_REQUEST_TIMEOUT_MS));
     let action = request.action;
     let state_for_action = state.clone();
-    let mut task = tokio::spawn(async move { dispatch(action, state_for_action).await });
+    let owner_uid = state.binding.owner_uid;
+    let mut task = tokio::spawn(crate::provenance::with_trust_owner(owner_uid, async move {
+        dispatch(action, state_for_action).await
+    }));
     let abort = task.abort_handle();
     if let Ok(mut active) = state.active.lock() {
         active.insert(id.as_str().to_string(), abort.clone());
@@ -367,20 +371,15 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
             validate_text(&command, "App command", 256)?;
             validate_args(&args)?;
             let apps_root = apps_root();
-            let app_dir = crate::apps::find(&apps_root, &app_id)
-                .map(|app| app.dir)
-                .ok_or_else(|| format!("App `{app_id}` is not installed"))?;
+            let app = crate::apps::find_verified(&apps_root, &app_id)?;
+            let launch =
+                crate::bridge::AppLaunch::new(std::sync::Arc::clone(app.require_verified()?))?;
             let data = crate::paths::user_data_dir().to_string_lossy().into_owned();
             let apps = apps_root.to_string_lossy().into_owned();
             let isolation = state.isolation.clone();
             let output = tokio::task::spawn_blocking(move || {
                 crate::bridge::run_app_with_isolation(
-                    &app_dir,
-                    &command,
-                    &args,
-                    &data,
-                    &apps,
-                    isolation,
+                    &launch, &command, &args, &data, &apps, isolation,
                 )
             })
             .await
@@ -395,11 +394,9 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
         }
         HostAction::AppOpen { app_id } => {
             validate_name(&app_id, "App id")?;
-            let tool_count = crate::agent::tools::cos_apps_session::host_open_session(
-                &app_id,
-                &state.isolation,
-            )
-            .await?;
+            let tool_count =
+                crate::agent::tools::cos_apps_session::host_open_session(&app_id, &state.isolation)
+                    .await?;
             Ok(HostResult::AppOpened { tool_count })
         }
         HostAction::AppWarm { app_id, tool } => {
@@ -456,15 +453,17 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
             descriptor_digest,
             audit,
             arguments,
-        } => call_mcp(
-            &server,
-            &tool,
-            &descriptor_digest,
-            &audit,
-            arguments,
-            &state,
-        )
-        .await,
+        } => {
+            call_mcp(
+                &server,
+                &tool,
+                &descriptor_digest,
+                &audit,
+                arguments,
+                &state,
+            )
+            .await
+        }
         HostAction::McpDetach { server } => {
             validate_name(&server, "MCP server")?;
             let detached = state.mcp.lock().await.remove(&server).is_some();
@@ -482,6 +481,9 @@ async fn attach_mcp(spec: McpServerSpec, state: &HostState) -> Result<HostResult
     validate_args(&spec.args)?;
     if spec.env.len() > 64 {
         return Err("MCP environment exceeds 64 entries".to_string());
+    }
+    if let Some(package) = spec.provenance.as_deref() {
+        assert_package_live(state, &crate::provenance::runtime::PackageRef::of(package)).await?;
     }
     {
         let mcp = state.mcp.lock().await;
@@ -502,6 +504,7 @@ async fn attach_mcp(spec: McpServerSpec, state: &HostState) -> Result<HostResult
         &spec,
         None,
         Some(&state.isolation),
+        Some(state.binding.owner_uid),
     )
     .await?;
     let tools = handle.descriptors().to_vec();
@@ -511,6 +514,28 @@ async fn attach_mcp(spec: McpServerSpec, state: &HostState) -> Result<HostResult
         .await
         .insert(spec.name.clone(), HostedMcp { spec, handle });
     Ok(HostResult::McpAttached { tools })
+}
+
+async fn assert_package_live(
+    state: &HostState,
+    package: &crate::provenance::runtime::PackageRef,
+) -> Result<(), String> {
+    let response = crate::clawd::client::request(
+        &state.binding.broker_socket,
+        crate::clawd::wire::Request::build(
+            crate::clawd::routes::Command::ProvenancePackageLive,
+            serde_json::json!({"package": package}),
+        ),
+    )
+    .await?;
+    if response.ok {
+        Ok(())
+    } else {
+        Err(response
+            .error
+            .map(|error| error.message)
+            .unwrap_or_else(|| "clawd rejected the package liveness check".to_string()))
+    }
 }
 
 async fn call_mcp(
@@ -540,7 +565,27 @@ async fn call_mcp(
     {
         return Err("MCP invocation audit identity does not match the host lease".to_string());
     }
-    let (client, timeout, expected_digest) = {
+    let revoked = {
+        let mcp = state.mcp.lock().await;
+        mcp.get(server).and_then(|hosted| {
+            hosted.handle.assert_live().err().map(|error| {
+                (
+                    error,
+                    hosted.handle.instance_session_id().map(ToOwned::to_owned),
+                )
+            })
+        })
+    };
+    if let Some((error, instance_session_id)) = revoked {
+        let mut mcp = state.mcp.lock().await;
+        if mcp.get(server).is_some_and(|hosted| {
+            hosted.handle.instance_session_id() == instance_session_id.as_deref()
+        }) {
+            mcp.remove(server);
+        }
+        return Err(error);
+    }
+    let (client, timeout, expected_digest, instance_session_id, package) = {
         let mcp = state.mcp.lock().await;
         let hosted = mcp
             .get(server)
@@ -549,6 +594,16 @@ async fn call_mcp(
             hosted.handle.client(),
             hosted.handle.timeout(),
             hosted.handle.descriptor_digest().to_string(),
+            hosted
+                .handle
+                .instance_session_id()
+                .ok_or_else(|| format!("MCP server `{server}` has no runtime identity"))?
+                .to_string(),
+            hosted
+                .spec
+                .provenance
+                .as_deref()
+                .map(crate::provenance::runtime::PackageRef::of),
         )
     };
     if descriptor_digest != expected_digest {
@@ -563,6 +618,34 @@ async fn call_mcp(
         &expected_digest,
     )
     .await?;
+    if let Some(package) = package.as_ref() {
+        assert_package_live(state, package).await?;
+    }
+    let live = {
+        let mcp = state.mcp.lock().await;
+        match mcp.get(server) {
+            Some(hosted)
+                if hosted.handle.instance_session_id() == Some(instance_session_id.as_str()) =>
+            {
+                hosted.handle.assert_live()
+            }
+            Some(_) => Err(format!(
+                "MCP server `{server}` changed while its descriptors were verified"
+            )),
+            None => Err(format!(
+                "MCP server `{server}` was detached while its descriptors were verified"
+            )),
+        }
+    };
+    if let Err(error) = live {
+        let mut mcp = state.mcp.lock().await;
+        if mcp.get(server).is_some_and(|hosted| {
+            hosted.handle.instance_session_id() == Some(instance_session_id.as_str())
+        }) {
+            mcp.remove(server);
+        }
+        return Err(error);
+    }
     let value = tokio::time::timeout(timeout, client.call_tool(tool.to_string(), arguments))
         .await
         .map_err(|_| {

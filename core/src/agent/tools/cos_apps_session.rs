@@ -85,6 +85,7 @@ struct ActiveSession {
     /// Keeps the kernel-attested App session registered for the lifetime of
     /// the MCP child.
     identity: crate::bridge::AppIdentitySession,
+    _runtime: Option<AppRuntimeRegistration>,
     /// Serializes grant + RPC + revoke so concurrent tool calls cannot
     /// exercise each other's transient capabilities.
     call_lock: Arc<Mutex<()>>,
@@ -98,6 +99,33 @@ struct ActiveSession {
     /// re-asserts the pinned inodes against it rather than trusting
     /// that a check at open time still describes what is on disk.
     bound: Arc<SessionBinding>,
+}
+
+struct AppRuntimeRegistration {
+    owner: u32,
+    session_id: String,
+}
+
+impl AppRuntimeRegistration {
+    fn new(
+        owner: u32,
+        session_id: &str,
+        package: &crate::provenance::VerifiedPackage,
+        child_pid: u32,
+    ) -> Self {
+        crate::provenance::runtime::register(owner, session_id, package);
+        crate::provenance::runtime::bind_process(owner, session_id, child_pid);
+        Self {
+            owner,
+            session_id: session_id.to_string(),
+        }
+    }
+}
+
+impl Drop for AppRuntimeRegistration {
+    fn drop(&mut self) {
+        crate::provenance::runtime::deregister(self.owner, &self.session_id);
+    }
 }
 
 impl Drop for ActiveSession {
@@ -195,25 +223,9 @@ fn session_key(app_id: &str) -> Result<SessionKey, String> {
 /// code and should see only what the operator explicitly grants
 /// (`COS_*` config and the small set of locale/PATH/HOME vars in
 /// [`safe_session_env_allowlist`]).
-async fn bring_up_app(
-    app_id: &str,
-    app_dir: &Path,
-    manifest: &Manifest,
-    launch_tool: Option<&str>,
-    timeout_dur: Duration,
-    isolation: Option<&crate::extension_host::child_isolation::IsolationAuthority>,
-) -> Result<
-    (
-        Arc<McpClient>,
-        Child,
-        usize,
-        crate::bridge::AppIdentitySession,
-    ),
-    String,
-> {
-    let startup_deadline = Instant::now()
-        .checked_add(timeout_dur)
-        .ok_or_else(|| "MCP App startup deadline overflowed".to_string())?;
+fn declared_session_entry(launch: &crate::bridge::AppLaunch) -> Result<String, String> {
+    let app_id = launch.app_id();
+    let manifest = launch.manifest();
     let session = manifest
         .mcp_service()
         .ok_or_else(|| format!("app `{app_id}` has no MCP service"))?;
@@ -294,11 +306,92 @@ impl SessionBinding {
     fn entry_path(&self) -> &Path {
         &self.entry_path
     }
-    let manifest_path = canon_app.join("app.json");
+
+    fn audit_facts(&self) -> Value {
+        json!({
+            "entry": self.entry_rel,
+            "package_identity": self
+                .package_identity
+                .map(|(device, inode)| json!({"dev": device, "ino": inode})),
+            "pinned_entries": self
+                .pinned_entries
+                .iter()
+                .map(|(path, (device, inode))| {
+                    json!({"path": path.display().to_string(), "dev": device, "ino": inode})
+                })
+                .collect::<Vec<_>>(),
+        })
+    }
+
+    fn assert_pinned(&self) -> Result<(), String> {
+        for (path, expected) in &self.pinned_entries {
+            let metadata = std::fs::metadata(path).map_err(|error| {
+                format!(
+                    "pinned session file {} was replaced after verification: {error}",
+                    path.display()
+                )
+            })?;
+            if current_identity(&metadata) != *expected {
+                return Err(format!(
+                    "pinned session file {} was replaced after verification",
+                    path.display()
+                ));
+            }
+        }
+        if let Some(expected) = self.package_identity {
+            let metadata = std::fs::metadata(self.binding.dir()).map_err(|error| {
+                format!("pinned App directory was replaced after verification: {error}")
+            })?;
+            if current_identity(&metadata) != expected {
+                return Err("pinned App directory was replaced after verification".to_string());
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn current_identity(metadata: &std::fs::Metadata) -> (u64, u64) {
+    use std::os::unix::fs::MetadataExt;
+    (metadata.dev(), metadata.ino())
+}
+
+#[cfg(not(unix))]
+fn current_identity(_metadata: &std::fs::Metadata) -> (u64, u64) {
+    (0, 0)
+}
+
+async fn bring_up_app(
+    launch: &crate::bridge::AppLaunch,
+    launch_tool: Option<&str>,
+    timeout_dur: Duration,
+    isolation: Option<&crate::extension_host::child_isolation::IsolationAuthority>,
+) -> Result<
+    (
+        Arc<McpClient>,
+        Child,
+        usize,
+        crate::bridge::AppIdentitySession,
+        SessionBinding,
+    ),
+    String,
+> {
+    let startup_deadline = Instant::now()
+        .checked_add(timeout_dur)
+        .ok_or_else(|| "MCP App startup deadline overflowed".to_string())?;
+    let app_id = launch.app_id();
+    let app_dir = launch.dir();
+    let manifest = launch.manifest();
+    let session = manifest
+        .mcp_service()
+        .ok_or_else(|| format!("app `{app_id}` has no MCP service"))?;
+    let entry_rel = declared_session_entry(launch)?;
+    let binding = launch.bind(std::slice::from_ref(&entry_rel))?;
+    let bound = SessionBinding::new(binding, entry_rel.clone(), app_dir.join(&entry_rel));
+    let entry_abs = bound.entry_path();
+    let manifest_path = app_dir.join(launch.package().manifest_path());
     if !manifest_path.is_file() {
-        return Err(format!(
-            "app `{app_id}` verified snapshot has no app.json"
-        ));
+        return Err(format!("app `{app_id}` verified snapshot has no app.json"));
     }
 
     let apps_dir = apps_root();
@@ -320,9 +413,14 @@ impl SessionBinding {
     path_parts.push(apps_dir_str.clone());
     let pythonpath = path_parts.join(pathsep());
 
-    let mut command = build_command(manifest.runtime, &entry_abs, app_dir, isolation)?;
-    let mut app_session =
-        crate::bridge::AppIdentitySession::for_mcp(app_id, manifest, launch_tool)?;
+    let mut command = build_command(
+        manifest.runtime,
+        entry_abs,
+        app_dir,
+        isolation,
+        launch.package(),
+    )?;
+    let mut app_session = crate::bridge::AppIdentitySession::for_mcp(launch, launch_tool)?;
     // Wipe inherited env then reinstate the bare minimum + the
     // `COS_*` configuration variables. App-internal env from
     // `crate::config::as_env_vars()` is the curated subset the
@@ -362,17 +460,14 @@ impl SessionBinding {
     // swapped between `bind` and here fails the launch instead of
     // running whatever now sits at the path.
     bound.assert_pinned()?;
-    crate::provenance::audit(
-        "provenance.app_session_bound",
-        {
-            let mut facts = bound.audit_facts();
-            if let Some(object) = facts.as_object_mut() {
-                object.insert("package_id".to_string(), json!(app_id));
-                object.insert("session".to_string(), json!(app_session.id()));
-            }
-            facts
-        },
-    );
+    crate::provenance::audit("provenance.app_session_bound", {
+        let mut facts = bound.audit_facts();
+        if let Some(object) = facts.as_object_mut() {
+            object.insert("package_id".to_string(), json!(app_id));
+            object.insert("session".to_string(), json!(app_session.id()));
+        }
+        facts
+    });
     let mut child = command
         .spawn()
         .map_err(|e| format!("spawn `{app_id}` session: {e}"))?;
@@ -507,6 +602,7 @@ fn build_command(
     entry: &Path,
     app_dir: &Path,
     isolation: Option<&crate::extension_host::child_isolation::IsolationAuthority>,
+    package: &crate::provenance::VerifiedPackage,
 ) -> Result<Command, String> {
     let runner = crate::bridge::app_runner_path();
     let mut args = vec![std::ffi::OsString::from("--")];
@@ -536,8 +632,13 @@ fn build_command(
         }
         Runtime::Binary => args.push(entry.as_os_str().to_os_string()),
     }
-    let launch =
-        crate::extension_host::child_isolation::prepare(&runner, args, Some(app_dir), isolation)?;
+    let launch = crate::extension_host::child_isolation::prepare_verified(
+        &runner,
+        args,
+        Some(app_dir),
+        isolation,
+        package,
+    )?;
     let mut command = Command::new(launch.program);
     crate::extension_host::child_isolation::close_unallowlisted_fds(command.as_std_mut());
     command.env_clear().args(launch.args).envs(launch.env);
@@ -584,6 +685,7 @@ async fn get_or_open(
 
 fn active_session_is_live(session: &mut ActiveSession) -> bool {
     !session.poisoned.load(Ordering::SeqCst)
+        && reusable(session)
         && session
             .child
             .as_mut()
@@ -606,8 +708,8 @@ fn reusable(session: &ActiveSession) -> bool {
         );
         return false;
     }
-    if let Err(error) = crate::provenance::runtime::assert_live_instance_now(
-        crate::provenance::runtime::current_owner(),
+    if let Err(error) = crate::provenance::runtime::assert_live_instance_for_owner_now(
+        session.identity.owner_uid(),
         session.identity.id(),
     ) {
         tracing::warn!(
@@ -666,7 +768,7 @@ async fn begin_active_session_call(
     gateway_handle: Option<&str>,
 ) -> Result<ActiveCallGuard, String> {
     let key = session_key(app_id)?;
-    let (control, child_pid, call_lock, poisoned) = {
+    let (control, child_pid, call_lock, poisoned, provenance_owner, provenance_session, bound) = {
         let table = manager().lock().await;
         let session = table
             .get(&key)
@@ -676,10 +778,16 @@ async fn begin_active_session_call(
             session.child_pid,
             session.call_lock.clone(),
             session.poisoned.clone(),
+            session.identity.owner_uid(),
             session.identity.id().to_string(),
             Arc::clone(&session.bound),
         )
     };
+    bound.assert_pinned()?;
+    crate::provenance::runtime::assert_live_instance_for_owner_now(
+        provenance_owner,
+        &provenance_session,
+    )?;
     let lock_timeout = deadline_unix_ms
         .checked_sub(crate::agentd::grant::now_ms())
         .filter(|remaining| *remaining > 0)
@@ -799,23 +907,14 @@ async fn open_session(
         table.remove(&key)
     };
     drop(stale);
-    let app_dir = crate::apps::find(&apps_root(), app_id)
-        .map(|app| app.dir)
-        .ok_or_else(|| format!("App `{app_id}` is not installed"))?;
-    let manifest_path = app_dir.join("app.json");
-    let manifest_text = std::fs::read_to_string(&manifest_path)
-        .map_err(|e| format!("read manifest for `{app_id}`: {e}"))?;
-    let manifest = Manifest::from_json(&manifest_text)
-        .map_err(|e| format!("parse manifest for `{app_id}`: {e}"))?;
-    let (client, child, listed, identity) = bring_up_app(
-        app_id,
-        &app_dir,
-        &manifest,
-        launch_tool,
-        startup_timeout,
-        isolation,
-    )
-    .await?;
+    let app = crate::apps::find_verified(&apps_root(), app_id)?;
+    let verified = Arc::clone(app.require_verified()?);
+    verified
+        .assert_current(&crate::provenance::trust_store())
+        .map_err(|error| format!("App `{app_id}` is no longer trusted: {error}"))?;
+    let launch = crate::bridge::AppLaunch::new(Arc::clone(&verified))?;
+    let (client, child, listed, identity, bound) =
+        bring_up_app(&launch, launch_tool, startup_timeout, isolation).await?;
     let child_pid = child
         .id()
         .ok_or_else(|| format!("App session `{app_id}` lost its pid"))?;
@@ -823,9 +922,9 @@ async fn open_session(
     // stdio channel to the agent. Record which artifact it came from
     // and which exact process it is, so a later revocation can both
     // deny it and stop it.
-    let owner = crate::provenance::runtime::current_owner();
-    crate::provenance::runtime::register_mcp_package(owner, identity.id(), verified);
-    crate::provenance::runtime::bind_process(owner, identity.id(), child_pid);
+    let runtime = (!identity.daemon_managed()).then(|| {
+        AppRuntimeRegistration::new(identity.owner_uid(), identity.id(), &verified, child_pid)
+    });
     let mut table = manager().lock().await;
     table.insert(
         key,
@@ -834,6 +933,7 @@ async fn open_session(
             child: Some(child),
             tool_count: listed,
             identity,
+            _runtime: runtime,
             call_lock: Arc::new(Mutex::new(())),
             child_pid,
             poisoned: Arc::new(AtomicBool::new(false)),
@@ -861,12 +961,6 @@ async fn close_session(app_id: &str) -> bool {
         table.remove(&key)
     };
     let was_present = removed.is_some();
-    if let Some(session) = removed.as_ref() {
-        crate::provenance::runtime::deregister(
-            crate::provenance::runtime::current_owner(),
-            session.identity.id(),
-        );
-    }
     // Explicit drop here to make the lifetime obvious — the Drop
     // impl does the async reap.
     drop(removed);
@@ -1111,16 +1205,16 @@ fn build_schema(args: &[crate::caps::manifest::Arg]) -> Value {
     Value::Object(schema)
 }
 
-fn validate_mcp_descriptors(
-    service: &Session,
-    listed: &[ToolDescriptor],
-) -> Result<(), String> {
+fn validate_mcp_descriptors(service: &Session, listed: &[ToolDescriptor]) -> Result<(), String> {
     if listed.len() != service.tools.len() {
         return Err("MCP App descriptor set does not match its manifest".to_string());
     }
     let mut by_name = BTreeMap::new();
     for descriptor in listed {
-        if by_name.insert(descriptor.name.as_str(), descriptor).is_some() {
+        if by_name
+            .insert(descriptor.name.as_str(), descriptor)
+            .is_some()
+        {
             return Err("MCP App returned duplicate tool descriptors".to_string());
         }
     }
@@ -1202,10 +1296,9 @@ impl Tool for AppSessionTool {
 
         let args_map = effective.values;
         let caps = effective.needs.into_iter().flatten().collect::<Vec<_>>();
-        if let Err(denial) = crate::caps::require(
-            crate::caps::Verb::AGENT_INVOKE,
-            self.invoke_scope.clone(),
-        ) {
+        if let Err(denial) =
+            crate::caps::require(crate::caps::Verb::AGENT_INVOKE, self.invoke_scope.clone())
+        {
             let message = denial.to_string();
             emit_audit(
                 &self.app_id,
@@ -1293,8 +1386,7 @@ impl Tool for AppSessionTool {
                 return ToolResult::err(error);
             }
         };
-        if let Err(error) =
-            super::app_gateway::authorize_manifest(&self.manifest, &context.caller)
+        if let Err(error) = super::app_gateway::authorize_manifest(&self.manifest, &context.caller)
         {
             emit_audit(
                 &self.app_id,
@@ -1776,20 +1868,22 @@ pub(crate) async fn host_call_session(
     call_timeout: Duration,
 ) -> Result<crate::agent::tools::mcp::protocol::CallToolResult, String> {
     context.validate()?;
-    let app_dir = crate::apps::find(&apps_root(), app_id)
-        .map(|app| app.dir)
-        .ok_or_else(|| format!("App `{app_id}` is not installed"))?;
-    let manifest_path = app_dir.join("app.json");
-    let manifest_text = std::fs::read_to_string(&manifest_path)
-        .map_err(|error| format!("read manifest for `{app_id}`: {error}"))?;
+    let app = crate::apps::find_verified(&apps_root(), app_id)?;
+    let verified = app.require_verified()?;
+    verified
+        .assert_current(&crate::provenance::trust_store())
+        .map_err(|error| format!("App `{app_id}` is no longer trusted: {error}"))?;
     if package_digest
         .as_deref()
-        .is_some_and(|expected| crate::crypto::sha256_hex(manifest_text.as_bytes()) != expected)
+        .is_some_and(|expected| verified.content_digest() != expected)
     {
         return Err(format!(
-            "App `{app_id}` manifest changed after Gateway authorization"
+            "App `{app_id}` package changed after Gateway authorization"
         ));
     }
+    let manifest_text = verified
+        .manifest_text()
+        .map_err(|error| format!("read verified manifest for `{app_id}`: {error}"))?;
     let manifest = Manifest::from_json(&manifest_text)
         .map_err(|error| format!("parse manifest for `{app_id}`: {error}"))?;
     super::app_gateway::authorize_manifest(&manifest, &context.caller)?;
@@ -1889,25 +1983,18 @@ async fn call_manifest_tool(
 }
 
 fn manifest_tool_names(app_id: &str) -> Result<Vec<String>, String> {
-    let manifest_path = crate::apps::find(&apps_root(), app_id)
-        .map(|app| app.dir.join("app.json"))
-        .ok_or_else(|| format!("App `{app_id}` is not installed"))?;
-    let text =
-        std::fs::read_to_string(&manifest_path).map_err(|e| format!("read manifest: {e}"))?;
-    let manifest = Manifest::from_json(&text).map_err(|e| format!("parse manifest: {e}"))?;
-    Ok(manifest
+    let app = crate::apps::find_verified(&apps_root(), app_id)?;
+    Ok(app
+        .manifest
         .mcp_service()
         .map(|service| service.tools.iter().map(|tool| tool.name.clone()).collect())
         .unwrap_or_default())
 }
 
 fn require_legacy_session(app_id: &str) -> Result<(), String> {
-    let app = crate::apps::find(&apps_root(), app_id)
-        .ok_or_else(|| format!("App `{app_id}` is not installed"))?;
+    let app = crate::apps::find_verified(&apps_root(), app_id)?;
     if app.manifest.mcp.is_some() {
-        return Err(format!(
-            "App `{app_id}` uses Gateway-managed MCP lifecycle"
-        ));
+        return Err(format!("App `{app_id}` uses Gateway-managed MCP lifecycle"));
     }
     if app.manifest.session.is_none() {
         return Err(format!("App `{app_id}` has no legacy session"));
@@ -1924,7 +2011,7 @@ fn require_legacy_session(app_id: &str) -> Result<(), String> {
 /// when their caller policy admits the system Agent. Legacy session
 /// manifests retain the explicit open/close meta-tools during migration.
 pub fn register_all(registry: &mut ToolRegistry) {
-    let apps = crate::apps::discover(&apps_root());
+    let apps = crate::apps::discover_verified(&apps_root());
     let mut has_legacy_session_tools = false;
     for app in apps.values() {
         let Some(session) = app.manifest.mcp_service() else {

@@ -50,10 +50,8 @@ pub(crate) fn secure_scratch_dir(label: &str) -> std::path::PathBuf {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(
-            home.join(".cache"),
-            std::fs::Permissions::from_mode(0o755),
-        );
+        let _ =
+            std::fs::set_permissions(home.join(".cache"), std::fs::Permissions::from_mode(0o755));
         let _ = std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700));
         let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
     }
@@ -79,8 +77,14 @@ pub(crate) fn test_signing_key() -> &'static crate::provenance::sign::SigningKey
 pub(crate) fn record_trust_state(roots: &[crate::provenance::trust::TrustRootSpec]) {
     use std::collections::BTreeMap;
 
-    let mut domains: BTreeMap<String, (crate::provenance::state::TrustDomain, std::path::PathBuf, Vec<std::path::PathBuf>)> =
-        BTreeMap::new();
+    let mut domains: BTreeMap<
+        String,
+        (
+            crate::provenance::state::TrustDomain,
+            std::path::PathBuf,
+            Vec<std::path::PathBuf>,
+        ),
+    > = BTreeMap::new();
     for root in roots {
         let entry = domains
             .entry(root.domain.as_key())
@@ -229,8 +233,7 @@ pub(crate) fn revoke_test_package(content_digest: &str) {
             serde_json::from_str(&std::fs::read_to_string(&path).expect("read test trust"))
                 .expect("parse test trust");
         body["revoked_packages"] = serde_json::json!([content_digest]);
-        std::fs::write(&path, serde_json::to_vec_pretty(&body).unwrap())
-            .expect("write test trust");
+        std::fs::write(&path, serde_json::to_vec_pretty(&body).unwrap()).expect("write test trust");
         {
             use std::os::unix::fs::PermissionsExt;
             let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
@@ -253,8 +256,8 @@ pub(crate) fn revoke_test_package(content_digest: &str) {
 pub(crate) fn app_launch(dir: &std::path::Path, id: &str) -> crate::bridge::AppLaunch {
     sign_test_package(dir, crate::provenance::PackageKind::App, id);
     let trust = crate::provenance::trust_store();
-    let options = crate::provenance::VerifyOptions::new(crate::provenance::PackageKind::App)
-        .expect_id(id);
+    let options =
+        crate::provenance::VerifyOptions::new(crate::provenance::PackageKind::App).expect_id(id);
     let package = crate::provenance::verify::verify_package(dir, &options, &trust)
         .unwrap_or_else(|e| panic!("verify test app {id}: {e}"));
     crate::bridge::AppLaunch::new(std::sync::Arc::new(package))
@@ -267,8 +270,8 @@ pub(crate) fn try_app_launch(
     id: &str,
 ) -> Result<crate::bridge::AppLaunch, String> {
     let trust = crate::provenance::trust_store();
-    let options = crate::provenance::VerifyOptions::new(crate::provenance::PackageKind::App)
-        .expect_id(id);
+    let options =
+        crate::provenance::VerifyOptions::new(crate::provenance::PackageKind::App).expect_id(id);
     let package = crate::provenance::verify::verify_package(dir, &options, &trust)
         .map_err(|e| e.to_string())?;
     crate::bridge::AppLaunch::new(std::sync::Arc::new(package))
@@ -409,6 +412,7 @@ impl TestSessionGuard {
         let mut caps =
             role.caps_with_scopes(Some(Scope::Wild), Some(Scope::Wild), Some(Scope::Wild));
         caps.insert(Cap::new(Verb::SYS_KERNEL, Scope::Wild));
+        caps.insert(Cap::new(Verb::AGENT_INVOKE, Scope::name("**")));
         crate::proc::register_session(SessionInfo {
             session_id: session_id.clone(),
             pid: std::process::id(),

@@ -30,15 +30,25 @@ fn write_file(path: &Path, body: &str) {
 
 /// Build a signed App package with `app.json` + `main.py`.
 fn signed_app(root: &Path, id: &str, main_body: &str) -> (PathBuf, SigningKeyFile) {
+    signed_app_with_resources(root, id, main_body, &[])
+}
+
+fn signed_app_with_resources(
+    root: &Path,
+    id: &str,
+    main_body: &str,
+    resources: &[(&str, &str)],
+) -> (PathBuf, SigningKeyFile) {
     let dir = root.join(id);
     fs::create_dir_all(&dir).unwrap();
     write_file(
         &dir.join("app.json"),
-        &format!(
-            r#"{{"id":"{id}","version":"1.0.0","name":"{id}","operations":{{}}}}"#
-        ),
+        &format!(r#"{{"id":"{id}","version":"1.0.0","name":"{id}","operations":{{}}}}"#),
     );
     write_file(&dir.join("main.py"), main_body);
+    for (path, body) in resources {
+        write_file(&dir.join(path), body);
+    }
     let key = SigningKeyFile::generate(None).unwrap();
     let request = sign::SignRequest {
         kind: PackageKind::App,
@@ -47,7 +57,10 @@ fn signed_app(root: &Path, id: &str, main_body: &str) -> (PathBuf, SigningKeyFil
         manifest_schema: "cos.app-manifest/v1".to_string(),
         manifest_path: "app.json".to_string(),
         entrypoints: vec!["main.py".to_string()],
-        resources: vec![],
+        resources: resources
+            .iter()
+            .map(|(path, _)| (*path).to_string())
+            .collect(),
     };
     sign::sign_directory(&dir, &request, &key).unwrap();
     (dir, key)
@@ -105,6 +118,64 @@ fn signed_package_verifies_and_binds_its_manifest() {
 
 #[cfg(unix)]
 #[test]
+fn verified_snapshot_is_materialized_from_revalidated_descriptors() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tmpdir("materialized");
+    let (dir, key) = signed_app_with_resources(
+        &root,
+        "notes",
+        "print('signed')\n",
+        &[("assets/nested/config.json", "{\"enabled\":true}\n")],
+    );
+    let trust = trust_for(&[&key], &root.join("trust"));
+    let package = verify_package(
+        &dir,
+        &VerifyOptions::new(PackageKind::App).expect_id("notes"),
+        &trust,
+    )
+    .unwrap();
+    let snapshot = root.join("snapshot");
+    package.materialize_snapshot(&snapshot).unwrap();
+    assert_eq!(
+        fs::read_to_string(snapshot.join("main.py")).unwrap(),
+        "print('signed')\n"
+    );
+    assert_eq!(
+        fs::metadata(&snapshot).unwrap().permissions().mode() & 0o222,
+        0
+    );
+    assert_eq!(
+        fs::metadata(snapshot.join("main.py"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o222,
+        0
+    );
+    assert_eq!(
+        fs::read_to_string(snapshot.join("assets/nested/config.json")).unwrap(),
+        "{\"enabled\":true}\n"
+    );
+    assert_eq!(
+        fs::metadata(snapshot.join("assets/nested"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o222,
+        0
+    );
+
+    write_file(&dir.join("main.py"), "print('replaced')\n");
+    let error = package
+        .materialize_snapshot(&root.join("replaced"))
+        .unwrap_err();
+    assert!(error.to_string().contains("changed"), "{error}");
+    let _ = fs::remove_dir_all(root);
+}
+
+#[cfg(unix)]
+#[test]
 fn untrusted_and_forged_keys_are_rejected() {
     let root = tmpdir("forged");
     let (dir, key) = signed_app(&root, "notes", "x=1\n");
@@ -147,13 +218,19 @@ fn modified_added_and_removed_files_are_detected() {
     // Added file the signature does not cover.
     write_file(&dir.join("extra.py"), "print('extra')\n");
     let err = verify_package(&dir, &options, &trust).unwrap_err();
-    assert!(format!("{err}").contains("not covered by the signature"), "{err}");
+    assert!(
+        format!("{err}").contains("not covered by the signature"),
+        "{err}"
+    );
     fs::remove_file(dir.join("extra.py")).unwrap();
 
     // Removed file.
     fs::remove_file(dir.join("main.py")).unwrap();
     let err = verify_package(&dir, &options, &trust).unwrap_err();
-    assert!(format!("{err}").contains("missing from the package"), "{err}");
+    assert!(
+        format!("{err}").contains("missing from the package"),
+        "{err}"
+    );
     let _ = fs::remove_dir_all(&root);
 }
 
@@ -259,7 +336,10 @@ fn read_verified_detects_replacement_after_verification() {
     let (dir, key) = signed_app(&root, "notes", "print('good')\n");
     let trust = trust_for(&[&key], &root.join("trust"));
     let pkg = verify_package(&dir, &VerifyOptions::new(PackageKind::App), &trust).unwrap();
-    assert_eq!(pkg.read_verified_text("main.py").unwrap(), "print('good')\n");
+    assert_eq!(
+        pkg.read_verified_text("main.py").unwrap(),
+        "print('good')\n"
+    );
 
     // Replace the file by rename — the classic verify-then-execute race.
     write_file(&dir.join("main.py.new"), "print('evil')\n");
@@ -329,9 +409,9 @@ fn revocation_invalidates_caches_and_stops_future_use() {
         path: trust_root.clone(),
         tier: TrustTier::User,
         allowed_uids: vec![crate::provenance::fsec::effective_uid()],
-    domain: crate::provenance::state::TrustDomain::Owner(
-        crate::provenance::fsec::effective_uid(),
-    ),
+        domain: crate::provenance::state::TrustDomain::Owner(
+            crate::provenance::fsec::effective_uid(),
+        ),
     }]);
     assert_ne!(revoked.generation(), trust.generation());
     // The cached snapshot must not be reusable under the new store.

@@ -312,7 +312,9 @@ pub fn install_routed_extension_reader(owner_uid: u32, execution_uid: u32) -> Re
             .map_err(|_| "routed extension ACL registry is poisoned".to_string())?;
         readers.entry(owner_uid).or_default().insert(execution_uid);
     }
-    if let Err(error) = refresh_routed_acl(owner_uid) {
+    let setup = refresh_routed_acl(owner_uid)
+        .and_then(|_| crate::provenance::refresh_owner_trust_snapshot(owner_uid));
+    if let Err(error) = setup {
         if let Ok(mut readers) = routed_extension_readers().lock() {
             if let Some(owner) = readers.get_mut(&owner_uid) {
                 owner.remove(&execution_uid);
@@ -404,7 +406,105 @@ fn refresh_routed_acl(owner_uid: u32) -> Result<(), String> {
         set_routed_registry_file(&registry, owner_uid)
             .map_err(|error| format!("refresh routed capability registry: {error}"))?;
     }
+    refresh_routed_provenance_acl(owner_uid)?;
     Ok(())
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn refresh_routed_provenance_acl(owner_uid: u32) -> Result<(), String> {
+    let root = Path::new("/run/cos/caps").join(owner_uid.to_string());
+    if !root.exists() {
+        return Ok(());
+    }
+    for name in [
+        "provenance-running.json",
+        "provenance-running.lock",
+        "provenance-trust.json",
+    ] {
+        let path = root.join(name);
+        if !path.exists() {
+            continue;
+        }
+        reject_symlink(&path).map_err(|error| error.to_string())?;
+        set_routed_acl(&path, owner_uid, false)
+            .map_err(|error| format!("refresh routed provenance file: {error}"))?;
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn refresh_routed_provenance_acl(_owner_uid: u32) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn write_routed_trust_snapshot(owner_uid: u32, bytes: &[u8]) -> Result<(), String> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    if unsafe { libc::geteuid() } != 0 || bytes.len() > 4 * 1024 * 1024 {
+        return Err("routed trust snapshot requires a root broker and bounded input".to_string());
+    }
+    let root = Path::new("/run/cos/caps").join(owner_uid.to_string());
+    ensure_routed_caps_dir(&root, owner_uid)
+        .map_err(|error| format!("prepare routed trust directory: {error}"))?;
+    let path = root.join("provenance-trust.json");
+    let temp = root.join(format!(
+        ".provenance-trust-{}.tmp",
+        uuid::Uuid::new_v4().simple()
+    ));
+    let mut options = fs::OpenOptions::new();
+    options.create_new(true).write(true).mode(0o600);
+    let mut file = options
+        .open(&temp)
+        .map_err(|error| format!("create routed trust snapshot: {error}"))?;
+    let write = (|| {
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        chown(&temp, 0, 0)?;
+        fs::rename(&temp, &path)?;
+        set_routed_acl(&path, owner_uid, false)?;
+        if let Ok(directory) = fs::File::open(&root) {
+            let _ = directory.sync_all();
+        }
+        Ok::<(), io::Error>(())
+    })();
+    if let Err(error) = write {
+        let _ = fs::remove_file(&temp);
+        return Err(format!("publish routed trust snapshot: {error}"));
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn write_routed_trust_snapshot(_owner_uid: u32, _bytes: &[u8]) -> Result<(), String> {
+    Err("routed trust snapshots require Linux".to_string())
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn read_routed_trust_snapshot(owner_uid: u32) -> Result<Vec<u8>, String> {
+    use std::os::unix::fs::MetadataExt;
+
+    let path = Path::new("/run/cos/caps")
+        .join(owner_uid.to_string())
+        .join("provenance-trust.json");
+    let metadata = fs::symlink_metadata(&path)
+        .map_err(|error| format!("inspect routed trust snapshot: {error}"))?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.uid() != 0
+        || metadata.nlink() != 1
+        || metadata.mode() & 0o022 != 0
+        || metadata.len() > 4 * 1024 * 1024
+    {
+        return Err("routed trust snapshot has unsafe identity or mode".to_string());
+    }
+    fs::read(&path).map_err(|error| format!("read routed trust snapshot: {error}"))
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn read_routed_trust_snapshot(_owner_uid: u32) -> Result<Vec<u8>, String> {
+    Err("routed trust snapshots require Linux".to_string())
 }
 
 fn harden_private_tree(root: &Path) -> io::Result<()> {

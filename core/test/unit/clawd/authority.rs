@@ -25,6 +25,68 @@ fn client() -> crate::clawd::client_identity::ClientIdentity {
     }
 }
 
+fn managed_test_session(id: &str) -> crate::proc::SessionInfo {
+    crate::proc::SessionInfo {
+        session_id: id.to_string(),
+        pid: std::process::id(),
+        command: vec!["managed-test".to_string()],
+        started_at: chrono::Utc::now().to_rfc3339(),
+        stdout_path: String::new(),
+        stderr_path: String::new(),
+        group: Some("app".to_string()),
+        parent: None,
+        workdir: None,
+        exit_code: None,
+        ended_at: None,
+        tier: None,
+        scope: None,
+        priority: None,
+        caps: Some(CapSet::new()),
+        transient_caps: None,
+        role: Some("worker".to_string()),
+        app_id: Some("test-app".to_string()),
+        pending_bind: false,
+        start_time_ticks: crate::proc::read_start_time_ticks_pub(std::process::id()),
+        client: crate::session::SessionClient::default(),
+    }
+}
+
+#[test]
+fn provider_authority_requires_a_live_managed_runtime_record() {
+    let _lock = crate::test_env::lock_env();
+    let runtime = tempfile::tempdir().unwrap();
+    let _runtime =
+        crate::test_env::TestEnvVarGuard::set("COS_PROVENANCE_RUNTIME_DIR", runtime.path());
+    let owner = current_uid();
+    let session = managed_test_session("managed-authority");
+    assert!(require_live_extension_session(owner, &session).is_err());
+
+    let package = crate::provenance::runtime::PackageRef {
+        kind: crate::provenance::PackageKind::App,
+        id: "test-app".to_string(),
+        content_digest: format!("sha256:{}", "a".repeat(64)),
+        publisher_key_id: None,
+        tier: "vendor".to_string(),
+    };
+    crate::provenance::runtime::register_bound_instance(
+        owner,
+        &session.session_id,
+        crate::provenance::runtime::InstanceClass::App,
+        Some(package),
+    )
+    .unwrap();
+    crate::provenance::runtime::bind_process_checked(
+        owner,
+        &session.session_id,
+        std::process::id(),
+    )
+    .unwrap();
+    assert!(require_live_extension_session(owner, &session).is_ok());
+
+    crate::provenance::runtime::mark_for_shutdown(owner, &session.session_id, "revoked for test");
+    assert!(require_live_extension_session(owner, &session).is_err());
+}
+
 // ---------------------------------------------------------------------------
 // The registry is the only authorization surface
 // ---------------------------------------------------------------------------
@@ -94,6 +156,7 @@ fn route_audiences_match_their_families() {
             name if name.starts_with("app_session.") || name.starts_with("mcp_session.") => {
                 Audience::AppLaunch
             }
+            name if name.starts_with("provenance.") => Audience::AppLaunch,
             name if name.starts_with("scheduler.") => Audience::Scheduler,
             name if name.starts_with("credential.") => Audience::Credential,
             name if name.starts_with("system.") => Audience::SystemService,

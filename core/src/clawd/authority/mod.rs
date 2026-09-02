@@ -204,6 +204,24 @@ const PEER_SESSION_GRANT_USES: u32 = 1;
 /// the final capability check.
 const WORKER_APPROVAL_GRANT_TTL: std::time::Duration = std::time::Duration::from_secs(30);
 
+fn require_live_extension_session(
+    owner_uid: u32,
+    session: &crate::proc::SessionInfo,
+) -> Result<(), AuthorityError> {
+    if session.pending_bind || (session.app_id.is_none() && session.group.as_deref() != Some("mcp"))
+    {
+        return Ok(());
+    }
+    let trust = crate::provenance::trust_store_for_owner(owner_uid);
+    if crate::provenance::runtime::assert_live_instance(owner_uid, &session.session_id, &trust)
+        .is_err()
+    {
+        revoke_indexed_session(&session.session_id);
+        return Err(AuthorityError::Subject);
+    }
+    Ok(())
+}
+
 /// Authenticate the caller's own registered session and mint the grant
 /// this one request runs under.
 ///
@@ -246,6 +264,9 @@ async fn mint_peer_session_grant(
     }
     if pid != session.pid && !crate::proc::process_descends_from(pid, session.pid) {
         return Err(AuthorityError::PrincipalMismatch);
+    }
+    if descriptor.audience != Audience::AppLaunch {
+        require_live_extension_session(uid, &session)?;
     }
 
     let mut caps = session.caps.clone().unwrap_or_default();
@@ -374,6 +395,19 @@ pub async fn authorize(
         }
         _ => None,
     };
+    if descriptor.audience != Audience::AppLaunch {
+        if let Some(session) = session.as_ref() {
+            require_live_extension_session(uid, session).map_err(|error| {
+                unresolved(
+                    route_name,
+                    descriptor,
+                    uid,
+                    Some(&session.session_id),
+                    error,
+                )
+            })?;
+        }
+    }
     let decision = Decision::new(
         view,
         route_name,

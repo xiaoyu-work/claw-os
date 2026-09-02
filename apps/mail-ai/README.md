@@ -84,8 +84,8 @@ System-wide install lives at `rootfs/features/claw-mail-ai/`. It drops:
   — the manifest Thunderbird reads to find this host. The
   `allowed_extensions` array pins the extension ID
   `claw-mail-ai@claw.os`.
-- `/usr/lib/cos/mail-ai/{native_host.py, main.py, _lib/…}`
-  — a self-contained copy of this app. The root-owned
+- `/usr/lib/cos/apps/mail-ai/{native_host.py, main.py, _lib/…}`
+  — the canonical verified copy of this app. The root-owned
   `/usr/lib/cos/claw-mail-ai-host` binary invokes it.
 - `/etc/thunderbird/policies/policies.json`
   — `ExtensionSettings` that pins the extension as system-installed

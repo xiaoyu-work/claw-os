@@ -51,6 +51,7 @@ const HISTORICAL_USER_COMMANDS: &[&str] = &[
     "app_session.register",
     "app_session.register_native",
     "mcp_session.register",
+    "provenance.package-live",
     "app_session.bind",
     "app_session.set_transient",
     "app_session.deregister",

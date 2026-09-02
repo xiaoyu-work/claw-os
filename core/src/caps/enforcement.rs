@@ -116,6 +116,8 @@ struct SessionRow {
     #[serde(default)]
     app_id: Option<String>,
     #[serde(default)]
+    group: Option<String>,
+    #[serde(default)]
     pending_bind: bool,
     #[serde(default)]
     start_time_ticks: Option<u64>,
@@ -129,6 +131,44 @@ struct Registry {
 
 fn registry_path() -> PathBuf {
     crate::proc::registry_path_for_caps()
+}
+
+fn routed_owner_for_registry() -> Result<u32, String> {
+    let path = registry_path();
+    let routed = PathBuf::from("/run/cos/caps");
+    let relative = path
+        .strip_prefix(&routed)
+        .map_err(|_| "managed session registry is outside /run/cos/caps".to_string())?;
+    let components = relative
+        .components()
+        .map(|component| component.as_os_str())
+        .collect::<Vec<_>>();
+    if components.len() != 3 || components[1] != "proc" || components[2] != "registry.json" {
+        return Err("managed session registry path has an invalid shape".to_string());
+    }
+    let owner = components[0]
+        .to_str()
+        .and_then(|value| value.parse::<u32>().ok())
+        .ok_or_else(|| "managed session registry owner is invalid".to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = std::fs::symlink_metadata(&path)
+            .map_err(|error| format!("inspect managed session registry: {error}"))?;
+        if metadata.file_type().is_symlink()
+            || !metadata.is_file()
+            || metadata.uid() != 0
+            || metadata.nlink() != 1
+            || metadata.mode() & 0o022 != 0
+        {
+            return Err("managed session registry has unsafe identity or mode".to_string());
+        }
+    }
+    Ok(owner)
+}
+
+fn runtime_owner_for_registry() -> u32 {
+    routed_owner_for_registry().unwrap_or_else(|_| crate::provenance::runtime::current_owner())
 }
 
 fn load_registry() -> Registry {
@@ -555,12 +595,16 @@ fn require_impl(
             mode,
             session.caps.as_ref(),
             session.transient_caps.as_ref(),
-            session.app_id.is_some(),
+            session.app_id.is_some() || session.group.as_deref() == Some("mcp"),
             consent_context,
             operation_digest,
         );
     }
 
+    if process_has_no_new_privs() {
+        routed_owner_for_registry()
+            .map_err(|error| Denial::no_session(verb, scope.clone()).with_hint(error))?;
+    }
     let registry = load_registry();
     let session = match registry
         .sessions
@@ -594,7 +638,7 @@ fn require_impl(
         mode,
         session.caps.as_ref(),
         session.transient_caps.as_ref(),
-        session.app_id.is_some(),
+        session.app_id.is_some() || session.group.as_deref() == Some("mcp"),
         consent_context,
         operation_digest,
     )
@@ -607,27 +651,27 @@ fn authorize_session_caps(
     mode: Mode,
     caps: Option<&CapSet>,
     transient_caps: Option<&CapSet>,
-    is_app: bool,
+    requires_runtime_record: bool,
     consent_context: ConsentContext,
     operation_digest: Option<&str>,
 ) -> Result<(), Denial> {
-    // Provenance re-check on the authority path. An App or MCP session
-    // that was verified at launch keeps running for as long as its work
-    // takes; if the operator revoked its publisher key or its artifact
-    // digest in the meantime, it must stop receiving authority now
-    // rather than on the strength of a check that predates the
-    // revocation. The session is also marked for bounded shutdown so
-    // the supervisor stops the process itself.
-    let owner = crate::provenance::runtime::current_owner();
-    let trust = crate::provenance::trust_store();
-    // An App session is package-backed by construction, so a missing or
-    // unreadable record is a denial rather than "not an extension".
-    // Non-App sessions — the operator's shell, a daemon task — have no
-    // record to lose and pass through.
-    let liveness = if is_app {
-        crate::provenance::runtime::assert_live_instance(owner, session_id, &trust)
+    // The sandbox sees only the root-owned runtime record, not owner
+    // trust files. Full trust revalidation happens centrally in clawd
+    // before any provider grant; this local gate still fails closed if
+    // the record is missing, the process changed, or clawd marked it.
+    let owner = runtime_owner_for_registry();
+    // Managed App and MCP sessions are recorded by the daemon at bind,
+    // so a missing or unreadable record is a denial rather than "not an
+    // extension". Operator shells and daemon tasks have no record to
+    // lose and pass through.
+    let liveness = if requires_runtime_record {
+        if process_has_no_new_privs() {
+            crate::provenance::runtime::assert_routed_recorded_instance(owner, session_id)
+        } else {
+            crate::provenance::runtime::assert_recorded_instance(owner, session_id)
+        }
     } else {
-        crate::provenance::runtime::assert_live(owner, session_id, &trust)
+        Ok(())
     };
     if let Err(reason) = liveness {
         return Err(Denial::verb_not_granted(verb, scope).with_hint(format!(
@@ -653,7 +697,7 @@ fn authorize_session_caps(
     }
 
     if caps.covers(&requested)
-        || (!is_app
+        || (!requires_runtime_record
             && approved_grant_covers(session_id, verb, &scope, consent_context, operation_digest))
     {
         Ok(())

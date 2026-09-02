@@ -26,6 +26,7 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(60);
 const HOST_LIFECYCLE_ROUTES: &[Command] = &[
     Command::AppSessionRegister,
     Command::McpSessionRegister,
+    Command::ProvenancePackageLive,
     Command::AppSessionBind,
     Command::AppSessionSetTransient,
     Command::AppSessionDeregister,

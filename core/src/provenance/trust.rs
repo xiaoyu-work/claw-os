@@ -20,8 +20,9 @@
 //!
 //! There is deliberately no environment variable that appends a trust
 //! root, relaxes the ownership checks, or disables verification. The
-//! per-user root is resolved from the passwd entry of the effective
-//! uid, not from `HOME`/`COS_USER_CONFIG_DIR`, so redirecting the
+//! per-user root is resolved from the passwd entry of the authenticated
+//! owner uid (the effective uid for the owner's CLI), not from
+//! `HOME`/`COS_USER_CONFIG_DIR`, so redirecting the
 //! process environment cannot point trust at attacker-controlled
 //! files. Tests and embedders build a store explicitly with
 //! [`TrustStore::load_roots`]; that is a compiled-in call, not ambient
@@ -95,7 +96,8 @@ impl TrustTier {
 }
 
 /// One trusted publisher key after validation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TrustedKey {
     pub key_id: String,
     pub public_key: [u8; 32],
@@ -116,7 +118,8 @@ pub struct TrustedKey {
 /// compare equal. A malformed, ambiguous or out-of-range value rejects
 /// the whole trust entry rather than being ignored: a key whose expiry
 /// cannot be understood must not authorise anything.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Validity {
     pub not_before: Option<chrono::DateTime<chrono::Utc>>,
     pub not_after: Option<chrono::DateTime<chrono::Utc>>,
@@ -332,6 +335,20 @@ pub struct TrustStore {
     generation: String,
 }
 
+const ROUTED_TRUST_SCHEMA_V1: &str = "claw.routed-trust/v1";
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RoutedTrustSnapshot {
+    schema: String,
+    owner_uid: u32,
+    keys: BTreeMap<String, TrustedKey>,
+    revoked_keys: BTreeSet<String>,
+    revoked_packages: BTreeSet<String>,
+    dev_grants: BTreeMap<String, DevGrant>,
+    generation: String,
+}
+
 impl TrustStore {
     /// Production trust roots, in the order they are consulted.
     ///
@@ -339,6 +356,13 @@ impl TrustStore {
     /// effective uid; when that cannot be resolved (no passwd entry,
     /// non-Unix host) only the root-owned roots are used.
     pub fn default_roots() -> Vec<TrustRootSpec> {
+        Self::roots_for_owner(fsec::effective_uid())
+    }
+
+    /// Production trust roots for an authenticated owner.
+    pub fn roots_for_owner(uid: u32) -> Vec<TrustRootSpec> {
+        #[cfg(not(unix))]
+        let _ = uid;
         let mut roots = vec![
             TrustRootSpec {
                 path: PathBuf::from(VENDOR_TRUST_ROOT),
@@ -355,7 +379,6 @@ impl TrustStore {
         ];
         #[cfg(unix)]
         {
-            let uid = fsec::effective_uid();
             if let Ok(home) = crate::paths::verified_home_for_uid(uid) {
                 roots.push(TrustRootSpec {
                     path: home.join(USER_TRUST_SUBDIR),
@@ -393,6 +416,45 @@ impl TrustStore {
         store.watch = TrustWatch::observe(&Self::watch_paths(roots));
         store.recompute_generation();
         store
+    }
+
+    pub(crate) fn routed_snapshot_bytes(&self, owner_uid: u32) -> Result<Vec<u8>, String> {
+        serde_json::to_vec_pretty(&RoutedTrustSnapshot {
+            schema: ROUTED_TRUST_SCHEMA_V1.to_string(),
+            owner_uid,
+            keys: self.keys.clone(),
+            revoked_keys: self.revoked_keys.clone(),
+            revoked_packages: self.revoked_packages.clone(),
+            dev_grants: self.dev_grants.clone(),
+            generation: self.generation.clone(),
+        })
+        .map_err(|error| format!("serialize routed trust snapshot: {error}"))
+    }
+
+    pub(crate) fn from_routed_snapshot(owner_uid: u32, bytes: &[u8]) -> Result<Self, String> {
+        let snapshot: RoutedTrustSnapshot = serde_json::from_slice(bytes)
+            .map_err(|error| format!("parse routed trust snapshot: {error}"))?;
+        if snapshot.schema != ROUTED_TRUST_SCHEMA_V1 || snapshot.owner_uid != owner_uid {
+            return Err("routed trust snapshot identity is invalid".to_string());
+        }
+        if snapshot.generation.len() != 64
+            || !snapshot
+                .generation
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            return Err("routed trust snapshot generation is invalid".to_string());
+        }
+        Ok(Self {
+            keys: snapshot.keys,
+            revoked_keys: snapshot.revoked_keys,
+            revoked_packages: snapshot.revoked_packages,
+            dev_grants: snapshot.dev_grants,
+            diagnostics: Vec::new(),
+            domains: BTreeMap::new(),
+            watch: TrustWatch::default(),
+            generation: snapshot.generation,
+        })
     }
 
     /// Every path a reader stats to notice a change.

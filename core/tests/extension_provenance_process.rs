@@ -1147,11 +1147,7 @@ fn revoker_helper() {
 impl Fixture {
     /// Revoke from a separate process and return only once it has
     /// exited, so the change is durably on disk before the caller looks.
-    fn revoke_from_another_process(
-        &self,
-        revoked_keys: &[String],
-        revoked_packages: &[String],
-    ) {
+    fn revoke_from_another_process(&self, revoked_keys: &[String], revoked_packages: &[String]) {
         let spec = serde_json::json!({
             "trust_root": self.trust_root,
             "state_dir": self.state_dir,
@@ -1326,39 +1322,25 @@ fn a_revocation_from_another_process_denies_the_next_broker_call_and_kills_the_g
     );
     runtime::bind_process(me(), "app-sibling", sibling_pid);
 
-    // The launch endpoint the sandbox talks to. Deliberately built with
-    // an *empty* capability set: a worker that holds nothing still has
-    // to be refused, because the endpoint is also the thing that would
-    // otherwise answer "deny, not-granted" instead of "this package is
-    // no longer trusted" and leave the instance running.
-    let endpoint = cos::worker::BrokerAuthority::new(
-        "app-doomed".to_string(),
-        Some("doomed".to_string()),
-        cos::caps::CapSet::new(),
-        cos::worker::relay_slot(),
-    )
-    .with_package(Some(doomed.clone()));
-    let sibling_endpoint = cos::worker::BrokerAuthority::new(
-        "app-sibling".to_string(),
-        Some("sibling".to_string()),
-        cos::caps::CapSet::new(),
-        cos::worker::relay_slot(),
-    )
-    .with_package(Some(sibling.clone()));
+    let assert_live = |session: &str, package: &PackageRef| {
+        let trust = cos::provenance::trust_store();
+        package.is_live(&trust).inspect_err(|reason| {
+            runtime::mark_for_shutdown(me(), session, reason);
+        })?;
+        runtime::assert_live_instance(me(), session, &trust)
+    };
 
-    endpoint.assert_live().expect("live before the revocation");
-    sibling_endpoint.assert_live().expect("sibling is live");
+    assert_live("app-doomed", &doomed).expect("live before the revocation");
+    assert_live("app-sibling", &sibling).expect("sibling is live");
 
     // Another process revokes the artifact. Nothing tells this one.
     fx.revoke_from_another_process(&[], &[doomed.content_digest.clone()]);
 
     // No reload_trust(), no restart: the very next call notices.
-    let denial = endpoint
-        .assert_live()
+    let denial = assert_live("app-doomed", &doomed)
         .expect_err("a revoked package must be denied on its next broker call");
     assert!(denial.contains("revoked"), "unexpected: {denial}");
-    sibling_endpoint
-        .assert_live()
+    assert_live("app-sibling", &sibling)
         .expect("a sibling package is unaffected by another package's revocation");
 
     // The denial also marked it, and the lifecycle pass stops the whole
@@ -1394,9 +1376,15 @@ fn a_revocation_from_another_process_denies_the_next_broker_call_and_kills_the_g
     );
 
     // The record is cleared, so nothing is left claiming to be running.
-    assert!(runtime::instance_for(me(), "app-doomed").expect("readable").is_none());
-    assert!(runtime::pending_shutdowns(me()).expect("pending").is_empty());
-    assert!(runtime::instance_for(me(), "app-sibling").expect("readable").is_some());
+    assert!(runtime::instance_for(me(), "app-doomed")
+        .expect("readable")
+        .is_none());
+    assert!(runtime::pending_shutdowns(me())
+        .expect("pending")
+        .is_empty());
+    assert!(runtime::instance_for(me(), "app-sibling")
+        .expect("readable")
+        .is_some());
 
     sibling_group.kill();
 }
@@ -1429,8 +1417,11 @@ fn an_idle_instance_is_stopped_by_the_bounded_lifecycle_pass() {
     fx.revoke_from_another_process(&[fx.key.key_id.clone()], &[]);
     assert!(alive(pid));
 
-    let report =
-        runtime::lifecycle_tick(me(), &cos::provenance::trust_store(), runtime::SHUTDOWN_GRACE);
+    let report = runtime::lifecycle_tick(
+        me(),
+        &cos::provenance::trust_store(),
+        runtime::SHUTDOWN_GRACE,
+    );
     assert!(report.marked.contains(&"app-idle".to_string()));
     assert!(report.terminated.contains(&"app-idle".to_string()));
     assert!(
@@ -1438,7 +1429,9 @@ fn an_idle_instance_is_stopped_by_the_bounded_lifecycle_pass() {
         "an idle instance's descendant survived the lifecycle pass"
     );
     let _ = group.leader.wait();
-    assert!(runtime::instance_for(me(), "app-idle").expect("readable").is_none());
+    assert!(runtime::instance_for(me(), "app-idle")
+        .expect("readable")
+        .is_none());
     let _ = reference;
     let _ = pid;
 }
@@ -1477,8 +1470,7 @@ fn a_recycled_pid_is_never_signalled() {
     let state_path = fx.root.join("procdata").join("provenance-running.json");
     let mut state: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
-    state["shutdown"]["app-ghost"]["process"]["start_time_ticks"] =
-        serde_json::json!(u64::MAX);
+    state["shutdown"]["app-ghost"]["process"]["start_time_ticks"] = serde_json::json!(u64::MAX);
     fs::write(&state_path, serde_json::to_vec_pretty(&state).unwrap()).unwrap();
     runtime::reset_cache();
 
@@ -1493,7 +1485,9 @@ fn a_recycled_pid_is_never_signalled() {
         "an unrelated process holding a recycled pid was killed"
     );
     // The record is still released: there is nothing left to govern.
-    assert!(runtime::instance_for(me(), "app-ghost").expect("readable").is_none());
+    assert!(runtime::instance_for(me(), "app-ghost")
+        .expect("readable")
+        .is_none());
 
     let _ = reference;
     bystander.kill();
@@ -1509,7 +1503,9 @@ fn an_operator_configured_mcp_server_is_classified_not_ignored() {
     // is recorded and labelled, so it is a deliberate category rather
     // than a gap.
     runtime::register_operator_mcp(me(), "mcp:local-tool");
-    let instance = runtime::instance_for(me(), "mcp:local-tool").expect("readable").expect("recorded");
+    let instance = runtime::instance_for(me(), "mcp:local-tool")
+        .expect("readable")
+        .expect("recorded");
     assert_eq!(instance.class, InstanceClass::McpOperatorConfig);
     assert!(instance.package.is_none());
     assert!(!instance.class.is_package_backed());
@@ -1517,11 +1513,16 @@ fn an_operator_configured_mcp_server_is_classified_not_ignored() {
     // Revoking every key in the store leaves it alone: it never claimed
     // that trust in the first place.
     fx.revoke_from_another_process(&[fx.key.key_id.clone()], &[]);
-    let report =
-        runtime::lifecycle_tick(me(), &cos::provenance::trust_store(), runtime::SHUTDOWN_GRACE);
+    let report = runtime::lifecycle_tick(
+        me(),
+        &cos::provenance::trust_store(),
+        runtime::SHUTDOWN_GRACE,
+    );
     assert!(report.is_empty(), "unexpected action taken: {report:?}");
     assert!(runtime::assert_live_now(me(), "mcp:local-tool").is_ok());
-    assert!(runtime::instance_for(me(), "mcp:local-tool").expect("readable").is_some());
+    assert!(runtime::instance_for(me(), "mcp:local-tool")
+        .expect("readable")
+        .is_some());
 
     runtime::deregister(me(), "mcp:local-tool");
 }
@@ -1556,7 +1557,6 @@ fn a_marked_instance_stays_denied_until_the_lifecycle_pass_reaches_it() {
     assert!(runtime::assert_live_now(me(), "app-window").is_err());
     runtime::deregister(me(), "app-window");
 }
-
 
 /// Environment variable that turns a re-execution of this binary into
 /// "another process registering an instance".

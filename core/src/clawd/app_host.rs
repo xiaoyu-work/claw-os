@@ -830,7 +830,7 @@ fn record_service_failure(state: &mut AppServiceState) {
 }
 
 async fn merge_declared_services(slot: &OwnerHostSlot) {
-    let declared = declared_services();
+    let declared = declared_services(slot.owner_uid);
     let declared_ids = declared
         .iter()
         .map(|(app_id, _, _)| app_id.as_str())
@@ -859,8 +859,9 @@ async fn merge_declared_services(slot: &OwnerHostSlot) {
     }
 }
 
-fn declared_services() -> Vec<(String, crate::caps::manifest::McpLifecycle, String)> {
-    crate::apps::discover(&apps_root())
+fn declared_services(owner_uid: u32) -> Vec<(String, crate::caps::manifest::McpLifecycle, String)> {
+    let trust = crate::provenance::trust_store_for_owner(owner_uid);
+    crate::apps::discover_verified_with_trust(&apps_root(), &trust)
         .into_values()
         .filter_map(|app| {
             let service = app.manifest.mcp?;
@@ -1077,13 +1078,25 @@ async fn cleanup_started_host(
     extension_uid: u32,
     host_session_id: Option<&str>,
 ) -> Result<(), String> {
+    let mut session_cleanup_errors = Vec::new();
     if let Some(session_id) = host_session_id {
         for child in crate::proc::deregister_child_sessions_for_owner(session_id, owner_uid) {
             crate::clawd::authority::revoke_session_for_owner(&child, owner_uid);
+            if let Err(error) = crate::provenance::runtime::deregister_checked(owner_uid, &child) {
+                session_cleanup_errors.push(error);
+            }
         }
         crate::proc::deregister_session_for_owner(session_id, owner_uid);
         crate::clawd::authority::revoke_session_for_owner(session_id, owner_uid);
     }
+    let session_cleanup = if session_cleanup_errors.is_empty() {
+        Ok(())
+    } else {
+        Err(format!(
+            "persistent App runtime cleanup failed: {}",
+            session_cleanup_errors.join("; ")
+        ))
+    };
     let _ = host.child.start_kill();
     let containment = host.cgroup.cleanup().await;
     let reaped = match tokio::time::timeout(HOST_SHUTDOWN_GRACE, host.child.wait()).await {
@@ -1109,7 +1122,7 @@ async fn cleanup_started_host(
     } else {
         Err("routed ACL retained because Host cleanup failed".to_string())
     };
-    merge_cleanups([containment, reaped, mounts, paths, acl])
+    merge_cleanups([session_cleanup, containment, reaped, mounts, paths, acl])
 }
 
 fn cleanup_start_error(

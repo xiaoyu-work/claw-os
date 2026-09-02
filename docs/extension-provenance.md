@@ -95,11 +95,20 @@ world write bits. A shared ancestor is accepted only when it carries
 the sticky bit. A rejected root is reported as a diagnostic
 (`cos provenance trust list`), never skipped silently.
 
-The per-user roots resolve from the **passwd home of the effective
-uid**, not from `HOME` or `COS_USER_CONFIG_DIR`. There is deliberately
+The per-user roots resolve from the **passwd home of the authenticated
+owner uid** (`geteuid` for the owner's own CLI), not from `HOME` or
+`COS_USER_CONFIG_DIR`. There is deliberately
 no environment variable that appends a trust root, relaxes the
 ownership checks or disables verification, and no model-reachable
 surface that can add one.
+
+An Extension Host runs under a separate locked uid and never reads the
+owner's mutable trust directories directly. `clawd` validates those roots and
+atomically publishes their public keys, revocations and developer grants to a
+root-owned read-only projection at
+`/run/cos/caps/<uid>/provenance-trust.json`. The Host's private broker asks
+`clawd` to refresh and check the exact package immediately before a hosted MCP
+attach or call.
 
 ### Key ids, usage constraints, rotation and revocation
 
@@ -145,7 +154,7 @@ hours. Two mechanisms cover it, and they give different guarantees:
 
 | | Guarantee | Where |
 | --- | --- | --- |
-| **On use** | The *next* authority call fails. Not "soon" — the call in front of it. | `provenance::runtime::assert_live` on the capability path, the worker broker endpoint, `app_session.relay`, and every MCP/App-session tool call |
+| **On use** | The *next* authority call fails. Not "soon" — the call in front of it. | Central `clawd` provider authority, App-session call setup, and the Host's `provenance.package-live` check immediately before hosted MCP attach/dispatch |
 | **When idle** | Bounded by the tick of whichever supervision loop owns that view. | `provenance::runtime::lifecycle_tick`, called from the `clawd` authority sweep and the `agentd` reconcile pass |
 
 Neither waits for a grant to expire and neither needs a daemon restart.
@@ -166,8 +175,8 @@ the `agentd` supervisor and `clawd` acting for that owner all name the
 same file: `/run/cos/caps/<uid>/provenance-running.json` when the
 daemon's routed partition exists (root-owned, so a session cannot
 rewrite its own provenance), and an owner-qualified file in the owner's
-own data directory when it does not. Reads and writes both take a
-`flock` on a side file, and every mutation is a read-modify-write
+own data directory when it does not. Writers take an exclusive `flock`; read-only owner/Host projections take a
+shared lock. Every mutation is a read-modify-write
 *inside* that lock, so two processes registering different instances
 cannot lose one another's update. Pure reads never rewrite the file.
 
@@ -207,6 +216,12 @@ a *package* instance is never mistaken for one of these.
 
 An App with a `session` block runs as a stdio MCP server, and that
 launch is bound to one snapshot like any other:
+
+Only an authenticated `claw-extension-host` may register a package-backed App
+or MCP session with `clawd`. A normal user process remains on the unprivileged
+local execution path and cannot bind an arbitrary descendant to a trusted
+package identity. The Host registration, launch grant, runtime record and
+child process all carry the same exact `PackageRef`.
 
 1. `AppLaunch` is built from the verified package, so the manifest, the
    runtime selection, the session block and the capability ceiling all
@@ -304,20 +319,20 @@ in the launch path re-reads `app.json` or re-resolves the package by
 path, so the bytes that decided the capability grant and the bytes that
 execute cannot diverge.
 
-### Execution is bound to inodes, not paths
+### Execution is materialized from pinned descriptors
 
 Before the sandbox is prepared, `AppLaunch::bind` re-hashes the manifest
 and every entrypoint from the pinned directory descriptor and **keeps
-those descriptors open** until the child has been spawned. The resulting
-`(st_dev, st_ino)` identities travel into the worker policy, and the
-Linux provider refuses to bind a mount source whose inode differs from
-the one that was verified. Concretely:
+those descriptors open** until the child has been spawned. The package tree is
+then copied from that descriptor, with every file digest rechecked, into a
+private read-only snapshot. Bubblewrap mounts that snapshot at the canonical
+package path. Concretely:
 
-* the package directory is bound by inode;
-* each signed entrypoint is bound over it, also by inode;
+* the package directory identity must still match the opened descriptor;
+* every materialized file must match the signed digest and mode;
 * replacing `main.py` after verification is therefore either **detected**
   (identity mismatch → launch refused) or **irrelevant** (the sandbox
-  still sees the verified inode).
+  sees only the already materialized snapshot).
 
 The same applies on a cache hit: `assert_current` re-checks the
 directory identity and the trust generation, and `bind` re-hashes, so a

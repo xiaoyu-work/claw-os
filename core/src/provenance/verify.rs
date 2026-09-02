@@ -171,6 +171,9 @@ impl VerifiedPackage {
     pub fn dir(&self) -> &Path {
         &self.dir
     }
+    pub(crate) fn dir_identity(&self) -> (u64, u64) {
+        self.identity
+    }
     pub fn content_digest(&self) -> &str {
         &self.content_digest
     }
@@ -372,6 +375,94 @@ impl VerifiedPackage {
         })
     }
 
+    #[cfg(unix)]
+    pub fn materialize_snapshot(&self, destination: &Path) -> Result<(), ProvenanceError> {
+        use std::fs;
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::create_dir(destination).map_err(|error| ProvenanceError::Io {
+            path: destination.to_path_buf(),
+            reason: error.to_string(),
+        })?;
+        let mut directories = Vec::new();
+        for entry in self.files.values() {
+            let target = destination.join(&entry.path);
+            match entry.kind {
+                NodeKind::Dir => {
+                    fs::create_dir_all(&target).map_err(|error| ProvenanceError::Io {
+                        path: target.clone(),
+                        reason: error.to_string(),
+                    })?;
+                    directories.push((target, entry.mode));
+                }
+                NodeKind::File => {
+                    if let Some(parent) = target.parent() {
+                        fs::create_dir_all(parent).map_err(|error| ProvenanceError::Io {
+                            path: parent.to_path_buf(),
+                            reason: error.to_string(),
+                        })?;
+                    }
+                    let source = self.handle.open_file(&entry.path).map_err(|error| {
+                        ProvenanceError::TreeMismatch {
+                            path: self.dir.join(&entry.path),
+                            reason: format!("snapshot open failed: {error}"),
+                        }
+                    })?;
+                    let bytes = source.read_bounded(MAX_PACKAGE_BYTES).map_err(|error| {
+                        ProvenanceError::Io {
+                            path: self.dir.join(&entry.path),
+                            reason: error.to_string(),
+                        }
+                    })?;
+                    if digest_bytes(&bytes) != entry.digest {
+                        return Err(ProvenanceError::TreeMismatch {
+                            path: self.dir.join(&entry.path),
+                            reason: "file changed while materializing verified snapshot"
+                                .to_string(),
+                        });
+                    }
+                    let mut output = fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&target)
+                        .map_err(|error| ProvenanceError::Io {
+                            path: target.clone(),
+                            reason: error.to_string(),
+                        })?;
+                    output
+                        .write_all(&bytes)
+                        .and_then(|_| output.sync_all())
+                        .map_err(|error| ProvenanceError::Io {
+                            path: target.clone(),
+                            reason: error.to_string(),
+                        })?;
+                    fs::set_permissions(&target, fs::Permissions::from_mode(entry.mode & 0o555))
+                        .map_err(|error| ProvenanceError::Io {
+                            path: target,
+                            reason: error.to_string(),
+                        })?;
+                }
+            }
+        }
+        directories.sort_by_key(|(path, _)| std::cmp::Reverse(path.components().count()));
+        for (path, mode) in directories {
+            fs::set_permissions(&path, fs::Permissions::from_mode(mode & 0o555)).map_err(
+                |error| ProvenanceError::Io {
+                    path,
+                    reason: error.to_string(),
+                },
+            )?;
+        }
+        fs::set_permissions(destination, fs::Permissions::from_mode(0o555)).map_err(|error| {
+            ProvenanceError::Io {
+                path: destination.to_path_buf(),
+                reason: error.to_string(),
+            }
+        })?;
+        Ok(())
+    }
+
     /// Re-assert that the pinned directory is still the one that was
     /// verified and that the trust store has not moved on. Callers
     /// invoke this immediately before launching or disclosing.
@@ -386,6 +477,12 @@ impl VerifiedPackage {
             return Err(ProvenanceError::Trust {
                 path: self.dir.clone(),
                 source: TrustError::RevokedPackage(self.content_digest.clone()),
+            });
+        }
+        if let Err(reason) = super::runtime::PackageRef::of(self).is_live(trust) {
+            return Err(ProvenanceError::TreeMismatch {
+                path: self.dir.clone(),
+                reason,
             });
         }
         let meta = fsec::lstat(&self.dir).map_err(|e| ProvenanceError::Io {
@@ -567,6 +664,21 @@ pub fn verify_package(
         });
     }
     let identity = (dir_meta.dev, dir_meta.ino);
+    let canonical_dir = dir.canonicalize().map_err(|error| ProvenanceError::Io {
+        path: dir.to_path_buf(),
+        reason: format!("canonicalize package directory: {error}"),
+    })?;
+    let canonical_meta = fsec::lstat(&canonical_dir).map_err(|error| ProvenanceError::Io {
+        path: canonical_dir.clone(),
+        reason: error.to_string(),
+    })?;
+    if (canonical_meta.dev, canonical_meta.ino) != identity {
+        return Err(ProvenanceError::Io {
+            path: canonical_dir,
+            reason: "canonical package directory identity does not match opened directory"
+                .to_string(),
+        });
+    }
 
     let envelope_raw = match handle
         .open_file(ENVELOPE_FILE)
@@ -582,10 +694,12 @@ pub fn verify_package(
         }
     };
 
-    match envelope_raw {
+    let mut package = match envelope_raw {
         Some(raw) => verify_signed(dir, handle, identity, &raw, options, trust),
         None => verify_unsigned(dir, handle, identity, dir_meta, options, trust),
-    }
+    }?;
+    package.dir = canonical_dir;
+    Ok(package)
 }
 
 fn verify_signed(
