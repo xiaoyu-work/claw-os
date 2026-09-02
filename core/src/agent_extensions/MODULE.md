@@ -13,6 +13,13 @@ authorization-policy access.
 - Quarantine package/manifest failures with actionable diagnostics.
 - Publish bounded least-privilege runtime observations through one ordered
   per-extension FIFO with a reserved terminal slot.
+- Stop accepting new observations after repeated backpressure while draining
+  every already accepted FIFO event before the ordered terminal marker.
+  Security revocation and protocol compromise remain immediate discard paths.
+- Track detach acknowledgement independently from the event worker task,
+  retry every unacknowledged detach within the shared finish budget, and force
+  supervisor-owned host/cgroup teardown when exact child termination cannot be
+  proven.
 - Emit model observations at the real provider-attempt boundary with paired
   attempt ids.
 - Mint per-extension event/session/package/tool/policy-bound opaque capability

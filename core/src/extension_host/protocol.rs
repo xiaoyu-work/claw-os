@@ -7,7 +7,21 @@ use crate::clawd::wire::RequestId;
 
 pub const PROTOCOL_VERSION: u32 = 8;
 pub const MAX_CONTROL_FRAME_BYTES: usize = 8 * 1024 * 1024;
-pub const MAX_CONTROL_CONNECTIONS: usize = 8;
+// Long-running Agent events cannot consume the canonical App/MCP or priority
+// lifecycle lanes. Admission and action permits together are the global
+// connection/task ceiling for the worker-only control surface.
+pub const MAX_CANONICAL_CONTROL_ACTIONS: usize = 8;
+pub const MAX_PRIORITY_CONTROL_ACTIONS: usize = 4;
+pub const MAX_AGENT_EVENT_ACTIONS: usize = 64;
+pub const MAX_CANONICAL_ADMISSIONS: usize = 4;
+pub const MAX_PRIORITY_ADMISSIONS: usize = 4;
+pub const MAX_AGENT_EVENT_ADMISSIONS: usize = 8;
+pub const MAX_CONTROL_CONNECTIONS: usize = MAX_CANONICAL_CONTROL_ACTIONS
+    + MAX_PRIORITY_CONTROL_ACTIONS
+    + MAX_AGENT_EVENT_ACTIONS
+    + MAX_CANONICAL_ADMISSIONS
+    + MAX_PRIORITY_ADMISSIONS
+    + MAX_AGENT_EVENT_ADMISSIONS;
 pub const MAX_REQUEST_TIMEOUT_MS: u64 = 180_000;
 pub const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 130_000;
 pub const READY_TIMEOUT_MS: u64 = 15_000;
@@ -218,6 +232,7 @@ pub enum ExtensionErrorCategory {
     Connect,
     Timeout,
     Crash,
+    Busy,
     RemoteCallFailure,
     #[default]
     Protocol,
@@ -568,6 +583,33 @@ pub enum HostAction {
         request_id: RequestId,
     },
     Shutdown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlLane {
+    Canonical,
+    AgentEvent,
+    Priority,
+}
+
+impl HostAction {
+    pub const fn control_lane(&self) -> ControlLane {
+        match self {
+            Self::AgentExtensionEvent { .. } => ControlLane::AgentEvent,
+            Self::AgentExtensionDetach { .. } | Self::Cancel { .. } | Self::Shutdown => {
+                ControlLane::Priority
+            }
+            _ => ControlLane::Canonical,
+        }
+    }
+}
+
+pub fn control_socket_for(base: &str, lane: ControlLane) -> String {
+    match lane {
+        ControlLane::Canonical => base.to_string(),
+        ControlLane::AgentEvent => format!("{base}.events"),
+        ControlLane::Priority => format!("{base}.priority"),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

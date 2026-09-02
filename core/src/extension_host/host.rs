@@ -1,18 +1,18 @@
 //! `claw-extension-host` process implementation.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Read;
 use std::os::fd::FromRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::AsRawFd;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::Value;
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::{Notify, Semaphore};
+use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 
 use crate::agent::tools::mcp::integration::{McpServerHandle, McpServerSpec};
 use crate::clawd::transport::frame::{PeerStream, ReadOutcome};
@@ -20,11 +20,15 @@ use crate::clawd::transport::peer;
 use crate::clawd::wire::RequestId;
 
 use super::protocol::{
-    ControlRequest, ControlResponse, ExtensionErrorCategory, HostAction, HostBootstrap, HostResult,
-    MAX_CONTROL_CONNECTIONS, MAX_CONTROL_FRAME_BYTES, MAX_REQUEST_TIMEOUT_MS, PROTOCOL_VERSION,
+    control_socket_for, ControlLane, ControlRequest, ControlResponse, ExtensionErrorCategory,
+    HostAction, HostBootstrap, HostResult, MAX_AGENT_EVENT_ACTIONS, MAX_AGENT_EVENT_ADMISSIONS,
+    MAX_CANONICAL_ADMISSIONS, MAX_CANONICAL_CONTROL_ACTIONS, MAX_CONTROL_FRAME_BYTES,
+    MAX_PRIORITY_ADMISSIONS, MAX_PRIORITY_CONTROL_ACTIONS, MAX_REQUEST_TIMEOUT_MS,
+    PROTOCOL_VERSION,
 };
 
 const RESPONSE_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+const CONTROL_READ_TIMEOUT: Duration = Duration::from_millis(250);
 const RECENT_REQUESTS: usize = 256;
 const MAX_APP_ARGS: usize = 128;
 const MAX_ARG_BYTES: usize = 64 * 1024;
@@ -50,6 +54,7 @@ struct HostState {
     agent_extensions: tokio::sync::Mutex<
         HashMap<String, Arc<tokio::sync::Mutex<super::agent_extension::HostedAgentExtension>>>,
     >,
+    active_agent_events: Mutex<HashMap<String, HashMap<String, tokio::task::AbortHandle>>>,
     agent_extension_spawn: tokio::sync::Mutex<()>,
     shutting_down: AtomicBool,
     fatal_shutdown: AtomicBool,
@@ -97,12 +102,19 @@ fn run() -> Result<(), String> {
         .build()
         .map_err(|error| format!("build extension-host runtime: {error}"))?;
     runtime.block_on(async move {
-        let listener = UnixListener::bind(&control_socket)
-            .map_err(|error| format!("bind extension control socket: {error}"))?;
-        peer::enable_credential_passing(listener.as_raw_fd())
-            .map_err(|error| format!("enable extension peer credentials: {error}"))?;
-        std::fs::set_permissions(&control_socket, std::fs::Permissions::from_mode(0o660))
-            .map_err(|error| format!("protect extension control socket: {error}"))?;
+        let event_socket = PathBuf::from(control_socket_for(
+            &binding.control_socket,
+            ControlLane::AgentEvent,
+        ));
+        let priority_socket = PathBuf::from(control_socket_for(
+            &binding.control_socket,
+            ControlLane::Priority,
+        ));
+        let _ = std::fs::remove_file(&event_socket);
+        let _ = std::fs::remove_file(&priority_socket);
+        let canonical_listener = bind_control_listener(&control_socket)?;
+        let event_listener = bind_control_listener(&event_socket)?;
+        let priority_listener = bind_control_listener(&priority_socket)?;
 
         let state = Arc::new(HostState {
             task_id: binding.task_id.clone(),
@@ -118,29 +130,39 @@ fn run() -> Result<(), String> {
             active: Mutex::new(HashMap::new()),
             mcp: tokio::sync::Mutex::new(HashMap::new()),
             agent_extensions: tokio::sync::Mutex::new(HashMap::new()),
+            active_agent_events: Mutex::new(HashMap::new()),
             agent_extension_spawn: tokio::sync::Mutex::new(()),
             shutting_down: AtomicBool::new(false),
             fatal_shutdown: AtomicBool::new(false),
             shutdown: Notify::new(),
         });
-        let slots = Arc::new(Semaphore::new(MAX_CONTROL_CONNECTIONS));
+        let listeners = [
+            tokio::spawn(accept_control(
+                canonical_listener,
+                ControlLane::Canonical,
+                state.clone(),
+                Arc::new(Semaphore::new(MAX_CANONICAL_ADMISSIONS)),
+                Arc::new(Semaphore::new(MAX_CANONICAL_CONTROL_ACTIONS)),
+            )),
+            tokio::spawn(accept_control(
+                event_listener,
+                ControlLane::AgentEvent,
+                state.clone(),
+                Arc::new(Semaphore::new(MAX_AGENT_EVENT_ADMISSIONS)),
+                Arc::new(Semaphore::new(MAX_AGENT_EVENT_ACTIONS)),
+            )),
+            tokio::spawn(accept_control(
+                priority_listener,
+                ControlLane::Priority,
+                state.clone(),
+                Arc::new(Semaphore::new(MAX_PRIORITY_ADMISSIONS)),
+                Arc::new(Semaphore::new(MAX_PRIORITY_CONTROL_ACTIONS)),
+            )),
+        ];
 
-        loop {
-            tokio::select! {
-                _ = state.shutdown.notified() => break,
-                accepted = listener.accept() => {
-                    let (stream, _) = accepted
-                        .map_err(|error| format!("accept extension control request: {error}"))?;
-                    let Ok(permit) = slots.clone().try_acquire_owned() else {
-                        continue;
-                    };
-                    let state = state.clone();
-                    tokio::spawn(async move {
-                        let _permit = permit;
-                        serve_control(stream, state).await;
-                    });
-                }
-            }
+        state.shutdown.notified().await;
+        for listener in listeners {
+            listener.abort();
         }
 
         state.shutting_down.store(true, Ordering::SeqCst);
@@ -154,21 +176,39 @@ fn run() -> Result<(), String> {
         }
         crate::agent::tools::cos_apps_session::host_close_all_sessions().await;
         state.mcp.lock().await.clear();
+        let interrupted_extensions = state
+            .active_agent_events
+            .lock()
+            .map(|mut events| {
+                let ids = events.keys().cloned().collect::<HashSet<_>>();
+                for handle in events
+                    .drain()
+                    .flat_map(|(_, requests)| requests.into_values())
+                {
+                    handle.abort();
+                }
+                ids
+            })
+            .unwrap_or_default();
         let extensions = state
             .agent_extensions
             .lock()
             .await
             .drain()
-            .map(|(_, extension)| extension)
             .collect::<Vec<_>>();
-        for extension in extensions {
-            let _ = extension
-                .lock()
-                .await
-                .shutdown(super::abi::ShutdownReason::TaskComplete)
-                .await;
+        for (id, extension) in extensions {
+            let mut extension = extension.lock().await;
+            if interrupted_extensions.contains(&id) {
+                extension.abort().await;
+            } else {
+                let _ = extension
+                    .shutdown(super::abi::ShutdownReason::TaskComplete)
+                    .await;
+            }
         }
         let _ = std::fs::remove_file(&control_socket);
+        let _ = std::fs::remove_file(&event_socket);
+        let _ = std::fs::remove_file(&priority_socket);
         if state.fatal_shutdown.load(Ordering::SeqCst) {
             unsafe {
                 libc::_exit(124);
@@ -178,13 +218,85 @@ fn run() -> Result<(), String> {
     })
 }
 
-async fn serve_control(stream: UnixStream, state: Arc<HostState>) {
+fn bind_control_listener(path: &Path) -> Result<UnixListener, String> {
+    let listener = UnixListener::bind(path)
+        .map_err(|error| format!("bind extension control socket {}: {error}", path.display()))?;
+    peer::enable_credential_passing(listener.as_raw_fd())
+        .map_err(|error| format!("enable extension peer credentials: {error}"))?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660)).map_err(|error| {
+        format!(
+            "protect extension control socket {}: {error}",
+            path.display()
+        )
+    })?;
+    Ok(listener)
+}
+
+async fn accept_control(
+    listener: UnixListener,
+    lane: ControlLane,
+    state: Arc<HostState>,
+    admissions: Arc<Semaphore>,
+    actions: Arc<Semaphore>,
+) {
+    loop {
+        let admission = tokio::select! {
+            _ = state.shutdown.notified() => return,
+            permit = admissions.clone().acquire_owned() => match permit {
+                Ok(permit) => permit,
+                Err(_) => return,
+            },
+        };
+        let accepted = tokio::select! {
+            _ = state.shutdown.notified() => return,
+            accepted = listener.accept() => accepted,
+        };
+        let (stream, _) = match accepted {
+            Ok(accepted) => accepted,
+            Err(_) => {
+                state.shutting_down.store(true, Ordering::SeqCst);
+                state.fatal_shutdown.store(true, Ordering::SeqCst);
+                state.shutdown.notify_waiters();
+                return;
+            }
+        };
+        if !preauthenticate_peer(&stream, &state) {
+            continue;
+        }
+        let state = state.clone();
+        let actions = actions.clone();
+        tokio::spawn(async move {
+            serve_control(stream, lane, state, admission, actions).await;
+        });
+    }
+}
+
+fn preauthenticate_peer(stream: &UnixStream, state: &HostState) -> bool {
+    let Ok(credentials) = stream.peer_cred() else {
+        return false;
+    };
+    let Some(pid) = credentials.pid().and_then(|pid| u32::try_from(pid).ok()) else {
+        return false;
+    };
+    credentials.uid() == state.worker_uid
+        && credentials.gid() == state.owner_gid
+        && pid == state.worker_pid
+        && crate::proc::read_start_time_ticks_pub(pid) == state.worker_start_time_ticks
+}
+
+async fn serve_control(
+    stream: UnixStream,
+    lane: ControlLane,
+    state: Arc<HostState>,
+    admission: OwnedSemaphorePermit,
+    actions: Arc<Semaphore>,
+) {
     let mut stream = match PeerStream::new(stream) {
         Ok(stream) => stream,
         Err(_) => return,
     };
     let read = tokio::time::timeout(
-        Duration::from_secs(10),
+        CONTROL_READ_TIMEOUT,
         stream.read_request(MAX_CONTROL_FRAME_BYTES),
     )
     .await;
@@ -222,6 +334,44 @@ async fn serve_control(stream: UnixStream, state: Arc<HostState>) {
         .await;
         return;
     }
+    if request.action.control_lane() != lane {
+        write_response(
+            &mut stream,
+            ControlResponse::error(
+                id,
+                ExtensionErrorCategory::Protocol,
+                "extension-host action used the wrong control lane",
+            ),
+        )
+        .await;
+        return;
+    }
+    let action_permit = match actions.try_acquire_owned() {
+        Ok(permit) => permit,
+        Err(_) => {
+            write_response(
+                &mut stream,
+                ControlResponse::error(
+                    id,
+                    ExtensionErrorCategory::Busy,
+                    "extension-host control lane is busy; retry with bounded backpressure",
+                ),
+            )
+            .await;
+            return;
+        }
+    };
+    drop(admission);
+    serve_authenticated(request, stream, state, action_permit).await;
+}
+
+async fn serve_authenticated(
+    request: ControlRequest,
+    mut stream: PeerStream,
+    state: Arc<HostState>,
+    _action_permit: OwnedSemaphorePermit,
+) {
+    let id = request.id.clone();
     if let HostAction::Cancel { request_id } = &request.action {
         if cancel_active(&state, request_id) {
             // A blocking App operation cannot be safely unwound inside this
@@ -243,23 +393,79 @@ async fn serve_control(stream: UnixStream, state: Arc<HostState>) {
         return;
     }
 
-    let timeout = Duration::from_millis(request.timeout_ms.clamp(1, MAX_REQUEST_TIMEOUT_MS));
+    let requested_timeout =
+        Duration::from_millis(request.timeout_ms.clamp(1, MAX_REQUEST_TIMEOUT_MS));
+    let event_deadline = match &request.action {
+        HostAction::AgentExtensionEvent {
+            deadline_monotonic_ns,
+            ..
+        } => Some(*deadline_monotonic_ns),
+        _ => None,
+    };
+    let timeout = match event_deadline {
+        Some(deadline) => deadline
+            .remaining()
+            .unwrap_or(Duration::ZERO)
+            .min(requested_timeout),
+        None => requested_timeout,
+    };
+    let event_extension_id = match &request.action {
+        HostAction::AgentExtensionEvent { extension_id, .. } => Some(extension_id.clone()),
+        _ => None,
+    };
     let action = request.action;
     let state_for_action = state.clone();
-    let mut task = tokio::spawn(async move { dispatch(action, state_for_action).await });
+    let (start_tx, start_rx) = tokio::sync::oneshot::channel();
+    let mut task = tokio::spawn(async move {
+        let _ = start_rx.await;
+        dispatch(action, state_for_action).await
+    });
     let abort = task.abort_handle();
     if let Ok(mut active) = state.active.lock() {
         active.insert(id.as_str().to_string(), abort.clone());
     }
+    if let Some(extension_id) = event_extension_id.as_ref() {
+        if let Ok(mut events) = state.active_agent_events.lock() {
+            events
+                .entry(extension_id.clone())
+                .or_default()
+                .insert(id.as_str().to_string(), abort.clone());
+        }
+    }
+    let _ = start_tx.send(());
     let result = tokio::time::timeout(timeout, &mut task).await;
     if let Ok(mut active) = state.active.lock() {
         active.remove(id.as_str());
     }
+    let lifecycle_aborted = event_extension_id.as_ref().is_some_and(|extension_id| {
+        state
+            .active_agent_events
+            .lock()
+            .map(|events| {
+                !events
+                    .get(extension_id)
+                    .is_some_and(|requests| requests.contains_key(id.as_str()))
+            })
+            .unwrap_or(false)
+    });
+    if let Some(extension_id) = event_extension_id.as_ref() {
+        if let Ok(mut events) = state.active_agent_events.lock() {
+            if let Some(requests) = events.get_mut(extension_id) {
+                requests.remove(id.as_str());
+                if requests.is_empty() {
+                    events.remove(extension_id);
+                }
+            }
+        }
+    }
     let response = match result {
         Ok(Ok(Ok(result))) => ControlResponse::ok(id, result),
-        Ok(Ok(Err(error))) => {
-            ControlResponse::error(id, ExtensionErrorCategory::RemoteCallFailure, error)
-        }
+        Ok(Ok(Err(error))) => ControlResponse::error(id, error.category, error.message),
+        Ok(Err(_)) if lifecycle_aborted => ControlResponse::error(
+            id,
+            ExtensionErrorCategory::Busy,
+            "Agent extension event was interrupted by priority lifecycle control",
+        ),
         Ok(Err(join)) => {
             state.shutting_down.store(true, Ordering::SeqCst);
             state.fatal_shutdown.store(true, Ordering::SeqCst);
@@ -267,6 +473,20 @@ async fn serve_control(stream: UnixStream, state: Arc<HostState>) {
                 id,
                 ExtensionErrorCategory::Crash,
                 format!("extension host action crashed: {join}"),
+            )
+        }
+        Err(_) if event_extension_id.is_some() => {
+            abort.abort();
+            if let Some(extension_id) = event_extension_id.as_deref() {
+                abort_hosted_agent_extension(&state, extension_id).await;
+            }
+            ControlResponse::error(
+                id,
+                ExtensionErrorCategory::Timeout,
+                format!(
+                    "Agent extension event exceeded its absolute deadline after {}ms",
+                    timeout.as_millis()
+                ),
             )
         }
         Err(_) => {
@@ -283,7 +503,13 @@ async fn serve_control(stream: UnixStream, state: Arc<HostState>) {
             )
         }
     };
-    write_response(&mut stream, response).await;
+    if let Some(deadline) = event_deadline {
+        if let Ok(remaining) = deadline.remaining() {
+            write_response_with_timeout(&mut stream, response, remaining).await;
+        }
+    } else {
+        write_response(&mut stream, response).await;
+    }
     if state.fatal_shutdown.load(Ordering::SeqCst) {
         state.shutdown.notify_waiters();
     }
@@ -349,6 +575,14 @@ fn validate_request(
 }
 
 async fn write_response(stream: &mut PeerStream, response: ControlResponse) {
+    write_response_with_timeout(stream, response, RESPONSE_WRITE_TIMEOUT).await;
+}
+
+async fn write_response_with_timeout(
+    stream: &mut PeerStream,
+    response: ControlResponse,
+    timeout: Duration,
+) {
     let Ok(body) = serde_json::to_vec(&response) else {
         return;
     };
@@ -359,15 +593,37 @@ async fn write_response(stream: &mut PeerStream, response: ControlResponse) {
             "extension-host response is too large",
         );
         if let Ok(body) = serde_json::to_vec(&fallback) {
-            let _ =
-                tokio::time::timeout(RESPONSE_WRITE_TIMEOUT, stream.write_response(&body)).await;
+            let _ = tokio::time::timeout(timeout, stream.write_response(&body)).await;
         }
         return;
     }
-    let _ = tokio::time::timeout(RESPONSE_WRITE_TIMEOUT, stream.write_response(&body)).await;
+    let _ = tokio::time::timeout(timeout, stream.write_response(&body)).await;
 }
 
-async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResult, String> {
+struct DispatchError {
+    category: ExtensionErrorCategory,
+    message: String,
+}
+
+impl DispatchError {
+    fn busy(message: impl Into<String>) -> Self {
+        Self {
+            category: ExtensionErrorCategory::Busy,
+            message: message.into(),
+        }
+    }
+}
+
+impl From<String> for DispatchError {
+    fn from(message: String) -> Self {
+        Self {
+            category: ExtensionErrorCategory::RemoteCallFailure,
+            message,
+        }
+    }
+}
+
+async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResult, DispatchError> {
     match action {
         HostAction::Ping => Ok(HostResult::Ready {
             pid: std::process::id(),
@@ -399,7 +655,9 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
                 .as_ref()
                 .is_some_and(|value| value.len() > MAX_CONTROL_FRAME_BYTES / 2)
             {
-                return Err("App output exceeds the extension-host limit".to_string());
+                return Err("App output exceeds the extension-host limit"
+                    .to_string()
+                    .into());
             }
             Ok(HostResult::AppOutput { output })
         }
@@ -417,7 +675,7 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
             validate_name(&app_id, "App id")?;
             validate_text(&tool, "App tool", 256)?;
             if !arguments.is_object() && !arguments.is_null() {
-                return Err("App tool arguments must be an object".to_string());
+                return Err("App tool arguments must be an object".to_string().into());
             }
             let value = crate::agent::tools::cos_apps_session::host_call_session(
                 &app_id,
@@ -433,31 +691,29 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
             let closed = crate::agent::tools::cos_apps_session::host_close_session(&app_id).await;
             Ok(HostResult::AppClosed { closed })
         }
-        HostAction::McpAttach { spec } => attach_mcp(spec, &state).await,
+        HostAction::McpAttach { spec } => Ok(attach_mcp(spec, &state).await?),
         HostAction::McpCall {
             server,
             tool,
             descriptor_digest,
             audit,
             arguments,
-        } => {
-            call_mcp(
-                &server,
-                &tool,
-                &descriptor_digest,
-                &audit,
-                arguments,
-                &state,
-            )
-            .await
-        }
+        } => Ok(call_mcp(
+            &server,
+            &tool,
+            &descriptor_digest,
+            &audit,
+            arguments,
+            &state,
+        )
+        .await?),
         HostAction::McpDetach { server } => {
             validate_name(&server, "MCP server")?;
             let detached = state.mcp.lock().await.remove(&server).is_some();
             Ok(HostResult::McpDetached { detached })
         }
         HostAction::AgentExtensionAttach { registration } => {
-            attach_agent_extension(registration, &state).await
+            Ok(attach_agent_extension(registration, &state).await?)
         }
         HostAction::AgentExtensionEvent {
             extension_id,
@@ -475,9 +731,13 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
                 .get(&extension_id)
                 .cloned()
                 .ok_or_else(|| format!("Agent extension `{extension_id}` is not attached"))?;
+            let extension_handle = extension.clone();
+            let mut extension = extension.try_lock_owned().map_err(|_| {
+                DispatchError::busy(format!(
+                    "Agent extension `{extension_id}` already has an event in flight"
+                ))
+            })?;
             let result = extension
-                .lock()
-                .await
                 .event(
                     &binding,
                     event_id,
@@ -492,11 +752,15 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
                     let mut extensions = state.agent_extensions.lock().await;
                     if extensions
                         .get(&extension_id)
-                        .is_some_and(|current| Arc::ptr_eq(current, &extension))
+                        .is_some_and(|current| Arc::ptr_eq(current, &extension_handle))
                     {
                         extensions.remove(&extension_id);
                     }
-                    Err(error)
+                    drop(extensions);
+                    tokio::spawn(async move {
+                        extension.abort().await;
+                    });
+                    Err(error.into())
                 }
             }
         }
@@ -506,20 +770,53 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
             reason,
         } => {
             validate_name(&extension_id, "Agent extension")?;
+            let interrupted = abort_agent_extension_events(&state, &extension_id);
             let Some(extension) = state.agent_extensions.lock().await.remove(&extension_id) else {
                 return Ok(HostResult::AgentExtensionDetached { detached: false });
             };
             let mut extension = extension.lock().await;
             if extension.binding() != &binding {
                 extension.abort().await;
-                return Err("Agent extension detach binding does not match".to_string());
+                return Err("Agent extension detach binding does not match"
+                    .to_string()
+                    .into());
             }
-            extension.shutdown(reason).await?;
+            if interrupted {
+                extension.abort().await;
+            } else {
+                extension.shutdown(reason).await?;
+            }
             Ok(HostResult::AgentExtensionDetached { detached: true })
         }
         HostAction::Cancel { .. } | HostAction::Shutdown => {
-            Err("control action was handled before dispatch".to_string())
+            Err("control action was handled before dispatch"
+                .to_string()
+                .into())
         }
+    }
+}
+
+fn abort_agent_extension_events(state: &HostState, extension_id: &str) -> bool {
+    let handles = state
+        .active_agent_events
+        .lock()
+        .ok()
+        .and_then(|mut events| events.remove(extension_id))
+        .unwrap_or_default();
+    let interrupted = !handles.is_empty();
+    for handle in handles.into_values() {
+        handle.abort();
+    }
+    interrupted
+}
+
+async fn abort_hosted_agent_extension(state: &HostState, extension_id: &str) {
+    let extension = state.agent_extensions.lock().await.remove(extension_id);
+    if let Some(extension) = extension {
+        tokio::spawn(async move {
+            let mut extension = extension.lock_owned().await;
+            extension.abort().await;
+        });
     }
 }
 

@@ -3154,9 +3154,14 @@ pub async fn execute_job_with_hooks(
         Ok(provider) => provider,
         Err(error) => {
             let message = format!("provider unavailable: {error}");
-            extension_runtime
+            if let Err(cleanup) = extension_runtime
                 .finish(false, 0, None, Some(&message))
-                .await;
+                .await
+            {
+                return FinishOutcome::Error(format!(
+                    "{message}; Agent extension containment teardown failed: {cleanup}"
+                ));
+            }
             return FinishOutcome::Error(message);
         }
     };
@@ -3197,17 +3202,27 @@ pub async fn execute_job_with_hooks(
     };
     let result = loop_::run_with_deps(&runtime_deps, request).await;
 
-    match &result {
+    let extension_finish = match &result {
         Ok(value) => {
             extension_runtime
                 .finish(true, value.turns, Some(&value.answer), None)
-                .await;
+                .await
         }
         Err(error) => {
             extension_runtime
                 .finish(false, 0, None, Some(&error.to_string()))
-                .await;
+                .await
         }
+    };
+    if let Err(error) = extension_finish {
+        let original = result
+            .as_ref()
+            .err()
+            .map(|failure| format!("{}; ", failure))
+            .unwrap_or_default();
+        return FinishOutcome::Error(format!(
+            "{original}Agent extension containment teardown failed: {error}"
+        ));
     }
 
     match result {

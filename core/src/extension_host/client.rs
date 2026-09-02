@@ -11,8 +11,8 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::clawd::wire::RequestId;
 
 use super::protocol::{
-    ControlRequest, ControlResponse, ExtensionBinding, ExtensionErrorCategory, HostAction,
-    HostResult, DEFAULT_REQUEST_TIMEOUT_MS, MAX_CONTROL_FRAME_BYTES, PROTOCOL_VERSION,
+    control_socket_for, ControlRequest, ControlResponse, ExtensionBinding, ExtensionErrorCategory,
+    HostAction, HostResult, DEFAULT_REQUEST_TIMEOUT_MS, MAX_CONTROL_FRAME_BYTES, PROTOCOL_VERSION,
     READY_TIMEOUT_MS,
 };
 
@@ -42,6 +42,19 @@ impl std::fmt::Display for ClientFault {
 }
 
 type ClientResult<T> = Result<T, ClientFault>;
+
+#[derive(Debug)]
+pub(crate) struct AgentExtensionEventError(ClientFault);
+
+impl AgentExtensionEventError {
+    pub(crate) fn is_busy(&self) -> bool {
+        self.0.category == ExtensionErrorCategory::Busy
+    }
+
+    pub(crate) fn message(&self) -> &str {
+        &self.0.message
+    }
+}
 
 static CURRENT: OnceLock<RwLock<Option<Arc<ExtensionHostClient>>>> = OnceLock::new();
 
@@ -465,7 +478,30 @@ impl ExtensionHostClient {
         payload: super::abi::EventPayload,
         capability_refs: Vec<crate::agent_extensions::capability_ref::CapabilityReference>,
     ) -> Result<super::protocol::AgentExtensionResult, String> {
-        let timeout = deadline.remaining()?;
+        self.send_agent_extension_event_classified(
+            extension_id,
+            binding,
+            event_id,
+            deadline,
+            payload,
+            capability_refs,
+        )
+        .await
+        .map_err(|error| error.message().to_string())
+    }
+
+    pub(crate) async fn send_agent_extension_event_classified(
+        &self,
+        extension_id: String,
+        binding: super::abi::AbiBinding,
+        event_id: String,
+        deadline: super::abi::MonotonicDeadlineNs,
+        payload: super::abi::EventPayload,
+        capability_refs: Vec<crate::agent_extensions::capability_ref::CapabilityReference>,
+    ) -> Result<super::protocol::AgentExtensionResult, AgentExtensionEventError> {
+        let timeout = deadline.remaining().map_err(|message| {
+            AgentExtensionEventError(ClientFault::new(ExtensionErrorCategory::Timeout, message))
+        })?;
         let result = self
             .request_with_timeout(
                 HostAction::AgentExtensionEvent {
@@ -476,7 +512,7 @@ impl ExtensionHostClient {
                     payload,
                     capability_refs,
                 },
-                timeout.saturating_add(Duration::from_secs(2)),
+                timeout,
                 false,
             )
             .await
@@ -486,7 +522,7 @@ impl ExtensionHostClient {
                     "extension host returned the wrong Agent-extension event result",
                 )),
             });
-        result.map_err(|error| error.message)
+        result.map_err(AgentExtensionEventError)
     }
 
     pub async fn detach_agent_extension(
@@ -515,6 +551,18 @@ impl ExtensionHostClient {
         result.map_err(|error| error.message)
     }
 
+    pub(crate) async fn request_supervisor_containment_teardown(&self) -> Result<(), String> {
+        self.request_with_timeout(HostAction::Shutdown, Duration::from_secs(1), false)
+            .await
+            .and_then(|result| match result {
+                HostResult::Shutdown => Ok(()),
+                _ => Err(ClientFault::protocol(
+                    "extension host returned the wrong containment-shutdown result",
+                )),
+            })
+            .map_err(|error| error.message)
+    }
+
     async fn request(&self, action: HostAction) -> ClientResult<HostResult> {
         self.request_with_timeout(
             action,
@@ -536,13 +584,15 @@ impl ExtensionHostClient {
                 crate::proc::read_start_time_ticks_pub(std::process::id()),
             )
             .map_err(ClientFault::protocol)?;
+        let host_timeout = if matches!(action, HostAction::AgentExtensionEvent { .. }) {
+            timeout
+        } else {
+            timeout.saturating_sub(Duration::from_millis(250))
+        };
         let request = ControlRequest::new(
             &self.binding,
             action,
-            timeout
-                .saturating_sub(Duration::from_millis(250))
-                .as_millis()
-                .min(u128::from(u64::MAX)) as u64,
+            host_timeout.as_millis().min(u128::from(u64::MAX)) as u64,
         );
         let request_id = request.id.clone();
         match tokio::time::timeout(timeout, self.exchange(request)).await {
@@ -563,7 +613,9 @@ impl ExtensionHostClient {
     }
 
     async fn exchange(&self, request: ControlRequest) -> ClientResult<HostResult> {
-        let path = Path::new(&self.binding.control_socket);
+        let socket =
+            control_socket_for(&self.binding.control_socket, request.action.control_lane());
+        let path = Path::new(&socket);
         let mut stream = UnixStream::connect(path).await.map_err(|error| {
             ClientFault::new(
                 ExtensionErrorCategory::Connect,
@@ -843,6 +895,7 @@ fn action_for_result<T>(result: &ClientResult<T>) -> super::protocol::LifecycleA
             ExtensionErrorCategory::Connect => super::protocol::LifecycleAction::Connect,
             ExtensionErrorCategory::Timeout => super::protocol::LifecycleAction::Timeout,
             ExtensionErrorCategory::Crash => super::protocol::LifecycleAction::Crash,
+            ExtensionErrorCategory::Busy => super::protocol::LifecycleAction::BackpressureDrop,
             ExtensionErrorCategory::RemoteCallFailure => {
                 super::protocol::LifecycleAction::RemoteCallFailure
             }
@@ -898,7 +951,8 @@ fn exchange_blocking(
     request: &ControlRequest,
     read_response: bool,
 ) -> Result<(), String> {
-    let path = Path::new(&binding.control_socket);
+    let socket = control_socket_for(&binding.control_socket, request.action.control_lane());
+    let path = Path::new(&socket);
     let mut stream = std::os::unix::net::UnixStream::connect(path)
         .map_err(|error| format!("connect extension host {}: {error}", path.display()))?;
     let body = serde_json::to_vec(request)

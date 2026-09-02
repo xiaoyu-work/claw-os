@@ -204,6 +204,10 @@ fn trusted_client_fault_categories_map_to_exact_lifecycle_actions() {
             super::super::protocol::LifecycleAction::Crash,
         ),
         (
+            ExtensionErrorCategory::Busy,
+            super::super::protocol::LifecycleAction::BackpressureDrop,
+        ),
+        (
             ExtensionErrorCategory::Protocol,
             super::super::protocol::LifecycleAction::Protocol,
         ),

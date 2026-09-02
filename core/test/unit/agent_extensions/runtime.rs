@@ -1,16 +1,18 @@
 use super::*;
 
 #[test]
-fn repeated_backpressure_disables_only_the_faulting_extension() {
+fn repeated_backpressure_stops_ingress_without_revoking_accepted_work() {
     let drops = AtomicUsize::new(0);
-    let disabled = AtomicBool::new(false);
+    let accepting = AtomicBool::new(true);
+    let security_disabled = AtomicBool::new(false);
     for _ in 0..DISABLE_AFTER_DROPS - 1 {
-        assert!(!register_backpressure_drop(&drops, &disabled));
-        assert!(!disabled.load(Ordering::Acquire));
+        assert!(!register_backpressure_drop(&drops, &accepting));
+        assert!(accepting.load(Ordering::Acquire));
     }
-    assert!(register_backpressure_drop(&drops, &disabled));
-    assert!(disabled.load(Ordering::Acquire));
-    assert!(!register_backpressure_drop(&drops, &disabled));
+    assert!(register_backpressure_drop(&drops, &accepting));
+    assert!(!accepting.load(Ordering::Acquire));
+    assert!(should_process_event(&security_disabled));
+    assert!(!register_backpressure_drop(&drops, &accepting));
 }
 
 #[test]
@@ -79,6 +81,78 @@ async fn reserved_terminal_slot_preserves_fifo_and_never_blocks_on_a_full_event_
     ));
 }
 
+#[tokio::test]
+async fn backpressure_terminal_drains_accepted_fifo_before_detach() {
+    let (sender, mut receiver) = mpsc::channel(4);
+    let slots = Arc::new(Semaphore::new(3));
+    let accepting = AtomicBool::new(true);
+    let security_disabled = AtomicBool::new(false);
+    let drops = AtomicUsize::new(0);
+    for index in 0..3 {
+        let permit = slots.clone().try_acquire_owned().unwrap();
+        sender
+            .try_send(ExtensionWork::Event {
+                payload: EventPayload::PreTool {
+                    turn_index: index,
+                    tool: "now".to_string(),
+                    tool_use_id_digest: "a".repeat(64),
+                    input_bytes: 2,
+                    input_digest: "b".repeat(64),
+                },
+                _permit: permit,
+            })
+            .unwrap();
+    }
+    for _ in 0..DISABLE_AFTER_DROPS {
+        register_backpressure_drop(&drops, &accepting);
+    }
+    assert!(!accepting.load(Ordering::Acquire));
+    let (done, _done_rx) = oneshot::channel();
+    sender
+        .try_send(ExtensionWork::Finish {
+            completion: None,
+            reason: ShutdownReason::Disabled,
+            done,
+        })
+        .expect("reserved terminal slot");
+
+    let mut delivered = Vec::new();
+    while let Some(work) = receiver.recv().await {
+        match work {
+            ExtensionWork::Event { payload, .. } if should_process_event(&security_disabled) => {
+                let EventPayload::PreTool { turn_index, .. } = payload else {
+                    panic!("unexpected payload");
+                };
+                delivered.push(turn_index);
+            }
+            ExtensionWork::Event { .. } => {}
+            ExtensionWork::Finish { .. } => break,
+        }
+    }
+    assert_eq!(delivered, vec![0, 1, 2]);
+}
+
+#[tokio::test]
+async fn security_revocation_discards_accepted_work_immediately() {
+    let (sender, mut receiver) = mpsc::channel(2);
+    let permit = Arc::new(Semaphore::new(1)).try_acquire_owned().unwrap();
+    sender
+        .try_send(ExtensionWork::Event {
+            payload: EventPayload::SessionStart {
+                source: "test".to_string(),
+                attended: false,
+                delegated: false,
+            },
+            _permit: permit,
+        })
+        .unwrap();
+    let security_disabled = AtomicBool::new(true);
+    let Some(ExtensionWork::Event { .. }) = receiver.recv().await else {
+        panic!("accepted event");
+    };
+    assert!(!should_process_event(&security_disabled));
+}
+
 #[test]
 fn completion_is_only_queued_for_subscribed_extensions() {
     let subscriptions = BTreeSet::from([EventKind::SessionStart]);
@@ -91,6 +165,50 @@ fn completion_is_only_queued_for_subscribed_extensions() {
 fn finish_reserves_time_for_forced_host_detach() {
     assert!(FINISH_DRAIN_TIMEOUT < FINISH_TIMEOUT);
     assert!(FINISH_TIMEOUT - FINISH_DRAIN_TIMEOUT >= Duration::from_secs(2));
+}
+
+#[tokio::test]
+async fn failed_detach_is_retried_after_the_worker_has_completed() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let observed = attempts.clone();
+    retry_with_deadline(
+        tokio::time::Instant::now() + Duration::from_secs(1),
+        move || {
+            let attempt = observed.fetch_add(1, Ordering::AcqRel);
+            async move {
+                match attempt {
+                    0 => Err("priority control busy".to_string()),
+                    1 => Err("priority response dropped".to_string()),
+                    _ => Ok(()),
+                }
+            }
+        },
+    )
+    .await
+    .expect("completed workers must retain independent detach retry state");
+    assert_eq!(attempts.load(Ordering::Acquire), 3);
+}
+
+#[tokio::test]
+async fn failed_detach_exhaustion_requires_containment_escalation() {
+    let error = retry_with_deadline(
+        tokio::time::Instant::now() + Duration::from_millis(120),
+        || async { Err("extension host crashed".to_string()) },
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error, "extension host crashed");
+}
+
+#[test]
+fn only_exact_detach_acknowledgement_proves_child_termination() {
+    let acknowledged = AtomicBool::new(false);
+    let error = classify_detach_response(Ok(false), &acknowledged).unwrap_err();
+    assert!(error.contains("exact child termination"), "{error}");
+    assert!(!acknowledged.load(Ordering::Acquire));
+
+    classify_detach_response(Ok(true), &acknowledged).unwrap();
+    assert!(acknowledged.load(Ordering::Acquire));
 }
 
 #[tokio::test]

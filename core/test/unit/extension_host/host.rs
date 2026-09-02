@@ -48,6 +48,7 @@ fn state() -> HostState {
         active: Mutex::new(HashMap::new()),
         mcp: tokio::sync::Mutex::new(HashMap::new()),
         agent_extensions: tokio::sync::Mutex::new(HashMap::new()),
+        active_agent_events: Mutex::new(HashMap::new()),
         agent_extension_spawn: tokio::sync::Mutex::new(()),
         shutting_down: AtomicBool::new(false),
         fatal_shutdown: AtomicBool::new(false),
@@ -75,6 +76,36 @@ fn make_request(state: &HostState) -> ControlRequest {
         timeout_ms: 1000,
         action: HostAction::Ping,
     }
+}
+
+fn abi_binding(state: &HostState, extension_id: &str) -> super::super::abi::AbiBinding {
+    super::super::abi::AbiBinding {
+        task_id: state.task_id.clone(),
+        session_id: state.session_id.clone().unwrap(),
+        owner_uid: state.worker_uid,
+        extension_id: extension_id.to_string(),
+        extension_version: "1.0.0".to_string(),
+        package_digest: format!("sha256:{}", "a".repeat(64)),
+        manifest_digest: "b".repeat(64),
+        entry_digest: "c".repeat(64),
+        capability_generation: state.binding.capability_generation.clone(),
+        lease_digest: crate::crypto::sha256_hex(state.lease_nonce.as_bytes()),
+        instance_nonce: "d".repeat(64),
+        additive: std::collections::BTreeMap::new(),
+    }
+}
+
+async fn exchange(path: &std::path::Path, request: &ControlRequest) -> ControlResponse {
+    let mut stream = UnixStream::connect(path).await.unwrap();
+    let body = serde_json::to_vec(request).unwrap();
+    crate::clawd::transport::frame::write_request_async(&mut stream, &body)
+        .await
+        .unwrap();
+    let body =
+        crate::clawd::transport::frame::read_response_async(&mut stream, MAX_CONTROL_FRAME_BYTES)
+            .await
+            .unwrap();
+    serde_json::from_slice(&body).unwrap()
 }
 
 #[test]
@@ -138,4 +169,166 @@ async fn cancellation_aborts_the_exact_active_request() {
     assert!(cancel_active(&state, &id));
     assert!(task.await.unwrap_err().is_cancelled());
     assert!(!cancel_active(&state, &id));
+}
+
+#[tokio::test]
+async fn saturated_events_and_stalled_readers_cannot_starve_canonical_or_priority_control() {
+    let root = tempfile::tempdir().unwrap();
+    let base = root.path().join("control.sock");
+    let event_path = PathBuf::from(control_socket_for(
+        &base.to_string_lossy(),
+        ControlLane::AgentEvent,
+    ));
+    let priority_path = PathBuf::from(control_socket_for(
+        &base.to_string_lossy(),
+        ControlLane::Priority,
+    ));
+    let mut test_state = state();
+    test_state.binding.control_socket = base.to_string_lossy().into_owned();
+    let state = Arc::new(test_state);
+
+    let canonical_actions = Arc::new(Semaphore::new(MAX_CANONICAL_CONTROL_ACTIONS));
+    let event_actions = Arc::new(Semaphore::new(MAX_AGENT_EVENT_ACTIONS));
+    let priority_actions = Arc::new(Semaphore::new(MAX_PRIORITY_CONTROL_ACTIONS));
+    let canonical = tokio::spawn(accept_control(
+        bind_control_listener(&base).unwrap(),
+        ControlLane::Canonical,
+        state.clone(),
+        Arc::new(Semaphore::new(MAX_CANONICAL_ADMISSIONS)),
+        canonical_actions.clone(),
+    ));
+    let events = tokio::spawn(accept_control(
+        bind_control_listener(&event_path).unwrap(),
+        ControlLane::AgentEvent,
+        state.clone(),
+        Arc::new(Semaphore::new(MAX_AGENT_EVENT_ADMISSIONS)),
+        event_actions.clone(),
+    ));
+    let priority = tokio::spawn(accept_control(
+        bind_control_listener(&priority_path).unwrap(),
+        ControlLane::Priority,
+        state.clone(),
+        Arc::new(Semaphore::new(MAX_PRIORITY_ADMISSIONS)),
+        priority_actions,
+    ));
+
+    let saturation = event_actions
+        .clone()
+        .acquire_many_owned(MAX_AGENT_EVENT_ACTIONS as u32)
+        .await
+        .unwrap();
+    let mut stalled = Vec::new();
+    for _ in 0..MAX_AGENT_EVENT_ADMISSIONS {
+        stalled.push(UnixStream::connect(&event_path).await.unwrap());
+    }
+
+    let mut app = make_request(&state);
+    app.action = HostAction::AppClose {
+        app_id: "missing-app".to_string(),
+    };
+    let app_response = exchange(&base, &app).await;
+    assert!(app_response.ok);
+    assert_eq!(app_response.id, app.id);
+
+    let mut mcp = make_request(&state);
+    mcp.action = HostAction::McpDetach {
+        server: "missing-mcp".to_string(),
+    };
+    let mcp_response = exchange(&base, &mcp).await;
+    assert!(mcp_response.ok);
+    assert_eq!(mcp_response.id, mcp.id);
+
+    let mut detach = make_request(&state);
+    detach.action = HostAction::AgentExtensionDetach {
+        extension_id: "observer".to_string(),
+        binding: abi_binding(&state, "observer"),
+        reason: super::super::abi::ShutdownReason::Disabled,
+    };
+    let detach_response = exchange(&priority_path, &detach).await;
+    assert!(detach_response.ok);
+    assert_eq!(detach_response.id, detach.id);
+
+    let canonical_saturation = canonical_actions
+        .acquire_many_owned(MAX_CANONICAL_CONTROL_ACTIONS as u32)
+        .await
+        .unwrap();
+    let mut wrong_lane = make_request(&state);
+    wrong_lane.action = HostAction::AgentExtensionEvent {
+        extension_id: "observer".to_string(),
+        binding: abi_binding(&state, "observer"),
+        event_id: "wrong-lane".to_string(),
+        deadline_monotonic_ns: super::super::abi::MonotonicDeadlineNs::after(Duration::from_secs(
+            1,
+        ))
+        .unwrap(),
+        payload: super::super::abi::EventPayload::SessionStart {
+            source: "test".to_string(),
+            attended: false,
+            delegated: false,
+        },
+        capability_refs: Vec::new(),
+    };
+    let wrong_lane_response = exchange(&base, &wrong_lane).await;
+    assert!(!wrong_lane_response.ok);
+    assert_eq!(
+        wrong_lane_response.error_category,
+        Some(ExtensionErrorCategory::Protocol)
+    );
+    drop(canonical_saturation);
+
+    drop(stalled);
+    tokio::time::sleep(CONTROL_READ_TIMEOUT + Duration::from_millis(50)).await;
+    let mut event = make_request(&state);
+    event.action = HostAction::AgentExtensionEvent {
+        extension_id: "observer".to_string(),
+        binding: abi_binding(&state, "observer"),
+        event_id: "event-1".to_string(),
+        deadline_monotonic_ns: super::super::abi::MonotonicDeadlineNs::after(Duration::from_secs(
+            1,
+        ))
+        .unwrap(),
+        payload: super::super::abi::EventPayload::SessionStart {
+            source: "test".to_string(),
+            attended: false,
+            delegated: false,
+        },
+        capability_refs: Vec::new(),
+    };
+    let event_response = exchange(&event_path, &event).await;
+    assert!(!event_response.ok);
+    assert_eq!(event_response.id, event.id);
+    assert_eq!(
+        event_response.error_category,
+        Some(ExtensionErrorCategory::Busy)
+    );
+
+    drop(saturation);
+    canonical.abort();
+    events.abort();
+    priority.abort();
+}
+
+#[test]
+fn control_capacity_is_globally_bounded_and_lane_separated() {
+    assert_eq!(
+        super::super::protocol::MAX_CONTROL_CONNECTIONS,
+        MAX_CANONICAL_CONTROL_ACTIONS
+            + MAX_PRIORITY_CONTROL_ACTIONS
+            + MAX_AGENT_EVENT_ACTIONS
+            + MAX_CANONICAL_ADMISSIONS
+            + MAX_PRIORITY_ADMISSIONS
+            + MAX_AGENT_EVENT_ADMISSIONS
+    );
+    assert!(MAX_AGENT_EVENT_ACTIONS >= 64);
+    for action in [
+        HostAction::Ping,
+        HostAction::AppClose {
+            app_id: "app".to_string(),
+        },
+        HostAction::McpDetach {
+            server: "mcp".to_string(),
+        },
+    ] {
+        assert_eq!(action.control_lane(), ControlLane::Canonical);
+    }
 }

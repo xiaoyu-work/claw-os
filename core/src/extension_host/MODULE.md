@@ -32,6 +32,15 @@ extensions.
   filesystem root, a verified read-only runtime/snapshot allowlist, and
   private writable state/tmpfs only.
 - Bound frames, concurrent calls, startup/call timeouts, and replay history.
+- Admit worker control over independent canonical App/MCP, Agent-event, and
+  priority lifecycle lanes. Each lane has bounded short-read admission;
+  Agent events have one in flight per extension and aggregate capacity for all
+  64 declared extensions, while detach/revocation/shutdown cannot be consumed
+  by event traffic.
+- Apply one absolute authenticated event deadline to descendant discovery,
+  child I/O, response validation, and post-work. Blocking `/proc` discovery
+  returns immutable snapshots from `spawn_blocking`; a timed-out scan cannot
+  mutate lifecycle state or retain an event permit.
 - Return only sanitized MCP descriptors and require every hosted MCP call to
   carry the exact canonical descriptor-set digest held by that host session.
   A relist mismatch blocks the call rather than substituting a new schema.
@@ -68,7 +77,7 @@ clawd supervisor
   -> sign host pid/start-time + socket paths + nonce into the worker grant
 
 claw-agentd registry call
-  -> versioned control request to exact host pid
+  -> versioned lane-specific control request to exact host pid
   -> host starts/calls App or MCP child
   -> child policy check reads its root-maintained session row
   -> child privileged request uses COS_EXTENSION_BROKER_SOCKET

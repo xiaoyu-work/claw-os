@@ -166,12 +166,27 @@ Events never block or mutate the canonical model/tool path. Each extension has
 one ordered queue, its own worker, and event-slot accounting that reserves a
 terminal slot. Runtime observers use bounded `try_send`; a full queue drops
 that extension's event and emits an audit record. Eight consecutive drops
-enqueue a terminal disable behind already accepted events. Completion uses the
-same FIFO, is sent only when subscribed, and cannot overtake an earlier event.
-Task finish, completion acknowledgement, detach, worker abort, and forced
-cleanup share one total deadline. A crash, hang, malformed result, or limit
-violation has the same per-extension failure scope. The broker, another
-extension, and another session continue.
+stop new ingress and enqueue a terminal disable behind every already accepted
+event; the accepted FIFO is still processed in order. Trust revocation or
+protocol compromise instead discards queued observations immediately.
+Completion uses the same FIFO, is sent only when subscribed, and cannot
+overtake an earlier event.
+
+Host admission uses independent bounded lanes for canonical App/MCP work,
+Agent events, and priority detach/revocation/shutdown. At most one event per
+extension is in flight, aggregate event capacity covers all 64 extension
+slots, and excess work receives a correlated typed `busy` response. Short
+pre-authentication/read budgets and one global task/FD ceiling bound stalled
+connections without lending canonical or priority permits to event work.
+
+Task finish, completion acknowledgement, detach retries, worker abort, and
+forced cleanup share one total deadline. Detach acknowledgement is independent
+of worker completion: a failed detach is retried even after its FIFO worker
+has exited. If the host cannot prove exact child termination, the worker
+returns a terminal failure and requests host shutdown so `clawd` performs the
+mandatory cgroup kill/empty/quarantine cleanup. A crash, hang, malformed
+result, or limit violation normally has per-extension failure scope; inability
+to prove containment escalates to the task host.
 
 Event projections are least-privilege:
 
@@ -207,7 +222,11 @@ action itself and cannot synchronously answer an authorization question.
 
 For each event the worker creates one absolute Linux monotonic deadline and
 transmits it unchanged through worker-host control and CEX1. The same deadline
-expires the event's 256-bit opaque capability references. Each active extension
+expires connection admission, descendant discovery, child write/read, frame
+validation, response processing, and the event's 256-bit opaque capability
+references. `/proc` discovery runs as immutable blocking work under that
+deadline; a late result cannot update lifecycle state or retain an event slot.
+Each active extension
 has an independent store sized from its authenticated action-policy count; no
 extension can borrow another's quota. Every reference is bound at mint time to
 owner, session, task, extension, manifest digest, capability generation, event

@@ -196,10 +196,10 @@ server identity, opaque-handle digest, descriptor digest, capability
 generation, binding digest, and lease digest. Remote display names are stored
 only as keyed untrusted-text digests; arguments and secrets are not logged.
 Lifecycle classification is versioned typed data, not text inference:
-connect, transport timeout, host crash, protocol failure, and remote-call
-failure are assigned by their trusted observer. Remote App/MCP messages remain
-`remote-call-failure` even when they contain words such as `timeout`, `closed`,
-`connect`, or `crash`.
+connect, transport timeout, host crash, protocol failure, typed busy
+backpressure, and remote-call failure are assigned by their trusted observer.
+Remote App/MCP messages remain `remote-call-failure` even when they contain
+words such as `timeout`, `closed`, `connect`, or `crash`.
 Stdout/stderr-derived errors and tool results remain untrusted and wrapped.
 
 ## Configuration

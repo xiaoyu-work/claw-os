@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use tokio::sync::{mpsc, oneshot, OwnedSemaphorePermit, Semaphore};
@@ -27,6 +27,10 @@ const ACTION_TIMEOUT: Duration = Duration::from_secs(30);
 const TRUST_RECHECK_INTERVAL: Duration = Duration::from_secs(5);
 const FINISH_TIMEOUT: Duration = Duration::from_secs(8);
 const FINISH_DRAIN_TIMEOUT: Duration = Duration::from_secs(6);
+const DETACH_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(1);
+const DETACH_RETRY_DELAY: Duration = Duration::from_millis(50);
+const CONTAINMENT_ESCALATION_RESERVE: Duration = Duration::from_millis(500);
+const MAX_DETACH_ATTEMPTS: usize = 3;
 
 struct AbortOnDrop(Option<tokio::task::AbortHandle>);
 
@@ -57,7 +61,7 @@ pub struct ExtensionRuntime {
 
 struct ExtensionControl {
     sender: mpsc::Sender<ExtensionWork>,
-    worker: tokio::task::JoinHandle<()>,
+    worker: Option<tokio::task::JoinHandle<()>>,
     client: Arc<ExtensionHostClient>,
     binding: crate::extension_host::abi::AbiBinding,
     id: String,
@@ -66,6 +70,8 @@ struct ExtensionControl {
     capability_generation: String,
     completion_subscribed: bool,
     terminal: Arc<AtomicBool>,
+    detach_acknowledged: Arc<AtomicBool>,
+    terminal_failure: Arc<Mutex<Option<String>>>,
 }
 
 enum ExtensionWork {
@@ -90,7 +96,8 @@ struct ExtensionSink {
     sender: mpsc::Sender<ExtensionWork>,
     event_slots: Arc<Semaphore>,
     client: Arc<ExtensionHostClient>,
-    disabled: Arc<AtomicBool>,
+    accepting: Arc<AtomicBool>,
+    security_disabled: Arc<AtomicBool>,
     terminal: Arc<AtomicBool>,
     consecutive_drops: Arc<AtomicUsize>,
 }
@@ -194,7 +201,7 @@ impl ExtensionRuntime {
         turns: u32,
         answer: Option<&str>,
         error: Option<&str>,
-    ) {
+    ) -> Result<(), String> {
         if let Some(name) = self.hook_name.take() {
             if let Some(hooks) = self.hooks.as_ref() {
                 hooks.unregister(&name);
@@ -232,44 +239,124 @@ impl ExtensionRuntime {
         for done in pending {
             let _ = tokio::time::timeout_at(drain_deadline, done).await;
         }
-        let mut forced_detaches = Vec::new();
-        for control in self.controls.drain(..) {
-            let mut worker = control.worker;
-            if tokio::time::timeout_at(drain_deadline, &mut worker)
-                .await
-                .is_err()
-            {
-                worker.abort();
-                control.client.emit_agent_extension(
-                    LifecycleAction::Shutdown,
-                    &control.id,
-                    &control.manifest_digest,
-                    audit_metadata(
-                        &control.package_digest,
-                        &control.capability_generation,
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                    ),
-                    false,
-                    Duration::ZERO,
-                    Some("extension worker exceeded the finish drain deadline"),
-                );
-                forced_detaches.push((control.client, control.id, control.binding));
-            }
-        }
-        let detach_all = futures_util::future::join_all(forced_detaches.into_iter().map(
-            |(client, id, binding)| async move {
-                client
-                    .detach_agent_extension(id, binding, ShutdownReason::Disabled)
+        let mut controls = Vec::new();
+        for mut control in self.controls.drain(..) {
+            if let Some(mut worker) = control.worker.take() {
+                if tokio::time::timeout_at(drain_deadline, &mut worker)
                     .await
-            },
-        ));
-        let _ = tokio::time::timeout_at(deadline, detach_all).await;
+                    .is_err()
+                {
+                    worker.abort();
+                    control.client.emit_agent_extension(
+                        LifecycleAction::Shutdown,
+                        &control.id,
+                        &control.manifest_digest,
+                        audit_metadata(
+                            &control.package_digest,
+                            &control.capability_generation,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                        ),
+                        false,
+                        Duration::ZERO,
+                        Some("extension worker exceeded the finish drain deadline"),
+                    );
+                }
+            }
+            controls.push(control);
+        }
+        let retry_deadline = deadline
+            .checked_sub(CONTAINMENT_ESCALATION_RESERVE)
+            .unwrap_or(drain_deadline);
+        let retries = futures_util::future::join_all(controls.iter().map(|control| async move {
+            if control.detach_acknowledged.load(Ordering::Acquire) {
+                Ok(())
+            } else {
+                retry_detach(control, ShutdownReason::Disabled, retry_deadline).await
+            }
+        }))
+        .await;
+        let detach_failures = controls
+            .iter()
+            .zip(retries)
+            .filter_map(|(control, result)| result.is_err().then_some(control.id.clone()))
+            .collect::<Vec<_>>();
+        let lifecycle_failures = controls
+            .iter()
+            .filter_map(|control| {
+                control
+                    .terminal_failure
+                    .lock()
+                    .ok()
+                    .and_then(|failure| failure.clone())
+            })
+            .collect::<Vec<_>>();
+        if detach_failures.is_empty() && lifecycle_failures.is_empty() {
+            return Ok(());
+        }
+        let ids = detach_failures
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(", ");
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let escalation = if detach_failures.is_empty() {
+            Ok(())
+        } else if remaining.is_zero() {
+            Err("extension lifecycle budget expired before containment escalation".to_string())
+        } else {
+            tokio::time::timeout(
+                remaining,
+                controls[0].client.request_supervisor_containment_teardown(),
+            )
+            .await
+            .map_err(|_| "extension containment escalation timed out".to_string())
+            .and_then(|result| result)
+        };
+        let detail = match escalation {
+            Ok(()) => "extension host shutdown requested; supervisor cleanup is mandatory",
+            Err(ref error) => error.as_str(),
+        };
+        for control in &controls {
+            if !detach_failures.contains(&control.id) {
+                continue;
+            }
+            control.client.emit_agent_extension(
+                LifecycleAction::Shutdown,
+                &control.id,
+                &control.manifest_digest,
+                audit_metadata(
+                    &control.package_digest,
+                    &control.capability_generation,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
+                false,
+                Duration::ZERO,
+                Some(detail),
+            );
+        }
+        let prior = lifecycle_failures.join("; ");
+        Err(match (ids.is_empty(), prior.is_empty()) {
+            (false, false) => format!(
+                "Agent extension detach was not acknowledged for [{ids}]; {detail}; {prior}"
+            ),
+            (false, true) => {
+                format!("Agent extension detach was not acknowledged for [{ids}]; {detail}")
+            }
+            (true, false) => prior,
+            (true, true) => "Agent extension containment teardown failed".to_string(),
+        })
     }
 }
 
@@ -332,8 +419,11 @@ async fn activate_one(
     let refs = Arc::new(CapabilityReferenceStore::new(
         manifest.action_policies.len(),
     ));
-    let disabled = Arc::new(AtomicBool::new(false));
+    let accepting = Arc::new(AtomicBool::new(true));
+    let security_disabled = Arc::new(AtomicBool::new(false));
     let terminal = Arc::new(AtomicBool::new(false));
+    let detach_acknowledged = Arc::new(AtomicBool::new(false));
+    let terminal_failure = Arc::new(Mutex::new(None));
     let sink = ExtensionSink {
         id: manifest.identity.id.clone(),
         manifest_digest: manifest_digest.clone(),
@@ -343,7 +433,8 @@ async fn activate_one(
         sender: sender.clone(),
         event_slots,
         client: client.clone(),
-        disabled: disabled.clone(),
+        accepting: accepting.clone(),
+        security_disabled: security_disabled.clone(),
         terminal: terminal.clone(),
         consecutive_drops: Arc::new(AtomicUsize::new(0)),
     };
@@ -362,14 +453,17 @@ async fn activate_one(
         tools,
         client.clone(),
         refs,
-        disabled,
+        accepting,
+        security_disabled,
+        detach_acknowledged.clone(),
+        terminal_failure.clone(),
         receiver,
     ));
     Ok((
         sink,
         ExtensionControl {
             sender,
-            worker,
+            worker: Some(worker),
             client,
             binding,
             id,
@@ -378,6 +472,8 @@ async fn activate_one(
             capability_generation,
             completion_subscribed,
             terminal,
+            detach_acknowledged,
+            terminal_failure,
         },
     ))
 }
@@ -393,7 +489,10 @@ async fn run_extension(
     tools: Arc<ToolRegistry>,
     client: Arc<ExtensionHostClient>,
     refs: Arc<CapabilityReferenceStore>,
-    disabled: Arc<AtomicBool>,
+    accepting: Arc<AtomicBool>,
+    security_disabled: Arc<AtomicBool>,
+    detach_acknowledged: Arc<AtomicBool>,
+    terminal_failure: Arc<Mutex<Option<String>>>,
     mut work: mpsc::Receiver<ExtensionWork>,
 ) {
     let mut trust_check = tokio::time::interval(TRUST_RECHECK_INTERVAL);
@@ -402,28 +501,30 @@ async fn run_extension(
             item = work.recv() => {
                 match item {
                     Some(ExtensionWork::Event { payload, .. }) => {
-                        if disabled.load(Ordering::Acquire) {
+                        if !should_process_event(&security_disabled) {
                             continue;
                         }
                         if let Err(error) = process_event(
                             &manifest, &manifest_digest, &package_digest, &package, &binding,
-                            &exposure, &tools, &client, &refs, &disabled, payload,
+                            &exposure, &tools, &client, &refs, &security_disabled, payload,
                         ).await {
                             disable_extension(
                                 &manifest, &manifest_digest, &package_digest, &binding,
-                                &exposure, &client, &disabled, &error,
+                                &exposure, &client, &accepting, &security_disabled,
+                                &detach_acknowledged, &terminal_failure, &error,
                             ).await;
                             break;
                         }
                     }
                     Some(ExtensionWork::Finish { completion, reason, done }) => {
                         if let Some(payload) = completion {
-                            if !disabled.load(Ordering::Acquire) {
+                            if !security_disabled.load(Ordering::Acquire) {
                                 if let Err(error) = process_event(
                                     &manifest, &manifest_digest, &package_digest, &package, &binding,
-                                    &exposure, &tools, &client, &refs, &disabled, payload,
+                                    &exposure, &tools, &client, &refs, &security_disabled, payload,
                                 ).await {
-                                    disabled.store(true, Ordering::Release);
+                                    accepting.store(false, Ordering::Release);
+                                    security_disabled.store(true, Ordering::Release);
                                     client.emit_agent_extension(
                                         LifecycleAction::Disable,
                                         &manifest.identity.id,
@@ -440,31 +541,18 @@ async fn run_extension(
                                 }
                             }
                         }
-                        let detached = tokio::time::timeout(
-                            Duration::from_secs(4),
-                            client.detach_agent_extension(
-                                manifest.identity.id.clone(),
-                                binding.clone(),
-                                reason,
-                            ),
-                        ).await;
-                        client.emit_agent_extension(
-                            LifecycleAction::Shutdown,
+                        detach_or_escalate(
                             &manifest.identity.id,
                             &manifest_digest,
-                            audit_metadata(
-                                &package_digest,
-                                exposure.capability_generation(),
-                                None, None, None, None, None, None, None,
-                            ),
-                            matches!(detached, Ok(Ok(_))),
-                            Duration::ZERO,
-                            match &detached {
-                                Ok(Err(error)) => Some(error.as_str()),
-                                Err(_) => Some("extension detach exceeded its deadline"),
-                                _ => None,
-                            },
-                        );
+                            &package_digest,
+                            exposure.capability_generation(),
+                            &binding,
+                            &client,
+                            &detach_acknowledged,
+                            &terminal_failure,
+                            reason,
+                        )
+                        .await;
                         let _ = done.send(());
                         break;
                     }
@@ -472,11 +560,12 @@ async fn run_extension(
                 }
             },
             _ = trust_check.tick() => {
-                if !disabled.load(Ordering::Acquire) {
+                if !security_disabled.load(Ordering::Acquire) {
                     if let Err(error) = assert_package_current(&package) {
                         disable_extension(
                             &manifest, &manifest_digest, &package_digest, &binding,
-                            &exposure, &client, &disabled, &error,
+                            &exposure, &client, &accepting, &security_disabled,
+                            &detach_acknowledged, &terminal_failure, &error,
                         ).await;
                         break;
                     }
@@ -494,10 +583,14 @@ async fn disable_extension(
     binding: &crate::extension_host::abi::AbiBinding,
     exposure: &ToolExposureContext,
     client: &ExtensionHostClient,
-    disabled: &AtomicBool,
+    accepting: &AtomicBool,
+    security_disabled: &AtomicBool,
+    detach_acknowledged: &AtomicBool,
+    terminal_failure: &Mutex<Option<String>>,
     error: &str,
 ) {
-    disabled.store(true, Ordering::Release);
+    accepting.store(false, Ordering::Release);
+    security_disabled.store(true, Ordering::Release);
     client.emit_agent_extension(
         LifecycleAction::Disable,
         &manifest.identity.id,
@@ -517,13 +610,200 @@ async fn disable_extension(
         Duration::ZERO,
         Some(error),
     );
-    let _ = client
-        .detach_agent_extension(
-            manifest.identity.id.clone(),
-            binding.clone(),
-            ShutdownReason::Disabled,
+    detach_or_escalate(
+        &manifest.identity.id,
+        manifest_digest,
+        package_digest,
+        exposure.capability_generation(),
+        binding,
+        client,
+        detach_acknowledged,
+        terminal_failure,
+        ShutdownReason::Disabled,
+    )
+    .await;
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn detach_or_escalate(
+    id: &str,
+    manifest_digest: &str,
+    package_digest: &str,
+    capability_generation: &str,
+    binding: &crate::extension_host::abi::AbiBinding,
+    client: &ExtensionHostClient,
+    detach_acknowledged: &AtomicBool,
+    terminal_failure: &Mutex<Option<String>>,
+    reason: ShutdownReason,
+) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(4);
+    let retry_deadline = deadline
+        .checked_sub(CONTAINMENT_ESCALATION_RESERVE)
+        .unwrap_or(deadline);
+    let result = retry_with_deadline(retry_deadline, || {
+        detach_once(
+            id,
+            manifest_digest,
+            package_digest,
+            capability_generation,
+            binding,
+            client,
+            detach_acknowledged,
+            reason,
+            retry_deadline,
         )
-        .await;
+    })
+    .await;
+    let Err(detach_error) = result else {
+        return;
+    };
+    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+    let escalation =
+        tokio::time::timeout(remaining, client.request_supervisor_containment_teardown())
+            .await
+            .map_err(|_| "extension containment escalation timed out".to_string())
+            .and_then(|result| result);
+    let detail = match escalation {
+        Ok(()) => "extension host shutdown requested; supervisor cleanup is mandatory".to_string(),
+        Err(error) => error,
+    };
+    client.emit_agent_extension(
+        LifecycleAction::Shutdown,
+        id,
+        manifest_digest,
+        audit_metadata(
+            package_digest,
+            capability_generation,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ),
+        false,
+        Duration::ZERO,
+        Some(&detail),
+    );
+    if let Ok(mut failure) = terminal_failure.lock() {
+        *failure = Some(format!(
+            "Agent extension `{id}` detach failed: {detach_error}; {detail}"
+        ));
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn detach_once(
+    id: &str,
+    manifest_digest: &str,
+    package_digest: &str,
+    capability_generation: &str,
+    binding: &crate::extension_host::abi::AbiBinding,
+    client: &ExtensionHostClient,
+    detach_acknowledged: &AtomicBool,
+    reason: ShutdownReason,
+    deadline: tokio::time::Instant,
+) -> Result<(), String> {
+    if detach_acknowledged.load(Ordering::Acquire) {
+        return Ok(());
+    }
+    let attempt_deadline = deadline.min(tokio::time::Instant::now() + DETACH_ATTEMPT_TIMEOUT);
+    let detached = tokio::time::timeout_at(
+        attempt_deadline,
+        client.detach_agent_extension(id.to_string(), binding.clone(), reason),
+    )
+    .await;
+    let result = match detached {
+        Ok(result) => classify_detach_response(result, detach_acknowledged),
+        Err(_) => Err("extension detach exceeded its priority lifecycle deadline".to_string()),
+    };
+    client.emit_agent_extension(
+        LifecycleAction::Shutdown,
+        id,
+        manifest_digest,
+        audit_metadata(
+            package_digest,
+            capability_generation,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ),
+        result.is_ok(),
+        Duration::ZERO,
+        result.as_ref().err().map(String::as_str),
+    );
+    result
+}
+
+fn classify_detach_response(
+    response: Result<bool, String>,
+    detach_acknowledged: &AtomicBool,
+) -> Result<(), String> {
+    match response {
+        Ok(true) => {
+            detach_acknowledged.store(true, Ordering::Release);
+            Ok(())
+        }
+        Ok(false) => {
+            Err("extension host could not acknowledge exact child termination".to_string())
+        }
+        Err(error) => Err(error),
+    }
+}
+
+async fn retry_detach(
+    control: &ExtensionControl,
+    reason: ShutdownReason,
+    deadline: tokio::time::Instant,
+) -> Result<(), String> {
+    retry_with_deadline(deadline, || {
+        detach_once(
+            &control.id,
+            &control.manifest_digest,
+            &control.package_digest,
+            &control.capability_generation,
+            &control.binding,
+            &control.client,
+            &control.detach_acknowledged,
+            reason,
+            deadline,
+        )
+    })
+    .await
+}
+
+async fn retry_with_deadline<F, Fut>(
+    deadline: tokio::time::Instant,
+    mut attempt: F,
+) -> Result<(), String>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<(), String>>,
+{
+    let mut last_error = "extension detach was not acknowledged".to_string();
+    for attempt_index in 0..MAX_DETACH_ATTEMPTS {
+        if tokio::time::Instant::now() >= deadline {
+            break;
+        }
+        match attempt().await {
+            Ok(()) => return Ok(()),
+            Err(error) => last_error = error,
+        }
+        if attempt_index + 1 == MAX_DETACH_ATTEMPTS || tokio::time::Instant::now() >= deadline {
+            break;
+        }
+        tokio::time::sleep(DETACH_RETRY_DELAY).await;
+    }
+    Err(last_error)
+}
+
+fn should_process_event(security_disabled: &AtomicBool) -> bool {
+    !security_disabled.load(Ordering::Acquire)
 }
 
 fn assert_package_current(package: &crate::provenance::VerifiedPackage) -> Result<(), String> {
@@ -543,7 +823,7 @@ async fn process_event(
     tools: &ToolRegistry,
     client: &ExtensionHostClient,
     refs: &Arc<CapabilityReferenceStore>,
-    disabled: &AtomicBool,
+    security_disabled: &AtomicBool,
     payload: EventPayload,
 ) -> Result<(), String> {
     assert_package_current(package)?;
@@ -586,8 +866,8 @@ async fn process_event(
         Duration::ZERO,
         None,
     );
-    let result = client
-        .send_agent_extension_event(
+    let result = match client
+        .send_agent_extension_event_classified(
             manifest.identity.id.clone(),
             binding.clone(),
             event_id.clone(),
@@ -595,7 +875,33 @@ async fn process_event(
             payload,
             reference_lease.references().to_vec(),
         )
-        .await?;
+        .await
+    {
+        Ok(result) => result,
+        Err(error) if error.is_busy() => {
+            client.emit_agent_extension(
+                LifecycleAction::BackpressureDrop,
+                &manifest.identity.id,
+                manifest_digest,
+                audit_metadata(
+                    package_digest,
+                    exposure.capability_generation(),
+                    Some(kind),
+                    Some(&event_id),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                ),
+                false,
+                started.elapsed(),
+                Some(error.message()),
+            );
+            return Ok(());
+        }
+        Err(error) => return Err(error.message().to_string()),
+    };
     deadline.remaining()?;
     let mut prepared_actions = Vec::with_capacity(result.proposed_actions.len());
     let mut reference_bindings = Vec::with_capacity(result.proposed_actions.len());
@@ -667,7 +973,7 @@ async fn process_event(
         started.elapsed(),
         None,
     );
-    if disabled.load(Ordering::Acquire) {
+    if security_disabled.load(Ordering::Acquire) {
         return Ok(());
     }
     for (prepared, action, capability_ref) in prepared_actions {
@@ -742,7 +1048,8 @@ impl ExtensionObserver {
 
 impl ExtensionSink {
     fn publish(&self, payload: EventPayload) {
-        if self.disabled.load(Ordering::Acquire)
+        if !self.accepting.load(Ordering::Acquire)
+            || self.security_disabled.load(Ordering::Acquire)
             || self.terminal.load(Ordering::Acquire)
             || !self.subscriptions.contains(&payload.kind())
         {
@@ -763,7 +1070,8 @@ impl ExtensionSink {
                 self.consecutive_drops.store(0, Ordering::Release);
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
-                self.disabled.store(true, Ordering::Release);
+                self.accepting.store(false, Ordering::Release);
+                self.security_disabled.store(true, Ordering::Release);
             }
             Err(mpsc::error::TrySendError::Full(_)) => {
                 self.record_backpressure_drop();
@@ -792,7 +1100,7 @@ impl ExtensionSink {
             Duration::ZERO,
             Some("extension event queue is full"),
         );
-        if register_backpressure_drop(&self.consecutive_drops, &self.disabled)
+        if register_backpressure_drop(&self.consecutive_drops, &self.accepting)
             && !self.terminal.swap(true, Ordering::AcqRel)
         {
             self.client.emit_agent_extension(
@@ -922,9 +1230,9 @@ fn audit_metadata(
     }
 }
 
-fn register_backpressure_drop(drops: &AtomicUsize, disabled: &AtomicBool) -> bool {
+fn register_backpressure_drop(drops: &AtomicUsize, accepting: &AtomicBool) -> bool {
     let drops = drops.fetch_add(1, Ordering::AcqRel) + 1;
-    drops >= DISABLE_AFTER_DROPS && !disabled.swap(true, Ordering::AcqRel)
+    drops >= DISABLE_AFTER_DROPS && accepting.swap(false, Ordering::AcqRel)
 }
 
 #[cfg(test)]

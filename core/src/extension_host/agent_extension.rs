@@ -6,6 +6,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use tokio::process::{Child, ChildStdin, ChildStdout};
@@ -18,6 +19,15 @@ use super::abi::{
     INITIALIZE_TIMEOUT, SHUTDOWN_TIMEOUT,
 };
 use super::protocol::{AgentExtensionRegistration, AgentExtensionResult, ExtensionBinding};
+
+const MAX_DISCOVERY_TASKS: usize = 64;
+static DISCOVERY_SLOTS: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
+
+fn discovery_slots() -> Arc<tokio::sync::Semaphore> {
+    DISCOVERY_SLOTS
+        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(MAX_DISCOVERY_TASKS)))
+        .clone()
+}
 
 pub(crate) struct HostedAgentExtension {
     manifest: ExtensionManifest,
@@ -291,33 +301,28 @@ impl HostedAgentExtension {
         capability_refs: Vec<CapabilityReference>,
     ) -> Result<AgentExtensionResult, String> {
         if binding != &self.binding {
-            return self
-                .fail_closed(
-                    "extension event binding does not match the active instance".to_string(),
-                )
-                .await;
+            return self.abort_event(
+                "extension event binding does not match the active instance".to_string(),
+            );
         }
         if let Err(error) = payload.validate() {
-            return self.fail_closed(error).await;
+            return self.abort_event(error);
         }
         if !self.manifest.subscriptions.contains(&payload.kind()) {
             return self
-                .fail_closed("extension event was not declared in the manifest".to_string())
-                .await;
+                .abort_event("extension event was not declared in the manifest".to_string());
         }
         if capability_refs.len() != self.manifest.action_policies.len() {
             return self
-                .fail_closed("extension event capability references are incomplete".to_string())
-                .await;
+                .abort_event("extension event capability references are incomplete".to_string());
         }
         let timeout = match deadline.remaining() {
             Ok(timeout) => timeout,
-            Err(error) => return self.fail_closed(error).await,
+            Err(error) => return self.abort_event(error),
         };
         if timeout > Duration::from_millis(self.manifest.limits.event_timeout_ms) {
             return self
-                .fail_closed("extension event deadline exceeds the manifest limit".to_string())
-                .await;
+                .abort_event("extension event deadline exceeds the manifest limit".to_string());
         }
         let request = AbiRequest {
             protocol: ABI_VERSION,
@@ -331,10 +336,13 @@ impl HostedAgentExtension {
             },
             additive: BTreeMap::new(),
         };
-        let response = match self.exchange(&request, timeout).await {
+        let response = match self.exchange_until(&request, deadline).await {
             Ok(response) => response,
-            Err(error) => return self.fail_closed(error).await,
+            Err(error) => return self.abort_event(error),
         };
+        if let Err(error) = deadline.remaining() {
+            return self.abort_event(error);
+        }
         let (output, proposed_actions) = match super::abi::validate_result(
             &request,
             &response,
@@ -343,8 +351,11 @@ impl HostedAgentExtension {
             self.manifest.limits.max_actions_per_event,
         ) {
             Ok(result) => result,
-            Err(error) => return self.fail_closed(error).await,
+            Err(error) => return self.abort_event(error),
         };
+        if let Err(error) = deadline.remaining() {
+            return self.abort_event(error);
+        }
         self.sequence = self.sequence.saturating_add(1);
         Ok(AgentExtensionResult {
             output: output.clone(),
@@ -383,6 +394,11 @@ impl HostedAgentExtension {
         }
     }
 
+    fn abort_event<T>(&mut self, error: String) -> Result<T, String> {
+        let _ = self.child.start_kill();
+        Err(error)
+    }
+
     async fn cleanup(&mut self) -> Result<(), String> {
         let process = self.kill_and_wait().await;
         let storage = match std::fs::remove_dir_all(&self.materialized_root) {
@@ -411,6 +427,24 @@ impl HostedAgentExtension {
         .map_err(|_| format!("Agent extension timed out after {}ms", timeout.as_millis()))?;
         self.remember_descendants();
         result
+    }
+
+    async fn exchange_until(
+        &mut self,
+        request: &AbiRequest,
+        deadline: super::abi::MonotonicDeadlineNs,
+    ) -> Result<AbiResponse, String> {
+        self.remember_descendants_until(deadline).await?;
+        let remaining = deadline.remaining()?;
+        let result = tokio::time::timeout(remaining, async {
+            super::abi::write_request(&mut self.stdin, request).await?;
+            super::abi::read_response(&mut self.stdout).await
+        })
+        .await
+        .map_err(|_| "Agent extension event deadline expired during child I/O".to_string())??;
+        self.remember_descendants_until(deadline).await?;
+        deadline.remaining()?;
+        Ok(result)
     }
 
     async fn kill_and_wait(&mut self) -> Result<(), String> {
@@ -469,6 +503,24 @@ impl HostedAgentExtension {
                     .insert(descendant.pid, descendant.start_time_ticks);
             }
         }
+    }
+
+    async fn remember_descendants_until(
+        &mut self,
+        deadline: super::abi::MonotonicDeadlineNs,
+    ) -> Result<(), String> {
+        let mut roots = self.known_descendants.keys().copied().collect::<Vec<_>>();
+        if let Some(pid) = self.child.id() {
+            roots.push(pid);
+        }
+        let descendants =
+            run_blocking_until(deadline, move || capture_descendants_many(&roots)).await?;
+        deadline.remaining()?;
+        for descendant in descendants {
+            self.known_descendants
+                .insert(descendant.pid, descendant.start_time_ticks);
+        }
+        Ok(())
     }
 
     fn remember_new_host_children(&mut self, preexisting: &[ProcessIdentity]) {
@@ -566,6 +618,10 @@ struct ProcessIdentity {
 }
 
 fn capture_descendants(root: u32) -> Vec<ProcessIdentity> {
+    capture_descendants_many(&[root])
+}
+
+fn capture_descendants_many(roots: &[u32]) -> Vec<ProcessIdentity> {
     let mut parents = BTreeMap::<u32, Vec<ProcessIdentity>>::new();
     let Ok(entries) = std::fs::read_dir("/proc") else {
         return Vec::new();
@@ -588,7 +644,7 @@ fn capture_descendants(root: u32) -> Vec<ProcessIdentity> {
     }
 
     let mut descendants = Vec::new();
-    let mut pending = vec![root];
+    let mut pending = roots.to_vec();
     while let Some(parent) = pending.pop() {
         if let Some(children) = parents.get(&parent) {
             descendants.extend(children.iter().copied());
@@ -596,6 +652,34 @@ fn capture_descendants(root: u32) -> Vec<ProcessIdentity> {
         }
     }
     descendants
+}
+
+async fn run_blocking_until<T, F>(
+    deadline: super::abi::MonotonicDeadlineNs,
+    work: F,
+) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let remaining = deadline.remaining()?;
+    let permit = tokio::time::timeout(remaining, discovery_slots().acquire_owned())
+        .await
+        .map_err(|_| "Agent extension event deadline expired during process discovery".to_string())?
+        .map_err(|_| "Agent extension process discovery is unavailable".to_string())?;
+    let remaining = deadline.remaining()?;
+    let result = tokio::time::timeout(
+        remaining,
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            work()
+        }),
+    )
+    .await
+    .map_err(|_| "Agent extension event deadline expired during process discovery".to_string())?
+    .map_err(|error| format!("Agent extension process discovery task failed: {error}"))?;
+    deadline.remaining()?;
+    Ok(result)
 }
 
 fn direct_children(parent: u32) -> Vec<ProcessIdentity> {
