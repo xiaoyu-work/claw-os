@@ -345,13 +345,68 @@ fn a_grant_for_a_different_audience_is_not_accepted_here() {
 #[test]
 fn a_grant_version_mismatch_fails_closed() {
     let signer = GrantSigner::from_secret([7u8; 32]);
-    let mut future = claims(77);
-    future.v = GRANT_VERSION + 1;
-    let grant = signer.issue(future);
+    for version in [GRANT_VERSION - 1, GRANT_VERSION + 1] {
+        let mut mismatched = claims(77);
+        mismatched.v = version;
+        let grant = signer.issue(mismatched);
+        assert!(matches!(
+            signer.verify(&grant, &expectation("hello"), 2_000),
+            Err(GrantError::Version { expected, actual })
+                if expected == GRANT_VERSION && actual == version
+        ));
+    }
+}
+
+#[test]
+fn an_old_serialized_grant_reaches_an_explicit_version_rejection() {
+    let signer = GrantSigner::from_secret([7u8; 32]);
+    let mut old = claims(77);
+    old.v = GRANT_VERSION - 1;
+    old.extension = Some(extension(88, "task-a", "session-a"));
+    let mut document = serde_json::to_value(signer.issue(old)).unwrap();
+    document["claims"]["extension"]
+        .as_object_mut()
+        .unwrap()
+        .remove("agent_extensions");
+
+    let decoded: SignedGrant = serde_json::from_value(document).expect(
+        "the additive receipt collection must deserialize before the grant version is checked",
+    );
+    assert!(decoded
+        .claims
+        .extension
+        .as_ref()
+        .unwrap()
+        .agent_extensions
+        .is_empty());
     assert!(matches!(
-        signer.verify(&grant, &expectation("hello"), 2_000),
-        Err(GrantError::Version { .. })
+        signer.verify(&decoded, &expectation("hello"), 2_000),
+        Err(GrantError::Version {
+            expected: GRANT_VERSION,
+            actual
+        }) if actual == GRANT_VERSION - 1
     ));
+}
+
+#[test]
+fn receipt_bytes_are_part_of_the_current_grant_signature() {
+    let signer = GrantSigner::from_secret([7u8; 32]);
+    let mut claims = claims(77);
+    claims.extension = Some(extension(88, "task-a", "session-a"));
+    let mut signed_without_receipts = claims.clone();
+    signed_without_receipts
+        .extension
+        .as_mut()
+        .unwrap()
+        .agent_extensions
+        .clear();
+    let mut legacy_canonical = signer.issue(signed_without_receipts);
+    legacy_canonical.claims = claims;
+
+    assert_eq!(
+        signer.verify(&legacy_canonical, &expectation("hello"), 2_000),
+        Err(GrantError::Signature)
+    );
 }
 
 #[test]

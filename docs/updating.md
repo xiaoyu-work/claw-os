@@ -149,9 +149,11 @@ upgrade replaces the whole set. Agent tasks run in `claw-agentd` processes that
   against a half-upgraded pair. The broker additionally measures the installed
   worker and `claw-extension-host` binaries against the security floor before
   spawning them, so either component being replaced on disk is refused before
-  it becomes a process. Extension-host control protocol v8 binds
-  owner-qualified package verification receipts into the private bootstrap and
-  has its own monotonic floor alongside the worker and broker protocols.
+  it becomes a process. Agentd worker protocol v10 and grant format v9 bind
+  owner-qualified Agent-extension package receipts into the signed task
+  authority. A v9 worker frame or v8 grant is rejected explicitly.
+  Extension-host control protocol v8 remains the independently floored host
+  channel, and the child Agent-extension ABI remains v2.
 - If the worker binary is missing or the daemon is started with
   `CLAWD_AGENTD=off`, agent tasks stop being executed and say so, while every
   other `clawd` primitive keeps serving.

@@ -156,7 +156,9 @@ Compatibility policy:
   supported version that satisfies every required feature. Silent downgrade is
   always rejected.
 - The worker-to-host control protocol is separately versioned and replaced in
-  lockstep with the package.
+  lockstep with the package. Agentd worker protocol v10 and signed grant format
+  v9 carry the authenticated package receipts; extension-host control remains
+  v8 and this child ABI remains v2.
 
 ## Observational events
 

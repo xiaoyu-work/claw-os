@@ -244,10 +244,20 @@ fn a_worker_that_did_not_shed_privilege_is_rejected() {
     assert!(check_hello_with(&hello, &lease, true).is_err());
     hello.euid = lease.owner_uid;
 
-    hello.protocol = protocol::PROTOCOL_VERSION + 1;
-    let error = check_hello_with(&hello, &lease, true).unwrap_err();
-    assert!(error.contains("protocol mismatch"), "{error}");
-    assert!(error.contains("reinstall"), "{error}");
+    for version in [
+        protocol::PROTOCOL_VERSION - 1,
+        protocol::PROTOCOL_VERSION + 1,
+    ] {
+        hello.protocol = version;
+        let error = check_hello_with(&hello, &lease, true).unwrap_err();
+        assert!(error.contains("protocol mismatch"), "{error}");
+        assert!(error.contains(&format!("v{version}")), "{error}");
+        assert!(
+            error.contains(&format!("v{}", protocol::PROTOCOL_VERSION)),
+            "{error}"
+        );
+        assert!(error.contains("reinstall"), "{error}");
+    }
 }
 
 #[test]

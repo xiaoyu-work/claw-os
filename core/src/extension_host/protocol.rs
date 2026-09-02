@@ -44,6 +44,7 @@ pub struct HostBootstrap {
     pub control_socket: String,
     pub broker_socket: String,
     pub approved_paths: Vec<ApprovedPath>,
+    #[serde(default)]
     pub agent_extensions: Vec<crate::provenance::verify::PackageVerificationReceipt>,
 }
 
@@ -352,6 +353,7 @@ pub struct ExtensionBinding {
     pub owner_gid: u32,
     pub capability_generation: String,
     pub approved_paths: Vec<ApprovedPath>,
+    #[serde(default)]
     pub agent_extensions: Vec<crate::provenance::verify::PackageVerificationReceipt>,
     pub worker_pid: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]

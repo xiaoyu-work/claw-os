@@ -21,7 +21,7 @@ use sha2::Sha256;
 
 /// Wire format version. Bumped whenever the claim set changes shape so
 /// a mixed old/new install fails closed instead of mis-parsing.
-pub const GRANT_VERSION: u32 = 8;
+pub const GRANT_VERSION: u32 = 9;
 
 /// Intended recipient of the grant. A token issued for the worker
 /// channel is meaningless anywhere else because every verifier requires

@@ -14,6 +14,97 @@ fn identity(uid: u32, gid: u32) -> LocalIdentity {
     }
 }
 
+fn extension_binding() -> crate::extension_host::protocol::ExtensionBinding {
+    crate::extension_host::protocol::ExtensionBinding {
+        protocol: crate::extension_host::protocol::PROTOCOL_VERSION,
+        task_id: "task-a".to_string(),
+        session_id: None,
+        owner_uid: 1000,
+        extension_uid: 61_000,
+        owner_gid: 1000,
+        capability_generation: "a".repeat(16),
+        approved_paths: vec![crate::extension_host::protocol::ApprovedPath {
+            path: "/home/test".to_string(),
+            device: 1,
+            inode: 2,
+            owner_uid: 1000,
+            mode: 0o40755,
+        }],
+        agent_extensions: Vec::new(),
+        worker_pid: 4242,
+        worker_start_time_ticks: Some(1),
+        host_pid: 4243,
+        host_start_time_ticks: Some(2),
+        lease_nonce: "0123456789abcdef0123456789abcdef".to_string(),
+        expires_at_ms: u64::MAX,
+        control_socket: "/run/cos/extensions/control.sock".to_string(),
+        broker_socket: "/run/cos/extensions/broker.sock".to_string(),
+    }
+}
+
+#[tokio::test]
+async fn an_old_assignment_without_receipts_gets_an_explicit_protocol_rejection() {
+    let extension = extension_binding();
+    let signer = crate::agentd::grant::GrantSigner::from_secret([7u8; 32]);
+    let grant = signer.issue(crate::agentd::grant::GrantClaims {
+        v: crate::agentd::grant::GRANT_VERSION - 1,
+        audience: crate::agentd::grant::GRANT_AUDIENCE.to_string(),
+        broker_pid: 1,
+        task_id: "task-a".to_string(),
+        session_id: None,
+        owner_uid: 1000,
+        owner_gid: 1000,
+        client: crate::session::SessionClient::default(),
+        presence: None,
+        capability_generation: "a".repeat(16),
+        prepare_nonce: "0123456789abcdef0123456789abcdef".to_string(),
+        commit_nonce: "fedcba9876543210fedcba9876543210".to_string(),
+        extension: Some(extension.clone()),
+        worker_pid: 4242,
+        worker_start_time_ticks: Some(1),
+        issued_at_ms: 1,
+        expires_at_ms: u64::MAX,
+        routes: protocol::worker_routes(),
+    });
+    let frame = BrokerFrame::Prepare(Box::new(Assignment {
+        protocol: protocol::PROTOCOL_VERSION - 1,
+        grant,
+        job: protocol::JobSpec {
+            id: "task-a".to_string(),
+            prompt: "test".to_string(),
+            context: None,
+            branch_context: None,
+            session_id: None,
+            max_turns: None,
+            use_memory: false,
+            owner_uid: 1000,
+            owner_home: "/home/test".to_string(),
+        },
+        consent_context: ConsentContext::Unattended,
+        session: None,
+        presence: None,
+        extension: Some(extension),
+    }));
+    let mut document = serde_json::to_value(frame).unwrap();
+    document["grant"]["claims"]["extension"]
+        .as_object_mut()
+        .unwrap()
+        .remove("agent_extensions");
+    document["extension"]
+        .as_object_mut()
+        .unwrap()
+        .remove("agent_extensions");
+    let mut bytes = serde_json::to_vec(&document).unwrap();
+    bytes.push(b'\n');
+    let mut frames = FrameReader::new(BufReader::new(bytes.as_slice()));
+
+    let error = receive_assignment(&mut frames, &identity(1000, 1000))
+        .await
+        .unwrap_err();
+    assert!(error.contains("agentd protocol mismatch"), "{error}");
+    assert!(error.contains("reinstall"), "{error}");
+}
+
 #[test]
 fn the_worker_refuses_to_run_a_user_task_with_root_ids() {
     // A task owned by an ordinary account must never end up running

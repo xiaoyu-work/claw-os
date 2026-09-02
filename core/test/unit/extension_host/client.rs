@@ -32,6 +32,18 @@ fn binding() -> ExtensionBinding {
 }
 
 #[test]
+fn a_missing_receipt_collection_defaults_to_no_extension_authority() {
+    let mut document = serde_json::to_value(binding()).unwrap();
+    document.as_object_mut().unwrap().remove("agent_extensions");
+
+    let decoded: ExtensionBinding = serde_json::from_value(document).unwrap();
+    assert!(decoded.agent_extensions.is_empty());
+    decoded
+        .validate_shape()
+        .expect("missing receipts must authorize no Agent extensions");
+}
+
+#[test]
 fn binding_rejects_replay_against_another_worker() {
     let binding = binding();
     assert!(binding
