@@ -51,14 +51,19 @@ fn package(mut mutate: impl FnMut(&mut serde_json::Value)) -> crate::provenance:
         },
         "entry": "bin/observer",
         "protocol": {
-            "min_version": 1,
-            "max_version": 1,
-            "required_features": ["observational-events"]
+            "min_version": 2,
+            "max_version": 2,
+            "required_features": ["observational-events", "proposed-actions"]
         },
         "subscriptions": ["session-start", "pre-model-call", "post-tool"],
         "requested_capabilities": [{
-            "verb": "ui.notify",
-            "scope": {"kind": "wild"}
+            "verb": "sys.observe",
+            "scope": {"kind": "name", "value": "time"}
+        }],
+        "action_policies": [{
+            "requested_index": 0,
+            "tool": "now",
+            "policy_id": "builtin.now/v1"
         }],
         "limits": {
             "event_timeout_ms": 500,

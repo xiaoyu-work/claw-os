@@ -38,6 +38,123 @@ fn mixed_capability_primitive(command: &str, args: &[String]) -> Result<serde_js
     Ok(serde_json::json!({"command": command, "path": path}))
 }
 
+#[tokio::test]
+async fn model_attempt_events_pair_before_tools_and_exclude_tool_latency() {
+    struct AttemptSpy {
+        order: Arc<std::sync::Mutex<Vec<&'static str>>>,
+        latency: Arc<std::sync::atomic::AtomicU64>,
+    }
+    impl crate::agent::llm::attempt_observer::ProviderAttemptObserver for AttemptSpy {
+        fn observe_switch(&self, _record: &crate::agent::llm::provider_chain::ProviderSwitch) {}
+
+        fn observe_start(
+            &self,
+            _record: &crate::agent::llm::attempt_observer::ProviderAttemptStart,
+        ) {
+            self.order.lock().unwrap().push("pre-model");
+        }
+
+        fn observe_finish(
+            &self,
+            record: &crate::agent::llm::attempt_observer::ProviderAttemptFinish,
+        ) {
+            self.latency
+                .store(record.latency_ms, std::sync::atomic::Ordering::SeqCst);
+            self.order.lock().unwrap().push("post-model");
+        }
+    }
+    struct ToolSpy {
+        order: Arc<std::sync::Mutex<Vec<&'static str>>>,
+    }
+    impl Hook for ToolSpy {
+        fn name(&self) -> &str {
+            "attempt-tool-order"
+        }
+        fn pre_tool(&self, _ctx: &HookContext, _call: &ToolCall) -> ToolDecision {
+            self.order.lock().unwrap().push("pre-tool");
+            ToolDecision::Allow
+        }
+        fn post_tool(
+            &self,
+            _ctx: &HookContext,
+            _call: &ToolCall,
+            _summary: &ToolResultSummary,
+        ) -> HookOutcome {
+            self.order.lock().unwrap().push("post-tool");
+            HookOutcome::Continue
+        }
+    }
+    struct SlowTool;
+    #[async_trait::async_trait]
+    impl crate::agent::tools::Tool for SlowTool {
+        fn name(&self) -> &str {
+            "slow_fixture"
+        }
+        fn description(&self) -> &str {
+            "slow test fixture"
+        }
+        fn input_schema(&self) -> serde_json::Value {
+            serde_json::json!({"type":"object"})
+        }
+        async fn exec(&self, _input: serde_json::Value) -> crate::agent::tools::ToolResult {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            crate::agent::tools::ToolResult::ok("done")
+        }
+    }
+
+    let order = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let latency = Arc::new(std::sync::atomic::AtomicU64::new(u64::MAX));
+    global_registry().register(Arc::new(ToolSpy {
+        order: Arc::clone(&order),
+    }));
+    let config = cfg();
+    let mock = Arc::new(MockProvider::new(&config.model, &config));
+    mock.push_response(MockResponse::ToolUse(vec![ToolCall {
+        id: "slow-call".to_string(),
+        name: "slow_fixture".to_string(),
+        input: serde_json::json!({}),
+    }]));
+    let provider: Arc<dyn crate::agent::llm::Provider> =
+        Arc::new(crate::agent::llm::attempt_observer::ObservedProvider::new(
+            mock,
+            "mock",
+            Arc::new(AttemptSpy {
+                order: Arc::clone(&order),
+                latency: Arc::clone(&latency),
+            }),
+        ));
+    let mut tools = builtin_only_registry();
+    tools.register(Arc::new(SlowTool));
+    let llm_tools = tools.as_llm_tools();
+    let mut messages = vec![Message::user_text("go")];
+    let hook_context = ctx();
+    let started = std::time::Instant::now();
+    run_turn(
+        provider,
+        &config.model,
+        "sys",
+        &mut messages,
+        &tools,
+        &llm_tools,
+        config.max_tokens,
+        config.temperature,
+        None,
+        None,
+        Some(&hook_context),
+        progress::null_progress(),
+    )
+    .await
+    .unwrap();
+    global_registry().unregister("attempt-tool-order");
+
+    assert!(started.elapsed() >= std::time::Duration::from_millis(100));
+    assert!(latency.load(std::sync::atomic::Ordering::SeqCst) < 100);
+    assert_eq!(
+        *order.lock().unwrap(),
+        vec!["pre-model", "post-model", "pre-tool", "post-tool"]
+    );
+}
+
 /// pre_tool returning Allow runs the tool unmodified and the
 /// hook's post_tool sees a successful result summary.
 #[tokio::test]

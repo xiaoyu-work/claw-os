@@ -30,6 +30,41 @@ struct ExtensionTestTool {
     executions: Arc<AtomicUsize>,
 }
 
+fn proposed_action(
+    tool: &str,
+    input: serde_json::Value,
+) -> crate::extension_host::abi::ProposedAction {
+    crate::extension_host::abi::ProposedAction {
+        action_id: "action-a".to_string(),
+        capability_ref: crate::agent_extensions::capability_ref::CapabilityReference {
+            requested_index: 0,
+            handle: "a".repeat(64),
+        },
+        tool: tool.to_string(),
+        input,
+        additive: std::collections::BTreeMap::new(),
+    }
+}
+
+fn prepare_proposal(
+    registry: &ToolRegistry,
+    context: &ToolExposureContext,
+    action: &crate::extension_host::abi::ProposedAction,
+    policy_id: &str,
+    capability: &crate::caps::Cap,
+) -> Result<PreparedExtensionProposal, String> {
+    registry.prepare_extension_proposal(
+        context,
+        "observer",
+        &format!("sha256:{}", "a".repeat(64)),
+        &"b".repeat(64),
+        "event-a",
+        action,
+        policy_id,
+        capability,
+    )
+}
+
 #[async_trait::async_trait]
 impl crate::agent::tools::Tool for ExtensionTestTool {
     fn name(&self) -> &str {
@@ -171,6 +206,202 @@ impl crate::agent::tools::Tool for OwnedDescriptorTool {
     async fn exec(&self, _input: serde_json::Value) -> crate::agent::tools::ToolResult {
         crate::agent::tools::ToolResult::ok("ok")
     }
+}
+
+#[test]
+fn extension_proposals_default_deny_higher_order_credentials_and_legacy_tools() {
+    let registry = default_registry();
+    let context = ToolExposureContext::isolated(Guardrails::permissive());
+    for (tool, input) in [
+        (
+            "cos_delegate",
+            serde_json::json!({
+                "task": "steal secrets",
+                "provider": "openai",
+                "model": "attacker",
+                "allowed_tools": ["cos_credential"]
+            }),
+        ),
+        (
+            "cos_credential",
+            serde_json::json!({"command": "load", "name": "API_KEY"}),
+        ),
+        ("cos_sysinfo", serde_json::json!({"command": "summary"})),
+        ("cos_proc", serde_json::json!({"command": "wait", "pid": 1})),
+    ] {
+        let error = prepare_proposal(
+            &registry,
+            &context,
+            &proposed_action(tool, input),
+            "attacker/policy",
+            &crate::caps::Cap::new(
+                crate::caps::Verb::SECRET_READ,
+                crate::caps::Scope::name("default/API_KEY"),
+            ),
+        )
+        .err()
+        .unwrap();
+        assert!(
+            error.contains("does not accept"),
+            "{tool} reached proposal execution: {error}"
+        );
+    }
+}
+
+#[test]
+fn extension_proposal_requires_exact_tool_policy_and_capability() {
+    let registry = builtin_only_registry();
+    let context = ToolExposureContext::isolated(Guardrails::permissive());
+    let action = proposed_action("now", serde_json::json!({}));
+    let capability = crate::caps::Cap::new(
+        crate::caps::Verb::SYS_OBSERVE,
+        crate::caps::Scope::name("time"),
+    );
+    let prepared =
+        prepare_proposal(&registry, &context, &action, "builtin.now/v1", &capability).unwrap();
+    assert_eq!(prepared.binding().capability, capability);
+
+    let wrong_scope = crate::caps::Cap::new(
+        crate::caps::Verb::SYS_OBSERVE,
+        crate::caps::Scope::name("hardware"),
+    );
+    assert!(
+        prepare_proposal(&registry, &context, &action, "builtin.now/v1", &wrong_scope,)
+            .err()
+            .unwrap()
+            .contains("exactly match")
+    );
+    assert!(
+        prepare_proposal(&registry, &context, &action, "builtin.now/v2", &capability,)
+            .err()
+            .unwrap()
+            .contains("policy")
+    );
+    assert!(prepare_proposal(
+        &registry,
+        &context,
+        &proposed_action("now", serde_json::json!({"provider": "openai"})),
+        "builtin.now/v1",
+        &capability,
+    )
+    .is_err());
+}
+
+#[test]
+fn noncooperative_blocking_tool_is_rejected_before_execution() {
+    struct BlockingTool(Arc<AtomicUsize>);
+    #[async_trait::async_trait]
+    impl crate::agent::tools::Tool for BlockingTool {
+        fn name(&self) -> &str {
+            "blocking_fixture"
+        }
+        fn description(&self) -> &str {
+            "must never run"
+        }
+        fn input_schema(&self) -> serde_json::Value {
+            serde_json::json!({"type":"object"})
+        }
+        async fn exec(&self, _input: serde_json::Value) -> crate::agent::tools::ToolResult {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_secs(60));
+            crate::agent::tools::ToolResult::ok("unexpected")
+        }
+    }
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(BlockingTool(Arc::clone(&calls))));
+    let context = ToolExposureContext::isolated(Guardrails::permissive());
+    let result = prepare_proposal(
+        &registry,
+        &context,
+        &proposed_action("blocking_fixture", serde_json::json!({})),
+        "fixture.blocking/v1",
+        &crate::caps::Cap::new(
+            crate::caps::Verb::SYS_OBSERVE,
+            crate::caps::Scope::name("time"),
+        ),
+    );
+    assert!(result.is_err());
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn safe_extension_proposal_reenters_exact_capability_and_approval_enforcement() {
+    let _lock = crate::test_env::lock_env();
+    let data = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(data.path().join("proc")).unwrap();
+    std::fs::write(
+        data.path().join("proc/registry.json"),
+        r#"{"sessions":[{"session_id":"proposal-session","pid":0,"caps":[]}]}"#,
+    )
+    .unwrap();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", data.path().as_os_str());
+    let _session = crate::test_env::TestEnvVarGuard::set("COS_SESSION", "proposal-session");
+    let _mode = crate::test_env::TestEnvVarGuard::set("COS_PERMS_MODE", "strict");
+
+    let registry = builtin_only_registry();
+    let capability = crate::caps::Cap::new(
+        crate::caps::Verb::SYS_OBSERVE,
+        crate::caps::Scope::name("time"),
+    );
+    let exposure = ToolExposureContext::isolated(Guardrails::permissive())
+        .with_identity(
+            "proposal-session",
+            unsafe { libc::geteuid() as u32 },
+            crate::session::SessionSource::LocalCli,
+        )
+        .with_presence(true, true);
+    let prepared = prepare_proposal(
+        &registry,
+        &exposure,
+        &proposed_action("now", serde_json::json!({})),
+        "builtin.now/v1",
+        &capability,
+    )
+    .unwrap();
+    let result = crate::approvals::LocalApprovalInvocation::new("proposal-task")
+        .unwrap()
+        .scope(prepared.execute(
+            exposure.clone(),
+            registry.approval().clone(),
+            "extension proposal test",
+        ))
+        .await;
+    assert!(result.is_error);
+    assert!(result.content.contains("approval"), "{}", result.content);
+
+    std::fs::write(
+        data.path().join("proc/registry.json"),
+        serde_json::json!({
+            "sessions": [{
+                "session_id": "proposal-session",
+                "pid": 0,
+                "caps": [{
+                    "verb": "sys.observe",
+                    "scope": {"kind": "name", "value": "time"}
+                }]
+            }]
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let prepared = prepare_proposal(
+        &registry,
+        &exposure,
+        &proposed_action("now", serde_json::json!({})),
+        "builtin.now/v1",
+        &capability,
+    )
+    .unwrap();
+    let result = prepared
+        .execute(
+            exposure,
+            registry.approval().clone(),
+            "extension proposal test",
+        )
+        .await;
+    assert!(!result.is_error, "{}", result.content);
 }
 
 #[test]

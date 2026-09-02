@@ -180,6 +180,107 @@ struct ToolEntry {
     disclosure: Arc<ToolDisclosure>,
 }
 
+pub struct PreparedExtensionProposal {
+    tool: Arc<dyn Tool>,
+    call: ToolCall,
+    required_capability: crate::caps::Cap,
+    operation_digest: String,
+}
+
+impl PreparedExtensionProposal {
+    pub fn binding(&self) -> ExtensionProposalBinding {
+        ExtensionProposalBinding {
+            action_id: self.call.id.clone(),
+            tool: self.call.name.clone(),
+            policy_id: self
+                .tool
+                .extension_proposal_policy()
+                .expect("prepared extension proposal has a policy")
+                .policy_id
+                .to_string(),
+            input_digest: crate::crypto::sha256_hex(
+                &serde_json::to_vec(&self.call.input).unwrap_or_default(),
+            ),
+            capability: self.required_capability.clone(),
+            operation_digest: self.operation_digest.clone(),
+        }
+    }
+
+    pub async fn execute(
+        self,
+        exposure: ToolExposureContext,
+        approval: ApprovalGate,
+        approval_reason: &'static str,
+    ) -> ToolResult {
+        if approval.is_classified(&self.call.name) {
+            match approval
+                .evaluate_for(
+                    &self.call.name,
+                    &self.call.input,
+                    approval_reason,
+                    self.tool.approval_boundary(),
+                )
+                .await
+            {
+                crate::agent::runtime::approval::ApprovalOutcome::Approved { .. } => {}
+                crate::agent::runtime::approval::ApprovalOutcome::Denied { reason } => {
+                    return ToolResult::err(format!(
+                        "approval denied for `{}`: {}",
+                        self.call.name,
+                        reason.unwrap_or_else(|| "no reason".to_string())
+                    ));
+                }
+                crate::agent::runtime::approval::ApprovalOutcome::Deferred { prompt } => {
+                    return ToolResult::err(format!(
+                        "approval pending for `{}`: {}",
+                        self.call.name,
+                        prompt.unwrap_or_else(|| "user approval required".to_string())
+                    ));
+                }
+            }
+        }
+
+        let ceiling = crate::caps::CapSet::from_caps([self.required_capability.clone()]);
+        crate::caps::enforcement::with_capability_ceiling(ceiling, async move {
+            let check = super::exposure::scope(exposure.clone(), async {
+                crate::caps::enforcement::require_or_json_for_operation(
+                    self.required_capability.verb,
+                    self.required_capability.scope.clone(),
+                    &self.operation_digest,
+                )
+            })
+            .await;
+            if let Err(denial) = check {
+                return ToolResult::err(denial.to_string());
+            }
+            let guardrails = exposure.guardrails().clone();
+            super::exposure::scope(
+                exposure.clone(),
+                super::delegate::PARENT_GUARDRAILS.scope(
+                    guardrails,
+                    super::delegate::PARENT_APPROVAL.scope(
+                        approval,
+                        super::delegate::PARENT_EXPOSURE
+                            .scope(exposure, self.tool.exec(self.call.input)),
+                    ),
+                ),
+            )
+            .await
+        })
+        .await
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtensionProposalBinding {
+    pub action_id: String,
+    pub tool: String,
+    pub policy_id: String,
+    pub input_digest: String,
+    pub capability: crate::caps::Cap,
+    pub operation_digest: String,
+}
+
 #[derive(Debug)]
 struct ToolAttachmentState {
     active: AtomicBool,
@@ -374,6 +475,95 @@ impl ToolRegistry {
 
     pub fn approval(&self) -> &ApprovalGate {
         &self.approval
+    }
+
+    pub fn validate_extension_action_policy(
+        &self,
+        tool: &str,
+        expected_policy_id: &str,
+    ) -> Result<(), String> {
+        let entry = self
+            .tools
+            .get(tool)
+            .ok_or_else(|| "extension action policy names an unregistered tool".to_string())?;
+        let policy = entry
+            .tool
+            .extension_proposal_policy()
+            .ok_or_else(|| "tool does not accept Agent-extension proposed actions".to_string())?;
+        if policy.policy_id != expected_policy_id
+            || policy.execution != super::ExtensionProposalExecution::Cooperative
+        {
+            return Err("extension action policy does not match the tool policy".to_string());
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_extension_proposal(
+        &self,
+        context: &ToolExposureContext,
+        extension_id: &str,
+        package_digest: &str,
+        manifest_digest: &str,
+        event_id: &str,
+        action: &crate::extension_host::abi::ProposedAction,
+        expected_policy_id: &str,
+        expected_capability: &crate::caps::Cap,
+    ) -> Result<PreparedExtensionProposal, String> {
+        let entry = self
+            .tools
+            .get(&action.tool)
+            .ok_or_else(|| "extension proposed an unregistered tool".to_string())?;
+        let policy = entry
+            .tool
+            .extension_proposal_policy()
+            .ok_or_else(|| "tool does not accept Agent-extension proposed actions".to_string())?;
+        if policy.policy_id != expected_policy_id
+            || policy.execution != super::ExtensionProposalExecution::Cooperative
+        {
+            return Err("extension action policy does not match the tool policy".to_string());
+        }
+        let prepared = entry
+            .tool
+            .prepare_extension_proposal(action.input.clone())?;
+        if &prepared.required_capability != expected_capability {
+            return Err(
+                "extension action capability does not exactly match its declared policy"
+                    .to_string(),
+            );
+        }
+        let decision = self.exposure_decision(context, &action.tool);
+        if !decision.is_visible() || self.approval.is_auto_denied(&action.tool) {
+            return Err(format!(
+                "extension proposed tool is unavailable: {}",
+                decision.reason().unwrap_or("policy denied")
+            ));
+        }
+        let canonical = serde_json::to_vec(&serde_json::json!({
+            "domain": "claw.agent-extension.action/v2",
+            "extension_id": extension_id,
+            "package_digest": package_digest,
+            "manifest_digest": manifest_digest,
+            "event_id": event_id,
+            "action_id": action.action_id,
+            "tool": action.tool,
+            "policy_id": policy.policy_id,
+            "input": prepared.canonical_input,
+            "capability": prepared.required_capability,
+            "catalog_generation": self.catalog_generation(),
+            "capability_generation": context.capability_generation(),
+        }))
+        .map_err(|error| format!("encode extension action binding: {error}"))?;
+        Ok(PreparedExtensionProposal {
+            tool: entry.tool.clone(),
+            call: ToolCall {
+                id: action.action_id.clone(),
+                name: action.tool.clone(),
+                input: prepared.canonical_input,
+            },
+            required_capability: prepared.required_capability,
+            operation_digest: crate::crypto::sha256_hex(&canonical),
+        })
     }
 
     pub(crate) fn policy_fork(&self) -> Self {

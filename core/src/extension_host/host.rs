@@ -463,6 +463,7 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
             extension_id,
             binding,
             event_id,
+            deadline_monotonic_ns,
             payload,
             capability_refs,
         } => {
@@ -477,7 +478,13 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
             let result = extension
                 .lock()
                 .await
-                .event(&binding, event_id, payload, capability_refs)
+                .event(
+                    &binding,
+                    event_id,
+                    deadline_monotonic_ns,
+                    payload,
+                    capability_refs,
+                )
                 .await;
             match result {
                 Ok(value) => Ok(HostResult::AgentExtensionEvent { value }),

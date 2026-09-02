@@ -43,7 +43,7 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | `clawd` broker | Versioned framed Unix-socket RPC, per-message peer identity, declarative route registry, mandatory capability-authority middleware, privileged dispatch, task ownership/lease, worker/extension supervision, and audit hook | `core/src/bin/clawd.rs`, `core/src/clawd/server.rs`, `core/src/clawd/transport/`, `core/src/clawd/routes.rs`, `core/src/clawd/authority/` |
 | `claw-agentd` worker | Unprivileged per-task process that runs the model/tool loop after privilege drop; grant-authenticated private job channel | `core/src/bin/claw-agentd.rs`, `core/src/agentd/` |
 | `claw-extension-host` | Per-task isolated-UID process that runs dynamic App/MCP code and signed Agent extension observers behind a worker-only control socket; only App/MCP children receive the route-filtered broker proxy | `core/src/bin/claw-extension-host.rs`, `core/src/extension_host/` |
-| Agent extension ABI | Explicit authenticated-package registry, observation-only event fanout, opaque capability references, and proposed-action mediation | `core/src/agent_extensions/`, `core/src/provenance/`, `core/src/extension_host/abi.rs` |
+| Agent extension ABI | Explicit authenticated-package registry, provider-attempt/tool observation FIFO, per-extension capability references, and default-deny exact-action mediation | `core/src/agent_extensions/`, `core/src/provenance/`, `core/src/extension_host/abi.rs` |
 | Agent runtime | Multi-turn model/tool loop, prompt assembly, hooks, progress, compression, and tool dispatch | `core/src/agent/runtime/` |
 | Model-input trust | Closed trust lattice, model-input source registry, labelled segments, and the bounded data fence for non-policy content | `core/src/agent/trust/` |
 | LLM abstraction | Provider registry, wire adapters, streaming accumulation, fallback chain, credentials, and usage | `core/src/agent/llm/` |
@@ -453,13 +453,17 @@ lifecycle. LLM composition follows the same snapshot rule:
 `HttpTransport` into `llm::registry`; the registry alone maps immutable
 `AgentConfig` values into provider-specific settings. Credential-store then
 environment precedence is resolved once before provider construction, and
-credential pools receive only pre-resolved entries. `ProviderChain` receives a
-`ProviderAttemptObserver`; the live audit observer is assembled with the audit
-path and request/session metadata outside the chain, and retains the existing
-warn-only audit-write failure semantics. Provider modules therefore own only
-authentication headers, wire serialization/parsing/streaming, and upstream
-error classification, with no config, environment, credential-store, or audit
-discovery.
+credential pools receive only pre-resolved entries. Every concrete provider
+slot is wrapped by an injected `ProviderAttemptObserver` beneath capability and
+budget gates but above the provider invocation. It emits one paired id for each
+real buffered or streaming attempt, including runtime retries and fallback
+slots; terminal observation happens before tool dispatch and reports only
+provider/model identity, model-only latency, usage, and a stable error class.
+The live audit observer is assembled with the audit path and request/session
+metadata outside the chain, retaining warn-only audit-write failure semantics.
+Provider modules therefore own only authentication headers, wire
+serialization/parsing/streaming, and upstream error classification, with no
+config, environment, credential-store, or audit discovery.
 
 Copilot's context-aware path keeps the same transport through GitHub-token
 exchange, rejected-token refresh, live model-catalog negotiation, and the

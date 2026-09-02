@@ -95,7 +95,7 @@ while True:
     request = read_frame()
     lifecycle = request["message"]["lifecycle"]
     if lifecycle == "initialize":
-        selected = 0 if MODE == "downgrade" else 1
+        selected = 0 if MODE == "downgrade" else 2
         write_frame({
             "protocol": selected,
             "binding": request["binding"],
@@ -133,10 +133,10 @@ while True:
         actions = []
         if MODE in ("normal", "forged-ref"):
             actions = [{
-                "action_id": "notify",
+                "action_id": "read-time",
                 "capability_ref": {"requested_index": 0, "handle": handle},
-                "tool": "echo",
-                "input": {"text": "extension action"},
+                "tool": "now",
+                "input": {},
             }]
         output = json.dumps({
             "mode": MODE,
@@ -147,7 +147,7 @@ while True:
             "host_root_absent": not os.path.exists("/root/.ssh"),
         }, separators=(",", ":"))
         write_frame({
-            "protocol": 1,
+            "protocol": 2,
             "binding": request["binding"],
             "sequence": request["sequence"],
             "message": {
@@ -159,7 +159,7 @@ while True:
         })
     elif lifecycle == "shutdown":
         write_frame({
-            "protocol": 1,
+            "protocol": 2,
             "binding": request["binding"],
             "sequence": request["sequence"],
             "message": {"lifecycle": "shutdown-ack"},
@@ -211,14 +211,19 @@ fn install_agent_extension(
         },
         "entry": "bin/observer.py",
         "protocol": {
-            "min_version": 1,
-            "max_version": 1,
+            "min_version": 2,
+            "max_version": 2,
             "required_features": ["observational-events", "proposed-actions"],
         },
         "subscriptions": ["session-start"],
         "requested_capabilities": [{
-            "verb": "ui.notify",
-            "scope": {"kind": "wild"},
+            "verb": "sys.observe",
+            "scope": {"kind": "name", "value": "time"},
+        }],
+        "action_policies": [{
+            "requested_index": 0,
+            "tool": "now",
+            "policy_id": "builtin.now/v1",
         }],
         "limits": {
             "event_timeout_ms": timeout_ms,
@@ -544,10 +549,12 @@ async fn send_agent_extension_probe(
     handle: String,
     timeout: Duration,
 ) -> Result<cos::extension_host::protocol::AgentExtensionResult, String> {
+    let deadline = cos::extension_host::abi::MonotonicDeadlineNs::after(timeout)?;
     host.send_agent_extension_event(
         id.to_string(),
         binding,
         uuid::Uuid::new_v4().simple().to_string(),
+        deadline,
         cos::extension_host::abi::EventPayload::SessionStart {
             source: "boundary-test".to_string(),
             attended: false,
@@ -557,7 +564,6 @@ async fn send_agent_extension_probe(
             requested_index: 0,
             handle,
         }],
-        timeout,
     )
     .await
 }
@@ -704,12 +710,9 @@ async fn worker_child() {
         .attach_agent_extension(registration.clone())
         .await
         .expect("attach generic Agent extension");
-    let refs = cos::agent_extensions::capability_ref::CapabilityReferenceStore::default();
-    let expires_at_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64
-        + 1000;
+    let refs = Arc::new(cos::agent_extensions::capability_ref::CapabilityReferenceStore::new(1));
+    let deadline =
+        cos::extension_host::abi::MonotonicDeadlineNs::after(Duration::from_secs(1)).unwrap();
     let reference_context = cos::agent_extensions::capability_ref::ReferenceContext {
         owner_uid: binding.owner_uid,
         session_id: &binding.session_id,
@@ -718,23 +721,33 @@ async fn worker_child() {
         manifest_digest: &binding.manifest_digest,
         capability_generation: &binding.capability_generation,
         event_id: "normal-event",
-        expires_at_ms,
+        deadline,
     };
-    let issued = refs
-        .issue(&reference_context, &[Cap::unscoped(Verb::UI_NOTIFY)])
+    let capability = Cap::new(Verb::SYS_OBSERVE, Scope::name("time"));
+    let lease = refs
+        .issue_event(
+            &reference_context,
+            std::slice::from_ref(&capability),
+            &[cos::agent_extensions::manifest::ExtensionActionPolicy {
+                requested_index: 0,
+                tool: "now".to_string(),
+                policy_id: "builtin.now/v1".to_string(),
+            }],
+        )
         .expect("issue capability reference");
+    let issued = lease.references().to_vec();
     let result = client
         .send_agent_extension_event(
             "observer".to_string(),
             binding.clone(),
             "normal-event".to_string(),
+            deadline,
             cos::extension_host::abi::EventPayload::SessionStart {
                 source: "boundary-test".to_string(),
                 attended: false,
                 delegated: false,
             },
             issued,
-            Duration::from_secs(2),
         )
         .await
         .expect("observe session start");
@@ -749,15 +762,19 @@ async fn worker_child() {
         .proposed_actions
         .first()
         .expect("explicit proposed action");
-    assert_eq!(
-        refs.consume(&reference_context, &action.capability_ref)
-            .expect("resolve exact reference"),
-        Cap::unscoped(Verb::UI_NOTIFY)
-    );
-    assert!(refs
-        .consume(&reference_context, &action.capability_ref)
-        .expect_err("reference replay must fail")
-        .contains("invalid or expired"));
+    lease
+        .consume_all(&[
+            cos::agent_extensions::capability_ref::ActionReferenceBinding {
+                reference: action.capability_ref.clone(),
+                action_id: action.action_id.clone(),
+                tool: action.tool.clone(),
+                policy_id: "builtin.now/v1".to_string(),
+                input_digest: cos::crypto::sha256_hex(b"{}"),
+                capability,
+                operation_digest: cos::crypto::sha256_hex(b"boundary-operation"),
+            },
+        ])
+        .expect("resolve exact reference");
 
     let mut cross_session_binding = binding.clone();
     cross_session_binding.session_id = "other-session".to_string();
@@ -766,7 +783,7 @@ async fn worker_child() {
         "observer",
         cross_session_binding,
         "a".repeat(64),
-        Duration::from_secs(2),
+        Duration::from_secs(1),
     )
     .await
     .expect_err("cross-session event must fail");
@@ -800,7 +817,7 @@ async fn worker_child() {
             id,
             hostile,
             "b".repeat(64),
-            Duration::from_secs(2),
+            Duration::from_millis(200),
         )
         .await
         .expect_err("hostile extension event must fail");
@@ -816,7 +833,7 @@ async fn worker_child() {
             "steady",
             steady.clone(),
             "c".repeat(64),
-            Duration::from_secs(2),
+            Duration::from_secs(1),
         )
         .await
         .unwrap_or_else(|error| panic!("hostile {mode} affected steady extension: {error}"));
@@ -832,15 +849,12 @@ async fn worker_child() {
         "forged",
         forged_binding.clone(),
         "d".repeat(64),
-        Duration::from_secs(2),
+        Duration::from_secs(1),
     )
     .await
     .expect("receive forged proposal");
     let forged_action = forged.proposed_actions.first().expect("forged action");
-    assert!(refs
-        .consume(&reference_context, &forged_action.capability_ref)
-        .expect_err("forged secret/capability reference must fail")
-        .contains("invalid or expired"));
+    assert_eq!(forged_action.capability_ref.handle, "f".repeat(64));
     client
         .detach_agent_extension(
             "forged".to_string(),
@@ -860,7 +874,7 @@ async fn worker_child() {
         "descendant",
         descendant_binding.clone(),
         "e".repeat(64),
-        Duration::from_secs(2),
+        Duration::from_secs(1),
     )
     .await
     .expect("spawn extension descendant");

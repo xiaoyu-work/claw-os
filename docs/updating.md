@@ -149,7 +149,7 @@ upgrade replaces the whole set. Agent tasks run in `claw-agentd` processes that
   against a half-upgraded pair. The broker additionally measures the installed
   worker and `claw-extension-host` binaries against the security floor before
   spawning them, so either component being replaced on disk is refused before
-  it becomes a process. Extension-host control protocol v7 binds
+  it becomes a process. Extension-host control protocol v8 binds
   owner-qualified package verification receipts into the private bootstrap and
   has its own monotonic floor alongside the worker and broker protocols.
 - If the worker binary is missing or the daemon is started with

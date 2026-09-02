@@ -89,6 +89,23 @@ impl ToolResult {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtensionProposalExecution {
+    Cooperative,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExtensionProposalPolicy {
+    pub policy_id: &'static str,
+    pub execution: ExtensionProposalExecution,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExtensionProposalPreparation {
+    pub canonical_input: serde_json::Value,
+    pub required_capability: crate::caps::Cap,
+}
+
 /// What a tool implementation must offer.
 #[async_trait]
 pub trait Tool: Send + Sync {
@@ -118,6 +135,24 @@ pub trait Tool: Send + Sync {
     /// both while projecting schemas and immediately before dispatch.
     fn is_available(&self) -> bool {
         true
+    }
+
+    /// Explicit opt-in for Agent-extension proposed actions.
+    ///
+    /// Default deny is intentional. Exposure, parallel safety, and ordinary
+    /// approval metadata do not establish that a tool is capability-complete,
+    /// cooperatively cancellable, or free of provider/prompt routing.
+    fn extension_proposal_policy(&self) -> Option<ExtensionProposalPolicy> {
+        None
+    }
+
+    /// Validate and normalize an extension-proposed input and derive the one
+    /// exact capability the operation requires.
+    fn prepare_extension_proposal(
+        &self,
+        _input: serde_json::Value,
+    ) -> Result<ExtensionProposalPreparation, String> {
+        Err("tool does not accept Agent-extension proposed actions".to_string())
     }
 
     /// Execute the tool. Errors should be returned via `ToolResult::err`,

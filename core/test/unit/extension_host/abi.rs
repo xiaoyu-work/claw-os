@@ -23,8 +23,8 @@ fn initialize() -> AbiRequest {
         binding: binding(),
         sequence: 0,
         message: HostMessage::Initialize {
-            min_version: 1,
-            max_version: 1,
+            min_version: ABI_VERSION,
+            max_version: ABI_VERSION,
             required_features: vec![FEATURE_OBSERVATIONAL_EVENTS.to_string()],
             subscriptions: vec![EventKind::SessionStart],
             requested_capability_count: 0,
@@ -49,8 +49,8 @@ fn protocol_downgrade_and_binding_substitution_fail_closed() {
     validate_ready(
         &request,
         &response,
-        1,
-        1,
+        ABI_VERSION,
+        ABI_VERSION,
         &[FEATURE_OBSERVATIONAL_EVENTS.to_string()],
     )
     .unwrap();
@@ -64,8 +64,8 @@ fn protocol_downgrade_and_binding_substitution_fail_closed() {
     assert!(validate_ready(
         &request,
         &response,
-        1,
-        1,
+        ABI_VERSION,
+        ABI_VERSION,
         &[FEATURE_OBSERVATIONAL_EVENTS.to_string()],
     )
     .unwrap_err()
@@ -79,9 +79,52 @@ fn protocol_downgrade_and_binding_substitution_fail_closed() {
     {
         *selected_version = ABI_VERSION;
     }
-    assert!(validate_ready(&request, &response, 1, 1, &[])
-        .unwrap_err()
-        .contains("binding"));
+    assert!(
+        validate_ready(&request, &response, ABI_VERSION, ABI_VERSION, &[])
+            .unwrap_err()
+            .contains("binding")
+    );
+}
+
+#[test]
+fn monotonic_deadline_round_trips_and_expires_without_wall_clock() {
+    let deadline = MonotonicDeadlineNs::after(Duration::from_millis(20)).unwrap();
+    let encoded = serde_json::to_string(&deadline).unwrap();
+    let decoded: MonotonicDeadlineNs = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(decoded, deadline);
+    assert!(decoded.remaining().is_ok());
+    std::thread::sleep(Duration::from_millis(25));
+    assert!(decoded.remaining().unwrap_err().contains("expired"));
+}
+
+#[test]
+fn model_attempt_events_carry_identity_usage_and_error_class_only() {
+    let pre = EventPayload::PreModelCall {
+        turn_index: 3,
+        attempt_id: "attempt-a".to_string(),
+        provider: "mock".to_string(),
+        model: "mock-model".to_string(),
+    };
+    let post = EventPayload::PostModelCall {
+        turn_index: 3,
+        attempt_id: "attempt-a".to_string(),
+        provider: "mock".to_string(),
+        model: "mock-model".to_string(),
+        success: false,
+        latency_ms: 12,
+        input_tokens: 4,
+        output_tokens: 0,
+        error_class: Some("rate_limited".to_string()),
+    };
+    let encoded = format!(
+        "{}{}",
+        serde_json::to_string(&pre).unwrap(),
+        serde_json::to_string(&post).unwrap()
+    );
+    assert!(encoded.contains("attempt-a"));
+    for forbidden in ["prompt", "messages", "reasoning", "credential", "secret"] {
+        assert!(!encoded.contains(forbidden), "{encoded}");
+    }
 }
 
 #[test]
@@ -142,7 +185,7 @@ fn result_limits_and_correlation_are_enforced() {
         sequence: 1,
         message: HostMessage::Event {
             event_id: event_id.to_string(),
-            deadline_ms: 1000,
+            deadline_monotonic_ns: MonotonicDeadlineNs::after(Duration::from_secs(1)).unwrap(),
             payload: EventPayload::SessionStart {
                 source: "broker-task".to_string(),
                 attended: false,

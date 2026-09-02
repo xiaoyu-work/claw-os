@@ -5,7 +5,7 @@ use crate::agent::tools::mcp::integration::McpServerSpec;
 use crate::agent::tools::mcp::protocol::{CallToolResult, ToolDescriptor};
 use crate::clawd::wire::RequestId;
 
-pub const PROTOCOL_VERSION: u32 = 7;
+pub const PROTOCOL_VERSION: u32 = 8;
 pub const MAX_CONTROL_FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_CONTROL_CONNECTIONS: usize = 8;
 pub const MAX_REQUEST_TIMEOUT_MS: u64 = 180_000;
@@ -553,6 +553,7 @@ pub enum HostAction {
         extension_id: String,
         binding: super::abi::AbiBinding,
         event_id: String,
+        deadline_monotonic_ns: super::abi::MonotonicDeadlineNs,
         payload: super::abi::EventPayload,
         capability_refs: Vec<crate::agent_extensions::capability_ref::CapabilityReference>,
     },

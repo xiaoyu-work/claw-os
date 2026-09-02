@@ -7,7 +7,10 @@
 use async_trait::async_trait;
 use serde_json::json;
 
-use super::{Tool, ToolResult};
+use super::{
+    ExtensionProposalExecution, ExtensionProposalPolicy, ExtensionProposalPreparation, Tool,
+    ToolResult,
+};
 
 /// `echo` — return the input text unchanged. Useful for tool-loop sanity tests.
 pub struct Echo;
@@ -67,6 +70,32 @@ impl Tool for Now {
             "type": "object",
             "properties": {},
             "additionalProperties": false
+        })
+    }
+
+    fn extension_proposal_policy(&self) -> Option<ExtensionProposalPolicy> {
+        Some(ExtensionProposalPolicy {
+            policy_id: "builtin.now/v1",
+            execution: ExtensionProposalExecution::Cooperative,
+        })
+    }
+
+    fn prepare_extension_proposal(
+        &self,
+        input: serde_json::Value,
+    ) -> Result<ExtensionProposalPreparation, String> {
+        let object = input
+            .as_object()
+            .ok_or_else(|| "now input must be an object".to_string())?;
+        if !object.is_empty() {
+            return Err("now input does not accept fields".to_string());
+        }
+        Ok(ExtensionProposalPreparation {
+            canonical_input: serde_json::json!({}),
+            required_capability: crate::caps::Cap::new(
+                crate::caps::Verb::SYS_OBSERVE,
+                crate::caps::Scope::name("time"),
+            ),
         })
     }
 

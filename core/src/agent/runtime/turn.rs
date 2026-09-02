@@ -302,7 +302,9 @@ async fn run_turn_inner(request: TurnRequest<'_>) -> Result<TurnReport, super::l
         temperature: Some(temperature),
         top_p: None,
         stop_sequences: vec![],
-        extra: serde_json::Value::Null,
+        extra: serde_json::json!({
+            "_cos_turn_index": hook_ctx.map(|context| context.turn_index).unwrap_or(0),
+        }),
     };
 
     // Prompt-cache markers are no-ops for providers that don't support

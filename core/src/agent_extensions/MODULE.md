@@ -11,11 +11,16 @@ authorization-policy access.
 - Parse and validate the authenticated `extension.json` schema.
 - Load selected ids only through `crate::provenance::verify`.
 - Quarantine package/manifest failures with actionable diagnostics.
-- Publish bounded least-privilege runtime observations through per-extension
-  queues.
-- Mint event/session/package-bound opaque capability references.
-- Route proposed actions through `ToolRegistry`, an attenuating capability
-  ceiling, approvals, exact provider enforcement, and audit.
+- Publish bounded least-privilege runtime observations through one ordered
+  per-extension FIFO with a reserved terminal slot.
+- Emit model observations at the real provider-attempt boundary with paired
+  attempt ids.
+- Mint per-extension event/session/package/tool/policy-bound opaque capability
+  references under one monotonic deadline and consume result batches
+  atomically.
+- Route only explicitly cooperative, default-deny proposed tools through exact
+  input-derived capability enforcement, approvals, provider enforcement, and
+  audit.
 - Never inject extension output into canonical prompts or conversation
   history.
 
@@ -23,10 +28,10 @@ authorization-policy access.
 
 | Path | Role |
 | --- | --- |
-| `manifest.rs` | Identity/version/content binding, subscriptions, requested capabilities, protocol/features, limits |
+| `manifest.rs` | Identity/version/content binding, subscriptions, requested capabilities, action policies, protocol/features, limits |
 | `registry.rs` | Explicit installed-package selection and activation quarantine |
-| `capability_ref.rs` | 256-bit one-use capability-reference store |
-| `runtime.rs` | Observation hook, per-extension backpressure, lifecycle, and action mediation |
+| `capability_ref.rs` | Per-extension 256-bit one-use reference leases and atomic result consumption |
+| `runtime.rs` | Attempt/tool observation, ordered backpressure/lifecycle, and default-deny action mediation |
 | `../extension_host/abi.rs` | Framed child protocol |
 | `../extension_host/agent_extension.rs` | Host-side process and cleanup |
 | `../provenance/` | Shared `VerifiedPackage` authentication and pinned package snapshots |

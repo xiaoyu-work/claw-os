@@ -5,46 +5,77 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, OwnedSemaphorePermit, Semaphore};
 
 use crate::agent::runtime::hooks::{
-    Hook, HookContext, HookOutcome, ToolDecision, ToolResultSummary, TurnSummary,
+    Hook, HookContext, HookOutcome, ToolDecision, ToolResultSummary,
 };
 use crate::agent::tools::exposure::ToolExposureContext;
 use crate::agent::tools::registry::ToolRegistry;
-use crate::caps::CapSet;
-use crate::extension_host::abi::{EventPayload, ShutdownReason};
+use crate::extension_host::abi::{EventPayload, MonotonicDeadlineNs, ShutdownReason};
 use crate::extension_host::client::ExtensionHostClient;
 use crate::extension_host::protocol::{
     AgentExtensionAudit, AgentExtensionRegistration, LifecycleAction,
 };
 
-use super::capability_ref::{CapabilityReferenceStore, ReferenceContext};
+use super::capability_ref::{ActionReferenceBinding, CapabilityReferenceStore, ReferenceContext};
 use super::manifest::{EventKind, ExtensionManifest};
 use super::registry::{installed_root, ExtensionRegistry, RegisteredExtension};
 
 const DISABLE_AFTER_DROPS: usize = 8;
 const ACTION_TIMEOUT: Duration = Duration::from_secs(30);
 const TRUST_RECHECK_INTERVAL: Duration = Duration::from_secs(5);
+const FINISH_TIMEOUT: Duration = Duration::from_secs(8);
+const FINISH_DRAIN_TIMEOUT: Duration = Duration::from_secs(6);
+
+struct AbortOnDrop(Option<tokio::task::AbortHandle>);
+
+impl AbortOnDrop {
+    fn new(handle: tokio::task::AbortHandle) -> Self {
+        Self(Some(handle))
+    }
+
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        if let Some(handle) = self.0.take() {
+            handle.abort();
+        }
+    }
+}
 
 pub struct ExtensionRuntime {
     hook_name: Option<String>,
     hooks: Option<crate::agent::runtime::hooks::HookRegistry>,
     controls: Vec<ExtensionControl>,
+    attempt_observer: Arc<dyn crate::agent::llm::attempt_observer::ProviderAttemptObserver>,
 }
 
 struct ExtensionControl {
-    control: mpsc::Sender<Control>,
+    sender: mpsc::Sender<ExtensionWork>,
     worker: tokio::task::JoinHandle<()>,
-    timeout: Duration,
+    client: Arc<ExtensionHostClient>,
+    binding: crate::extension_host::abi::AbiBinding,
+    id: String,
+    manifest_digest: String,
+    package_digest: String,
+    capability_generation: String,
+    completion_subscribed: bool,
+    terminal: Arc<AtomicBool>,
 }
 
-enum Control {
-    Completion {
+enum ExtensionWork {
+    Event {
         payload: EventPayload,
-        done: oneshot::Sender<()>,
+        _permit: OwnedSemaphorePermit,
     },
-    Shutdown {
+    Finish {
+        completion: Option<EventPayload>,
+        reason: ShutdownReason,
         done: oneshot::Sender<()>,
     },
 }
@@ -56,10 +87,11 @@ struct ExtensionSink {
     package_digest: String,
     capability_generation: String,
     subscriptions: BTreeSet<EventKind>,
-    sender: mpsc::Sender<EventPayload>,
+    sender: mpsc::Sender<ExtensionWork>,
+    event_slots: Arc<Semaphore>,
     client: Arc<ExtensionHostClient>,
-    binding: crate::extension_host::abi::AbiBinding,
     disabled: Arc<AtomicBool>,
+    terminal: Arc<AtomicBool>,
     consecutive_drops: Arc<AtomicUsize>,
 }
 
@@ -80,6 +112,9 @@ impl ExtensionRuntime {
                 hook_name: None,
                 hooks: None,
                 controls: Vec::new(),
+                attempt_observer: Arc::new(
+                    crate::agent::llm::attempt_observer::NoopProviderAttemptObserver,
+                ),
             };
         }
         let Some(client) = crate::extension_host::client::current() else {
@@ -90,6 +125,9 @@ impl ExtensionRuntime {
                 hook_name: None,
                 hooks: None,
                 controls: Vec::new(),
+                attempt_observer: Arc::new(
+                    crate::agent::llm::attempt_observer::NoopProviderAttemptObserver,
+                ),
             };
         };
         let registry = ExtensionRegistry::load_selected(&installed_root(), configured);
@@ -101,19 +139,10 @@ impl ExtensionRuntime {
             );
         }
 
-        let refs = Arc::new(CapabilityReferenceStore::default());
         let mut sinks = Vec::new();
         let mut controls = Vec::new();
         for extension in registry.registered.into_values() {
-            match activate_one(
-                extension,
-                exposure,
-                tools.clone(),
-                client.clone(),
-                refs.clone(),
-            )
-            .await
-            {
+            match activate_one(extension, exposure, tools.clone(), client.clone()).await {
                 Ok((sink, control)) => {
                     exposure.enable_extension(sink.id.clone());
                     sinks.push(sink);
@@ -129,6 +158,9 @@ impl ExtensionRuntime {
                 hook_name: None,
                 hooks: None,
                 controls,
+                attempt_observer: Arc::new(
+                    crate::agent::llm::attempt_observer::NoopProviderAttemptObserver,
+                ),
             };
         }
         let hook_name = format!("agent-extension-observer-{}", uuid::Uuid::new_v4().simple());
@@ -146,7 +178,14 @@ impl ExtensionRuntime {
             hook_name: Some(hook_name),
             hooks: Some(hooks),
             controls,
+            attempt_observer: observer,
         }
+    }
+
+    pub fn attempt_observer(
+        &self,
+    ) -> Arc<dyn crate::agent::llm::attempt_observer::ProviderAttemptObserver> {
+        Arc::clone(&self.attempt_observer)
     }
 
     pub async fn finish(
@@ -169,37 +208,68 @@ impl ExtensionRuntime {
             answer_digest: crate::crypto::sha256_hex(answer.as_bytes()),
             error: crate::audit_policy::optional_text_digest(error),
         };
+        let started = tokio::time::Instant::now();
+        let drain_deadline = started + FINISH_DRAIN_TIMEOUT;
+        let deadline = started + FINISH_TIMEOUT;
+        let mut pending = Vec::new();
         for control in &self.controls {
+            if control.terminal.swap(true, Ordering::AcqRel) {
+                continue;
+            }
             let (done_tx, done_rx) = oneshot::channel();
             if control
-                .control
-                .send(Control::Completion {
-                    payload: payload.clone(),
+                .sender
+                .try_send(ExtensionWork::Finish {
+                    completion: control.completion_subscribed.then(|| payload.clone()),
+                    reason: ShutdownReason::TaskComplete,
                     done: done_tx,
                 })
-                .await
                 .is_ok()
             {
-                let _ =
-                    tokio::time::timeout(control.timeout + Duration::from_secs(2), done_rx).await;
+                pending.push(done_rx);
             }
         }
+        for done in pending {
+            let _ = tokio::time::timeout_at(drain_deadline, done).await;
+        }
+        let mut forced_detaches = Vec::new();
         for control in self.controls.drain(..) {
-            let (done_tx, done_rx) = oneshot::channel();
-            let _ = control
-                .control
-                .send(Control::Shutdown { done: done_tx })
-                .await;
-            let _ = tokio::time::timeout(Duration::from_secs(4), done_rx).await;
             let mut worker = control.worker;
-            if tokio::time::timeout(Duration::from_secs(1), &mut worker)
+            if tokio::time::timeout_at(drain_deadline, &mut worker)
                 .await
                 .is_err()
             {
                 worker.abort();
-                tracing::warn!("Agent extension worker did not stop before task teardown");
+                control.client.emit_agent_extension(
+                    LifecycleAction::Shutdown,
+                    &control.id,
+                    &control.manifest_digest,
+                    audit_metadata(
+                        &control.package_digest,
+                        &control.capability_generation,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    ),
+                    false,
+                    Duration::ZERO,
+                    Some("extension worker exceeded the finish drain deadline"),
+                );
+                forced_detaches.push((control.client, control.id, control.binding));
             }
         }
+        let detach_all = futures_util::future::join_all(forced_detaches.into_iter().map(
+            |(client, id, binding)| async move {
+                client
+                    .detach_agent_extension(id, binding, ShutdownReason::Disabled)
+                    .await
+            },
+        ));
+        let _ = tokio::time::timeout_at(deadline, detach_all).await;
     }
 }
 
@@ -208,7 +278,6 @@ async fn activate_one(
     exposure: &ToolExposureContext,
     tools: Arc<ToolRegistry>,
     client: Arc<ExtensionHostClient>,
-    refs: Arc<CapabilityReferenceStore>,
 ) -> Result<(ExtensionSink, ExtensionControl), String> {
     let RegisteredExtension {
         manifest,
@@ -216,6 +285,9 @@ async fn activate_one(
         package,
     } = extension;
     assert_package_current(&package)?;
+    for policy in &manifest.action_policies {
+        tools.validate_extension_action_policy(&policy.tool, &policy.policy_id)?;
+    }
     let registration = AgentExtensionRegistration {
         extension_id: manifest.identity.id.clone(),
         extension_version: manifest.identity.version.clone(),
@@ -255,42 +327,57 @@ async fn activate_one(
         started.elapsed(),
         None,
     );
-    let (sender, receiver) = mpsc::channel(manifest.limits.queue_capacity);
-    let (control_tx, control_rx) = mpsc::channel(1);
+    let (sender, receiver) = mpsc::channel(manifest.limits.queue_capacity + 1);
+    let event_slots = Arc::new(Semaphore::new(manifest.limits.queue_capacity));
+    let refs = Arc::new(CapabilityReferenceStore::new(
+        manifest.action_policies.len(),
+    ));
     let disabled = Arc::new(AtomicBool::new(false));
+    let terminal = Arc::new(AtomicBool::new(false));
     let sink = ExtensionSink {
         id: manifest.identity.id.clone(),
         manifest_digest: manifest_digest.clone(),
         package_digest: package.content_digest().to_string(),
         capability_generation: exposure.capability_generation().to_string(),
         subscriptions: manifest.subscriptions.iter().copied().collect(),
-        sender,
+        sender: sender.clone(),
+        event_slots,
         client: client.clone(),
-        binding: binding.clone(),
         disabled: disabled.clone(),
+        terminal: terminal.clone(),
         consecutive_drops: Arc::new(AtomicUsize::new(0)),
     };
-    let timeout = Duration::from_millis(manifest.limits.event_timeout_ms);
+    let completion_subscribed = manifest.subscriptions.contains(&EventKind::Completion);
+    let id = manifest.identity.id.clone();
+    let control_manifest_digest = manifest_digest.clone();
+    let control_package_digest = package.content_digest().to_string();
+    let capability_generation = exposure.capability_generation().to_string();
     let worker = tokio::spawn(run_extension(
         manifest,
         manifest_digest,
         package.content_digest().to_string(),
         package,
-        binding,
+        binding.clone(),
         exposure.clone(),
         tools,
-        client,
+        client.clone(),
         refs,
         disabled,
         receiver,
-        control_rx,
     ));
     Ok((
         sink,
         ExtensionControl {
-            control: control_tx,
+            sender,
             worker,
-            timeout,
+            client,
+            binding,
+            id,
+            manifest_digest: control_manifest_digest,
+            package_digest: control_package_digest,
+            capability_generation,
+            completion_subscribed,
+            terminal,
         },
     ))
 }
@@ -307,16 +394,17 @@ async fn run_extension(
     client: Arc<ExtensionHostClient>,
     refs: Arc<CapabilityReferenceStore>,
     disabled: Arc<AtomicBool>,
-    mut events: mpsc::Receiver<EventPayload>,
-    mut controls: mpsc::Receiver<Control>,
+    mut work: mpsc::Receiver<ExtensionWork>,
 ) {
     let mut trust_check = tokio::time::interval(TRUST_RECHECK_INTERVAL);
     loop {
         tokio::select! {
-            biased;
-            control = controls.recv() => match control {
-                Some(Control::Completion { payload, done }) => {
-                    if !disabled.load(Ordering::Acquire) {
+            item = work.recv() => {
+                match item {
+                    Some(ExtensionWork::Event { payload, .. }) => {
+                        if disabled.load(Ordering::Acquire) {
+                            continue;
+                        }
                         if let Err(error) = process_event(
                             &manifest, &manifest_digest, &package_digest, &package, &binding,
                             &exposure, &tools, &client, &refs, &disabled, payload,
@@ -325,47 +413,62 @@ async fn run_extension(
                                 &manifest, &manifest_digest, &package_digest, &binding,
                                 &exposure, &client, &disabled, &error,
                             ).await;
+                            break;
                         }
                     }
-                    let _ = done.send(());
-                }
-                Some(Control::Shutdown { done }) => {
-                    let _ = client.detach_agent_extension(
-                        manifest.identity.id.clone(),
-                        binding.clone(),
-                        ShutdownReason::TaskComplete,
-                    ).await;
-                    client.emit_agent_extension(
-                        LifecycleAction::Shutdown,
-                        &manifest.identity.id,
-                        &manifest_digest,
-                        audit_metadata(
-                            &package_digest,
-                            exposure.capability_generation(),
-                            None, None, None, None, None, None, None,
-                        ),
-                        true,
-                        Duration::ZERO,
-                        None,
-                    );
-                    let _ = done.send(());
-                    break;
-                }
-                None => break,
-            },
-            event = events.recv() => {
-                let Some(event) = event else { break; };
-                if disabled.load(Ordering::Acquire) {
-                    continue;
-                }
-                if let Err(error) = process_event(
-                    &manifest, &manifest_digest, &package_digest, &package, &binding,
-                    &exposure, &tools, &client, &refs, &disabled, event,
-                ).await {
-                    disable_extension(
-                        &manifest, &manifest_digest, &package_digest, &binding,
-                        &exposure, &client, &disabled, &error,
-                    ).await;
+                    Some(ExtensionWork::Finish { completion, reason, done }) => {
+                        if let Some(payload) = completion {
+                            if !disabled.load(Ordering::Acquire) {
+                                if let Err(error) = process_event(
+                                    &manifest, &manifest_digest, &package_digest, &package, &binding,
+                                    &exposure, &tools, &client, &refs, &disabled, payload,
+                                ).await {
+                                    disabled.store(true, Ordering::Release);
+                                    client.emit_agent_extension(
+                                        LifecycleAction::Disable,
+                                        &manifest.identity.id,
+                                        &manifest_digest,
+                                        audit_metadata(
+                                            &package_digest,
+                                            exposure.capability_generation(),
+                                            None, None, None, None, None, None, None,
+                                        ),
+                                        false,
+                                        Duration::ZERO,
+                                        Some(&error),
+                                    );
+                                }
+                            }
+                        }
+                        let detached = tokio::time::timeout(
+                            Duration::from_secs(4),
+                            client.detach_agent_extension(
+                                manifest.identity.id.clone(),
+                                binding.clone(),
+                                reason,
+                            ),
+                        ).await;
+                        client.emit_agent_extension(
+                            LifecycleAction::Shutdown,
+                            &manifest.identity.id,
+                            &manifest_digest,
+                            audit_metadata(
+                                &package_digest,
+                                exposure.capability_generation(),
+                                None, None, None, None, None, None, None,
+                            ),
+                            matches!(detached, Ok(Ok(_))),
+                            Duration::ZERO,
+                            match &detached {
+                                Ok(Err(error)) => Some(error.as_str()),
+                                Err(_) => Some("extension detach exceeded its deadline"),
+                                _ => None,
+                            },
+                        );
+                        let _ = done.send(());
+                        break;
+                    }
+                    None => break,
                 }
             },
             _ = trust_check.tick() => {
@@ -375,6 +478,7 @@ async fn run_extension(
                             &manifest, &manifest_digest, &package_digest, &binding,
                             &exposure, &client, &disabled, &error,
                         ).await;
+                        break;
                     }
                 }
             }
@@ -438,14 +542,14 @@ async fn process_event(
     exposure: &ToolExposureContext,
     tools: &ToolRegistry,
     client: &ExtensionHostClient,
-    refs: &CapabilityReferenceStore,
+    refs: &Arc<CapabilityReferenceStore>,
     disabled: &AtomicBool,
     payload: EventPayload,
 ) -> Result<(), String> {
     assert_package_current(package)?;
     let event_id = uuid::Uuid::new_v4().simple().to_string();
     let timeout = Duration::from_millis(manifest.limits.event_timeout_ms);
-    let expires_at_ms = now_ms().saturating_add(manifest.limits.event_timeout_ms);
+    let deadline = MonotonicDeadlineNs::after(timeout)?;
     let reference_context = ReferenceContext {
         owner_uid: exposure.owner_uid(),
         session_id: exposure.authority_session_id(),
@@ -454,9 +558,13 @@ async fn process_event(
         manifest_digest,
         capability_generation: exposure.capability_generation(),
         event_id: &event_id,
-        expires_at_ms,
+        deadline,
     };
-    let capability_refs = refs.issue(&reference_context, &manifest.requested_capabilities)?;
+    let reference_lease = refs.issue_event(
+        &reference_context,
+        &manifest.requested_capabilities,
+        &manifest.action_policies,
+    )?;
     let kind = payload.kind();
     let started = Instant::now();
     client.emit_agent_extension(
@@ -483,11 +591,63 @@ async fn process_event(
             manifest.identity.id.clone(),
             binding.clone(),
             event_id.clone(),
+            deadline,
             payload,
-            capability_refs,
-            timeout,
+            reference_lease.references().to_vec(),
         )
         .await?;
+    deadline.remaining()?;
+    let mut prepared_actions = Vec::with_capacity(result.proposed_actions.len());
+    let mut reference_bindings = Vec::with_capacity(result.proposed_actions.len());
+    for action in &result.proposed_actions {
+        let policy = manifest
+            .action_policies
+            .iter()
+            .find(|policy| {
+                policy.requested_index == action.capability_ref.requested_index
+                    && policy.tool == action.tool
+            })
+            .ok_or_else(|| "extension action was not declared in the manifest".to_string())?;
+        let expected_capability = manifest
+            .requested_capabilities
+            .get(policy.requested_index)
+            .ok_or_else(|| "extension action named an unknown capability index".to_string())?;
+        let ceiling = crate::caps::CapSet::from_caps([expected_capability.clone()]);
+        let action_exposure = exposure.attenuated_for_extension(&manifest.identity.id, &ceiling);
+        let call = crate::agent::llm::ToolCall {
+            id: action.action_id.clone(),
+            name: action.tool.clone(),
+            input: action.input.clone(),
+        };
+        let mut normalized = action.clone();
+        normalized.input = crate::agent::runtime::turn::effective_tool_input(
+            &call,
+            exposure.conversation_session_id(),
+            &action_exposure,
+        );
+        let prepared = tools.prepare_extension_proposal(
+            &action_exposure,
+            &manifest.identity.id,
+            package_digest,
+            manifest_digest,
+            &event_id,
+            &normalized,
+            &policy.policy_id,
+            expected_capability,
+        )?;
+        let binding = prepared.binding();
+        reference_bindings.push(ActionReferenceBinding {
+            reference: action.capability_ref.clone(),
+            action_id: binding.action_id.clone(),
+            tool: binding.tool.clone(),
+            policy_id: binding.policy_id.clone(),
+            input_digest: binding.input_digest.clone(),
+            capability: binding.capability.clone(),
+            operation_digest: binding.operation_digest.clone(),
+        });
+        prepared_actions.push((prepared, binding, action.capability_ref.handle.clone()));
+    }
+    reference_lease.consume_all(&reference_bindings)?;
     client.emit_agent_extension(
         LifecycleAction::Result,
         &manifest.identity.id,
@@ -510,50 +670,44 @@ async fn process_event(
     if disabled.load(Ordering::Acquire) {
         return Ok(());
     }
-    for action in result.proposed_actions {
+    for (prepared, action, capability_ref) in prepared_actions {
         assert_package_current(package)?;
-        let requested = manifest
-            .requested_capabilities
-            .get(action.capability_ref.requested_index)
-            .ok_or_else(|| "extension action named an unknown capability index".to_string())?;
-        let cap = refs.consume(&reference_context, &action.capability_ref)?;
-        if &cap != requested {
-            return Err(
-                "extension action capability reference did not match its index".to_string(),
-            );
-        }
-        let ceiling = CapSet::from_caps([cap]);
+        let ceiling = crate::caps::CapSet::from_caps([action.capability.clone()]);
         let action_exposure = exposure.attenuated_for_extension(&manifest.identity.id, &ceiling);
-        let call = crate::agent::llm::ToolCall {
-            id: action.action_id.clone(),
-            name: action.tool.clone(),
-            input: action.input,
-        };
-        let input = crate::agent::runtime::turn::effective_tool_input(
-            &call,
-            exposure.conversation_session_id(),
-            &action_exposure,
-        );
         let started = Instant::now();
-        let result = match tokio::time::timeout(
-            ACTION_TIMEOUT,
-            crate::caps::enforcement::with_capability_ceiling(
-                ceiling,
-                tools.execute(
-                    &action_exposure,
-                    &call.name,
-                    input,
-                    "policy: Agent extension proposed action",
-                ),
-            ),
-        )
-        .await
-        {
-            Ok(result) => result,
-            Err(_) => crate::agent::tools::ToolResult::err(format!(
-                "Agent extension proposed action timed out after {}s",
-                ACTION_TIMEOUT.as_secs()
-            )),
+        let approval = tools.approval().clone();
+        let mut task = tokio::spawn(prepared.execute(
+            action_exposure,
+            approval,
+            "policy: Agent extension proposed action",
+        ));
+        let mut abort_on_drop = AbortOnDrop::new(task.abort_handle());
+        let action_deadline = tokio::time::Instant::now() + ACTION_TIMEOUT;
+        let result = loop {
+            tokio::select! {
+                result = &mut task => {
+                    abort_on_drop.disarm();
+                    break match result {
+                        Ok(result) => result,
+                        Err(error) => crate::agent::tools::ToolResult::err(format!(
+                            "Agent extension proposed action task failed: {error}"
+                        )),
+                    };
+                }
+                _ = tokio::time::sleep_until(action_deadline) => {
+                    task.abort();
+                    break crate::agent::tools::ToolResult::err(format!(
+                        "Agent extension proposed action timed out after {}s",
+                        ACTION_TIMEOUT.as_secs()
+                    ));
+                }
+                _ = tokio::time::sleep(TRUST_RECHECK_INTERVAL) => {
+                    if let Err(error) = assert_package_current(package) {
+                        task.abort();
+                        break crate::agent::tools::ToolResult::err(error);
+                    }
+                }
+            }
         };
         client.emit_agent_extension(
             LifecycleAction::Action,
@@ -565,9 +719,9 @@ async fn process_event(
                 Some(kind),
                 Some(&event_id),
                 Some(&result.content),
-                Some(&call.id),
-                Some(&call.name),
-                Some(&action.capability_ref.handle),
+                Some(&action.action_id),
+                Some(&action.tool),
+                Some(&capability_ref),
                 None,
             ),
             !result.is_error,
@@ -588,10 +742,23 @@ impl ExtensionObserver {
 
 impl ExtensionSink {
     fn publish(&self, payload: EventPayload) {
-        if self.disabled.load(Ordering::Acquire) || !self.subscriptions.contains(&payload.kind()) {
+        if self.disabled.load(Ordering::Acquire)
+            || self.terminal.load(Ordering::Acquire)
+            || !self.subscriptions.contains(&payload.kind())
+        {
             return;
         }
-        match self.sender.try_send(payload) {
+        let permit = match self.event_slots.clone().try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(_) => {
+                self.record_backpressure_drop();
+                return;
+            }
+        };
+        match self.sender.try_send(ExtensionWork::Event {
+            payload,
+            _permit: permit,
+        }) {
             Ok(()) => {
                 self.consecutive_drops.store(0, Ordering::Release);
             }
@@ -599,58 +766,60 @@ impl ExtensionSink {
                 self.disabled.store(true, Ordering::Release);
             }
             Err(mpsc::error::TrySendError::Full(_)) => {
-                let queue_depth = self.sender.max_capacity() - self.sender.capacity();
-                self.client.emit_agent_extension(
-                    LifecycleAction::BackpressureDrop,
-                    &self.id,
-                    &self.manifest_digest,
-                    audit_metadata(
-                        &self.package_digest,
-                        &self.capability_generation,
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        Some(queue_depth),
-                    ),
-                    false,
-                    Duration::ZERO,
-                    Some("extension event queue is full"),
-                );
-                if register_backpressure_drop(&self.consecutive_drops, &self.disabled) {
-                    self.client.emit_agent_extension(
-                        LifecycleAction::Disable,
-                        &self.id,
-                        &self.manifest_digest,
-                        audit_metadata(
-                            &self.package_digest,
-                            &self.capability_generation,
-                            None,
-                            None,
-                            None,
-                            None,
-                            None,
-                            None,
-                            Some(queue_depth),
-                        ),
-                        false,
-                        Duration::ZERO,
-                        Some("extension disabled after repeated backpressure"),
-                    );
-                    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                        let client = self.client.clone();
-                        let id = self.id.clone();
-                        let binding = self.binding.clone();
-                        handle.spawn(async move {
-                            let _ = client
-                                .detach_agent_extension(id, binding, ShutdownReason::Disabled)
-                                .await;
-                        });
-                    }
-                }
+                self.record_backpressure_drop();
             }
+        }
+    }
+
+    fn record_backpressure_drop(&self) {
+        let queue_depth = self.sender.max_capacity() - self.sender.capacity();
+        self.client.emit_agent_extension(
+            LifecycleAction::BackpressureDrop,
+            &self.id,
+            &self.manifest_digest,
+            audit_metadata(
+                &self.package_digest,
+                &self.capability_generation,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(queue_depth),
+            ),
+            false,
+            Duration::ZERO,
+            Some("extension event queue is full"),
+        );
+        if register_backpressure_drop(&self.consecutive_drops, &self.disabled)
+            && !self.terminal.swap(true, Ordering::AcqRel)
+        {
+            self.client.emit_agent_extension(
+                LifecycleAction::Disable,
+                &self.id,
+                &self.manifest_digest,
+                audit_metadata(
+                    &self.package_digest,
+                    &self.capability_generation,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(queue_depth),
+                ),
+                false,
+                Duration::ZERO,
+                Some("extension disabled after repeated backpressure"),
+            );
+            let (done, _ignored) = oneshot::channel();
+            let _ = self.sender.try_send(ExtensionWork::Finish {
+                completion: None,
+                reason: ShutdownReason::Disabled,
+                done,
+            });
         }
     }
 }
@@ -658,27 +827,6 @@ impl ExtensionSink {
 impl Hook for ExtensionObserver {
     fn name(&self) -> &str {
         &self.name
-    }
-
-    fn pre_turn(&self, ctx: &HookContext) -> HookOutcome {
-        self.publish(EventPayload::PreModelCall {
-            turn_index: ctx.turn_index,
-            provider: ctx.provider.clone(),
-            model: ctx.model.clone(),
-        });
-        HookOutcome::Continue
-    }
-
-    fn post_turn(&self, ctx: &HookContext, summary: &TurnSummary) -> HookOutcome {
-        self.publish(EventPayload::PostModelCall {
-            turn_index: ctx.turn_index,
-            success: summary.success,
-            latency_ms: summary.latency_ms,
-            input_tokens: summary.input_tokens,
-            output_tokens: summary.output_tokens,
-            error: crate::audit_policy::optional_text_digest(summary.error.as_deref()),
-        });
-        HookOutcome::Continue
     }
 
     fn pre_tool(&self, ctx: &HookContext, tool_call: &crate::agent::llm::ToolCall) -> ToolDecision {
@@ -713,6 +861,42 @@ impl Hook for ExtensionObserver {
     }
 }
 
+impl crate::agent::llm::attempt_observer::ProviderAttemptObserver for ExtensionObserver {
+    fn observe_switch(&self, _record: &crate::agent::llm::provider_chain::ProviderSwitch) {}
+
+    fn observe_start(&self, record: &crate::agent::llm::attempt_observer::ProviderAttemptStart) {
+        self.publish(EventPayload::PreModelCall {
+            turn_index: record.turn_index,
+            attempt_id: record.attempt_id.clone(),
+            provider: record.provider.clone(),
+            model: record.model.clone(),
+        });
+    }
+
+    fn observe_finish(&self, record: &crate::agent::llm::attempt_observer::ProviderAttemptFinish) {
+        let (success, error_class) = match record.outcome {
+            crate::agent::llm::attempt_observer::ProviderAttemptOutcome::Success => (true, None),
+            crate::agent::llm::attempt_observer::ProviderAttemptOutcome::Error(class) => {
+                (false, Some(class.to_string()))
+            }
+            crate::agent::llm::attempt_observer::ProviderAttemptOutcome::Cancelled => {
+                (false, Some("cancelled".to_string()))
+            }
+        };
+        self.publish(EventPayload::PostModelCall {
+            turn_index: record.start.turn_index,
+            attempt_id: record.start.attempt_id.clone(),
+            provider: record.start.provider.clone(),
+            model: record.start.model.clone(),
+            success,
+            latency_ms: record.latency_ms,
+            input_tokens: record.usage.input_tokens,
+            output_tokens: record.usage.output_tokens,
+            error_class,
+        });
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn audit_metadata(
     package_digest: &str,
@@ -736,13 +920,6 @@ fn audit_metadata(
         capability_ref: capability_ref.map(crate::audit_policy::text_digest),
         queue_depth,
     }
-}
-
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 fn register_backpressure_drop(drops: &AtomicUsize, disabled: &AtomicBool) -> bool {

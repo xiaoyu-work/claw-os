@@ -39,8 +39,8 @@ The manifest schema is:
   },
   "entry": "bin/observer",
   "protocol": {
-    "min_version": 1,
-    "max_version": 1,
+    "min_version": 2,
+    "max_version": 2,
     "required_features": [
       "observational-events",
       "proposed-actions"
@@ -56,8 +56,15 @@ The manifest schema is:
   ],
   "requested_capabilities": [
     {
-      "verb": "ui.notify",
-      "scope": { "kind": "wild" }
+      "verb": "sys.observe",
+      "scope": { "kind": "name", "value": "time" }
+    }
+  ],
+  "action_policies": [
+    {
+      "requested_index": 0,
+      "tool": "now",
+      "policy_id": "builtin.now/v1"
     }
   ],
   "limits": {
@@ -74,7 +81,7 @@ Identity and version must match the authenticated `.provenance.json` envelope
 (or the root-owned vendor package metadata). The content digest covers all
 verified payload files except `extension.json`, avoiding a self-referential
 digest while still binding the executable and assets. The entry is a signed
-executable file. ABI v1 permits 50–5000 ms event deadlines, 1–32 queued events,
+executable file. ABI v2 permits 50–5000 ms event deadlines, 1–32 queued events,
 1–8192 bytes of output, at most four proposed actions, and exactly one
 in-flight event per extension.
 
@@ -136,7 +143,7 @@ extension cannot select below the manifest minimum, above either maximum, or a
 version other than the host's current ABI. There is no legacy parse or
 downgrade fallback.
 
-Current ABI version: **1**.
+Current ABI version: **2**.
 
 Compatibility policy:
 
@@ -153,26 +160,33 @@ Compatibility policy:
 
 ## Observational events
 
-Events never block or mutate the canonical model/tool path. Runtime hooks use
-bounded `try_send`; each extension has its own queue and worker. A full queue
-drops that extension's event and emits an audit record. Eight consecutive
-drops disable and detach only that extension. A crash, hang, malformed result,
-or limit violation has the same per-extension failure scope. The broker,
-another extension, and another session continue.
+Events never block or mutate the canonical model/tool path. Each extension has
+one ordered queue, its own worker, and event-slot accounting that reserves a
+terminal slot. Runtime observers use bounded `try_send`; a full queue drops
+that extension's event and emits an audit record. Eight consecutive drops
+enqueue a terminal disable behind already accepted events. Completion uses the
+same FIFO, is sent only when subscribed, and cannot overtake an earlier event.
+Task finish, completion acknowledgement, detach, worker abort, and forced
+cleanup share one total deadline. A crash, hang, malformed result, or limit
+violation has the same per-extension failure scope. The broker, another
+extension, and another session continue.
 
 Event projections are least-privilege:
 
 | Event | Projection |
 | --- | --- |
 | `session-start` | trusted source class, attended/delegated booleans |
-| `pre-model-call` | turn index and provider/model identities |
-| `post-model-call` | success, latency, token counts, error digest |
+| `pre-model-call` | turn index, attempt id, and provider/model identities |
+| `post-model-call` | matching attempt id, provider/model, model-only latency, token counts, stable error class |
 | `pre-tool` | tool identity, call-id digest, input byte count/digest |
 | `post-tool` | tool identity, success, latency, result byte count/digest |
 | `completion` | success, turn count, answer byte count/digest |
 
 Prompts, messages, tool arguments/results, reasoning state, credentials, secret
-values, and answer text do not cross ABI v1. Extension output is bounded,
+values, and answer text do not cross ABI v2. Model events are emitted at the
+actual provider-attempt boundary: retries and fallbacks receive distinct paired
+ids, `post-model-call` occurs before any tool dispatch, and turns that never
+invoke a provider emit no model event. Extension output is bounded,
 treated as untrusted, represented by a keyed digest in audit/session mutation
 records, and never inserted into system/developer prompts or the conversation.
 A future model-visible surface must use a fixed trusted local tool-result
@@ -189,37 +203,49 @@ running task never continues to invoke code whose package is no longer current.
 An extension result may contain explicit proposed actions. It cannot execute an
 action itself and cannot synchronously answer an authorization question.
 
-For each event the worker mints fresh 256-bit opaque references to the
-manifest-requested capabilities. Each reference is bound to owner, session,
-task, extension, manifest digest, capability generation, event id, and deadline.
+For each event the worker creates one absolute Linux monotonic deadline and
+transmits it unchanged through worker-host control and CEX1. The same deadline
+expires the event's 256-bit opaque capability references. Each active extension
+has an independent store sized from its authenticated action-policy count; no
+extension can borrow another's quota. Every reference is bound at mint time to
+owner, session, task, extension, manifest digest, capability generation, event
+id, exact capability, requested index, allowed tool, and versioned policy id.
 The store keeps only SHA-256 handle keys. Guessing, replay, cross-event,
-cross-session, wrong-index, and expired references return the same denial.
-Raw credentials and secret values are never references and never cross the
-ABI.
+cross-session, wrong-index, tool/policy substitution, exact-scope mismatch, and
+expired references return the same denial. Raw credentials and secret values
+are never references and never cross the ABI.
 
 For an accepted proposal, the worker:
 
-1. consumes the exact one-use capability reference;
-2. resolves the named tool in the normal `ToolRegistry` under the same trusted
-   owner/session/task/extension context;
-3. installs a task-local capability ceiling containing only that referenced
-   capability;
-4. runs normal exposure, guardrail, capability-risk approval, exact
-   argument-derived capability enforcement, provider checks, and audit;
-5. records only bounded result metadata/digests and does not return the tool
+1. requires an authenticated manifest action policy naming the tool, requested
+   capability index, and versioned tool policy id;
+2. asks the registered tool to validate/canonicalize the input and derive one
+   exact capability before exposure or approval;
+3. rejects the entire result unless every proposed action is cooperatively
+   cancellable, policy-identical, and exact-capability-identical;
+4. atomically consumes all result references before executing any action; an
+   invalid item retires the complete event lease so no valid prefix executes;
+5. installs a task-local capability ceiling containing only the derived
+   capability and runs normal exposure, guardrail, operation-bound capability
+   approval, provider enforcement, and audit;
+6. runs the preauthorized tool in an abortable task with a 30-second action
+   deadline and periodic package-revocation checks;
+7. records only bounded result metadata/digests and does not return the tool
    result to the extension or inject it into the model trajectory.
 
-The ceiling also suppresses approval requests outside the declared reference,
-so an extension cannot use consent UI as an authority-escalation channel.
-Each proposed action has a fixed 30-second worker deadline in addition to the
-owning tool/provider's normal deadline.
+Proposal support is default-deny and independent of ordinary tool exposure.
+`cos_delegate`, provider/model selectors, credential tools, shell/process
+primitives, MCP gateways, legacy proxies, and every blocking/non-cooperative
+tool are categorically non-proposable. ABI v2 initially enables only the
+side-effect-free `now` tool under `builtin.now/v1`, deriving exactly
+`sys.observe` on `name:time`.
 Extensions cannot mutate the canonical system prompt, grants, approvals,
 authorization rules, or audit history.
 
 ## Failure and shutdown
 
-Initialize has a five-second deadline; events use the signed manifest deadline;
-shutdown has two seconds. Host control timeouts are longer than child deadlines,
+Initialize has a five-second deadline; events use one unchanged monotonic
+deadline; shutdown has two seconds. Host control timeouts are longer than child deadlines,
 so a hung child is killed without cancelling the whole host. The host tracks
 the sandbox process tree, kills and reaps adopted descendants, and verifies no
 known process identity survived before reporting detach success. Final task

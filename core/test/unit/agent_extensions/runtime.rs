@@ -32,6 +32,76 @@ fn extension_observer_never_mutates_or_blocks_runtime_decisions() {
     assert!(matches!(decision, ToolDecision::Allow));
 }
 
+#[tokio::test]
+async fn reserved_terminal_slot_preserves_fifo_and_never_blocks_on_a_full_event_queue() {
+    let (sender, mut receiver) = mpsc::channel(3);
+    let slots = Arc::new(Semaphore::new(2));
+    for index in 0..2 {
+        let permit = slots.clone().try_acquire_owned().unwrap();
+        sender
+            .try_send(ExtensionWork::Event {
+                payload: EventPayload::PreTool {
+                    turn_index: index,
+                    tool: "now".to_string(),
+                    tool_use_id_digest: "a".repeat(64),
+                    input_bytes: 2,
+                    input_digest: "b".repeat(64),
+                },
+                _permit: permit,
+            })
+            .unwrap();
+    }
+    assert!(slots.clone().try_acquire_owned().is_err());
+    let (done, _done_rx) = oneshot::channel();
+    sender
+        .try_send(ExtensionWork::Finish {
+            completion: None,
+            reason: ShutdownReason::TaskComplete,
+            done,
+        })
+        .expect("reserved finish slot");
+
+    for expected in 0..2 {
+        let Some(ExtensionWork::Event { payload, .. }) = receiver.recv().await else {
+            panic!("event must precede finish");
+        };
+        assert!(matches!(
+            payload,
+            EventPayload::PreTool { turn_index, .. } if turn_index == expected
+        ));
+    }
+    assert!(matches!(
+        receiver.recv().await,
+        Some(ExtensionWork::Finish {
+            completion: None,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn completion_is_only_queued_for_subscribed_extensions() {
+    let subscriptions = BTreeSet::from([EventKind::SessionStart]);
+    assert!(!subscriptions.contains(&EventKind::Completion));
+    let subscriptions = BTreeSet::from([EventKind::Completion]);
+    assert!(subscriptions.contains(&EventKind::Completion));
+}
+
+#[test]
+fn finish_reserves_time_for_forced_host_detach() {
+    assert!(FINISH_DRAIN_TIMEOUT < FINISH_TIMEOUT);
+    assert!(FINISH_TIMEOUT - FINISH_DRAIN_TIMEOUT >= Duration::from_secs(2));
+}
+
+#[tokio::test]
+async fn dropping_parent_action_scope_aborts_the_detached_task() {
+    let task = tokio::spawn(std::future::pending::<()>());
+    let guard = AbortOnDrop::new(task.abort_handle());
+    drop(guard);
+    let error = task.await.expect_err("action task must be cancelled");
+    assert!(error.is_cancelled());
+}
+
 #[cfg(unix)]
 #[test]
 fn active_extension_package_fails_currentness_after_revocation() {

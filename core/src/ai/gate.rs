@@ -1185,8 +1185,18 @@ pub fn wrap_for_system(inner: Arc<dyn LlmProvider>) -> Arc<dyn LlmProvider> {
 pub fn build_system_provider(
     cfg: &crate::config::AgentConfig,
 ) -> llm::Result<Arc<dyn LlmProvider>> {
+    build_system_provider_with_observer(
+        cfg,
+        Arc::new(crate::agent::llm::attempt_observer::NoopProviderAttemptObserver),
+    )
+}
+
+pub fn build_system_provider_with_observer(
+    cfg: &crate::config::AgentConfig,
+    extension_observer: Arc<dyn llm::attempt_observer::ProviderAttemptObserver>,
+) -> llm::Result<Arc<dyn LlmProvider>> {
     use crate::agent::llm::attempt_observer::{
-        AuditProviderAttemptObserver, RequestMetadata,
+        AuditProviderAttemptObserver, CompositeProviderAttemptObserver, RequestMetadata,
     };
 
     // Provider construction is where the model transport (HTTP client,
@@ -1196,10 +1206,13 @@ pub fn build_system_provider(
         .map_err(llm::LlmError::NotConfigured)?;
 
     let context = llm::construction::ProviderBuildContext::from_process()?;
-    let observer = Arc::new(AuditProviderAttemptObserver::new(
-        crate::paths::agent_audit_log_path(),
-        RequestMetadata::from_process(),
-    ));
+    let observer = Arc::new(CompositeProviderAttemptObserver::new(vec![
+        Arc::new(AuditProviderAttemptObserver::new(
+            crate::paths::agent_audit_log_path(),
+            RequestMetadata::from_process(),
+        )),
+        extension_observer,
+    ]));
     build_system_provider_with_context(cfg, &context, observer)
 }
 
@@ -1218,6 +1231,11 @@ pub fn build_system_provider_with_context(
         )));
     }
     let primary = llm::registry::build_with_context(&cfg.provider, &cfg.model, cfg, context)?;
+    let primary = Arc::new(llm::attempt_observer::ObservedProvider::new(
+        primary,
+        cfg.provider.clone(),
+        observer.clone(),
+    ));
     let mut slots = vec![ProviderSlot::new(
         wrap_for_system(primary),
         cfg.provider.clone(),
@@ -1244,6 +1262,11 @@ pub fn build_system_provider_with_context(
         }
         let fallback_cfg = fallback.apply_to(cfg);
         let built = llm::registry::build_with_context(provider, model, &fallback_cfg, context)?;
+        let built = Arc::new(llm::attempt_observer::ObservedProvider::new(
+            built,
+            provider.to_string(),
+            observer.clone(),
+        ));
         slots.push(ProviderSlot::new(
             wrap_for_system(built),
             provider.to_string(),
@@ -1467,8 +1490,7 @@ impl Drop for SystemBudgetReservation {
             self.estimated,
             actual_units,
             cap_units,
-        )
-        {
+        ) {
             tracing::warn!(
                 target: "ai.gate",
                 "system-agent budget reservation drop settlement failed: {e}",
@@ -1492,8 +1514,7 @@ fn wrap_system_stream(
     let wrapped = inner.map(move |item| {
         if let Ok(StreamEvent::Done { ref usage, .. }) = item {
             if let Some(mut r) = state.lock().ok().and_then(|mut g| g.take()) {
-                let actual =
-                    u64::from(usage.input_tokens) + u64::from(usage.output_tokens);
+                let actual = u64::from(usage.input_tokens) + u64::from(usage.output_tokens);
                 if let Err(e) = r.commit_to_actuals(actual) {
                     return Err(llm::LlmError::InvalidRequest(format!(
                         "system-agent budget settlement: {e}"

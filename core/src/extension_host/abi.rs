@@ -12,6 +12,54 @@ use crate::agent_extensions::manifest::{
     EventKind, ABI_VERSION, FEATURE_OBSERVATIONAL_EVENTS, FEATURE_PROPOSED_ACTIONS,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct MonotonicDeadlineNs(pub u64);
+
+impl MonotonicDeadlineNs {
+    pub fn after(duration: Duration) -> Result<Self, String> {
+        let nanos = u64::try_from(duration.as_nanos())
+            .map_err(|_| "extension event deadline is too large".to_string())?;
+        Ok(Self(monotonic_now_ns()?.saturating_add(nanos)))
+    }
+
+    pub fn remaining(self) -> Result<Duration, String> {
+        let now = monotonic_now_ns()?;
+        if self.0 <= now {
+            return Err("extension event deadline expired".to_string());
+        }
+        Ok(Duration::from_nanos(self.0 - now))
+    }
+}
+
+fn monotonic_now_ns() -> Result<u64, String> {
+    #[cfg(unix)]
+    {
+        let mut value = libc::timespec {
+            tv_sec: 0,
+            tv_nsec: 0,
+        };
+        if unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut value) } != 0 {
+            return Err(format!(
+                "read monotonic clock: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        let seconds = u64::try_from(value.tv_sec)
+            .map_err(|_| "monotonic clock returned a negative value".to_string())?;
+        let nanos = u64::try_from(value.tv_nsec)
+            .map_err(|_| "monotonic clock returned invalid nanoseconds".to_string())?;
+        Ok(seconds.saturating_mul(1_000_000_000).saturating_add(nanos))
+    }
+    #[cfg(not(unix))]
+    {
+        static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+        let elapsed = START.get_or_init(std::time::Instant::now).elapsed();
+        u64::try_from(elapsed.as_nanos())
+            .map_err(|_| "monotonic clock exceeded the supported range".to_string())
+    }
+}
+
 pub const MAX_ABI_FRAME_BYTES: usize = 64 * 1024;
 pub const MAX_EVENT_PAYLOAD_BYTES: usize = 16 * 1024;
 pub const MAX_ACTION_INPUT_BYTES: usize = 16 * 1024;
@@ -107,7 +155,7 @@ pub enum HostMessage {
     },
     Event {
         event_id: String,
-        deadline_ms: u64,
+        deadline_monotonic_ns: MonotonicDeadlineNs,
         payload: EventPayload,
         capability_refs: Vec<CapabilityReference>,
     },
@@ -153,17 +201,21 @@ pub enum EventPayload {
     },
     PreModelCall {
         turn_index: u32,
+        attempt_id: String,
         provider: String,
         model: String,
     },
     PostModelCall {
         turn_index: u32,
+        attempt_id: String,
+        provider: String,
+        model: String,
         success: bool,
         latency_ms: u64,
         input_tokens: u32,
         output_tokens: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        error: Option<crate::audit_policy::TextDigest>,
+        error_class: Option<String>,
     },
     PreTool {
         turn_index: u32,

@@ -3082,13 +3082,7 @@ pub async fn execute_job(
     stream_sink: Arc<dyn crate::agent::llm::accumulate::StreamSink>,
     progress_sink: Arc<dyn crate::agent::runtime::progress::ProgressSink>,
 ) -> FinishOutcome {
-    execute_job_with_hooks(
-        job,
-        stream_sink,
-        progress_sink,
-        standalone_runtime_hooks(),
-    )
-    .await
+    execute_job_with_hooks(job, stream_sink, progress_sink, standalone_runtime_hooks()).await
 }
 
 pub async fn execute_job_with_hooks(
@@ -3109,10 +3103,6 @@ pub async fn execute_job_with_hooks(
     if let Some(n) = job.max_turns {
         cfg.max_turns = n;
     }
-    let provider = match crate::ai::gate::build_system_provider(&cfg) {
-        Ok(p) => p,
-        Err(e) => return FinishOutcome::Error(format!("provider unavailable: {e}")),
-    };
     let guardrails = loop_::guardrails_from_cfg(&cfg);
     let mut exposure =
         match crate::agent::tools::exposure::ToolExposureContext::from_current_session_with_presence(
@@ -3151,6 +3141,19 @@ pub async fn execute_job_with_hooks(
         hooks,
     )
     .await;
+    let provider = match crate::ai::gate::build_system_provider_with_observer(
+        &cfg,
+        extension_runtime.attempt_observer(),
+    ) {
+        Ok(provider) => provider,
+        Err(error) => {
+            let message = format!("provider unavailable: {error}");
+            extension_runtime
+                .finish(false, 0, None, Some(&message))
+                .await;
+            return FinishOutcome::Error(message);
+        }
+    };
 
     let request = loop_::RuntimeRequest::streaming(
         provider,

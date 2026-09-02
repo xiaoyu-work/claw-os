@@ -30,6 +30,80 @@ pub(crate) struct HostedAgentExtension {
     known_descendants: BTreeMap<u32, u64>,
 }
 
+struct ExtensionLaunchGuard {
+    materialized_root: Option<PathBuf>,
+    child: Option<Child>,
+}
+
+impl ExtensionLaunchGuard {
+    fn new(materialized_root: PathBuf) -> Self {
+        Self {
+            materialized_root: Some(materialized_root),
+            child: None,
+        }
+    }
+
+    fn root(&self) -> &Path {
+        self.materialized_root
+            .as_deref()
+            .expect("launch guard owns materialized root")
+    }
+
+    async fn fail<T>(&mut self, error: String) -> Result<T, String> {
+        let mut cleanup_errors = Vec::new();
+        if let Some(child) = self.child.as_mut() {
+            let descendants = child.id().map(capture_descendants).unwrap_or_default();
+            for descendant in &descendants {
+                unsafe {
+                    libc::kill(descendant.pid as libc::pid_t, libc::SIGKILL);
+                }
+            }
+            let _ = child.start_kill();
+            if tokio::time::timeout(Duration::from_secs(1), child.wait())
+                .await
+                .is_err()
+            {
+                cleanup_errors.push("unattached extension child did not exit".to_string());
+            }
+            reap_captured_descendants(descendants).await;
+        }
+        self.child = None;
+        if let Some(root) = self.materialized_root.take() {
+            if let Err(cleanup) = std::fs::remove_dir_all(&root) {
+                if cleanup.kind() != std::io::ErrorKind::NotFound {
+                    cleanup_errors
+                        .push(format!("remove unattached materialized package: {cleanup}"));
+                }
+            }
+        }
+        if cleanup_errors.is_empty() {
+            Err(error)
+        } else {
+            Err(format!("{error}; {}", cleanup_errors.join("; ")))
+        }
+    }
+
+    fn disarm(&mut self) -> (PathBuf, Child) {
+        (
+            self.materialized_root
+                .take()
+                .expect("launch guard owns materialized root"),
+            self.child.take().expect("launch guard owns child"),
+        )
+    }
+}
+
+impl Drop for ExtensionLaunchGuard {
+    fn drop(&mut self) {
+        if let Some(child) = self.child.as_mut() {
+            let _ = child.start_kill();
+        }
+        if let Some(root) = self.materialized_root.take() {
+            let _ = std::fs::remove_dir_all(root);
+        }
+    }
+}
+
 impl HostedAgentExtension {
     pub async fn attach(
         registration: &AgentExtensionRegistration,
@@ -88,10 +162,11 @@ impl HostedAgentExtension {
             .read_verified(&manifest.entry)
             .map_err(|error| format!("read verified extension entry: {error}"))?;
         let materialized_root = materialize(&package)?;
+        let mut launch_guard = ExtensionLaunchGuard::new(materialized_root);
         package
             .assert_tree_current()
             .map_err(|error| format!("extension package changed during launch: {error}"))?;
-        let entry = materialized_root.join(&manifest.entry);
+        let entry = launch_guard.root().join(&manifest.entry);
         let binding = AbiBinding {
             task_id: host_binding.task_id.clone(),
             session_id,
@@ -110,7 +185,7 @@ impl HostedAgentExtension {
 
         let launch = super::child_isolation::prepare_verified_package(
             &entry,
-            &materialized_root,
+            launch_guard.root(),
             vec![(
                 OsString::from("CLAW_EXTENSION_ABI"),
                 OsString::from(ABI_VERSION.to_string()),
@@ -128,17 +203,36 @@ impl HostedAgentExtension {
             .stderr(Stdio::null())
             .kill_on_drop(true);
         super::child_isolation::close_unallowlisted_fds(command.as_std_mut());
-        let mut child = command
-            .spawn()
-            .map_err(|error| format!("spawn Agent extension: {error}"))?;
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| "Agent extension stdin was not captured".to_string())?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| "Agent extension stdout was not captured".to_string())?;
+        launch_guard.child = Some(
+            command
+                .spawn()
+                .map_err(|error| format!("spawn Agent extension: {error}"))?,
+        );
+        let stdin = match launch_guard
+            .child
+            .as_mut()
+            .and_then(|child| child.stdin.take())
+        {
+            Some(stdin) => stdin,
+            None => {
+                return launch_guard
+                    .fail("Agent extension stdin was not captured".to_string())
+                    .await;
+            }
+        };
+        let stdout = match launch_guard
+            .child
+            .as_mut()
+            .and_then(|child| child.stdout.take())
+        {
+            Some(stdout) => stdout,
+            None => {
+                return launch_guard
+                    .fail("Agent extension stdout was not captured".to_string())
+                    .await;
+            }
+        };
+        let (materialized_root, child) = launch_guard.disarm();
         let mut hosted = Self {
             manifest,
             binding,
@@ -162,10 +256,14 @@ impl HostedAgentExtension {
             },
             additive: BTreeMap::new(),
         };
-        let response = hosted
-            .exchange(&initialize, INITIALIZE_TIMEOUT)
-            .await
-            .map_err(|error| format!("initialize Agent extension: {error}"))?;
+        let response = match hosted.exchange(&initialize, INITIALIZE_TIMEOUT).await {
+            Ok(response) => response,
+            Err(error) => {
+                return hosted
+                    .fail_closed(format!("initialize Agent extension: {error}"))
+                    .await;
+            }
+        };
         if let Err(error) = super::abi::validate_ready(
             &initialize,
             &response,
@@ -173,8 +271,7 @@ impl HostedAgentExtension {
             hosted.manifest.protocol.max_version,
             &hosted.manifest.protocol.required_features,
         ) {
-            let _ = hosted.kill_and_wait().await;
-            return Err(error);
+            return hosted.fail_closed(error).await;
         }
         hosted.sequence = 1;
         hosted.remember_new_host_children(&preexisting_children);
@@ -189,46 +286,46 @@ impl HostedAgentExtension {
         &mut self,
         binding: &AbiBinding,
         event_id: String,
+        deadline: super::abi::MonotonicDeadlineNs,
         payload: EventPayload,
         capability_refs: Vec<CapabilityReference>,
     ) -> Result<AgentExtensionResult, String> {
         if binding != &self.binding {
-            let cleanup = self.kill_and_wait().await;
-            if let Err(cleanup) = cleanup {
-                return Err(format!(
-                    "extension event binding does not match the active instance; {cleanup}"
-                ));
-            }
-            return Err("extension event binding does not match the active instance".to_string());
+            return self
+                .fail_closed(
+                    "extension event binding does not match the active instance".to_string(),
+                )
+                .await;
         }
         if let Err(error) = payload.validate() {
-            return match self.kill_and_wait().await {
-                Ok(()) => Err(error),
-                Err(cleanup) => Err(format!("{error}; {cleanup}")),
-            };
+            return self.fail_closed(error).await;
         }
         if !self.manifest.subscriptions.contains(&payload.kind()) {
-            let error = "extension event was not declared in the manifest".to_string();
-            return match self.kill_and_wait().await {
-                Ok(()) => Err(error),
-                Err(cleanup) => Err(format!("{error}; {cleanup}")),
-            };
+            return self
+                .fail_closed("extension event was not declared in the manifest".to_string())
+                .await;
         }
-        if capability_refs.len() != self.manifest.requested_capabilities.len() {
-            let error = "extension event capability references are incomplete".to_string();
-            return match self.kill_and_wait().await {
-                Ok(()) => Err(error),
-                Err(cleanup) => Err(format!("{error}; {cleanup}")),
-            };
+        if capability_refs.len() != self.manifest.action_policies.len() {
+            return self
+                .fail_closed("extension event capability references are incomplete".to_string())
+                .await;
         }
-        let timeout = Duration::from_millis(self.manifest.limits.event_timeout_ms);
+        let timeout = match deadline.remaining() {
+            Ok(timeout) => timeout,
+            Err(error) => return self.fail_closed(error).await,
+        };
+        if timeout > Duration::from_millis(self.manifest.limits.event_timeout_ms) {
+            return self
+                .fail_closed("extension event deadline exceeds the manifest limit".to_string())
+                .await;
+        }
         let request = AbiRequest {
             protocol: ABI_VERSION,
             binding: self.binding.clone(),
             sequence: self.sequence,
             message: HostMessage::Event {
                 event_id: event_id.clone(),
-                deadline_ms: now_ms().saturating_add(self.manifest.limits.event_timeout_ms),
+                deadline_monotonic_ns: deadline,
                 payload,
                 capability_refs,
             },
@@ -236,12 +333,7 @@ impl HostedAgentExtension {
         };
         let response = match self.exchange(&request, timeout).await {
             Ok(response) => response,
-            Err(error) => {
-                return match self.kill_and_wait().await {
-                    Ok(()) => Err(error),
-                    Err(cleanup) => Err(format!("{error}; {cleanup}")),
-                };
-            }
+            Err(error) => return self.fail_closed(error).await,
         };
         let (output, proposed_actions) = match super::abi::validate_result(
             &request,
@@ -251,12 +343,7 @@ impl HostedAgentExtension {
             self.manifest.limits.max_actions_per_event,
         ) {
             Ok(result) => result,
-            Err(error) => {
-                return match self.kill_and_wait().await {
-                    Ok(()) => Err(error),
-                    Err(cleanup) => Err(format!("{error}; {cleanup}")),
-                };
-            }
+            Err(error) => return self.fail_closed(error).await,
         };
         self.sequence = self.sequence.saturating_add(1);
         Ok(AgentExtensionResult {
@@ -277,14 +364,37 @@ impl HostedAgentExtension {
             Ok(response) => super::abi::validate_shutdown(&request, &response),
             Err(error) => Err(error),
         };
-        self.kill_and_wait().await?;
-        let _ = std::fs::remove_dir_all(&self.materialized_root);
-        outcome
+        let cleanup = self.cleanup().await;
+        match (outcome, cleanup) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+            (Err(error), Err(cleanup)) => Err(format!("{error}; {cleanup}")),
+        }
     }
 
     pub async fn abort(&mut self) {
-        let _ = self.kill_and_wait().await;
-        let _ = std::fs::remove_dir_all(&self.materialized_root);
+        let _ = self.cleanup().await;
+    }
+
+    async fn fail_closed<T>(&mut self, error: String) -> Result<T, String> {
+        match self.cleanup().await {
+            Ok(()) => Err(error),
+            Err(cleanup) => Err(format!("{error}; {cleanup}")),
+        }
+    }
+
+    async fn cleanup(&mut self) -> Result<(), String> {
+        let process = self.kill_and_wait().await;
+        let storage = match std::fs::remove_dir_all(&self.materialized_root) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(format!("remove materialized extension package: {error}")),
+        };
+        match (process, storage) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+            (Err(error), Err(storage)) => Err(format!("{error}; {storage}")),
+        }
     }
 
     async fn exchange(
@@ -374,6 +484,13 @@ impl HostedAgentExtension {
     }
 }
 
+impl Drop for HostedAgentExtension {
+    fn drop(&mut self) {
+        let _ = self.child.start_kill();
+        let _ = std::fs::remove_dir_all(&self.materialized_root);
+    }
+}
+
 fn materialize(package: &crate::provenance::VerifiedPackage) -> Result<PathBuf, String> {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -440,13 +557,6 @@ fn random_nonce() -> Result<String, String> {
     crate::credential::os_random_bytes(&mut bytes)
         .map_err(|error| format!("generate extension instance nonce: {error}"))?;
     Ok(hex::encode(bytes))
-}
-
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 #[derive(Clone, Copy)]

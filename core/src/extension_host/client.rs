@@ -461,16 +461,18 @@ impl ExtensionHostClient {
         extension_id: String,
         binding: super::abi::AbiBinding,
         event_id: String,
+        deadline: super::abi::MonotonicDeadlineNs,
         payload: super::abi::EventPayload,
         capability_refs: Vec<crate::agent_extensions::capability_ref::CapabilityReference>,
-        timeout: Duration,
     ) -> Result<super::protocol::AgentExtensionResult, String> {
+        let timeout = deadline.remaining()?;
         let result = self
             .request_with_timeout(
                 HostAction::AgentExtensionEvent {
                     extension_id,
                     binding,
                     event_id,
+                    deadline_monotonic_ns: deadline,
                     payload,
                     capability_refs,
                 },

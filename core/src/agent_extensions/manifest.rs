@@ -10,7 +10,7 @@ use crate::provenance::envelope::{content_digest as tree_content_digest, FileEnt
 use crate::provenance::VerifiedPackage;
 
 pub const MANIFEST_FILE: &str = "extension.json";
-pub const ABI_VERSION: u32 = 1;
+pub const ABI_VERSION: u32 = 2;
 pub const FEATURE_OBSERVATIONAL_EVENTS: &str = "observational-events";
 pub const FEATURE_PROPOSED_ACTIONS: &str = "proposed-actions";
 pub const SUPPORTED_FEATURES: &[&str] = &[FEATURE_OBSERVATIONAL_EVENTS, FEATURE_PROPOSED_ACTIONS];
@@ -25,9 +25,18 @@ pub struct ExtensionManifest {
     #[serde(default)]
     pub requested_capabilities: Vec<Cap>,
     #[serde(default)]
+    pub action_policies: Vec<ExtensionActionPolicy>,
+    #[serde(default)]
     pub limits: ExtensionLimits,
     #[serde(flatten)]
     pub additive: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtensionActionPolicy {
+    pub requested_index: usize,
+    pub tool: String,
+    pub policy_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -212,6 +221,43 @@ impl ExtensionManifest {
         if self.requested_capabilities.len() > 16 {
             return Err("extension requested too many capabilities".to_string());
         }
+        if self.action_policies.len() > 16 {
+            return Err("extension declared too many action policies".to_string());
+        }
+        let mut action_policies = BTreeSet::new();
+        for policy in &self.action_policies {
+            if policy.requested_index >= self.requested_capabilities.len()
+                || policy.tool.is_empty()
+                || policy.tool.len() > 128
+                || !policy
+                    .tool
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+                || policy.policy_id.is_empty()
+                || policy.policy_id.len() > 128
+                || !policy.policy_id.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'/' | b'_' | b'-')
+                })
+                || !action_policies.insert((
+                    policy.requested_index,
+                    policy.tool.clone(),
+                    policy.policy_id.clone(),
+                ))
+            {
+                return Err("extension action policy is invalid or duplicate".to_string());
+            }
+        }
+        if self.action_policies.is_empty()
+            && self
+                .protocol
+                .required_features
+                .iter()
+                .any(|feature| feature == FEATURE_PROPOSED_ACTIONS)
+        {
+            return Err(
+                "extensions requiring proposed actions must declare an action policy".to_string(),
+            );
+        }
         let mut caps = BTreeSet::new();
         for cap in &self.requested_capabilities {
             let metadata = crate::caps::catalog::lookup(cap.verb)
@@ -221,7 +267,10 @@ impl ExtensionManifest {
                 ScopeKind::None | ScopeKind::Wild => kind == ScopeKind::Wild,
                 expected => kind == expected,
             };
-            if !valid_kind || !caps.insert(format!("{}:{}", cap.verb, cap.scope)) {
+            if !valid_kind
+                || cap.scope != cap.scope.clone().canonicalized()
+                || !caps.insert(format!("{}:{}", cap.verb, cap.scope))
+            {
                 return Err(format!(
                     "extension capability `{}` has an invalid or duplicate scope",
                     cap.verb

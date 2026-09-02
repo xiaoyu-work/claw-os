@@ -216,8 +216,8 @@ fn agent_extension_package(fx: &Fixture, id: &str) -> PathBuf {
             },
             "entry": "bin/observer",
             "protocol": {
-                "min_version": 1,
-                "max_version": 1,
+                "min_version": 2,
+                "max_version": 2,
                 "required_features": ["observational-events"],
             },
             "subscriptions": ["session-start"],
