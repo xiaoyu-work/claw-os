@@ -106,4 +106,3 @@ Any new extension kind, discovery root, or install path must:
 4. Quarantine failures with an actionable diagnostic.
 5. Add adversarial unit and process coverage for inventory drift, link/path
    substitution, signatures, trust roots, and mutable-source races.
-
