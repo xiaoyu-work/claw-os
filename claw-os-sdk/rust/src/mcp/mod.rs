@@ -1,15 +1,15 @@
 //! Embeddable MCP (Model Context Protocol) stdio server for Claw OS
 //! native Apps.
 //!
-//! This crate is the Rust counterpart to `claw-os-sdk/python/src/claw_os_sdk/serve.py`. It lets
-//! any Rust binary (typically a libcosmic GUI App) opt into a second
+//! This module is the Rust counterpart to `claw_os_sdk.mcp`. It lets
+//! any Rust binary (typically a desktop GUI App) opt into a second
 //! mode in which it speaks MCP JSON-RPC over stdio so the kernel
 //! agent can invoke its tools.
 //!
 //! ## Usage shape
 //!
 //! ```ignore
-//! use cos_mcp_serve::{Server, Tool, ToolResult};
+//! use claw_os_sdk::mcp::{Server, Tool, ToolResult};
 //! use async_trait::async_trait;
 //! use std::sync::Arc;
 //!
@@ -51,9 +51,9 @@
 //! ## Scope
 //!
 //! Server-only. Clients live in the kernel (`core/src/agent/tools/mcp/
-//! client.rs`). The wire types are duplicated between the two for
-//! now to keep desktop binaries off the kernel's dependency surface;
-//! a future cleanup can extract a shared `cos-mcp-types` crate.
+//! client.rs`). Keeping this implementation in the public SDK lets
+//! native Apps expose MCP tools without depending on kernel or
+//! `cos-runtime` internals.
 
 mod generated;
 pub mod protocol;

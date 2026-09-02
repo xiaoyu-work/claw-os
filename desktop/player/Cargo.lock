@@ -873,6 +873,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
+name = "claw-os-sdk"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64",
+ "num-bigint",
+ "num-traits",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "clipboard-win"
 version = "5.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1059,17 +1074,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cos-mcp-serve"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
-]
-
-[[package]]
 name = "cosmic-client-toolkit"
 version = "0.2.0"
 source = "git+https://github.com/pop-os/cosmic-protocols?rev=160b086#160b086abe03cd34a8a375d7fbe47b24308d1f38"
@@ -1133,7 +1137,7 @@ dependencies = [
  "ashpd 0.12.3",
  "async-trait",
  "clap_lex",
- "cos-mcp-serve",
+ "claw-os-sdk",
  "env_logger",
  "fork",
  "gstreamer-tag",

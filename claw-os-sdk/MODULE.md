@@ -71,8 +71,8 @@ python3 wire/codegen.py
 python3 wire/codegen.py --check
 ```
 
-The generator writes the four SDK bindings plus the core and
-`cos-mcp-serve` JSON-RPC constant modules.
+The generator writes the four SDK bindings plus the core and Rust SDK MCP
+JSON-RPC constant modules.
 
 Then run the affected language tests plus the repository Python suite:
 

@@ -636,7 +636,7 @@ catalog/run pair. Typed compatibility proxies remain constructible for
 specialized callers and tests. Session tools are additive and appear only for
 Apps that declare a stateful session surface.
 
-### 12.8 Rust SDK: `crates/cos-mcp-serve`
+### 12.8 Rust SDK: `claw_os_sdk::mcp`
 
 Desktop Apps that ship as native `libcosmic` GUI binaries (under
 `desktop/*`) cannot exec a Python `server.py` — they already own a
@@ -644,12 +644,12 @@ running event loop. Instead, the **same binary** flips into MCP
 server mode when launched with `COS_MCP_SERVER=1` in the environment
 (the kernel agent sets it automatically; see `bring_up_app`).
 
-`crates/cos-mcp-serve` is the Rust counterpart to `claw_os_sdk.mcp`
+`claw_os_sdk::mcp` is the Rust counterpart to `claw_os_sdk.mcp`
 (`claw-os-sdk/python/src/claw_os_sdk/mcp.py`). It exposes a tiny
 builder API:
 
 ```rust
-use cos_mcp_serve::{Server, Tool, ToolResult};
+use claw_os_sdk::mcp::{Server, Tool, ToolResult};
 use std::sync::Arc;
 
 if std::env::var("COS_MCP_SERVER").as_deref() == Ok("1") {

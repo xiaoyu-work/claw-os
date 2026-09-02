@@ -8,6 +8,7 @@ The official Rust SDK for Claw OS. Use this crate to talk to the
 | Module      | Purpose                                                                         |
 |-------------|---------------------------------------------------------------------------------|
 | `ai`        | Stable `chat` / `chat-untrusted` access through `cos ai chat`.                  |
+| `mcp`       | Native App MCP server, tool, protocol, and stdio transport APIs.                 |
 | `tools`     | `cos ai tool <name>` — fulfil catalog tools the model proposed.                 |
 | `gui`       | Desktop GUI bootstrap and kernel-provided launch context.                       |
 | `envelope`  | Wire-v1 envelope adapter; SDKs handle the migration to native v1 transparently. |
@@ -17,6 +18,8 @@ The crate does not export `policy`, `fs`, `exec`, `pkg`, `notify`, or
 `net`. Those helpers belong to the unpublished, OS-internal
 `cos-runtime` crate and are unavailable to third-party SDK consumers.
 The `cos` kernel performs capability checks when public SDK operations run.
+Native Apps expose agent-callable tools through `claw_os_sdk::mcp`; MCP is a
+module of this SDK rather than a separate developer package.
 
 ## Add it
 

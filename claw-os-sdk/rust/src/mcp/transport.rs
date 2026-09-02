@@ -25,7 +25,7 @@ use tokio::sync::Mutex;
 /// comfortably above any realistic MCP frame (tool args, prompts,
 /// embedded JSON-RPC payloads) while keeping a single misbehaving peer
 /// from exhausting the host. 16 MiB matches the SDK-side serve.py
-/// cap so the two ends agree on what an oversize frame looks like.
+/// cap so the two language implementations agree on what an oversize frame looks like.
 pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 
 /// Capacity of the in-memory channel paired by [`in_memory_pair`].
@@ -169,8 +169,8 @@ impl Transport for StdioTransport {
             // check against MAX_FRAME_BYTES so a pathological peer
             // can't drive us OOM by streaming an endless "line".
             // This replaces the prior `read_line` (no size bound) —
-            // see also the matching SDK-side cap in
-            // claw_os_sdk.serve.MAX_LINE_BYTES.
+            // See also the matching Python SDK cap in
+            // claw_os_sdk.mcp.MAX_LINE_BYTES.
             let mut buf: Vec<u8> = Vec::new();
             loop {
                 // The fill_buf borrow ends inside this inner block,
@@ -229,9 +229,7 @@ impl Transport for StdioTransport {
             }
             let line = match String::from_utf8(buf) {
                 Ok(s) => s,
-                Err(e) => {
-                    return Err(TransportError::Decode(format!("invalid utf-8: {e}")))
-                }
+                Err(e) => return Err(TransportError::Decode(format!("invalid utf-8: {e}"))),
             };
             if line.trim().is_empty() {
                 continue;
@@ -245,6 +243,6 @@ impl Transport for StdioTransport {
 mod tests {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/test/unit/transport.rs"
+        "/test/unit/mcp/transport.rs"
     ));
 }

@@ -30,14 +30,14 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::protocol::{
+use super::protocol::{
     CallToolParams, CallToolResult, ContentItem, Implementation, InitializeParams,
     InitializeResult, JsonRpcError, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
     ListToolsResult, RequestId, ServerCapabilities, ToolDescriptor, ToolsCapability, ERR_INTERNAL,
     ERR_INVALID_PARAMS, ERR_INVALID_REQUEST, ERR_METHOD_NOT_FOUND, ERR_PARSE, JSONRPC_VERSION,
 };
-use crate::tool::Tool;
-use crate::transport::{StdioTransport, Transport, TransportError};
+use super::tool::Tool;
+use super::transport::{StdioTransport, Transport, TransportError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ServerError {
@@ -76,9 +76,8 @@ impl Server {
     /// use [`Server::try_tool`] instead.
     pub fn tool(self, tool: Arc<dyn Tool>) -> Self {
         let name = tool.name();
-        self.try_tool(tool).unwrap_or_else(|_| {
-            panic!("duplicate MCP tool registration at startup: {name}")
-        })
+        self.try_tool(tool)
+            .unwrap_or_else(|_| panic!("duplicate MCP tool registration at startup: {name}"))
     }
 
     /// Like [`Server::tool`] but surfaces duplicate registrations as
@@ -292,10 +291,7 @@ impl Server {
         let id = req.id.clone();
         if let Some(params) = req.params.as_ref() {
             if let Err(error) = validate_initialize_params(params) {
-                return JsonRpcResponse::err(
-                    id,
-                    JsonRpcError::new(ERR_INVALID_PARAMS, error),
-                );
+                return JsonRpcResponse::err(id, JsonRpcError::new(ERR_INVALID_PARAMS, error));
             }
         }
         // We accept the params for compliance but don't currently
@@ -323,7 +319,7 @@ impl Server {
             }
         };
         let result = InitializeResult {
-            protocol_version: crate::protocol::PROTOCOL_VERSION.to_string(),
+            protocol_version: super::protocol::PROTOCOL_VERSION.to_string(),
             capabilities: ServerCapabilities {
                 tools: Some(ToolsCapability {
                     list_changed: Some(false),
@@ -506,6 +502,6 @@ fn extract_id(raw: &Value) -> RequestId {
 mod tests {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/test/unit/server.rs"
+        "/test/unit/mcp/server.rs"
     ));
 }

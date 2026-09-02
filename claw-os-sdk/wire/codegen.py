@@ -49,7 +49,7 @@ PY_OUT   = ROOT / "python" / "src" / "claw_os_sdk" / "generated.py"
 TS_OUT   = ROOT / "node" / "src" / "generated.ts"
 GO_OUT   = ROOT / "go" / "generated.go"
 CORE_MCP_OUT = ROOT.parent / "core" / "src" / "agent" / "tools" / "mcp" / "generated.rs"
-CRATE_MCP_OUT = ROOT.parent / "crates" / "cos-mcp-serve" / "src" / "generated.rs"
+RUST_MCP_OUT = ROOT / "rust" / "src" / "mcp" / "generated.rs"
 
 BANNER_LINES = [
     "DO NOT EDIT BY HAND.",
@@ -1959,7 +1959,7 @@ def main() -> int:
         TS_OUT: emit_ts(schemas, contract),
         GO_OUT: emit_go(schemas, contract),
         CORE_MCP_OUT: emit_mcp_rust(contract),
-        CRATE_MCP_OUT: emit_mcp_rust(contract),
+        RUST_MCP_OUT: emit_mcp_rust(contract),
     }
     if args.check:
         stale = [

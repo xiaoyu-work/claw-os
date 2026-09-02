@@ -25,6 +25,7 @@
 //! | Module        | Wire family | Equivalent CLI                  |
 //! |---------------|-------------|---------------------------------|
 //! | [`ai`]        | `ai`        | stable `cos ai chat`            |
+//! | [`mcp`]       | MCP         | App-hosted tools over JSON-RPC  |
 //! | [`tools`]     | `tool`      | `cos ai tool <name> --app <id>` |
 //! | [`envelope`]  | shared      | the common reply envelope       |
 //! | [`generated`] | shared      | typed structs codegen'd from `wire/v1/*.schema.json` |
@@ -56,6 +57,7 @@ pub mod ai;
 pub mod envelope;
 pub mod generated;
 pub mod gui;
+pub mod mcp;
 pub mod tools;
 
 /// Errors returned by every bridge call.

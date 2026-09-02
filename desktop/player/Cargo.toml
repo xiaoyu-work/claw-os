@@ -15,7 +15,7 @@ xdgen = "0.1"
 [dependencies]
 ashpd = { version = "0.12", optional = true }
 async-trait = "0.1"
-cos-mcp-serve = { path = "../../crates/cos-mcp-serve" }
+claw-os-sdk = { path = "../../claw-os-sdk/rust" }
 gstreamer-tag = "0.25"
 image = "0.25"
 serde = { version = "1", features = ["serde_derive"] }

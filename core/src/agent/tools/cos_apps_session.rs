@@ -651,7 +651,7 @@ fn plan_session_launch(
         extra_env: BTreeMap::from([
             ("PYTHONPATH".to_string(), pythonpath),
             // Trigger the MCP-server mode of `runtime: binary` apps.
-            // The Rust SDK at `crates/cos-mcp-serve` keys off this
+            // The public Rust SDK's `claw_os_sdk::mcp` module keys off this
             // variable (and only this variable) so the same desktop GUI
             // binary can serve both its normal `main()` flow and the
             // agent's tool surface. Python/Node/Shell apps ignore it.

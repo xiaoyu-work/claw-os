@@ -1,7 +1,7 @@
 use super::*;
-use crate::protocol::{ClientCapabilities, ContentItem, JsonRpcRequest, RequestId};
-use crate::tool::ToolResult;
-use crate::transport::in_memory_pair;
+use crate::mcp::protocol::{ClientCapabilities, ContentItem, JsonRpcRequest, RequestId};
+use crate::mcp::tool::ToolResult;
+use crate::mcp::transport::in_memory_pair;
 use async_trait::async_trait;
 
 struct Echo;
@@ -35,7 +35,7 @@ async fn drive_initialize(t: &impl Transport) -> InitializeResult {
         method: "initialize".to_string(),
         params: Some(
             serde_json::to_value(&InitializeParams {
-                protocol_version: crate::protocol::PROTOCOL_VERSION.to_string(),
+                protocol_version: crate::mcp::protocol::PROTOCOL_VERSION.to_string(),
                 capabilities: ClientCapabilities::default(),
                 client_info: Implementation {
                     name: "test".into(),
@@ -329,81 +329,81 @@ async fn fractional_and_large_numeric_ids_round_trip() {
 
 #[tokio::test]
 async fn initialize_rejects_null_or_malformed_known_capabilities() {
-        let (client, server) = in_memory_pair();
-        let handle = tokio::spawn(Server::new("t", "0").serve(server));
+    let (client, server) = in_memory_pair();
+    let handle = tokio::spawn(Server::new("t", "0").serve(server));
 
-        for capabilities in [
-            r#"{"roots":null}"#,
-            r#"{"roots":false}"#,
-            r#"{"roots":{"listChanged":null}}"#,
-            r#"{"roots":{"listChanged":"yes"}}"#,
-            r#"{"experimental":null}"#,
-            r#"{"sampling":[]}"#,
-            r#"{"elicitation":null}"#,
-            r#"{"elicitation":false}"#,
-        ] {
-            let request = format!(
-                r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"protocolVersion":"2025-06-18","capabilities":{capabilities},"clientInfo":{{"name":"test","version":"1"}}}}}}"#
-            );
-            client.send(request).await.unwrap();
-            let frame = client.recv().await.unwrap().unwrap();
-            let response: JsonRpcResponse = serde_json::from_str(&frame).unwrap();
-            assert_eq!(response.error.unwrap().code, ERR_INVALID_PARAMS);
-        }
+    for capabilities in [
+        r#"{"roots":null}"#,
+        r#"{"roots":false}"#,
+        r#"{"roots":{"listChanged":null}}"#,
+        r#"{"roots":{"listChanged":"yes"}}"#,
+        r#"{"experimental":null}"#,
+        r#"{"sampling":[]}"#,
+        r#"{"elicitation":null}"#,
+        r#"{"elicitation":false}"#,
+    ] {
+        let request = format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"protocolVersion":"2025-06-18","capabilities":{capabilities},"clientInfo":{{"name":"test","version":"1"}}}}}}"#
+        );
+        client.send(request).await.unwrap();
+        let frame = client.recv().await.unwrap().unwrap();
+        let response: JsonRpcResponse = serde_json::from_str(&frame).unwrap();
+        assert_eq!(response.error.unwrap().code, ERR_INVALID_PARAMS);
+    }
 
-        drop(client);
-        let _ = handle.await;
+    drop(client);
+    let _ = handle.await;
 }
 
 #[tokio::test]
 async fn ping_and_tools_list_validate_method_specific_params() {
-        let (client, server) = in_memory_pair();
-        let handle = tokio::spawn(Server::new("t", "0").serve(server));
+    let (client, server) = in_memory_pair();
+    let handle = tokio::spawn(Server::new("t", "0").serve(server));
 
-        for request in [
-            r#"{"jsonrpc":"2.0","id":1,"method":"ping","params":[]}"#,
-            r#"{"jsonrpc":"2.0","id":7,"method":"ping","params":null}"#,
-            r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":[]}"#,
-            r#"{"jsonrpc":"2.0","id":8,"method":"tools/list","params":null}"#,
-            r#"{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{"cursor":7}}"#,
-            r#"{"jsonrpc":"2.0","id":4,"method":"tools/list","params":{"cursor":null}}"#,
-        ] {
-            client.send(request.into()).await.unwrap();
-            let frame = client.recv().await.unwrap().unwrap();
-            let response: JsonRpcResponse = serde_json::from_str(&frame).unwrap();
-            assert_eq!(response.error.unwrap().code, ERR_INVALID_PARAMS);
-        }
+    for request in [
+        r#"{"jsonrpc":"2.0","id":1,"method":"ping","params":[]}"#,
+        r#"{"jsonrpc":"2.0","id":7,"method":"ping","params":null}"#,
+        r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":[]}"#,
+        r#"{"jsonrpc":"2.0","id":8,"method":"tools/list","params":null}"#,
+        r#"{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{"cursor":7}}"#,
+        r#"{"jsonrpc":"2.0","id":4,"method":"tools/list","params":{"cursor":null}}"#,
+    ] {
+        client.send(request.into()).await.unwrap();
+        let frame = client.recv().await.unwrap().unwrap();
+        let response: JsonRpcResponse = serde_json::from_str(&frame).unwrap();
+        assert_eq!(response.error.unwrap().code, ERR_INVALID_PARAMS);
+    }
 
-        for request in [
-            r#"{"jsonrpc":"2.0","id":5,"method":"ping","params":{}}"#,
-            r#"{"jsonrpc":"2.0","id":6,"method":"tools/list","params":{"cursor":"next"}}"#,
-        ] {
-            client.send(request.into()).await.unwrap();
-            let frame = client.recv().await.unwrap().unwrap();
-            let response: JsonRpcResponse = serde_json::from_str(&frame).unwrap();
-            assert!(response.error.is_none());
-        }
+    for request in [
+        r#"{"jsonrpc":"2.0","id":5,"method":"ping","params":{}}"#,
+        r#"{"jsonrpc":"2.0","id":6,"method":"tools/list","params":{"cursor":"next"}}"#,
+    ] {
+        client.send(request.into()).await.unwrap();
+        let frame = client.recv().await.unwrap().unwrap();
+        let response: JsonRpcResponse = serde_json::from_str(&frame).unwrap();
+        assert!(response.error.is_none());
+    }
 
-        drop(client);
-        let _ = handle.await;
+    drop(client);
+    let _ = handle.await;
 }
 
 #[tokio::test]
 async fn invalid_id_precedes_null_method_params() {
-        let (client, server) = in_memory_pair();
-        let handle = tokio::spawn(Server::new("t", "0").serve(server));
+    let (client, server) = in_memory_pair();
+    let handle = tokio::spawn(Server::new("t", "0").serve(server));
 
-        client
-            .send(r#"{"jsonrpc":"2.0","id":true,"method":"ping","params":null}"#.into())
-            .await
-            .unwrap();
-        let frame = client.recv().await.unwrap().unwrap();
-        let response: Value = serde_json::from_str(&frame).unwrap();
-        assert_eq!(response["id"], Value::Null);
-        assert_eq!(response["error"]["code"], ERR_INVALID_REQUEST);
+    client
+        .send(r#"{"jsonrpc":"2.0","id":true,"method":"ping","params":null}"#.into())
+        .await
+        .unwrap();
+    let frame = client.recv().await.unwrap().unwrap();
+    let response: Value = serde_json::from_str(&frame).unwrap();
+    assert_eq!(response["id"], Value::Null);
+    assert_eq!(response["error"]["code"], ERR_INVALID_REQUEST);
 
-        drop(client);
-        let _ = handle.await;
+    drop(client);
+    let _ = handle.await;
 }
 
 #[tokio::test]

@@ -27,7 +27,7 @@ for _cand in _CANDIDATES:
         sys.path.insert(0, str(_cand))
         break
 
-from claw_os_sdk.serve import App  # noqa: E402
+from claw_os_sdk.mcp import App  # noqa: E402
 
 
 def _bin(env_name: str, default_name: str) -> str:

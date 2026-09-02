@@ -862,12 +862,15 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 name = "claw-os-sdk"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "base64 0.22.1",
  "num-bigint",
  "num-traits",
+ "regex",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
@@ -1118,17 +1121,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cos-mcp-serve"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
-]
-
-[[package]]
 name = "cos-runtime"
 version = "0.1.0"
 dependencies = [
@@ -1202,8 +1194,8 @@ dependencies = [
  "anyhow",
  "async-trait",
  "clap",
+ "claw-os-sdk",
  "console-subscriber",
- "cos-mcp-serve",
  "cos-runtime",
  "futures",
  "i18n-embed",

@@ -9,7 +9,7 @@ rust-version = "1.93"
 [dependencies]
 anyhow = "1"
 async-trait = "0.1"
-cos-mcp-serve = { path = "../../crates/cos-mcp-serve" }
+claw-os-sdk = { path = "../../claw-os-sdk/rust" }
 cos-runtime = { path = "../../cos-runtime/rust" }
 jiff = "0.2"
 jiff-icu = "0.2"

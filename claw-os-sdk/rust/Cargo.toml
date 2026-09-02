@@ -12,6 +12,7 @@ keywords = ["claw-os", "sdk", "rpc", "policy", "agent"]
 categories = ["api-bindings", "os"]
 
 [dependencies]
+async-trait = "0.1"
 base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["arbitrary_precision"] }
@@ -19,6 +20,8 @@ num-bigint = "0.4"
 num-traits = "0.2"
 regex = "1"
 thiserror = "2"
+tokio = { version = "1", features = ["io-std", "io-util", "macros", "rt", "sync"] }
 
 [dev-dependencies]
 tempfile = "3"
+tokio = { version = "1", features = ["full"] }

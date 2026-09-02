@@ -213,8 +213,9 @@ async fn main() {
         || std::env::args().any(|a| a == "--mcp-server");
 
     if mcp_mode {
-        let server = cos_mcp_serve::Server::new("cosmic-screenshot", env!("CARGO_PKG_VERSION"))
-            .tool(Arc::new(mcp::CaptureTool));
+        let server =
+            claw_os_sdk::mcp::Server::new("cosmic-screenshot", env!("CARGO_PKG_VERSION"))
+                .tool(Arc::new(mcp::CaptureTool));
         if let Err(e) = server.serve_stdio().await {
             eprintln!("cosmic-screenshot MCP server exited: {e}");
             std::process::exit(1);

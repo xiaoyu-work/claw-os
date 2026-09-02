@@ -996,12 +996,15 @@ dependencies = [
 name = "claw-os-sdk"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "base64",
  "num-bigint",
  "num-traits",
+ "regex",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
@@ -1348,17 +1351,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cos-mcp-serve"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
-]
-
-[[package]]
 name = "cos-runtime"
 version = "0.1.0"
 dependencies = [
@@ -1420,8 +1412,8 @@ dependencies = [
  "atomic_float",
  "bstr",
  "bzip2",
+ "claw-os-sdk",
  "compio",
- "cos-mcp-serve",
  "cos-runtime",
  "cosmic-client-toolkit",
  "cosmic-mime-apps",

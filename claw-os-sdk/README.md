@@ -36,6 +36,7 @@ claw-os-sdk/
 │       ├── lib.rs               top-level re-exports + transport
 │       ├── envelope.rs          common envelope parse / error
 │       ├── ai.rs                stable chat + unsupported compatibility shims
+│       ├── mcp/                 native App MCP server runtime
 │       ├── tools.rs             tools::call / tools::catalog
 │       └── generated.rs         codegen output (envelope types)
 │
@@ -45,7 +46,6 @@ claw-os-sdk/
 │   └── src/claw_os_sdk/
 │       ├── __init__.py
 │       ├── ai.py, tools.py, mcp.py, claw_os_session.py
-│       ├── serve.py            temporary legacy import path
 │       └── generated.py
 │
 ├── node/                Node SDK (npm package `@claw-os/sdk`)
@@ -201,7 +201,7 @@ Install from an immutable release artifact or tag, never from `main`.
 |-----------|--------|
 | `wire/v1` schemas | Initial draft |
 | `wire/codegen.py` | Emits deterministic Rust, Python, Node, Go, and MCP validation bindings |
-| `rust/` | Moved from `crates/claw-bridge`; adds `ai`, `tools`. The `policy / fs / exec / pkg / notify / net` modules moved on into `cos-runtime/`. |
+| `rust/` | Public `ai`, `tools`, and native App `mcp` modules. The `policy / fs / exec / pkg / notify / net` modules live in `cos-runtime/`. |
 | `python/` | Moved from `apps/_lib`; packaged as `claw-os-sdk`. The internal `policy` / `snapshot` helpers moved on into `cos-runtime/python/`. |
 | `node/` | Built out — `ai`, `tools`, `gui` over wire v1, with tests |
 | `go/`   | Built out — `ai`, `tools`, `gui` over wire v1, with tests |

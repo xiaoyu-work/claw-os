@@ -16,7 +16,7 @@ The desktop binary supports two run modes in the same executable:
    environment (the kernel always sets it via
    `core/src/agent/tools/cos_apps_session.rs::bring_up_app`). In
    this mode the binary speaks JSON-RPC MCP over stdio using the
-   `cos-mcp-serve` crate and exposes one tool —
+   `claw_os_sdk::mcp` module and exposes one tool —
    `screenshot.capture` — backed by the same capture flow.
 
 ## Why the manifest's `entry` is absolute

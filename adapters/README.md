@@ -62,7 +62,7 @@ at load time, so the same JSON works both in-repo (sitting next to
 adapters/
   <name>/
     manifest.json   # claw.agent-api/v1 sidecar
-    main.py         # MCP server using claw_os_sdk.serve
+    main.py         # MCP server using claw_os_sdk.mcp
     test_main.py    # Python unit tests
 ```
 
@@ -74,9 +74,9 @@ repo's `adapters/` directory.
 
 ## Authoring an adapter
 
-The adapter is a Python MCP server using the `claw_os_sdk.serve.App`
+The adapter is a Python MCP server using the `claw_os_sdk.mcp.App`
 helper. The `main.py` is responsible for resolving the SDK install
-location so it can `from claw_os_sdk import serve` both in-repo and
+location so it can `from claw_os_sdk import mcp` both in-repo and
 after install — see `adapters/_template/main.py` for the copy-paste
 bootstrap.
 

@@ -11,7 +11,7 @@
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use cos_mcp_serve::{Tool, ToolResult};
+use claw_os_sdk::mcp::{Tool, ToolResult};
 use serde_json::{Value, json};
 
 use crate::{CaptureOptions, capture};

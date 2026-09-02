@@ -15,8 +15,6 @@ Public modules
 - :mod:`claw_os_sdk.gui`      — desktop GUI bootstrap: the kernel context
   handed to an app launched via ``cos app <id> --gui`` (toolkit-agnostic).
 - :mod:`claw_os_sdk.mcp`      — manifest-bound MCP App service runtime.
-- :mod:`claw_os_sdk.serve`    — deprecated import path during bundled
-  App migration.
 - :mod:`claw_os_sdk.claw_os_session` — reference implementation for
   third-party agents that want to attach to a live ``claw-os`` session.
 - :mod:`claw_os_sdk.generated` — typed dataclasses emitted from the
@@ -37,7 +35,7 @@ implementation details of the claw-os bundled apps, not part of the
 public SDK surface.
 """
 
-from . import ai, gui, mcp, serve, tools
+from . import ai, gui, mcp, tools
 
-__all__ = ["ai", "gui", "mcp", "serve", "tools"]
+__all__ = ["ai", "gui", "mcp", "tools"]
 __version__ = "0.1.0"

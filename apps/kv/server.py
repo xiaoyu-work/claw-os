@@ -25,7 +25,7 @@ from typing import Dict, Optional
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from _shared.atomic import atomic_write_bytes  # noqa: E402
 
-from claw_os_sdk.serve import App  # noqa: E402
+from claw_os_sdk.mcp import App  # noqa: E402
 
 DATA_DIR = os.environ.get("COS_DATA_DIR", "/var/lib/cos")
 STORE_PATH = os.path.join(DATA_DIR, "kv.json")

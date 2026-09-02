@@ -17,7 +17,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use cos_mcp_serve::{Server, Tool, ToolResult};
+use claw_os_sdk::mcp::{Server, Tool, ToolResult};
 use serde_json::{Value, json};
 
 /// The full list of page-commands this build exposes. Keep in sync

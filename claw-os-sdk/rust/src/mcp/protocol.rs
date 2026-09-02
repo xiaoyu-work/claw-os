@@ -154,7 +154,7 @@ impl JsonRpcError {
 
 // --- Standard JSON-RPC error codes ---------------------------------
 
-pub use crate::generated::{
+pub use super::generated::{
     ERR_INTERNAL, ERR_INVALID_PARAMS, ERR_INVALID_REQUEST, ERR_METHOD_NOT_FOUND, ERR_PARSE,
 };
 
@@ -326,6 +326,6 @@ pub enum ContentItem {
 mod tests {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/test/unit/protocol.rs"
+        "/test/unit/mcp/protocol.rs"
     ));
 }

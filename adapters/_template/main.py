@@ -12,7 +12,7 @@ import os
 import pathlib
 import sys
 
-# Bootstrap import path for ``claw_os_sdk.serve``. Order: explicit env override
+# Bootstrap import path for ``claw_os_sdk.mcp``. Order: explicit env override
 # (used by tests + packaging), then repo layout, then common install
 # layouts. First hit wins.
 _HERE = pathlib.Path(__file__).resolve().parent
@@ -28,7 +28,7 @@ for cand in _CANDIDATES:
         sys.path.insert(0, str(cand))
         break
 
-from claw_os_sdk.serve import App  # noqa: E402  — sys.path bootstrap above.
+from claw_os_sdk.mcp import App  # noqa: E402  — sys.path bootstrap above.
 
 
 app = App()

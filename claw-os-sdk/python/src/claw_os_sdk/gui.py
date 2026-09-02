@@ -1,6 +1,6 @@
 """Desktop GUI bootstrap for Claw OS apps.
 
-This is the GUI counterpart to :mod:`claw_os_sdk.serve` (agent tools) and
+This is the GUI counterpart to :mod:`claw_os_sdk.mcp` (agent tools) and
 :mod:`claw_os_sdk.ai` (model access). It does **not** wrap a UI toolkit:
 a Claw OS desktop app draws its own window in whatever toolkit/language
 it likes ("World A"). All this module does is hand the app the small
