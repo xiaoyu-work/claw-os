@@ -812,8 +812,8 @@ impl ToolRegistry {
 ///   cron, checkpoint, service, trace, watch, ipc, browser, netfilter,
 ///   policy, model). Each proxy gives the model the exact same surface as
 ///   the cos CLI for that primitive.
-/// - The compact `cos_app_catalog` / `cos_app_run` progressive App gateways
-///   plus any explicitly active stateful App-session tools.
+/// - Authenticated MCP App tools, progressively disclosed behind the fixed
+///   search/describe/call bridge.
 /// - `cos_memory` (notes) and, if the default memory DB opens cleanly,
 ///   `cos_recall` (FTS5 history search).
 pub fn default_registry_with_deps(deps: &RegistryDeps) -> ToolRegistry {
@@ -833,7 +833,6 @@ pub fn default_registry_with_deps(deps: &RegistryDeps) -> ToolRegistry {
     )));
     r.register(Arc::new(super::cos_help::CosHelp));
     super::cos_proxy::register_all_with_notes(&mut r, deps.runtime.notes().clone());
-    super::cos_apps::register_default_with_root(&mut r, deps.paths.apps_dir.clone());
     super::cos_apps_session::register_manifests(&mut r, &deps.paths.apps_dir, &deps.app_sessions);
     super::media::register_default_media_tools_with_outputs_dir(
         &mut r,

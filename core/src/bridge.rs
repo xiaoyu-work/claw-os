@@ -520,10 +520,7 @@ impl AppIdentitySession {
         };
         let ceiling = launch.ceiling();
         let bound = match declared {
-            Some(declared) => {
-                let trusted_args = trusted_pre_dispatch_args(app_id, declared, args)?;
-                bind_operation_args(declared, &trusted_args)?
-            }
+            Some(declared) => bind_operation_args(declared, args)?,
             None => BoundOperationArgs {
                 values: BTreeMap::new(),
                 argv: args.to_vec(),
@@ -1505,150 +1502,6 @@ fn bind_operation_args(
     Ok(BoundOperationArgs { values, argv })
 }
 
-fn trusted_pre_dispatch_args(
-    app_id: &str,
-    operation: &Operation,
-    args: &[String],
-) -> Result<Vec<String>, String> {
-    let mut resolved = args.to_vec();
-    for selector in operation
-        .args
-        .iter()
-        .filter(|arg| arg.trusted_resolver.is_some())
-    {
-        let resolver = selector
-            .trusted_resolver
-            .ok_or_else(|| "trusted resolver disappeared during dispatch".to_string())?;
-        let flag = crate::caps::args::flag_name(selector);
-        let supplied = resolved
-            .iter()
-            .take_while(|arg| arg.as_str() != "--")
-            .any(|arg| arg == &format!("--{flag}") || arg.starts_with(&format!("--{flag}=")));
-        if supplied && resolver == crate::caps::manifest::TrustedArgResolver::EmailHost {
-            return Err("`--host` is reserved for trusted email resolution".to_string());
-        }
-        if supplied {
-            continue;
-        }
-        let value = match resolver {
-            crate::caps::manifest::TrustedArgResolver::EmailProvider => {
-                resolve_email_provider(operation, selector)?.to_string()
-            }
-            crate::caps::manifest::TrustedArgResolver::EmailHost => {
-                let bound = crate::caps::args::bind_supplied_cli_args(&operation.args, &resolved)?;
-                let provider = bound
-                    .get("provider")
-                    .and_then(serde_json::Value::as_str)
-                    .ok_or_else(|| {
-                        "email host resolver requires provider resolution".to_string()
-                    })?;
-                resolve_email_host(provider)?
-            }
-            crate::caps::manifest::TrustedArgResolver::CalendarProvider => {
-                if app_id != "calendar" {
-                    return Err(format!(
-                        "App `{app_id}` is not allowed to use the calendar provider resolver"
-                    ));
-                }
-                resolve_calendar_provider()?.to_string()
-            }
-            crate::caps::manifest::TrustedArgResolver::NtfyServer => resolve_ntfy_server()?,
-        };
-        let delimiter = resolved
-            .iter()
-            .position(|arg| arg == "--")
-            .unwrap_or(resolved.len());
-        resolved.splice(delimiter..delimiter, [format!("--{flag}"), value]);
-    }
-    Ok(resolved)
-}
-
-fn resolve_ntfy_server() -> Result<String, String> {
-    let normalize = |value: String| value.trim().trim_end_matches('/').to_string();
-    if let Some(configured) = std::env::var("COS_NTFY_SERVER")
-        .ok()
-        .map(&normalize)
-        .filter(|value| !value.is_empty())
-    {
-        return Ok(configured);
-    }
-    Ok(crate::credential::try_load("ntfy_server", "default")
-        .map_err(|error| format!("resolve ntfy server: {error}"))?
-        .map(normalize)
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "https://ntfy.sh".to_string()))
-}
-
-fn resolve_email_provider<'a>(
-    operation: &'a Operation,
-    selector: &crate::caps::manifest::Arg,
-) -> Result<&'a str, String> {
-    let mappings = operation
-        .needs
-        .iter()
-        .find_map(|need| match &need.scope {
-            ScopeBinding::FromArgMap { arg, values } if arg == &selector.name => Some(values),
-            _ => None,
-        })
-        .ok_or_else(|| {
-            format!(
-                "trusted resolver `{}` requires a from-arg-map capability",
-                selector.name
-            )
-        })?;
-    let mut provider = None;
-    for candidate in ["gmail", "outlook", "smtp"] {
-        let Some(scope) = mappings.get(candidate) else {
-            continue;
-        };
-        let configured = match scope {
-            Scope::Name(name) => {
-                let (namespace, credential) = name.split_once('/').ok_or_else(|| {
-                    format!("email provider `{candidate}` has an invalid credential scope")
-                })?;
-                crate::credential::is_configured(credential, namespace)
-                    .map_err(|error| format!("resolve email provider: {error}"))?
-                    || (candidate == "smtp" && std::env::var_os("SMTP_HOST").is_some())
-            }
-            _ => {
-                return Err(format!(
-                    "email provider `{candidate}` must map to a credential name scope"
-                ));
-            }
-        };
-        if configured {
-            provider = Some(candidate);
-            break;
-        }
-    }
-    provider.ok_or_else(|| {
-        "no email provider configured; pass --provider or configure credentials".to_string()
-    })
-}
-
-fn resolve_calendar_provider() -> Result<&'static str, String> {
-    for (provider, credential) in [
-        ("google", "GOOGLE_ACCESS_TOKEN"),
-        ("outlook", "MICROSOFT_ACCESS_TOKEN"),
-    ] {
-        if crate::credential::is_configured(credential, "default")
-            .map_err(|error| format!("resolve calendar provider: {error}"))?
-        {
-            return Ok(provider);
-        }
-    }
-    Ok("local")
-}
-
-fn resolve_email_host(provider: &str) -> Result<String, String> {
-    match provider {
-        "gmail" => Ok("gmail.googleapis.com".to_string()),
-        "outlook" => Ok("graph.microsoft.com".to_string()),
-        "smtp" => Ok(std::env::var("SMTP_HOST").unwrap_or_else(|_| "localhost".to_string())),
-        other => Err(format!("unsupported email provider `{other}`")),
-    }
-}
-
 fn canonical_operation_argv(
     operation: &Operation,
     raw: &[String],
@@ -1663,20 +1516,6 @@ fn canonical_operation_argv(
         .args
         .iter()
         .filter(|declaration| declaration.effective_binding() == ArgBinding::Positional)
-        .collect::<Vec<_>>();
-    let alias_count = supplied_positionals
-        .len()
-        .saturating_sub(positional_declarations.len())
-        .min(
-            operation
-                .args
-                .iter()
-                .filter(|declaration| declaration.positional_alias)
-                .count(),
-        );
-    let supplied_positionals = supplied_positionals
-        .into_iter()
-        .skip(alias_count)
         .collect::<Vec<_>>();
     let mut positionals = Vec::new();
     let mut supplied_count = 0;
@@ -1755,9 +1594,8 @@ fn raw_operation_positionals(operation: &Operation, raw: &[String]) -> Vec<Strin
                 .split_once('=')
                 .map_or(token.as_str(), |(name, _)| name);
             if let Some(declaration) = operation.args.iter().find(|declaration| {
-                (declaration.effective_binding() == crate::caps::manifest::ArgBinding::Flag
-                    && option == format!("--{}", crate::caps::args::flag_name(declaration)))
-                    || declaration.aliases.iter().any(|alias| alias == option)
+                declaration.effective_binding() == crate::caps::manifest::ArgBinding::Flag
+                    && option == format!("--{}", crate::caps::args::flag_name(declaration))
             }) {
                 if declaration.kind != ArgKind::Bool && !token.contains('=') {
                     index += 1;

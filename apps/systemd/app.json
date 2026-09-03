@@ -11,47 +11,359 @@
   "runtime": "python",
   "operations": {
     "status": {
-      "label": {"en": "Inspect a systemd unit"},
+      "label": {
+        "en": "Inspect a systemd unit"
+      },
       "args": [
-        {"name": "unit", "kind": "name", "required": true}
+        {
+          "name": "unit",
+          "kind": "name",
+          "required": true
+        }
       ],
       "needs": [
         {
           "verb": "sys.observe",
-          "scope": {"kind": "from-arg", "arg": "unit"},
-          "why": {"en": "Read the unit's load, active, sub-state, and enablement state."}
+          "scope": {
+            "kind": "from-arg",
+            "arg": "unit"
+          },
+          "why": {
+            "en": "Read the unit's load, active, sub-state, and enablement state."
+          }
         }
       ]
     },
     "start": {
-      "label": {"en": "Start a systemd unit"},
-      "args": [{"name": "unit", "kind": "name", "required": true}],
-      "needs": [{"verb": "sys.service", "scope": {"kind": "from-arg", "arg": "unit"}, "why": {"en": "Start this native system service."}}]
+      "label": {
+        "en": "Start a systemd unit"
+      },
+      "args": [
+        {
+          "name": "unit",
+          "kind": "name",
+          "required": true
+        }
+      ],
+      "needs": [
+        {
+          "verb": "sys.service",
+          "scope": {
+            "kind": "from-arg",
+            "arg": "unit"
+          },
+          "why": {
+            "en": "Start this native system service."
+          }
+        }
+      ]
     },
     "stop": {
-      "label": {"en": "Stop a systemd unit"},
-      "args": [{"name": "unit", "kind": "name", "required": true}],
-      "needs": [{"verb": "sys.service", "scope": {"kind": "from-arg", "arg": "unit"}, "why": {"en": "Stop this native system service."}}]
+      "label": {
+        "en": "Stop a systemd unit"
+      },
+      "args": [
+        {
+          "name": "unit",
+          "kind": "name",
+          "required": true
+        }
+      ],
+      "needs": [
+        {
+          "verb": "sys.service",
+          "scope": {
+            "kind": "from-arg",
+            "arg": "unit"
+          },
+          "why": {
+            "en": "Stop this native system service."
+          }
+        }
+      ]
     },
     "restart": {
-      "label": {"en": "Restart a systemd unit"},
-      "args": [{"name": "unit", "kind": "name", "required": true}],
-      "needs": [{"verb": "sys.service", "scope": {"kind": "from-arg", "arg": "unit"}, "why": {"en": "Restart this native system service."}}]
+      "label": {
+        "en": "Restart a systemd unit"
+      },
+      "args": [
+        {
+          "name": "unit",
+          "kind": "name",
+          "required": true
+        }
+      ],
+      "needs": [
+        {
+          "verb": "sys.service",
+          "scope": {
+            "kind": "from-arg",
+            "arg": "unit"
+          },
+          "why": {
+            "en": "Restart this native system service."
+          }
+        }
+      ]
     },
     "reload": {
-      "label": {"en": "Reload a systemd unit"},
-      "args": [{"name": "unit", "kind": "name", "required": true}],
-      "needs": [{"verb": "sys.service", "scope": {"kind": "from-arg", "arg": "unit"}, "why": {"en": "Ask this service to reload its configuration."}}]
+      "label": {
+        "en": "Reload a systemd unit"
+      },
+      "args": [
+        {
+          "name": "unit",
+          "kind": "name",
+          "required": true
+        }
+      ],
+      "needs": [
+        {
+          "verb": "sys.service",
+          "scope": {
+            "kind": "from-arg",
+            "arg": "unit"
+          },
+          "why": {
+            "en": "Ask this service to reload its configuration."
+          }
+        }
+      ]
     },
     "enable": {
-      "label": {"en": "Enable a systemd unit"},
-      "args": [{"name": "unit", "kind": "name", "required": true}],
-      "needs": [{"verb": "sys.service", "scope": {"kind": "from-arg", "arg": "unit"}, "why": {"en": "Enable this unit for future boots."}}]
+      "label": {
+        "en": "Enable a systemd unit"
+      },
+      "args": [
+        {
+          "name": "unit",
+          "kind": "name",
+          "required": true
+        }
+      ],
+      "needs": [
+        {
+          "verb": "sys.service",
+          "scope": {
+            "kind": "from-arg",
+            "arg": "unit"
+          },
+          "why": {
+            "en": "Enable this unit for future boots."
+          }
+        }
+      ]
     },
     "disable": {
-      "label": {"en": "Disable a systemd unit"},
-      "args": [{"name": "unit", "kind": "name", "required": true}],
-      "needs": [{"verb": "sys.service", "scope": {"kind": "from-arg", "arg": "unit"}, "why": {"en": "Disable this unit for future boots."}}]
+      "label": {
+        "en": "Disable a systemd unit"
+      },
+      "args": [
+        {
+          "name": "unit",
+          "kind": "name",
+          "required": true
+        }
+      ],
+      "needs": [
+        {
+          "verb": "sys.service",
+          "scope": {
+            "kind": "from-arg",
+            "arg": "unit"
+          },
+          "why": {
+            "en": "Disable this unit for future boots."
+          }
+        }
+      ]
     }
+  },
+  "schema_version": 2,
+  "mcp": {
+    "entry": "server.py",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "access": {
+      "system_agent": true,
+      "apps": []
+    },
+    "tools": [
+      {
+        "name": "systemd.status",
+        "summary": {
+          "en": "Inspect a systemd unit"
+        },
+        "args": [
+          {
+            "name": "unit",
+            "kind": "name",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.observe",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "unit"
+            },
+            "why": {
+              "en": "Read the unit's load, active, sub-state, and enablement state."
+            }
+          }
+        ]
+      },
+      {
+        "name": "systemd.start",
+        "summary": {
+          "en": "Start a systemd unit"
+        },
+        "args": [
+          {
+            "name": "unit",
+            "kind": "name",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.service",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "unit"
+            },
+            "why": {
+              "en": "Start this native system service."
+            }
+          }
+        ]
+      },
+      {
+        "name": "systemd.stop",
+        "summary": {
+          "en": "Stop a systemd unit"
+        },
+        "args": [
+          {
+            "name": "unit",
+            "kind": "name",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.service",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "unit"
+            },
+            "why": {
+              "en": "Stop this native system service."
+            }
+          }
+        ]
+      },
+      {
+        "name": "systemd.restart",
+        "summary": {
+          "en": "Restart a systemd unit"
+        },
+        "args": [
+          {
+            "name": "unit",
+            "kind": "name",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.service",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "unit"
+            },
+            "why": {
+              "en": "Restart this native system service."
+            }
+          }
+        ]
+      },
+      {
+        "name": "systemd.reload",
+        "summary": {
+          "en": "Reload a systemd unit"
+        },
+        "args": [
+          {
+            "name": "unit",
+            "kind": "name",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.service",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "unit"
+            },
+            "why": {
+              "en": "Ask this service to reload its configuration."
+            }
+          }
+        ]
+      },
+      {
+        "name": "systemd.enable",
+        "summary": {
+          "en": "Enable a systemd unit"
+        },
+        "args": [
+          {
+            "name": "unit",
+            "kind": "name",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.service",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "unit"
+            },
+            "why": {
+              "en": "Enable this unit for future boots."
+            }
+          }
+        ]
+      },
+      {
+        "name": "systemd.disable",
+        "summary": {
+          "en": "Disable a systemd unit"
+        },
+        "args": [
+          {
+            "name": "unit",
+            "kind": "name",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.service",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "unit"
+            },
+            "why": {
+              "en": "Disable this unit for future boots."
+            }
+          }
+        ]
+      }
+    ]
   }
 }

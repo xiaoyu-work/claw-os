@@ -10,10 +10,10 @@ fn app_stdin_opt_in_resolves_only_installed_manifest_operations() {
     std::fs::write(
         app.join("app.json"),
         r#"{
-            "id":"pipe","version":"0.1","name":"Pipe",
+            "id":"pipe","version":"0.1","name": {"en": "Pipe"},
             "operations":{
-                "read":{"label":"Read"},
-                "write":{"label":"Write","stdin":true}
+                "read":{"label": {"en": "Read"}},
+                "write":{"label": {"en": "Write"},"stdin":true}
             }
         }"#,
     )
@@ -715,7 +715,7 @@ fn install_generates_desktop_entry_for_gui_app() {
         r#"{
               "id": "notes",
               "version": "0.0.1",
-              "name": "Notes",
+              "name": {"en": "Notes"},
               "desktop": {
                 "icon": "notes",
                 "categories": ["Utility"],
@@ -768,7 +768,7 @@ fn install_skips_desktop_entry_for_headless_app() {
     write_min_app(
         &src,
         "calc",
-        r#"{"id":"calc","version":"0.0.1","name":"Calc"}"#,
+        r#"{"id":"calc","version":"0.0.1","name": {"en": "Calc"}}"#,
     );
 
     let prev_apps = std::env::var_os("COS_APPS_DIR");
@@ -957,7 +957,7 @@ fn install_rejects_unknown_tool_in_manifest() {
         r#"{
               "id": "bad",
               "version": "0.0.1",
-              "name": "Bad",
+              "name": {"en": "Bad"},
               "ai": {
                 "budget": {"monthly_units": 1},
                 "safety": "strict",
@@ -994,7 +994,7 @@ fn install_copies_app_without_ai_block_and_skips_consent() {
         r#"{
               "id": "calc",
               "version": "0.0.1",
-              "name": "Calc"
+              "name": {"en": "Calc"}
             }"#,
     );
 
@@ -1032,7 +1032,7 @@ fn install_no_consent_defers_consent_for_ai_app() {
         r#"{
               "id": "summ",
               "version": "0.0.1",
-              "name": "Summ",
+              "name": {"en": "Summ"},
               "ai": {
                 "budget": {"monthly_units": 100},
                 "safety": "strict",
@@ -1082,7 +1082,7 @@ fn install_yes_grants_consent_for_ai_app() {
         r#"{
               "id": "yes",
               "version": "0.0.1",
-              "name": "Yes",
+              "name": {"en": "Yes"},
               "ai": {
                 "budget": {"monthly_units": 100},
                 "safety": "strict",
@@ -1128,7 +1128,7 @@ fn install_refuses_to_overwrite_without_force() {
         r#"{
               "id": "twice",
               "version": "0.0.1",
-              "name": "Twice"
+              "name": {"en": "Twice"}
             }"#,
     );
     std::fs::create_dir_all(dst.join("twice")).unwrap();
@@ -1161,7 +1161,7 @@ fn install_force_replaces_existing_install() {
         r#"{
               "id": "force",
               "version": "0.0.1",
-              "name": "Force"
+              "name": {"en": "Force"}
             }"#,
     );
     std::fs::create_dir_all(dst.join("force")).unwrap();
@@ -1199,14 +1199,14 @@ fn install_force_lint_failure_preserves_existing_install() {
     write_min_app(
         &installed,
         "atomic",
-        r#"{"id":"atomic","version":"0.0.1","name":"Atomic"}"#,
+        r#"{"id":"atomic","version":"0.0.1","name": {"en": "Atomic"}}"#,
     );
     std::fs::write(installed.join("old-state"), b"still usable").unwrap();
     reseal_app(&installed, "atomic");
     write_min_app(
         &src,
         "atomic",
-        r#"{"id":"atomic","version":"0.0.2","name":"Atomic"}"#,
+        r#"{"id":"atomic","version":"0.0.2","name": {"en": "Atomic"}}"#,
     );
     std::fs::write(src.join("main.py"), b"import openai\n").unwrap();
     reseal_app(&src, "atomic");
@@ -1250,19 +1250,19 @@ fn install_recovers_backup_left_by_interrupted_forced_install() {
     write_min_app(
         &backup,
         "recover",
-        r#"{"id":"recover","version":"0.0.1","name":"Recover"}"#,
+        r#"{"id":"recover","version":"0.0.1","name": {"en": "Recover"}}"#,
     );
     std::fs::write(backup.join("old-state"), b"recovered").unwrap();
     reseal_app(&backup, "recover");
     write_min_app(
         &staging,
         "recover",
-        r#"{"id":"recover","version":"0.0.2","name":"Recover"}"#,
+        r#"{"id":"recover","version":"0.0.2","name": {"en": "Recover"}}"#,
     );
     write_min_app(
         &src,
         "recover",
-        r#"{"id":"recover","version":"0.0.3","name":"Recover"}"#,
+        r#"{"id":"recover","version":"0.0.3","name": {"en": "Recover"}}"#,
     );
     std::fs::write(src.join("main.py"), b"import openai\n").unwrap();
     reseal_app(&src, "recover");
@@ -1304,13 +1304,13 @@ fn install_force_publish_failure_restores_existing_install() {
     write_min_app(
         &installed,
         "rollback",
-        r#"{"id":"rollback","version":"0.0.1","name":"Rollback"}"#,
+        r#"{"id":"rollback","version":"0.0.1","name": {"en": "Rollback"}}"#,
     );
     std::fs::write(installed.join("old-state"), b"restorable").unwrap();
     write_min_app(
         &src,
         "rollback",
-        r#"{"id":"rollback","version":"0.0.2","name":"Rollback"}"#,
+        r#"{"id":"rollback","version":"0.0.2","name": {"en": "Rollback"}}"#,
     );
 
     let mut rename_calls = 0;
@@ -1352,7 +1352,7 @@ fn install_same_path_keeps_development_tree_in_place() {
     write_min_app(
         &source,
         "devapp",
-        r#"{"id":"devapp","version":"0.0.1","name":"Dev App"}"#,
+        r#"{"id":"devapp","version":"0.0.1","name": {"en": "Dev App"}}"#,
     );
     std::fs::write(source.join("working-copy"), b"preserve me").unwrap();
     reseal_app(&source, "devapp");
@@ -1398,7 +1398,7 @@ fn install_rejects_symlink_in_source_tree() {
         r#"{
               "id": "linky",
               "version": "0.0.1",
-              "name": "Linky"
+              "name": {"en": "Linky"}
             }"#,
     );
 
@@ -1506,11 +1506,11 @@ fn write_runtime_app_manifest(
     let mut manifest = json!({
         "id": id,
         "version": "1.0.0",
-        "name": id,
+        "name": {"en": id},
         "runtime": runtime,
         "operations": {
             "echo": {
-                "label": "Echo",
+                "label": {"en": "Echo"},
                 "args": [
                     {"name": "first", "kind": "text"},
                     {"name": "second", "kind": "text"},
@@ -1520,7 +1520,7 @@ fn write_runtime_app_manifest(
                      "default": 10}
                 ]
             },
-            "fail": {"label": "Fail"}
+            "fail": {"label": {"en": "Fail"}}
         }
     });
     if let Some(entry) = entry {

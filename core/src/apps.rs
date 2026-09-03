@@ -327,12 +327,6 @@ fn arg_schema(arg: &Arg) -> Value {
     if arg.repeatable {
         schema["items"] = json!({"type": value_type});
     }
-    if !arg.aliases.is_empty() {
-        schema["aliases"] = serde_json::json!(arg.aliases);
-    }
-    if arg.positional_alias {
-        schema["positional_alias"] = serde_json::Value::Bool(true);
-    }
     if !arg.choices.is_empty() {
         if arg.repeatable {
             schema["items"]["enum"] = serde_json::Value::Array(arg.choices.clone());
@@ -342,9 +336,6 @@ fn arg_schema(arg: &Arg) -> Value {
     }
     if let Some(default) = &arg.default {
         schema["default"] = default.clone();
-    }
-    if let Some(default_from) = &arg.default_from {
-        schema["default_from"] = json!(default_from);
     }
     schema
 }

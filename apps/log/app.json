@@ -139,5 +139,144 @@
         }
       ]
     }
+  },
+  "schema_version": 2,
+  "mcp": {
+    "entry": "server.py",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "access": {
+      "system_agent": true,
+      "apps": []
+    },
+    "tools": [
+      {
+        "name": "log.read",
+        "summary": {
+          "en": "Read recent log entries (filter by --app, --status)"
+        },
+        "args": [
+          {
+            "name": "limit",
+            "kind": "integer",
+            "required": false,
+            "default": 20
+          },
+          {
+            "name": "app",
+            "kind": "text",
+            "required": false
+          },
+          {
+            "name": "status",
+            "kind": "text",
+            "required": false
+          }
+        ],
+        "needs": [
+          {
+            "verb": "data.log.read",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Read entries from the system audit log."
+            }
+          }
+        ]
+      },
+      {
+        "name": "log.tail",
+        "summary": {
+          "en": "Show last N log entries"
+        },
+        "args": [
+          {
+            "name": "n",
+            "kind": "integer",
+            "required": false,
+            "default": 10
+          }
+        ],
+        "needs": [
+          {
+            "verb": "data.log.read",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Read the most recent entries from the system audit log."
+            }
+          }
+        ]
+      },
+      {
+        "name": "log.search",
+        "summary": {
+          "en": "Search logs by keyword (filter by --app)"
+        },
+        "args": [
+          {
+            "name": "query",
+            "kind": "text",
+            "required": true,
+            "repeatable": true
+          },
+          {
+            "name": "limit",
+            "kind": "integer",
+            "required": false,
+            "default": 20
+          },
+          {
+            "name": "app",
+            "kind": "text",
+            "required": false
+          }
+        ],
+        "needs": [
+          {
+            "verb": "data.log.read",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Scan the system audit log for entries matching your query."
+            }
+          }
+        ]
+      },
+      {
+        "name": "log.write",
+        "summary": {
+          "en": "Write a manual log entry"
+        },
+        "args": [
+          {
+            "name": "message",
+            "kind": "text",
+            "required": true,
+            "repeatable": true
+          },
+          {
+            "name": "level",
+            "kind": "text",
+            "required": false,
+            "default": "info"
+          }
+        ],
+        "needs": [
+          {
+            "verb": "data.log.write",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Append a manual entry to the system audit log."
+            }
+          }
+        ]
+      }
+    ]
   }
 }

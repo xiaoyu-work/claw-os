@@ -40,14 +40,15 @@ the handler.
 ## 1. What is a Claw OS app?
 
 A Claw OS app is a directory whose minimum contents are a manifest and an
-entry point. Apps may also include a stateful MCP service, desktop surface,
+entry point. An Agent-callable App also includes an MCP service entry; a
+strictly human-only App may omit it. Apps may include a desktop surface,
 dependencies, tests, and arbitrary assets:
 
 ```
 my-app/
 ├── app.json        ← required manifest
 ├── main.py         ← default Python entry point
-├── server.py       ← optional authenticated MCP App service
+├── server.py       ← authenticated MCP App service
 └── assets/         ← optional app-owned files
 ```
 
@@ -94,24 +95,49 @@ Off-system (writing code on a non-Claw-OS machine) you can either:
 
 ## 3. The minimum viable app
 
-Manifest (anything not shown gets a sensible default — `runtime`
-defaults to `python`):
+Manifest for an Agent-callable App (`runtime` defaults to `python`):
 
 ```jsonc
 {
   "id": "hello",
   "version": "0.1.0",
+  "schema_version": 2,
   "name": { "en": "Hello" },
   "runtime": "python",
   "operations": {
     "say": {
-      "label": { "en": "Say something" }
+      "label": { "en": "Say something" },
+      "args": [
+        {
+          "name": "message",
+          "kind": "text",
+          "required": true
+        }
+      ]
     }
+  },
+  "mcp": {
+    "entry": "server.py",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "tools": [
+      {
+        "name": "hello.say",
+        "summary": { "en": "Say something." },
+        "args": [
+          {
+            "name": "message",
+            "kind": "text",
+            "required": true
+          }
+        ]
+      }
+    ]
   }
 }
 ```
 
-Only `id`, `version`, and `name.en` are mandatory
+Only a human-only App may stop at `id`, `version`, and `name.en`
 ([`manifest.rs:613-621`](../core/src/caps/manifest.rs)). Every
 `name`/`label`/`summary`/`why` field is a localised map; English is
 required, other locales (`zh-CN`, …) are optional fallbacks
@@ -164,49 +190,22 @@ For a mode-specific confirmation, use `required_when` with the same
 needs. The argument is accepted exactly when the condition applies and is then
 required. The condition must reference an earlier argument; conditionally
 required arguments cannot be repeatable or also declare `required: true`,
-defaults, or trusted resolvers. A conditional confirmation still declares
+or defaults. A conditional confirmation still declares
 `choices: [true]`.
 
 Use `choices` for a closed scalar enum. Set `repeatable: true` when every
 occurrence is meaningful: the bound value becomes an ordered JSON array and a
 flag is emitted once per item. Repeatable positional arguments must be the
-last positional declaration. Repeatable booleans, derived defaults, and
-trusted resolvers are rejected because their occurrence semantics would be
-ambiguous.
+last positional declaration. Repeatable booleans are rejected.
 
-Use `aliases` for explicit alternate option spellings, such as
-`"aliases": ["-n"]` or a positional argument's compatibility
-`"aliases": ["--output"]`. Every spelling binds the same effective value and
-conflicting forms are rejected. `positional_alias: true` is reserved for an
-optional flag that historically occupied a surplus leading positional slot;
-the one-positional canonical form remains unambiguous and canonical argv emits
-the flag form. Positional aliases cannot coexist with optional or repeatable
-positional arguments.
+Every argument has one canonical name and one binding. `aliases`,
+`positional_alias`, `default_from`, and `trusted_resolver` are invalid
+manifest fields. Callers provide context-dependent values explicitly.
 
 An optional argument may declare a non-null literal `default` matching its
 `kind`. Omit `default` when there is no default; explicit JSON `null` is
-invalid. If its default depends on an earlier string argument, use
-`default_from`:
-
-```jsonc
-{
-  "name": "output",
-  "kind": "path",
-  "binding": "flag",
-  "required": false,
-  "default_from": {
-    "arg": "url",
-    "transform": "url-path-basename",
-    "prefix": "~/",
-    "fallback": "download"
-  }
-}
-```
-
-The supported transforms are `identity` and `url-path-basename`.
-`url-path-basename` requires a text source, path destination, and safe
-single-component fallback. `default_from` is limited to one-shot operations and is rejected for MCP tool
-arguments.
+invalid. Defaults are literals only; the runtime never derives one argument
+from another argument, credentials, environment, or host configuration.
 Defaulted arguments must be optional; defaulted positional arguments follow
 all required positional arguments. Defaulted positionals cannot be mixed with
 optional positional slots that have no default because argv cannot represent
@@ -227,15 +226,9 @@ default and omitted boolean into that object, validates choices and repeatable
 arrays, and normalizes path values. One shared effective-call resolver feeds
 the in-process gate, daemon gate, and forwarded tool arguments.
 
-The bundled email and calendar apps use the reserved `email-provider` and
-`calendar-provider` trusted resolvers. Before capability derivation, the
-trusted launcher selects a provider from credential metadata, materializes
-`--provider <name>`, and the manifest grants only that provider's exact
-credential and host scopes. Calendar falls back to `local` when neither remote
-credential exists. The bundled ntfy gateway similarly materializes its
-configured `NTFY_SERVER` before deriving the exact URL-host scope and falls
-back to `https://ntfy.sh` only when no server is configured. Third-party Apps
-and MCP tools cannot use trusted resolvers.
+Provider, host, destination, and server selection are explicit typed
+arguments. Conditional needs bind fixed or caller-supplied scopes only after
+the selected provider/mode condition applies.
 
 An operation may set `stdin: true` to receive explicitly forwarded caller
 input. The top-level CLI opts in with `--stdin`, for example
@@ -373,10 +366,9 @@ Needs that apply only in one mode declare `when` explicitly:
 `{"kind":"arg-equals","arg":"provider","value":"google"}`. An inactive
 condition omits only that declared need. Once active, missing arguments and
 unmapped `from-arg-map` values remain errors. Binding a capability
-unconditionally to an optional argument without a default or trusted resolver
-is rejected at manifest load time. `arg-not-equals` provides the inverse
-comparison when a safe fallback must omit authority, such as preventing a
-private credential from being used with a public default endpoint.
+unconditionally to an optional argument without a matching `required_when`
+condition is rejected at manifest load time. `arg-not-equals` provides the
+inverse comparison when one mode must omit authority.
 
 Check it at runtime by importing the internal runtime:
 

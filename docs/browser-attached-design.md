@@ -146,9 +146,10 @@ tools/
    `policy.require()`, which uses the hidden policy bridge over `COS_SESSION`,
    inheriting the kernel's permission decision.
 
-4. **Coarse gate**: invoking `cos app browser-attached` itself requires
-   `agent.invoke:name=browser-attached` (see two-tier enforcement in
-   `core/src/agent/tools/cos_apps.rs`).
+4. **Exact invoke gate**: each MCP call requires
+   `agent.invoke:browser-attached/<tool>` and passes through the authenticated
+   App Gateway before the target receives any authority
+   (`core/src/agent/tools/app_gateway.rs`).
 
 5. **Per-host scope**: most verbs require a host-scoped grant
    (`browser.nav:host=mail.example.com`), so a grant for one site does not

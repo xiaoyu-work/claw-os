@@ -268,5 +268,256 @@
       "openpyxl",
       "python-pptx"
     ]
+  },
+  "schema_version": 2,
+  "mcp": {
+    "entry": "server.py",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "access": {
+      "system_agent": true,
+      "apps": []
+    },
+    "tools": [
+      {
+        "name": "doc.read",
+        "summary": {
+          "en": "Read document content (PDF, DOCX, XLSX, PPTX, CSV, etc.)"
+        },
+        "args": [
+          {
+            "name": "path",
+            "kind": "path",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "path"
+            },
+            "why": {
+              "en": "Read the contents of the file you asked to open."
+            }
+          }
+        ]
+      },
+      {
+        "name": "doc.info",
+        "summary": {
+          "en": "Get document metadata without reading full content"
+        },
+        "args": [
+          {
+            "name": "path",
+            "kind": "path",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.meta",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "path"
+            },
+            "why": {
+              "en": "Inspect the file's metadata (size, format) without reading its content."
+            }
+          }
+        ]
+      },
+      {
+        "name": "doc.convert",
+        "summary": {
+          "en": "Convert document to another format"
+        },
+        "args": [
+          {
+            "name": "path",
+            "kind": "path",
+            "required": true
+          },
+          {
+            "name": "to",
+            "kind": "name",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "path"
+            },
+            "why": {
+              "en": "Read the source document so it can be converted."
+            }
+          },
+          {
+            "verb": "fs.write",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Write the converted document to disk."
+            }
+          }
+        ]
+      },
+      {
+        "name": "doc.summarize",
+        "summary": {
+          "en": "Summarize a document into 5 short bullet lines via the AI gate"
+        },
+        "args": [
+          {
+            "name": "text",
+            "kind": "text",
+            "required": false,
+            "repeatable": true
+          },
+          {
+            "name": "file",
+            "kind": "path",
+            "required": false
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "file"
+            },
+            "why": {
+              "en": "Read the document so its contents can be summarised."
+            },
+            "when": {
+              "kind": "arg-present",
+              "arg": "file"
+            }
+          },
+          {
+            "verb": "ai.chat.untrusted",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Send the document text to a model so it can be summarised for you."
+            }
+          },
+          {
+            "verb": "memory.write",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "self-ref",
+                "value": "doc"
+              }
+            },
+            "why": {
+              "en": "Remember the document summary so the agent can recall it later."
+            }
+          }
+        ]
+      },
+      {
+        "name": "doc.explain",
+        "summary": {
+          "en": "Explain the supplied content in plain prose via the AI gate"
+        },
+        "args": [
+          {
+            "name": "text",
+            "kind": "text",
+            "required": false,
+            "repeatable": true
+          },
+          {
+            "name": "file",
+            "kind": "path",
+            "required": false
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "file"
+            },
+            "why": {
+              "en": "Read the document so it can be explained."
+            },
+            "when": {
+              "kind": "arg-present",
+              "arg": "file"
+            }
+          },
+          {
+            "verb": "ai.chat.untrusted",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Send the content to a model so it can be explained for you."
+            }
+          }
+        ]
+      },
+      {
+        "name": "doc.rewrite",
+        "summary": {
+          "en": "Rewrite the supplied content following an instruction"
+        },
+        "args": [
+          {
+            "name": "text",
+            "kind": "text",
+            "required": false,
+            "repeatable": true
+          },
+          {
+            "name": "file",
+            "kind": "path",
+            "required": false
+          },
+          {
+            "name": "instruction",
+            "kind": "name",
+            "required": false
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "file"
+            },
+            "why": {
+              "en": "Read the document so it can be rewritten."
+            },
+            "when": {
+              "kind": "arg-present",
+              "arg": "file"
+            }
+          },
+          {
+            "verb": "ai.chat.untrusted",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Send the content to a model to be rewritten per your instruction."
+            }
+          }
+        ]
+      }
+    ]
   }
 }

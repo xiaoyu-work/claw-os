@@ -146,7 +146,6 @@ def _parser_flags(tree: ast.Module) -> set[str]:
 
 def _gateway_list_contract(tree: ast.Module):
     positionals: list[str] = []
-    positional_aliases: list[str] = []
     flags: set[str] = set()
     for node in ast.walk(tree):
         if not (
@@ -165,17 +164,10 @@ def _gateway_list_contract(tree: ast.Module):
                         for item in keyword.value.elts
                         if isinstance(item, ast.Constant) and isinstance(item.value, str)
                     )
-            elif keyword.arg == "positional_aliases":
-                if isinstance(keyword.value, (ast.Tuple, ast.List)):
-                    positional_aliases.extend(
-                        item.value
-                        for item in keyword.value.elts
-                        if isinstance(item, ast.Constant) and isinstance(item.value, str)
-                    )
             elif keyword.arg in {"value_flags", "bool_flags"}:
                 values = _strings(keyword.value, {})
                 flags.update(value.replace("-", "_") for value in values)
-    return positionals, positional_aliases, flags
+    return positionals, flags
 
 
 def _normalized_bool_flags(tree: ast.Module) -> set[str]:
@@ -197,19 +189,11 @@ def _normalized_bool_flags(tree: ast.Module) -> set[str]:
     return flags
 
 
-def _parser_aliases(tree: ast.Module) -> set[str]:
-    aliases = set()
+def _parser_options(tree: ast.Module) -> set[str]:
+    options = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        if isinstance(node.func, ast.Name) and node.func.id == "parse_canonical_argv":
-            for keyword in node.keywords:
-                if keyword.arg == "aliases" and isinstance(keyword.value, ast.Dict):
-                    aliases.update(
-                        key.value
-                        for key in keyword.value.keys
-                        if isinstance(key, ast.Constant) and isinstance(key.value, str)
-                    )
         if isinstance(node.func, ast.Attribute) and node.func.attr == "add_argument":
             option_args = [
                 arg.value
@@ -219,8 +203,8 @@ def _parser_aliases(tree: ast.Module) -> set[str]:
                 and arg.value.startswith("-")
             ]
             if option_args:
-                aliases.update(option_args)
-    return aliases
+                options.update(option_args)
+    return options
 
 
 def _function_map(tree: ast.Module) -> dict[str, ast.FunctionDef]:
@@ -468,40 +452,24 @@ def test_parser_flags_have_flag_bindings() -> None:
             for arg in operation.get("args", [])
             if _binding(arg) == "flag"
         }
-        declared.update(
-            alias.removeprefix("--")
-            for operation in manifest.get("operations", {}).values()
-            for arg in operation.get("args", [])
-            for alias in arg.get("aliases", [])
-            if alias.startswith("--")
-        )
         missing = _parser_flags(tree) - declared
         if missing:
             drift[str(path.relative_to(APPS_ROOT))] = sorted(missing)
     assert not drift, "\n".join(drift)
 
 
-def test_handler_option_aliases_match_manifests() -> None:
+def test_handlers_accept_only_manifest_options() -> None:
     drift = {}
     for path, tree, manifest in _sources():
-        declared = {
-            alias
-            for operation in manifest.get("operations", {}).values()
-            for arg in operation.get("args", [])
-            for alias in arg.get("aliases", [])
-        }
         canonical = {
             f"--{arg['name'].replace('_', '-')}"
             for operation in manifest.get("operations", {}).values()
             for arg in operation.get("args", [])
             if _binding(arg) == "flag"
         }
-        parsed = _parser_aliases(tree) - canonical
-        if declared != parsed:
-            drift[str(path.relative_to(APPS_ROOT))] = {
-                "manifest_only": sorted(declared - parsed),
-                "parser_only": sorted(parsed - declared),
-            }
+        undeclared = _parser_options(tree) - canonical
+        if undeclared:
+            drift[str(path.relative_to(APPS_ROOT))] = sorted(undeclared)
     assert not drift, drift
 
 
@@ -575,8 +543,8 @@ def test_canonical_positionals_are_not_reparsed_as_options() -> None:
 def test_gateway_list_bindings_match_manifests() -> None:
     drift = {}
     for path, tree, manifest in _sources():
-        positionals, positional_aliases, flags = _gateway_list_contract(tree)
-        if not positionals and not positional_aliases and not flags:
+        positionals, flags = _gateway_list_contract(tree)
+        if not positionals and not flags:
             continue
         declaration = manifest["operations"]["send"]
         manifest_positionals = [
@@ -589,21 +557,10 @@ def test_gateway_list_bindings_match_manifests() -> None:
             for arg in declaration.get("args", [])
             if _binding(arg) == "flag"
         }
-        manifest_positional_aliases = [
-            arg["name"]
-            for arg in declaration.get("args", [])
-            if arg.get("positional_alias", False)
-        ]
-        if (
-            positionals != manifest_positionals
-            or positional_aliases != manifest_positional_aliases
-            or flags != manifest_flags
-        ):
+        if positionals != manifest_positionals or flags != manifest_flags:
             drift[str(path.relative_to(APPS_ROOT))] = {
                 "parser_positionals": positionals,
                 "manifest_positionals": manifest_positionals,
-                "parser_positional_aliases": positional_aliases,
-                "manifest_positional_aliases": manifest_positional_aliases,
                 "parser_flags": sorted(flags),
                 "manifest_flags": sorted(manifest_flags),
             }
@@ -613,14 +570,7 @@ def test_gateway_list_bindings_match_manifests() -> None:
 def test_positional_order_and_fixed_path_scopes_are_unambiguous() -> None:
     drift: list[str] = []
     for path, _tree, manifest in _sources():
-        for surface, declaration in [
-            *manifest.get("operations", {}).items(),
-            *(
-                (tool["name"], tool)
-                for service_field in ("session", "mcp")
-                for tool in manifest.get(service_field, {}).get("tools", [])
-            ),
-        ]:
+        for surface, declaration in manifest.get("operations", {}).items():
             optional_seen = False
             optional_gap_seen = False
             positional_args = [
@@ -631,23 +581,20 @@ def test_positional_order_and_fixed_path_scopes_are_unambiguous() -> None:
             if any(
                 not arg.get("required", False)
                 and "default" not in arg
-                and "default_from" not in arg
                 for arg in positional_args
             ) and any(
-                "default" in arg or "default_from" in arg
+                "default" in arg
                 for arg in positional_args
             ):
                 drift.append(f"{path}:{surface} mixes positional defaults and gaps")
             for index, arg in enumerate(positional_args):
                 if not arg.get("required", False):
                     optional_seen = True
-                    if "default" not in arg and "default_from" not in arg:
+                    if "default" not in arg:
                         optional_gap_seen = True
                 elif optional_seen:
                     drift.append(f"{path}:{surface} optional positional before {arg['name']}")
-                if optional_gap_seen and (
-                    "default" in arg or "default_from" in arg
-                ):
+                if optional_gap_seen and "default" in arg:
                     drift.append(f"{path}:{surface} default follows positional gap")
                 if arg.get("repeatable") and index != len(positional_args) - 1:
                     drift.append(f"{path}:{surface} repeatable positional before {arg['name']}")
@@ -779,12 +726,9 @@ def test_argparse_contracts_match_manifests() -> None:
                 if arg is None:
                     drift.append(f"{path}:{operation} missing {parsed['name']}")
                     continue
-                alias_binding = parsed["option"] in arg.get("aliases", [])
-                if _binding(arg) != parsed["binding"] and not alias_binding:
+                if _binding(arg) != parsed["binding"]:
                     drift.append(f"{path}:{operation}.{parsed['name']} binding")
-                handler_required = bool(arg.get("required", False)) or arg.get(
-                    "trusted_resolver"
-                ) in {"email-provider", "calendar-provider"}
+                handler_required = bool(arg.get("required", False))
                 if handler_required != parsed["required"]:
                     drift.append(f"{path}:{operation}.{parsed['name']} required")
                 if parsed["kind"] is not None and arg.get("kind") != parsed["kind"]:
@@ -818,13 +762,15 @@ def test_every_manifest_matches_published_schema_contract() -> None:
     }
     drift: list[str] = []
 
-    def check_args(path, app_id, surface, args, *, session=False):
+    def check_args(path, surface, args, *, mcp=False):
         positions = {arg["name"]: index for index, arg in enumerate(args)}
         for index, arg in enumerate(args):
             if arg.get("kind") not in kinds:
                 drift.append(f"{path}:{surface}.{arg.get('name')} unknown kind")
             binding = arg.get("binding")
-            if binding is not None and binding not in bindings:
+            if mcp and binding is not None:
+                drift.append(f"{path}:{surface}.{arg.get('name')} MCP binding")
+            elif binding is not None and binding not in bindings:
                 drift.append(f"{path}:{surface}.{arg.get('name')} unknown binding")
             if arg.get("default") is None and "default" in arg:
                 drift.append(f"{path}:{surface}.{arg.get('name')} null default")
@@ -848,8 +794,6 @@ def test_every_manifest_matches_published_schema_contract() -> None:
                     arg.get("required", False)
                     or arg.get("repeatable", False)
                     or "default" in arg
-                    or "default_from" in arg
-                    or "trusted_resolver" in arg
                     or required_when.get("kind") not in condition_kinds
                     or set(required_when) != expected_fields
                     or referenced not in positions
@@ -860,55 +804,7 @@ def test_every_manifest_matches_published_schema_contract() -> None:
                 arg.get("required", False) or "required_when" in arg
             ):
                 drift.append(f"{path}:{surface}.confirm is not required")
-            if session and (
-                "default_from" in arg
-                or "trusted_resolver" in arg
-                or "aliases" in arg
-                or "positional_alias" in arg
-            ):
-                drift.append(f"{path}:{surface}.{arg.get('name')} session resolver")
-            if arg.get("positional_alias") and (
-                _binding(arg) != "flag"
-                or arg.get("required", False)
-                or arg.get("repeatable", False)
-                or arg.get("kind") == "bool"
-            ):
-                drift.append(f"{path}:{surface}.{arg.get('name')} positional alias shape")
-            aliases = arg.get("aliases", [])
-            if len(aliases) != len(set(aliases)) or any(
-                re.fullmatch(r"(?:-[A-Za-z0-9]|--[a-z][a-z0-9-]*)", alias) is None
-                for alias in aliases
-            ):
-                drift.append(f"{path}:{surface}.{arg.get('name')} invalid aliases")
-            resolver_app = {
-                "email-provider": "email",
-                "email-host": "email",
-                "calendar-provider": "calendar",
-                "ntfy-server": "gateway-ntfy",
-            }.get(arg.get("trusted_resolver"))
-            expected_resolver_shape = (
-                ("host", "host")
-                if arg.get("trusted_resolver") == "email-host"
-                else (
-                    ("server", "text")
-                    if arg.get("trusted_resolver") == "ntfy-server"
-                    else ("provider", "name")
-                )
-            )
-            if arg.get("trusted_resolver") and (
-                resolver_app != app_id
-                or (arg.get("name"), arg.get("kind")) != expected_resolver_shape
-                or _binding(arg) != "flag"
-                or arg.get("required", False)
-                or "default" in arg
-                or "default_from" in arg
-            ):
-                drift.append(f"{path}:{surface}.{arg.get('name')} invalid trusted resolver")
-            if arg.get("repeatable") and (
-                arg.get("kind") == "bool"
-                or "default_from" in arg
-                or "trusted_resolver" in arg
-            ):
+            if arg.get("repeatable") and arg.get("kind") == "bool":
                 drift.append(f"{path}:{surface}.{arg.get('name')} repeatable shape")
             choices = arg.get("choices", [])
             if arg.get("name") == "provider" and not choices:
@@ -943,12 +839,6 @@ def test_every_manifest_matches_published_schema_contract() -> None:
                 )
                 if not valid:
                     drift.append(f"{path}:{surface}.{arg.get('name')} default type")
-        if any(arg.get("positional_alias") for arg in args) and any(
-            _binding(arg) == "positional" and not arg.get("required", False)
-            for arg in args
-        ):
-            drift.append(f"{path}:{surface} positional alias with optional positional")
-
     condition_kinds = set(defs["needCondition"]["properties"]["kind"]["enum"])
 
     def check_needs(path, surface, needs, args):
@@ -1004,13 +894,11 @@ def test_every_manifest_matches_published_schema_contract() -> None:
                 guaranteed = (
                     declaration.get("required", False)
                     or "default" in declaration
-                    or "default_from" in declaration
-                    or "trusted_resolver" in declaration
                     or declaration.get("kind") == "bool"
                 )
                 guarded = (
                     condition is not None and condition.get("arg") == bound_arg
-                )
+                ) or declaration.get("required_when") == condition
                 if not guaranteed and not guarded:
                     drift.append(
                         f"{path}:{surface} unconditional optional binding {bound_arg}"
@@ -1028,34 +916,97 @@ def test_every_manifest_matches_published_schema_contract() -> None:
     for manifest_path in sorted(APPS_ROOT.rglob("app.json")):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         for name, operation in manifest.get("operations", {}).items():
-            check_args(
-                manifest_path, manifest["id"], name, operation.get("args", [])
-            )
+            check_args(manifest_path, name, operation.get("args", []))
             check_needs(
                 manifest_path,
                 name,
                 operation.get("needs", []),
                 operation.get("args", []),
             )
-        for service_field in ("session", "mcp"):
-            for tool in manifest.get(service_field, {}).get("tools", []):
-                check_args(
-                    manifest_path,
-                    manifest["id"],
-                    tool["name"],
-                    tool.get("args", []),
-                    session=True,
-                )
-                check_needs(
-                    manifest_path,
-                    tool["name"],
-                    tool.get("needs", []),
-                    tool.get("args", []),
-                )
+        for tool in manifest.get("mcp", {}).get("tools", []):
+            check_args(
+                manifest_path,
+                tool["name"],
+                tool.get("args", []),
+                mcp=True,
+            )
+            check_needs(
+                manifest_path,
+                tool["name"],
+                tool.get("needs", []),
+                tool.get("args", []),
+            )
     assert not drift, "\n".join(drift)
 
 
-def test_published_schema_validates_all_manifests_and_rejects_alias_ambiguity() -> None:
+def test_bundled_apps_have_an_explicit_agent_surface() -> None:
+    human_only = {"panel-calendar", "panel-clipboard", "widget-rail"}
+    manifests = [
+        (path, json.loads(path.read_text(encoding="utf-8")))
+        for path in sorted(APPS_ROOT.rglob("app.json"))
+    ]
+    missing_mcp = {
+        manifest["id"] for _path, manifest in manifests if "mcp" not in manifest
+    }
+    assert missing_mcp == human_only
+
+    for path, manifest in manifests:
+        if manifest["id"] in human_only:
+            assert manifest["desktop"]["panel_applet"] is True
+            assert manifest["runtime"] == "shell"
+            continue
+        assert manifest["schema_version"] == 2
+        assert manifest["mcp"]["tools"]
+        entry = manifest["mcp"].get("entry")
+        if entry and not Path(entry).is_absolute():
+            assert path.with_name(entry).is_file()
+
+
+def test_manifest_bound_mcp_tools_match_operations() -> None:
+    drift: dict[str, object] = {}
+    for path in sorted(APPS_ROOT.rglob("app.json")):
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        if manifest.get("mcp", {}).get("entry") != "server.py":
+            continue
+        server_path = path.with_name("server.py")
+        if (
+            not server_path.is_file()
+            or "serve_manifest_operations"
+            not in server_path.read_text(encoding="utf-8")
+        ):
+            continue
+        operations = manifest.get("operations", {})
+        tools = manifest["mcp"]["tools"]
+        tool_map = {tool["name"]: tool for tool in tools}
+        expected_names = {
+            f"{manifest['id']}.{operation}" for operation in operations
+        }
+        if len(tool_map) != len(tools) or set(tool_map) != expected_names:
+            drift[str(path.relative_to(APPS_ROOT))] = {
+                "operations": sorted(expected_names),
+                "tools": sorted(tool_map),
+            }
+            continue
+        for operation, declaration in operations.items():
+            tool = tool_map[f"{manifest['id']}.{operation}"]
+            expected_args = [
+                {key: value for key, value in arg.items() if key != "binding"}
+                for arg in declaration.get("args", [])
+            ]
+            if tool.get("args", []) != expected_args:
+                drift[f"{path.relative_to(APPS_ROOT)}:{operation}.args"] = {
+                    "operation": expected_args,
+                    "tool": tool.get("args", []),
+                }
+            if tool.get("needs", []) != declaration.get("needs", []):
+                drift[f"{path.relative_to(APPS_ROOT)}:{operation}.needs"] = {
+                    "operation": declaration.get("needs", []),
+                    "tool": tool.get("needs", []),
+                }
+    assert not drift, drift
+
+
+def test_published_schema_rejects_removed_app_contracts() -> None:
     from jsonschema import Draft202012Validator
 
     schema = json.loads(
@@ -1067,26 +1018,29 @@ def test_published_schema_validates_all_manifests_and_rejects_alias_ambiguity() 
     for path in APPS_ROOT.rglob("app.json"):
         validator.validate(json.loads(path.read_text(encoding="utf-8")))
 
-    ambiguous = {
-        "id": "ambiguous",
+    operation_first = {
+        "id": "strict",
         "version": "1",
-        "name": {"en": "Ambiguous"},
+        "name": {"en": "Strict"},
         "operations": {
-            "send": {
-                "label": {"en": "Send"},
+            "run": {
+                "label": {"en": "Run"},
                 "args": [
-                    {"name": "text", "kind": "text", "required": False},
-                    {
-                        "name": "target",
-                        "kind": "name",
-                        "binding": "flag",
-                        "positional_alias": True,
-                    },
+                    {"name": "value", "kind": "text", "required": True},
                 ],
             }
         },
     }
-    assert list(validator.iter_errors(ambiguous))
+    removed_arg_fields = {
+        "aliases": ["-v"],
+        "positional_alias": True,
+        "default_from": {"source": "config", "key": "value"},
+        "trusted_resolver": "email-provider",
+    }
+    for field, value in removed_arg_fields.items():
+        legacy = json.loads(json.dumps(operation_first))
+        legacy["operations"]["run"]["args"][0][field] = value
+        assert list(validator.iter_errors(legacy)), field
 
     mcp_first = {
         "schema_version": 2,
@@ -1126,6 +1080,22 @@ def test_published_schema_validates_all_manifests_and_rejects_alias_ambiguity() 
     duplicate_callers["mcp"]["access"]["apps"] = ["crm", "crm"]
     assert list(validator.iter_errors(duplicate_callers))
 
+    mcp_binding = json.loads(json.dumps(mcp_first))
+    mcp_binding["mcp"]["tools"][0]["args"][0]["binding"] = "flag"
+    assert list(validator.iter_errors(mcp_binding))
+
+    for path, field in (
+        (("mcp",), "unknown"),
+        (("mcp", "tools", 0), "unknown"),
+        ((), "unknown"),
+    ):
+        unknown = json.loads(json.dumps(mcp_first))
+        target = unknown
+        for component in path:
+            target = target[component]
+        target[field] = True
+        assert list(validator.iter_errors(unknown)), path
+
 
 def test_wire_capability_catalog_matches_kernel_and_manifests() -> None:
     schema = json.loads(
@@ -1141,9 +1111,8 @@ def test_wire_capability_catalog_matches_kernel_and_manifests() -> None:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         for operation in manifest.get("operations", {}).values():
             declared.update(need["verb"] for need in operation.get("needs", []))
-        for service_field in ("session", "mcp"):
-            for tool in manifest.get(service_field, {}).get("tools", []):
-                declared.update(need["verb"] for need in tool.get("needs", []))
+        for tool in manifest.get("mcp", {}).get("tools", []):
+            declared.update(need["verb"] for need in tool.get("needs", []))
     assert wire == kernel
     assert declared <= wire
 

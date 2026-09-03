@@ -88,6 +88,7 @@ use super::verb::Verb;
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Manifest {
     pub id: String,
     pub version: String,
@@ -126,8 +127,7 @@ pub struct Manifest {
 
     /// The single MCP-first App service contract, and the only place a
     /// manifest may declare agent-callable tools. Absent means the app
-    /// is one-shot only (the agent can still call its operations
-    /// through `cos_app_<id>`). See [`McpService`].
+    /// is human-only. See [`McpService`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp: Option<McpService>,
 
@@ -141,8 +141,8 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub desktop: Option<Desktop>,
 
-    /// Free-form dependency declarations. Preserved for forward
-    /// compatibility — the bridge's package resolver consumes this.
+    /// Free-form dependency declarations consumed by the bridge's package
+    /// resolver.
     #[serde(default)]
     pub dependencies: serde_json::Value,
 }
@@ -328,6 +328,7 @@ impl Runtime {
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Operation {
     pub label: LocalizedText,
     #[serde(default)]
@@ -354,15 +355,15 @@ pub struct EffectiveCall {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Arg {
     /// Identifier referenced by `from-arg` scope bindings.
     pub name: String,
     /// What kind of value this arg holds; the UI uses this to pick a
     /// widget and to validate the input.
     pub kind: ArgKind,
-    /// How the value is bound on the one-shot CLI. Omitted booleans retain
-    /// their historical flag binding; every other omitted binding is
-    /// positional.
+    /// How the value is bound on the one-shot CLI. Omitted booleans use flag
+    /// binding; every other omitted binding is positional.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub binding: Option<ArgBinding>,
     #[serde(default)]
@@ -374,13 +375,6 @@ pub struct Arg {
     /// Bind every occurrence in order and expose the value as a JSON array.
     #[serde(default)]
     pub repeatable: bool,
-    /// Additional accepted option spellings mapped to this same value.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub aliases: Vec<String>,
-    /// Accept this flag-bound value as a surplus leading positional for
-    /// backward-compatible grammars.
-    #[serde(default)]
-    pub positional_alias: bool,
     /// Optional closed set of accepted scalar values.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub choices: Vec<serde_json::Value>,
@@ -390,55 +384,9 @@ pub struct Arg {
         skip_serializing_if = "Option::is_none"
     )]
     pub default: Option<serde_json::Value>,
-    /// Derive an omitted value from another declared argument. The bridge
-    /// materializes the result before launching the App so capability
-    /// derivation and the handler consume the same value.
-    #[serde(
-        default,
-        deserialize_with = "deserialize_non_null_default_from",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub default_from: Option<ArgDefaultBinding>,
-    /// Trusted kernel resolver applied before binding and capability
-    /// derivation.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub trusted_resolver: Option<TrustedArgResolver>,
     /// Human-readable help. Optional.
     #[serde(default)]
     pub label: LocalizedText,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct ArgDefaultBinding {
-    /// Previously declared argument used as the input value.
-    pub arg: String,
-    /// Optional deterministic transformation applied to the input.
-    #[serde(default)]
-    pub transform: ArgDefaultTransform,
-    /// Literal text prepended after transformation.
-    #[serde(default)]
-    pub prefix: String,
-    /// Replacement used when the transformation produces no safe value.
-    #[serde(default)]
-    pub fallback: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum ArgDefaultTransform {
-    #[default]
-    Identity,
-    UrlPathBasename,
-}
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum TrustedArgResolver {
-    EmailProvider,
-    EmailHost,
-    CalendarProvider,
-    NtfyServer,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -519,23 +467,6 @@ where
     Ok(Some(value))
 }
 
-fn deserialize_non_null_default_from<'de, D>(
-    deserializer: D,
-) -> Result<Option<ArgDefaultBinding>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = serde_json::Value::deserialize(deserializer)?;
-    if value.is_null() {
-        return Err(serde::de::Error::custom(
-            "`default_from` cannot be null; omit it when unused",
-        ));
-    }
-    serde_json::from_value(value)
-        .map(Some)
-        .map_err(serde::de::Error::custom)
-}
-
 impl ArgKind {
     /// Returns true if values of this kind can populate a [`Scope`].
     pub fn binds_to_scope(self) -> bool {
@@ -561,37 +492,7 @@ fn apply_arg_defaults(
         if values.contains_key(&declaration.name) {
             continue;
         }
-        let value = if let Some(default) = &declaration.default {
-            Some(default.clone())
-        } else if let Some(binding) = &declaration.default_from {
-            let source = values
-                .get(&binding.arg)
-                .and_then(serde_json::Value::as_str)
-                .ok_or_else(|| {
-                    format!(
-                        "arg `{}` default source `{}` was not supplied",
-                        declaration.name, binding.arg
-                    )
-                })?;
-            let transformed = match binding.transform {
-                ArgDefaultTransform::Identity => source.to_string(),
-                ArgDefaultTransform::UrlPathBasename => safe_url_path_basename(source)
-                    .or(binding.fallback.as_deref())
-                    .ok_or_else(|| {
-                        format!(
-                            "arg `{}` could not derive a safe URL path basename from `{}`",
-                            declaration.name, binding.arg
-                        )
-                    })?
-                    .to_string(),
-            };
-            Some(serde_json::Value::String(format!(
-                "{}{transformed}",
-                binding.prefix
-            )))
-        } else {
-            None
-        };
+        let value = declaration.default.clone();
         if let Some(value) = value {
             values.insert(declaration.name.clone(), value);
             applied.push(declaration.name.clone());
@@ -648,30 +549,6 @@ pub(crate) fn argument_is_required(
             .is_some_and(|condition| condition_applies(Some(condition), values))
 }
 
-fn safe_url_path_basename(value: &str) -> Option<&str> {
-    let end = value.find(['?', '#']).unwrap_or(value.len());
-    let without_suffix = &value[..end];
-    let path = if let Some(scheme) = without_suffix.find("://") {
-        let after_authority = &without_suffix[scheme + 3..];
-        after_authority
-            .find('/')
-            .map(|slash| &after_authority[slash..])
-            .unwrap_or("")
-    } else {
-        without_suffix
-    };
-    let basename = path.rsplit('/').next().unwrap_or("");
-    if basename.is_empty()
-        || matches!(basename, "." | "..")
-        || basename.contains('\\')
-        || basename.chars().any(char::is_control)
-    {
-        None
-    } else {
-        Some(basename)
-    }
-}
-
 // ---------------------------------------------------------------------------
 // McpService — long-lived agent-driven tools
 // ---------------------------------------------------------------------------
@@ -682,11 +559,8 @@ fn safe_url_path_basename(value: &str) -> Option<&str> {
 /// using the manifest's per-tool `needs[]` and audited the same way
 /// `cos ai chat` is.
 ///
-/// Authors who want a stateless one-shot integration should keep using
-/// `operations` (the kernel auto-wraps each op as a `cos_app_<id>`
-/// agent tool). `McpService` is for when the app holds in-memory state
-/// across calls or kicks off background work.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct McpService {
     /// Path to the MCP server entry file, relative to the app
     /// directory. If absent, the kernel uses
@@ -772,6 +646,7 @@ fn default_mcp_system_agent() -> bool {
 /// drive both the agent's view (auto-generated JSON Schema for the
 /// model) and the kernel's enforcement (cap resolution at call time).
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct McpTool {
     /// Globally unique tool name. Convention: `<app_id>.<verb>`
     /// (e.g. `kv.get`). Must match `[a-z][a-z0-9._-]*` and be unique
@@ -1136,6 +1011,8 @@ pub enum ManifestError {
     AiDuplicateTool { name: String },
     #[error("manifest `mcp` requires `schema_version: 2`")]
     McpSchemaVersion,
+    #[error("manifest `mcp.tools` must contain at least one tool")]
+    McpNoTools,
     #[error("manifest field `session` was removed; declare the service under `mcp`")]
     RemovedSessionField,
     #[error("manifest `mcp.access.apps[]`: invalid App id `{app}`")]
@@ -1148,6 +1025,8 @@ pub enum ManifestError {
     McpDuplicateTool { name: String },
     #[error("mcp tool `{tool}`: arg `{arg}` declared twice")]
     McpDuplicateArg { tool: String, arg: String },
+    #[error("mcp tool `{tool}`: arg `{arg}` cannot declare CLI-only `binding`")]
+    McpArgBindingNotAllowed { tool: String, arg: String },
     #[error("mcp tool `{tool}`: arg `{arg}` default is invalid: {detail}")]
     McpArgDefaultInvalid {
         tool: String,
@@ -1196,72 +1075,34 @@ pub enum ManifestError {
     DesktopInvalid { field: &'static str, detail: String },
 }
 
-fn validate_arg_defaults(args: &[Arg]) -> Result<(), (String, String)> {
-    let optional_gap = args.iter().any(|arg| {
-        arg.effective_binding() == ArgBinding::Positional
-            && !arg.required
-            && arg.default.is_none()
-            && arg.default_from.is_none()
-    });
-    if optional_gap {
-        if let Some(defaulted) = args.iter().find(|arg| {
+fn validate_arg_defaults(args: &[Arg], enforce_cli_layout: bool) -> Result<(), (String, String)> {
+    if enforce_cli_layout {
+        let optional_gap = args.iter().any(|arg| {
             arg.effective_binding() == ArgBinding::Positional
-                && (arg.default.is_some() || arg.default_from.is_some())
-        }) {
-            return Err((
-                defaulted.name.clone(),
-                "defaulted and omitted optional positional arguments cannot be mixed".to_string(),
-            ));
-        }
-    }
-    let has_optional_positional = args
-        .iter()
-        .any(|arg| arg.effective_binding() == ArgBinding::Positional && !arg.required);
-    if has_optional_positional {
-        if let Some(alias) = args.iter().find(|arg| arg.positional_alias) {
-            return Err((
-                alias.name.clone(),
-                "positional_alias cannot be combined with optional positional arguments"
-                    .to_string(),
-            ));
+                && !arg.required
+                && arg.default.is_none()
+        });
+        if optional_gap {
+            if let Some(defaulted) = args.iter().find(|arg| {
+                arg.effective_binding() == ArgBinding::Positional && arg.default.is_some()
+            }) {
+                return Err((
+                    defaulted.name.clone(),
+                    "defaulted and omitted optional positional arguments cannot be mixed"
+                        .to_string(),
+                ));
+            }
         }
     }
     for (index, arg) in args.iter().enumerate() {
-        if arg.positional_alias
-            && (arg.effective_binding() != ArgBinding::Flag
-                || arg.kind == ArgKind::Bool
-                || arg.required
-                || arg.repeatable)
-        {
-            return Err((
-                arg.name.clone(),
-                "positional_alias requires an optional, non-boolean, non-repeatable flag arg"
-                    .to_string(),
-            ));
-        }
-        if arg.positional_alias
-            && args.iter().any(|candidate| {
-                candidate.effective_binding() == ArgBinding::Positional && candidate.repeatable
-            })
-        {
-            return Err((
-                arg.name.clone(),
-                "positional_alias cannot be combined with repeatable positionals".to_string(),
-            ));
-        }
         if arg.repeatable && arg.kind == ArgKind::Bool {
             return Err((
                 arg.name.clone(),
                 "repeatable boolean arguments are ambiguous".to_string(),
             ));
         }
-        if arg.repeatable && (arg.default_from.is_some() || arg.trusted_resolver.is_some()) {
-            return Err((
-                arg.name.clone(),
-                "repeatable arguments cannot use default_from or trusted_resolver".to_string(),
-            ));
-        }
-        if arg.repeatable
+        if enforce_cli_layout
+            && arg.repeatable
             && arg.effective_binding() == ArgBinding::Positional
             && args[index + 1..]
                 .iter()
@@ -1291,7 +1132,8 @@ fn validate_arg_defaults(args: &[Arg]) -> Result<(), (String, String)> {
                 return Err((arg.name.clone(), "choices must be unique".to_string()));
             }
         }
-        if arg.effective_binding() == ArgBinding::Positional
+        if enforce_cli_layout
+            && arg.effective_binding() == ArgBinding::Positional
             && !arg.required
             && args[index + 1..]
                 .iter()
@@ -1303,20 +1145,15 @@ fn validate_arg_defaults(args: &[Arg]) -> Result<(), (String, String)> {
                     .to_string(),
             ));
         }
-        if arg.default.is_some() && arg.default_from.is_some() {
-            return Err((
-                arg.name.clone(),
-                "declare only one of `default` or `default_from`".to_string(),
-            ));
-        }
-        if arg.required && (arg.default.is_some() || arg.default_from.is_some()) {
+        if arg.required && arg.default.is_some() {
             return Err((
                 arg.name.clone(),
                 "required arguments cannot declare defaults".to_string(),
             ));
         }
-        if arg.effective_binding() == ArgBinding::Positional
-            && (arg.default.is_some() || arg.default_from.is_some())
+        if enforce_cli_layout
+            && arg.effective_binding() == ArgBinding::Positional
+            && arg.default.is_some()
             && args[index + 1..]
                 .iter()
                 .any(|later| later.effective_binding() == ArgBinding::Positional && later.required)
@@ -1337,138 +1174,8 @@ fn validate_arg_defaults(args: &[Arg]) -> Result<(), (String, String)> {
                 ));
             }
         }
-        let Some(binding) = &arg.default_from else {
-            continue;
-        };
-        let Some((source_index, source)) = args
-            .iter()
-            .enumerate()
-            .find(|(_, candidate)| candidate.name == binding.arg)
-        else {
-            return Err((
-                arg.name.clone(),
-                format!("references undeclared arg `{}`", binding.arg),
-            ));
-        };
-        if source_index >= index {
-            return Err((
-                arg.name.clone(),
-                format!(
-                    "source `{}` must be declared before the defaulted arg",
-                    binding.arg
-                ),
-            ));
-        }
-        if !matches!(
-            source.kind,
-            ArgKind::Path | ArgKind::Host | ArgKind::Name | ArgKind::Text
-        ) || source.repeatable
-        {
-            return Err((
-                arg.name.clone(),
-                format!(
-                    "source `{}` must be a non-repeatable string arg",
-                    binding.arg
-                ),
-            ));
-        }
-        if !matches!(
-            arg.kind,
-            ArgKind::Path | ArgKind::Host | ArgKind::Name | ArgKind::Text
-        ) {
-            return Err((
-                arg.name.clone(),
-                "`default_from` can only populate a string arg".to_string(),
-            ));
-        }
-        if !binding.prefix.is_empty() && arg.kind != ArgKind::Path {
-            return Err((
-                arg.name.clone(),
-                "`prefix` is only supported for path defaults".to_string(),
-            ));
-        }
-        if binding.prefix.chars().any(char::is_control) {
-            return Err((
-                arg.name.clone(),
-                "`prefix` must not contain control characters".to_string(),
-            ));
-        }
-        match binding.transform {
-            ArgDefaultTransform::Identity => {
-                if binding.fallback.is_some() {
-                    return Err((
-                        arg.name.clone(),
-                        "`fallback` requires a transform that can produce no value".to_string(),
-                    ));
-                }
-            }
-            ArgDefaultTransform::UrlPathBasename => {
-                if source.kind != ArgKind::Text || arg.kind != ArgKind::Path {
-                    return Err((
-                        arg.name.clone(),
-                        "`url-path-basename` requires a text source and path destination"
-                            .to_string(),
-                    ));
-                }
-                if !binding
-                    .fallback
-                    .as_deref()
-                    .is_some_and(is_safe_default_leaf)
-                {
-                    return Err((
-                        arg.name.clone(),
-                        "`url-path-basename` requires a safe single-component fallback".to_string(),
-                    ));
-                }
-            }
-        }
     }
     Ok(())
-}
-
-fn validate_arg_aliases(args: &[Arg]) -> Result<(), (String, String)> {
-    let mut options = BTreeMap::<String, String>::new();
-    for arg in args {
-        if arg.effective_binding() == ArgBinding::Flag {
-            let canonical = format!("--{}", arg.name.replace('_', "-"));
-            if let Some(existing) = options.insert(canonical.clone(), arg.name.clone()) {
-                return Err((
-                    arg.name.clone(),
-                    format!("option `{canonical}` conflicts with arg `{existing}`"),
-                ));
-            }
-        }
-        for alias in &arg.aliases {
-            let valid_short = alias.len() == 2
-                && alias.starts_with('-')
-                && alias.as_bytes()[1].is_ascii_alphanumeric();
-            let valid_long = alias.strip_prefix("--").is_some_and(|name| {
-                !name.is_empty()
-                    && name.as_bytes()[0].is_ascii_lowercase()
-                    && name.bytes().all(|byte| {
-                        byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
-                    })
-            });
-            if !valid_short && !valid_long {
-                return Err((arg.name.clone(), format!("invalid option alias `{alias}`")));
-            }
-            if let Some(existing) = options.insert(alias.clone(), arg.name.clone()) {
-                return Err((
-                    arg.name.clone(),
-                    format!("option alias `{alias}` conflicts with arg `{existing}`"),
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
-fn is_safe_default_leaf(value: &str) -> bool {
-    !value.is_empty()
-        && !matches!(value, "." | "..")
-        && !value.contains('/')
-        && !value.contains('\\')
-        && !value.chars().any(char::is_control)
 }
 
 impl Manifest {
@@ -1513,6 +1220,9 @@ impl Manifest {
             return Err(ManifestError::McpSchemaVersion);
         }
         if let Some(service) = &self.mcp {
+            if service.tools.is_empty() {
+                return Err(ManifestError::McpNoTools);
+            }
             let mut seen_apps = std::collections::BTreeSet::new();
             for app in &service.access.apps {
                 if !is_valid_id(app) {
@@ -1572,46 +1282,8 @@ impl Manifest {
                         arg: arg.name.clone(),
                     });
                 }
-                let trusted_shape_matches = match arg.trusted_resolver {
-                    Some(TrustedArgResolver::EmailProvider) => {
-                        self.id == "email" && arg.name == "provider" && arg.kind == ArgKind::Name
-                    }
-                    Some(TrustedArgResolver::EmailHost) => {
-                        self.id == "email" && arg.name == "host" && arg.kind == ArgKind::Host
-                    }
-                    Some(TrustedArgResolver::CalendarProvider) => {
-                        self.id == "calendar" && arg.name == "provider" && arg.kind == ArgKind::Name
-                    }
-                    Some(TrustedArgResolver::NtfyServer) => {
-                        self.id == "gateway-ntfy"
-                            && arg.name == "server"
-                            && arg.kind == ArgKind::Text
-                    }
-                    None => true,
-                };
-                if arg.trusted_resolver.is_some()
-                    && (!trusted_shape_matches
-                        || arg.effective_binding() != ArgBinding::Flag
-                        || arg.required
-                        || arg.default.is_some()
-                        || arg.default_from.is_some())
-                {
-                    return Err(ManifestError::ArgDefaultInvalid {
-                        op: op_name.clone(),
-                        arg: arg.name.clone(),
-                        detail: "trusted resolver is restricted to its bundled app's optional provider flag"
-                            .to_string(),
-                    });
-                }
             }
-            if let Err((arg, detail)) = validate_arg_defaults(&op.args) {
-                return Err(ManifestError::ArgDefaultInvalid {
-                    op: op_name.clone(),
-                    arg,
-                    detail,
-                });
-            }
-            if let Err((arg, detail)) = validate_arg_aliases(&op.args) {
+            if let Err((arg, detail)) = validate_arg_defaults(&op.args, true) {
                 return Err(ManifestError::ArgDefaultInvalid {
                     op: op_name.clone(),
                     arg,
@@ -1776,6 +1448,12 @@ impl Manifest {
 
                 let mut seen_args: BTreeMap<&str, &Arg> = BTreeMap::new();
                 for arg in &tool.args {
+                    if arg.binding.is_some() {
+                        return Err(ManifestError::McpArgBindingNotAllowed {
+                            tool: tool.name.clone(),
+                            arg: arg.name.clone(),
+                        });
+                    }
                     if seen_args.insert(arg.name.as_str(), arg).is_some() {
                         return Err(ManifestError::McpDuplicateArg {
                             tool: tool.name.clone(),
@@ -1783,14 +1461,7 @@ impl Manifest {
                         });
                     }
                 }
-                if let Err((arg, detail)) = validate_arg_defaults(&tool.args) {
-                    return Err(ManifestError::McpArgDefaultInvalid {
-                        tool: tool.name.clone(),
-                        arg,
-                        detail,
-                    });
-                }
-                if let Err((arg, detail)) = validate_arg_aliases(&tool.args) {
+                if let Err((arg, detail)) = validate_arg_defaults(&tool.args, false) {
                     return Err(ManifestError::McpArgDefaultInvalid {
                         tool: tool.name.clone(),
                         arg,
@@ -1806,19 +1477,6 @@ impl Manifest {
                                 detail,
                             })?;
                     }
-                }
-                if let Some(arg) = tool.args.iter().find(|arg| {
-                    arg.default_from.is_some()
-                        || arg.trusted_resolver.is_some()
-                        || !arg.aliases.is_empty()
-                        || arg.positional_alias
-                }) {
-                    return Err(ManifestError::McpArgDefaultInvalid {
-                        tool: tool.name.clone(),
-                        arg: arg.name.clone(),
-                        detail: "CLI aliases, default_from, and trusted resolvers are only supported for one-shot operations"
-                            .to_string(),
-                    });
                 }
                 for (idx, need) in tool.needs.iter().enumerate() {
                     validate_need_condition(need, &seen_args).map_err(|detail| {
@@ -2384,15 +2042,8 @@ fn validate_required_when(
     if declaration.required {
         return Err("required_when cannot be combined with required=true".to_string());
     }
-    if declaration.default.is_some()
-        || declaration.default_from.is_some()
-        || declaration.trusted_resolver.is_some()
-        || declaration.repeatable
-    {
-        return Err(
-            "required_when arguments cannot be repeatable or declare defaults or trusted resolvers"
-                .into(),
-        );
+    if declaration.default.is_some() || declaration.repeatable {
+        return Err("required_when arguments cannot be repeatable or declare defaults".into());
     }
     let referenced = match condition {
         NeedCondition::ArgPresent { arg }
@@ -2428,11 +2079,8 @@ fn validate_optional_need_binding(need: &Need, args: &BTreeMap<&str, &Arg>) -> R
     let Some(declaration) = args.get(bound_arg.as_str()) else {
         return Ok(());
     };
-    let guaranteed = declaration.required
-        || declaration.default.is_some()
-        || declaration.default_from.is_some()
-        || declaration.trusted_resolver.is_some()
-        || declaration.kind == ArgKind::Bool;
+    let guaranteed =
+        declaration.required || declaration.default.is_some() || declaration.kind == ArgKind::Bool;
     let explicitly_guarded = matches!(
         &need.when,
         Some(

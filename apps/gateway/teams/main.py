@@ -210,7 +210,6 @@ def run(command: str, args):
             parsed, error = gateway_args.parse(
                 args,
                 positional=("text",),
-                positional_aliases=("recipient",),
                 value_flags=("recipient", "title"),
                 bool_flags=("legacy",),
             )

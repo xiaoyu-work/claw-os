@@ -32,6 +32,18 @@ fn load_app(value: &Value) -> App {
     App::from_manifest(file.path()).unwrap()
 }
 
+fn protocol_only_app() -> App {
+    let mut app = load_app(&manifest(json!([
+        {
+            "name": "echo",
+            "summary": {"en": "Echo text"},
+            "args": [{"name": "text", "kind": "text", "required": true}]
+        }
+    ])));
+    app.bind(Arc::new(Echo)).unwrap();
+    app
+}
+
 fn context(call_id: &str) -> Value {
     json!({
         "wire_version": 1,
@@ -1022,7 +1034,7 @@ async fn handler_panic_is_a_tool_error_and_app_survives() {
 
 #[tokio::test]
 async fn malformed_and_oversized_custom_frames_recover() {
-    let app = load_app(&manifest(json!([])));
+    let app = protocol_only_app();
     let (client, server) = in_memory_pair();
     let task = tokio::spawn(app.serve(server));
 
@@ -1045,7 +1057,7 @@ async fn malformed_and_oversized_custom_frames_recover() {
 
 #[tokio::test]
 async fn invalid_utf8_stdio_frame_returns_parse_error_and_next_ping_succeeds() {
-    let app = load_app(&manifest(json!([])));
+    let app = protocol_only_app();
     let (mut client_input, server_input) = tokio::io::duplex(4096);
     let (server_output, client_output) = tokio::io::duplex(4096);
     let transport = StdioTransport::from_pair(Box::new(server_input), Box::new(server_output));
@@ -1086,7 +1098,7 @@ impl Transport for FailingOutput {
 
 #[tokio::test]
 async fn output_failure_is_returned() {
-    let app = load_app(&manifest(json!([])));
+    let app = protocol_only_app();
     let error = app
         .serve(FailingOutput {
             frame: StdMutex::new(Some(Frame::Message(
@@ -1116,7 +1128,7 @@ impl Transport for PanickingInput {
 
 #[tokio::test]
 async fn reader_task_failure_is_returned_instead_of_closing_silently() {
-    let app = load_app(&manifest(json!([])));
+    let app = protocol_only_app();
     let error = tokio::time::timeout(Duration::from_secs(1), app.serve(PanickingInput))
         .await
         .expect("runtime hung after reader task failure")
@@ -1197,6 +1209,31 @@ fn manifest_validation_rejects_session_only_fields_and_invalid_contracts() {
                 "name": "legacy",
                 "summary": {"en": "Legacy"},
                 "args": [{"name": "x", "kind": "text", "default_from": {"arg": "y"}}]
+            }
+        ])),
+        manifest(json!([])),
+        {
+            let mut value = manifest(json!([
+                {"name": "closed", "summary": {"en": "Closed"}}
+            ]));
+            value["unknown"] = json!(true);
+            value
+        },
+        {
+            let mut value = manifest(json!([
+                {"name": "closed", "summary": {"en": "Closed"}}
+            ]));
+            value["mcp"]["unknown"] = json!(true);
+            value
+        },
+        manifest(json!([
+            {"name": "closed", "summary": {"en": "Closed"}, "unknown": true}
+        ])),
+        manifest(json!([
+            {
+                "name": "closed",
+                "summary": {"en": "Closed"},
+                "args": [{"name": "x", "kind": "text", "binding": "flag"}]
             }
         ])),
     ] {
@@ -1281,9 +1318,11 @@ fn every_required_when_kind_is_applied() {
 fn environment_loader_and_manifest_size_cap_are_enforced() {
     let mut file = NamedTempFile::new().unwrap();
     file.write_all(
-        serde_json::to_string(&manifest(json!([])))
-            .unwrap()
-            .as_bytes(),
+        serde_json::to_string(&manifest(json!([
+            {"name": "status", "summary": {"en": "Status"}}
+        ])))
+        .unwrap()
+        .as_bytes(),
     )
     .unwrap();
     let prior = std::env::var_os("COS_APP_MANIFEST");

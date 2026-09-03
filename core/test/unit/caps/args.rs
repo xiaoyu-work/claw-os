@@ -33,23 +33,22 @@ fn declared_binding_controls_how_values_are_bound() {
 
 #[test]
 fn unknown_flags_are_rejected() {
-    let error = bind_cli_args(&decls(), &raw(&["--bogus", "/etc/shadow"]))
-        .expect_err("undeclared flags must fail closed");
-    assert!(error.contains("--bogus"), "unexpected error: {error}");
+    for flag in ["--bogus", "-b"] {
+        let error = bind_cli_args(&decls(), &raw(&[flag, "/etc/shadow"]))
+            .expect_err("undeclared flags must fail closed");
+        assert!(error.contains(flag), "unexpected error: {error}");
+    }
 }
 
 #[test]
 fn excess_positionals_require_an_explicit_repeatable_contract() {
-    let error = bind_cli_args(
-        &decls(),
-        &raw(&["/home/u/notes.txt", "undeclared"]),
-    )
-    .expect_err("extra positional values must fail closed");
+    let error = bind_cli_args(&decls(), &raw(&["/home/u/notes.txt", "undeclared"]))
+        .expect_err("extra positional values must fail closed");
     assert!(error.contains("undeclared"), "unexpected error: {error}");
 }
 
 #[test]
-fn legacy_boolean_binding_is_a_flag() {
+fn omitted_boolean_binding_is_a_flag() {
     let decls: Vec<Arg> = serde_json::from_value(serde_json::json!([
         {"name": "urgent", "kind": "bool"}
     ]))
@@ -105,13 +104,11 @@ fn choices_and_duplicate_non_repeatable_flags_fail_closed() {
     ]))
     .unwrap();
     assert!(bind_cli_args(&decls, &raw(&["--provider", "unknown"])).is_err());
-    assert!(
-        bind_cli_args(
-            &decls,
-            &raw(&["--provider", "local", "--provider", "google"])
-        )
-        .is_err()
-    );
+    assert!(bind_cli_args(
+        &decls,
+        &raw(&["--provider", "local", "--provider", "google"])
+    )
+    .is_err());
 }
 
 #[test]
@@ -138,47 +135,18 @@ fn repeatable_flags_and_positionals_preserve_every_value_in_order() {
 }
 
 #[test]
-fn positional_aliases_bind_surplus_legacy_forms_without_ambiguity() {
-    let decls: Vec<Arg> = serde_json::from_value(serde_json::json!([
-        {"name":"text","kind":"text","required":true},
-        {"name":"recipient","kind":"name","binding":"flag","positional_alias":true}
-    ]))
-    .unwrap();
-    let one = bind_cli_args(&decls, &raw(&["hello"])).unwrap();
-    assert_eq!(one["text"], "hello");
-    assert!(!one.contains_key("recipient"));
-    let two = bind_cli_args(&decls, &raw(&["room", "hello"])).unwrap();
-    assert_eq!(two["recipient"], "room");
-    assert_eq!(two["text"], "hello");
-    let flagged = bind_cli_args(&decls, &raw(&["hello", "--recipient", "room"])).unwrap();
-    assert_eq!(flagged, two);
-    assert!(bind_cli_args(
-        &decls,
-        &raw(&["other-room", "hello", "--recipient", "room"])
-    )
-    .is_err());
-}
-
-#[test]
-fn option_aliases_map_to_one_value_and_reject_conflicts() {
-    let decls: Vec<Arg> = serde_json::from_value(serde_json::json!([
-        {"name":"url","kind":"text","required":true},
-        {"name":"output","kind":"path","aliases":["--output"]},
-        {"name":"limit","kind":"integer","binding":"flag","aliases":["-n"]}
-    ]))
-    .unwrap();
-    let aliases = bind_cli_args(
-        &decls,
-        &raw(&["https://example.test", "--output", "/a", "-n", "3"]),
-    )
-    .unwrap();
-    assert_eq!(aliases["output"], "/a");
-    assert_eq!(aliases["limit"], 3);
-    assert!(bind_cli_args(
-        &decls,
-        &raw(&["https://example.test", "/a", "--output", "/b"])
-    )
-    .is_err());
+fn removed_alias_fields_fail_closed() {
+    for declaration in [
+        serde_json::json!({"name":"value","kind":"text","aliases":["--value"]}),
+        serde_json::json!({
+            "name":"value",
+            "kind":"text",
+            "binding":"flag",
+            "positional_alias":true
+        }),
+    ] {
+        assert!(serde_json::from_value::<Arg>(declaration).is_err());
+    }
 }
 
 #[test]
@@ -187,12 +155,14 @@ fn end_of_options_allows_flag_shaped_positionals() {
         {"name": "text", "kind": "text", "required": true}
     ]))
     .unwrap();
-    let values = bind_cli_args(&decls, &raw(&["--", "--literal"])).unwrap();
-    assert_eq!(values["text"], Value::String("--literal".to_string()));
+    for literal in ["--literal", "-n"] {
+        let values = bind_cli_args(&decls, &raw(&["--", literal])).unwrap();
+        assert_eq!(values["text"], Value::String(literal.to_string()));
+    }
 }
 
 #[test]
-fn kebab_alias_and_defaults_are_applied() {
+fn canonical_kebab_flags_and_defaults_are_applied() {
     let decls: Vec<Arg> = serde_json::from_value(serde_json::json!([
         {"name": "dry_run", "kind": "bool", "binding": "flag"},
         {"name": "limit", "kind": "integer", "binding": "flag", "default": 7}
@@ -210,8 +180,7 @@ fn kebab_alias_and_defaults_are_applied() {
 #[test]
 fn missing_required_argument_is_rejected() {
     let decls = decls();
-    let error =
-        bind_cli_args(&decls, &raw(&["--recursive"])).expect_err("path is required");
+    let error = bind_cli_args(&decls, &raw(&["--recursive"])).expect_err("path is required");
     assert!(error.contains("path"), "unexpected error: {error}");
 }
 

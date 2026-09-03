@@ -205,9 +205,10 @@ fn from_tool_results(observed: &mut std::collections::BTreeSet<SourceKind>) {
     // real registered tool name.
     for (tool, expected) in [
         ("mcp_github_issue", SourceKind::McpToolResult),
-        ("cos_app_run", SourceKind::AppToolResult),
-        ("app_calendar_list", SourceKind::AppToolResult),
-        ("cos_app_catalog", SourceKind::AppToolMetadata),
+        (
+            "app_calendar__calendar_list",
+            SourceKind::AppToolResult,
+        ),
         ("cos_app_memory", SourceKind::AppMemory),
         ("cos_browser", SourceKind::WebPageContent),
         ("cos_stt", SourceKind::MediaTranscript),

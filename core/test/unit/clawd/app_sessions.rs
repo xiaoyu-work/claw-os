@@ -5,26 +5,26 @@ use crate::caps::Verb;
 const FS_MANIFEST: &str = r#"{
   "id": "fs",
   "version": "0.1.0",
-  "name": "Files",
+  "name": {"en": "Files"},
   "desktop": {"exec": "--gui"},
   "operations": {
     "read": {
-      "label": "Read a file",
+      "label": {"en": "Read a file"},
       "args": [{"name": "path", "kind": "path", "required": true}],
       "needs": [
-        {"verb": "fs.read", "scope": {"kind": "from-arg", "arg": "path"}, "why": "read it"}
+        {"verb": "fs.read", "scope": {"kind": "from-arg", "arg": "path"}, "why": {"en": "read it"}}
       ]
     },
     "scan": {
-      "label": "Scan",
+      "label": {"en": "Scan"},
       "args": [],
-      "needs": [{"verb": "fs.meta", "scope": {"kind": "wild"}, "why": "list"}]
+      "needs": [{"verb": "fs.meta", "scope": {"kind": "wild"}, "why": {"en": "list"}}]
     },
     "install": {
-      "label": "Install",
+      "label": {"en": "Install"},
       "args": [{"name": "package", "kind": "name", "required": true}],
       "needs": [
-        {"verb": "sys.package", "scope": {"kind": "from-arg", "arg": "package"}, "why": "install"}
+        {"verb": "sys.package", "scope": {"kind": "from-arg", "arg": "package"}, "why": {"en": "install"}}
       ]
     }
   }
@@ -34,12 +34,12 @@ const FS_MANIFEST: &str = r#"{
 const PKG_MANIFEST: &str = r#"{
   "id": "pkg",
   "version": "0.1.0",
-  "name": "Packages",
+  "name": {"en": "Packages"},
   "operations": {
     "need": {
-      "label": "Ensure installed",
+      "label": {"en": "Ensure installed"},
       "args": [],
-      "needs": [{"verb": "sys.package", "scope": {"kind": "wild"}, "why": "install"}]
+      "needs": [{"verb": "sys.package", "scope": {"kind": "wild"}, "why": {"en": "install"}}]
     }
   }
 }"#;
@@ -48,17 +48,17 @@ const PKG_MANIFEST: &str = r#"{
 const CONFIG_EDITOR_MANIFEST: &str = r#"{
   "id": "config-editor",
   "version": "0.1.0",
-  "name": "Config Editor",
+  "name": {"en": "Config Editor"},
   "operations": {
     "apply": {
-      "label": "Apply configuration",
+      "label": {"en": "Apply configuration"},
       "args": [
         {"name": "target", "kind": "path", "required": true},
         {"name": "source", "kind": "path", "required": true}
       ],
       "needs": [
-        {"verb": "sys.config", "scope": {"kind": "from-arg", "arg": "target"}, "why": "edit"},
-        {"verb": "fs.read", "scope": {"kind": "from-arg", "arg": "source"}, "why": "read"}
+        {"verb": "sys.config", "scope": {"kind": "from-arg", "arg": "target"}, "why": {"en": "edit"}},
+        {"verb": "fs.read", "scope": {"kind": "from-arg", "arg": "source"}, "why": {"en": "read"}}
       ]
     }
   }
@@ -68,16 +68,16 @@ const CONFIG_EDITOR_MANIFEST: &str = r#"{
 const USER_MANAGER_MANIFEST: &str = r#"{
   "id": "user-manager",
   "version": "0.1.0",
-  "name": "Users",
+  "name": {"en": "Users"},
   "operations": {
     "create-user": {
-      "label": "Create a user",
+      "label": {"en": "Create a user"},
       "args": [{"name": "user", "kind": "name", "required": true}],
       "needs": [
         {
           "verb": "sys.identity",
           "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "accounts"}},
-          "why": "manage accounts"
+          "why": {"en": "manage accounts"}
         }
       ]
     }
@@ -1681,7 +1681,7 @@ fn daemon_gateway_revalidates_every_call_and_revokes_its_target_grant() {
   "schema_version": 2,
   "id": "mesh",
   "version": "0.1.0",
-  "name": "Mesh",
+  "name": {"en": "Mesh"},
   "runtime": "python",
   "mcp": {
     "entry": "server.py",
@@ -1689,20 +1689,20 @@ fn daemon_gateway_revalidates_every_call_and_revokes_its_target_grant() {
     "tools": [
       {
         "name": "alpha",
-        "summary": "Read alpha",
+        "summary": {"en": "Read alpha"},
         "needs": [{
           "verb": "data.kv.read",
           "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "alpha"}},
-          "why": "read alpha"
+          "why": {"en": "read alpha"}
         }]
       },
       {
         "name": "beta",
-        "summary": "Read beta",
+        "summary": {"en": "Read beta"},
         "needs": [{
           "verb": "data.kv.read",
           "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "beta"}},
-          "why": "read beta"
+          "why": {"en": "read beta"}
         }]
       }
     ]
@@ -2745,35 +2745,35 @@ const DEV_MANIFEST: &str = r#"{
   "schema_version": 2,
   "id": "scratch",
   "version": "0.1.0",
-  "name": "Scratch",
+  "name": {"en": "Scratch"},
   "desktop": {"exec": "--gui"},
   "operations": {
     "grab": {
-      "label": "Grab",
+      "label": {"en": "Grab"},
       "args": [],
       "needs": [
         {"verb": "sys.package",
          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "nano"}},
-         "why": "install"},
+         "why": {"en": "install"}},
         {"verb": "secret.read",
          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "default/TOKEN"}},
-         "why": "auth"},
+         "why": {"en": "auth"}},
         {"verb": "net.dial",
          "scope": {"kind": "fixed", "scope": {"kind": "host", "value": "evil.example"}},
-         "why": "sync"},
-        {"verb": "proc.spawn", "scope": {"kind": "wild"}, "why": "helper"},
+         "why": {"en": "sync"}},
+        {"verb": "proc.spawn", "scope": {"kind": "wild"}, "why": {"en": "helper"}},
         {"verb": "fs.exec",
          "scope": {"kind": "fixed", "scope": {"kind": "path", "value": "/usr/bin/**"}},
-         "why": "run"},
+         "why": {"en": "run"}},
         {"verb": "fs.read",
          "scope": {"kind": "fixed", "scope": {"kind": "path", "value": "/etc/**"}},
-         "why": "config"},
-        {"verb": "fs.meta", "scope": {"kind": "wild"}, "why": "list"},
-        {"verb": "agent.spawn", "scope": {"kind": "wild"}, "why": "delegate"},
-        {"verb": "ui.notify", "scope": {"kind": "wild"}, "why": "tell the user"},
+         "why": {"en": "config"}},
+        {"verb": "fs.meta", "scope": {"kind": "wild"}, "why": {"en": "list"}},
+        {"verb": "agent.spawn", "scope": {"kind": "wild"}, "why": {"en": "delegate"}},
+        {"verb": "ui.notify", "scope": {"kind": "wild"}, "why": {"en": "tell the user"}},
         {"verb": "data.kv.write",
          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "scratch"}},
-         "why": "state"}
+         "why": {"en": "state"}}
       ]
     }
   },
@@ -2781,15 +2781,15 @@ const DEV_MANIFEST: &str = r#"{
     "tools": [
       {
         "name": "escalate",
-        "summary": "widen after launch",
+        "summary": {"en": "widen after launch"},
         "args": [],
         "needs": [
           {"verb": "sys.package",
            "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "nano"}},
-           "why": "install"},
+           "why": {"en": "install"}},
           {"verb": "data.kv.read",
            "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "scratch"}},
-           "why": "state"}
+           "why": {"en": "state"}}
         ]
       }
     ]
@@ -3286,34 +3286,34 @@ const E2E_DEV_MANIFEST: &str = r#"{
   "schema_version": 2,
   "id": "scratch",
   "version": "0.1.0",
-  "name": "Scratch",
+  "name": {"en": "Scratch"},
   "operations": {
     "run": {
-      "label": "Run",
+      "label": {"en": "Run"},
       "args": [],
       "needs": [
         {"verb": "sys.package",
          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "nano"}},
-         "why": "install"},
+         "why": {"en": "install"}},
         {"verb": "secret.read",
          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "default/TOKEN"}},
-         "why": "auth"},
+         "why": {"en": "auth"}},
         {"verb": "net.dial",
          "scope": {"kind": "fixed", "scope": {"kind": "host", "value": "evil.example"}},
-         "why": "sync"},
-        {"verb": "proc.spawn", "scope": {"kind": "wild"}, "why": "helper"},
+         "why": {"en": "sync"}},
+        {"verb": "proc.spawn", "scope": {"kind": "wild"}, "why": {"en": "helper"}},
         {"verb": "fs.exec",
          "scope": {"kind": "fixed", "scope": {"kind": "path", "value": "/usr/bin/**"}},
-         "why": "run"},
-        {"verb": "fs.meta", "scope": {"kind": "wild"}, "why": "list"},
-        {"verb": "agent.spawn", "scope": {"kind": "wild"}, "why": "delegate"},
+         "why": {"en": "run"}},
+        {"verb": "fs.meta", "scope": {"kind": "wild"}, "why": {"en": "list"}},
+        {"verb": "agent.spawn", "scope": {"kind": "wild"}, "why": {"en": "delegate"}},
         {"verb": "fs.read",
          "scope": {"kind": "fixed", "scope": {"kind": "path", "value": "/root/scratch/**"}},
-         "why": "its own tree"},
+         "why": {"en": "its own tree"}},
         {"verb": "data.kv.write",
          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "scratch"}},
-         "why": "state"},
-        {"verb": "ui.notify", "scope": {"kind": "wild"}, "why": "tell the user"}
+         "why": {"en": "state"}},
+        {"verb": "ui.notify", "scope": {"kind": "wild"}, "why": {"en": "tell the user"}}
       ]
     }
   }
@@ -3582,15 +3582,15 @@ fn a_dev_trusted_app_cannot_widen_itself_through_an_mcp_tool() {
     "tools": [
       {
         "name": "escalate",
-        "summary": "widen after launch",
+        "summary": {"en": "widen after launch"},
         "args": [],
         "needs": [
           {"verb": "sys.package",
            "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "nano"}},
-           "why": "install"},
+           "why": {"en": "install"}},
           {"verb": "data.kv.read",
            "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "scratch"}},
-           "why": "state"}
+           "why": {"en": "state"}}
         ]
       }
     ]

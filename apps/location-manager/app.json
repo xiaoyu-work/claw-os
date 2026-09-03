@@ -58,5 +58,67 @@
         }
       ]
     }
+  },
+  "schema_version": 2,
+  "mcp": {
+    "entry": "server.py",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "access": {
+      "system_agent": true,
+      "apps": []
+    },
+    "tools": [
+      {
+        "name": "location-manager.locate",
+        "summary": {
+          "en": "Request current location"
+        },
+        "args": [
+          {
+            "name": "accuracy",
+            "kind": "name",
+            "required": false,
+            "default": "city"
+          }
+        ],
+        "needs": [
+          {
+            "verb": "device.location",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Request geographic coordinates from the system GeoClue service."
+            }
+          }
+        ]
+      },
+      {
+        "name": "location-manager.timezone",
+        "summary": {
+          "en": "Suggest the current timezone"
+        },
+        "args": [
+          {
+            "name": "accuracy",
+            "kind": "name",
+            "required": false,
+            "default": "city"
+          }
+        ],
+        "needs": [
+          {
+            "verb": "device.location",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Use a GeoClue fix to suggest nearby IANA timezone regions."
+            }
+          }
+        ]
+      }
+    ]
   }
 }

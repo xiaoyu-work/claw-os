@@ -898,7 +898,37 @@ func readMCPManifest(path string) ([]byte, error) {
 	return raw, nil
 }
 
+func rejectMCPUnknownFields(object map[string]any, context string, allowed ...string) error {
+	unknown := ""
+	for field := range object {
+		accepted := false
+		for _, candidate := range allowed {
+			if field == candidate {
+				accepted = true
+				break
+			}
+		}
+		if !accepted && (unknown == "" || field < unknown) {
+			unknown = field
+		}
+	}
+	if unknown != "" {
+		return &MCPManifestError{
+			Message: fmt.Sprintf("%s contains unknown field %q", context, unknown),
+		}
+	}
+	return nil
+}
+
 func parseMCPManifest(manifest map[string]any) (*MCPApp, error) {
+	if err := rejectMCPUnknownFields(
+		manifest,
+		"App manifest",
+		"id", "version", "schema_version", "name", "summary", "icon", "runtime",
+		"entry", "operations", "ai", "mcp", "desktop", "dependencies",
+	); err != nil {
+		return nil, err
+	}
 	if !mcpIntegerEquals(manifest["schema_version"], 2) {
 		return nil, &MCPManifestError{Message: "MCP Apps require `schema_version: 2`"}
 	}
@@ -914,16 +944,42 @@ func parseMCPManifest(manifest map[string]any) (*MCPApp, error) {
 	if !ok {
 		return nil, &MCPManifestError{Message: "App manifest has no `mcp` service"}
 	}
+	if _, err := mcpLocalizedEnglish(manifest["name"], "name"); err != nil {
+		return nil, err
+	}
+	if err := rejectMCPUnknownFields(
+		service,
+		"`mcp`",
+		"entry", "transport", "lifecycle", "access", "tools",
+	); err != nil {
+		return nil, err
+	}
 	if transport, present := service["transport"]; present && transport != "stdio" {
 		return nil, &MCPManifestError{Message: "`mcp.transport` must be `stdio`"}
 	}
-	rawTools := []any{}
-	if value, present := service["tools"]; present {
-		var ok bool
-		rawTools, ok = value.([]any)
+	if lifecycle, present := service["lifecycle"]; present &&
+		lifecycle != "lazy" && lifecycle != "always-on" && lifecycle != "while-app-running" {
+		return nil, &MCPManifestError{Message: "`mcp.lifecycle` is invalid"}
+	}
+	if access, present := service["access"]; present {
+		object, ok := access.(map[string]any)
 		if !ok {
-			return nil, &MCPManifestError{Message: "`mcp.tools` must be an array"}
+			return nil, &MCPManifestError{Message: "`mcp.access` must be an object"}
 		}
+		if err := rejectMCPUnknownFields(
+			object,
+			"`mcp.access`",
+			"system_agent", "apps", "external_agents",
+		); err != nil {
+			return nil, err
+		}
+	}
+	rawTools, ok := service["tools"].([]any)
+	if !ok {
+		return nil, &MCPManifestError{Message: "`mcp.tools` must be an array"}
+	}
+	if len(rawTools) == 0 {
+		return nil, &MCPManifestError{Message: "`mcp.tools` must contain at least one tool"}
 	}
 	app := &MCPApp{
 		id:      id,
@@ -935,6 +991,13 @@ func parseMCPManifest(manifest map[string]any) (*MCPApp, error) {
 		object, ok := rawTool.(map[string]any)
 		if !ok {
 			return nil, &MCPManifestError{Message: fmt.Sprintf("`mcp.tools[%d]` must be an object", index)}
+		}
+		if err := rejectMCPUnknownFields(
+			object,
+			fmt.Sprintf("`mcp.tools[%d]`", index),
+			"name", "summary", "args", "needs",
+		); err != nil {
+			return nil, err
 		}
 		name, ok := object["name"].(string)
 		if !ok || !mcpToolNamePattern.MatchString(name) {
@@ -990,10 +1053,12 @@ func parseMCPArguments(toolName string, rawArgs []any) ([]mcpArgument, error) {
 		if !ok || !validMCPArgKind(kind) {
 			return nil, &MCPManifestError{Message: fmt.Sprintf("tool %q arg %q has invalid kind", toolName, name)}
 		}
-		for _, unsupported := range []string{"default_from", "trusted_resolver", "aliases", "positional_alias"} {
-			if _, present := object[unsupported]; present {
-				return nil, &MCPManifestError{Message: fmt.Sprintf("tool %q arg %q cannot declare %q", toolName, name, unsupported)}
-			}
+		if err := rejectMCPUnknownFields(
+			object,
+			fmt.Sprintf("tool %q arg %q", toolName, name),
+			"name", "kind", "required", "required_when", "repeatable", "choices", "default", "label",
+		); err != nil {
+			return nil, err
 		}
 		required, err := optionalMCPBool(object, "required", toolName, name)
 		if err != nil {
@@ -1003,12 +1068,10 @@ func parseMCPArguments(toolName string, rawArgs []any) ([]mcpArgument, error) {
 		if err != nil {
 			return nil, err
 		}
-		if binding, present := object["binding"]; present && binding != "positional" && binding != "flag" {
-			return nil, &MCPManifestError{Message: fmt.Sprintf("tool %q arg %q has invalid binding", toolName, name)}
-		}
 		if repeatable && kind == "bool" {
 			return nil, &MCPManifestError{Message: fmt.Sprintf("tool %q arg %q cannot repeat booleans", toolName, name)}
 		}
+
 		choices := []any{}
 		if rawChoices, present := object["choices"]; present {
 			var ok bool

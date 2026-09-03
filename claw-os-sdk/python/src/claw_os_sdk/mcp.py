@@ -36,6 +36,7 @@ import json
 import math
 import os
 import pathlib
+import re
 import sys
 import threading
 import time
@@ -97,6 +98,8 @@ MAX_CONCURRENT_CALLS = 1
 MAX_PENDING_CALLS = 64
 EOF_CANCELLATION_GRACE_SECONDS = 0.05
 ERR_SERVER_BUSY = -32000
+_APP_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_-]*$")
+_TOOL_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9._-]*$")
 
 
 class ManifestError(ValueError):
@@ -857,28 +860,80 @@ def _load_manifest_service(path: pathlib.Path) -> tuple[str, str, List[_Tool]]:
         raise ManifestError(f"invalid App manifest `{path}`: {error}") from error
     if not isinstance(manifest, dict):
         raise ManifestError("App manifest must be a JSON object")
+    _reject_unknown_fields(
+        manifest,
+        {
+            "id",
+            "version",
+            "schema_version",
+            "name",
+            "summary",
+            "icon",
+            "runtime",
+            "entry",
+            "operations",
+            "ai",
+            "mcp",
+            "desktop",
+            "dependencies",
+        },
+        "App manifest",
+    )
     if manifest.get("schema_version") != 2:
         raise ManifestError("MCP Apps require `schema_version: 2`")
     app_id = manifest.get("id")
     version = manifest.get("version")
     service = manifest.get("mcp")
-    if not isinstance(app_id, str) or not app_id:
+    if not isinstance(app_id, str) or _APP_ID_PATTERN.fullmatch(app_id) is None:
         raise ManifestError("App manifest has no valid `id`")
     if not isinstance(version, str) or not version:
         raise ManifestError("App manifest has no valid `version`")
     if not isinstance(service, dict):
         raise ManifestError("App manifest has no `mcp` service")
-    raw_tools = service.get("tools", [])
+    _localized_english(manifest.get("name"), "name")
+    _reject_unknown_fields(
+        service,
+        {"entry", "transport", "lifecycle", "access", "tools"},
+        "`mcp`",
+    )
+    if service.get("transport", "stdio") != "stdio":
+        raise ManifestError("`mcp.transport` must be `stdio`")
+    if service.get("lifecycle", "lazy") not in {
+        "lazy",
+        "always-on",
+        "while-app-running",
+    }:
+        raise ManifestError("`mcp.lifecycle` is invalid")
+    access = service.get("access")
+    if access is not None:
+        if not isinstance(access, dict):
+            raise ManifestError("`mcp.access` must be an object")
+        _reject_unknown_fields(
+            access,
+            {"system_agent", "apps", "external_agents"},
+            "`mcp.access`",
+        )
+    raw_tools = service.get("tools")
     if not isinstance(raw_tools, list):
         raise ManifestError("`mcp.tools` must be an array")
+    if not raw_tools:
+        raise ManifestError("`mcp.tools` must contain at least one tool")
 
     tools: List[_Tool] = []
     names: set[str] = set()
     for index, raw_tool in enumerate(raw_tools):
         if not isinstance(raw_tool, dict):
             raise ManifestError(f"`mcp.tools[{index}]` must be an object")
+        _reject_unknown_fields(
+            raw_tool,
+            {"name", "summary", "args", "needs"},
+            f"`mcp.tools[{index}]`",
+        )
         name = raw_tool.get("name")
-        if not isinstance(name, str) or not name:
+        if (
+            not isinstance(name, str)
+            or _TOOL_NAME_PATTERN.fullmatch(name) is None
+        ):
             raise ManifestError(f"`mcp.tools[{index}].name` must be a string")
         if name in names:
             raise ManifestError(f"tool `{name}` is declared twice")
@@ -911,6 +966,18 @@ def _localized_english(value: Any, field_name: str) -> str:
     raise ManifestError(f"`{field_name}` requires non-empty English text")
 
 
+def _reject_unknown_fields(
+    value: Dict[str, Any],
+    allowed: set[str],
+    field_name: str,
+) -> None:
+    unknown = sorted(set(value) - allowed)
+    if unknown:
+        raise ManifestError(
+            f"{field_name} contains unknown field `{unknown[0]}`"
+        )
+
+
 def _manifest_input_schema(
     args: List[Any],
     tool_name: str,
@@ -932,6 +999,20 @@ def _manifest_input_schema(
             raise ManifestError(
                 f"tool `{tool_name}` arg {index} must be an object"
             )
+        _reject_unknown_fields(
+            raw_arg,
+            {
+                "name",
+                "kind",
+                "required",
+                "required_when",
+                "repeatable",
+                "choices",
+                "default",
+                "label",
+            },
+            f"tool `{tool_name}` arg {index}",
+        )
         name = raw_arg.get("name")
         kind = raw_arg.get("kind")
         if not isinstance(name, str) or not name:

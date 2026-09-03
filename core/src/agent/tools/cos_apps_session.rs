@@ -1,10 +1,9 @@
-//! cos *apps* session bridge — agent-driven, stateful tool calls into apps.
+//! Authenticated MCP App Mesh — typed tool calls into App services.
 //!
-//! This is the symmetric counterpart to [`super::cos_apps`] (the
-//! stateless one-shot proxies). Where `cos_app_<id>` shells `cos app
-//! <id> <verb>` for every call, an *app session tool* keeps the app's
-//! MCP server alive between calls so it can hold in-memory state and
-//! run background work.
+//! This is the sole model-visible App invocation path. Each App's MCP server
+//! can stay alive between calls so it can hold in-memory state and run
+//! background work; CLI-style one-shot App operations are not projected to
+//! the model.
 //!
 //! ## Discovery, registration, and lifecycle
 //!
@@ -2010,10 +2009,10 @@ impl Tool for AppSessionTool {
 
     fn disclosure(&self) -> ToolDisclosure {
         ToolDisclosure::extension(
-            "app-session",
+            "app-mcp",
             Some(self.app_id.clone()),
             Some(self.manifest_tool_name.clone()),
-            ["app".to_string(), "session".to_string()],
+            ["app".to_string(), "mcp".to_string()],
         )
     }
 
@@ -2374,7 +2373,7 @@ fn emit_audit(
         session_id.as_deref(),
     );
     // Override provider so audit dashboards can split kernel-catalog
-    // tools from app-session tools without parsing model strings.
+    // tools from MCP App tools without parsing model strings.
     rec.provider = format!("app:{app_id}");
     record_run(&rec);
 }

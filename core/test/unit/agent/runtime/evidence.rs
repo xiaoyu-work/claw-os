@@ -125,6 +125,23 @@ fn bridged_tool_preserves_underlying_evidence_identity() {
 }
 
 #[test]
+fn typed_mcp_app_results_require_evidence_binding() {
+    let messages = trajectory(
+        "call_1",
+        "app_calendar__calendar_list",
+        "{\"events\":[]}",
+        false,
+    );
+    let report = verify_answer(
+        "List my calendar",
+        "There are no events. [evidence:call_1 confidence=0.9]",
+        &messages,
+    );
+    assert_eq!(report.status, EvidenceStatus::Verified);
+    assert!(report.sources[0].binding_relevant);
+}
+
+#[test]
 fn gemini_wire_id_suffix_verifies_against_internal_tool_id() {
     let mut messages = trajectory(
         "cos_tool_call::upstream-call-123",

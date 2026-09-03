@@ -187,12 +187,8 @@ fn build_schema_marks_required_args() {
             required: true,
             required_when: None,
             repeatable: false,
-            aliases: Vec::new(),
-            positional_alias: false,
             choices: Vec::new(),
             default: None,
-            default_from: None,
-            trusted_resolver: None,
             label: LocalizedText::default(),
         },
         Arg {
@@ -202,12 +198,8 @@ fn build_schema_marks_required_args() {
             required: false,
             required_when: None,
             repeatable: true,
-            aliases: Vec::new(),
-            positional_alias: false,
             choices: vec![serde_json::json!("a"), serde_json::json!("b")],
             default: None,
-            default_from: None,
-            trusted_resolver: None,
             label: LocalizedText::default(),
         },
         Arg {
@@ -217,12 +209,8 @@ fn build_schema_marks_required_args() {
             required: false,
             required_when: None,
             repeatable: false,
-            aliases: Vec::new(),
-            positional_alias: false,
             choices: Vec::new(),
             default: Some(serde_json::json!(60)),
-            default_from: None,
-            trusted_resolver: None,
             label: LocalizedText::default(),
         },
     ];
@@ -540,13 +528,16 @@ fn session_package(root: &Path, id: &str, entrypoints: &[&str]) -> std::path::Pa
             "schema_version": 2,
             "id": id,
             "version": "1.0.0",
-            "name": id,
+            "name": {"en": id},
             "runtime": "python",
             "operations": {},
             "mcp": {
                 "transport": "stdio",
                 "entry": "server.py",
-                "tools": []
+                "tools": [{
+                    "name": format!("{id}.probe"),
+                    "summary": {"en": "Probe"}
+                }]
             }
         })
         .to_string(),
@@ -791,7 +782,7 @@ fn signed_probe_app(apps: &Path, id: &str, body: &str) -> std::path::PathBuf {
             "schema_version": 2,
             "id": id,
             "version": "1.0.0",
-            "name": id,
+            "name": {"en": id},
             "runtime": "python",
             "operations": {},
             "mcp": {
@@ -1643,13 +1634,16 @@ fn only_the_allowlisted_ids_may_name_a_program_outside_their_package() {
             "schema_version": 2,
             "id": "impostor",
             "version": "1.0.0",
-            "name": "impostor",
+            "name": {"en": "impostor"},
             "runtime": "binary",
             "operations": {},
             "mcp": {
                 "transport": "stdio",
                 "entry": "/usr/bin/cosmic-player",
-                "tools": []
+                "tools": [{
+                    "name": "impostor.probe",
+                    "summary": {"en": "Probe"}
+                }]
             }
         })
         .to_string(),

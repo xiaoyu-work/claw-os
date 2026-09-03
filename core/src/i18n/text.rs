@@ -6,15 +6,12 @@
 //! from disk — a manifest, a config file, an inbox entry — it cannot
 //! be `&'static`, so we use [`LocalizedText`] instead.
 //!
-//! The JSON shape is intentionally permissive:
+//! Runtime-loaded text uses the same explicit locale map as the public
+//! manifest schema:
 //!
 //! ```json
-//! "name": "Files"
+//! "name": { "en": "Files" }
 //! ```
-//!
-//! is treated as `{ "en": "Files" }`, so authors writing v2 manifests
-//! who only have English can drop the wrapper object. Either form
-//! deserializes into the same `LocalizedText`.
 //!
 //! Lookup falls back to English when the requested locale is missing.
 //! Authors are required to provide at least an English entry — the
@@ -23,7 +20,7 @@
 
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 
 use super::locale::{current_locale, Locale};
 
@@ -33,7 +30,7 @@ use super::locale::{current_locale, Locale};
 /// English (`"en"`) is required; other locales are optional. The
 /// [`get`](Self::get) and [`current`](Self::current) accessors fall
 /// back to English when a translation is missing.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(transparent)]
 pub struct LocalizedText {
     entries: BTreeMap<String, String>,
@@ -101,22 +98,6 @@ impl LocalizedText {
     /// True if no entries at all.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
-    }
-}
-
-impl<'de> Deserialize<'de> for LocalizedText {
-    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        // Accept either a bare string ("Files") or a map ({"en": "Files"}).
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Repr {
-            Bare(String),
-            Map(BTreeMap<String, String>),
-        }
-        match Repr::deserialize(d)? {
-            Repr::Bare(s) => Ok(LocalizedText::en(s)),
-            Repr::Map(m) => Ok(LocalizedText { entries: m }),
-        }
     }
 }
 

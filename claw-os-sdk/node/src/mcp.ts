@@ -801,6 +801,21 @@ export class App {
   }
 }
 
+function rejectUnknownFields(
+  value: JsonObject,
+  context: string,
+  allowed: readonly string[],
+): void {
+  const unknown = Object.keys(value)
+    .filter((field) => !allowed.includes(field))
+    .sort();
+  if (unknown.length > 0) {
+    throw new ManifestError(
+      `${context} contains unknown field \`${unknown[0]}\``,
+    );
+  }
+}
+
 function loadManifest(path: string): {
   id: string;
   version: string;
@@ -814,6 +829,21 @@ function loadManifest(path: string): {
     throw new ManifestError(`invalid App manifest \`${path}\`: ${asError(error).message}`);
   }
   if (!isObject(manifest)) throw new ManifestError("App manifest must be a JSON object");
+  rejectUnknownFields(manifest, "App manifest", [
+    "id",
+    "version",
+    "schema_version",
+    "name",
+    "summary",
+    "icon",
+    "runtime",
+    "entry",
+    "operations",
+    "ai",
+    "mcp",
+    "desktop",
+    "dependencies",
+  ]);
   if (manifest.schema_version !== 2) {
     throw new ManifestError("MCP Apps require `schema_version: 2`");
   }
@@ -833,21 +863,56 @@ function loadManifest(path: string): {
   if (!isObject(manifest.mcp)) {
     throw new ManifestError("App manifest has no `mcp` service");
   }
+  localizedEnglish(manifest.name, "name");
+  rejectUnknownFields(manifest.mcp, "`mcp`", [
+    "entry",
+    "transport",
+    "lifecycle",
+    "access",
+    "tools",
+  ]);
   if (
     manifest.mcp.transport !== undefined
     && manifest.mcp.transport !== "stdio"
   ) {
     throw new ManifestError("`mcp.transport` must be `stdio`");
   }
-  const rawTools = manifest.mcp.tools ?? [];
+  if (
+    manifest.mcp.lifecycle !== undefined
+    && !["lazy", "always-on", "while-app-running"].includes(
+      String(manifest.mcp.lifecycle),
+    )
+  ) {
+    throw new ManifestError("`mcp.lifecycle` is invalid");
+  }
+  if (manifest.mcp.access !== undefined) {
+    if (!isObject(manifest.mcp.access)) {
+      throw new ManifestError("`mcp.access` must be an object");
+    }
+    rejectUnknownFields(manifest.mcp.access, "`mcp.access`", [
+      "system_agent",
+      "apps",
+      "external_agents",
+    ]);
+  }
+  const rawTools = manifest.mcp.tools;
   if (!Array.isArray(rawTools)) {
     throw new ManifestError("`mcp.tools` must be an array");
+  }
+  if (rawTools.length === 0) {
+    throw new ManifestError("`mcp.tools` must contain at least one tool");
   }
   const names = new Set<string>();
   const tools = rawTools.map((rawTool, index) => {
     if (!isObject(rawTool)) {
       throw new ManifestError(`\`mcp.tools[${index}]\` must be an object`);
     }
+    rejectUnknownFields(rawTool, `\`mcp.tools[${index}]\``, [
+      "name",
+      "summary",
+      "args",
+      "needs",
+    ]);
     if (typeof rawTool.name !== "string" || !TOOL_NAME_PATTERN.test(rawTool.name)) {
       throw new ManifestError(`\`mcp.tools[${index}].name\` is invalid`);
     }
@@ -940,30 +1005,21 @@ function parseArguments(
         `tool \`${toolName}\` arg \`${raw.name}\` has invalid kind`,
       );
     }
-    for (const unsupported of [
-      "default_from",
-      "trusted_resolver",
-      "aliases",
-      "positional_alias",
-    ]) {
-      if (Object.prototype.hasOwnProperty.call(raw, unsupported)) {
-        throw new ManifestError(
-          `tool \`${toolName}\` arg \`${raw.name}\` cannot declare \`${unsupported}\``,
-        );
-      }
-    }
+    rejectUnknownFields(raw, `tool \`${toolName}\` arg \`${raw.name}\``, [
+      "name",
+      "kind",
+      "required",
+      "required_when",
+      "repeatable",
+      "choices",
+      "default",
+      "label",
+    ]);
     if (raw.required !== undefined && typeof raw.required !== "boolean") {
       throw new ManifestError(`tool \`${toolName}\` arg \`${raw.name}\` required must be boolean`);
     }
     if (raw.repeatable !== undefined && typeof raw.repeatable !== "boolean") {
       throw new ManifestError(`tool \`${toolName}\` arg \`${raw.name}\` repeatable must be boolean`);
-    }
-    if (
-      raw.binding !== undefined
-      && raw.binding !== "positional"
-      && raw.binding !== "flag"
-    ) {
-      throw new ManifestError(`tool \`${toolName}\` arg \`${raw.name}\` has invalid binding`);
     }
     const kind = raw.kind as ArgKind;
     const required = raw.required === true;
@@ -971,6 +1027,7 @@ function parseArguments(
     if (repeatable && kind === "bool") {
       throw new ManifestError(`tool \`${toolName}\` arg \`${raw.name}\` cannot repeat booleans`);
     }
+
     const choices = raw.choices ?? [];
     if (!Array.isArray(choices)) {
       throw new ManifestError(`tool \`${toolName}\` arg \`${raw.name}\` choices must be an array`);

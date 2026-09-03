@@ -66,5 +66,73 @@
         }
       ]
     }
+  },
+  "schema_version": 2,
+  "mcp": {
+    "entry": "server.py",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "access": {
+      "system_agent": true,
+      "apps": []
+    },
+    "tools": [
+      {
+        "name": "notify.send",
+        "summary": {
+          "en": "Send a notification message"
+        },
+        "args": [
+          {
+            "name": "message",
+            "kind": "text",
+            "required": true,
+            "repeatable": true
+          },
+          {
+            "name": "urgent",
+            "kind": "bool",
+            "required": false,
+            "default": false
+          }
+        ],
+        "needs": [
+          {
+            "verb": "ui.notify",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Display a notification to you on the screen."
+            }
+          }
+        ]
+      },
+      {
+        "name": "notify.list",
+        "summary": {
+          "en": "List recent notifications"
+        },
+        "args": [
+          {
+            "name": "limit",
+            "kind": "integer",
+            "required": false,
+            "default": 20
+          }
+        ],
+        "needs": [
+          {
+            "verb": "data.inbox.read",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Read your stored notifications history."
+            }
+          }
+        ]
+      }
+    ]
   }
 }

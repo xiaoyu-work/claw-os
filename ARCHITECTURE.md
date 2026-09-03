@@ -298,7 +298,8 @@ model
 flags or operands, and it cannot dispatch a CLI operation or address hidden
 `__*` routes. Command discovery therefore does not become a generic shell or a
 way around per-tool policy. Installed Apps use the parallel
-`cos_app_catalog`/`cos_app_run` path.
+authenticated MCP App Mesh: `cos_tool_search`, `cos_tool_describe`, and
+`cos_tool_call` project only tools permitted for the current caller.
 
 Token usage follows the same owner boundary as Agent execution. A model call to
 `cos_usage` reads the current routed owner's log. A direct

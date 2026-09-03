@@ -1,8 +1,8 @@
-"""Compatibility helpers for manifest-canonical operation argv."""
+"""Helpers for manifest-canonical operation argv."""
 
 
 class _PositionalToken(str):
-    """A string that cannot be reclassified as an option by legacy handlers."""
+    """A positional string that list-based handlers cannot reclassify."""
 
     def __eq__(self, other):
         if isinstance(other, _PositionalToken):
@@ -24,13 +24,12 @@ class _PositionalToken(str):
 
 
 def parse_canonical_argv(
-    args, *, value_flags=(), bool_flags=(), repeatable_flags=(), aliases=None
+    args, *, value_flags=(), bool_flags=(), repeatable_flags=()
 ):
     """Parse the complete canonical grammar into positionals and options."""
     value_flags = {name.replace("_", "-") for name in value_flags}
     bool_flags = {name.replace("_", "-") for name in bool_flags}
     repeatable_flags = {name.replace("_", "-") for name in repeatable_flags}
-    aliases = dict(aliases or {})
     options = {}
     positionals = []
     parse_options = True
@@ -42,8 +41,8 @@ def parse_canonical_argv(
             index += 1
             continue
         option, separator, inline = token.partition("=")
-        if parse_options and (option.startswith("--") or option in aliases):
-            name = aliases.get(option, option.removeprefix("--"))
+        if parse_options and option.startswith("--"):
+            name = option.removeprefix("--")
             if name in bool_flags:
                 if separator:
                     normalized = inline.strip().lower()
@@ -80,10 +79,10 @@ def parse_canonical_argv(
 
 
 def normalize_canonical_argv(args, *, bool_flags=()):
-    """Return legacy list-handler tokens for the canonical bridge grammar.
+    """Return list-handler tokens for the canonical bridge grammar.
 
-    The authority consumes ``--name=value`` and ``--`` directly. Older
-    list-based handlers expect split value flags and bare true booleans, so
+    The authority consumes ``--name=value`` and ``--`` directly. App
+    list handlers consume split value flags and bare true booleans, so
     normalize only that representation after authority has validated it.
     """
     bool_flags = {name.replace("_", "-") for name in bool_flags}

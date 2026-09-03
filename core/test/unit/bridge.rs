@@ -124,7 +124,7 @@ fn run_app_rejects_non_main_py_for_python() {
     std::fs::create_dir_all(&tmp).unwrap();
     std::fs::write(
         tmp.join("app.json"),
-        r#"{"id":"x","version":"0","name":"X","runtime":"python","entry":"alt.py"}"#,
+        r#"{"id":"x","version":"0","name": {"en": "X"},"runtime":"python","entry":"alt.py"}"#,
     )
     .unwrap();
     let launch = crate::test_env::app_launch(&tmp, "x");
@@ -143,7 +143,7 @@ fn run_app_errors_on_unknown_runtime() {
     std::fs::create_dir_all(&tmp).unwrap();
     std::fs::write(
         tmp.join("app.json"),
-        r#"{"id":"x","version":"0","name":"X","runtime":"rust"}"#,
+        r#"{"id":"x","version":"0","name": {"en": "X"},"runtime":"rust"}"#,
     )
     .unwrap();
     // An unparseable manifest never becomes a verified snapshot, so the
@@ -164,7 +164,7 @@ fn run_app_node_entry_missing_surfaces_clear_error() {
     std::fs::create_dir_all(&tmp).unwrap();
     std::fs::write(
         tmp.join("app.json"),
-        r#"{"id":"x","version":"0","name":"X","runtime":"node"}"#,
+        r#"{"id":"x","version":"0","name": {"en": "X"},"runtime":"node"}"#,
     )
     .unwrap();
     let launch = crate::test_env::app_launch(&tmp, "x");
@@ -214,10 +214,10 @@ fn run_python_app_handles_stdout_larger_than_pipe_buffer() {
         r#"{
               "id": "x",
               "version": "0",
-              "name": "X",
+              "name": {"en": "X"},
               "operations": {
                 "noop": {
-                  "label": "Noop",
+                  "label": {"en": "Noop"},
                   "args": [{"name": "path", "kind": "path", "default": "."}]
                 }
               }
@@ -271,27 +271,24 @@ fn run_python_app_handles_stdout_larger_than_pipe_buffer() {
 }
 
 #[test]
-fn operation_defaults_bind_the_same_argv_and_narrow_caps() {
-    let _env = crate::test_env::lock_env();
-    let home = tempfile::tempdir().unwrap();
-    let _home = crate::test_env::TestEnvVarGuard::set("HOME", home.path());
+fn operation_defaults_and_explicit_args_bind_the_same_argv_and_narrow_caps() {
     let manifest = Manifest::from_json(
         r#"{
               "id": "defaults",
               "version": "0.1",
-              "name": "Defaults",
+              "name": {"en": "Defaults"},
               "operations": {
                 "ls": {
-                  "label": "List",
+                  "label": {"en": "List"},
                   "args": [{"name": "path", "kind": "path", "default": "."}],
                   "needs": [
                     {"verb": "fs.read",
                      "scope": {"kind": "from-arg", "arg": "path"},
-                     "why": "List the current directory."}
+                     "why": {"en": "List the current directory."}}
                   ]
                 },
                 "search": {
-                  "label": "Search",
+                  "label": {"en": "Search"},
                   "args": [
                     {"name": "query", "kind": "text", "required": true},
                     {"name": "path", "kind": "path", "default": "/workspace"}
@@ -299,25 +296,19 @@ fn operation_defaults_bind_the_same_argv_and_narrow_caps() {
                   "needs": [
                     {"verb": "fs.read",
                      "scope": {"kind": "from-arg", "arg": "path"},
-                     "why": "Search the workspace."}
+                     "why": {"en": "Search the workspace."}}
                   ]
                 },
                 "download": {
-                  "label": "Download",
+                  "label": {"en": "Download"},
                   "args": [
                     {"name": "url", "kind": "text", "required": true},
-                    {"name": "output", "kind": "path", "binding": "flag",
-                     "default_from": {
-                       "arg": "url",
-                       "transform": "url-path-basename",
-                       "prefix": "~/",
-                       "fallback": "download"
-                     }}
+                    {"name": "output", "kind": "path", "required": true}
                   ],
                   "needs": [
                     {"verb": "fs.write",
                      "scope": {"kind": "from-arg", "arg": "output"},
-                     "why": "Save the download."}
+                     "why": {"en": "Save the download."}}
                   ]
                 }
               }
@@ -364,44 +355,15 @@ fn operation_defaults_bind_the_same_argv_and_narrow_caps() {
     .unwrap();
     assert!(search_caps.covers(&Cap::new(Verb::FS_READ, Scope::path("/workspace"))));
 
+    let output_dir = tempfile::tempdir().unwrap();
+    let explicit_output = output_dir.path().join("chosen.bin");
     let url = "https://example.com/releases/artifact.bin?download=1".to_string();
-    let download =
-        bind_operation_args(&manifest.operations["download"], std::slice::from_ref(&url)).unwrap();
-    let default_output = home.path().join("artifact.bin");
-    assert_eq!(
-        download.argv,
-        vec![
-            url.clone(),
-            "--output".to_string(),
-            default_output.to_string_lossy().into_owned()
-        ]
+    assert!(
+        bind_operation_args(&manifest.operations["download"], std::slice::from_ref(&url))
+            .unwrap_err()
+            .contains("argument `output` is required")
     );
-    let mut download_parent = CapSet::new();
-    download_parent.insert(Cap::new(
-        Verb::FS_WRITE,
-        Scope::path(default_output.to_string_lossy()),
-    ));
-    let download_resolved = manifest
-        .resolve_needs("download", &download.values)
-        .unwrap();
-    let download_caps = constrained_operation_caps(
-        &download_parent,
-        true,
-        &manifest.operations["download"].needs,
-        &download_resolved,
-    )
-    .unwrap();
-    assert!(download_caps.covers(&Cap::new(
-        Verb::FS_WRITE,
-        Scope::path(default_output.to_string_lossy()),
-    )));
-
-    let explicit_output = home.path().join("chosen.bin");
-    let explicit_args = vec![
-        url,
-        "--output".to_string(),
-        explicit_output.to_string_lossy().into_owned(),
-    ];
+    let explicit_args = vec![url, explicit_output.to_string_lossy().into_owned()];
     let explicit = bind_operation_args(&manifest.operations["download"], &explicit_args).unwrap();
     assert_eq!(explicit.argv, explicit_args);
     let mut explicit_parent = CapSet::new();
@@ -422,10 +384,6 @@ fn operation_defaults_bind_the_same_argv_and_narrow_caps() {
     assert!(explicit_caps.covers(&Cap::new(
         Verb::FS_WRITE,
         Scope::path(explicit_output.to_string_lossy()),
-    )));
-    assert!(!explicit_caps.covers(&Cap::new(
-        Verb::FS_WRITE,
-        Scope::path(default_output.to_string_lossy()),
     )));
 }
 
@@ -485,10 +443,10 @@ fn defaulted_bool_args_never_shift_the_effective_argv() {
         r#"{
               "id": "flags",
               "version": "0.1",
-              "name": "Flags",
+              "name": {"en": "Flags"},
               "operations": {
                 "sync": {
-                  "label": "Sync",
+                  "label": {"en": "Sync"},
                   "args": [
                     {"name": "recursive", "kind": "bool", "binding": "flag",
                      "default": true},
@@ -499,7 +457,7 @@ fn defaulted_bool_args_never_shift_the_effective_argv() {
                   "needs": [
                     {"verb": "data.kv.read",
                      "scope": {"kind": "from-arg", "arg": "target"},
-                     "why": "Read the target store."}
+                     "why": {"en": "Read the target store."}}
                   ]
                 }
               }
@@ -544,8 +502,8 @@ fn defaulted_bool_args_never_shift_the_effective_argv() {
 fn canonical_argv_matches_bound_boolean_and_delimiter_values() {
     let manifest = Manifest::from_json(
         r#"{
-            "id":"canonical","version":"0.1","name":"Canonical",
-            "operations":{"run":{"label":"Run","args":[
+            "id":"canonical","version":"0.1","name": {"en": "Canonical"},
+            "operations":{"run":{"label": {"en": "Run"},"args":[
                 {"name":"text","kind":"text","required":true},
                 {"name":"confirm","kind":"bool","binding":"flag","default":false},
                 {"name":"enabled","kind":"bool","binding":"positional","default":true},
@@ -595,8 +553,8 @@ fn canonical_argv_matches_bound_boolean_and_delimiter_values() {
 fn repeatable_flags_round_trip_through_canonical_argv() {
     let manifest = Manifest::from_json(
         r#"{
-            "id":"repeat","version":"0.1","name":"Repeat",
-            "operations":{"fetch":{"label":"Fetch","args":[
+            "id":"repeat","version":"0.1","name": {"en": "Repeat"},
+            "operations":{"fetch":{"label": {"en": "Fetch"},"args":[
                 {"name":"url","kind":"text","required":true},
                 {"name":"header","kind":"text","binding":"flag","repeatable":true}
             ]}}
@@ -646,14 +604,14 @@ fn repeatable_flags_round_trip_through_canonical_argv() {
 fn explicit_false_overrides_true_default_for_authority_and_child() {
     let manifest = Manifest::from_json(
         r#"{
-            "id":"boolean","version":"0.1","name":"Boolean",
-            "operations":{"run":{"label":"Run","args":[
+            "id":"boolean","version":"0.1","name": {"en": "Boolean"},
+            "operations":{"run":{"label": {"en": "Run"},"args":[
                 {"name":"enabled","kind":"bool","binding":"flag","default":true}
             ],"needs":[
                 {"verb":"data.kv.read","scope":{"kind":"fixed",
                  "scope":{"kind":"name","value":"enabled"}},
                  "when":{"kind":"arg-equals","arg":"enabled","value":true},
-                 "why":"Read enabled data"}
+                 "why": {"en": "Read enabled data"}}
             ]}}
         }"#,
     )
@@ -673,9 +631,9 @@ fn explicit_false_overrides_true_default_for_authority_and_child() {
 #[test]
 fn in_process_wild_need_rejects_typed_wildcard_authority() {
     let manifest = Manifest::from_json(
-        r#"{"id":"wild","version":"1","name":"Wild",
-             "operations":{"dial":{"label":"Dial","needs":[
-               {"verb":"net.dial","scope":{"kind":"wild"},"why":"Dial"}
+        r#"{"id":"wild","version":"1","name": {"en": "Wild"},
+             "operations":{"dial":{"label": {"en": "Dial"},"needs":[
+               {"verb":"net.dial","scope":{"kind":"wild"},"why": {"en": "Dial"}}
              ]}}}"#,
     )
     .unwrap();
@@ -686,40 +644,38 @@ fn in_process_wild_need_rejects_typed_wildcard_authority() {
 }
 
 #[test]
-fn trusted_email_provider_is_bound_before_capability_derivation() {
-    let credentials = tempfile::tempdir().unwrap();
-    let _credentials =
-        crate::test_env::TestEnvVarGuard::set("COS_CREDENTIALS_DIR", credentials.path());
-    let _smtp = crate::test_env::TestEnvVarGuard::set("SMTP_HOST", "mail.example.test");
+fn explicit_email_provider_and_host_drive_capability_derivation() {
     let manifest = Manifest::from_json(
         r#"{
-            "id":"email","version":"0.1","name":"Email",
-            "operations":{"send":{"label":"Send","args":[
+            "id":"email","version":"0.1","name": {"en": "Email"},
+            "operations":{"send":{"label": {"en": "Send"},"args":[
                 {"name":"body","kind":"text","required":true},
                 {"name":"provider","kind":"name","binding":"flag",
-                 "trusted_resolver":"email-provider"},
+                 "required":true},
                 {"name":"host","kind":"host","binding":"flag",
-                 "trusted_resolver":"email-host"}
+                 "required":true}
             ],"needs":[{"verb":"secret.read","scope":{
                 "kind":"from-arg-map","arg":"provider","values":{
                     "smtp":{"kind":"name","value":"default/SMTP_PASSWORD"},
                     "gmail":{"kind":"name","value":"default/GOOGLE_ACCESS_TOKEN"}
-                }},"why":"Read provider credential"},
+                }},"why": {"en": "Read provider credential"}},
                 {"verb":"net.dial","scope":{"kind":"from-arg","arg":"host"},
-                 "why":"Connect to provider"}]}}
+                 "why": {"en": "Connect to provider"}}]}}
         }"#,
     )
     .unwrap();
     let operation = &manifest.operations["send"];
-    let trusted = trusted_pre_dispatch_args("email", operation, &["hello".into()]).unwrap();
-    assert_eq!(
-        trusted,
-        ["hello", "--provider", "smtp", "--host", "mail.example.test"]
-    );
-    let bound = bind_operation_args(operation, &trusted).unwrap();
+    let explicit = [
+        "hello".into(),
+        "--provider".into(),
+        "smtp".into(),
+        "--host".into(),
+        "mail.example.test".into(),
+    ];
+    let bound = bind_operation_args(operation, &explicit).unwrap();
     assert_eq!(bound.values["provider"], serde_json::json!("smtp"));
     assert_eq!(bound.values["host"], serde_json::json!("mail.example.test"));
-    assert_eq!(bound.argv, trusted);
+    assert_eq!(bound.argv, explicit);
 
     let resolved = manifest.resolve_needs("send", &bound.values).unwrap();
     assert_eq!(resolved[0][0].scope, Scope::name("default/SMTP_PASSWORD"));
@@ -727,19 +683,15 @@ fn trusted_email_provider_is_bound_before_capability_derivation() {
 }
 
 #[test]
-fn local_calendar_resolution_is_identical_for_in_process_caps() {
+fn explicit_calendar_provider_selects_only_its_capabilities() {
     let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap();
     let app_dir = repository.join("apps/calendar");
     let manifest = load_manifest(&app_dir).unwrap().unwrap();
     let operation = &manifest.operations["today"];
-    let credentials = tempfile::tempdir().unwrap();
-    let _credentials =
-        crate::test_env::TestEnvVarGuard::set("COS_CREDENTIALS_DIR", credentials.path());
-    let trusted = trusted_pre_dispatch_args("calendar", operation, &[]).unwrap();
-    assert_eq!(trusted, ["--provider", "local"]);
-    let bound = bind_operation_args(operation, &trusted).unwrap();
+    assert!(bind_operation_args(operation, &[]).is_err());
+    let bound = bind_operation_args(operation, &["--provider".into(), "local".into()]).unwrap();
     let resolved = manifest.resolve_needs("today", &bound.values).unwrap();
 
     let mut parent = CapSet::new();
@@ -757,15 +709,21 @@ fn local_calendar_resolution_is_identical_for_in_process_caps() {
     )));
     assert!(!caps.covers(&Cap::new(Verb::NET_DIAL, Scope::host("www.googleapis.com"))));
 
-    let namespace = credentials.path().join("default");
-    std::fs::create_dir_all(&namespace).unwrap();
-    std::fs::write(namespace.join("GOOGLE_ACCESS_TOKEN.json"), "{}").unwrap();
-    let trusted = trusted_pre_dispatch_args("calendar", operation, &[]).unwrap();
-    assert_eq!(trusted, ["--provider", "google"]);
+    let google = bind_operation_args(operation, &["--provider".into(), "google".into()]).unwrap();
+    let google_resolved = manifest.resolve_needs("today", &google.values).unwrap();
+    assert!(google_resolved[0].is_empty());
+    assert_eq!(
+        google_resolved[1][0].scope,
+        Scope::host("www.googleapis.com")
+    );
+    assert_eq!(
+        google_resolved[2][0].scope,
+        Scope::name("default/GOOGLE_ACCESS_TOKEN")
+    );
 }
 
 #[test]
-fn ntfy_server_is_resolved_before_exact_host_capability() {
+fn explicit_ntfy_server_drives_exact_host_capability() {
     let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap();
@@ -774,13 +732,12 @@ fn ntfy_server_is_resolved_before_exact_host_capability() {
     )
     .unwrap();
     let operation = &manifest.operations["send"];
-    let _server =
-        crate::test_env::TestEnvVarGuard::set("COS_NTFY_SERVER", "https://notify.example:8443");
-    let trusted = trusted_pre_dispatch_args("gateway-ntfy", operation, &["hello".into()]).unwrap();
-    assert!(trusted
-        .windows(2)
-        .any(|pair| pair == ["--server", "https://notify.example:8443"]));
-    let bound = bind_operation_args(operation, &trusted).unwrap();
+    let explicit = [
+        "hello".into(),
+        "--server".into(),
+        "https://notify.example:8443".into(),
+    ];
+    let bound = bind_operation_args(operation, &explicit).unwrap();
     let needs = manifest.resolve_needs("send", &bound.values).unwrap();
     assert!(needs
         .into_iter()
@@ -789,8 +746,7 @@ fn ntfy_server_is_resolved_before_exact_host_capability() {
 }
 
 #[test]
-fn ntfy_server_resolution_uses_explicit_env_credential_fallback_precedence() {
-    let _env = crate::test_env::lock_env();
+fn ntfy_server_is_required_for_every_operation() {
     let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap();
@@ -800,40 +756,9 @@ fn ntfy_server_resolution_uses_explicit_env_credential_fallback_precedence() {
     .unwrap();
     let send = &manifest.operations["send"];
     let status = &manifest.operations["status"];
-    let credentials = tempfile::tempdir().unwrap();
-    let process = tempfile::tempdir().unwrap();
-    let _credentials =
-        crate::test_env::TestEnvVarGuard::set("COS_CREDENTIALS_DIR", credentials.path());
-    let _session = crate::test_env::TestSessionGuard::admin(process.path());
-    let _server_env = crate::test_env::TestEnvVarGuard::set("COS_NTFY_SERVER", "");
-    let fallback = trusted_pre_dispatch_args("gateway-ntfy", send, &["hello".into()]).unwrap();
-    assert!(fallback
-        .windows(2)
-        .any(|pair| pair == ["--server", "https://ntfy.sh"]));
-    let fallback_bound = bind_operation_args(send, &fallback).unwrap();
-    let fallback_needs = manifest
-        .resolve_needs("send", &fallback_bound.values)
-        .unwrap();
-    assert_eq!(fallback_needs[0][0].scope, Scope::host("ntfy.sh:443"));
-    assert!(fallback_needs[3].is_empty());
-
-    crate::credential::run(
-        "store",
-        &[
-            "ntfy_server".into(),
-            "https://credential.example:9443".into(),
-        ],
-    )
-    .unwrap();
-
-    let from_credential =
-        trusted_pre_dispatch_args("gateway-ntfy", send, &["hello".into()]).unwrap();
-    assert!(from_credential
-        .windows(2)
-        .any(|pair| pair == ["--server", "https://credential.example:9443"]));
-
-    let explicit = trusted_pre_dispatch_args(
-        "gateway-ntfy",
+    assert!(bind_operation_args(send, &["hello".into()]).is_err());
+    assert!(bind_operation_args(status, &[]).is_err());
+    let explicit = bind_operation_args(
         send,
         &[
             "hello".into(),
@@ -842,15 +767,19 @@ fn ntfy_server_resolution_uses_explicit_env_credential_fallback_precedence() {
         ],
     )
     .unwrap();
-    assert!(explicit
-        .windows(2)
-        .any(|pair| pair == ["--server", "https://explicit.example:7443"]));
-    assert!(!explicit
-        .iter()
-        .any(|arg| arg == "https://credential.example:9443"));
-
-    let status_args = trusted_pre_dispatch_args("gateway-ntfy", status, &[]).unwrap();
-    assert_eq!(status_args, ["--server", "https://credential.example:9443"]);
+    assert_eq!(
+        explicit.values["server"],
+        serde_json::json!("https://explicit.example:7443/")
+    );
+    let status_bound = bind_operation_args(
+        status,
+        &["--server".into(), "https://status.example:9443".into()],
+    )
+    .unwrap();
+    assert_eq!(
+        status_bound.values["server"],
+        serde_json::json!("https://status.example:9443")
+    );
 }
 
 #[test]
@@ -929,10 +858,10 @@ fn stdin_forwarding_requires_an_explicit_operation_contract() {
     std::fs::write(
         app.path().join("app.json"),
         r#"{
-            "id":"stdin","version":"0.1","name":"Stdin",
+            "id":"stdin","version":"0.1","name": {"en": "Stdin"},
             "operations":{
-                "pipe":{"label":"Pipe","stdin":true},
-                "closed":{"label":"Closed"}
+                "pipe":{"label": {"en": "Pipe"},"stdin":true},
+                "closed":{"label": {"en": "Closed"}}
             }
         }"#,
     )
@@ -962,8 +891,8 @@ fn explicit_stdin_bytes_reach_python_and_polyglot_children() {
     std::fs::create_dir_all(&python).unwrap();
     std::fs::write(
         python.join("app.json"),
-        r#"{"id":"python-app","version":"1","name":"Pipe",
-             "operations":{"read":{"label":"Read","stdin":true}}}"#,
+        r#"{"id":"python-app","version":"1","name": {"en": "Pipe"},
+             "operations":{"read":{"label": {"en": "Read"},"stdin":true}}}"#,
     )
     .unwrap();
     std::fs::write(
@@ -999,8 +928,8 @@ fn explicit_stdin_bytes_reach_python_and_polyglot_children() {
     std::fs::create_dir_all(&shell).unwrap();
     std::fs::write(
         shell.join("app.json"),
-        r#"{"id":"shell-app","version":"1","name":"Pipe","runtime":"shell",
-             "operations":{"read":{"label":"Read","stdin":true}}}"#,
+        r#"{"id":"shell-app","version":"1","name": {"en": "Pipe"},"runtime":"shell",
+             "operations":{"read":{"label": {"en": "Read"},"stdin":true}}}"#,
     )
     .unwrap();
     let entry = shell.join("main.sh");
@@ -1090,7 +1019,7 @@ fn bundled_lone_limits_bind_before_optional_selectors() {
 }
 
 #[test]
-fn bundled_legacy_aliases_canonicalize_to_one_effective_grammar() {
+fn bundled_removed_aliases_are_rejected() {
     let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap();
@@ -1112,21 +1041,22 @@ fn bundled_legacy_aliases_canonicalize_to_one_effective_grammar() {
     ] {
         let manifest = load(&["gateway", app]);
         let operation = &manifest.operations["send"];
-        let legacy =
-            bind_operation_args(operation, &["destination".into(), "hello".into()]).unwrap();
-        let canonical = bind_operation_args(
-            operation,
-            &["hello".into(), format!("--{alias}"), "destination".into()],
-        )
-        .unwrap();
-        assert_eq!(legacy.values, canonical.values, "{app}");
-        assert_eq!(legacy.argv, canonical.argv, "{app}");
+        assert!(
+            bind_operation_args(operation, &["destination".into(), "hello".into()]).is_err(),
+            "{app}"
+        );
+        let mut args = vec!["hello".into(), format!("--{alias}"), "destination".into()];
+        if app == "ntfy" {
+            args.extend(["--server".into(), "https://ntfy.example".into()]);
+        }
+        let canonical = bind_operation_args(operation, &args).unwrap();
+        assert_eq!(canonical.values[alias], "destination", "{app}");
     }
 
     let net = load(&["net"]);
     let output = effective_app_home().join("alias.bin");
     let url = "https://example.test/alias.bin".to_string();
-    let flagged = bind_operation_args(
+    assert!(bind_operation_args(
         &net.operations["download"],
         &[
             url.clone(),
@@ -1134,14 +1064,21 @@ fn bundled_legacy_aliases_canonicalize_to_one_effective_grammar() {
             output.to_string_lossy().into_owned(),
         ],
     )
+    .is_err());
+    let positional = bind_operation_args(
+        &net.operations["download"],
+        &[url, output.to_string_lossy().into_owned()],
+    )
     .unwrap();
-    assert_eq!(flagged.argv, [url, output.to_string_lossy().into_owned()]);
+    assert_eq!(
+        positional.values["output"],
+        serde_json::json!(output.to_string_lossy())
+    );
 
     let pkg = load(&["pkg"]);
-    let short = bind_operation_args(
+    assert!(bind_operation_args(
         &pkg.operations["search"],
         &["editor".into(), "-n".into(), "3".into()],
     )
-    .unwrap();
-    assert_eq!(short.argv, ["editor", "--limit", "3"]);
+    .is_err());
 }

@@ -177,12 +177,8 @@ class Arg(_ArgRequired, total=False):
     required: bool
     required_when: "Needcondition"
     repeatable: bool
-    aliases: List[str]
-    positional_alias: bool
     choices: List[Any]
     default: Any
-    default_from: "Argdefaultbinding"
-    trusted_resolver: str
     label: "Localizedtext"
 
 class Positionalarg(TypedDict, total=False):
@@ -195,25 +191,10 @@ class Optionalpositionalgap(TypedDict, total=False):
     """
     pass
 
-class Optionalpositional(TypedDict, total=False):
-    """optionalPositional.
-    """
-    pass
-
 class Defaultedpositional(TypedDict, total=False):
     """defaultedPositional.
     """
     pass
-
-class _ArgdefaultbindingRequired(TypedDict):
-    arg: str
-
-class Argdefaultbinding(_ArgdefaultbindingRequired, total=False):
-    """argDefaultBinding.
-    """
-    transform: str
-    prefix: str
-    fallback: str
 
 class _NeedRequired(TypedDict):
     verb: str
@@ -281,7 +262,10 @@ class Aibudget(TypedDict, total=False):
     """
     monthly_units: int
 
-class Mcpservice(TypedDict, total=False):
+class _McpserviceRequired(TypedDict):
+    tools: List["Mcptool"]
+
+class Mcpservice(_McpserviceRequired, total=False):
     """mcpService.
 
     Long-lived MCP server the app launches for stateful, agent-driven tool
@@ -291,7 +275,6 @@ class Mcpservice(TypedDict, total=False):
     transport: str
     lifecycle: str
     access: "Mcpaccess"
-    tools: List["Mcptool"]
 
 class Mcpaccess(TypedDict, total=False):
     """mcpAccess.
@@ -313,7 +296,7 @@ class Mcptool(_McptoolRequired, total=False):
     One MCP-callable tool. Mirrors operation: args + needs drive the model's
     view and the kernel's enforcement.
     """
-    args: List["Arg"]
+    args: List[Any]
     needs: List["Need"]
 
 class Desktop(TypedDict, total=False):

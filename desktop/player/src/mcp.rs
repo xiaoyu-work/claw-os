@@ -7,9 +7,8 @@
 //! live `cosmic-player` instance, but any MPRIS-compliant player
 //! works — VLC, Rhythmbox, Spotify, …).
 //!
-//! If no MPRIS player is running, the tools return an error rather
-//! than auto-launching one — the agent can decide whether to spawn
-//! the player itself via `cos_app_run` first.
+//! If no MPRIS player is running, the tools return an error. Launching a
+//! desktop process is a separate typed, capability-gated action.
 
 use std::sync::Arc;
 

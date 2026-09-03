@@ -7,16 +7,16 @@ fn recording_progress_persists_tool_start_before_result() {
 
     sink.on_tool_start(
         "call-1",
-        "cos_app_run",
-        &serde_json::json!({"app": "exec", "command": "ps"}),
+        "app_calendar__calendar_list",
+        &serde_json::json!({"provider": "local"}),
     );
 
     let rows = db.recent_tool_invocations("session-1", 10).unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].session_id, "session-1");
     assert_eq!(rows[0].tool_call_id, "call-1");
-    assert_eq!(rows[0].tool_name, "cos_app_run");
-    assert!(rows[0].input.contains("\"command\":\"ps\""));
+    assert_eq!(rows[0].tool_name, "app_calendar__calendar_list");
+    assert!(rows[0].input.contains("\"provider\":\"local\""));
     assert!(rows[0].completed_at_ms.is_none());
     assert!(rows[0].success.is_none());
     assert!(db.recent("session-1", 10).unwrap().is_empty());

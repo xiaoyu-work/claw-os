@@ -113,6 +113,39 @@ def _drive(app: mcp.App, *frames: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 class ManifestBindingTests(unittest.TestCase):
+    def test_manifest_contract_is_closed_and_requires_tools(self) -> None:
+        tool = {
+            "name": "mail.status",
+            "summary": {"en": "Show status."},
+        }
+        invalid_manifests = [
+            {**_manifest(tool), "unknown": True},
+            {
+                **_manifest(tool),
+                "mcp": {**_manifest(tool)["mcp"], "unknown": True},
+            },
+            _manifest({**tool, "unknown": True}),
+            _manifest(
+                {
+                    **tool,
+                    "args": [
+                        {
+                            "name": "value",
+                            "kind": "text",
+                            "binding": "flag",
+                        }
+                    ],
+                }
+            ),
+            _manifest(),
+        ]
+        for index, manifest in enumerate(invalid_manifests):
+            with self.subTest(index=index):
+                directory, path = _write_manifest(manifest)
+                self.addCleanup(directory.cleanup)
+                with self.assertRaises(mcp.ManifestError):
+                    mcp.App.from_manifest(path)
+
     def test_manifest_is_the_only_tool_descriptor_source(self) -> None:
         directory, path = _write_manifest(
             _manifest(

@@ -92,5 +92,100 @@
         }
       ]
     }
+  },
+  "schema_version": 2,
+  "mcp": {
+    "entry": "server.py",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "access": {
+      "system_agent": true,
+      "apps": []
+    },
+    "tools": [
+      {
+        "name": "event-center.status",
+        "summary": {
+          "en": "Inspect event-source health"
+        },
+        "needs": [
+          {
+            "verb": "sys.events",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "observe"
+              }
+            },
+            "why": {
+              "en": "Read watcher status and active pidfd subscriptions."
+            }
+          }
+        ]
+      },
+      {
+        "name": "event-center.recent",
+        "summary": {
+          "en": "Read recent system events"
+        },
+        "args": [
+          {
+            "name": "limit",
+            "kind": "integer",
+            "required": false,
+            "default": 100
+          },
+          {
+            "name": "source",
+            "kind": "name",
+            "required": false
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.events",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "observe"
+              }
+            },
+            "why": {
+              "en": "Read persistent system event records, including sensitive security/process context."
+            }
+          }
+        ]
+      },
+      {
+        "name": "event-center.watch-pid",
+        "summary": {
+          "en": "Subscribe to one process exit"
+        },
+        "args": [
+          {
+            "name": "pid",
+            "kind": "integer",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.events",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "observe"
+              }
+            },
+            "why": {
+              "en": "Open a pidfd and emit a race-free event when the selected process exits."
+            }
+          }
+        ]
+      }
+    ]
   }
 }

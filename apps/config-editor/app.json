@@ -93,7 +93,9 @@
           "kind": "bool",
           "required": true,
           "binding": "flag",
-          "choices": [true]
+          "choices": [
+            true
+          ]
         }
       ],
       "needs": [
@@ -139,7 +141,9 @@
           "kind": "bool",
           "required": true,
           "binding": "flag",
-          "choices": [true]
+          "choices": [
+            true
+          ]
         }
       ],
       "needs": [
@@ -155,5 +159,168 @@
         }
       ]
     }
+  },
+  "schema_version": 2,
+  "mcp": {
+    "entry": "server.py",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "access": {
+      "system_agent": true,
+      "apps": []
+    },
+    "tools": [
+      {
+        "name": "config-editor.inspect",
+        "summary": {
+          "en": "Inspect a supported system config"
+        },
+        "args": [
+          {
+            "name": "target",
+            "kind": "path",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.config",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "target"
+            },
+            "why": {
+              "en": "Read this exact sensitive system configuration file."
+            }
+          }
+        ]
+      },
+      {
+        "name": "config-editor.validate",
+        "summary": {
+          "en": "Validate staged config content"
+        },
+        "args": [
+          {
+            "name": "target",
+            "kind": "path",
+            "required": true
+          },
+          {
+            "name": "source",
+            "kind": "path",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.config",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "target"
+            },
+            "why": {
+              "en": "Select the exact system config validator and target semantics."
+            }
+          },
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "source"
+            },
+            "why": {
+              "en": "Read staged replacement content without putting it in argv."
+            }
+          }
+        ]
+      },
+      {
+        "name": "config-editor.apply",
+        "summary": {
+          "en": "Apply validated config content"
+        },
+        "args": [
+          {
+            "name": "target",
+            "kind": "path",
+            "required": true
+          },
+          {
+            "name": "source",
+            "kind": "path",
+            "required": true
+          },
+          {
+            "name": "confirm",
+            "kind": "bool",
+            "required": true,
+            "choices": [
+              true
+            ]
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.config",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "target"
+            },
+            "why": {
+              "en": "Atomically replace this exact system configuration file."
+            }
+          },
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "source"
+            },
+            "why": {
+              "en": "Read staged replacement content from the approved source file."
+            }
+          }
+        ]
+      },
+      {
+        "name": "config-editor.restore",
+        "summary": {
+          "en": "Restore a config backup"
+        },
+        "args": [
+          {
+            "name": "target",
+            "kind": "path",
+            "required": true
+          },
+          {
+            "name": "backup_token",
+            "kind": "name",
+            "required": true
+          },
+          {
+            "name": "confirm",
+            "kind": "bool",
+            "required": true,
+            "choices": [
+              true
+            ]
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.config",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "target"
+            },
+            "why": {
+              "en": "Restore the durable backup for this exact system config."
+            }
+          }
+        ]
+      }
+    ]
   }
 }

@@ -224,11 +224,10 @@ fn refused_frames_are_audited_as_bounded_metadata() {
 #[test]
 fn tool_mutation_wrappers_carry_no_model_input() {
     let facts = audit_policy::tool_facts(
-        "cos_app_run",
+        "app_email__email_send",
         &json!({
-            "app": "email",
-            "command": "send",
-            "args": ["--password", "hunter2-password"],
+            "to": "recipient@example.com",
+            "body": "hunter2-password",
         }),
     );
     let forward = json!({
@@ -241,9 +240,10 @@ fn tool_mutation_wrappers_carry_no_model_input() {
     });
     let rendered = serde_json::to_string(&forward).expect("serialize");
     assert_clean(&rendered);
-    assert_eq!(forward["tool"], json!("cos_app_run"));
-    assert_eq!(forward["input"]["app"], json!("email"));
-    assert_eq!(forward["input"]["args"], json!({"type": "array", "len": 2}));
+    assert_eq!(forward["tool"], json!("app_email__email_send"));
+    assert_eq!(forward["tool_known"], json!(false));
+    assert_eq!(forward["input"], json!({}));
+    assert_eq!(forward["input_omitted"], json!(2));
 }
 
 #[test]

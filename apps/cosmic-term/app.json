@@ -42,7 +42,6 @@
             "name": "timeout_secs",
             "kind": "integer",
             "required": false,
-            "binding": "flag",
             "default": 30,
             "label": {
               "en": "Timeout in seconds; values are clamped to 1 through 600."

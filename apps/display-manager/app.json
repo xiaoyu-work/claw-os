@@ -274,7 +274,9 @@
           "kind": "bool",
           "required": true,
           "binding": "flag",
-          "choices": [true]
+          "choices": [
+            true
+          ]
         }
       ],
       "needs": [
@@ -350,7 +352,9 @@
           "kind": "bool",
           "required": true,
           "binding": "flag",
-          "choices": [true]
+          "choices": [
+            true
+          ]
         }
       ],
       "needs": [
@@ -369,5 +373,381 @@
         }
       ]
     }
+  },
+  "schema_version": 2,
+  "mcp": {
+    "entry": "server.py",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "access": {
+      "system_agent": true,
+      "apps": []
+    },
+    "tools": [
+      {
+        "name": "display-manager.status",
+        "summary": {
+          "en": "Inspect displays and backlights"
+        },
+        "needs": [
+          {
+            "verb": "sys.observe",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "display"
+              }
+            },
+            "why": {
+              "en": "Read COSMIC output modes/layout and kernel backlight state."
+            }
+          }
+        ]
+      },
+      {
+        "name": "display-manager.enable",
+        "summary": {
+          "en": "Enable an output"
+        },
+        "args": [
+          {
+            "name": "output",
+            "kind": "name",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "device.display",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "manage"
+              }
+            },
+            "why": {
+              "en": "Enable the selected COSMIC output."
+            }
+          }
+        ]
+      },
+      {
+        "name": "display-manager.disable",
+        "summary": {
+          "en": "Disable an output"
+        },
+        "args": [
+          {
+            "name": "output",
+            "kind": "name",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "device.display",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "manage"
+              }
+            },
+            "why": {
+              "en": "Disable the selected output unless it is the last enabled display."
+            }
+          }
+        ]
+      },
+      {
+        "name": "display-manager.mirror",
+        "summary": {
+          "en": "Mirror one output from another"
+        },
+        "args": [
+          {
+            "name": "output",
+            "kind": "name",
+            "required": true
+          },
+          {
+            "name": "from",
+            "kind": "name",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "device.display",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "manage"
+              }
+            },
+            "why": {
+              "en": "Mirror a selected output from another output."
+            }
+          }
+        ]
+      },
+      {
+        "name": "display-manager.position",
+        "summary": {
+          "en": "Position an output"
+        },
+        "args": [
+          {
+            "name": "output",
+            "kind": "name",
+            "required": true
+          },
+          {
+            "name": "x",
+            "kind": "integer",
+            "required": true
+          },
+          {
+            "name": "y",
+            "kind": "integer",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "device.display",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "manage"
+              }
+            },
+            "why": {
+              "en": "Change the selected output's logical position."
+            }
+          }
+        ]
+      },
+      {
+        "name": "display-manager.mode",
+        "summary": {
+          "en": "Set output mode and optional properties"
+        },
+        "args": [
+          {
+            "name": "output",
+            "kind": "name",
+            "required": true
+          },
+          {
+            "name": "width",
+            "kind": "integer",
+            "required": true
+          },
+          {
+            "name": "height",
+            "kind": "integer",
+            "required": true
+          },
+          {
+            "name": "adaptive-sync",
+            "kind": "name",
+            "required": false
+          },
+          {
+            "name": "refresh",
+            "kind": "number",
+            "required": false
+          },
+          {
+            "name": "scale",
+            "kind": "number",
+            "required": false
+          },
+          {
+            "name": "x",
+            "kind": "integer",
+            "required": false
+          },
+          {
+            "name": "y",
+            "kind": "integer",
+            "required": false
+          },
+          {
+            "name": "transform",
+            "kind": "name",
+            "required": false
+          }
+        ],
+        "needs": [
+          {
+            "verb": "device.display",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "manage"
+              }
+            },
+            "why": {
+              "en": "Change mode, refresh, scale, position, rotation, or adaptive sync."
+            }
+          }
+        ]
+      },
+      {
+        "name": "display-manager.scale",
+        "summary": {
+          "en": "Set output scale"
+        },
+        "args": [
+          {
+            "name": "output",
+            "kind": "name",
+            "required": true
+          },
+          {
+            "name": "scale",
+            "kind": "number",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "device.display",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "manage"
+              }
+            },
+            "why": {
+              "en": "Change scale while preserving the current mode and refresh."
+            }
+          }
+        ]
+      },
+      {
+        "name": "display-manager.apply-layout",
+        "summary": {
+          "en": "Apply a full cosmic-randr KDL layout"
+        },
+        "args": [
+          {
+            "name": "source",
+            "kind": "path",
+            "required": true
+          },
+          {
+            "name": "confirm",
+            "kind": "bool",
+            "required": true,
+            "choices": [
+              true
+            ]
+          }
+        ],
+        "needs": [
+          {
+            "verb": "device.display",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "manage"
+              }
+            },
+            "why": {
+              "en": "Apply the complete validated display layout."
+            }
+          },
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "source"
+            },
+            "why": {
+              "en": "Read layout KDL from the exact approved file."
+            }
+          }
+        ]
+      },
+      {
+        "name": "display-manager.brightness",
+        "summary": {
+          "en": "Set a kernel backlight percentage"
+        },
+        "args": [
+          {
+            "name": "backlight",
+            "kind": "name",
+            "required": true
+          },
+          {
+            "name": "percent",
+            "kind": "integer",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "device.display",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "manage"
+              }
+            },
+            "why": {
+              "en": "Change one exact kernel backlight device."
+            }
+          }
+        ]
+      },
+      {
+        "name": "display-manager.restore",
+        "summary": {
+          "en": "Restore a previous display state"
+        },
+        "args": [
+          {
+            "name": "backup_token",
+            "kind": "name",
+            "required": true
+          },
+          {
+            "name": "confirm",
+            "kind": "bool",
+            "required": true,
+            "choices": [
+              true
+            ]
+          }
+        ],
+        "needs": [
+          {
+            "verb": "device.display",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "manage"
+              }
+            },
+            "why": {
+              "en": "Restore the previous layout or brightness if current state still matches."
+            }
+          }
+        ]
+      }
+    ]
   }
 }

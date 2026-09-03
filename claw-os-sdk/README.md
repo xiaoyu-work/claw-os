@@ -108,14 +108,9 @@ parent → app process → cos child). A pure-library binding can't claim
 
 ## AI support
 
-Across Rust, Python, Node, and Go, the stable hand-written AI surface is
-`chat` / `chat-untrusted`. Supplying origin `external-content`
-automatically selects `ai.chat.untrusted`.
-
-The existing embed, image, vision, audio, and video helper names and
-signatures remain for compatibility. They are deprecated, experimental,
-and currently unsupported, and always return a language-specific typed
-unsupported error before invoking `cos`.
+Across Rust, Python, Node, and Go, the hand-written AI surface is `chat` /
+`chat-untrusted`. Supplying origin `external-content` automatically selects
+`ai.chat.untrusted`. Unsupported modality helpers are not published.
 
 A v2 socket transport is planned (see `wire/v2-design.md`) to bring
 per-call latency down from ~50 ms to µs-class, but the same envelopes

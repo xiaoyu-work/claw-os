@@ -149,12 +149,8 @@ export interface Arg {
   required?: boolean;
   required_when?: Needcondition;
   repeatable?: boolean;
-  aliases?: string[];
-  positional_alias?: boolean;
   choices?: unknown[];
   default?: unknown;
-  default_from?: Argdefaultbinding;
-  trusted_resolver?: "email-provider" | "email-host" | "calendar-provider" | "ntfy-server";
   label?: Localizedtext;
 }
 
@@ -171,25 +167,9 @@ export interface Optionalpositionalgap {
 }
 
 /**
- * optionalPositional.
- */
-export interface Optionalpositional {
-}
-
-/**
  * defaultedPositional.
  */
 export interface Defaultedpositional {
-}
-
-/**
- * argDefaultBinding.
- */
-export interface Argdefaultbinding {
-  arg: string;
-  transform?: "identity" | "url-path-basename";
-  prefix?: string;
-  fallback?: string;
 }
 
 /**
@@ -266,7 +246,7 @@ export interface Mcpservice {
   transport?: "stdio";
   lifecycle?: "lazy" | "always-on" | "while-app-running";
   access?: Mcpaccess;
-  tools?: Mcptool[];
+  tools: Mcptool[];
 }
 
 /**
@@ -288,7 +268,7 @@ export interface Mcpaccess {
 export interface Mcptool {
   name: string;
   summary: Localizedtext;
-  args?: Arg[];
+  args?: unknown[];
   needs?: Need[];
 }
 

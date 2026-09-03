@@ -8,7 +8,6 @@
 pub mod app_gateway;
 pub mod builtin;
 pub mod clarify;
-pub mod cos_apps;
 pub mod cos_apps_session;
 pub mod cos_help;
 pub mod cos_proxy;

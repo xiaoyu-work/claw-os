@@ -28,11 +28,16 @@ after(() => {
   }
 });
 
-function manifestPath(tools: unknown[]): string {
+function writeManifest(value: unknown): string {
   const directory = mkdtempSync(join(process.cwd(), ".mcp-test-"));
   temporaryDirectories.push(directory);
   const path = join(directory, "app.json");
-  writeFileSync(path, JSON.stringify({
+  writeFileSync(path, JSON.stringify(value));
+  return path;
+}
+
+function manifestPath(tools: unknown[]): string {
+  return writeManifest({
     schema_version: 2,
     id: "test_app",
     version: "1.2.3",
@@ -41,8 +46,18 @@ function manifestPath(tools: unknown[]): string {
       transport: "stdio",
       tools,
     },
-  }));
-  return path;
+  });
+}
+
+function protocolOnlyApp(): App {
+  const app = App.fromManifest(manifestPath([
+    {
+      name: "test_app.noop",
+      summary: { en: "No operation." },
+    },
+  ]));
+  app.tool("test_app.noop", () => null);
+  return app;
 }
 
 function context(callId: string): Record<string, unknown> {
@@ -148,6 +163,37 @@ class Harness {
     }
   }
 }
+
+test("manifest contract is closed and requires tools", () => {
+  const tool = {
+    name: "test_app.status",
+    summary: { en: "Show status." },
+  };
+  const base = {
+    schema_version: 2,
+    id: "test_app",
+    version: "1.2.3",
+    name: { en: "Test App" },
+    mcp: { tools: [tool] },
+  };
+  for (const manifest of [
+    { ...base, unknown: true },
+    { ...base, mcp: { ...base.mcp, unknown: true } },
+    { ...base, mcp: { tools: [{ ...tool, unknown: true }] } },
+    {
+      ...base,
+      mcp: {
+        tools: [{
+          ...tool,
+          args: [{ name: "value", kind: "text", binding: "flag" }],
+        }],
+      },
+    },
+    { ...base, mcp: { tools: [] } },
+  ]) {
+    assert.throws(() => App.fromManifest(writeManifest(manifest)), ManifestError);
+  }
+});
 
 test("tools/list is derived only from the manifest", async () => {
   const app = App.fromManifest(manifestPath([
@@ -427,7 +473,7 @@ test("expired authenticated deadlines stop handlers before execution", async () 
 });
 
 test("malformed and oversized frames are rejected without poisoning the stream", async () => {
-  const app = App.fromManifest(manifestPath([]));
+  const app = protocolOnlyApp();
   const harness = new Harness(app);
   harness.sendRaw("{bad json\n");
   const malformed = await harness.waitFor(
@@ -476,7 +522,7 @@ test("tool response output failures reject the App server", async () => {
 });
 
 test("request IDs retain their exact wire representation", async () => {
-  const app = App.fromManifest(manifestPath([]));
+  const app = protocolOnlyApp();
   const harness = new Harness(app);
   harness.sendRaw(
     "{\"jsonrpc\":\"2.0\",\"id\":9007199254740993,\"method\":\"ping\"}\n",

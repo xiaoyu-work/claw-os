@@ -249,7 +249,13 @@ class TestSendCommand(unittest.TestCase):
 
         result = run(
             "send",
-            ["--to", "x@y.com", "--subject", "hi", "--body", "hello", "--provider", "smtp"],
+            [
+                "--to", "x@y.com",
+                "--subject", "hi",
+                "--body", "hello",
+                "--provider", "smtp",
+                "--host", "mail.example.com",
+            ],
         )
         self.assertTrue(result.get("sent"))
         self.assertEqual(result["to"], "x@y.com")
@@ -276,6 +282,7 @@ class TestSendCommand(unittest.TestCase):
                 "--body", "hello",
                 "--cc", "z@y.com",
                 "--provider", "smtp",
+                "--host", "localhost",
             ],
         )
         self.assertTrue(result.get("sent"))
@@ -295,7 +302,13 @@ class TestSendCommand(unittest.TestCase):
 
         result = run(
             "send",
-            ["--to", "x@y.com", "--subject", "hi", "--body", "hello", "--provider", "smtp"],
+            [
+                "--to", "x@y.com",
+                "--subject", "hi",
+                "--body", "hello",
+                "--provider", "smtp",
+                "--host", "localhost",
+            ],
         )
         self.assertTrue(result.get("sent"))
         self.assertFalse(mock_connect.call_args.kwargs["starttls"])
@@ -311,7 +324,13 @@ class TestSendCommand(unittest.TestCase):
 
         result = run(
             "send",
-            ["--to", "x@y.com", "--subject", "hi", "--body", "hello", "--provider", "smtp"],
+            [
+                "--to", "x@y.com",
+                "--subject", "hi",
+                "--body", "hello",
+                "--provider", "smtp",
+                "--host", "localhost",
+            ],
         )
         self.assertTrue(result.get("sent"))
         mock_server.login.assert_not_called()

@@ -205,5 +205,200 @@
       "bash",
       "python3"
     ]
+  },
+  "schema_version": 2,
+  "mcp": {
+    "entry": "server.py",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "access": {
+      "system_agent": true,
+      "apps": []
+    },
+    "tools": [
+      {
+        "name": "exec.run",
+        "summary": {
+          "en": "Start a process to run the command you specified and capture its output."
+        },
+        "args": [
+          {
+            "name": "command",
+            "kind": "name",
+            "required": true
+          },
+          {
+            "name": "arguments",
+            "kind": "text",
+            "required": false,
+            "repeatable": true
+          },
+          {
+            "name": "timeout",
+            "kind": "integer",
+            "required": false,
+            "default": 300
+          },
+          {
+            "name": "shell",
+            "kind": "bool",
+            "required": false,
+            "default": false
+          }
+        ],
+        "needs": [
+          {
+            "verb": "proc.spawn",
+            "scope": {
+              "kind": "from-arg-or-wild",
+              "arg": "command",
+              "wild_when": "shell"
+            },
+            "why": {
+              "en": "Start a new process to run the command you asked to run."
+            }
+          }
+        ]
+      },
+      {
+        "name": "exec.script",
+        "summary": {
+          "en": "Run a script inline or from a file using bash, python, or node."
+        },
+        "args": [
+          {
+            "name": "code",
+            "kind": "text",
+            "required": false,
+            "repeatable": true
+          },
+          {
+            "name": "lang",
+            "kind": "name",
+            "required": false,
+            "default": "bash"
+          },
+          {
+            "name": "file",
+            "kind": "path",
+            "required": false
+          },
+          {
+            "name": "timeout",
+            "kind": "integer",
+            "required": false,
+            "default": 300
+          }
+        ],
+        "needs": [
+          {
+            "verb": "proc.spawn",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Start a new process for the interpreter to run your script."
+            }
+          }
+        ]
+      },
+      {
+        "name": "exec.which",
+        "summary": {
+          "en": "Check if a command exists"
+        },
+        "args": [
+          {
+            "name": "name",
+            "kind": "name",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.meta",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "name"
+            },
+            "why": {
+              "en": "Look up where the command lives on the filesystem."
+            }
+          }
+        ]
+      },
+      {
+        "name": "exec.start",
+        "summary": {
+          "en": "Start a command in the background"
+        },
+        "args": [
+          {
+            "name": "command",
+            "kind": "name",
+            "required": true
+          },
+          {
+            "name": "arguments",
+            "kind": "text",
+            "required": false,
+            "repeatable": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "proc.spawn",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "command"
+            },
+            "why": {
+              "en": "Start a new background process for the command you asked to run."
+            }
+          }
+        ]
+      },
+      {
+        "name": "exec.stop",
+        "summary": {
+          "en": "Stop a background process by PID"
+        },
+        "args": [
+          {
+            "name": "pid",
+            "kind": "integer",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "proc.signal",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Send a termination signal to the process you asked to stop."
+            }
+          }
+        ]
+      },
+      {
+        "name": "exec.ps",
+        "summary": {
+          "en": "List running background processes"
+        },
+        "needs": [
+          {
+            "verb": "proc.observe",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Read the list of background processes started by this app."
+            }
+          }
+        ]
+      }
+    ]
   }
 }

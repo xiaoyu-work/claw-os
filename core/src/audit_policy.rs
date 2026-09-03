@@ -370,18 +370,6 @@ const TOOL_POLICIES: &[ToolPolicy] = &[
         fields: &[("command", FieldRule::Token), ("args", FieldRule::Size)],
     },
     ToolPolicy {
-        tool: "cos_app_catalog",
-        fields: &[("command", FieldRule::Token), ("args", FieldRule::Size)],
-    },
-    ToolPolicy {
-        tool: "cos_app_run",
-        fields: &[
-            ("app", FieldRule::Token),
-            ("command", FieldRule::Token),
-            ("args", FieldRule::Size),
-        ],
-    },
-    ToolPolicy {
         tool: "cos_delegate",
         fields: &[
             ("provider", FieldRule::Token),

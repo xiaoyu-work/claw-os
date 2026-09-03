@@ -146,12 +146,8 @@ type Arg struct {
 	Required bool `json:"required,omitempty"`
 	RequiredWhen *Needcondition `json:"required_when,omitempty"`
 	Repeatable bool `json:"repeatable,omitempty"`
-	Aliases []string `json:"aliases,omitempty"`
-	PositionalAlias bool `json:"positional_alias,omitempty"`
 	Choices []interface{} `json:"choices,omitempty"`
 	Default *interface{} `json:"default,omitempty"`
-	DefaultFrom *Argdefaultbinding `json:"default_from,omitempty"`
-	TrustedResolver string `json:"trusted_resolver,omitempty"`
 	Label *Localizedtext `json:"label,omitempty"`
 }
 
@@ -163,20 +159,8 @@ type Positionalarg struct {
 type Optionalpositionalgap struct {
 }
 
-// Optionalpositional — optionalPositional.
-type Optionalpositional struct {
-}
-
 // Defaultedpositional — defaultedPositional.
 type Defaultedpositional struct {
-}
-
-// Argdefaultbinding — argDefaultBinding.
-type Argdefaultbinding struct {
-	Arg string `json:"arg"`
-	Transform string `json:"transform,omitempty"`
-	Prefix string `json:"prefix,omitempty"`
-	Fallback string `json:"fallback,omitempty"`
 }
 
 // Need — need.
@@ -238,7 +222,7 @@ type Mcpservice struct {
 	Transport string `json:"transport,omitempty"`
 	Lifecycle string `json:"lifecycle,omitempty"`
 	Access *Mcpaccess `json:"access,omitempty"`
-	Tools []Mcptool `json:"tools,omitempty"`
+	Tools []Mcptool `json:"tools"`
 }
 
 // Mcpaccess — mcpAccess.
@@ -256,7 +240,7 @@ type Mcpaccess struct {
 type Mcptool struct {
 	Name string `json:"name"`
 	Summary Localizedtext `json:"summary"`
-	Args []Arg `json:"args,omitempty"`
+	Args []interface{} `json:"args,omitempty"`
 	Needs []Need `json:"needs,omitempty"`
 }
 

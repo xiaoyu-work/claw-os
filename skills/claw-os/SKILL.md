@@ -26,11 +26,11 @@ the current task:
 4. Execute only through the returned `model_tool` or another named,
    capability-gated tool. `cos_help` never executes commands.
 
-For installed Apps, use `path=["app"]` or `cos_app_catalog`, then inspect one
-App and operation before calling `cos_app_run`. Before saying Claw lacks a
-capability, inspect the relevant command-tree branch. Read a linked resource
-below only when command discovery identifies a workflow whose semantics need
-more explanation.
+For installed App services, search the permitted MCP catalog with
+`cos_tool_search`, inspect the selected schema with `cos_tool_describe`, and
+invoke it through `cos_tool_call`. `path=["app"]` describes the human CLI and
+does not make an operation model-callable. Before saying Claw lacks a
+capability, inspect the relevant command-tree branch.
 
 ## Agent-only tools
 

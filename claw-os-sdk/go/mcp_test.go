@@ -17,14 +17,18 @@ import (
 
 func writeMCPTestManifest(t *testing.T, tools string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "app.json")
-	body := fmt.Sprintf(`{
+	return writeMCPRawManifest(t, fmt.Sprintf(`{
 		"schema_version": 2,
 		"id": "example",
 		"version": "1.2.3",
 		"name": {"en": "Example"},
 		"mcp": {"transport": "stdio", "tools": [%s]}
-	}`, tools)
+	}`, tools))
+}
+
+func writeMCPRawManifest(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "app.json")
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -361,9 +365,14 @@ func TestMCPDeadlineCancelsRunningHandler(t *testing.T) {
 }
 
 func TestMCPMalformedAndOversizedFramesRecover(t *testing.T) {
-	path := writeMCPTestManifest(t, "")
+	path := writeMCPTestManifest(t, `{"name":"example.noop","summary":{"en":"No operation"}}`)
 	app, err := LoadMCPApp(path)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.Bind("example.noop", func(map[string]any, *MCPCall) (any, error) {
+		return nil, nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	var input bytes.Buffer
@@ -475,10 +484,22 @@ func TestMCPManifestValidationAndMissingBindings(t *testing.T) {
 		name  string
 		tools string
 	}{
+		{name: "empty tools", tools: ``},
 		{name: "duplicate tools", tools: `{"name":"a.run","summary":{"en":"A"}},{"name":"a.run","summary":{"en":"B"}}`},
 		{name: "summary must be localized", tools: `{"name":"a.run","summary":"A"}`},
 		{name: "unsupported session arg field", tools: `{"name":"a.run","summary":{"en":"A"},"args":[{"name":"x","kind":"text","aliases":["--x"]}]}`},
+		{name: "CLI binding", tools: `{"name":"a.run","summary":{"en":"A"},"args":[{"name":"x","kind":"text","binding":"flag"}]}`},
+		{name: "unknown tool field", tools: `{"name":"a.run","summary":{"en":"A"},"unknown":true}`},
 		{name: "condition references later arg", tools: `{"name":"a.run","summary":{"en":"A"},"args":[{"name":"x","kind":"text","required_when":{"kind":"arg-present","arg":"y"}},{"name":"y","kind":"text"}]}`},
+	}
+
+	for _, body := range []string{
+		`{"schema_version":2,"id":"example","version":"1","name":{"en":"Example"},"unknown":true,"mcp":{"tools":[{"name":"a.run","summary":{"en":"A"}}]}}`,
+		`{"schema_version":2,"id":"example","version":"1","name":{"en":"Example"},"mcp":{"unknown":true,"tools":[{"name":"a.run","summary":{"en":"A"}}]}}`,
+	} {
+		if _, err := LoadMCPApp(writeMCPRawManifest(t, body)); err == nil {
+			t.Fatal("manifest with unknown field loaded")
+		}
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

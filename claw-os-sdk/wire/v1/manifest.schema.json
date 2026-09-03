@@ -5,7 +5,7 @@
   "description": "The manifest every app under COS_APPS_DIR must provide. MCP Apps declare one versioned service with tools, lifecycle, caller restrictions, capability needs, and optional AI and desktop surfaces.",
   "type": "object",
   "required": ["id", "version", "name"],
-  "additionalProperties": true,
+  "additionalProperties": false,
   "properties": {
     "id": { "type": "string", "pattern": "^[a-z][a-z0-9_-]*$", "description": "Stable app identifier; must equal the directory name under COS_APPS_DIR." },
     "version": { "type": "string", "description": "Semantic version of the app." },
@@ -17,7 +17,7 @@
     "entry": { "type": "string", "description": "Entry file relative to the app dir. Defaults to the runtime's default (main.py / main.js / main.sh / main)." },
     "operations": {
       "type": "object",
-      "description": "One-shot operations keyed by command name. Each is invokable as `cos app <id> <op>` and auto-exposed to the agent. Values conform to #/$defs/operation.",
+      "description": "Optional human CLI operations keyed by command name. Each is invokable as `cos app <id> <op>` but is never an Agent tool. Values conform to #/$defs/operation.",
       "additionalProperties": { "$ref": "#/$defs/operation" }
     },
     "ai": { "$ref": "#/$defs/aiPolicy", "description": "AI policy. Required iff any operation or MCP tool declares an ai.* need." },
@@ -48,7 +48,7 @@
       "type": "object",
       "description": "A one-shot operation: its inputs and the capabilities it needs.",
       "required": ["label"],
-      "additionalProperties": true,
+      "additionalProperties": false,
       "properties": {
         "label": { "$ref": "#/$defs/localizedText" },
         "summary": { "$ref": "#/$defs/localizedText" },
@@ -58,19 +58,9 @@
           "items": { "$ref": "#/$defs/arg" },
           "description": "Declared input parameters; order is significant for the UI.",
           "not": {
-            "anyOf": [
-              {
-                "allOf": [
-                  { "contains": { "$ref": "#/$defs/optionalPositionalGap" } },
-                  { "contains": { "$ref": "#/$defs/defaultedPositional" } }
-                ]
-              },
-              {
-                "allOf": [
-                  { "contains": { "$ref": "#/$defs/optionalPositional" } },
-                  { "contains": { "properties": { "positional_alias": { "const": true } }, "required": ["positional_alias"] } }
-                ]
-              }
+            "allOf": [
+              { "contains": { "$ref": "#/$defs/optionalPositionalGap" } },
+              { "contains": { "$ref": "#/$defs/defaultedPositional" } }
             ]
           }
         },
@@ -80,21 +70,11 @@
     "arg": {
       "type": "object",
       "required": ["name", "kind"],
-      "additionalProperties": true,
+      "additionalProperties": false,
       "allOf": [
         {
-          "not": { "required": ["default", "default_from"] }
-        },
-        {
           "if": { "properties": { "required": { "const": true } }, "required": ["required"] },
-          "then": {
-            "not": {
-              "anyOf": [
-                { "required": ["default"] },
-                { "required": ["default_from"] }
-              ]
-            }
-          }
+          "then": { "not": { "required": ["default"] } }
         },
         {
           "if": { "required": ["required_when"] },
@@ -103,13 +83,7 @@
               "required": { "const": false },
               "repeatable": { "const": false }
             },
-            "not": {
-              "anyOf": [
-                { "required": ["default"] },
-                { "required": ["default_from"] },
-                { "required": ["trusted_resolver"] }
-              ]
-            }
+            "not": { "required": ["default"] }
           }
         },
         {
@@ -146,50 +120,9 @@
             "properties": {
               "default": { "type": "array" },
               "kind": { "not": { "const": "bool" } }
-            },
-            "not": { "anyOf": [{ "required": ["default_from"] }, { "required": ["trusted_resolver"] }] }
+            }
           },
           "else": { "properties": { "default": { "not": { "type": "array" } } } }
-        },
-        {
-          "if": { "properties": { "positional_alias": { "const": true } }, "required": ["positional_alias"] },
-          "then": {
-            "properties": {
-              "binding": { "const": "flag" },
-              "required": { "const": false },
-              "repeatable": { "const": false },
-              "kind": { "not": { "const": "bool" } }
-            },
-            "required": ["binding"]
-          }
-        },
-        {
-          "if": { "required": ["trusted_resolver"] },
-          "then": {
-            "properties": {
-              "binding": { "const": "flag" },
-              "required": { "const": false }
-            },
-            "required": ["binding"],
-            "not": {
-              "anyOf": [
-                { "required": ["default"] },
-                { "required": ["default_from"] }
-              ]
-            }
-          }
-        },
-        {
-          "if": { "properties": { "trusted_resolver": { "const": "email-host" } }, "required": ["trusted_resolver"] },
-          "then": { "properties": { "name": { "const": "host" }, "kind": { "const": "host" } } },
-          "else": {
-            "if": { "properties": { "trusted_resolver": { "const": "ntfy-server" } }, "required": ["trusted_resolver"] },
-            "then": { "properties": { "name": { "const": "server" }, "kind": { "const": "text" } } },
-            "else": {
-              "if": { "required": ["trusted_resolver"] },
-              "then": { "properties": { "name": { "const": "provider" }, "kind": { "const": "name" } } }
-            }
-          }
         }
       ],
       "properties": {
@@ -199,12 +132,8 @@
         "required": { "type": "boolean" },
         "required_when": { "$ref": "#/$defs/needCondition", "description": "Require and accept this argument only when an earlier declared argument satisfies the condition." },
         "repeatable": { "type": "boolean", "description": "Bind every occurrence in order and expose an array value. Repeatable positional args must be last; repeatable booleans are rejected." },
-        "aliases": { "type": "array", "items": { "type": "string", "pattern": "^(-[A-Za-z0-9]|--[a-z][a-z0-9-]*)$" }, "uniqueItems": true, "description": "Additional short or long option spellings for the same effective argument." },
-        "positional_alias": { "type": "boolean", "description": "Accept this optional flag argument as a surplus leading positional before the canonical positional grammar." },
         "choices": { "type": "array", "uniqueItems": true, "description": "Optional closed set of accepted scalar values." },
         "default": { "description": "Optional non-null default whose JSON type must match kind. Omit this property when there is no default." },
-        "default_from": { "$ref": "#/$defs/argDefaultBinding", "description": "Derive an omitted string value from an earlier declared argument." },
-        "trusted_resolver": { "type": "string", "enum": ["email-provider", "email-host", "calendar-provider", "ntfy-server"], "description": "Trusted pre-dispatch resolver, restricted by the kernel to its matching bundled app." },
         "label": { "$ref": "#/$defs/localizedText" }
       }
     },
@@ -229,36 +158,14 @@
             { "not": { "required": ["required"] } }
           ]
         },
-        { "not": { "anyOf": [{ "required": ["default"] }, { "required": ["default_from"] }] } }
-      ]
-    },
-    "optionalPositional": {
-      "allOf": [
-        { "$ref": "#/$defs/positionalArg" },
-        {
-          "anyOf": [
-            { "properties": { "required": { "const": false } }, "required": ["required"] },
-            { "not": { "required": ["required"] } }
-          ]
-        }
+        { "not": { "required": ["default"] } }
       ]
     },
     "defaultedPositional": {
       "allOf": [
         { "$ref": "#/$defs/positionalArg" },
-        { "anyOf": [{ "required": ["default"] }, { "required": ["default_from"] }] }
+        { "required": ["default"] }
       ]
-    },
-    "argDefaultBinding": {
-      "type": "object",
-      "required": ["arg"],
-      "additionalProperties": false,
-      "properties": {
-        "arg": { "type": "string", "description": "Earlier declared string argument used as input." },
-        "transform": { "type": "string", "enum": ["identity", "url-path-basename"], "default": "identity" },
-        "prefix": { "type": "string", "default": "" },
-        "fallback": { "type": "string", "description": "Safe fallback when the transform produces no value." }
-      }
     },
     "need": {
       "type": "object",
@@ -415,13 +322,14 @@
     "mcpService": {
       "type": "object",
       "description": "Long-lived MCP server the app launches for stateful, agent-driven tool calls.",
-      "additionalProperties": true,
+      "required": ["tools"],
+      "additionalProperties": false,
       "properties": {
         "entry": { "type": "string", "description": "MCP server entry file relative to the app dir. Defaults to the runtime's server entry." },
         "transport": { "type": "string", "enum": ["stdio"], "default": "stdio", "description": "Wire protocol. Only stdio is supported today." },
         "lifecycle": { "type": "string", "enum": ["lazy", "always-on", "while-app-running"], "default": "lazy", "description": "Host lifecycle." },
         "access": { "$ref": "#/$defs/mcpAccess", "description": "Authenticated caller restrictions. This never grants authority." },
-        "tools": { "type": "array", "items": { "$ref": "#/$defs/mcpTool" }, "description": "Tools advertised through this service (authoritative allowlist)." }
+        "tools": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/mcpTool" }, "description": "Tools advertised through this service (authoritative allowlist)." }
       }
     },
     "mcpAccess": {
@@ -438,38 +346,17 @@
       "type": "object",
       "description": "One MCP-callable tool. Mirrors operation: args + needs drive the model's view and the kernel's enforcement.",
       "required": ["name", "summary"],
-      "additionalProperties": true,
+      "additionalProperties": false,
       "properties": {
         "name": { "type": "string", "pattern": "^[a-z][a-z0-9._-]*$", "description": "Globally unique tool name; convention <app_id>.<verb> (e.g. kv.get)." },
         "summary": { "$ref": "#/$defs/localizedText" },
         "args": {
           "type": "array",
-          "not": {
-            "anyOf": [
-              {
-                "allOf": [
-                  { "contains": { "$ref": "#/$defs/optionalPositionalGap" } },
-                  { "contains": { "$ref": "#/$defs/defaultedPositional" } }
-                ]
-              },
-              {
-                "allOf": [
-                  { "contains": { "$ref": "#/$defs/optionalPositional" } },
-                  { "contains": { "properties": { "positional_alias": { "const": true } }, "required": ["positional_alias"] } }
-                ]
-              }
-            ]
-          },
           "items": {
-            "$ref": "#/$defs/arg",
-            "not": {
-              "anyOf": [
-                { "required": ["default_from"] },
-                { "required": ["trusted_resolver"] },
-                { "required": ["aliases"] },
-                { "required": ["positional_alias"] }
-              ]
-            }
+            "allOf": [
+              { "$ref": "#/$defs/arg" },
+              { "not": { "required": ["binding"] } }
+            ]
           }
         },
         "needs": { "type": "array", "items": { "$ref": "#/$defs/need" } }

@@ -189,18 +189,14 @@ fn default_registry_has_builtins_and_cos_proxy() {
     assert!(r.get("cos_stt").is_some());
     assert!(r.get("cos_imagegen").is_some());
     assert!(r.get("cos_doctor").is_some());
-    // Generic catalog + run are always registered, regardless of
-    // whether any typed cos_app_<id> proxies were picked up from
-    // $COS_APPS_DIR (which is environment-dependent at test time).
-    assert!(r.get("cos_app_catalog").is_some());
-    assert!(r.get("cos_app_run").is_some());
+    assert!(r.get("cos_app_catalog").is_none());
+    assert!(r.get("cos_app_run").is_none());
 
     // Lower bound: 2 builtins + cos_delegate + cos_todo + cos_clarify
     // + cos_skill
-    // + every cos_proxy tool (primitives + cos_memory) + cos_app_catalog
-    // + cos_app_run + 3 media tools, plus optionally cos_recall and active
-    // stateful App-session tools.
-    let expected_min = 6 + super::super::cos_proxy::total_count() + 2 + 3;
+    // + every cos_proxy tool (primitives + cos_memory) + 3 media tools,
+    // plus optionally cos_recall and authenticated MCP App tools.
+    let expected_min = 6 + super::super::cos_proxy::total_count() + 3;
     assert!(
         r.len() >= expected_min,
         "expected at least {} tools, got {}",

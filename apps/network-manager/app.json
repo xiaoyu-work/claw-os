@@ -298,5 +298,316 @@
         }
       ]
     }
+  },
+  "schema_version": 2,
+  "mcp": {
+    "entry": "server.py",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "access": {
+      "system_agent": true,
+      "apps": []
+    },
+    "tools": [
+      {
+        "name": "network-manager.status",
+        "summary": {
+          "en": "Inspect NetworkManager state"
+        },
+        "needs": [
+          {
+            "verb": "sys.observe",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "network"
+              }
+            },
+            "why": {
+              "en": "Read general connectivity and radio state."
+            }
+          }
+        ]
+      },
+      {
+        "name": "network-manager.wifi-list",
+        "summary": {
+          "en": "List nearby Wi-Fi networks"
+        },
+        "needs": [
+          {
+            "verb": "sys.observe",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "network"
+              }
+            },
+            "why": {
+              "en": "Scan and read nearby Wi-Fi access points."
+            }
+          }
+        ]
+      },
+      {
+        "name": "network-manager.connection-list",
+        "summary": {
+          "en": "List NetworkManager connections"
+        },
+        "needs": [
+          {
+            "verb": "sys.observe",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "network"
+              }
+            },
+            "why": {
+              "en": "Read saved and active connection profiles."
+            }
+          }
+        ]
+      },
+      {
+        "name": "network-manager.vpn-list",
+        "summary": {
+          "en": "List VPN profiles"
+        },
+        "needs": [
+          {
+            "verb": "sys.observe",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "network"
+              }
+            },
+            "why": {
+              "en": "Read VPN and WireGuard connection profiles."
+            }
+          }
+        ]
+      },
+      {
+        "name": "network-manager.wifi-connect",
+        "summary": {
+          "en": "Connect to Wi-Fi"
+        },
+        "args": [
+          {
+            "name": "ssid",
+            "kind": "name",
+            "required": true
+          },
+          {
+            "name": "credential",
+            "kind": "name",
+            "required": false
+          }
+        ],
+        "needs": [
+          {
+            "verb": "net.manage",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "wifi"
+              }
+            },
+            "why": {
+              "en": "Connect to a Wi-Fi network."
+            }
+          },
+          {
+            "verb": "secret.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "credential"
+            },
+            "why": {
+              "en": "Use the optional stored Wi-Fi password."
+            },
+            "when": {
+              "kind": "arg-present",
+              "arg": "credential"
+            }
+          }
+        ]
+      },
+      {
+        "name": "network-manager.wifi-disconnect",
+        "summary": {
+          "en": "Disconnect a Wi-Fi device"
+        },
+        "args": [
+          {
+            "name": "device",
+            "kind": "name",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "net.manage",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "wifi"
+              }
+            },
+            "why": {
+              "en": "Disconnect a Wi-Fi network device."
+            }
+          }
+        ]
+      },
+      {
+        "name": "network-manager.wifi-forget",
+        "summary": {
+          "en": "Forget a Wi-Fi connection"
+        },
+        "args": [
+          {
+            "name": "connection",
+            "kind": "name",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "net.manage",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "wifi"
+              }
+            },
+            "why": {
+              "en": "Delete a saved Wi-Fi connection profile."
+            }
+          }
+        ]
+      },
+      {
+        "name": "network-manager.wifi-toggle",
+        "summary": {
+          "en": "Turn Wi-Fi on or off"
+        },
+        "args": [
+          {
+            "name": "state",
+            "kind": "name",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "net.manage",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "wifi"
+              }
+            },
+            "why": {
+              "en": "Change the global Wi-Fi radio state."
+            }
+          }
+        ]
+      },
+      {
+        "name": "network-manager.airplane",
+        "summary": {
+          "en": "Turn airplane mode on or off"
+        },
+        "args": [
+          {
+            "name": "state",
+            "kind": "name",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "net.manage",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "airplane"
+              }
+            },
+            "why": {
+              "en": "Change all NetworkManager radio state."
+            }
+          }
+        ]
+      },
+      {
+        "name": "network-manager.vpn-up",
+        "summary": {
+          "en": "Activate a VPN profile"
+        },
+        "args": [
+          {
+            "name": "profile",
+            "kind": "name",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "net.manage",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "vpn"
+              }
+            },
+            "why": {
+              "en": "Activate a VPN or WireGuard profile."
+            }
+          }
+        ]
+      },
+      {
+        "name": "network-manager.vpn-down",
+        "summary": {
+          "en": "Deactivate a VPN profile"
+        },
+        "args": [
+          {
+            "name": "profile",
+            "kind": "name",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "net.manage",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "vpn"
+              }
+            },
+            "why": {
+              "en": "Deactivate a VPN or WireGuard profile."
+            }
+          }
+        ]
+      }
+    ]
   }
 }

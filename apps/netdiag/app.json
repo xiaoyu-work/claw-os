@@ -169,5 +169,177 @@
         }
       ]
     }
+  },
+  "schema_version": 2,
+  "mcp": {
+    "entry": "server.py",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "access": {
+      "system_agent": true,
+      "apps": []
+    },
+    "tools": [
+      {
+        "name": "netdiag.interfaces",
+        "summary": {
+          "en": "Inspect network interfaces"
+        },
+        "needs": [
+          {
+            "verb": "sys.observe",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "network"
+              }
+            },
+            "why": {
+              "en": "Read local interface state and counters."
+            }
+          }
+        ]
+      },
+      {
+        "name": "netdiag.routes",
+        "summary": {
+          "en": "Inspect network routes"
+        },
+        "needs": [
+          {
+            "verb": "sys.observe",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "network"
+              }
+            },
+            "why": {
+              "en": "Read the kernel route table."
+            }
+          }
+        ]
+      },
+      {
+        "name": "netdiag.dns",
+        "summary": {
+          "en": "Resolve a network target"
+        },
+        "args": [
+          {
+            "name": "target",
+            "kind": "host",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "net.resolve",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "target"
+            },
+            "why": {
+              "en": "Resolve this exact host or host:port target."
+            }
+          }
+        ]
+      },
+      {
+        "name": "netdiag.tcp",
+        "summary": {
+          "en": "Test TCP reachability and latency"
+        },
+        "args": [
+          {
+            "name": "target",
+            "kind": "host",
+            "required": true
+          },
+          {
+            "name": "attempts",
+            "kind": "integer",
+            "required": false
+          },
+          {
+            "name": "timeout",
+            "kind": "number",
+            "required": false
+          }
+        ],
+        "needs": [
+          {
+            "verb": "net.resolve",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "target"
+            },
+            "why": {
+              "en": "Resolve this exact target once."
+            }
+          },
+          {
+            "verb": "net.dial",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "target"
+            },
+            "why": {
+              "en": "Open bounded TCP probes to the resolved addresses."
+            }
+          }
+        ]
+      },
+      {
+        "name": "netdiag.diagnose",
+        "summary": {
+          "en": "Run staged network diagnosis"
+        },
+        "args": [
+          {
+            "name": "target",
+            "kind": "host",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.observe",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "network"
+              }
+            },
+            "why": {
+              "en": "Inspect interfaces and routes."
+            }
+          },
+          {
+            "verb": "net.resolve",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "target"
+            },
+            "why": {
+              "en": "Resolve this exact target once."
+            }
+          },
+          {
+            "verb": "net.dial",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "target"
+            },
+            "why": {
+              "en": "Test TCP reachability to the resolved target."
+            }
+          }
+        ]
+      }
+    ]
   }
 }

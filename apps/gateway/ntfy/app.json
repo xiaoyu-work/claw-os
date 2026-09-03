@@ -24,8 +24,7 @@
           "name": "topic",
           "kind": "name",
           "required": false,
-          "binding": "flag",
-          "positional_alias": true
+          "binding": "flag"
         },
         {
           "name": "title",
@@ -54,9 +53,8 @@
         {
           "name": "server",
           "kind": "text",
-          "required": false,
-          "binding": "flag",
-          "trusted_resolver": "ntfy-server"
+          "required": true,
+          "binding": "flag"
         },
         {
           "name": "bearer",
@@ -157,9 +155,8 @@
         {
           "name": "server",
           "kind": "text",
-          "required": false,
-          "binding": "flag",
-          "trusted_resolver": "ntfy-server"
+          "required": true,
+          "binding": "flag"
         }
       ],
       "needs": [
@@ -204,5 +201,200 @@
         }
       ]
     }
+  },
+  "schema_version": 2,
+  "mcp": {
+    "entry": "server.py",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "access": {
+      "system_agent": true,
+      "apps": []
+    },
+    "tools": [
+      {
+        "name": "gateway-ntfy.send",
+        "summary": {
+          "en": "Send a message through this gateway"
+        },
+        "args": [
+          {
+            "name": "text",
+            "kind": "text",
+            "required": true
+          },
+          {
+            "name": "topic",
+            "kind": "name",
+            "required": false
+          },
+          {
+            "name": "title",
+            "kind": "text",
+            "required": false
+          },
+          {
+            "name": "priority",
+            "kind": "text",
+            "required": false
+          },
+          {
+            "name": "tags",
+            "kind": "text",
+            "required": false
+          },
+          {
+            "name": "click",
+            "kind": "text",
+            "required": false
+          },
+          {
+            "name": "server",
+            "kind": "text",
+            "required": true
+          },
+          {
+            "name": "bearer",
+            "kind": "text",
+            "required": false
+          },
+          {
+            "name": "basic",
+            "kind": "text",
+            "required": false
+          },
+          {
+            "name": "markdown",
+            "kind": "bool",
+            "required": false,
+            "default": false
+          }
+        ],
+        "needs": [
+          {
+            "verb": "net.dial",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "server",
+              "transform": "url-host"
+            },
+            "why": {
+              "en": "Connect to the remote gateway service to perform the send operation."
+            }
+          },
+          {
+            "verb": "secret.read",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "default/ntfy_server"
+              }
+            },
+            "why": {
+              "en": "Read the configured ntfy_server secret required by this gateway."
+            }
+          },
+          {
+            "verb": "secret.read",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "default/ntfy_default_topic"
+              }
+            },
+            "why": {
+              "en": "Read the configured ntfy_default_topic secret required by this gateway."
+            }
+          },
+          {
+            "verb": "secret.read",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "default/ntfy_token"
+              }
+            },
+            "why": {
+              "en": "Read the configured ntfy_token secret required by this gateway."
+            },
+            "when": {
+              "kind": "arg-not-equals",
+              "arg": "server",
+              "value": "https://ntfy.sh/"
+            }
+          },
+          {
+            "verb": "memory.write",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "self-ref",
+                "value": "gateway-ntfy"
+              }
+            },
+            "why": {
+              "en": "Remember the successful send so the agent can recall it later."
+            }
+          }
+        ]
+      },
+      {
+        "name": "gateway-ntfy.status",
+        "summary": {
+          "en": "Show gateway configuration and status"
+        },
+        "args": [
+          {
+            "name": "server",
+            "kind": "text",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "secret.read",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "default/ntfy_server"
+              }
+            },
+            "why": {
+              "en": "Read the configured ntfy_server secret required by this gateway."
+            }
+          },
+          {
+            "verb": "secret.read",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "default/ntfy_default_topic"
+              }
+            },
+            "why": {
+              "en": "Read the configured ntfy_default_topic secret required by this gateway."
+            }
+          },
+          {
+            "verb": "secret.read",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "default/ntfy_token"
+              }
+            },
+            "why": {
+              "en": "Read the configured ntfy_token secret required by this gateway."
+            }
+          }
+        ]
+      }
+    ]
   }
 }

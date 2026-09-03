@@ -284,19 +284,17 @@ fn unknown_tools_contribute_no_input() {
 }
 
 #[test]
-fn known_tools_keep_selectors_and_sizes_only() {
+fn typed_app_tools_do_not_persist_caller_defined_fields() {
     let facts = tool_facts(
-        "cos_app_run",
+        "app_email__email_send",
         &json!({
-            "app": "email",
-            "command": "send",
-            "args": ["--password", "hunter2-password"],
+            "to": "recipient@example.com",
+            "body": "hunter2-password",
         }),
     );
-    assert!(facts.known);
-    assert_eq!(facts.input["app"], json!("email"));
-    assert_eq!(facts.input["command"], json!("send"));
-    assert_eq!(facts.input["args"], json!({"type": "array", "len": 2}));
+    assert!(!facts.known);
+    assert_eq!(facts.input, json!({}));
+    assert_eq!(facts.input_omitted, 2);
     assert_no_secrets(&render(&facts));
 }
 

@@ -91,10 +91,46 @@ pub(crate) fn load(path: &Path) -> Result<Manifest, AppError> {
     parse(manifest)
 }
 
+fn reject_unknown_fields(
+    object: &Map<String, Value>,
+    context: &str,
+    allowed: &[&str],
+) -> Result<(), AppError> {
+    if let Some(field) = object
+        .keys()
+        .filter(|field| !allowed.contains(&field.as_str()))
+        .min()
+    {
+        return Err(AppError::Manifest(format!(
+            "{context} contains unknown field `{field}`"
+        )));
+    }
+    Ok(())
+}
+
 fn parse(manifest: Value) -> Result<Manifest, AppError> {
     let object = manifest
         .as_object()
         .ok_or_else(|| AppError::Manifest("App manifest must be a JSON object".into()))?;
+    reject_unknown_fields(
+        object,
+        "App manifest",
+        &[
+            "id",
+            "version",
+            "schema_version",
+            "name",
+            "summary",
+            "icon",
+            "runtime",
+            "entry",
+            "operations",
+            "ai",
+            "mcp",
+            "desktop",
+            "dependencies",
+        ],
+    )?;
     if !object
         .get("schema_version")
         .is_some_and(|value| integer_equals(value, 2))
@@ -114,26 +150,50 @@ fn parse(manifest: Value) -> Result<Manifest, AppError> {
             "App manifest has no valid `version`".into(),
         ));
     }
+    localized_english(object.get("name"), "name")?;
     let service = object
         .get("mcp")
         .and_then(Value::as_object)
         .ok_or_else(|| AppError::Manifest("App manifest has no `mcp` service".into()))?;
-    if object.contains_key("session") {
-        return Err(AppError::Manifest(
-            "the removed `session` field is not accepted; declare `mcp`".into(),
-        ));
-    }
+    reject_unknown_fields(
+        service,
+        "`mcp`",
+        &["entry", "transport", "lifecycle", "access", "tools"],
+    )?;
     if service
         .get("transport")
         .is_some_and(|transport| transport.as_str() != Some("stdio"))
     {
         return Err(AppError::Manifest("`mcp.transport` must be `stdio`".into()));
     }
+    if service.get("lifecycle").is_some_and(|lifecycle| {
+        !matches!(
+            lifecycle.as_str(),
+            Some("lazy" | "always-on" | "while-app-running")
+        )
+    }) {
+        return Err(AppError::Manifest("`mcp.lifecycle` is invalid".into()));
+    }
+    if let Some(access) = service.get("access") {
+        let access = access
+            .as_object()
+            .ok_or_else(|| AppError::Manifest("`mcp.access` must be an object".into()))?;
+        reject_unknown_fields(
+            access,
+            "`mcp.access`",
+            &["system_agent", "apps", "external_agents"],
+        )?;
+    }
     let raw_tools = match service.get("tools") {
         Some(Value::Array(tools)) => tools.as_slice(),
         Some(_) => return Err(AppError::Manifest("`mcp.tools` must be an array".into())),
         None => &[],
     };
+    if raw_tools.is_empty() {
+        return Err(AppError::Manifest(
+            "`mcp.tools` must contain at least one tool".into(),
+        ));
+    }
     let tool_pattern =
         Regex::new(r"^[a-z][a-z0-9._-]*$").expect("static tool name regex must compile");
     let mut names = HashSet::new();
@@ -142,6 +202,11 @@ fn parse(manifest: Value) -> Result<Manifest, AppError> {
         let tool = raw_tool
             .as_object()
             .ok_or_else(|| AppError::Manifest(format!("`mcp.tools[{index}]` must be an object")))?;
+        reject_unknown_fields(
+            tool,
+            &format!("`mcp.tools[{index}]`"),
+            &["name", "summary", "args", "needs"],
+        )?;
         let name = tool
             .get("name")
             .and_then(Value::as_str)
@@ -213,33 +278,28 @@ fn parse_arguments(tool_name: &str, raw_args: &[Value]) -> Result<Vec<ManifestAr
                 )));
             }
         };
-        for unsupported in [
-            "default_from",
-            "trusted_resolver",
-            "aliases",
-            "positional_alias",
-        ] {
-            if object.contains_key(unsupported) {
-                return Err(AppError::Manifest(format!(
-                    "tool `{tool_name}` arg `{name}` cannot declare `{unsupported}`"
-                )));
-            }
-        }
+        reject_unknown_fields(
+            object,
+            &format!("tool `{tool_name}` arg `{name}`"),
+            &[
+                "name",
+                "kind",
+                "required",
+                "required_when",
+                "repeatable",
+                "choices",
+                "default",
+                "label",
+            ],
+        )?;
         let required = optional_bool(object, "required", tool_name, name)?;
         let repeatable = optional_bool(object, "repeatable", tool_name, name)?;
-        if object
-            .get("binding")
-            .is_some_and(|binding| !matches!(binding.as_str(), Some("positional" | "flag")))
-        {
-            return Err(AppError::Manifest(format!(
-                "tool `{tool_name}` arg `{name}` has invalid binding"
-            )));
-        }
         if repeatable && kind == ArgumentKind::Bool {
             return Err(AppError::Manifest(format!(
                 "tool `{tool_name}` arg `{name}` cannot repeat booleans"
             )));
         }
+
         let choices = match object.get("choices") {
             Some(Value::Array(choices)) => choices.clone(),
             Some(_) => {
