@@ -3,8 +3,7 @@
 // Chat is the stable model API and shells out to
 // `cos ai chat --app <id>`. The kernel derives ai.chat or
 // ai.chat.untrusted from origin, then runs capability checks, budget,
-// safety, and audit. Multimodal names remain as deprecated experimental
-// compatibility shims and fail before invoking cos.
+// safety, and audit.
 //
 // Apps never name a verb and never pick a model. They describe what
 // they want; the gate picks the verb and the machine owner configures
@@ -30,14 +29,6 @@ import (
 type AiUnavailableError struct{ Msg string }
 
 func (e *AiUnavailableError) Error() string { return e.Msg }
-
-// AiUnsupportedError reports an experimental compatibility modality
-// that is currently unsupported.
-type AiUnsupportedError struct{ Modality string }
-
-func (e *AiUnsupportedError) Error() string {
-	return e.Modality + ": currently unsupported; only chat/chat-untrusted are stable"
-}
 
 // AiDeniedError: a gate (capability / origin) refused the call.
 type AiDeniedError struct{ Payload map[string]any }
@@ -92,7 +83,7 @@ type AiResponse struct {
 	Raw       map[string]any
 }
 
-// ChatOptions are the optional parameters shared by the AI helpers.
+// ChatOptions are the optional parameters for Chat.
 type ChatOptions struct {
 	// Origin is the prompt provenance. Pass "external-content" for any
 	// third-party text so the strict safety pipeline runs and the gate
@@ -125,62 +116,6 @@ func Chat(prompt string, opts ChatOptions) (*AiResponse, error) {
 	return dispatch(dispatchArgs{modality: "chat", prompt: strptr(prompt), opts: opts})
 }
 
-// Embed is an experimental compatibility shim and is currently unsupported.
-//
-// Deprecated: only Chat/chat-untrusted are stable.
-func Embed(prompt string, opts ChatOptions) (*AiResponse, error) {
-	return nil, &AiUnsupportedError{Modality: "embed"}
-}
-
-// ImageGenerate is an experimental compatibility shim and is currently unsupported.
-//
-// Deprecated: only Chat/chat-untrusted are stable.
-func ImageGenerate(prompt, output string, opts ChatOptions) (*AiResponse, error) {
-	return nil, &AiUnsupportedError{Modality: "image.generate"}
-}
-
-// ImageAnalyze is an experimental compatibility shim and is currently unsupported.
-//
-// Deprecated: only Chat/chat-untrusted are stable.
-func ImageAnalyze(image string, opts ChatOptions) (*AiResponse, error) {
-	return nil, &AiUnsupportedError{Modality: "image.analyze"}
-}
-
-// VisionAnalyze is an experimental compatibility shim and is currently unsupported.
-//
-// Deprecated: only Chat/chat-untrusted are stable.
-func VisionAnalyze(prompt, image string, opts ChatOptions) (*AiResponse, error) {
-	return nil, &AiUnsupportedError{Modality: "vision.analyze"}
-}
-
-// AudioTTS is an experimental compatibility shim and is currently unsupported.
-//
-// Deprecated: only Chat/chat-untrusted are stable.
-func AudioTTS(prompt, output string, opts ChatOptions) (*AiResponse, error) {
-	return nil, &AiUnsupportedError{Modality: "audio.tts"}
-}
-
-// AudioSTT is an experimental compatibility shim and is currently unsupported.
-//
-// Deprecated: only Chat/chat-untrusted are stable.
-func AudioSTT(audio string, opts ChatOptions) (*AiResponse, error) {
-	return nil, &AiUnsupportedError{Modality: "audio.stt"}
-}
-
-// VideoGenerate is an experimental compatibility shim and is currently unsupported.
-//
-// Deprecated: only Chat/chat-untrusted are stable.
-func VideoGenerate(prompt, output string, opts ChatOptions) (*AiResponse, error) {
-	return nil, &AiUnsupportedError{Modality: "video.generate"}
-}
-
-// VideoAnalyze is an experimental compatibility shim and is currently unsupported.
-//
-// Deprecated: only Chat/chat-untrusted are stable.
-func VideoAnalyze(prompt, video string, opts ChatOptions) (*AiResponse, error) {
-	return nil, &AiUnsupportedError{Modality: "video.analyze"}
-}
-
 // Budget returns the current-period budget snapshot for an app. appID
 // defaults to $COS_APP_ID when empty.
 func Budget(appID string) (*AiBudget, error) {
@@ -193,18 +128,18 @@ func Budget(appID string) (*AiBudget, error) {
 	}
 	out, err := cosCallJSON("cos agent budget show", []string{"agent", "budget", "show", app})
 	if err != nil {
+		if denied, ok := err.(*DeniedError); ok {
+			return nil, &AiUnavailableError{Msg: denied.Error()}
+		}
 		if ue, ok := err.(*UnavailableError); ok {
 			return nil, &AiUnavailableError{Msg: ue.Msg}
 		}
 		return nil, err
 	}
-	if out.Status != 0 || out.hasError() {
-		return nil, &AiUnavailableError{Msg: "cos agent budget show failed: " + asString(asMap(out.Envelope)["error"])}
-	}
-	if err := ValidateBudgetShow(out.Envelope); err != nil {
+	if err := ValidateBudgetShow(out.Data); err != nil {
 		return nil, &AiUnavailableError{Msg: "budget response decode failed: " + err.Error()}
 	}
-	env := asMap(out.Envelope)
+	env := asMap(out.Data)
 	return &AiBudget{
 		Period:    asString(env["period"]),
 		UnitsUsed: asUint64(env["units_used"]),
@@ -294,15 +229,15 @@ func dispatch(a dispatchArgs) (*AiResponse, error) {
 
 	out, err := cosCallJSON("cos ai "+a.modality, argv)
 	if err != nil {
+		if denied, ok := err.(*DeniedError); ok {
+			return nil, classifyError(denied.Payload)
+		}
 		if ue, ok := err.(*UnavailableError); ok {
 			return nil, &AiUnavailableError{Msg: ue.Msg}
 		}
 		return nil, err
 	}
-	if out.Status != 0 || out.hasError() {
-		return nil, classifyError(asMap(out.Envelope))
-	}
-	response, err := parseResponse(out.Envelope)
+	response, err := parseResponse(out.Data)
 	if err != nil {
 		return nil, err
 	}
@@ -315,13 +250,6 @@ func classifyError(env map[string]any) error {
 	case "BUDGET_EXCEEDED":
 		return &AiBudgetExceededError{Payload: env}
 	case "SAFETY_VIOLATION":
-		return &AiSafetyViolationError{Payload: env}
-	}
-	msg := strings.ToLower(asString(env["error"]))
-	if strings.Contains(msg, "budget") && (strings.Contains(msg, "exceed") || strings.Contains(msg, "over")) {
-		return &AiBudgetExceededError{Payload: env}
-	}
-	if strings.Contains(msg, "safety") || strings.Contains(msg, "redact") || strings.Contains(msg, "injection") {
 		return &AiSafetyViolationError{Payload: env}
 	}
 	return &AiDeniedError{Payload: env}

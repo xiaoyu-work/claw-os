@@ -2,8 +2,8 @@
 
 ## Purpose
 
-`adapters/` exposes narrowly wrapped external command-line tools through the
-same manifest/operation contract as bundled apps.
+`adapters/` contains App packages that expose narrowly wrapped external
+command-line tools through the authenticated MCP App Mesh.
 
 ## Responsibilities
 
@@ -16,7 +16,7 @@ same manifest/operation contract as bundled apps.
 
 | Path | Role |
 | --- | --- |
-| `<id>/app.json` | Adapter operation/dependency contract |
+| `<id>/app.json` | Signed App identity, MCP tools, dependencies, and needs |
 | `<id>/main.py` | Safe external-binary invocation |
 | `<id>/test_main.py` | Argument, command-line, output, and error tests |
 | `_template/` | Starting structure for a new adapter |
@@ -25,18 +25,16 @@ same manifest/operation contract as bundled apps.
 ## Provenance and packaging status
 
 Adapters are **not packaged today**: nothing under `packaging/` or
-`rootfs/` installs `adapters/` onto a system. They are therefore
-source-tree content, do not inherit vendor trust, and are quarantined by
-the extension-provenance gate until they are either signed and installed
-as packages or given an explicit developer grant:
+`rootfs/` installs `adapters/` onto a system. They are therefore source-tree
+content and do not inherit vendor trust. Install one as an App package with
+an authenticated publisher signature, or record an explicit digest-bound
+development decision:
 
 ```bash
-cos provenance dev-trust --kind mcp --id <adapter-id> --path adapters/<id>
+cos app install adapters/<id> --dev-trust
 ```
 
-Productizing an adapter means shipping it as a signed package directory
-(`agent-api.json` plus `.provenance.json`) under an approved package
-root. See [`../docs/extension-provenance.md`](../docs/extension-provenance.md).
+See [`../docs/extension-provenance.md`](../docs/extension-provenance.md).
 
 ## Dependencies
 
@@ -44,14 +42,11 @@ Adapters use argument-vector subprocess APIs, never shell interpolation.
 Operation manifests and runtime validation remain aligned. External binary
 failure is surfaced as an adapter error, not a successful empty result.
 
-Adapters attach as MCP servers and therefore run in the same
-hostile-worker sandbox as any third-party server
-([`../core/src/worker/MODULE.md`](../core/src/worker/MODULE.md)): a
-read-only system image, no App data directory, no host paths beyond the
-configured working directory, no network at all, and a per-launch broker
-endpoint that admits nothing by default. An adapter that shells out to a
-binary outside `/usr` must declare it as a dependency; a binary the
-sandbox cannot see is not a smaller adapter, it is a failed launch.
+Adapters run through the task-owned Extension Host. Every call carries a
+Gateway-authenticated caller context, receives only the exact capabilities
+derived from `app.json.mcp.tools[].needs`, and is audited under the App's
+verified package identity. An adapter that shells out to a binary must
+declare both the binary dependency and the exact `proc.spawn` need.
 
 ## Tests
 

@@ -381,8 +381,6 @@ const TOOL_POLICIES: &[ToolPolicy] = &[
             ("args", FieldRule::Size),
         ],
     },
-    ToolPolicy { tool: "cos_app_session_open", fields: &[("app", FieldRule::Token)] },
-    ToolPolicy { tool: "cos_app_session_close", fields: &[("app", FieldRule::Token)] },
     ToolPolicy {
         tool: "cos_delegate",
         fields: &[

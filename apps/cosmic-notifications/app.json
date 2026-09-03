@@ -1,23 +1,24 @@
 {
   "id": "cosmic-notifications",
   "version": "0.1.0",
+  "schema_version": 2,
   "name": {
     "en": "Notifications"
   },
   "summary": {
-    "en": "Post and dismiss freedesktop notifications via the session D-Bus."
+    "en": "Post and dismiss freedesktop notifications through the session D-Bus."
   },
   "icon": "🔔",
-  "runtime": "shell",
-  "operations": {},
-  "session": {
-    "entry": "server.sh",
+  "runtime": "binary",
+  "mcp": {
+    "entry": "/usr/bin/cosmic-notifications",
     "transport": "stdio",
+    "lifecycle": "lazy",
     "tools": [
       {
         "name": "notify.post",
         "summary": {
-          "en": "Show a freedesktop notification. Returns the assigned notification ID, which can be used with notify.close."
+          "en": "Show a freedesktop notification and return its assigned notification id."
         },
         "args": [
           {
@@ -25,13 +26,14 @@
             "kind": "text",
             "required": true,
             "label": {
-              "en": "Single-line headline shown by the notification daemon."
+              "en": "Non-empty headline shown by the notification daemon."
             }
           },
           {
             "name": "body",
             "kind": "text",
             "required": false,
+            "default": "",
             "label": {
               "en": "Optional body text shown below the summary."
             }
@@ -40,30 +42,34 @@
             "name": "app_name",
             "kind": "text",
             "required": false,
+            "default": "Claw OS Agent",
             "label": {
-              "en": "Sender name shown in the notification (defaults to \"Claw OS Agent\")."
+              "en": "Sender name shown in the popup; empty or omitted uses Claw OS Agent."
             }
           },
           {
             "name": "icon",
             "kind": "text",
             "required": false,
+            "default": "com.clawos.Notifications",
             "label": {
-              "en": "Icon name (freedesktop icon spec, e.g. \"dialog-information\")."
+              "en": "Icon name or absolute path; omitted uses com.clawos.Notifications."
             }
           },
           {
             "name": "expire_ms",
-            "kind": "number",
+            "kind": "integer",
             "required": false,
+            "default": -1,
             "label": {
-              "en": "Timeout in milliseconds before auto-dismiss (-1 = daemon default, 0 = never)."
+              "en": "Auto-dismiss timeout in milliseconds; -1 uses the daemon default and 0 never expires."
             }
           },
           {
             "name": "transient",
             "kind": "bool",
             "required": false,
+            "default": false,
             "label": {
               "en": "Do not retain the popup in notification history."
             }
@@ -72,7 +78,9 @@
         "needs": [
           {
             "verb": "ui.notify",
-            "scope": { "kind": "wild" },
+            "scope": {
+              "kind": "wild"
+            },
             "why": {
               "en": "Send a desktop notification to the user."
             }
@@ -82,24 +90,26 @@
       {
         "name": "notify.close",
         "summary": {
-          "en": "Dismiss a previously posted notification by ID."
+          "en": "Dismiss a notification by the integer id returned from notify.post."
         },
         "args": [
           {
             "name": "id",
-            "kind": "number",
+            "kind": "integer",
             "required": true,
             "label": {
-              "en": "The notification ID returned by notify.post."
+              "en": "Notification id returned by notify.post."
             }
           }
         ],
         "needs": [
           {
             "verb": "ui.notify",
-            "scope": { "kind": "wild" },
+            "scope": {
+              "kind": "wild"
+            },
             "why": {
-              "en": "Close a notification previously posted by the agent."
+              "en": "Dismiss a desktop notification."
             }
           }
         ]

@@ -24,7 +24,7 @@ import clawossdk "github.com/xiaoyu-work/claw-os/claw-os-sdk/go"
 
 | Area          | Functions                                                          | Equivalent CLI                    |
 |---------------|--------------------------------------------------------------------|-----------------------------------|
-| AI            | Stable `Chat` / chat-untrusted access; multimodal compatibility shims; `Budget` | `cos ai chat --app <id>`          |
+| AI            | `Chat` / chat-untrusted access; `Budget`                         | `cos ai chat --app <id>`          |
 | Tools         | `CallTool`, `Catalog`, `ForChat`                                   | `cos ai tool <name> --app <id>`   |
 | MCP service   | `LoadMCPApp`, `(*MCPApp).Bind`, `Serve`, `ServeStdio`               | App Host private stdio transport  |
 | GUI           | `IsGUILaunch`, `Context`, `(*GuiContext).OpenAgentOverlay`         | launched via `cos app <id> --gui` |
@@ -40,8 +40,11 @@ import clawossdk "github.com/xiaoyu-work/claw-os/claw-os-sdk/go"
 
 // A single entry serves both the one-shot operation and the GUI window.
 func run(command string, args map[string]any) (any, error) {
-	if clawossdk.IsGUILaunch(command) {
-		ctx := clawossdk.Context(nil) // ctx.AppID, ctx.Files
+	if clawossdk.IsGUILaunch() {
+		ctx, err := clawossdk.Context(nil)
+		if err != nil {
+			return nil, err
+		}
 		startMyWindow(ctx)            // your toolkit, your event loop
 		return nil, nil
 	}
@@ -127,11 +130,9 @@ cancellation, and authenticated deadlines, and returns fatal transport errors.
 
 ## AI support
 
-- **Stable:** `Chat`. Setting `Origin: "external-content"`
-  automatically selects `ai.chat.untrusted`.
-- **Compatibility only:** embed, image, vision, audio, and video helpers
-  retain their signatures but are deprecated, experimental, and currently
-  unsupported. They return `*AiUnsupportedError` before invoking `cos`.
+`Chat` is the public model API. Setting `Origin: "external-content"`
+automatically selects `ai.chat.untrusted`. Unsupported modalities are not
+published as placeholder APIs.
 
 ### What you never do
 
@@ -153,13 +154,12 @@ Each domain returns typed errors you can switch on:
   envelope.
 - `*AiUnavailableError` / `*ToolUnavailableError` — transport failure
   (binary missing, timeout, non-JSON output).
-- `*AiUnsupportedError` — a multimodal compatibility shim was called.
 - `*ToolDeniedError` — capability / unknown-tool / arg-shape refusal.
 
 ## Binary resolution
 
-The SDK runs `cos` from `$PATH`. Override with `CLAW_COS_BIN` (or
-`COS_BIN`) — used by tests and dev setups.
+The SDK runs `cos` from `$PATH`. Override with `CLAW_COS_BIN` for
+tests and dev setups.
 
 ## Develop
 

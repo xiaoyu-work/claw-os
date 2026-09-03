@@ -138,7 +138,7 @@ class CallContext:
     call_id: str
     trace_id: str
     depth: int
-    caller: Optional[McpPrincipal]
+    caller: McpPrincipal
     parent_call_id: Optional[str] = None
     deadline_unix_ms: Optional[int] = None
     session_id: Optional[str] = None
@@ -154,10 +154,6 @@ class CallContext:
         repr=False,
         compare=False,
     )
-
-    @property
-    def authenticated(self) -> bool:
-        return self.caller is not None
 
     @property
     def progress_requested(self) -> bool:
@@ -276,53 +272,32 @@ class _Tool:
     name: str
     summary: str
     input_schema: Dict[str, Any]
+    manifest_args: List[Dict[str, Any]]
     handler: Optional[Callable[..., Any]] = None
-    manifest_args: Optional[List[Dict[str, Any]]] = None
 
 
-@dataclass
 class App:
-    """One App MCP server.
+    """A manifest-bound App MCP server.
 
-    New Apps use :meth:`from_manifest`, bind each declared tool with
-    ``@app.tool(name)``, then call :meth:`serve`.
+    Construct with :meth:`from_manifest`, bind each declared tool with
+    ``@app.tool(name)``, then call :meth:`serve`. Direct construction is
+    rejected because code-authored tool schemas and unauthenticated calls
+    are not part of the Claw App Mesh contract.
     """
 
-    name: Optional[str] = None
-    version: str = "0.0.0"
-    _tools: Dict[str, _Tool] = field(default_factory=dict)
-    _initialized: bool = False
-    _manifest_bound: bool = False
-    _requires_call_context: bool = False
-    _write_lock: threading.Lock = field(
-        default_factory=threading.Lock,
-        init=False,
-        repr=False,
-    )
-    _active_lock: threading.Lock = field(
-        default_factory=threading.Lock,
-        init=False,
-        repr=False,
-    )
-    _active_calls: Dict[str, _CallState] = field(
-        default_factory=dict,
-        init=False,
-        repr=False,
-    )
-    _pending_slots: threading.BoundedSemaphore = field(
-        default_factory=lambda: threading.BoundedSemaphore(MAX_PENDING_CALLS),
-        init=False,
-        repr=False,
-    )
-    _executor: Optional[ThreadPoolExecutor] = field(
-        default=None,
-        init=False,
-        repr=False,
-    )
+    name: str
+    version: str
+    _tools: Dict[str, _Tool]
+    _initialized: bool
+    _write_lock: threading.Lock
+    _active_lock: threading.Lock
+    _active_calls: Dict[str, _CallState]
+    _pending_slots: threading.BoundedSemaphore
+    _executor: Optional[ThreadPoolExecutor]
 
-    def __post_init__(self) -> None:
-        if self.name is None:
-            self.name = os.environ.get("COS_APP_ID") or "unknown"
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+        raise TypeError("App must be created with App.from_manifest()")
 
     @classmethod
     def from_manifest(
@@ -340,59 +315,31 @@ class App:
             path or os.environ.get("COS_APP_MANIFEST") or "app.json"
         )
         name, version, tools = _load_manifest_service(manifest_path)
-        app = cls(
-            name=name,
-            version=version,
-            _manifest_bound=True,
-            _requires_call_context=True,
-        )
+        app = object.__new__(cls)
+        app.name = name
+        app.version = version
         app._tools = {tool.name: tool for tool in tools}
+        app._initialized = False
+        app._write_lock = threading.Lock()
+        app._active_lock = threading.Lock()
+        app._active_calls = {}
+        app._pending_slots = threading.BoundedSemaphore(MAX_PENDING_CALLS)
+        app._executor = None
         return app
 
     def tool(
         self,
         name: str,
-        *,
-        summary: Optional[str] = None,
-        args: Optional[Dict[str, Dict[str, Any]]] = None,
-        required: Optional[List[str]] = None,
     ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-        """Bind a handler to ``name``.
-
-        Manifest-bound Apps must not repeat ``summary``, ``args``, or
-        ``required``. Those legacy parameters remain temporarily for
-        bundled ``session`` Apps.
-        """
+        """Bind a handler to one manifest-declared tool name."""
 
         def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
-            if self._manifest_bound:
-                if summary is not None or args is not None or required is not None:
-                    raise ValueError(
-                        "manifest-bound tools declare schema only in app.json"
-                    )
-                tool = self._tools.get(name)
-                if tool is None:
-                    raise ValueError(f"tool `{name}` is not declared in app.json.mcp")
-                if tool.handler is not None:
-                    raise ValueError(f"tool `{name}` registered twice")
-                tool.handler = fn
-                return fn
-
-            if name in self._tools:
+            tool = self._tools.get(name)
+            if tool is None:
+                raise ValueError(f"tool `{name}` is not declared in app.json.mcp")
+            if tool.handler is not None:
                 raise ValueError(f"tool `{name}` registered twice")
-            schema: Dict[str, Any] = {
-                "type": "object",
-                "properties": dict(args or {}),
-                "additionalProperties": False,
-            }
-            if required:
-                schema["required"] = list(required)
-            self._tools[name] = _Tool(
-                name=name,
-                summary=summary or fn.__doc__ or "",
-                input_schema=schema,
-                handler=fn,
-            )
+            tool.handler = fn
             return fn
 
         return decorator
@@ -769,7 +716,7 @@ class App:
         handler = tool.handler
         if handler is None:
             raise _RpcError(ERR_INTERNAL, f"tool `{name}` has no handler")
-        context = self._call_context(params, msg_id, state)
+        context = self._call_context(params, state)
         try:
             arguments = _resolve_manifest_arguments(tool, arguments)
         except _ToolArgumentError as error:
@@ -798,7 +745,6 @@ class App:
     def _call_context(
         self,
         params: Dict[str, Any],
-        msg_id: Any,
         state: _CallState,
     ) -> CallContext:
         raw_meta = params.get("_meta", {})
@@ -814,23 +760,10 @@ class App:
                 "`_meta.progressToken` must be a string or integer",
             )
         raw_context = raw_meta.get(CALL_CONTEXT_META_KEY)
-        if not self._requires_call_context:
-            raw_context = None
         if raw_context is None:
-            if self._requires_call_context:
-                raise _RpcError(
-                    ERR_INVALID_PARAMS,
-                    f"missing authenticated `{CALL_CONTEXT_META_KEY}`",
-                )
-            request_key = _request_key(msg_id)
-            return CallContext(
-                call_id=request_key,
-                trace_id=request_key,
-                depth=0,
-                caller=None,
-                _cancelled=state.cancelled,
-                _progress_token=progress_token,
-                _emit_notification=self._send_notification,
+            raise _RpcError(
+                ERR_INVALID_PARAMS,
+                f"missing authenticated `{CALL_CONTEXT_META_KEY}`",
             )
         try:
             validate_mcp_call_context(raw_context)
@@ -1105,8 +1038,6 @@ def _resolve_manifest_arguments(
     tool: _Tool,
     supplied: Dict[str, Any],
 ) -> Dict[str, Any]:
-    if tool.manifest_args is None:
-        return supplied
     declared = {arg["name"]: arg for arg in tool.manifest_args}
     extras = sorted(name for name in supplied if name not in declared)
     if extras:

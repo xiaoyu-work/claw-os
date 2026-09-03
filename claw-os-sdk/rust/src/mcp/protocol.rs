@@ -1,16 +1,4 @@
-//! JSON-RPC 2.0 envelope + MCP method types.
-//!
-//! Wire format reference: <https://spec.modelcontextprotocol.io/>.
-//! We model the subset of methods the kernel actually uses today
-//! (initialize, tools/list, tools/call, ping). Adding new methods
-//! is purely additive — new variants on [`McpRequest`] /
-//! [`McpResponse`] dispatch.
-//!
-//! **Note on duplication:** these types are also defined in
-//! `core/src/agent/tools/mcp/protocol.rs`. The two definitions must
-//! stay byte-compatible on the wire — the kernel acts as the client
-//! when calling into Apps that use this crate. Kept in sync by hand
-//! until a dedicated `cos-mcp-types` crate is extracted.
+//! Public JSON-RPC 2.0 and MCP payload types used by the App runtime.
 
 use std::collections::BTreeMap;
 
@@ -298,11 +286,15 @@ pub struct CallToolResult {
     pub content: Vec<ContentItem>,
     #[serde(default, rename = "isError", skip_serializing_if = "Option::is_none")]
     pub is_error: Option<bool>,
+    #[serde(
+        default,
+        rename = "structuredContent",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub structured_content: Option<serde_json::Map<String, Value>>,
 }
 
-/// Content payload — MCP allows `text` / `image` / `resource`. We
-/// model just `text` for now; richer kinds can be added without
-/// breaking callers.
+/// Content payload returned by an MCP tool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentItem {
@@ -311,12 +303,6 @@ pub enum ContentItem {
     },
     Image {
         data: String,
-        // MCP spec uses camelCase `mimeType`. The struct-level
-        // `rename_all = "snake_case"` only renames the variant
-        // discriminator, not the inner fields, so we have to apply
-        // the rename explicitly. Without this the field was emitted
-        // as `mime_type` and Claude Desktop / Cursor silently
-        // dropped images attached to tool results.
         #[serde(rename = "mimeType")]
         mime_type: String,
     },

@@ -19,7 +19,12 @@ fn app_stdin_opt_in_resolves_only_installed_manifest_operations() {
     )
     .unwrap();
 
-    let args = |values: &[&str]| values.iter().map(|value| value.to_string()).collect::<Vec<_>>();
+    let args = |values: &[&str]| {
+        values
+            .iter()
+            .map(|value| value.to_string())
+            .collect::<Vec<_>>()
+    };
     assert!(app_operation_accepts_stdin_in(
         &args(&["app", "pipe", "write", "--stdin"]),
         root.path()
@@ -350,9 +355,7 @@ fn agent_usage_is_publicly_discoverable() {
     assert!(help["commands"].get("usage").is_some());
     assert_eq!(help["model_tools"]["usage"], "cos_usage");
 
-    let leaf = parse(
-        dispatch(&["agent".into(), "usage".into(), "--schema".into()]).unwrap(),
-    );
+    let leaf = parse(dispatch(&["agent".into(), "usage".into(), "--schema".into()]).unwrap());
     assert_eq!(leaf["command"], "cos agent usage");
     assert_eq!(leaf["schema_available"], true);
     assert!(leaf["parameters"].is_array());
@@ -613,7 +616,6 @@ fn consent_grant_yes_writes_record_and_show_reads_it_back() {
             origins: vec![PromptOrigin::Trusted],
             tools: Vec::new(),
         }),
-        session: None,
         mcp: None,
         desktop: None,
         dependencies: serde_json::Value::Null,
@@ -866,7 +868,7 @@ fn create_scaffolds_both_surfaces() {
     assert!(parsed.desktop.is_some(), "both kind must include desktop");
 
     let entry = std::fs::read_to_string(app_dir.join("main.py")).unwrap();
-    assert!(entry.contains("gui.is_gui_launch(command)"));
+    assert!(entry.contains("gui.is_gui_launch()"));
     assert!(entry.contains("from claw_os_sdk import gui"));
 
     let _ = std::fs::remove_dir_all(&parent);
@@ -1605,7 +1607,12 @@ fn polyglot_app_operations_dispatch_through_declared_runtime() {
 
         for (id, runtime, declared_entry, entry_file) in cases {
             let app_dir = write_runtime_app_manifest(apps, id, runtime, declared_entry, false);
-            write_runtime_app_entry(&app_dir, id, entry_file, &runtime_test_entry_source(runtime));
+            write_runtime_app_entry(
+                &app_dir,
+                id,
+                entry_file,
+                &runtime_test_entry_source(runtime),
+            );
 
             let ran_marker = data.join("apps").join(id).join(format!("{id}.ran"));
             let schema = dispatch(&["app".to_string(), id.to_string(), "--schema".to_string()])
@@ -1681,10 +1688,7 @@ fn polyglot_app_operations_dispatch_through_declared_runtime() {
                 .iter()
                 .find(|entry| entry["app"] == id && entry["command"] == "echo")
                 .unwrap();
-            assert_eq!(
-                success["args"],
-                json!(["alpha", "beta", "--confirm=true"])
-            );
+            assert_eq!(success["args"], json!(["alpha", "beta", "--confirm=true"]));
             assert_eq!(success["status"], "ok");
 
             let failure = audit

@@ -13,6 +13,23 @@ enum OutputFormat {
 }
 
 const DEFAULT_APP_STDIN_MAX_BYTES: usize = 16 * 1024 * 1024;
+const WIRE_V1_FLAG: &str = "--wire=1";
+
+fn extract_wire_version(mut argv: Vec<String>) -> Result<(Vec<String>, bool), String> {
+    let Some(first) = argv.first() else {
+        return Ok((argv, false));
+    };
+    if first == WIRE_V1_FLAG {
+        argv.remove(0);
+        return Ok((argv, true));
+    }
+    if first.starts_with("--wire=") {
+        return Err(format!(
+            "unsupported wire version in `{first}`; this kernel supports `--wire=1`"
+        ));
+    }
+    Ok((argv, false))
+}
 
 /// Pull `--plain` / `--compact` / `--json` / `--pretty` out of argv
 /// before the router sees them. Returns the kept args plus the
@@ -38,9 +55,7 @@ fn extract_format(argv: Vec<String>) -> (Vec<String>, OutputFormat) {
             continue;
         }
         match (options, a.as_str()) {
-            (true, "--plain" | "--compact" | "--json") => {
-                explicit = Some(OutputFormat::Compact)
-            }
+            (true, "--plain" | "--compact" | "--json") => explicit = Some(OutputFormat::Compact),
             (true, "--pretty") => explicit = Some(OutputFormat::Pretty),
             _ => kept.push(a),
         }
@@ -117,22 +132,110 @@ fn render(payload: &str, fmt: OutputFormat) -> String {
     }
 }
 
+fn wire_success(payload: &str) -> Result<serde_json::Value, String> {
+    let data: serde_json::Value = serde_json::from_str(payload)
+        .map_err(|error| format!("wire reply is not JSON: {error}"))?;
+    if !data.is_object() {
+        return Err("wire success payload must be a JSON object".to_string());
+    }
+    Ok(serde_json::json!({
+        "ok": true,
+        "wire_version": 1,
+        "data": data,
+    }))
+}
+
+fn wire_failure(error: &str) -> serde_json::Value {
+    let mut source = serde_json::from_str::<serde_json::Value>(error)
+        .ok()
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    let message = source
+        .remove("error")
+        .and_then(|value| value.as_str().map(str::to_string))
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| {
+            if error.is_empty() {
+                "kernel request failed".to_string()
+            } else {
+                error.to_string()
+            }
+        });
+    let code = source
+        .remove("code")
+        .and_then(|value| value.as_str().map(str::to_string))
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "INTERNAL_ERROR".to_string());
+    let audit_id = source
+        .remove("audit_id")
+        .and_then(|value| value.as_str().map(str::to_string));
+    let mut detail = source
+        .remove("detail")
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_default();
+    detail.extend(source);
+
+    let mut envelope = serde_json::json!({
+        "ok": false,
+        "wire_version": 1,
+        "error": message,
+        "code": code,
+    });
+    if let Some(audit_id) = audit_id {
+        envelope["audit_id"] = serde_json::Value::String(audit_id);
+    }
+    if !detail.is_empty() {
+        envelope["detail"] = serde_json::Value::Object(detail);
+    }
+    envelope
+}
+
 fn main() {
-    // Freshness gate, before argv is interpreted or a session is
-    // bootstrapped: a `cos` binary older than the release this system
-    // has already accepted refuses to act rather than reintroducing a
-    // fixed client-side flaw. Cheap — one small root-owned file.
+    let raw_args: Vec<String> = env::args().skip(1).collect();
+    let (raw_args, wire_v1) = match extract_wire_version(raw_args) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            println!(
+                "{}",
+                wire_failure(
+                    &serde_json::json!({
+                        "error": error,
+                        "code": "INVALID_ARGS",
+                    })
+                    .to_string()
+                )
+            );
+            process::exit(1);
+        }
+    };
+
+    // After selecting the output protocol but before request argv is
+    // interpreted or a session is bootstrapped, reject a `cos` binary
+    // older than the release this system has already accepted. Decoding
+    // the protocol first keeps this fail-closed refusal machine-readable.
     if let Err(refusal) =
         cos::update::runtime::enforce_startup(cos::update::runtime::Scope::CompiledEpoch)
     {
-        eprintln!("cos: {refusal}");
+        if wire_v1 {
+            println!(
+                "{}",
+                wire_failure(
+                    &serde_json::json!({
+                        "error": refusal.to_string(),
+                        "code": "KERNEL_UNAVAILABLE",
+                    })
+                    .to_string()
+                )
+            );
+        } else {
+            eprintln!("cos: {refusal}");
+        }
         process::exit(1);
     }
-    let raw_args: Vec<String> = env::args().skip(1).collect();
     let (raw_args, fmt) = extract_format(raw_args);
+    let fmt = if wire_v1 { OutputFormat::Compact } else { fmt };
     let operation_accepts_stdin = router::app_operation_accepts_stdin(&raw_args);
-    let (args, stdin_requested) =
-        extract_stdin_request(raw_args, operation_accepts_stdin);
+    let (args, stdin_requested) = extract_stdin_request(raw_args, operation_accepts_stdin);
 
     // Bootstrap a CLI session if the caller didn't already gate us
     // through one (typical for `cos agent setup`, `cos agent chat`,
@@ -141,8 +244,7 @@ fn main() {
     let _session_guard = caps::bootstrap_user_cli_session(&args);
 
     let result = if stdin_requested {
-        match app_stdin_max_bytes()
-            .and_then(|limit| read_requested_stdin(std::io::stdin(), limit))
+        match app_stdin_max_bytes().and_then(|limit| read_requested_stdin(std::io::stdin(), limit))
         {
             Ok(stdin_data) => router::dispatch_with_stdin(&args, Some(stdin_data)),
             Err(error) => Err(error),
@@ -153,10 +255,42 @@ fn main() {
 
     match result {
         Ok(Some(output)) => {
-            println!("{}", render(&output, fmt));
+            if wire_v1 {
+                match wire_success(&output) {
+                    Ok(envelope) => println!("{envelope}"),
+                    Err(error) => {
+                        println!(
+                            "{}",
+                            wire_failure(
+                                &serde_json::json!({
+                                    "error": error,
+                                    "code": "INTERNAL_ERROR",
+                                })
+                                .to_string()
+                            )
+                        );
+                        process::exit(1);
+                    }
+                }
+            } else {
+                println!("{}", render(&output, fmt));
+            }
+        }
+        Ok(None) if wire_v1 => {
+            println!(
+                "{}",
+                wire_failure(
+                    r#"{"error":"wire request completed without a response payload","code":"INTERNAL_ERROR"}"#
+                )
+            );
+            process::exit(1);
         }
         Ok(None) => {}
         Err(e) => {
+            if wire_v1 {
+                println!("{}", wire_failure(&e));
+                process::exit(1);
+            }
             // If a primitive returned a structured JSON error envelope as
             // its Err string (e.g. `{"error":"agent not configured",
             // "fix":"cos agent setup"}`), surface it as-is instead of
@@ -181,8 +315,5 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/test/unit/main.rs"
-    ));
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/main.rs"));
 }

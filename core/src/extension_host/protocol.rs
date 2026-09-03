@@ -5,7 +5,7 @@ use crate::agent::tools::mcp::integration::McpServerSpec;
 use crate::agent::tools::mcp::protocol::{CallToolResult, ToolDescriptor};
 use crate::clawd::wire::RequestId;
 
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 8;
 pub const MAX_CONTROL_FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_CONTROL_CONNECTIONS: usize = 8;
 pub const MAX_REQUEST_TIMEOUT_MS: u64 = 180_000;
@@ -31,6 +31,8 @@ pub struct HostBootstrap {
     pub task_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_id: Option<String>,
     pub owner_uid: u32,
     pub extension_uid: u32,
     pub execution_gid: u32,
@@ -64,8 +66,7 @@ impl HostBootstrap {
         let Some(worker_start_time_ticks) = self.worker_start_time_ticks else {
             return Err("extension-host bootstrap omitted worker start time".to_string());
         };
-        if crate::proc::read_start_time_ticks_pub(self.worker_pid)
-            != Some(worker_start_time_ticks)
+        if crate::proc::read_start_time_ticks_pub(self.worker_pid) != Some(worker_start_time_ticks)
         {
             return Err("extension-host bootstrap worker identity is stale".to_string());
         }
@@ -74,6 +75,7 @@ impl HostBootstrap {
             protocol: self.protocol,
             task_id: self.task_id,
             session_id: self.session_id,
+            app_id: self.app_id,
             owner_uid: self.owner_uid,
             extension_uid: self.extension_uid,
             owner_gid: self.execution_gid,
@@ -177,6 +179,69 @@ impl McpInvocationAudit {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppInvocationAudit {
+    pub app_id: String,
+    pub tool: String,
+    pub invoke_target: String,
+    pub capability_generation: String,
+    pub context: crate::agent::tools::app_gateway::McpCallContext,
+}
+
+impl AppInvocationAudit {
+    pub fn new(
+        app_id: impl Into<String>,
+        tool: impl Into<String>,
+        capability_generation: impl Into<String>,
+        context: crate::agent::tools::app_gateway::McpCallContext,
+    ) -> Result<Self, String> {
+        let app_id = app_id.into();
+        let tool = tool.into();
+        let invocation = Self {
+            invoke_target: crate::agent::tools::app_gateway::invoke_target(&app_id, &tool)?,
+            app_id,
+            tool,
+            capability_generation: capability_generation.into(),
+            context,
+        };
+        invocation.validate_shape()?;
+        Ok(invocation)
+    }
+
+    pub fn validate_shape(&self) -> Result<(), String> {
+        if self.invoke_target
+            != crate::agent::tools::app_gateway::invoke_target(&self.app_id, &self.tool)?
+            || self.capability_generation.len() != 16
+            || !self
+                .capability_generation
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            return Err("App invocation audit target is invalid".to_string());
+        }
+        self.context.validate()
+    }
+
+    pub fn validate_live_binding(&self, binding: &ExtensionBinding) -> Result<(), String> {
+        self.validate_shape()?;
+        if self.capability_generation != binding.capability_generation {
+            return Err("App invocation used a substituted capability generation".to_string());
+        }
+        self.context.validate_extension_binding(binding)
+    }
+
+    pub fn validate_audit_binding(&self, binding: &ExtensionBinding) -> Result<(), String> {
+        self.validate_shape()?;
+        if self.capability_generation != binding.capability_generation {
+            return Err(
+                "App invocation audit used a substituted capability generation".to_string(),
+            );
+        }
+        self.context.validate_extension_audit_binding(binding)
+    }
+}
+
 impl LifecycleAction {
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -223,6 +288,8 @@ pub struct ExtensionBinding {
     pub task_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_id: Option<String>,
     pub owner_uid: u32,
     pub extension_uid: u32,
     pub owner_gid: u32,
@@ -257,6 +324,18 @@ impl ExtensionBinding {
             .is_some_and(|value| value.is_empty() || value.len() > 128)
         {
             return Err("extension-host binding has an invalid session id".to_string());
+        }
+        if self.app_id.as_deref().is_some_and(|value| {
+            let mut bytes = value.bytes();
+            value.len() > 128
+                || !bytes.next().is_some_and(|byte| byte.is_ascii_lowercase())
+                || !bytes.all(|byte| {
+                    byte.is_ascii_lowercase()
+                        || byte.is_ascii_digit()
+                        || matches!(byte, b'_' | b'-')
+                })
+        }) {
+            return Err("extension-host binding has an invalid App id".to_string());
         }
         if self.owner_uid == 0
             || self.extension_uid == 0
@@ -384,17 +463,12 @@ pub enum HostAction {
         #[serde(default)]
         args: Vec<String>,
     },
-    AppOpen {
-        app_id: String,
-    },
     AppCall {
         app_id: String,
         tool: String,
         #[serde(default)]
         arguments: Value,
-    },
-    AppClose {
-        app_id: String,
+        audit: AppInvocationAudit,
     },
     McpAttach {
         spec: McpServerSpec,
@@ -472,14 +546,8 @@ pub enum HostResult {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output: Option<String>,
     },
-    AppOpened {
-        tool_count: usize,
-    },
     AppCall {
         value: CallToolResult,
-    },
-    AppClosed {
-        closed: bool,
     },
     McpAttached {
         tools: Vec<ToolDescriptor>,

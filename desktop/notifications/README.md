@@ -42,3 +42,10 @@ sudo just rootdir=debian/cosmic-notifications prefix=/usr install
 ## Profiling async tasks with tokio-console
 
 To debug issues with asynchronous code, install [tokio-console](https://github.com/tokio-rs/console) and run it within a separate terminal. Then kill the **cosmic-notifications** process a couple times in quick succession to prevent **cosmic-session** from spawning it again. Then you can start **cosmic-notifications** with **tokio-console** support either by running `just tokio-console` from this repository to test code changes, or `env TOKIO_CONSOLE=1 cosmic-notifications` to enable it with the installed version of **cosmic-notifications**.
+
+## Claw OS MCP service
+
+The App Host starts `/usr/bin/cosmic-notifications` with
+`COS_MCP_SERVER=1`; this mode acts as a D-Bus notification client rather than
+starting a second daemon. `apps/cosmic-notifications/app.json` owns the tool
+catalog.

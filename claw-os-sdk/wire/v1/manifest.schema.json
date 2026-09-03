@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://claw-os.dev/wire/v1/manifest.schema.json",
   "title": "App manifest (app.json)",
-  "description": "The manifest every app under COS_APPS_DIR must provide. MCP-first Apps declare one versioned service with tools, lifecycle, caller restrictions, capability needs, and optional AI and desktop surfaces. Legacy operations and session remain during migration.",
+  "description": "The manifest every app under COS_APPS_DIR must provide. MCP Apps declare one versioned service with tools, lifecycle, caller restrictions, capability needs, and optional AI and desktop surfaces.",
   "type": "object",
   "required": ["id", "version", "name"],
   "additionalProperties": true,
@@ -20,18 +20,19 @@
       "description": "One-shot operations keyed by command name. Each is invokable as `cos app <id> <op>` and auto-exposed to the agent. Values conform to #/$defs/operation.",
       "additionalProperties": { "$ref": "#/$defs/operation" }
     },
-    "ai": { "$ref": "#/$defs/aiPolicy", "description": "AI policy. Required iff any legacy operation, session tool, or MCP tool declares an ai.* need." },
-    "session": { "$ref": "#/$defs/session", "description": "Optional long-lived MCP server exposing stateful, agent-driven tools." },
-    "mcp": { "$ref": "#/$defs/session", "description": "MCP-first App service. This becomes the single Agent/App interface after legacy operations and session are removed." },
+    "ai": { "$ref": "#/$defs/aiPolicy", "description": "AI policy. Required iff any operation or MCP tool declares an ai.* need." },
+    "mcp": { "$ref": "#/$defs/mcpService", "description": "The App's authenticated MCP service and sole Agent/App tool interface." },
     "desktop": { "$ref": "#/$defs/desktop", "description": "Optional desktop GUI surface. Declaring it makes the app a launchable GUI; the installer generates a .desktop entry whose Exec routes through `cos app <id> --gui` so the GUI process is kernel-spawned and shares the app's identity, caps, consent, and audit." },
     "dependencies": { "type": "object", "additionalProperties": true, "description": "Free-form dependency declarations (e.g. {\"binaries\": [...]}) consumed by the bridge's resolver." }
   },
   "allOf": [
     {
+      "not": { "required": ["session"] }
+    },
+    {
       "if": { "required": ["mcp"] },
       "then": {
-        "required": ["schema_version"],
-        "not": { "required": ["session"] }
+        "required": ["schema_version"]
       }
     }
   ],
@@ -411,7 +412,7 @@
         "monthly_units": { "type": "integer", "minimum": 0, "description": "Abstract billing units per period. 0 disables enforcement." }
       }
     },
-    "session": {
+    "mcpService": {
       "type": "object",
       "description": "Long-lived MCP server the app launches for stateful, agent-driven tool calls.",
       "additionalProperties": true,
@@ -420,7 +421,7 @@
         "transport": { "type": "string", "enum": ["stdio"], "default": "stdio", "description": "Wire protocol. Only stdio is supported today." },
         "lifecycle": { "type": "string", "enum": ["lazy", "always-on", "while-app-running"], "default": "lazy", "description": "Host lifecycle." },
         "access": { "$ref": "#/$defs/mcpAccess", "description": "Authenticated caller restrictions. This never grants authority." },
-        "tools": { "type": "array", "items": { "$ref": "#/$defs/sessionTool" }, "description": "Tools advertised through this session (authoritative allowlist)." }
+        "tools": { "type": "array", "items": { "$ref": "#/$defs/mcpTool" }, "description": "Tools advertised through this service (authoritative allowlist)." }
       }
     },
     "mcpAccess": {
@@ -433,7 +434,7 @@
         "external_agents": { "type": "boolean", "default": false, "description": "Allow authenticated external-Gateway agents." }
       }
     },
-    "sessionTool": {
+    "mcpTool": {
       "type": "object",
       "description": "One MCP-callable tool. Mirrors operation: args + needs drive the model's view and the kernel's enforcement.",
       "required": ["name", "summary"],

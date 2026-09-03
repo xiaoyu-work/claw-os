@@ -1,6 +1,7 @@
 {
   "id": "cosmic-player",
   "version": "0.1.0",
+  "schema_version": 2,
   "name": {
     "en": "Media Player"
   },
@@ -9,51 +10,63 @@
   },
   "icon": "🎵",
   "runtime": "binary",
-  "operations": {},
-  "session": {
+  "mcp": {
     "entry": "/usr/bin/cosmic-player",
     "transport": "stdio",
+    "lifecycle": "lazy",
     "tools": [
       {
         "name": "player.play",
-        "summary": { "en": "Resume playback on the active MPRIS player." },
+        "summary": {
+          "en": "Resume playback on the active MPRIS player."
+        },
         "args": [],
         "needs": []
       },
       {
         "name": "player.pause",
-        "summary": { "en": "Pause the active MPRIS player." },
+        "summary": {
+          "en": "Pause the active MPRIS player."
+        },
         "args": [],
         "needs": []
       },
       {
         "name": "player.stop",
-        "summary": { "en": "Stop playback on the active MPRIS player." },
+        "summary": {
+          "en": "Stop playback on the active MPRIS player."
+        },
         "args": [],
         "needs": []
       },
       {
         "name": "player.next",
-        "summary": { "en": "Skip to the next track." },
+        "summary": {
+          "en": "Skip to the next track."
+        },
         "args": [],
         "needs": []
       },
       {
         "name": "player.previous",
-        "summary": { "en": "Skip to the previous track." },
+        "summary": {
+          "en": "Skip to the previous track."
+        },
         "args": [],
         "needs": []
       },
       {
         "name": "player.toggle",
-        "summary": { "en": "Toggle play/pause on the active MPRIS player." },
+        "summary": {
+          "en": "Toggle play and pause on the active MPRIS player."
+        },
         "args": [],
         "needs": []
       },
       {
         "name": "player.status",
         "summary": {
-          "en": "Return the active MPRIS player's identity, playback status, and current track metadata."
+          "en": "Return playback status and selected track metadata from the active MPRIS player."
         },
         "args": [],
         "needs": []

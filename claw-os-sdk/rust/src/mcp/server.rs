@@ -1,325 +1,560 @@
-//! Inbound MCP server — accept JSON-RPC over a [`Transport`] and
-//! dispatch to registered [`Tool`] handlers.
-//!
-//! Differs from the kernel's `core/src/agent/tools/mcp/server.rs` in
-//! one important way: it owns its own simple `Vec<Arc<dyn Tool>>`
-//! instead of borrowing a kernel `ToolRegistry`. Apps that embed
-//! this crate need *only* this crate — they don't pull in any of the
-//! kernel's runtime state (caps, audit, registry filters, …). All of
-//! that gating happens on the kernel side **before** the call is
-//! forwarded over MCP, so the App is in a "trust the kernel" position
-//! by the time `exec` runs.
-//!
-//! ## Method surface
-//!
-//! * `initialize` — protocol handshake; advertises the `tools`
-//!   capability.
-//! * `tools/list` — reflect the registered tools into MCP
-//!   `ToolDescriptor`s.
-//! * `tools/call` — exec the named tool, wrap the result in
-//!   `CallToolResult`.
-//! * `ping` — round-trip liveness.
-//! * `notifications/initialized` — accepted and ignored (spec's
-//!   "client is ready" signal).
-//!
-//! Anything else returns `METHOD_NOT_FOUND` so the optional method
-//! families (`resources/*`, `prompts/*`) degrade cleanly.
-
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
-use serde_json::{json, Value};
+use async_trait::async_trait;
+use serde_json::{json, Map, Value};
+use tokio::sync::{mpsc, Mutex};
+use tokio::task::{JoinError, JoinHandle};
 
-use super::protocol::{
-    CallToolParams, CallToolResult, ContentItem, Implementation, InitializeParams,
-    InitializeResult, JsonRpcError, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
-    ListToolsResult, RequestId, ServerCapabilities, ToolDescriptor, ToolsCapability, ERR_INTERNAL,
-    ERR_INVALID_PARAMS, ERR_INVALID_REQUEST, ERR_METHOD_NOT_FOUND, ERR_PARSE, JSONRPC_VERSION,
+use crate::generated::{
+    normalize_mcp_call_context_integers, validate_mcp_call_context, McpCallContext,
 };
-use super::tool::Tool;
-use super::transport::{StdioTransport, Transport, TransportError};
+
+use super::manifest::{self, ManifestTool};
+use super::protocol::{
+    ClientCapabilities, Implementation, InitializeParams, InitializeResult, ListToolsResult,
+    ServerCapabilities, ToolDescriptor, ToolsCapability, ERR_INTERNAL, ERR_INVALID_PARAMS,
+    ERR_INVALID_REQUEST, ERR_METHOD_NOT_FOUND, ERR_PARSE, JSONRPC_VERSION, PROTOCOL_VERSION,
+};
+use super::tool::{
+    deadline_wait, CallContext, Cancellation, Progress, ProgressSink, Tool, ToolResult,
+};
+use super::transport::{Frame, StdioTransport, Transport, TransportError, MAX_FRAME_BYTES};
+
+pub const CALL_CONTEXT_META_KEY: &str = "claw-os.dev/call-context";
+pub const ERR_SERVER_BUSY: i64 = -32000;
+const MAX_CALLS: usize = 64;
+const INPUT_CHANNEL_CAPACITY: usize = 1;
+const EOF_GRACE: Duration = Duration::from_millis(50);
+const READER_TERMINATED: &str = "MCP reader task terminated unexpectedly";
 
 #[derive(Debug, thiserror::Error)]
-pub enum ServerError {
-    #[error("transport: {0}")]
+pub enum AppError {
+    #[error("invalid App manifest: {0}")]
+    Manifest(String),
+    #[error("tool `{0}` is not declared in app.json.mcp.tools")]
+    UndeclaredTool(String),
+    #[error("tool `{0}` is already bound")]
+    DuplicateBinding(String),
+    #[error("missing handlers for manifest tools: {0}")]
+    MissingBindings(String),
+    #[error(transparent)]
     Transport(#[from] TransportError),
-
-    /// Two tools were registered under the same name. The builder
-    /// returns this instead of silently dropping the prior handler —
-    /// MCP clients pin tool names so the resulting "same name, different
-    /// behaviour" race is impossible to debug from the client side.
-    #[error("duplicate tool registration: {name}")]
-    DuplicateTool { name: &'static str },
 }
 
-/// Builder + runtime for an inbound MCP server.
-pub struct Server {
-    name: String,
+/// A manifest-bound MCP App service.
+pub struct App {
+    id: String,
     version: String,
-    tools: HashMap<&'static str, Arc<dyn Tool>>,
+    tools: Vec<ManifestTool>,
+    tool_indexes: HashMap<String, usize>,
+    bindings: HashMap<String, Arc<dyn Tool>>,
 }
 
-impl Server {
-    pub fn new(name: impl Into<String>, version: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            version: version.into(),
-            tools: HashMap::new(),
+impl App {
+    /// Load the authoritative App manifest from one bounded file snapshot.
+    pub fn from_manifest(path: impl AsRef<Path>) -> Result<Self, AppError> {
+        let manifest = manifest::load(path.as_ref())?;
+        let tool_indexes = manifest
+            .tools
+            .iter()
+            .enumerate()
+            .map(|(index, tool)| (tool.name.clone(), index))
+            .collect();
+        Ok(Self {
+            id: manifest.id,
+            version: manifest.version,
+            tools: manifest.tools,
+            tool_indexes,
+            bindings: HashMap::new(),
+        })
+    }
+
+    /// Load `COS_APP_MANIFEST`, falling back to `app.json` for direct
+    /// development runs.
+    pub fn from_environment() -> Result<Self, AppError> {
+        let path = std::env::var_os("COS_APP_MANIFEST")
+            .filter(|path| !path.is_empty())
+            .unwrap_or_else(|| "app.json".into());
+        Self::from_manifest(path)
+    }
+
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn version(&self) -> &str {
+        &self.version
+    }
+
+    /// Bind implementation to a tool name already declared by the manifest.
+    pub fn bind(&mut self, tool: Arc<dyn Tool>) -> Result<(), AppError> {
+        let name = tool.name().to_string();
+        if !self.tool_indexes.contains_key(&name) {
+            return Err(AppError::UndeclaredTool(name));
         }
-    }
-
-    /// Register one tool. Panics if a tool with the same name has
-    /// already been registered — silently overwriting would make
-    /// versioning races impossible to detect from either the client
-    /// or the audit log. Callers that need a non-panicking variant
-    /// (e.g. building the registry from user configuration) should
-    /// use [`Server::try_tool`] instead.
-    pub fn tool(self, tool: Arc<dyn Tool>) -> Self {
-        let name = tool.name();
-        self.try_tool(tool)
-            .unwrap_or_else(|_| panic!("duplicate MCP tool registration at startup: {name}"))
-    }
-
-    /// Like [`Server::tool`] but surfaces duplicate registrations as
-    /// `Err(ServerError::DuplicateTool)` instead of panicking.
-    pub fn try_tool(mut self, tool: Arc<dyn Tool>) -> Result<Self, ServerError> {
-        let name = tool.name();
-        if self.tools.contains_key(name) {
-            return Err(ServerError::DuplicateTool { name });
+        if self.bindings.contains_key(&name) {
+            return Err(AppError::DuplicateBinding(name));
         }
-        self.tools.insert(name, tool);
-        Ok(self)
+        self.bindings.insert(name, tool);
+        Ok(())
     }
 
-    /// Register every tool from an iterator. Panics on the first
-    /// duplicate (see [`Server::tool`] for rationale). Callers that
-    /// want graceful error handling should fold over [`try_tool`]
-    /// directly.
-    pub fn tools<I>(self, iter: I) -> Self
-    where
-        I: IntoIterator<Item = Arc<dyn Tool>>,
-    {
-        let mut s = self;
-        for t in iter {
-            s = s.tool(t);
-        }
-        s
-    }
-
-    /// Drive the server over `tokio::io::stdin()` / `stdout()`.
-    /// Blocks until stdin closes (or a transport error fires), which
-    /// is exactly the lifecycle the kernel agent expects: spawn,
-    /// handshake, run, exit when the parent kills the child.
-    pub async fn serve_stdio(self) -> Result<(), ServerError> {
+    pub async fn serve_stdio(self) -> Result<(), AppError> {
         self.serve(StdioTransport::stdio()).await
     }
 
-    /// Drive the server over an arbitrary [`Transport`]. Tests use
-    /// `transport::in_memory_pair` to wire a client + server pair
-    /// in-process; production calls [`Server::serve_stdio`].
-    pub async fn serve(self, transport: impl Transport) -> Result<(), ServerError> {
-        let server = Arc::new(self);
-        let t = Arc::new(transport);
-        loop {
-            let frame = match t.recv().await? {
-                Some(f) => f,
-                None => return Ok(()),
-            };
-
-            // Quick structural sniff. JSON-RPC notifications carry no
-            // `id`; requests carry one. Detecting the difference up
-            // front lets us:
-            //   - silently drop spec-conformant notifications
-            //   - reject "notification with id" frames (forbidden by
-            //     spec) without engaging the request dispatcher
-            //   - emit RequestId::Null when we can't even read the id
-            //     out of a malformed frame
-            let raw_value: Result<Value, _> = serde_json::from_str(&frame);
-            let raw = match raw_value {
-                Ok(v) => v,
-                Err(err) => {
-                    let resp = JsonRpcResponse::err(
-                        RequestId::Null,
-                        JsonRpcError::new(ERR_PARSE, format!("parse error: {err}")),
-                    );
-                    t.send(serde_json::to_string(&resp).unwrap_or_default())
-                        .await?;
-                    continue;
-                }
-            };
-            if !raw.is_object() {
-                let resp = JsonRpcResponse::err(
-                    RequestId::Null,
-                    JsonRpcError::new(ERR_INVALID_REQUEST, "request must be a JSON object"),
-                );
-                t.send(serde_json::to_string(&resp).unwrap_or_default())
-                    .await?;
-                continue;
-            }
-            // jsonrpc version check — spec requires exactly "2.0".
-            // Otherwise the server can be tricked into accepting a
-            // v1-flavoured envelope whose semantics differ from
-            // what callers expect.
-            match raw.get("jsonrpc").and_then(|v| v.as_str()) {
-                Some(v) if v == JSONRPC_VERSION => {}
-                _ => {
-                    let id = extract_id(&raw);
-                    let resp = JsonRpcResponse::err(
-                        id,
-                        JsonRpcError::new(
-                            ERR_INVALID_REQUEST,
-                            "missing or invalid jsonrpc 2.0 envelope",
-                        ),
-                    );
-                    t.send(serde_json::to_string(&resp).unwrap_or_default())
-                        .await?;
-                    continue;
-                }
-            }
-            if raw.get("id").is_some()
-                && !matches!(
-                    raw.get("id"),
-                    Some(Value::Null | Value::String(_) | Value::Number(_))
-                )
-            {
-                let resp = JsonRpcResponse::err(
-                    RequestId::Null,
-                    JsonRpcError::new(
-                        ERR_INVALID_REQUEST,
-                        "request id must be a string, number, or null",
-                    ),
-                );
-                t.send(serde_json::to_string(&resp).unwrap_or_default())
-                    .await?;
-                continue;
-            }
-            if raw
-                .get("params")
-                .is_some_and(|params| !params.is_object() && !params.is_array())
-                && raw.get("id").is_none()
-            {
-                let id = extract_id(&raw);
-                let resp = JsonRpcResponse::err(
-                    id,
-                    JsonRpcError::new(
-                        ERR_INVALID_REQUEST,
-                        "request params must be an object or array",
-                    ),
-                );
-                t.send(serde_json::to_string(&resp).unwrap_or_default())
-                    .await?;
-                continue;
-            }
-            if raw.get("id").is_some()
-                && raw.get("params").is_some_and(Value::is_null)
-                && matches!(
-                    raw.get("method").and_then(Value::as_str),
-                    Some("ping" | "tools/list")
-                )
-            {
-                let resp = JsonRpcResponse::err(
-                    extract_id(&raw),
-                    JsonRpcError::new(ERR_INVALID_PARAMS, "params must not be null"),
-                );
-                t.send(serde_json::to_string(&resp).unwrap_or_default())
-                    .await?;
-                continue;
-            }
-
-            let has_id = raw.get("id").is_some();
-            if !has_id {
-                match serde_json::from_value::<JsonRpcNotification>(raw) {
-                    Ok(_) => continue,
-                    Err(err) => {
-                        let resp = JsonRpcResponse::err(
-                            RequestId::Null,
-                            JsonRpcError::new(
-                                ERR_INVALID_REQUEST,
-                                format!("invalid notification: {err}"),
-                            ),
-                        );
-                        t.send(serde_json::to_string(&resp).unwrap_or_default())
-                            .await?;
-                        continue;
-                    }
-                }
-            }
-
-            let parsed: Result<JsonRpcRequest, _> = serde_json::from_str(&frame);
-            match parsed {
-                Ok(req) => {
-                    let resp = server.handle(req).await;
-                    let body = serde_json::to_string(&resp).unwrap_or_else(|_| {
-                        // We can always serialize a parse-error
-                        // response because it has no Value fields.
-                        serde_json::to_string(&JsonRpcResponse::err(
-                            RequestId::Null,
-                            JsonRpcError::new(ERR_INTERNAL, "encode failed"),
-                        ))
-                        .unwrap()
-                    });
-                    t.send(body).await?;
-                }
-                Err(err) => {
-                    let id = extract_id(&raw);
-                    let resp = JsonRpcResponse::err(
-                        id,
-                        JsonRpcError::new(ERR_INVALID_REQUEST, format!("invalid request: {err}")),
-                    );
-                    t.send(serde_json::to_string(&resp).unwrap_or_default())
-                        .await?;
-                }
-            }
+    pub async fn serve(self, transport: impl Transport) -> Result<(), AppError> {
+        let missing: Vec<&str> = self
+            .tools
+            .iter()
+            .filter(|tool| !self.bindings.contains_key(&tool.name))
+            .map(|tool| tool.name.as_str())
+            .collect();
+        if !missing.is_empty() {
+            return Err(AppError::MissingBindings(missing.join(", ")));
         }
+        Runtime::new(self, Arc::new(transport)).run().await
     }
+}
 
-    async fn handle(self: &Arc<Self>, req: JsonRpcRequest) -> JsonRpcResponse {
-        let id = req.id.clone();
-        match req.method.as_str() {
-            "initialize" => self.handle_initialize(req),
-            "ping" => self.handle_ping(req),
-            "tools/list" => self.handle_tools_list(req),
-            "tools/call" => self.handle_tools_call(req).await,
-            other => JsonRpcResponse::err(
-                id,
-                JsonRpcError::new(ERR_METHOD_NOT_FOUND, format!("method not found: {other}")),
-            ),
-        }
-    }
+struct Output {
+    transport: Arc<dyn Transport>,
+    write_lock: Mutex<()>,
+    fatal: mpsc::UnboundedSender<TransportError>,
+}
 
-    fn handle_initialize(&self, req: JsonRpcRequest) -> JsonRpcResponse {
-        let id = req.id.clone();
-        if let Some(params) = req.params.as_ref() {
-            if let Err(error) = validate_initialize_params(params) {
-                return JsonRpcResponse::err(id, JsonRpcError::new(ERR_INVALID_PARAMS, error));
-            }
-        }
-        // We accept the params for compliance but don't currently
-        // honour client capabilities (we don't emit progress
-        // notifications, etc.). The spec allows servers to ignore
-        // capabilities they don't implement — and to tolerate an
-        // omitted `params` member, since the only required fields
-        // (protocol version, client info, capabilities) all default
-        // sensibly.
-        let _params: InitializeParams = match req.params {
-            Some(v) => match serde_json::from_value(v) {
-                Ok(p) => p,
-                Err(e) => {
-                    return JsonRpcResponse::err(
-                        id,
-                        JsonRpcError::new(ERR_INVALID_PARAMS, e.to_string()),
-                    );
-                }
-            },
-            None => {
-                return JsonRpcResponse::err(
-                    id,
-                    JsonRpcError::new(ERR_INVALID_PARAMS, "missing params"),
-                );
+impl Output {
+    async fn send(&self, value: Value) -> Result<(), TransportError> {
+        let frame = match serde_json::to_string(&value) {
+            Ok(frame) => frame,
+            Err(error) => {
+                let error = TransportError::Encode(error.to_string());
+                let _ = self.fatal.send(error.clone());
+                return Err(error);
             }
         };
+        let _guard = self.write_lock.lock().await;
+        if let Err(error) = self.transport.send(frame).await {
+            let _ = self.fatal.send(error.clone());
+            return Err(error);
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl ProgressSink for Output {
+    async fn emit_progress(
+        &self,
+        token: Value,
+        progress: f64,
+        update: Progress,
+    ) -> Result<(), TransportError> {
+        let mut params = Map::from_iter([
+            ("progressToken".into(), token),
+            ("progress".into(), json!(progress)),
+        ]);
+        if let Some(total) = update.total {
+            params.insert("total".into(), json!(total));
+        }
+        if let Some(message) = update.message {
+            params.insert("message".into(), Value::String(message));
+        }
+        self.send(json!({
+            "jsonrpc": JSONRPC_VERSION,
+            "method": "notifications/progress",
+            "params": params
+        }))
+        .await
+    }
+}
+
+struct CallState {
+    key: String,
+    id: Value,
+    authenticated_call_id: String,
+    cancellation: Arc<Cancellation>,
+    suppress_response: AtomicBool,
+}
+
+struct PendingCall {
+    state: Arc<CallState>,
+    tool: Arc<dyn Tool>,
+    args: Value,
+    context: CallContext,
+}
+
+struct ActiveCall {
+    state: Arc<CallState>,
+    context: CallContext,
+    handle: JoinHandle<ToolResult>,
+    deadline_unix_ms: Option<u64>,
+}
+
+struct Runtime {
+    id: String,
+    version: String,
+    tools: Vec<ManifestTool>,
+    tool_indexes: HashMap<String, usize>,
+    bindings: HashMap<String, Arc<dyn Tool>>,
+    transport: Arc<dyn Transport>,
+    output: Arc<Output>,
+    fatal_rx: mpsc::UnboundedReceiver<TransportError>,
+    calls: HashMap<String, Arc<CallState>>,
+    pending: VecDeque<PendingCall>,
+    active: Option<ActiveCall>,
+}
+
+impl Runtime {
+    fn new(app: App, transport: Arc<dyn Transport>) -> Self {
+        let (fatal_tx, fatal_rx) = mpsc::unbounded_channel();
+        let output = Arc::new(Output {
+            transport: transport.clone(),
+            write_lock: Mutex::new(()),
+            fatal: fatal_tx,
+        });
+        Self {
+            id: app.id,
+            version: app.version,
+            tools: app.tools,
+            tool_indexes: app.tool_indexes,
+            bindings: app.bindings,
+            transport,
+            output,
+            fatal_rx,
+            calls: HashMap::new(),
+            pending: VecDeque::new(),
+            active: None,
+        }
+    }
+
+    async fn run(mut self) -> Result<(), AppError> {
+        let (input_tx, mut input_rx) = mpsc::channel(INPUT_CHANNEL_CAPACITY);
+        let transport = self.transport.clone();
+        let reader = tokio::spawn(read_input(transport, input_tx));
+        let result = self.run_loop(&mut input_rx).await;
+        drop(input_rx);
+
+        let reader_was_running = !reader.is_finished();
+        if reader_was_running {
+            reader.abort();
+        }
+        let reader_result = reader.await;
+        let reader_terminated = matches!(
+            &result,
+            Err(AppError::Transport(TransportError::Io(message)))
+                if message == READER_TERMINATED
+        );
+        match reader_result {
+            Ok(()) => result,
+            Err(error) if error.is_cancelled() && reader_was_running => result,
+            Err(error) if reader_terminated => {
+                Err(TransportError::Io(format!("MCP reader task failed: {error}")).into())
+            }
+            Err(_) => result,
+        }
+    }
+
+    async fn run_loop(
+        &mut self,
+        input_rx: &mut mpsc::Receiver<ReaderEvent>,
+    ) -> Result<(), AppError> {
+        let mut eof_grace = None;
+        loop {
+            self.start_next();
+            if eof_grace.is_some() && self.active.is_none() && self.pending.is_empty() {
+                return Ok(());
+            }
+            let event = if let Some(active) = self.active.as_mut() {
+                let deadline_unix_ms = active.deadline_unix_ms;
+                if let Some(eof_deadline) = eof_grace {
+                    tokio::select! {
+                        biased;
+                        joined = &mut active.handle => Event::Completed(joined),
+                        failure = self.fatal_rx.recv() => Event::Fatal(failure),
+                        _ = wait_for_deadline(deadline_unix_ms) => Event::Deadline,
+                        _ = tokio::time::sleep_until(eof_deadline) => Event::EofGraceExpired,
+                    }
+                } else {
+                    tokio::select! {
+                        biased;
+                        joined = &mut active.handle => Event::Completed(joined),
+                        failure = self.fatal_rx.recv() => Event::Fatal(failure),
+                        input = input_rx.recv() => Event::Input(input),
+                        _ = wait_for_deadline(deadline_unix_ms) => Event::Deadline,
+                    }
+                }
+            } else if let Some(eof_deadline) = eof_grace {
+                tokio::select! {
+                    biased;
+                    failure = self.fatal_rx.recv() => Event::Fatal(failure),
+                    _ = tokio::time::sleep_until(eof_deadline) => Event::EofGraceExpired,
+                }
+            } else {
+                tokio::select! {
+                    biased;
+                    failure = self.fatal_rx.recv() => Event::Fatal(failure),
+                    input = input_rx.recv() => Event::Input(input),
+                }
+            };
+            match event {
+                Event::Completed(joined) => {
+                    if let Err(error) = self.finish_active(joined).await {
+                        self.abort_all("MCP output failed", true).await;
+                        return Err(error.into());
+                    }
+                }
+                Event::Deadline => {
+                    if let Err(error) = self.expire_active().await {
+                        self.abort_all("MCP output failed", true).await;
+                        return Err(error.into());
+                    }
+                }
+                Event::Fatal(Some(error)) => {
+                    self.abort_all("MCP output failed", true).await;
+                    return Err(error.into());
+                }
+                Event::Fatal(None) => {}
+                Event::Input(Some(ReaderEvent::Frame(frame))) => {
+                    if let Err(error) = self.handle_frame(frame).await {
+                        self.abort_all("MCP output failed", true).await;
+                        return Err(error.into());
+                    }
+                }
+                Event::Input(Some(ReaderEvent::Eof)) => {
+                    eof_grace = Some(tokio::time::Instant::now() + EOF_GRACE);
+                }
+                Event::Input(Some(ReaderEvent::Error(error))) => {
+                    self.abort_all("MCP input failed", true).await;
+                    return Err(error.into());
+                }
+                Event::Input(None) => {
+                    self.abort_all("MCP input failed", true).await;
+                    return Err(TransportError::Io(READER_TERMINATED.into()).into());
+                }
+                Event::EofGraceExpired => {
+                    self.abort_all("MCP input closed", true).await;
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    fn start_next(&mut self) {
+        if self.active.is_some() {
+            return;
+        }
+        while let Some(call) = self.pending.pop_front() {
+            if call.state.suppress_response.load(Ordering::Acquire) {
+                self.calls.remove(&call.state.key);
+                continue;
+            }
+            let tool = call.tool;
+            let args = call.args;
+            let context = call.context;
+            let handler_context = context.clone();
+            let deadline_unix_ms = context.deadline_unix_ms();
+            let handle = tokio::spawn(async move { tool.handle(args, handler_context).await });
+            self.active = Some(ActiveCall {
+                state: call.state,
+                context,
+                handle,
+                deadline_unix_ms,
+            });
+            break;
+        }
+    }
+
+    async fn finish_active(
+        &mut self,
+        joined: Result<ToolResult, JoinError>,
+    ) -> Result<(), TransportError> {
+        let active = self.active.take().expect("completed call must be active");
+        self.calls.remove(&active.state.key);
+        if active.state.suppress_response.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        let result = match joined {
+            Ok(result) => match active.context.check_cancelled() {
+                Ok(()) => result,
+                Err(error) => ToolResult::error(error.to_string()),
+            },
+            Err(error) if error.is_panic() => {
+                ToolResult::error(format!("MCP tool handler panicked: {error}"))
+            }
+            Err(error) => ToolResult::error(format!("MCP tool handler failed: {error}")),
+        };
+        self.send_tool_result(active.state.id.clone(), result).await
+    }
+
+    async fn expire_active(&mut self) -> Result<(), TransportError> {
+        let active = self.active.take().expect("deadline requires active call");
+        let message = format!("call `{}` exceeded its deadline", active.context.call_id());
+        active.state.cancellation.cancel(message.clone()).await;
+        active.handle.abort();
+        let _ = active.handle.await;
+        self.calls.remove(&active.state.key);
+        if !active.state.suppress_response.load(Ordering::Acquire) {
+            self.send_tool_result(active.state.id.clone(), ToolResult::error(message))
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn handle_frame(&mut self, frame: Frame) -> Result<(), TransportError> {
+        let text = match frame {
+            Frame::Oversized => {
+                return self
+                    .send_error(
+                        Value::Null,
+                        ERR_PARSE,
+                        format!("frame exceeds {MAX_FRAME_BYTES} bytes; rejected"),
+                    )
+                    .await;
+            }
+            Frame::InvalidUtf8 => {
+                return self
+                    .send_error(Value::Null, ERR_PARSE, "frame is not valid UTF-8")
+                    .await;
+            }
+            Frame::Message(text) if text.len() > MAX_FRAME_BYTES => {
+                return self
+                    .send_error(
+                        Value::Null,
+                        ERR_PARSE,
+                        format!("frame exceeds {MAX_FRAME_BYTES} bytes; rejected"),
+                    )
+                    .await;
+            }
+            Frame::Message(text) => text,
+        };
+        let message: Value = match serde_json::from_str(&text) {
+            Ok(message) => message,
+            Err(error) => {
+                return self
+                    .send_error(Value::Null, ERR_PARSE, format!("parse error: {error}"))
+                    .await;
+            }
+        };
+        let Some(object) = message.as_object() else {
+            return self
+                .send_error(Value::Null, ERR_INVALID_REQUEST, "request not an object")
+                .await;
+        };
+        let has_id = object.contains_key("id");
+        let id = object.get("id").cloned().unwrap_or(Value::Null);
+        if has_id && !valid_request_id(&id) {
+            return self
+                .send_error(
+                    Value::Null,
+                    ERR_INVALID_REQUEST,
+                    "request id must be a string, number, or null",
+                )
+                .await;
+        }
+        if object.get("jsonrpc").and_then(Value::as_str) != Some(JSONRPC_VERSION) {
+            return self
+                .send_error(id, ERR_INVALID_REQUEST, "missing jsonrpc 2.0 envelope")
+                .await;
+        }
+        let Some(method) = object.get("method").and_then(Value::as_str) else {
+            return self
+                .send_error(id, ERR_INVALID_REQUEST, "request method must be a string")
+                .await;
+        };
+        let params = object.get("params");
+        if !has_id {
+            if params.is_some_and(|params| !params.is_object() && !params.is_array()) {
+                return self
+                    .send_error(
+                        Value::Null,
+                        ERR_INVALID_REQUEST,
+                        "request params must be an object or array",
+                    )
+                    .await;
+            }
+            self.handle_notification(method, params).await;
+            return Ok(());
+        }
+        match method {
+            "initialize" => self.handle_initialize(id, params).await,
+            "ping" => {
+                self.handle_ping(id, params, object.contains_key("params"))
+                    .await
+            }
+            "tools/list" => {
+                self.handle_tools_list(id, params, object.contains_key("params"))
+                    .await
+            }
+            "tools/call" => self.queue_tool_call(id, params).await,
+            _ => {
+                self.send_error(
+                    id,
+                    ERR_METHOD_NOT_FOUND,
+                    format!("unknown method `{method}`"),
+                )
+                .await
+            }
+        }
+    }
+
+    async fn handle_notification(&mut self, method: &str, params: Option<&Value>) {
+        if method != "notifications/cancelled" {
+            return;
+        }
+        let Some(request_id) = params
+            .and_then(Value::as_object)
+            .and_then(|params| params.get("requestId"))
+            .filter(|request_id| valid_request_id(request_id))
+        else {
+            return;
+        };
+        let Ok(key) = request_key(request_id) else {
+            return;
+        };
+        if let Some(state) = self.calls.get(&key).cloned() {
+            state.suppress_response.store(true, Ordering::Release);
+            state
+                .cancellation
+                .cancel(format!(
+                    "call `{}` was cancelled",
+                    state.authenticated_call_id
+                ))
+                .await;
+        }
+    }
+
+    async fn handle_initialize(
+        &self,
+        id: Value,
+        params: Option<&Value>,
+    ) -> Result<(), TransportError> {
+        let Some(params) = params.and_then(Value::as_object) else {
+            return self
+                .send_error(
+                    id,
+                    ERR_INVALID_PARAMS,
+                    "initialize params must be an object",
+                )
+                .await;
+        };
+        let parsed: InitializeParams = match serde_json::from_value(Value::Object(params.clone())) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                return self
+                    .send_error(id, ERR_INVALID_PARAMS, error.to_string())
+                    .await;
+            }
+        };
+        if let Err(message) = validate_initialize(&parsed, params) {
+            return self.send_error(id, ERR_INVALID_PARAMS, message).await;
+        }
         let result = InitializeResult {
-            protocol_version: super::protocol::PROTOCOL_VERSION.to_string(),
+            protocol_version: PROTOCOL_VERSION.into(),
             capabilities: ServerCapabilities {
                 tools: Some(ToolsCapability {
                     list_changed: Some(false),
@@ -327,174 +562,344 @@ impl Server {
                 ..Default::default()
             },
             server_info: Implementation {
-                name: self.name.clone(),
+                name: self.id.clone(),
                 version: self.version.clone(),
             },
             instructions: None,
         };
-        match serde_json::to_value(&result) {
-            Ok(v) => JsonRpcResponse::ok(id, v),
-            Err(e) => JsonRpcResponse::err(id, JsonRpcError::new(ERR_INTERNAL, e.to_string())),
-        }
+        self.send_result(id, serde_json::to_value(result).map_err(encode_error)?)
+            .await
     }
 
-    fn handle_ping(&self, req: JsonRpcRequest) -> JsonRpcResponse {
-        let id = req.id;
-        match req.params {
-            None | Some(Value::Object(_)) => JsonRpcResponse::ok(id, json!({})),
-            Some(_) => JsonRpcResponse::err(
-                id,
-                JsonRpcError::new(ERR_INVALID_PARAMS, "ping params must be an object"),
-            ),
+    async fn handle_ping(
+        &self,
+        id: Value,
+        params: Option<&Value>,
+        params_present: bool,
+    ) -> Result<(), TransportError> {
+        if params_present && !params.is_some_and(Value::is_object) {
+            return self
+                .send_error(id, ERR_INVALID_PARAMS, "ping params must be an object")
+                .await;
         }
+        self.send_result(id, json!({})).await
     }
 
-    fn handle_tools_list(&self, req: JsonRpcRequest) -> JsonRpcResponse {
-        let id = req.id;
-        if let Some(params) = req.params {
-            let Some(params) = params.as_object() else {
-                return JsonRpcResponse::err(
-                    id,
-                    JsonRpcError::new(ERR_INVALID_PARAMS, "tools/list params must be an object"),
-                );
+    async fn handle_tools_list(
+        &self,
+        id: Value,
+        params: Option<&Value>,
+        params_present: bool,
+    ) -> Result<(), TransportError> {
+        if params_present {
+            let Some(params) = params.and_then(Value::as_object) else {
+                return self
+                    .send_error(
+                        id,
+                        ERR_INVALID_PARAMS,
+                        "tools/list params must be an object",
+                    )
+                    .await;
             };
             if params
                 .get("cursor")
                 .is_some_and(|cursor| !cursor.is_string())
             {
-                return JsonRpcResponse::err(
-                    id,
-                    JsonRpcError::new(ERR_INVALID_PARAMS, "tools/list cursor must be a string"),
-                );
+                return self
+                    .send_error(id, ERR_INVALID_PARAMS, "tools/list cursor must be a string")
+                    .await;
             }
         }
-        let mut tools: Vec<ToolDescriptor> = Vec::with_capacity(self.tools.len());
-        // Sort by name so list order is deterministic — easier on
-        // both human readers and JSON-Schema-aware UIs that snapshot
-        // the catalogue.
-        let mut names: Vec<&&'static str> = self.tools.keys().collect();
-        names.sort();
-        for n in names {
-            let t = &self.tools[*n];
-            tools.push(ToolDescriptor {
-                name: t.name().to_string(),
-                description: Some(t.description().to_string()),
-                input_schema: t.input_schema(),
-            });
-        }
-
         let result = ListToolsResult {
-            tools,
+            tools: self
+                .tools
+                .iter()
+                .map(|tool| ToolDescriptor {
+                    name: tool.name.clone(),
+                    description: Some(tool.summary.clone()),
+                    input_schema: tool.input_schema.clone(),
+                })
+                .collect(),
             next_cursor: None,
         };
-        match serde_json::to_value(&result) {
-            Ok(v) => JsonRpcResponse::ok(id, v),
-            Err(e) => JsonRpcResponse::err(id, JsonRpcError::new(ERR_INTERNAL, e.to_string())),
-        }
+        self.send_result(id, serde_json::to_value(result).map_err(encode_error)?)
+            .await
     }
 
-    async fn handle_tools_call(&self, req: JsonRpcRequest) -> JsonRpcResponse {
-        let id = req.id.clone();
-        let arguments_present = req
-            .params
-            .as_ref()
-            .and_then(Value::as_object)
-            .is_some_and(|params| params.contains_key("arguments"));
-        let params: CallToolParams = match req.params {
-            Some(v) => match serde_json::from_value(v) {
-                Ok(p) => p,
-                Err(e) => {
-                    return JsonRpcResponse::err(
-                        id,
-                        JsonRpcError::new(ERR_INVALID_PARAMS, e.to_string()),
-                    );
-                }
-            },
-            None => {
-                return JsonRpcResponse::err(
+    async fn queue_tool_call(
+        &mut self,
+        id: Value,
+        params: Option<&Value>,
+    ) -> Result<(), TransportError> {
+        let Some(params) = params.and_then(Value::as_object) else {
+            return self
+                .send_error(
                     id,
-                    JsonRpcError::new(ERR_INVALID_PARAMS, "missing params"),
-                );
-            }
+                    ERR_INVALID_PARAMS,
+                    "tools/call params must be an object",
+                )
+                .await;
         };
-        let tool = match self.tools.get(params.name.as_str()) {
-            Some(t) => t.clone(),
-            None => {
-                return JsonRpcResponse::err(
-                    id,
-                    JsonRpcError::new(
-                        ERR_INVALID_PARAMS,
-                        format!("tool not registered: {}", params.name),
-                    ),
-                );
-            }
+        if self.calls.len() >= MAX_CALLS {
+            return self
+                .send_error(id, ERR_SERVER_BUSY, "too many pending MCP tool calls")
+                .await;
+        }
+        let key = request_key(&id).map_err(encode_error)?;
+        if self.calls.contains_key(&key) {
+            return self
+                .send_error(id, ERR_INVALID_REQUEST, "duplicate active request id")
+                .await;
+        }
+        let Some(name) = params.get("name").and_then(Value::as_str) else {
+            return self
+                .send_error(id, ERR_INVALID_PARAMS, "missing `name`")
+                .await;
         };
-        let arguments = match params.arguments {
-            Some(Value::Object(arguments)) => Value::Object(arguments),
+        let Some(tool_index) = self.tool_indexes.get(name).copied() else {
+            return self
+                .send_error(id, ERR_INVALID_PARAMS, format!("unknown tool `{name}`"))
+                .await;
+        };
+        let arguments = match params.get("arguments") {
+            Some(Value::Object(arguments)) => arguments,
             Some(_) => {
-                return JsonRpcResponse::err(
-                    id,
-                    JsonRpcError::new(ERR_INVALID_PARAMS, "`arguments` must be an object"),
-                );
+                return self
+                    .send_error(id, ERR_INVALID_PARAMS, "`arguments` must be an object")
+                    .await;
             }
-            None if !arguments_present => json!({}),
-            None => {
-                return JsonRpcResponse::err(
-                    id,
-                    JsonRpcError::new(ERR_INVALID_PARAMS, "`arguments` must be an object"),
-                );
+            None => &Map::new(),
+        };
+        let (authenticated, progress_token) = match parse_call_context(params) {
+            Ok(context) => context,
+            Err(error) => return self.send_error(id, error.code, error.message).await,
+        };
+        let manifest_tool = &self.tools[tool_index];
+        let args = match manifest::resolve_arguments(manifest_tool, arguments) {
+            Ok(args) => args,
+            Err(error) => {
+                return self
+                    .send_tool_result(
+                        id,
+                        ToolResult::error(format!("bad arguments for `{name}`: {error}")),
+                    )
+                    .await;
             }
         };
-        let result = tool.exec(arguments).await;
-        let body = CallToolResult {
-            content: vec![ContentItem::Text {
-                text: result.content,
-            }],
-            is_error: if result.is_error { Some(true) } else { None },
-        };
-        match serde_json::to_value(&body) {
-            Ok(v) => JsonRpcResponse::ok(id, v),
-            Err(e) => JsonRpcResponse::err(id, JsonRpcError::new(ERR_INTERNAL, e.to_string())),
+        let cancellation = Arc::new(Cancellation::new());
+        let authenticated_call_id = authenticated.call_id.clone();
+        let context = CallContext::new(
+            authenticated,
+            cancellation.clone(),
+            progress_token,
+            self.output.clone(),
+        );
+        let state = Arc::new(CallState {
+            key: key.clone(),
+            id,
+            authenticated_call_id,
+            cancellation,
+            suppress_response: AtomicBool::new(false),
+        });
+        let tool = self
+            .bindings
+            .get(name)
+            .expect("bindings validated before serving")
+            .clone();
+        self.calls.insert(key, state.clone());
+        self.pending.push_back(PendingCall {
+            state,
+            tool,
+            args,
+            context,
+        });
+        Ok(())
+    }
+
+    async fn send_tool_result(&self, id: Value, result: ToolResult) -> Result<(), TransportError> {
+        let mut payload = Map::from_iter([
+            (
+                "content".into(),
+                json!([{"type": "text", "text": result.text}]),
+            ),
+            ("isError".into(), Value::Bool(result.is_error)),
+        ]);
+        if let Some(structured) = result.structured_content {
+            payload.insert("structuredContent".into(), Value::Object(structured));
+        }
+        self.send_result(id, Value::Object(payload)).await
+    }
+
+    async fn send_result(&self, id: Value, result: Value) -> Result<(), TransportError> {
+        self.output
+            .send(json!({
+                "jsonrpc": JSONRPC_VERSION,
+                "id": id,
+                "result": result
+            }))
+            .await
+    }
+
+    async fn send_error(
+        &self,
+        id: Value,
+        code: i64,
+        message: impl Into<String>,
+    ) -> Result<(), TransportError> {
+        self.output
+            .send(json!({
+                "jsonrpc": JSONRPC_VERSION,
+                "id": id,
+                "error": {"code": code, "message": message.into()}
+            }))
+            .await
+    }
+
+    async fn abort_all(&mut self, reason: &str, suppress: bool) {
+        let states: Vec<Arc<CallState>> = self.calls.values().cloned().collect();
+        for state in states {
+            if suppress {
+                state.suppress_response.store(true, Ordering::Release);
+            }
+            state.cancellation.cancel(reason).await;
+        }
+        self.pending.clear();
+        self.calls.clear();
+        if let Some(active) = self.active.take() {
+            active.handle.abort();
+            let _ = active.handle.await;
         }
     }
 }
 
-fn validate_initialize_params(params: &Value) -> Result<(), String> {
-    let capabilities = params
+enum Event {
+    Input(Option<ReaderEvent>),
+    Completed(Result<ToolResult, JoinError>),
+    Deadline,
+    EofGraceExpired,
+    Fatal(Option<TransportError>),
+}
+
+enum ReaderEvent {
+    Frame(Frame),
+    Eof,
+    Error(TransportError),
+}
+
+struct RpcError {
+    code: i64,
+    message: String,
+}
+
+fn parse_call_context(
+    params: &Map<String, Value>,
+) -> Result<(McpCallContext, Option<Value>), RpcError> {
+    let meta = params
+        .get("_meta")
+        .and_then(Value::as_object)
+        .ok_or_else(|| RpcError {
+            code: ERR_INVALID_PARAMS,
+            message: "`_meta` must be an object".into(),
+        })?;
+    let progress_token = match meta.get("progressToken") {
+        Some(Value::String(token)) => Some(Value::String(token.clone())),
+        Some(Value::Number(number)) if manifest::number_is_integer(number) => {
+            Some(Value::Number(number.clone()))
+        }
+        Some(_) => {
+            return Err(RpcError {
+                code: ERR_INVALID_PARAMS,
+                message: "`_meta.progressToken` must be a string or integer".into(),
+            });
+        }
+        None => None,
+    };
+    let raw_context = meta.get(CALL_CONTEXT_META_KEY).ok_or_else(|| RpcError {
+        code: ERR_INVALID_PARAMS,
+        message: format!("missing authenticated `{CALL_CONTEXT_META_KEY}`"),
+    })?;
+    validate_mcp_call_context(raw_context).map_err(|error| RpcError {
+        code: ERR_INVALID_PARAMS,
+        message: format!("invalid authenticated call context: {error}"),
+    })?;
+    let mut normalized = raw_context.clone();
+    normalize_mcp_call_context_integers(&mut normalized);
+    let authenticated = serde_json::from_value(normalized).map_err(|error| RpcError {
+        code: ERR_INTERNAL,
+        message: format!("cannot materialize authenticated call context: {error}"),
+    })?;
+    Ok((authenticated, progress_token))
+}
+
+fn validate_initialize(parsed: &InitializeParams, raw: &Map<String, Value>) -> Result<(), String> {
+    let capabilities = raw
         .get("capabilities")
         .and_then(Value::as_object)
-        .ok_or_else(|| "initialize capabilities must be an object".to_string())?;
+        .ok_or_else(|| "missing `capabilities`".to_string())?;
     for name in ["experimental", "sampling", "elicitation"] {
         if capabilities
             .get(name)
-            .is_some_and(|capability| !capability.is_object())
+            .is_some_and(|value| !value.is_object())
         {
-            return Err(format!("capabilities.{name} must be an object"));
+            return Err(format!("`capabilities.{name}` must be an object"));
         }
     }
     if let Some(roots) = capabilities.get("roots") {
         let roots = roots
             .as_object()
-            .ok_or_else(|| "capabilities.roots must be an object".to_string())?;
+            .ok_or_else(|| "`capabilities.roots` must be an object".to_string())?;
         if roots
             .get("listChanged")
-            .is_some_and(|list_changed| !list_changed.is_boolean())
+            .is_some_and(|value| !value.is_boolean())
         {
-            return Err("capabilities.roots.listChanged must be a boolean".to_string());
+            return Err("`capabilities.roots.listChanged` must be a boolean".into());
         }
     }
+    if parsed.protocol_version.is_empty()
+        || parsed.client_info.name.is_empty()
+        || parsed.client_info.version.is_empty()
+    {
+        return Err("missing or invalid `clientInfo`".into());
+    }
+    let _capabilities: &ClientCapabilities = &parsed.capabilities;
     Ok(())
 }
 
-/// Pull a [`RequestId`] out of an arbitrary JSON-RPC frame value.
-/// Returns [`RequestId::Null`] when no id is present or the id is of an
-/// unrecognised type — exactly what the JSON-RPC 2.0 spec mandates
-/// for error responses to malformed requests.
-fn extract_id(raw: &Value) -> RequestId {
-    match raw.get("id") {
-        Some(Value::Number(number)) => RequestId::Num(number.clone()),
-        Some(Value::String(s)) => RequestId::Str(s.clone()),
-        _ => RequestId::Null,
+fn valid_request_id(value: &Value) -> bool {
+    value.is_null() || value.is_string() || value.is_number()
+}
+
+fn request_key(value: &Value) -> Result<String, serde_json::Error> {
+    serde_json::to_string(value)
+}
+
+fn encode_error(error: serde_json::Error) -> TransportError {
+    TransportError::Encode(error.to_string())
+}
+
+async fn read_input(transport: Arc<dyn Transport>, input: mpsc::Sender<ReaderEvent>) {
+    loop {
+        let event = match transport.recv().await {
+            Ok(Some(frame)) => ReaderEvent::Frame(frame),
+            Ok(None) => ReaderEvent::Eof,
+            Err(error) => ReaderEvent::Error(error),
+        };
+        let terminal = matches!(event, ReaderEvent::Eof | ReaderEvent::Error(_));
+        if input.send(event).await.is_err() || terminal {
+            return;
+        }
+    }
+}
+
+async fn wait_for_deadline(deadline_unix_ms: Option<u64>) {
+    match deadline_unix_ms {
+        Some(deadline_unix_ms) => loop {
+            let Some(wait) = deadline_wait(deadline_unix_ms) else {
+                return;
+            };
+            tokio::time::sleep(wait).await;
+        },
+        None => std::future::pending().await,
     }
 }
 

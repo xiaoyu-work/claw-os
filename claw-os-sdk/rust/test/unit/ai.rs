@@ -27,10 +27,20 @@ fn classify_budget_error_by_code() {
 }
 
 #[test]
-fn classify_safety_error_by_keyword() {
-    let payload = serde_json::json!({"error": "safety blocked"});
-    let err = classify_ai_error("safety blocked", &payload);
+fn classify_safety_error_by_code() {
+    let payload = serde_json::json!({"error": "opaque", "code": "SAFETY_VIOLATION"});
+    let err = classify_ai_error("opaque", &payload);
     assert!(matches!(err, AiError::SafetyViolation(_)));
+}
+
+#[test]
+fn error_messages_do_not_override_stable_codes() {
+    let payload = serde_json::json!({
+        "error": "budget safety blocked",
+        "code": "PERMISSION_DENIED"
+    });
+    let err = classify_ai_error("budget safety blocked", &payload);
+    assert!(matches!(err, AiError::Denied { .. }));
 }
 
 #[test]

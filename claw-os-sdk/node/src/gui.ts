@@ -15,7 +15,7 @@
 //
 //   import { gui } from "@claw-os/sdk";
 //   export function run(command, args) {
-//     if (gui.isGuiLaunch(command)) {
+//     if (gui.isGuiLaunch()) {
 //       const ctx = gui.context(args);
 //       startMyWindow(ctx);   // your toolkit, your loop
 //       return;
@@ -30,9 +30,6 @@ import { createConnection } from "node:net";
 import * as ai from "./ai";
 import * as tools from "./tools";
 
-/** Command value the bridge passes (and the default `desktop.exec`)
- * when an app is launched as a GUI. */
-export const GUI_COMMAND = "--gui";
 const ASK_CLAW_LAUNCHER = "/usr/local/bin/cos-ask-claw-launcher";
 const ASK_CLAW_PROTOCOL = 1;
 const ASK_CLAW_REQUEST_LIMIT = 32 * 1024;
@@ -40,14 +37,11 @@ const ASK_CLAW_REQUEST_LIMIT = 32 * 1024;
 /**
  * Return `true` when the current invocation is a desktop GUI launch.
  *
- * Detection prefers the `COS_APP_GUI` environment variable the bridge
- * sets for the long-lived GUI process. As a fallback (so apps with a
- * custom `desktop.exec` still work) a `command` equal to
- * {@link GUI_COMMAND} is also treated as a GUI launch.
+ * The bridge sets `COS_APP_GUI=1` for the authenticated desktop launch.
+ * Command strings are not accepted as a substitute for host context.
  */
-export function isGuiLaunch(command?: string): boolean {
-  if (process.env.COS_APP_GUI === "1") return true;
-  return command !== undefined && command === GUI_COMMAND;
+export function isGuiLaunch(): boolean {
+  return process.env.COS_APP_GUI === "1";
 }
 
 /** The kernel context handed to a desktop app at launch. */
@@ -212,19 +206,26 @@ function validateAskClawLauncher(): void {
  * from `COS_ARGS_JSON` when not supplied explicitly.
  */
 export function context(files?: string[]): GuiContext {
-  const appId = process.env.COS_APP_ID || "unknown";
+  const appId = process.env.COS_APP_ID;
+  if (!appId) throw new Error("COS_APP_ID is required for a GUI launch");
   const resolved = files ?? filesFromEnv();
+  if (!Array.isArray(resolved) || resolved.some((file) => typeof file !== "string")) {
+    throw new Error("GUI files must be an array of strings");
+  }
   return new GuiContext(appId, [...resolved]);
 }
 
 function filesFromEnv(): string[] {
   const raw = process.env.COS_ARGS_JSON;
   if (!raw) return [];
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) return parsed.map((x) => String(x));
+    parsed = JSON.parse(raw);
   } catch {
-    return [];
+    throw new Error("COS_ARGS_JSON must be valid JSON");
   }
-  return [];
+  if (!Array.isArray(parsed) || parsed.some((file) => typeof file !== "string")) {
+    throw new Error("COS_ARGS_JSON must be an array of strings");
+  }
+  return parsed;
 }

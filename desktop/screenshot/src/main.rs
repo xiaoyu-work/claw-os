@@ -1,7 +1,7 @@
 use ashpd::desktop::screenshot::Screenshot;
 use clap::{ArgAction, Parser};
-use std::{collections::HashMap, fs, os::unix::fs::MetadataExt, path::PathBuf, sync::Arc};
-use zbus::{Connection, proxy, zvariant::Value};
+use std::{collections::HashMap, fs, os::unix::fs::MetadataExt, path::PathBuf};
+use zbus::{proxy, zvariant::Value, Connection};
 
 mod localize;
 mod mcp;
@@ -36,9 +36,6 @@ struct Args {
     /// The directory to save the screenshot to, if not performing an interactive screenshot
     #[clap(short, long)]
     save_dir: Option<PathBuf>,
-    /// Run as an MCP stdio server (also triggered by COS_MCP_SERVER=1).
-    #[clap(long, hide = true)]
-    mcp_server: bool,
 }
 
 #[proxy(assume_defaults = true)]
@@ -96,12 +93,22 @@ impl std::fmt::Display for CaptureError {
 }
 
 pub(crate) async fn capture(opts: CaptureOptions) -> Result<CaptureOutcome, CaptureError> {
-    let picture_dir = (!opts.interactive).then(|| {
-        opts.save_dir
+    let picture_dir = if opts.interactive {
+        None
+    } else {
+        let dir = opts
+            .save_dir
             .clone()
-            .filter(|dir| dir.is_dir())
-            .unwrap_or_else(|| dirs::picture_dir().expect("failed to locate picture directory"))
-    });
+            .or_else(dirs::picture_dir)
+            .ok_or_else(|| CaptureError::Io("failed to locate picture directory".into()))?;
+        if !dir.is_dir() {
+            return Err(CaptureError::Io(format!(
+                "screenshot destination is not an existing directory: {}",
+                dir.display()
+            )));
+        }
+        Some(dir)
+    };
 
     let response = Screenshot::request()
         .interactive(opts.interactive)
@@ -129,9 +136,9 @@ pub(crate) async fn capture(opts: CaptureOptions) -> Result<CaptureOutcome, Capt
     let uri = response.uri();
     let path = match uri.scheme() {
         "file" => {
-            let response_path = uri.to_file_path().map_err(|_| {
-                CaptureError::Other(format!("unsupported response URI '{uri}'"))
-            })?;
+            let response_path = uri
+                .to_file_path()
+                .map_err(|_| CaptureError::Other(format!("unsupported response URI '{uri}'")))?;
             if let Some(picture_dir) = picture_dir {
                 let date = jiff::Zoned::now();
                 let filename = format!("Screenshot_{}.png", date.strftime("%Y-%m-%d_%H-%M-%S"));
@@ -162,7 +169,9 @@ pub(crate) async fn capture(opts: CaptureOptions) -> Result<CaptureOutcome, Capt
         }
         "clipboard" => String::new(),
         scheme => {
-            return Err(CaptureError::Other(format!("unsupported scheme '{scheme}'")));
+            return Err(CaptureError::Other(format!(
+                "unsupported scheme '{scheme}'"
+            )));
         }
     };
 
@@ -205,18 +214,8 @@ async fn send_notification(path: &str) {
 async fn main() {
     crate::localize::localize();
 
-    // The kernel agent spawns this binary with `COS_MCP_SERVER=1` so
-    // the same executable can be reused as an MCP tool provider. The
-    // flag form `--mcp-server` is supported for manual testing only;
-    // production callers always go through the env var.
-    let mcp_mode = std::env::var("COS_MCP_SERVER").as_deref() == Ok("1")
-        || std::env::args().any(|a| a == "--mcp-server");
-
-    if mcp_mode {
-        let server =
-            claw_os_sdk::mcp::Server::new("cosmic-screenshot", env!("CARGO_PKG_VERSION"))
-                .tool(Arc::new(mcp::CaptureTool));
-        if let Err(e) = server.serve_stdio().await {
+    if std::env::var("COS_MCP_SERVER").as_deref() == Ok("1") {
+        if let Err(e) = mcp::run().await {
             eprintln!("cosmic-screenshot MCP server exited: {e}");
             std::process::exit(1);
         }

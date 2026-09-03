@@ -80,6 +80,10 @@ impl AppLaunch {
         self.package.ceiling()
     }
 
+    pub fn package_ref(&self) -> crate::provenance::runtime::PackageRef {
+        crate::provenance::runtime::PackageRef::of(&self.package)
+    }
+
     /// Re-assert the snapshot against the current trust store, then
     /// open and re-hash the files this launch will execute.
     ///
@@ -213,6 +217,7 @@ pub(crate) struct AppIdentitySession {
     session_id: String,
     backend: AppSessionBackend,
     parent_caps: Option<CapSet>,
+    package: crate::provenance::runtime::PackageRef,
     /// The launcher's right to relay one App-session system-service
     /// call for this worker. Issued by `clawd` at bind time, bound to
     /// this launcher process, and deliberately never exported into the
@@ -252,7 +257,9 @@ enum LaunchRequest<'a> {
     Gui {
         exec: &'a str,
     },
-    Mcp,
+    Mcp {
+        tool: &'a str,
+    },
 }
 
 impl LaunchRequest<'_> {
@@ -260,7 +267,7 @@ impl LaunchRequest<'_> {
         match self {
             LaunchRequest::Operation { .. } => "operation",
             LaunchRequest::Gui { .. } => "gui",
-            LaunchRequest::Mcp => "mcp",
+            LaunchRequest::Mcp { .. } => "mcp",
         }
     }
 
@@ -268,7 +275,25 @@ impl LaunchRequest<'_> {
         match self {
             LaunchRequest::Operation { operation, .. } => format!("cos app {app_id} {operation}"),
             LaunchRequest::Gui { exec } => format!("cos app {app_id} {exec}"),
-            LaunchRequest::Mcp => format!("cos app {app_id} session"),
+            LaunchRequest::Mcp { tool } => format!("cos app {app_id} mcp {tool}"),
+        }
+    }
+
+    fn session_group(&self) -> &'static str {
+        match self {
+            LaunchRequest::Mcp { .. } => "app-mcp",
+            LaunchRequest::Operation { .. } | LaunchRequest::Gui { .. } => "app",
+        }
+    }
+
+    fn invoke_cap(&self, app_id: &str) -> Result<Cap, String> {
+        match self {
+            LaunchRequest::Mcp { tool } => {
+                crate::agent::tools::app_gateway::invoke_cap(app_id, tool)
+            }
+            LaunchRequest::Operation { .. } | LaunchRequest::Gui { .. } => {
+                Ok(Cap::new(Verb::AGENT_INVOKE, Scope::name(app_id)))
+            }
         }
     }
 }
@@ -282,6 +307,8 @@ pub(crate) struct TransientCall<'a> {
     pub tool: &'a str,
     pub args: &'a BTreeMap<String, serde_json::Value>,
     pub caps: CapSet,
+    pub context: crate::agent::tools::app_gateway::McpCallContext,
+    pub capability_generation: String,
 }
 
 #[derive(Clone)]
@@ -289,6 +316,7 @@ pub(crate) struct AppSessionControl {
     session_id: String,
     backend: AppSessionBackend,
     parent_caps: Option<CapSet>,
+    package: crate::provenance::runtime::PackageRef,
 }
 
 pub(crate) struct McpProcSession {
@@ -406,11 +434,16 @@ impl Drop for McpProcSession {
 }
 
 impl AppSessionControl {
+    pub fn uses_local_backend(&self) -> bool {
+        matches!(self.backend, AppSessionBackend::Local { .. })
+    }
+
     pub fn set_transient_call(&self, call: Option<TransientCall<'_>>) -> Result<(), String> {
         set_app_session_transient_call(
             &self.session_id,
             &self.backend,
             self.parent_caps.as_ref(),
+            &self.package,
             call,
         )
     }
@@ -437,6 +470,14 @@ impl AppIdentitySession {
             .and_then(serde_json::Value::as_str)
             .map(ToOwned::to_owned)
             .ok_or_else(|| "clawd native App session response omitted handle".to_string())?;
+        let package = result
+            .get("package")
+            .cloned()
+            .ok_or_else(|| "clawd native App session response omitted package identity".to_string())
+            .and_then(|value| {
+                serde_json::from_value(value)
+                    .map_err(|error| format!("invalid native App package identity: {error}"))
+            })?;
         Ok(Self {
             session_id,
             backend: AppSessionBackend::Clawd {
@@ -444,6 +485,7 @@ impl AppIdentitySession {
                 handle,
             },
             parent_caps: None,
+            package,
             granted_caps: CapSet::new(),
             relay: crate::worker::relay_slot(),
         })
@@ -494,6 +536,7 @@ impl AppIdentitySession {
             .transpose()
             .map_err(|error| format!("resolve `{operation}` capabilities: {error}"))?;
         let local_ceiling = ceiling.clone();
+        let package = launch.package_ref();
         let session = Self::start(
             app_id,
             LaunchRequest::Operation {
@@ -501,6 +544,7 @@ impl AppIdentitySession {
                 args: &effective_args,
             },
             Some(ceiling),
+            package,
             |parent_caps| match declared {
                 Some(declared) => {
                     let caps = constrained_operation_caps(
@@ -522,10 +566,12 @@ impl AppIdentitySession {
         let ceiling = launch.ceiling();
         let local_ceiling = ceiling.clone();
         let manifest = launch.manifest().clone();
+        let package = launch.package_ref();
         Self::start(
             app_id,
             LaunchRequest::Gui { exec },
             Some(ceiling),
+            package,
             move |parent_caps| {
                 let needs = manifest
                     .operations
@@ -540,9 +586,14 @@ impl AppIdentitySession {
 
     /// Register an MCP identity. Session tools receive their authority
     /// per call through [`AppSessionControl::set_transient_call`].
-    pub fn for_mcp(app_id: &str, manifest: &Manifest) -> Result<Self, String> {
-        let _ = manifest;
-        Self::start(app_id, LaunchRequest::Mcp, None, |_| Ok(CapSet::new()))
+    pub fn for_mcp(launch: &AppLaunch, tool: &str) -> Result<Self, String> {
+        Self::start(
+            launch.app_id(),
+            LaunchRequest::Mcp { tool },
+            Some(launch.ceiling()),
+            launch.package_ref(),
+            |_| Ok(CapSet::new()),
+        )
     }
 
     /// Shared launch path.
@@ -557,6 +608,7 @@ impl AppIdentitySession {
         app_id: &str,
         request: LaunchRequest<'_>,
         ceiling: Option<crate::provenance::Ceiling>,
+        package: crate::provenance::runtime::PackageRef,
         local_caps: F,
     ) -> Result<Self, String>
     where
@@ -570,16 +622,15 @@ impl AppIdentitySession {
         }
         crate::caps::enforcement::require_current_session_identity(&parent.session_id, parent.pid)
             .map_err(|err| format!("App parent session identity check failed: {err}"))?;
-        let invoke = Cap::new(Verb::AGENT_INVOKE, Scope::name(app_id));
+        let invoke = request.invoke_cap(app_id)?;
         if !parent_caps.covers(&invoke) {
-            return Err(format!("parent session cannot invoke App `{app_id}`"));
+            return Err(format!("parent session cannot invoke `{}`", invoke.scope));
         }
 
         // Derived on both paths: the daemon mints the session, and the
         // launcher still needs the same set to build the sandbox that
         // session will run inside.
-        let mut caps = local_caps(&parent_caps)?;
-        caps.insert(invoke);
+        let caps = local_caps(&parent_caps)?;
 
         if use_clawd_app_session_backend() {
             return Self::register_with_clawd(
@@ -588,9 +639,18 @@ impl AppIdentitySession {
                 parent_caps,
                 caps,
                 ceiling.as_ref(),
+                &package,
             );
         }
-        Self::register_local(&parent, app_id, &request.command(app_id), caps, parent_caps)
+        Self::register_local(
+            &parent,
+            app_id,
+            &request.command(app_id),
+            request.session_group(),
+            caps,
+            parent_caps,
+            package,
+        )
     }
 
     fn register_with_clawd(
@@ -599,6 +659,7 @@ impl AppIdentitySession {
         parent_caps: CapSet,
         granted_caps: CapSet,
         ceiling: Option<&crate::provenance::Ceiling>,
+        package: &crate::provenance::runtime::PackageRef,
     ) -> Result<Self, String> {
         // Only `parent_caps` crosses the wire, and only ever to narrow
         // what the daemon already resolved. The launcher's identity —
@@ -608,6 +669,7 @@ impl AppIdentitySession {
             "app_id": app_id,
             "kind": request.kind(),
             "parent_caps": parent_caps,
+            "package": package,
         });
         match request {
             LaunchRequest::Operation { operation, args } => {
@@ -618,7 +680,9 @@ impl AppIdentitySession {
             LaunchRequest::Gui { exec } => {
                 params["operation"] = serde_json::Value::String((*exec).to_string());
             }
-            LaunchRequest::Mcp => {}
+            LaunchRequest::Mcp { tool } => {
+                params["tool"] = serde_json::Value::String((*tool).to_string());
+            }
         }
 
         // A launch that needs consent is answered with the ids of the
@@ -688,6 +752,7 @@ impl AppIdentitySession {
                 handle,
             },
             parent_caps: Some(parent_caps),
+            package: package.clone(),
             granted_caps,
             relay: crate::worker::relay_slot(),
         })
@@ -697,8 +762,10 @@ impl AppIdentitySession {
         parent: &SessionInfo,
         app_id: &str,
         command: &str,
+        group: &str,
         caps: CapSet,
         parent_caps: CapSet,
+        package: crate::provenance::runtime::PackageRef,
     ) -> Result<Self, String> {
         let session_id = format!("app-{}", uuid::Uuid::new_v4().simple());
         let info = SessionInfo {
@@ -710,7 +777,7 @@ impl AppIdentitySession {
             started_at: chrono::Utc::now().to_rfc3339(),
             stdout_path: String::new(),
             stderr_path: String::new(),
-            group: Some("app".to_string()),
+            group: Some(group.to_string()),
             parent: Some(parent.session_id.clone()),
             workdir: std::env::current_dir()
                 .ok()
@@ -741,6 +808,7 @@ impl AppIdentitySession {
                 proc_data_dir: crate::paths::proc_data_dir(),
             },
             parent_caps: Some(parent_caps),
+            package,
             granted_caps: caps,
             relay: crate::worker::relay_slot(),
         })
@@ -795,6 +863,7 @@ impl AppIdentitySession {
             &self.session_id,
             &self.backend,
             self.parent_caps.as_ref(),
+            &self.package,
             call,
         )
     }
@@ -820,11 +889,16 @@ impl AppIdentitySession {
         &self.granted_caps
     }
 
+    pub fn uses_local_backend(&self) -> bool {
+        matches!(self.backend, AppSessionBackend::Local { .. })
+    }
+
     pub fn control(&self) -> AppSessionControl {
         AppSessionControl {
             session_id: self.session_id.clone(),
             backend: self.backend.clone(),
             parent_caps: self.parent_caps.clone(),
+            package: self.package.clone(),
         }
     }
 }
@@ -1110,6 +1184,7 @@ fn set_app_session_transient_call(
     session_id: &str,
     backend: &AppSessionBackend,
     parent_caps: Option<&CapSet>,
+    package: &crate::provenance::runtime::PackageRef,
     call: Option<TransientCall<'_>>,
 ) -> Result<(), String> {
     match backend {
@@ -1121,6 +1196,9 @@ fn set_app_session_transient_call(
                 Some(call) => serde_json::json!({
                     "tool": call.tool,
                     "args": call.args,
+                    "context": call.context,
+                    "capability_generation": call.capability_generation,
+                    "package": package,
                 }),
                 None => serde_json::Value::Null,
             };

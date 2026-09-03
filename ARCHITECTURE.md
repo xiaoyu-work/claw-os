@@ -52,7 +52,7 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | Session event journal | Root-owned, MAC-chained record of session lifecycle and privileged mutation brackets; the ordering and recovery authority the other session/audit views project from | `core/src/session/journal/`, `core/src/clawd/journal.rs` |
 | Audit | Hash-chained JSONL events and agent audit/query commands | `core/src/audit.rs`, `core/src/agent/audit_cli.rs` |
 | Notification service | Durable owner-scoped user-attention records, delivery policy, DND, deduplication, retries, and channel leases | `core/src/notifications/`, `core/src/clawd/notifications.rs` |
-| Apps and adapters | Declarative operation manifests plus Python, Node, shell, or binary runtime handlers | `apps/`, `adapters/`, `core/src/apps.rs`, `core/src/bridge.rs` |
+| Apps and adapters | Signed App Mesh manifests and SDK handlers, with optional human-facing CLI operations and desktop surfaces | `apps/`, `adapters/`, `core/src/apps.rs`, `core/src/bridge.rs` |
 | Extension provenance | Publisher signing, trust roots, package verification, and the shared bounded installer for Apps, Skills, and MCP/adapter packages | `core/src/provenance/` |
 | Update freshness | Signed release-security manifest, monotonic local security floor, one-use recovery authorizations, and the install/activation/runtime gates that refuse a superseded release | `core/src/update/`, `packaging/release-security/`, `packaging/deb/common/` |
 | SDK/runtime | One public multi-language App SDK, including MCP service APIs, plus internal bundled-App policy helpers | `claw-os-sdk/`, `cos-runtime/` |
@@ -92,6 +92,9 @@ This keeps local, sandboxed, and remote implementations interchangeable.
 - Runtime dispatch runs guardrails and pre/post hooks around tool calls.
 - App manifests declare capability needs; bundled apps enforce them through
   `cos_runtime.policy`.
+- App Mesh callers require exact `agent.invoke:<app>/<tool>` authority. The
+  target receives only the independently derived needs of that signed tool,
+  never the caller's invoke authority.
 - A model response is data, never authorization.
 
 ### AI ownership
@@ -473,8 +476,8 @@ stays stable for prompt caching without weakening capability or approval
 checks.
 
 Standalone and `claw-agentd` audit hooks are installed into that
-exact registry, and delegated children inherit it. App-session tools retain
-their discovered App root; Skill roots retain their trust origin. Legacy
+exact registry, and delegated children inherit it. App Mesh tools retain
+their verified package identity; Skill roots retain their trust origin. Legacy
 `config::get()` and static `with_override` callers remain source compatible,
 while all production core code uses Arc-owned
 `current_snapshot`/`with_snapshot`; a source inventory test enforces that
@@ -726,47 +729,49 @@ immediately. See [`docs/extension-provenance.md`](docs/extension-provenance.md).
 
 ```text
 apps/<id>/app.json
-  -> core app discovery and manifest validation
-  -> operation schema / validated default binding / capability derivation
-  -> app session registration
-  -> hostile-worker launch policy derived from the granted capabilities
-  -> declared Python / Node / shell / binary entrypoint with effective args,
-     inside a namespace/seccomp/cgroup sandbox
-  -> policy-enforced SDK/runtime calls through the per-launch broker endpoint
-  -> structured result
+  -> provenance verification and manifest validation
+  -> human CLI:
+       operation schema -> effective argv -> operation capabilities
+       -> one sandboxed Python / Node / shell / binary process
+  -> authenticated App Mesh:
+       exact agent.invoke:<app>/<tool> caller authorization
+       -> fresh signed-package verification
+       -> manifest argument validation and target-capability derivation
+       -> task-owned Extension Host -> app-mcp sandbox
+       -> MCP tools/call with authenticated call context
+       -> structured result -> transient authority revocation
 ```
 
 Manifest/schema discovery must remain side-effect free and must not execute the
 app entrypoint.
 
-App identity and capabilities are issued by the session authority, never
-asserted by the launcher. For an unprivileged launch the request names only the
-App, launch kind, operation, and arguments; `clawd` re-reads the installed
-manifest, derives capabilities from the requested operation plus the validated
-arguments, and bounds them by the launcher authority it resolves from the peer's
-process ancestry. A launcher the daemon cannot tie to a registered session gets
-an unprivileged, home-bounded policy ceiling instead: machine-mutating verbs and
-global filesystem authority require either an authenticated parent session or an
-approved permission grant bound to that exact peer process. A launch that needs
-consent is answered with the ids of the requests the daemon filed; the launcher
-process waits on `permission.status` with a bounded timeout and retries over the
-same connection, and grants are settled all-or-none and retired on first use.
-Registration returns an opaque handle to a launch grant the capability authority
-holds. The grant is bound to the launching process, expires, and authorises the
-pid bind, per-call capability updates, and teardown for that one session; the
-launched App never receives it. Binding derives a strictly narrower session
-grant — launch authority dropped, bound to the App's own process tree — which is
-what every privileged provider route the App later calls is authorized against.
-Deregistration revokes the launch grant, and the session grant with it.
+App identity and capabilities are issued by the daemon authority, never
+asserted by the launcher, environment, or MCP business arguments. Human CLI
+operations remain one-shot commands. For an operation launch, `clawd` re-reads
+the installed manifest, derives capabilities from the operation and effective
+arguments, and binds a strictly narrower grant to the launched process tree.
 
-Inside a supervised task, the tool registry sends one-shot App operations and
-stateful session calls over the extension-host control channel. The host
-re-reads the installed manifest, launches the declared entrypoint, and uses its
-private broker proxy for registration, binding, transient call scopes, and
-teardown. Returned stdout, stderr-derived failures, MCP descriptors, and tool
-results are bounded and treated as untrusted model data. A missing or crashed
-host fails dynamic execution closed; there is no fallback that runs App code
-inside `claw-agentd`.
+Agent-to-App and App-to-App calls use the private App Gateway. The caller must
+hold exact authority for `<app-id>/<tool-name>`, and the target manifest's
+`mcp.access` policy must admit the authenticated principal. `clawd` then
+re-verifies the current signed package, validates the exact declared tool,
+generation, lineage, and deadline, and derives a separate target grant from
+that tool's `needs[]`. Caller invoke authority never enters the target grant.
+
+The task-owned Extension Host is the only dynamic execution boundary available
+to `claw-agentd`. Its broker-derived binding distinguishes System Agent from
+an exact App Agent identity. The worker sends only typed App id, tool name, and
+arguments; the host owns launch, `app-mcp` registration, process binding,
+per-call authority, and teardown. The Gateway adds versioned authenticated MCP
+metadata containing caller identity, call/trace ancestry, task/session ids, and
+deadline. The reusable process holds no prior call's transient authority.
+
+Authority-time package lookup bypasses the discovery cache and re-hashes the
+signed file tree, so replacing a package child after registration refuses the
+next call. Returned stdout, stderr-derived failures, descriptors, and tool
+results are bounded and treated as untrusted model data. A missing host,
+invalid package, stale generation, mismatched principal, expired deadline, or
+failed sandbox refuses execution; there is no in-worker fallback.
 
 ### Proactive scheduling
 
@@ -792,14 +797,14 @@ bounded by the same home-scoped ceiling the executor applies before it runs.
 ### Worker isolation
 
 Every process Claw OS did not write — an App operation, a GUI App
-surface, an App session server, an MCP server, an adapter, a
+surface, an App Mesh service, an external MCP server, an adapter, a
 model-authored command — runs under one shared launch policy defined in
 `core/src/worker/`. The definition is typed and derived by trusted code
 from authenticated manifest, operation and capability data; the Linux
 provider enforces it with user/mount/PID/IPC/UTS/network namespaces, all
 capabilities dropped, a seccomp filter, a resource governor, a read-only
 root and an explicit mount list. There is no second, weaker launch path:
-the App bridge, the App session bridge, the MCP attach path and the
+the App bridge, the App Mesh host, the external MCP attach path and the
 agent sandbox tool are consumers of the same provider, and a host that
 cannot enforce the policy refuses the launch instead of running the
 worker unsandboxed.
@@ -964,8 +969,9 @@ fans out to the combined Docker/WSL channel and the independent APT channel.
 - Rootfs/image builds require Linux filesystem semantics and root privileges.
 - Windows case-insensitive checkouts cannot faithfully represent every
   case-colliding desktop symlink.
-- Public SDK wire changes regenerate every language binding and retain
-  backwards-compatible serialization unless explicitly versioned.
+- Public SDK wire changes regenerate every language binding. Breaking
+  contracts require an explicit wire version; unsupported shapes are rejected
+  rather than translated or served through a compatibility path.
 - SDK response validation and first-party MCP JSON-RPC error codes are
   generated together from `claw-os-sdk/wire/v1/`.
 

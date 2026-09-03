@@ -656,6 +656,7 @@ pub fn spawn_host(
     containment: &ContainmentRoot,
     task_id: &str,
     task_session_id: Option<&str>,
+    task_app_id: Option<&str>,
     host_session_id: Option<&str>,
     worker_pid: u32,
     worker_start_time_ticks: Option<u64>,
@@ -721,6 +722,7 @@ pub fn spawn_host(
         protocol: protocol::PROTOCOL_VERSION,
         task_id: task_id.to_string(),
         session_id: task_session_id.map(ToOwned::to_owned),
+        app_id: task_app_id.map(ToOwned::to_owned),
         owner_uid: owner.uid,
         extension_uid: extension.uid,
         execution_gid: isolation.execution_gid(),
@@ -799,10 +801,7 @@ pub fn spawn_host(
             attach_current_process(cgroup_procs_fd)?;
             libc::umask(0o077);
             place_bootstrap_fd(bootstrap_raw_fd)?;
-            crate::agentd::spawn::mark_inherited_descriptors_cloexec_except(
-                3,
-                bootstrap_raw_fd,
-            );
+            crate::agentd::spawn::mark_inherited_descriptors_cloexec_except(3, bootstrap_raw_fd);
             setup_private_mount_namespace(&writable_task_path)?;
             if try_namespaces {
                 // IPC and UTS isolation do not change filesystem or network
@@ -870,6 +869,7 @@ pub fn spawn_host(
         protocol: protocol::PROTOCOL_VERSION,
         task_id: task_id.to_string(),
         session_id: task_session_id.map(ToOwned::to_owned),
+        app_id: task_app_id.map(ToOwned::to_owned),
         owner_uid: owner.uid,
         extension_uid: extension.uid,
         owner_gid: gid,

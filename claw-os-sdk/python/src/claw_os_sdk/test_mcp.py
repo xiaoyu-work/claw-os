@@ -35,6 +35,15 @@ def _write_manifest(value: dict[str, Any]) -> tuple[tempfile.TemporaryDirectory,
     return directory, path
 
 
+def _bound_app(
+    test: unittest.TestCase,
+    *tools: dict[str, Any],
+) -> mcp.App:
+    directory, path = _write_manifest(_manifest(*tools))
+    test.addCleanup(directory.cleanup)
+    return mcp.App.from_manifest(path)
+
+
 def _context(
     *,
     call_id: str = "call-1",
@@ -147,11 +156,8 @@ class ManifestBindingTests(unittest.TestCase):
                 "limit": limit,
             }
 
-        with self.assertRaisesRegex(ValueError, "only in app.json"):
-
-            @app.tool("mail.search", summary="drift")
-            def duplicate_schema() -> None:
-                return None
+        with self.assertRaisesRegex(TypeError, "unexpected keyword argument"):
+            app.tool("mail.search", summary="drift")
 
         with self.assertRaisesRegex(ValueError, "not declared"):
 
@@ -216,6 +222,10 @@ class ManifestBindingTests(unittest.TestCase):
         with self.assertRaisesRegex(mcp.ManifestError, "missing handlers"):
             _drive(app, {"jsonrpc": "2.0", "id": 1, "method": "ping"})
 
+    def test_direct_construction_is_rejected(self) -> None:
+        with self.assertRaisesRegex(TypeError, "App.from_manifest"):
+            mcp.App(name="code-authored")
+
 
 class AuthenticatedContextTests(unittest.TestCase):
     def _app(self) -> tuple[tempfile.TemporaryDirectory, mcp.App]:
@@ -241,10 +251,8 @@ class AuthenticatedContextTests(unittest.TestCase):
             context = mcp.current_context()
             return {
                 "argument": caller,
-                "authenticated_kind": (
-                    context.caller.kind if context.caller else None
-                ),
-                "authenticated_id": context.caller.id if context.caller else None,
+                "authenticated_kind": context.caller.kind,
+                "authenticated_id": context.caller.id,
                 "call_id": context.call_id,
             }
 
@@ -294,26 +302,15 @@ class AuthenticatedContextTests(unittest.TestCase):
         self.assertEqual(frames[0]["error"]["code"], mcp.ERR_INVALID_PARAMS)
         self.assertIn("WIRE_UNKNOWN_FIELD", frames[0]["error"]["message"])
 
-    def test_legacy_mode_never_authenticates_supplied_context(self) -> None:
-        app = mcp.App(name="legacy")
-
-        @app.tool("legacy.context")
-        def context_tool() -> dict[str, Any]:
-            return {"authenticated": mcp.current_context().authenticated}
-
-        frames = _drive(
-            app,
-            _call("legacy.context", {}, context=_context()),
-        )
-        self.assertEqual(
-            frames[0]["result"]["structuredContent"],
-            {"authenticated": False},
-        )
-
-
 class ProgressAndCancellationTests(unittest.TestCase):
     def test_handler_can_emit_progress(self) -> None:
-        app = mcp.App(name="worker")
+        app = _bound_app(
+            self,
+            {
+                "name": "work.run",
+                "summary": {"en": "Run work."},
+            },
+        )
 
         @app.tool("work.run")
         def run() -> mcp.ToolResult:
@@ -323,7 +320,12 @@ class ProgressAndCancellationTests(unittest.TestCase):
 
         frames = _drive(
             app,
-            _call("work.run", {}, progress_token="progress-1"),
+            _call(
+                "work.run",
+                {},
+                context=_context(),
+                progress_token="progress-1",
+            ),
         )
         self.assertEqual(
             frames[0],
@@ -340,11 +342,24 @@ class ProgressAndCancellationTests(unittest.TestCase):
         )
         self.assertEqual(frames[1]["result"]["structuredContent"], {"done": True})
 
-        without_token = _drive(app, _call("work.run", {}))
+        without_token = _drive(
+            app,
+            _call(
+                "work.run",
+                {},
+                context=_context(call_id="call-2"),
+            ),
+        )
         self.assertFalse(without_token[0]["result"]["isError"])
 
     def test_invalid_progress_token_is_rejected(self) -> None:
-        app = mcp.App(name="worker")
+        app = _bound_app(
+            self,
+            {
+                "name": "work.run",
+                "summary": {"en": "Run work."},
+            },
+        )
 
         @app.tool("work.run")
         def run() -> str:
@@ -352,13 +367,24 @@ class ProgressAndCancellationTests(unittest.TestCase):
 
         frames = _drive(
             app,
-            _call("work.run", {}, progress_token={"forged": True}),
+            _call(
+                "work.run",
+                {},
+                context=_context(),
+                progress_token={"forged": True},
+            ),
         )
         self.assertEqual(frames[0]["error"]["code"], mcp.ERR_INVALID_PARAMS)
         self.assertIn("progressToken", frames[0]["error"]["message"])
 
     def test_cancellation_reaches_running_handler(self) -> None:
-        app = mcp.App(name="worker")
+        app = _bound_app(
+            self,
+            {
+                "name": "work.wait",
+                "summary": {"en": "Wait for cancellation."},
+            },
+        )
 
         @app.tool("work.wait")
         def wait() -> str:
@@ -370,7 +396,12 @@ class ProgressAndCancellationTests(unittest.TestCase):
 
         frames = _drive(
             app,
-            _call("work.wait", {}, request_id="request-1"),
+            _call(
+                "work.wait",
+                {},
+                request_id="request-1",
+                context=_context(call_id="call-wait"),
+            ),
             {
                 "jsonrpc": "2.0",
                 "method": "notifications/cancelled",
@@ -380,7 +411,13 @@ class ProgressAndCancellationTests(unittest.TestCase):
         self.assertEqual(frames, [])
 
     def test_eof_cancels_a_cooperative_in_flight_call(self) -> None:
-        app = mcp.App(name="worker")
+        app = _bound_app(
+            self,
+            {
+                "name": "work.wait",
+                "summary": {"en": "Wait for cancellation."},
+            },
+        )
 
         @app.tool("work.wait")
         def wait() -> str:
@@ -390,7 +427,13 @@ class ProgressAndCancellationTests(unittest.TestCase):
             context.raise_if_cancelled()
             return "unreachable"
 
-        self.assertEqual(_drive(app, _call("work.wait", {})), [])
+        self.assertEqual(
+            _drive(
+                app,
+                _call("work.wait", {}, context=_context()),
+            ),
+            [],
+        )
 
     def test_expired_deadline_stops_call_before_handler(self) -> None:
         directory, path = _write_manifest(

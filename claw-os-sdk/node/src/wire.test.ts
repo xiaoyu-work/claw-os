@@ -18,6 +18,7 @@ import {
   stringifyWireJson,
   validateAi,
   validateBudgetShow,
+  validateEnvelope,
   validateMcpCallContext,
   validateTool,
   validateToolCatalog,
@@ -35,6 +36,27 @@ function validAi(): Record<string, unknown> {
     tool_calls: [{ id: "c1", name: "echo", input: { value: "ok" } }],
   };
 }
+
+test("wire envelope accepts only coherent v1 branches", () => {
+  assert.doesNotThrow(() =>
+    validateEnvelope({ ok: true, wire_version: 1, data: { value: 1 } }),
+  );
+  assert.doesNotThrow(() =>
+    validateEnvelope({
+      ok: false,
+      wire_version: 1,
+      error: "denied",
+      code: "PERMISSION_DENIED",
+    }),
+  );
+  for (const payload of [
+    { value: 1 },
+    { ok: false, wire_version: 1, error: "missing code" },
+    { ok: true, wire_version: 2, data: {} },
+  ]) {
+    assert.throws(() => validateEnvelope(payload), WireDecodeError);
+  }
+});
 
 test("AI validator enforces the shared contract", () => {
   const cases: Array<[Record<string, unknown>, string, string]> = [];

@@ -5,7 +5,7 @@ async fn pair_round_trips() {
     let (a, b) = in_memory_pair();
     a.send("{\"hi\":1}".into()).await.unwrap();
     let recv = b.recv().await.unwrap();
-    assert_eq!(recv.as_deref(), Some("{\"hi\":1}"));
+    assert_eq!(recv, Some(Frame::Message("{\"hi\":1}".into())));
 }
 
 #[tokio::test]
@@ -43,9 +43,9 @@ async fn stdio_transport_round_trips_frame() {
     cli_in_w.write_all(b"{\"hello\":1}\n").await.unwrap();
     cli_in_w.flush().await.unwrap();
     let frame = server.recv().await.unwrap().unwrap();
-    assert_eq!(frame, "{\"hello\":1}");
+    assert_eq!(frame, Frame::Message("{\"hello\":1}".into()));
 
-    // Server writes a response; client side reads it.
+    // The transport writes a response; the peer reads it.
     server.send("{\"ok\":true}".into()).await.unwrap();
     use tokio::io::AsyncReadExt;
     let mut buf = vec![0u8; 64];
@@ -70,7 +70,7 @@ async fn stdio_transport_skips_blank_lines() {
     cli_in_w.flush().await.unwrap();
 
     let frame = server.recv().await.unwrap().unwrap();
-    assert_eq!(frame, "{\"go\":1}");
+    assert_eq!(frame, Frame::Message("{\"go\":1}".into()));
 }
 
 /// EOF on the read half surfaces as `Ok(None)`, matching the
@@ -86,12 +86,28 @@ async fn stdio_transport_eof_returns_none() {
     assert!(frame.is_none(), "EOF must surface as Ok(None)");
 }
 
-/// A peer that streams more than [`MAX_FRAME_BYTES`] without a
-/// newline must trip the size guard rather than letting us
-/// buffer endlessly. Regression test for the prior unbounded
-/// `read_line`.
+#[tokio::test]
+async fn stdio_transport_consumes_invalid_utf8_through_newline() {
+    let (mut cli_in_w, srv_in) = tokio::io::duplex(4096);
+    let (srv_out, _cli_out_r) = tokio::io::duplex(4096);
+    let server = StdioTransport::from_pair(Box::new(srv_in), Box::new(srv_out));
+
+    use tokio::io::AsyncWriteExt;
+    cli_in_w
+        .write_all(b"{\xff}\n{\"next\":true}\n")
+        .await
+        .unwrap();
+    cli_in_w.flush().await.unwrap();
+
+    assert_eq!(server.recv().await.unwrap(), Some(Frame::InvalidUtf8));
+    assert_eq!(
+        server.recv().await.unwrap(),
+        Some(Frame::Message("{\"next\":true}".into()))
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
-async fn stdio_transport_rejects_oversize_frame() {
+async fn stdio_transport_discards_oversize_frame_through_newline() {
     let (mut cli_in_w, srv_in) = tokio::io::duplex(64 * 1024);
     let (srv_out, _cli_out_r) = tokio::io::duplex(4096);
     let server = StdioTransport::from_pair(Box::new(srv_in), Box::new(srv_out));
@@ -112,15 +128,14 @@ async fn stdio_transport_rejects_oversize_frame() {
             written += to_write;
         }
         let _ = cli_in_w.flush().await;
-        // Hold the write half open until the test reads the
-        // error so tokio doesn't surface a premature EOF.
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let _ = cli_in_w.write_all(b"\n{\"next\":true}\n").await;
+        let _ = cli_in_w.flush().await;
     });
 
-    let err = server.recv().await.unwrap_err();
-    assert!(
-        matches!(err, TransportError::TooLarge { limit } if limit == MAX_FRAME_BYTES),
-        "expected TooLarge, got {err:?}",
+    assert_eq!(server.recv().await.unwrap(), Some(Frame::Oversized));
+    assert_eq!(
+        server.recv().await.unwrap(),
+        Some(Frame::Message("{\"next\":true}".into()))
     );
-    writer.abort();
+    writer.await.unwrap();
 }

@@ -38,18 +38,18 @@ import shutil
 import subprocess
 from typing import Any, Mapping, Optional, Sequence
 
+from claw_os_sdk._transport import (
+    WIRE_ARG,
+    WireDenied,
+    WireUnavailable,
+    decode_response,
+)
+
 
 # Subprocess timeout for every shell-out to the hidden memory bridge.
 # ``remember`` may compute a semantic embedding, which on a cold-start
 # CPU embedder can take a few seconds — be generous.
 _DEFAULT_TIMEOUT_S = 60
-
-
-def _truncate(value: Any, limit: int = 200) -> str:
-    s = repr(value) if not isinstance(value, str) else value
-    if len(s) <= limit:
-        return s
-    return s[:limit] + f"... [{len(s) - limit} more bytes elided]"
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +175,7 @@ def forget(*, source: Optional[str] = None, row_id: Optional[int] = None) -> dic
 
 
 def _invoke(subcommand: str, args: Sequence[str]) -> dict:
-    cmd = [_cos_binary(), "__memory", subcommand, *args]
+    cmd = [_cos_binary(), WIRE_ARG, "__memory", subcommand, *args]
     try:
         proc = subprocess.run(
             cmd,
@@ -189,60 +189,31 @@ def _invoke(subcommand: str, args: Sequence[str]) -> dict:
             f"memory {subcommand} timed out after {_DEFAULT_TIMEOUT_S}s"
         ) from exc
 
-    # On success the router writes one JSON object to stdout. On
-    # transport / CLI errors it writes a plain-text message to
-    # stderr — we try to parse either as JSON before giving up.
     stdout = (proc.stdout or "").strip()
-    stderr = (proc.stderr or "").strip()
-
-    if proc.returncode != 0:
-        # Try to recover a structured deny envelope from the stderr
-        # message ("memory remember denied: {...}").
-        denial = _maybe_extract_json(stderr)
-        if denial is not None and denial.get("decision") == "deny":
-            raise PermissionDenied(denial)
-        raise MemoryUnavailable(
-            f"memory {subcommand} exited {proc.returncode}: {_truncate(stderr or stdout)}"
-        )
-
-    if not stdout:
-        raise MemoryUnavailable(
-            f"memory {subcommand} returned no output (exit {proc.returncode})"
-        )
-
     try:
-        envelope = json.loads(stdout)
-    except json.JSONDecodeError as exc:
-        raise MemoryUnavailable(
-            f"memory {subcommand} returned non-JSON output: {_truncate(stdout)}"
-        ) from exc
-
-    if not isinstance(envelope, dict):
-        raise MemoryUnavailable(
-            f"memory {subcommand} returned an unrecognised envelope: {_truncate(envelope)}"
+        return decode_response(
+            stdout,
+            proc.returncode,
+            f"memory {subcommand}",
         )
-    return envelope
-
-
-def _maybe_extract_json(text: str) -> Optional[dict]:
-    """Pull the first ``{...}`` object out of a string, if any."""
-    if not text:
-        return None
-    start = text.find("{")
-    end = text.rfind("}")
-    if start < 0 or end <= start:
-        return None
-    candidate = text[start : end + 1]
-    try:
-        parsed = json.loads(candidate)
-    except json.JSONDecodeError:
-        return None
-    return parsed if isinstance(parsed, dict) else None
+    except WireDenied as error:
+        detail = error.payload.get("detail")
+        if (
+            error.payload.get("code") == "PERMISSION_DENIED"
+            and isinstance(detail, dict)
+            and detail.get("decision") == "deny"
+        ):
+            raise PermissionDenied(detail) from error
+        raise MemoryUnavailable(
+            f"memory {subcommand} denied: {error}"
+        ) from error
+    except WireUnavailable as error:
+        raise MemoryUnavailable(str(error)) from error
 
 
 def _cos_binary() -> str:
-    """Locate the ``cos`` binary. Honours ``COS_BIN`` for tests."""
-    override = os.environ.get("COS_BIN")
+    """Locate the ``cos`` binary. Honours ``CLAW_COS_BIN`` for tests."""
+    override = os.environ.get("CLAW_COS_BIN")
     if override:
         return override
     found = shutil.which("cos")

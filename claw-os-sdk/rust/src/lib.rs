@@ -34,6 +34,15 @@
 //! recomputed by `claw-os-sdk/wire/codegen.py` whenever the schemas
 //! change.
 //!
+//! ## Manifest-bound MCP Apps
+//!
+//! Native Apps load [`mcp::App`] from the authoritative App manifest, bind one
+//! [`mcp::Tool`] implementation for every declared name, and serve MCP over
+//! stdio. Tool descriptions and schemas are never authored in Rust. Each
+//! handler receives validated arguments and a Gateway-authenticated
+//! [`mcp::CallContext`] with immutable caller/lineage data, deadline,
+//! cancellation, and optional progress reporting.
+//!
 //! ## Transport
 //!
 //! Every call shells out to the `cos` binary on `$PATH`. The
@@ -76,7 +85,7 @@ pub enum BridgeError {
         app: String,
         verb: String,
         message: String,
-        code: Option<String>,
+        code: String,
     },
 
     /// The subprocess exited non-zero but stdout didn't parse as a
@@ -110,9 +119,7 @@ impl BridgeError {
     pub fn is_denied(&self) -> bool {
         matches!(
             self,
-            BridgeError::AppError { code: Some(c), .. }
-                if c.eq_ignore_ascii_case("denied")
-                    || c.eq_ignore_ascii_case("permission_denied")
+            BridgeError::AppError { code, .. } if code == "PERMISSION_DENIED"
         )
     }
 }
@@ -131,14 +138,11 @@ fn truncate_diag(s: &str, limit: usize) -> String {
     while cut > 0 && !s.is_char_boundary(cut) {
         cut -= 1;
     }
-    format!(
-        "{}… [{} more bytes elided]",
-        &s[..cut],
-        s.len() - cut
-    )
+    format!("{}… [{} more bytes elided]", &s[..cut], s.len() - cut)
 }
 
 const DIAG_LIMIT: usize = 256;
+const WIRE_V1_FLAG: &str = "--wire=1";
 
 /// Idiomatic alias preferred by external SDK consumers. New code
 /// should `use claw_os_sdk::Error;` rather than the historical
@@ -160,15 +164,15 @@ where
 {
     let bin = std::env::var("CLAW_COS_BIN").unwrap_or_else(|_| "cos".into());
     let mut cmd = Command::new(bin);
-    cmd.arg("app").arg(app).arg(verb);
+    cmd.arg(WIRE_V1_FLAG).arg("app").arg(app).arg(verb);
     for a in args {
         cmd.arg(a);
     }
     cmd
 }
 
-/// Invoke `cos app <app> <verb> <args...>` and return the raw JSON
-/// response as a [`serde_json::Value`].
+/// Invoke `cos --wire=1 app <app> <verb> <args...>` and return the
+/// request-specific success payload.
 ///
 /// `stdin` is the body to forward to the subprocess on stdin (used by
 /// `fs.write` to ship the file content without re-encoding through
@@ -189,12 +193,10 @@ where
         cmd.stdin(Stdio::piped());
     }
 
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| match e.kind() {
-            std::io::ErrorKind::NotFound => BridgeError::BinaryNotFound(e),
-            _ => BridgeError::Io(e),
-        })?;
+    let mut child = cmd.spawn().map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => BridgeError::BinaryNotFound(e),
+        _ => BridgeError::Io(e),
+    })?;
 
     if let Some(bytes) = stdin {
         if let Some(mut s) = child.stdin.take() {
@@ -208,63 +210,8 @@ where
         }
     }
 
-    let out = child.wait_with_output()?;
-    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-
-    // First: try to parse stdout as JSON. The Python apps always
-    // print one JSON object — success or error — to stdout. Stderr
-    // is only used by the wrapper itself when the subprocess hard-
-    // failed before the app could respond.
-    if !stdout.trim().is_empty() {
-        let parsed: serde_json::Value =
-            serde_json::from_str(stdout.trim()).map_err(|e| BridgeError::Decode {
-                app: app.to_string(),
-                verb: verb.to_string(),
-                message: format!(
-                    "not JSON ({e}): {}",
-                    truncate_diag(&stdout, DIAG_LIMIT)
-                ),
-            })?;
-
-        if let Some(err) = parsed.get("error").and_then(|v| v.as_str()) {
-            return Err(BridgeError::AppError {
-                app: app.to_string(),
-                verb: verb.to_string(),
-                message: err.to_string(),
-                code: parsed
-                    .get("code")
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string),
-            });
-        }
-
-        // Even if stdout parsed cleanly, a non-zero exit means the
-        // app actually failed (e.g. the wrapper crashed *after*
-        // printing a partial result, or the JSON didn't include an
-        // `error` field but the process still aborted). Surface that
-        // as a hard failure so callers don't see a "success" payload
-        // that contradicts the kernel's audit log.
-        if !out.status.success() {
-            return Err(BridgeError::NonZeroExit {
-                app: app.to_string(),
-                verb: verb.to_string(),
-                status: out.status.code().unwrap_or(-1),
-                stderr: truncate_diag(&stderr, DIAG_LIMIT),
-            });
-        }
-
-        return Ok(parsed);
-    }
-
-    // Empty stdout — the wrapper itself failed (e.g. `cos` binary
-    // crashed). Use the exit code + stderr.
-    Err(BridgeError::NonZeroExit {
-        app: app.to_string(),
-        verb: verb.to_string(),
-        status: out.status.code().unwrap_or(-1),
-        stderr: truncate_diag(&stderr, DIAG_LIMIT),
-    })
+    decode_wire_response(app, verb, child.wait_with_output()?)
+        .map_err(StructuredCosError::into_bridge)
 }
 
 /// Typed variant of [`call`] — deserialises stdout into the caller's
@@ -300,18 +247,13 @@ where
 // `verb` strings are propagated into [`BridgeError`] for diagnostics.
 // ---------------------------------------------------------------------------
 
-/// Invoke any `cos` sub-command and parse stdout (or stderr fall-back)
-/// as JSON. Used by [`ai`] and [`tools`] (and `cos-runtime`'s
-/// `policy`) for `cos ai ...`, hidden policy checks, etc.
+/// Invoke any `cos` sub-command through wire v1 and return its success
+/// data. Used by [`ai`] and [`tools`] for `cos ai ...`.
 ///
 /// `family` and `verb` are surfaced in [`BridgeError`] variants when
 /// the call fails — pass any human-meaningful strings.
 #[doc(hidden)]
-pub fn cos_call_json<A>(
-    family: &str,
-    verb: &str,
-    args: A,
-) -> Result<serde_json::Value, BridgeError>
+pub fn cos_call_json<A>(family: &str, verb: &str, args: A) -> Result<serde_json::Value, BridgeError>
 where
     A: IntoIterator,
     A::Item: AsRef<OsStr>,
@@ -324,7 +266,7 @@ pub(crate) struct StructuredAppError {
     pub app: String,
     pub verb: String,
     pub message: String,
-    pub code: Option<String>,
+    pub code: String,
     pub payload: serde_json::Value,
 }
 
@@ -351,6 +293,79 @@ impl StructuredCosError {
     }
 }
 
+fn decode_wire_response(
+    family: &str,
+    verb: &str,
+    out: std::process::Output,
+) -> Result<serde_json::Value, StructuredCosError> {
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if stdout.trim().is_empty() {
+        return Err(BridgeError::NonZeroExit {
+            app: family.to_string(),
+            verb: verb.to_string(),
+            status: out.status.code().unwrap_or(-1),
+            stderr: truncate_diag(&stderr, DIAG_LIMIT),
+        }
+        .into());
+    }
+
+    let raw: serde_json::Value =
+        serde_json::from_str(stdout.trim()).map_err(|error| BridgeError::Decode {
+            app: family.to_string(),
+            verb: verb.to_string(),
+            message: format!("not JSON ({error}): {}", truncate_diag(&stdout, DIAG_LIMIT)),
+        })?;
+    let envelope =
+        crate::envelope::Envelope::decode(raw.clone()).map_err(|error| BridgeError::Decode {
+            app: family.to_string(),
+            verb: verb.to_string(),
+            message: error,
+        })?;
+
+    if envelope.ok {
+        if !out.status.success() {
+            return Err(BridgeError::Decode {
+                app: family.to_string(),
+                verb: verb.to_string(),
+                message: format!(
+                    "wire success envelope accompanied exit status {}",
+                    out.status.code().unwrap_or(-1)
+                ),
+            }
+            .into());
+        }
+        return envelope.data.ok_or_else(|| {
+            BridgeError::Decode {
+                app: family.to_string(),
+                verb: verb.to_string(),
+                message: "wire success envelope omitted data".to_string(),
+            }
+            .into()
+        });
+    }
+
+    if out.status.success() {
+        return Err(BridgeError::Decode {
+            app: family.to_string(),
+            verb: verb.to_string(),
+            message: "wire error envelope accompanied exit status 0".to_string(),
+        }
+        .into());
+    }
+    Err(StructuredCosError::App(Box::new(StructuredAppError {
+        app: family.to_string(),
+        verb: verb.to_string(),
+        message: envelope
+            .error
+            .expect("validated error envelope must include error"),
+        code: envelope
+            .code
+            .expect("validated error envelope must include code"),
+        payload: raw,
+    })))
+}
+
 impl From<BridgeError> for StructuredCosError {
     fn from(error: BridgeError) -> Self {
         StructuredCosError::Bridge(error)
@@ -374,82 +389,23 @@ where
 {
     let bin = std::env::var("CLAW_COS_BIN").unwrap_or_else(|_| "cos".into());
     let mut cmd = Command::new(bin);
+    cmd.arg(WIRE_V1_FLAG);
     for a in args {
         cmd.arg(a);
     }
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
-    let child = cmd
-        .spawn()
-        .map_err(|e| match e.kind() {
-            std::io::ErrorKind::NotFound => BridgeError::BinaryNotFound(e),
-            _ => BridgeError::Io(e),
-        })?;
+    let child = cmd.spawn().map_err(|e| match e.kind() {
+        std::io::ErrorKind::NotFound => BridgeError::BinaryNotFound(e),
+        _ => BridgeError::Io(e),
+    })?;
 
-    let out = child.wait_with_output()?;
-    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-    let candidate = if !stdout.trim().is_empty() {
-        stdout.trim().to_string()
-    } else if !stderr.trim().is_empty() {
-        stderr.trim().to_string()
-    } else {
-        return Err(BridgeError::NonZeroExit {
-            app: family.to_string(),
-            verb: verb.to_string(),
-            status: out.status.code().unwrap_or(-1),
-            stderr: truncate_diag(&stderr, DIAG_LIMIT),
-        }
-        .into());
-    };
-
-    let parsed: serde_json::Value =
-        serde_json::from_str(&candidate).map_err(|e| BridgeError::Decode {
-            app: family.to_string(),
-            verb: verb.to_string(),
-            message: format!(
-                "not JSON ({e}): {}",
-                truncate_diag(&candidate, DIAG_LIMIT)
-            ),
-        })?;
-
-    if let Some(err) = parsed.get("error").and_then(|v| v.as_str()) {
-        return Err(StructuredCosError::App(Box::new(StructuredAppError {
-            app: family.to_string(),
-            verb: verb.to_string(),
-            message: err.to_string(),
-            code: parsed
-                .get("code")
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
-            payload: parsed.clone(),
-        })));
-    }
-
-    // Same correctness fix as `call`: a clean-shaped JSON object on
-    // stdout with no `error` field is not enough to call this a
-    // success when the subprocess actually crashed. Audit log will
-    // record the failure either way; surfacing it here keeps callers
-    // from acting on a phantom-success.
-    if !out.status.success() {
-        return Err(BridgeError::NonZeroExit {
-            app: family.to_string(),
-            verb: verb.to_string(),
-            status: out.status.code().unwrap_or(-1),
-            stderr: truncate_diag(&stderr, DIAG_LIMIT),
-        }
-        .into());
-    }
-
-    Ok(parsed)
+    decode_wire_response(family, verb, child.wait_with_output()?)
 }
 
 #[cfg(test)]
 mod tests {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/test/unit/lib.rs"
-    ));
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/lib.rs"));
 }
 
 #[cfg(test)]

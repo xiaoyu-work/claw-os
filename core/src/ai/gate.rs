@@ -77,14 +77,16 @@ use futures_util::stream::BoxStream;
 use crate::agent::llm::{
     self,
     run_log::{self, LlmRunRecord},
-    types::{ChatRequest as LlmChatRequest, ChatResponse as LlmChatResponse, ContentBlock,
-            EngineInfo, FinishReason, Message, Role, StreamEvent},
+    types::{
+        ChatRequest as LlmChatRequest, ChatResponse as LlmChatResponse, ContentBlock, EngineInfo,
+        FinishReason, Message, Role, StreamEvent,
+    },
     Provider as LlmProvider, Result as LlmResult,
 };
 use crate::agent::safety::redact::Redactor;
 use crate::apps;
-use crate::caps::{self, Scope, Verb};
 use crate::caps::manifest::{AiSafety, PromptOrigin};
+use crate::caps::{self, Scope, Verb};
 use crate::config;
 
 use super::budget::{BudgetError, Store};
@@ -120,7 +122,6 @@ pub struct ChatRequest {
 
     // Modality selectors. The gate derives the verb from these — the
     // caller never supplies a verb directly.
-
     /// True when the caller wants a vector back instead of text.
     /// Mutually exclusive with the other modality selectors.
     pub embed: bool,
@@ -410,10 +411,7 @@ pub enum AiError {
         "origin `{got}` is not in the app's declared origins; \
          allowed: {allowed:?}"
     )]
-    OriginNotAllowed {
-        got: String,
-        allowed: Vec<String>,
-    },
+    OriginNotAllowed { got: String, allowed: Vec<String> },
 
     #[error("invalid request: {0}")]
     ModalityConflict(String),
@@ -431,6 +429,9 @@ pub enum AiError {
         tool: String,
         allowed: Vec<String>,
     },
+
+    #[error("unknown tool requested: {0}")]
+    UnknownTool(String),
 
     #[error("missing required input for `{modality}`: {field}")]
     MissingInput {
@@ -465,6 +466,34 @@ pub enum AiError {
 
     #[error("internal: {0}")]
     Internal(String),
+}
+
+impl AiError {
+    pub fn wire_code(&self) -> &'static str {
+        match self {
+            AiError::UnknownApp(_) => "UNKNOWN_APP",
+            AiError::BadOrigin(_) | AiError::ModalityConflict(_) | AiError::MissingInput { .. } => {
+                "INVALID_ARGS"
+            }
+            AiError::NoAiPolicy { .. }
+            | AiError::AppDisabled(_)
+            | AiError::ConsentRequired { .. }
+            | AiError::ConsentStale { .. }
+            | AiError::OriginNotAllowed { .. }
+            | AiError::ToolNotInPolicy { .. }
+            | AiError::Denied(_) => "PERMISSION_DENIED",
+            AiError::Budget(BudgetError::OverUnitCap { .. })
+            | AiError::UserBudgetExceeded { .. }
+            | AiError::RequestBudgetExceeded { .. } => "BUDGET_EXCEEDED",
+            AiError::Safety(_) => "SAFETY_VIOLATION",
+            AiError::ModalityNotSupported(_) | AiError::UnknownTool(_) => "UNKNOWN_VERB",
+            AiError::Provider(_) => "KERNEL_UNAVAILABLE",
+            AiError::BadOverride { .. }
+            | AiError::BadConsent { .. }
+            | AiError::Budget(_)
+            | AiError::Internal(_) => "INTERNAL_ERROR",
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -557,6 +586,7 @@ fn denial_reason_token(err: &AiError) -> &'static str {
         AiError::ModalityConflict(_) => "modality_conflict",
         AiError::ModalityNotSupported(_) => "modality_not_supported",
         AiError::ToolNotInPolicy { .. } => "tool_not_in_policy",
+        AiError::UnknownTool(_) => "unknown_tool",
         AiError::MissingInput { .. } => "missing_input",
         AiError::Denied(_) => "caps_denied",
         AiError::Budget(_) => "budget_exceeded",
@@ -598,11 +628,7 @@ struct BudgetReservation {
 
 fn map_budget_error(error: BudgetError) -> AiError {
     match error {
-        BudgetError::OverUnitCap {
-            app,
-            used,
-            cap,
-        } if app == user_budget::USER_BUDGET_BUCKET => {
+        BudgetError::OverUnitCap { app, used, cap } if app == user_budget::USER_BUDGET_BUCKET => {
             AiError::UserBudgetExceeded { used, cap }
         }
         other => AiError::Budget(other),
@@ -683,12 +709,7 @@ impl Drop for BudgetReservation {
             self.per_app_cap
         };
         let app_id = self.app_id.clone();
-        let mut buckets = vec![(
-            app_id.as_str(),
-            self.estimated,
-            actual_units,
-            app_cap,
-        )];
+        let mut buckets = vec![(app_id.as_str(), self.estimated, actual_units, app_cap)];
         if self.user_cap > 0 {
             let user_cap = if self.refund_on_drop {
                 0
@@ -777,11 +798,7 @@ async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
     if !policy.origins.contains(&origin) {
         return Err(AiError::OriginNotAllowed {
             got: req.origin.clone(),
-            allowed: policy
-                .origins
-                .iter()
-                .map(origin_label)
-                .collect(),
+            allowed: policy.origins.iter().map(origin_label).collect(),
         });
     }
 
@@ -797,8 +814,7 @@ async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
     let model = cfg.model.clone();
 
     // 6. Capability check at the kernel boundary.
-    caps::require(verb, Scope::name(&model))
-        .map_err(|d| AiError::Denied(d.to_json()))?;
+    caps::require(verb, Scope::name(&model)).map_err(|d| AiError::Denied(d.to_json()))?;
 
     // 7. Apply safety pipeline to the prompt (when present).
     let (prompt_for_provider, prompt_redacted) = match req.prompt.as_deref() {
@@ -809,45 +825,44 @@ async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
         _ => (None, false),
     };
 
-    let prompt = prompt_for_provider
-        .ok_or(AiError::MissingInput {
-            modality: modality.label(),
-            field: "prompt",
-        })?;
+    let prompt = prompt_for_provider.ok_or(AiError::MissingInput {
+        modality: modality.label(),
+        field: "prompt",
+    })?;
 
     // 8. Resolve any requested Tools against (1) the App's manifest
     // `ai.tools[]` allowlist and (2) the kernel catalog. The
     // manifest allowlist is the App's declared intent; the catalog
     // check guards against typos and model hallucinations. Both
     // must pass before a Tool is exposed to the model.
-    let resolved_tools: Vec<crate::agent::llm::types::Tool> =
-        if req.tools.is_empty() {
-            Vec::new()
-        } else {
-            let mut out = Vec::with_capacity(req.tools.len());
-            for name in &req.tools {
-                if !policy.tools.iter().any(|t| t == name) {
-                    return Err(AiError::ToolNotInPolicy {
-                        app: req.app_id.clone(),
-                        tool: name.clone(),
-                        allowed: policy.tools.clone(),
-                    });
-                }
-                let def = crate::ai::tools::lookup(name).ok_or_else(|| {
-                    AiError::Provider(format!(
-                        "unknown tool requested: {name} (not in catalog)"
-                    ))
-                })?;
-                let schema: serde_json::Value =
-                    serde_json::from_str(def.args_schema).unwrap_or(serde_json::json!({}));
-                out.push(crate::agent::llm::types::Tool {
-                    name: def.name.to_string(),
-                    description: def.summary.to_string(),
-                    input_schema: schema,
+    let resolved_tools: Vec<crate::agent::llm::types::Tool> = if req.tools.is_empty() {
+        Vec::new()
+    } else {
+        let mut out = Vec::with_capacity(req.tools.len());
+        for name in &req.tools {
+            if !policy.tools.iter().any(|t| t == name) {
+                return Err(AiError::ToolNotInPolicy {
+                    app: req.app_id.clone(),
+                    tool: name.clone(),
+                    allowed: policy.tools.clone(),
                 });
             }
-            out
-        };
+            let def =
+                crate::ai::tools::lookup(name).ok_or_else(|| AiError::UnknownTool(name.clone()))?;
+            let schema: serde_json::Value =
+                serde_json::from_str(def.args_schema).map_err(|error| {
+                    AiError::Internal(format!(
+                        "catalog schema for tool `{name}` is invalid: {error}"
+                    ))
+                })?;
+            out.push(crate::agent::llm::types::Tool {
+                name: def.name.to_string(),
+                description: def.summary.to_string(),
+                input_schema: schema,
+            });
+        }
+        out
+    };
 
     // 9. Build the exact provider request, then reserve its conservative
     // maximum (serialized input bytes + provider output limit). Reserving
@@ -870,10 +885,8 @@ async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
                 limit,
             });
         };
-        llm_req.max_tokens = Some(
-            available_output
-                .min(DEFAULT_APP_MAX_OUTPUT_TOKENS as u64) as u32,
-        );
+        llm_req.max_tokens =
+            Some(available_output.min(DEFAULT_APP_MAX_OUTPUT_TOKENS as u64) as u32);
     }
     let estimated_units = estimate_request_units(&llm_req);
     if let Some(limit) = req.max_units {
@@ -1185,9 +1198,7 @@ pub fn wrap_for_system(inner: Arc<dyn LlmProvider>) -> Arc<dyn LlmProvider> {
 pub fn build_system_provider(
     cfg: &crate::config::AgentConfig,
 ) -> llm::Result<Arc<dyn LlmProvider>> {
-    use crate::agent::llm::attempt_observer::{
-        AuditProviderAttemptObserver, RequestMetadata,
-    };
+    use crate::agent::llm::attempt_observer::{AuditProviderAttemptObserver, RequestMetadata};
 
     // Provider construction is where the model transport (HTTP client,
     // streaming parser, credential resolution) enters a process. It is
@@ -1306,13 +1317,12 @@ impl LlmProvider for SystemGatedProvider {
         //    it somehow doesn't (or the caps system was bypassed), we
         //    fail closed here. Also emits one structured record per
         //    call to `caps.jsonl`.
-        caps::require(Verb::AI_CHAT, Scope::name(&model))
-            .map_err(|d| {
-                llm::LlmError::InvalidRequest(format!(
-                    "system-agent caps denied for ai.chat: {}",
-                    d.to_json()
-                ))
-            })?;
+        caps::require(Verb::AI_CHAT, Scope::name(&model)).map_err(|d| {
+            llm::LlmError::InvalidRequest(format!(
+                "system-agent caps denied for ai.chat: {}",
+                d.to_json()
+            ))
+        })?;
 
         // 2. Reserve budget against the system-agent bucket. Provider
         //    errors before a response release the reservation; after a
@@ -1334,12 +1344,9 @@ impl LlmProvider for SystemGatedProvider {
         // 4. Settle to actuals under the same hard cap. The provider has
         //    already run, but returning success after accounting crossed
         //    the cap would invite retries and hide the enforcement failure.
-        let actual_units =
-            u64::from(resp.usage.input_tokens) + u64::from(resp.usage.output_tokens);
+        let actual_units = u64::from(resp.usage.input_tokens) + u64::from(resp.usage.output_tokens);
         reservation.commit_to_actuals(actual_units).map_err(|e| {
-            llm::LlmError::InvalidRequest(format!(
-                "system-agent budget settlement: {e}"
-            ))
+            llm::LlmError::InvalidRequest(format!("system-agent budget settlement: {e}"))
         })?;
 
         Ok(resp)
@@ -1359,24 +1366,19 @@ impl LlmProvider for SystemGatedProvider {
         let model = request.model.clone();
         normalize_output_limit(&mut request)?;
 
-        caps::require(Verb::AI_CHAT, Scope::name(&model))
-            .map_err(|d| {
-                llm::LlmError::InvalidRequest(format!(
-                    "system-agent caps denied for ai.chat: {}",
-                    d.to_json()
-                ))
-            })?;
+        caps::require(Verb::AI_CHAT, Scope::name(&model)).map_err(|d| {
+            llm::LlmError::InvalidRequest(format!(
+                "system-agent caps denied for ai.chat: {}",
+                d.to_json()
+            ))
+        })?;
 
         let est_units = estimate_request_units(&request);
-        let store = Store::open().map_err(|e| {
-            llm::LlmError::Internal(format!("system-agent budget store: {e}"))
-        })?;
-        let reservation = SystemBudgetReservation::reserve(
-            store,
-            est_units,
-            cfg.system_budget_monthly_units,
-        )
-        .map_err(|e| llm::LlmError::InvalidRequest(format!("system-agent budget: {e}")))?;
+        let store = Store::open()
+            .map_err(|e| llm::LlmError::Internal(format!("system-agent budget store: {e}")))?;
+        let reservation =
+            SystemBudgetReservation::reserve(store, est_units, cfg.system_budget_monthly_units)
+                .map_err(|e| llm::LlmError::InvalidRequest(format!("system-agent budget: {e}")))?;
 
         let inner_stream = self.inner.chat_stream(request).await?;
         Ok(wrap_system_stream(inner_stream, reservation))
@@ -1399,11 +1401,7 @@ struct SystemBudgetReservation {
 }
 
 impl SystemBudgetReservation {
-    fn reserve(
-        mut store: Store,
-        estimated: u64,
-        cap_units: u64,
-    ) -> Result<Self, BudgetError> {
+    fn reserve(mut store: Store, estimated: u64, cap_units: u64) -> Result<Self, BudgetError> {
         let snap = store.reserve(SYSTEM_AGENT_BUCKET, estimated, cap_units)?;
         Ok(Self {
             store,
@@ -1467,8 +1465,7 @@ impl Drop for SystemBudgetReservation {
             self.estimated,
             actual_units,
             cap_units,
-        )
-        {
+        ) {
             tracing::warn!(
                 target: "ai.gate",
                 "system-agent budget reservation drop settlement failed: {e}",
@@ -1492,8 +1489,7 @@ fn wrap_system_stream(
     let wrapped = inner.map(move |item| {
         if let Ok(StreamEvent::Done { ref usage, .. }) = item {
             if let Some(mut r) = state.lock().ok().and_then(|mut g| g.take()) {
-                let actual =
-                    u64::from(usage.input_tokens) + u64::from(usage.output_tokens);
+                let actual = u64::from(usage.input_tokens) + u64::from(usage.output_tokens);
                 if let Err(e) = r.commit_to_actuals(actual) {
                     return Err(llm::LlmError::InvalidRequest(format!(
                         "system-agent budget settlement: {e}"
@@ -1510,11 +1506,7 @@ const DEFAULT_APP_MAX_OUTPUT_TOKENS: u32 = 1024;
 const DEFAULT_SYSTEM_MAX_OUTPUT_TOKENS: u32 = 4096;
 const REQUEST_TOKEN_OVERHEAD: u64 = 512;
 
-fn reported_units_or_estimate(
-    input_tokens: u32,
-    output_tokens: u32,
-    estimated_units: u64,
-) -> u64 {
+fn reported_units_or_estimate(input_tokens: u32, output_tokens: u32, estimated_units: u64) -> u64 {
     let reported = u64::from(input_tokens) + u64::from(output_tokens);
     if reported == 0 {
         estimated_units
@@ -1569,8 +1561,7 @@ fn estimate_input_units(req: &LlmChatRequest) -> u64 {
 /// normalized `max_tokens` output limit.
 fn estimate_request_units(req: &LlmChatRequest) -> u64 {
     estimate_input_units(req).saturating_add(u64::from(
-        req.max_tokens
-            .unwrap_or(DEFAULT_SYSTEM_MAX_OUTPUT_TOKENS),
+        req.max_tokens.unwrap_or(DEFAULT_SYSTEM_MAX_OUTPUT_TOKENS),
     ))
 }
 
@@ -1580,8 +1571,5 @@ fn estimate_request_units(req: &LlmChatRequest) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/test/unit/ai/gate.rs"
-    ));
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/ai/gate.rs"));
 }

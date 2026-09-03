@@ -18,3 +18,9 @@ You can get more detailed errors by using the `RUST_LOG` environment variables, 
 
 ## Clippy Lints
 PRs are welcome, as it builds a better product for everyone. It is recommended that you check your code with Clippy Lints turned on. You can find more about [Configuring Clippy](https://doc.rust-lang.org/nightly/clippy/configuration.html) here.
+
+## Claw OS MCP service
+
+The App Host starts `/usr/bin/cosmic-edit` with `COS_MCP_SERVER=1`.
+`apps/cosmic-edit/app.json` owns the MCP tool descriptions, arguments,
+defaults, and capability needs; Rust binds only the handlers.

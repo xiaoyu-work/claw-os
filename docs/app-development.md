@@ -10,10 +10,11 @@ For the architectural background see
 audit) and [`app-ai-tool-catalog.md`](app-ai-tool-catalog.md) (catalog
 of agent-callable tools). This document is the **how to** counterpart.
 
-> **MCP-first migration:** New App contracts use `schema_version: 2` and one
-> top-level `mcp` service containing lifecycle, caller access, and tools.
-> Legacy `operations` and `session` remain accepted only while bundled Apps
-> are migrated; the final migration removes both duplicate surfaces.
+App-to-Agent and App-to-App integration uses `schema_version: 2` and one
+top-level `mcp` service containing lifecycle, caller access, tools, and exact
+capability needs. The removed `session` block is rejected. Optional
+`operations` remain the human-facing `cos app <id> <operation>` CLI surface;
+they are not a second Agent tool contract.
 
 For Python, bind the manifest's tool names without duplicating their schemas:
 
@@ -39,14 +40,14 @@ the handler.
 ## 1. What is a Claw OS app?
 
 A Claw OS app is a directory whose minimum contents are a manifest and an
-entry point. Apps may also include a stateful session server, desktop surface,
+entry point. Apps may also include a stateful MCP service, desktop surface,
 dependencies, tests, and arbitrary assets:
 
 ```
 my-app/
 ├── app.json        ← required manifest
 ├── main.py         ← default Python entry point
-├── server.py       ← optional stateful session-tool server
+├── server.py       ← optional authenticated MCP App service
 └── assets/         ← optional app-owned files
 ```
 
@@ -204,8 +205,8 @@ invalid. If its default depends on an earlier string argument, use
 
 The supported transforms are `identity` and `url-path-basename`.
 `url-path-basename` requires a text source, path destination, and safe
-single-component fallback. `default_from` is limited to one-shot operations
-and is rejected for session-tool arguments.
+single-component fallback. `default_from` is limited to one-shot operations and is rejected for MCP tool
+arguments.
 Defaulted arguments must be optional; defaulted positional arguments follow
 all required positional arguments. Defaulted positionals cannot be mixed with
 optional positional slots that have no default because argv cannot represent
@@ -220,7 +221,7 @@ end-of-options delimiter; positional defaults follow supplied positional
 values. The handler must consume that canonical argv rather than recompute a
 separate default.
 
-Session tools receive a JSON object rather than argv. Before capability
+MCP tools receive a JSON object rather than argv. Before capability
 resolution and MCP forwarding, the kernel inserts every declared literal
 default and omitted boolean into that object, validates choices and repeatable
 arrays, and normalizes path values. One shared effective-call resolver feeds
@@ -233,8 +234,8 @@ trusted launcher selects a provider from credential metadata, materializes
 credential and host scopes. Calendar falls back to `local` when neither remote
 credential exists. The bundled ntfy gateway similarly materializes its
 configured `NTFY_SERVER` before deriving the exact URL-host scope and falls
-back to `https://ntfy.sh` only when no server is configured. Third-party apps
-and session tools cannot use trusted resolvers.
+back to `https://ntfy.sh` only when no server is configured. Third-party Apps
+and MCP tools cannot use trusted resolvers.
 
 An operation may set `stdin: true` to receive explicitly forwarded caller
 input. The top-level CLI opts in with `--stdin`, for example
@@ -242,7 +243,7 @@ input. The top-level CLI opts in with `--stdin`, for example
 recognized only in an App operation's pre-`--` option region, so command-owned
 `--stdin` flags elsewhere remain untouched. The CLI streams at most 16 MiB
 (configurable with `COS_APP_STDIN_MAX_BYTES`) and fails before launch on
-overflow. The bridge never inherits or probes process stdin. Agent, session,
+overflow. The bridge never inherits or probes process stdin. Agent, MCP
 service, and ordinary CLI calls therefore keep child stdin closed. Python list
 handlers use `apps/canonical_argv.py`;
 argparse and gateway parsers consume the same inline flags and `--` delimiter
@@ -510,7 +511,7 @@ and ship an app
 | `cos app <id> --schema` | Full manifest-derived schema for the app. |
 | `cos app <id> <op> --schema` | Schema for one op. |
 | `cos app lint [<id>]` | Refuse apps that import provider SDKs directly. Run on every app if no id given. |
-| `cos app tool list [<id>]` | Show the session-tool surface this app exposes to the agent. |
+| `cos app tool list [<id>]` | Show the manifest-declared MCP tools this App exposes through the private Gateway. |
 | `cos app install <dir> [--force] [--no-consent] [--yes] [--dev-trust]` | Validate the manifest, verify the package's provenance envelope, copy into `$COS_APPS_DIR/<id>/`, and (unless `--no-consent`) walk through the AI consent prompt. Copying is skipped only when the source resolves to that exact destination path. `--dev-trust` is the only route that installs unsigned content and records a persistent, digest-bound developer decision. |
 | `cos app consent list` | Which apps you have granted AI consent to. |
 | `cos app consent show <id>` | Display the manifest's AI block. |
@@ -599,7 +600,7 @@ this while writing the manifest:
   go through a private broker endpoint bound to that one launch, which
   relays them to `clawd` under a launcher-held grant. `clawd` still
   decodes, authorizes and spends the exact capability against the live
-  App session, so the endpoint can only narrow what the app may do. An
+  App workload grant, so the endpoint can only narrow what the app may do. An
   app cannot register an identity, widen its own capabilities, answer
   its own consent prompts, or reach the real broker socket.
 * **GUI.** Display and GPU transports are granted only to a

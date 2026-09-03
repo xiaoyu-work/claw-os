@@ -18,7 +18,7 @@ const okChat = `{
 }`
 
 func TestChatBuildsArgvAndParses(t *testing.T) {
-	bin, argvOut := fakeCos(t, okChat, 0)
+	bin, argvOut := fakeCos(t, wireSuccess(okChat), 0)
 	var res *AiResponse
 	var err error
 	withCos(t, bin, map[string]string{"COS_APP_ID": "notes"}, func() {
@@ -45,7 +45,7 @@ func TestChatBuildsArgvAndParses(t *testing.T) {
 	}
 
 	argv := readArgv(t, argvOut)
-	want := []string{"ai", "chat", "--app", "notes", "--origin", "external-content"}
+	want := []string{"--wire=1", "ai", "chat", "--app", "notes", "--origin", "external-content"}
 	for i, w := range want {
 		if argv[i] != w {
 			t.Fatalf("argv[%d] = %q, want %q (full %v)", i, argv[i], w, argv)
@@ -63,7 +63,7 @@ func TestChatEmptyPrompt(t *testing.T) {
 }
 
 func TestChatRequiresAppID(t *testing.T) {
-	bin, _ := fakeCos(t, okChat, 0)
+	bin, _ := fakeCos(t, wireSuccess(okChat), 0)
 	var err error
 	withCos(t, bin, map[string]string{"COS_APP_ID": ""}, func() {
 		_, err = Chat("hi", ChatOptions{})
@@ -78,11 +78,9 @@ func TestChatErrorClassification(t *testing.T) {
 		body string
 		want string
 	}{
-		{`{"error": "monthly budget exceeded"}`, "budget"},
-		{`{"error": "prompt injection detected"}`, "safety"},
-		{`{"error": "opaque", "code": "budget_exceeded"}`, "budget"},
-		{`{"error": "opaque", "code": "SaFeTy_ViOlAtIoN"}`, "safety"},
-		{`{"error": "capability denied"}`, "denied"},
+		{wireErrorEnvelope("safety words", "BUDGET_EXCEEDED"), "budget"},
+		{wireErrorEnvelope("budget words", "SAFETY_VIOLATION"), "safety"},
+		{wireErrorEnvelope("capability denied", "PERMISSION_DENIED"), "denied"},
 	}
 	for _, c := range cases {
 		bin, _ := fakeCos(t, c.body, 1)
@@ -115,7 +113,7 @@ func TestChatRejectsMalformedToolCall(t *testing.T) {
 	  "review":{"safety":"strict","prompt_redacted":false},
 	  "tool_calls":[{"id":"c1","input":{}}]
 	}`
-	bin, _ := fakeCos(t, body, 0)
+	bin, _ := fakeCos(t, wireSuccess(body), 0)
 	var err error
 	withCos(t, bin, map[string]string{"COS_APP_ID": "notes"}, func() {
 		_, err = Chat("hi", ChatOptions{})
@@ -135,7 +133,7 @@ func TestChatAcceptsMathematicalIntegersAndUnrestrictedToolInput(t *testing.T) {
 	  "review":{"safety":"strict","prompt_redacted":false},
 	  "tool_calls":[{"id":"c1","name":"echo","input":["a",1]}]
 	}`
-	bin, _ := fakeCos(t, body, 0)
+	bin, _ := fakeCos(t, wireSuccess(body), 0)
 	var response *AiResponse
 	var err error
 	withCos(t, bin, map[string]string{"COS_APP_ID": "notes"}, func() {
@@ -159,14 +157,14 @@ func TestChatRejectsScalarRootWithStableWireError(t *testing.T) {
 		_, err = Chat("hi", ChatOptions{})
 	})
 	unavailable, ok := err.(*AiUnavailableError)
-	if !ok || !strings.Contains(unavailable.Msg, "WIRE_TYPE") ||
+	if !ok || !strings.Contains(unavailable.Msg, "WIRE_ONE_OF") ||
 		!strings.Contains(unavailable.Msg, " at $:") {
 		t.Fatalf("expected stable root decode error, got %T %v", err, err)
 	}
 }
 
 func TestBudgetAcceptsProducerShape(t *testing.T) {
-	bin, _ := fakeCos(t, `{"app":"notes","period":"2026-08","units_used":7}`, 0)
+	bin, _ := fakeCos(t, wireSuccess(`{"app":"notes","period":"2026-08","units_used":7}`), 0)
 	var budget *AiBudget
 	var err error
 	withCos(t, bin, nil, func() {
@@ -177,15 +175,5 @@ func TestBudgetAcceptsProducerShape(t *testing.T) {
 	}
 	if budget.Period != "2026-08" || budget.UnitsUsed != 7 || budget.UnitsCap != 0 {
 		t.Fatalf("budget = %+v", budget)
-	}
-}
-
-func TestEmbedReturnsUnsupported(t *testing.T) {
-	res, err := Embed("text", ChatOptions{})
-	if res != nil {
-		t.Fatal("Embed returned a response")
-	}
-	if _, ok := err.(*AiUnsupportedError); !ok {
-		t.Fatalf("want AiUnsupportedError, got %T", err)
 	}
 }

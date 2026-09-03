@@ -26,7 +26,7 @@ it uses for one-shot operations and branches on the GUI launch::
     from claw_os_sdk import gui
 
     def run(command, args):
-        if gui.is_gui_launch(command):
+        if gui.is_gui_launch():
             ctx = gui.context(files=args)
             start_my_window(ctx)        # your toolkit, your loop
             return None
@@ -60,26 +60,18 @@ from typing import Any, List, Optional
 
 from . import ai, tools
 
-#: Command value the bridge passes (and the default ``desktop.exec``) when
-#: an app is launched as a GUI. Authors can override ``desktop.exec`` in
-#: their manifest; :func:`is_gui_launch` also honours ``COS_APP_GUI``.
-GUI_COMMAND = "--gui"
 ASK_CLAW_LAUNCHER = "/usr/local/bin/cos-ask-claw-launcher"
 ASK_CLAW_PROTOCOL = 1
 ASK_CLAW_REQUEST_LIMIT = 32 * 1024
 
 
-def is_gui_launch(command: Optional[str] = None) -> bool:
+def is_gui_launch() -> bool:
     """Return ``True`` when the current invocation is a desktop GUI launch.
 
-    Detection prefers the ``COS_APP_GUI`` environment variable the bridge
-    sets for the long-lived GUI process. As a fallback (and so apps with a
-    custom ``desktop.exec`` still work) it also treats a ``command`` equal
-    to :data:`GUI_COMMAND` as a GUI launch.
+    The bridge sets ``COS_APP_GUI=1`` for the authenticated desktop launch.
+    Command strings are not accepted as a substitute for host context.
     """
-    if os.environ.get("COS_APP_GUI") == "1":
-        return True
-    return command is not None and command == GUI_COMMAND
+    return os.environ.get("COS_APP_GUI") == "1"
 
 
 @dataclass
@@ -194,9 +186,13 @@ def context(files: Optional[List[str]] = None) -> GuiContext:
     spawns the GUI). ``files`` defaults to the launcher's file arguments,
     decoded from ``COS_ARGS_JSON`` when not supplied explicitly.
     """
-    app_id = os.environ.get("COS_APP_ID") or "unknown"
+    app_id = os.environ.get("COS_APP_ID")
+    if not app_id:
+        raise ValueError("COS_APP_ID is required for a GUI launch")
     if files is None:
         files = _files_from_env()
+    if not isinstance(files, list) or any(not isinstance(item, str) for item in files):
+        raise ValueError("GUI files must be a list of strings")
     return GuiContext(app_id=app_id, files=list(files))
 
 
@@ -206,8 +202,8 @@ def _files_from_env() -> List[str]:
         return []
     try:
         parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        return []
-    if isinstance(parsed, list):
-        return [str(x) for x in parsed]
-    return []
+    except json.JSONDecodeError as error:
+        raise ValueError("COS_ARGS_JSON must be valid JSON") from error
+    if not isinstance(parsed, list) or any(not isinstance(item, str) for item in parsed):
+        raise ValueError("COS_ARGS_JSON must be an array of strings")
+    return parsed

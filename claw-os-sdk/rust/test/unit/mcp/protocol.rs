@@ -71,6 +71,7 @@ fn call_tool_result_is_error_round_trip() {
             text: "boom".into(),
         }],
         is_error: Some(true),
+        structured_content: None,
     };
     let s = serde_json::to_string(&r).unwrap();
     assert!(s.contains("\"isError\":true"));

@@ -1,33 +1,62 @@
 use super::*;
 
 #[test]
-fn only_the_fixed_vendor_rows_have_a_system_program() {
-    assert_eq!(
-        allowlisted_system_program("cosmic-player"),
-        Some("/usr/bin/cosmic-player")
-    );
-    assert_eq!(
-        allowlisted_system_program("cosmic-screenshot"),
-        Some("/usr/bin/cosmic-screenshot")
-    );
-    // The notification App runs its own signed `server.sh`, so it may
-    // hold the transport without naming a path outside its package.
-    assert_eq!(allowlisted_system_program("cosmic-notifications"), None);
+fn every_fixed_row_names_exactly_its_system_program() {
+    // Kernel source, spelled out: an id may name this program and no
+    // other, and an id that is not here may name none at all.
+    let expected: &[(&str, &str)] = &[
+        ("cosmic-files", "/usr/bin/cosmic-files"),
+        ("cosmic-edit", "/usr/bin/cosmic-edit"),
+        ("cosmic-store", "/usr/bin/cosmic-store"),
+        ("cosmic-settings", "/usr/bin/cosmic-settings"),
+        ("cosmic-term", "/usr/bin/cosmic-term"),
+        ("cosmic-launcher", "/usr/bin/cosmic-launcher"),
+        ("cosmic-player", "/usr/bin/cosmic-player"),
+        ("cosmic-screenshot", "/usr/bin/cosmic-screenshot"),
+        ("cosmic-notifications", "/usr/bin/cosmic-notifications"),
+    ];
+    assert_eq!(ALLOWLIST.len(), expected.len(), "the table grew or shrank");
+    for (app_id, program) in expected {
+        assert_eq!(
+            allowlisted_system_program(app_id),
+            Some(*program),
+            "`{app_id}` does not name `{program}`"
+        );
+    }
     // Nothing else may name an absolute entry at all.
     assert_eq!(allowlisted_system_program("kv"), None);
     assert_eq!(allowlisted_system_program("cosmic-player-evil"), None);
+    assert_eq!(allowlisted_system_program("launcher"), None);
     assert_eq!(allowlisted_system_program(""), None);
 }
 
 #[test]
-fn every_row_grants_only_the_session_bus() {
+fn only_the_three_bus_rows_carry_a_transport() {
+    // Naming a system program and holding the session bus are separate
+    // grants. Six of the nine native Apps get the first and not the
+    // second, and their launches stay ordinary hostile MCP servers.
+    let with_bus: Vec<&str> = ALLOWLIST
+        .iter()
+        .filter(|row| !row.transports.is_empty())
+        .map(|row| row.app_id)
+        .collect();
+    assert_eq!(
+        with_bus,
+        vec!["cosmic-player", "cosmic-screenshot", "cosmic-notifications"]
+    );
     for row in ALLOWLIST {
-        assert_eq!(
-            row.transports,
-            &[Transport::SessionBus],
-            "row `{}` grants more than the session bus",
-            row.app_id
-        );
+        match row.app_id {
+            "cosmic-player" | "cosmic-screenshot" | "cosmic-notifications" => assert_eq!(
+                row.transports,
+                &[Transport::SessionBus],
+                "row `{}` grants more than the session bus",
+                row.app_id
+            ),
+            other => assert!(
+                row.transports.is_empty(),
+                "row `{other}` gained a desktop transport it does not need"
+            ),
+        }
     }
 }
 
@@ -41,9 +70,8 @@ fn a_package_that_is_not_vendor_trusted_is_never_classified() {
     std::fs::write(dir.join("app.json"), "{}").unwrap();
     crate::test_env::sign_test_package(&dir, crate::provenance::PackageKind::App, "cosmic-player");
     let trust = crate::provenance::trust_store();
-    let options =
-        crate::provenance::VerifyOptions::new(crate::provenance::PackageKind::App)
-            .expect_id("cosmic-player");
+    let options = crate::provenance::VerifyOptions::new(crate::provenance::PackageKind::App)
+        .expect_id("cosmic-player");
     let package = crate::provenance::verify::verify_package(&dir, &options, &trust)
         .expect("verify signed fixture");
 
@@ -59,7 +87,6 @@ fn a_package_that_is_not_vendor_trusted_is_never_classified() {
             "cosmic-player",
             &package,
             std::path::Path::new("/usr/bin/cosmic-player"),
-            &[],
         )
         .is_none(),
         "a publisher-signed package reached the desktop transport"
@@ -109,8 +136,7 @@ fn only_a_single_plain_unix_path_address_parses() {
 
     // An alternative list lets the launcher and the worker disagree
     // about which endpoint they are talking to.
-    assert!(refused("unix:path=/run/user/1000/bus;unix:path=/tmp/evil")
-        .contains("exactly one"));
+    assert!(refused("unix:path=/run/user/1000/bus;unix:path=/tmp/evil").contains("exactly one"));
     assert!(refused(";").contains("exactly one"));
     // Abstract sockets live in a network namespace the sandbox does
     // not share, and are named rather than silently dropped.
@@ -155,10 +181,7 @@ fn a_malformed_or_smuggled_escape_is_refused() {
     // Encoded traversal decodes to the same `..` a literal one would,
     // and is caught by the path check rather than the decoder.
     let decoded = parse_unix_bus_address("unix:path=/run/user/1000/%2e%2e/evil").unwrap();
-    assert_eq!(
-        decoded,
-        std::path::PathBuf::from("/run/user/1000/../evil")
-    );
+    assert_eq!(decoded, std::path::PathBuf::from("/run/user/1000/../evil"));
 }
 
 // ---------------------------------------------------------------------------
@@ -283,8 +306,10 @@ fn only_an_owner_owned_socket_named_bus_inside_the_runtime_dir_resolves() {
     // Claw OS's own endpoints are named explicitly, so a future
     // runtime-directory change cannot quietly make one reachable.
     assert!(refused(&crate::paths::clawd_socket_path()).contains("kernel-owned endpoint"));
-    assert!(refused(std::path::Path::new(crate::worker::linux_egress_socket()))
-        .contains("kernel-owned endpoint"));
+    assert!(
+        refused(std::path::Path::new(crate::worker::linux_egress_socket()))
+            .contains("kernel-owned endpoint")
+    );
     assert!(refused(std::path::Path::new("/run/systemd/private")).contains("kernel-owned endpoint"));
 
     let _ = std::fs::remove_dir_all(&dir);

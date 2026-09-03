@@ -82,10 +82,8 @@ pub struct AiToolCall {
 }
 
 /// App-verb invocation reply
-/// Reply shape for `cos app <id> <verb> [args]`. The payload is the verb's own
-/// JSON output — what schema you get depends on which verb you called. The kernel
-/// guarantees only that the body is valid JSON (or stderr-routed when stdout
-/// would be ambiguous).
+/// Success data for `cos --wire=1 app <id> <verb> [args]`. The kernel places the
+/// operation-specific object under the wire envelope's `data` field.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct App {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -104,9 +102,7 @@ pub struct BudgetShow {
 }
 
 /// Envelope
-/// Common wrapper around every wire v1 reply. Forward-compatible target shape —
-/// the current kernel still emits flat per-command shapes that SDKs adapt to this
-/// envelope.
+/// Common wrapper around every wire v1 reply requested with `cos --wire=1`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Envelope {
     pub ok: bool,
@@ -124,10 +120,9 @@ pub struct Envelope {
 }
 
 /// App manifest (app.json)
-/// The manifest every app under COS_APPS_DIR must provide. MCP-first Apps declare
-/// one versioned service with tools, lifecycle, caller restrictions, capability
-/// needs, and optional AI and desktop surfaces. Legacy operations and session
-/// remain during migration.
+/// The manifest every app under COS_APPS_DIR must provide. MCP Apps declare one
+/// versioned service with tools, lifecycle, caller restrictions, capability
+/// needs, and optional AI and desktop surfaces.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Manifest {
     pub id: String,
@@ -148,9 +143,7 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ai: Option<Aipolicy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session: Option<Session>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mcp: Option<Session>,
+    pub mcp: Option<Mcpservice>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub desktop: Option<Desktop>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -311,10 +304,10 @@ pub struct Aibudget {
     pub monthly_units: Option<u64>,
 }
 
-/// session
+/// mcpService
 /// Long-lived MCP server the app launches for stateful, agent-driven tool calls.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct Session {
+pub struct Mcpservice {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entry: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -324,7 +317,7 @@ pub struct Session {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub access: Option<Mcpaccess>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tools: Option<Vec<Sessiontool>>,
+    pub tools: Option<Vec<Mcptool>>,
 }
 
 /// mcpAccess
@@ -340,11 +333,11 @@ pub struct Mcpaccess {
     pub external_agents: Option<bool>,
 }
 
-/// sessionTool
+/// mcpTool
 /// One MCP-callable tool. Mirrors operation: args + needs drive the model's view
 /// and the kernel's enforcement.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct Sessiontool {
+pub struct Mcptool {
     pub name: String,
     pub summary: Localizedtext,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -817,6 +810,19 @@ pub fn validate_budget_show(value: &serde_json::Value) -> Result<(), WireDecodeE
 
 pub fn normalize_budget_show_integers(value: &mut serde_json::Value) {
     let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_BUDGET_SHOW)
+        .expect("generated wire schema must be valid JSON");
+    normalize_wire_integers(&schema, &schema, value);
+}
+
+const _WIRE_SCHEMA_ENVELOPE: &str = r###"{"$id":"https://claw-os.dev/wire/v1/envelope.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"description":"Common wrapper around every wire v1 reply requested with `cos --wire=1`.","oneOf":[{"additionalProperties":false,"properties":{"audit_id":{"type":"string"},"data":{"type":"object"},"ok":{"const":true},"wire_version":{"const":1,"type":"integer"}},"required":["ok","wire_version","data"],"type":"object"},{"additionalProperties":false,"properties":{"audit_id":{"type":"string"},"code":{"minLength":1,"type":"string"},"detail":{"type":"object"},"error":{"minLength":1,"type":"string"},"ok":{"const":false},"wire_version":{"const":1,"type":"integer"}},"required":["ok","wire_version","error","code"],"type":"object"}],"properties":{"audit_id":{"description":"Audit log entry id (ULID).","type":"string"},"code":{"description":"Stable error code from wire/v1/error_codes.md.","minLength":1,"type":"string"},"data":{"description":"Request-specific success payload. See the per-family schema for shape.","type":"object"},"detail":{"description":"Request-specific error payload.","type":"object"},"error":{"description":"Human-readable error summary. Present only when ok is false.","minLength":1,"type":"string"},"ok":{"description":"true iff the kernel accepted and dispatched the call.","type":"boolean"},"wire_version":{"const":1,"type":"integer"}},"required":["ok","wire_version"],"title":"Envelope","type":"object"}"###;
+pub fn validate_envelope(value: &serde_json::Value) -> Result<(), WireDecodeError> {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_ENVELOPE)
+        .expect("generated wire schema must be valid JSON");
+    validate_wire_schema(&schema, &schema, value, "Envelope", "$")
+}
+
+pub fn normalize_envelope_integers(value: &mut serde_json::Value) {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_ENVELOPE)
         .expect("generated wire schema must be valid JSON");
     normalize_wire_integers(&schema, &schema, value);
 }

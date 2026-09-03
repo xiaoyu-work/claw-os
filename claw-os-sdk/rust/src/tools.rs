@@ -23,7 +23,7 @@ pub enum ToolError {
     Denied {
         name: String,
         message: String,
-        code: Option<String>,
+        code: String,
         payload: serde_json::Value,
     },
 
@@ -55,10 +55,7 @@ pub struct CatalogEntry {
     pub returns_schema: serde_json::Value,
 }
 
-fn cos_tool_json(
-    name: &str,
-    argv: Vec<OsString>,
-) -> Result<serde_json::Value, ToolError> {
+fn cos_tool_json(name: &str, argv: Vec<OsString>) -> Result<serde_json::Value, ToolError> {
     match cos_call_json_structured("tool", name, argv) {
         Ok(value) => Ok(value),
         Err(StructuredCosError::App(error)) => {
@@ -82,46 +79,33 @@ pub fn call(name: &str, args: &serde_json::Value) -> Result<ToolResult, ToolErro
         return Err(ToolError::InvalidArg("call: name must be non-empty".into()));
     }
     let app = std::env::var("COS_APP_ID").map_err(|_| {
-        ToolError::InvalidArg(
-            "call: COS_APP_ID is required when invoking a catalog tool".into(),
-        )
+        ToolError::InvalidArg("call: COS_APP_ID is required when invoking a catalog tool".into())
     })?;
-    let args_json = serde_json::to_string(args).map_err(|e| {
-        ToolError::InvalidArg(format!("call: args is not serialisable JSON ({e})"))
-    })?;
+    let args_json = serde_json::to_string(args)
+        .map_err(|e| ToolError::InvalidArg(format!("call: args is not serialisable JSON ({e})")))?;
     let argv: Vec<OsString> = vec![
-        "ai".into(), "tool".into(), name.into(),
-        "--app".into(), app.into(),
-        "--args".into(), args_json.into(),
+        "ai".into(),
+        "tool".into(),
+        name.into(),
+        "--app".into(),
+        app.into(),
+        "--args".into(),
+        args_json.into(),
     ];
 
     let value = cos_tool_json(name, argv)?;
-    if let Some(err) = value.get("error").and_then(|v| v.as_str()) {
-        return Err(ToolError::Denied {
-            name: name.to_string(),
-            message: err.to_string(),
-            code: value
-                .get("code")
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
-            payload: value,
-        });
-    }
-    crate::generated::validate_tool(&value).map_err(|error| {
-        ToolError::Unavailable(format!("tool result decode failed: {error}"))
-    })?;
-    serde_json::from_value(value.clone()).map_err(|e| {
-        ToolError::Unavailable(format!("tool result decode failed ({e}): {value}"))
-    })
+    crate::generated::validate_tool(&value)
+        .map_err(|error| ToolError::Unavailable(format!("tool result decode failed: {error}")))?;
+    serde_json::from_value(value.clone())
+        .map_err(|e| ToolError::Unavailable(format!("tool result decode failed ({e}): {value}")))
 }
 
 /// Return the live global catalog from the argument-free `cos ai tools`.
 pub fn catalog() -> Result<Vec<CatalogEntry>, ToolError> {
     let argv: Vec<OsString> = vec!["ai".into(), "tools".into()];
     let value = cos_tool_json("catalog", argv)?;
-    crate::generated::validate_tool_catalog(&value).map_err(|error| {
-        ToolError::Unavailable(format!("catalog decode failed: {error}"))
-    })?;
+    crate::generated::validate_tool_catalog(&value)
+        .map_err(|error| ToolError::Unavailable(format!("catalog decode failed: {error}")))?;
     let rows = value
         .get("tools")
         .and_then(serde_json::Value::as_array)
@@ -154,8 +138,5 @@ where
 
 #[cfg(test)]
 mod tests {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/test/unit/tools.rs"
-    ));
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/tools.rs"));
 }

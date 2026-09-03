@@ -1,0 +1,36 @@
+{
+  "id": "adapter-template",
+  "version": "0.1.0",
+  "schema_version": 2,
+  "name": {
+    "en": "Adapter Template"
+  },
+  "summary": {
+    "en": "Skeleton for a command-line tool adapter."
+  },
+  "runtime": "python",
+  "mcp": {
+    "entry": "main.py",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "tools": [
+      {
+        "name": "example.echo",
+        "summary": {
+          "en": "Return the input text unchanged. Replace with a real tool."
+        },
+        "args": [
+          {
+            "name": "text",
+            "kind": "text",
+            "required": true,
+            "label": {
+              "en": "Text to echo."
+            }
+          }
+        ],
+        "needs": []
+      }
+    ]
+  }
+}

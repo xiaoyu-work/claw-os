@@ -64,16 +64,15 @@
 //! - Authors must declare a scope explicitly. There is no implicit
 //!   wildcard; `wild` is a separate variant authors opt into knowingly.
 //!
-//! ## Session tools (Phase 11)
+//! ## MCP tools
 //!
-//! An app may additionally expose a long-lived MCP server through a
-//! `session` block. Each tool inside it has the same `args` + `needs`
-//! shape as an operation, so capability gating and audit are identical
-//! to the one-shot CLI path. The kernel spawns the server (via the
-//! runtime, using `Session.entry` or the runtime's default
-//! `server.<ext>`), runs the MCP handshake, and registers each tool
-//! with the agent's [`ToolRegistry`]. See `docs/app-ai-integration.md`
-//! §12.
+//! An app exposes a long-lived MCP server through its `mcp` block.
+//! Each tool inside it has the same `args` + `needs` shape as an
+//! operation, so capability gating and audit are identical to the
+//! one-shot CLI path. The kernel spawns the server (via the runtime,
+//! using `McpService.entry` or the runtime's default `server.<ext>`),
+//! runs the MCP handshake, and registers each tool with the agent's
+//! [`ToolRegistry`]. See `docs/app-ai-integration.md` §12.
 
 use std::collections::BTreeMap;
 
@@ -92,8 +91,7 @@ use super::verb::Verb;
 pub struct Manifest {
     pub id: String,
     pub version: String,
-    /// Version of the App contract. MCP-first manifests use version 2.
-    /// Legacy manifests omit this field until their migration commit.
+    /// Version of the App contract. MCP manifests use version 2.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schema_version: Option<u32>,
     pub name: LocalizedText,
@@ -126,18 +124,12 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ai: Option<AiPolicy>,
 
-    /// Optional MCP server the app exposes for stateful, agent-driven
-    /// tool calls. Absent means the app is one-shot only (the agent can
-    /// still call its operations through `cos_app_<id>`). See
-    /// [`Session`].
+    /// The single MCP-first App service contract, and the only place a
+    /// manifest may declare agent-callable tools. Absent means the app
+    /// is one-shot only (the agent can still call its operations
+    /// through `cos_app_<id>`). See [`McpService`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session: Option<Session>,
-
-    /// The single MCP-first App service contract. New Apps declare this
-    /// instead of separate one-shot `operations` and stateful `session`
-    /// surfaces.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mcp: Option<Session>,
+    pub mcp: Option<McpService>,
 
     /// Optional desktop GUI surface. Presence of this block is the
     /// single signal that the app wants a graphical entry: at
@@ -306,10 +298,10 @@ impl Runtime {
         }
     }
 
-    /// Default entry file for an app's long-lived MCP session server.
-    /// Lives alongside `default_entry()` (the one-shot CLI entry) so an
-    /// app can ship both surfaces without naming them by hand.
-    pub fn default_session_entry(self) -> &'static str {
+    /// Default entry file for an app's long-lived MCP server. Lives
+    /// alongside `default_entry()` (the one-shot CLI entry) so an app
+    /// can ship both surfaces without naming them by hand.
+    pub fn default_mcp_entry(self) -> &'static str {
         match self {
             Runtime::Python => "server.py",
             Runtime::Node => "server.js",
@@ -498,9 +490,9 @@ impl Arg {
 
     fn accepts_value(&self, value: &serde_json::Value) -> bool {
         if self.repeatable {
-            value.as_array().is_some_and(|values| {
-                values.iter().all(|value| self.accepts_scalar(value))
-            })
+            value
+                .as_array()
+                .is_some_and(|values| values.iter().all(|value| self.accepts_scalar(value)))
         } else {
             self.accepts_scalar(value)
         }
@@ -617,8 +609,7 @@ pub(crate) fn resolve_effective_args(
     let defaulted = apply_arg_defaults(declarations, &mut values)?;
     if let Some(disallowed) = declarations.iter().find(|declaration| {
         declaration.required_when.as_ref().is_some_and(|condition| {
-            !condition_applies(Some(condition), &values)
-                && values.contains_key(&declaration.name)
+            !condition_applies(Some(condition), &values) && values.contains_key(&declaration.name)
         })
     }) {
         return Err(format!(
@@ -627,10 +618,8 @@ pub(crate) fn resolve_effective_args(
         ));
     }
     if let Some(required) = declarations.iter().find(|declaration| {
-        argument_is_required(declaration, &values)
-            && !values.contains_key(&declaration.name)
-    })
-    {
+        argument_is_required(declaration, &values) && !values.contains_key(&declaration.name)
+    }) {
         return Err(format!("argument `{}` is required", required.name));
     }
     for declaration in declarations {
@@ -660,9 +649,7 @@ pub(crate) fn argument_is_required(
 }
 
 fn safe_url_path_basename(value: &str) -> Option<&str> {
-    let end = value
-        .find(['?', '#'])
-        .unwrap_or(value.len());
+    let end = value.find(['?', '#']).unwrap_or(value.len());
     let without_suffix = &value[..end];
     let path = if let Some(scheme) = without_suffix.find("://") {
         let after_authority = &without_suffix[scheme + 3..];
@@ -686,31 +673,31 @@ fn safe_url_path_basename(value: &str) -> Option<&str> {
 }
 
 // ---------------------------------------------------------------------------
-// Session (MCP) — long-lived agent-driven tools
+// McpService — long-lived agent-driven tools
 // ---------------------------------------------------------------------------
 
-/// Declares a long-lived MCP server the app launches when an agent
-/// session needs cross-call state. The agent attaches to this server
-/// through the kernel's MCP bridge; every `tools/call` it makes is
-/// caps-gated using the manifest's per-tool `needs[]` and audited the
-/// same way `cos ai chat` is.
+/// Declares the long-lived MCP server the app launches when an agent
+/// needs its tools. The agent attaches to this server through the
+/// kernel's MCP bridge; every `tools/call` it makes is caps-gated
+/// using the manifest's per-tool `needs[]` and audited the same way
+/// `cos ai chat` is.
 ///
 /// Authors who want a stateless one-shot integration should keep using
 /// `operations` (the kernel auto-wraps each op as a `cos_app_<id>`
-/// agent tool). `Session` is for when the app holds in-memory state
+/// agent tool). `McpService` is for when the app holds in-memory state
 /// across calls or kicks off background work.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Session {
+pub struct McpService {
     /// Path to the MCP server entry file, relative to the app
     /// directory. If absent, the kernel uses
-    /// [`Runtime::default_session_entry`].
+    /// [`Runtime::default_mcp_entry`].
     #[serde(default)]
     pub entry: Option<String>,
 
     /// Wire protocol. Only `stdio` is supported today (matches the
     /// kernel's [`mcp::transport::StdioTransport`]).
     #[serde(default)]
-    pub transport: SessionTransport,
+    pub transport: McpTransport,
 
     /// How long the App service remains available.
     #[serde(default)]
@@ -722,23 +709,19 @@ pub struct Session {
     #[serde(default)]
     pub access: McpAccess,
 
-    /// Tools the app advertises through this session. The list is
+    /// Tools the app advertises through this service. The list is
     /// authoritative: the kernel only forwards `tools/call` requests
     /// for names that appear here, and runs the declared `needs[]` as
     /// the cap gate before forwarding.
     #[serde(default)]
-    pub tools: Vec<SessionTool>,
+    pub tools: Vec<McpTool>,
 }
 
-/// Public MCP-first name for the App service contract. The alias keeps the
-/// migration buildable while legacy `session` manifests are converted.
-pub type McpService = Session;
-
-/// Wire protocol for [`Session`]. Stdio is the de-facto MCP default
+/// Wire protocol for [`McpService`]. Stdio is the de-facto MCP default
 /// and the one our integration already implements.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
-pub enum SessionTransport {
+pub enum McpTransport {
     #[default]
     Stdio,
 }
@@ -783,16 +766,16 @@ fn default_mcp_system_agent() -> bool {
     true
 }
 
-/// One MCP-callable tool the app exposes through its [`Session`].
+/// One MCP-callable tool the app exposes through its [`McpService`].
 ///
 /// Mirrors [`Operation`] field-for-field on purpose: `args` + `needs`
 /// drive both the agent's view (auto-generated JSON Schema for the
 /// model) and the kernel's enforcement (cap resolution at call time).
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct SessionTool {
+pub struct McpTool {
     /// Globally unique tool name. Convention: `<app_id>.<verb>`
     /// (e.g. `kv.get`). Must match `[a-z][a-z0-9._-]*` and be unique
-    /// within the session.
+    /// within the service.
     pub name: String,
 
     /// One-line description surfaced to the model and to
@@ -812,9 +795,6 @@ pub struct SessionTool {
     #[serde(default)]
     pub needs: Vec<Need>,
 }
-
-/// Public MCP-first name for a manifest-declared service tool.
-pub type McpTool = SessionTool;
 
 // ---------------------------------------------------------------------------
 // Desktop GUI surface
@@ -900,9 +880,17 @@ pub struct Need {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum NeedCondition {
-    ArgPresent { arg: String },
-    ArgEquals { arg: String, value: serde_json::Value },
-    ArgNotEquals { arg: String, value: serde_json::Value },
+    ArgPresent {
+        arg: String,
+    },
+    ArgEquals {
+        arg: String,
+        value: serde_json::Value,
+    },
+    ArgNotEquals {
+        arg: String,
+        value: serde_json::Value,
+    },
 }
 
 /// How an operation's scope is determined at invocation time.
@@ -958,9 +946,15 @@ enum NeedConditionWire {
     #[serde(rename = "arg-present")]
     Present { arg: String },
     #[serde(rename = "arg-equals")]
-    Equals { arg: String, value: serde_json::Value },
+    Equals {
+        arg: String,
+        value: serde_json::Value,
+    },
     #[serde(rename = "arg-not-equals")]
-    NotEquals { arg: String, value: serde_json::Value },
+    NotEquals {
+        arg: String,
+        value: serde_json::Value,
+    },
 }
 
 #[derive(Deserialize)]
@@ -1142,58 +1136,58 @@ pub enum ManifestError {
     AiDuplicateTool { name: String },
     #[error("manifest `mcp` requires `schema_version: 2`")]
     McpSchemaVersion,
-    #[error("manifest cannot declare both `mcp` and legacy `session`")]
-    McpLegacySessionConflict,
+    #[error("manifest field `session` was removed; declare the service under `mcp`")]
+    RemovedSessionField,
     #[error("manifest `mcp.access.apps[]`: invalid App id `{app}`")]
     McpAccessInvalidApp { app: String },
     #[error("manifest `mcp.access.apps[]`: App `{app}` declared twice")]
     McpAccessDuplicateApp { app: String },
-    #[error("session tool `{tool}`: name must match [a-z][a-z0-9._-]* — got `{tool}`")]
-    SessionToolInvalidName { tool: String },
-    #[error("session tool `{name}` declared twice")]
-    SessionDuplicateTool { name: String },
-    #[error("session tool `{tool}`: arg `{arg}` declared twice")]
-    SessionDuplicateArg { tool: String, arg: String },
-    #[error("session tool `{tool}`: arg `{arg}` default is invalid: {detail}")]
-    SessionArgDefaultInvalid {
+    #[error("mcp tool `{tool}`: name must match [a-z][a-z0-9._-]* — got `{tool}`")]
+    McpToolInvalidName { tool: String },
+    #[error("mcp tool `{name}` declared twice")]
+    McpDuplicateTool { name: String },
+    #[error("mcp tool `{tool}`: arg `{arg}` declared twice")]
+    McpDuplicateArg { tool: String, arg: String },
+    #[error("mcp tool `{tool}`: arg `{arg}` default is invalid: {detail}")]
+    McpArgDefaultInvalid {
         tool: String,
         arg: String,
         detail: String,
     },
-    #[error("session tool `{tool}`: need #{idx} references undeclared arg `{arg}`")]
-    SessionNeedRefsUndeclaredArg {
+    #[error("mcp tool `{tool}`: need #{idx} references undeclared arg `{arg}`")]
+    McpNeedRefsUndeclaredArg {
         tool: String,
         idx: usize,
         arg: String,
     },
     #[error(
-        "session tool `{tool}`: need #{idx} (verb `{verb}`) binds to arg `{arg}` of \
+        "mcp tool `{tool}`: need #{idx} (verb `{verb}`) binds to arg `{arg}` of \
          kind `{kind:?}` which cannot populate a scope (expected path/host/name)"
     )]
-    SessionNeedArgKindMismatch {
+    McpNeedArgKindMismatch {
         tool: String,
         idx: usize,
         verb: String,
         arg: String,
         kind: ArgKind,
     },
-    #[error("session tool `{tool}`: need #{idx}: {detail}")]
-    SessionNeedInvalid {
+    #[error("mcp tool `{tool}`: need #{idx}: {detail}")]
+    McpNeedInvalid {
         tool: String,
         idx: usize,
         detail: String,
     },
-    #[error("session tool `{tool}`: {field}: {detail}")]
-    SessionLocalizedTextInvalid {
+    #[error("mcp tool `{tool}`: {field}: {detail}")]
+    McpLocalizedTextInvalid {
         tool: String,
         field: &'static str,
         detail: String,
     },
     #[error(
-        "session tool `{tool}`: need #{idx} (verb `{verb}`) is an AI verb but the \
+        "mcp tool `{tool}`: need #{idx} (verb `{verb}`) is an AI verb but the \
          manifest has no `ai` block — declare one with budget, safety, and origins"
     )]
-    SessionAiNeedMissingPolicy {
+    McpAiNeedMissingPolicy {
         tool: String,
         idx: usize,
         verb: String,
@@ -1216,14 +1210,13 @@ fn validate_arg_defaults(args: &[Arg]) -> Result<(), (String, String)> {
         }) {
             return Err((
                 defaulted.name.clone(),
-                "defaulted and omitted optional positional arguments cannot be mixed"
-                    .to_string(),
+                "defaulted and omitted optional positional arguments cannot be mixed".to_string(),
             ));
         }
     }
-    let has_optional_positional = args.iter().any(|arg| {
-        arg.effective_binding() == ArgBinding::Positional && !arg.required
-    });
+    let has_optional_positional = args
+        .iter()
+        .any(|arg| arg.effective_binding() == ArgBinding::Positional && !arg.required);
     if has_optional_positional {
         if let Some(alias) = args.iter().find(|arg| arg.positional_alias) {
             return Err((
@@ -1248,13 +1241,12 @@ fn validate_arg_defaults(args: &[Arg]) -> Result<(), (String, String)> {
         }
         if arg.positional_alias
             && args.iter().any(|candidate| {
-            candidate.effective_binding() == ArgBinding::Positional
-                && candidate.repeatable
+                candidate.effective_binding() == ArgBinding::Positional && candidate.repeatable
             })
         {
             return Err((
-            arg.name.clone(),
-            "positional_alias cannot be combined with repeatable positionals".to_string(),
+                arg.name.clone(),
+                "positional_alias cannot be combined with repeatable positionals".to_string(),
             ));
         }
         if arg.repeatable && arg.kind == ArgKind::Bool {
@@ -1263,9 +1255,7 @@ fn validate_arg_defaults(args: &[Arg]) -> Result<(), (String, String)> {
                 "repeatable boolean arguments are ambiguous".to_string(),
             ));
         }
-        if arg.repeatable
-            && (arg.default_from.is_some() || arg.trusted_resolver.is_some())
-        {
+        if arg.repeatable && (arg.default_from.is_some() || arg.trusted_resolver.is_some()) {
             return Err((
                 arg.name.clone(),
                 "repeatable arguments cannot use default_from or trusted_resolver".to_string(),
@@ -1303,9 +1293,9 @@ fn validate_arg_defaults(args: &[Arg]) -> Result<(), (String, String)> {
         }
         if arg.effective_binding() == ArgBinding::Positional
             && !arg.required
-            && args[index + 1..].iter().any(|later| {
-                later.effective_binding() == ArgBinding::Positional && later.required
-            })
+            && args[index + 1..]
+                .iter()
+                .any(|later| later.effective_binding() == ArgBinding::Positional && later.required)
         {
             return Err((
                 arg.name.clone(),
@@ -1329,9 +1319,7 @@ fn validate_arg_defaults(args: &[Arg]) -> Result<(), (String, String)> {
             && (arg.default.is_some() || arg.default_from.is_some())
             && args[index + 1..]
                 .iter()
-                .any(|later| {
-                    later.effective_binding() == ArgBinding::Positional && later.required
-                })
+                .any(|later| later.effective_binding() == ArgBinding::Positional && later.required)
         {
             return Err((
                 arg.name.clone(),
@@ -1486,16 +1474,16 @@ fn is_safe_default_leaf(value: &str) -> bool {
 impl Manifest {
     /// Parse a manifest from JSON text.
     pub fn from_json(s: &str) -> Result<Self, ManifestError> {
-        let m: Manifest = serde_json::from_str(s)?;
+        let value: serde_json::Value = serde_json::from_str(s)?;
+        if value
+            .as_object()
+            .is_some_and(|object| object.contains_key("session"))
+        {
+            return Err(ManifestError::RemovedSessionField);
+        }
+        let m: Manifest = serde_json::from_value(value)?;
         m.validate()?;
         Ok(m)
-    }
-
-    /// The authoritative MCP service during the migration. New manifests use
-    /// `mcp`; legacy packages continue through `session` until the final
-    /// removal commit.
-    pub fn mcp_service(&self) -> Option<&McpService> {
-        self.mcp.as_ref().or(self.session.as_ref())
     }
 
     /// Verify every entry in `ai.tools[]` exists in the kernel
@@ -1523,9 +1511,6 @@ impl Manifest {
         }
         if self.mcp.is_some() && self.schema_version != Some(2) {
             return Err(ManifestError::McpSchemaVersion);
-        }
-        if self.mcp.is_some() && self.session.is_some() {
-            return Err(ManifestError::McpLegacySessionConflict);
         }
         if let Some(service) = &self.mcp {
             let mut seen_apps = std::collections::BTreeSet::new();
@@ -1595,9 +1580,7 @@ impl Manifest {
                         self.id == "email" && arg.name == "host" && arg.kind == ArgKind::Host
                     }
                     Some(TrustedArgResolver::CalendarProvider) => {
-                        self.id == "calendar"
-                            && arg.name == "provider"
-                            && arg.kind == ArgKind::Name
+                        self.id == "calendar" && arg.name == "provider" && arg.kind == ArgKind::Name
                     }
                     Some(TrustedArgResolver::NtfyServer) => {
                         self.id == "gateway-ntfy"
@@ -1769,46 +1752,46 @@ impl Manifest {
             }
         }
 
-        if let Some(session) = self.mcp_service() {
+        if let Some(service) = self.mcp.as_ref() {
             let mut seen_tools: std::collections::BTreeSet<&str> =
                 std::collections::BTreeSet::new();
-            for tool in &session.tools {
-                if !is_valid_session_tool_name(&tool.name) {
-                    return Err(ManifestError::SessionToolInvalidName {
+            for tool in &service.tools {
+                if !is_valid_mcp_tool_name(&tool.name) {
+                    return Err(ManifestError::McpToolInvalidName {
                         tool: tool.name.clone(),
                     });
                 }
                 if !seen_tools.insert(tool.name.as_str()) {
-                    return Err(ManifestError::SessionDuplicateTool {
+                    return Err(ManifestError::McpDuplicateTool {
                         name: tool.name.clone(),
                     });
                 }
-                tool.summary.validate().map_err(|d| {
-                    ManifestError::SessionLocalizedTextInvalid {
+                tool.summary
+                    .validate()
+                    .map_err(|d| ManifestError::McpLocalizedTextInvalid {
                         tool: tool.name.clone(),
                         field: "summary",
                         detail: d,
-                    }
-                })?;
+                    })?;
 
                 let mut seen_args: BTreeMap<&str, &Arg> = BTreeMap::new();
                 for arg in &tool.args {
                     if seen_args.insert(arg.name.as_str(), arg).is_some() {
-                        return Err(ManifestError::SessionDuplicateArg {
+                        return Err(ManifestError::McpDuplicateArg {
                             tool: tool.name.clone(),
                             arg: arg.name.clone(),
                         });
                     }
                 }
                 if let Err((arg, detail)) = validate_arg_defaults(&tool.args) {
-                    return Err(ManifestError::SessionArgDefaultInvalid {
+                    return Err(ManifestError::McpArgDefaultInvalid {
                         tool: tool.name.clone(),
                         arg,
                         detail,
                     });
                 }
                 if let Err((arg, detail)) = validate_arg_aliases(&tool.args) {
-                    return Err(ManifestError::SessionArgDefaultInvalid {
+                    return Err(ManifestError::McpArgDefaultInvalid {
                         tool: tool.name.clone(),
                         arg,
                         detail,
@@ -1817,24 +1800,20 @@ impl Manifest {
                 for (index, arg) in tool.args.iter().enumerate() {
                     if let Some(condition) = &arg.required_when {
                         validate_required_when(arg, condition, index, &tool.args, &seen_args)
-                            .map_err(|detail| ManifestError::SessionArgDefaultInvalid {
+                            .map_err(|detail| ManifestError::McpArgDefaultInvalid {
                                 tool: tool.name.clone(),
                                 arg: arg.name.clone(),
                                 detail,
                             })?;
                     }
                 }
-                if let Some(arg) = tool
-                    .args
-                    .iter()
-                    .find(|arg| {
-                        arg.default_from.is_some()
-                            || arg.trusted_resolver.is_some()
-                            || !arg.aliases.is_empty()
-                            || arg.positional_alias
-                    })
-                {
-                    return Err(ManifestError::SessionArgDefaultInvalid {
+                if let Some(arg) = tool.args.iter().find(|arg| {
+                    arg.default_from.is_some()
+                        || arg.trusted_resolver.is_some()
+                        || !arg.aliases.is_empty()
+                        || arg.positional_alias
+                }) {
+                    return Err(ManifestError::McpArgDefaultInvalid {
                         tool: tool.name.clone(),
                         arg: arg.name.clone(),
                         detail: "CLI aliases, default_from, and trusted resolvers are only supported for one-shot operations"
@@ -1843,14 +1822,14 @@ impl Manifest {
                 }
                 for (idx, need) in tool.needs.iter().enumerate() {
                     validate_need_condition(need, &seen_args).map_err(|detail| {
-                        ManifestError::SessionNeedInvalid {
+                        ManifestError::McpNeedInvalid {
                             tool: tool.name.clone(),
                             idx,
                             detail,
                         }
                     })?;
                     validate_literal_path_scopes(&need.scope).map_err(|detail| {
-                        ManifestError::SessionNeedInvalid {
+                        ManifestError::McpNeedInvalid {
                             tool: tool.name.clone(),
                             idx,
                             detail,
@@ -1858,7 +1837,7 @@ impl Manifest {
                     })?;
                     need.why
                         .validate()
-                        .map_err(|d| ManifestError::SessionNeedInvalid {
+                        .map_err(|d| ManifestError::McpNeedInvalid {
                             tool: tool.name.clone(),
                             idx,
                             detail: format!("why: {d}"),
@@ -1867,11 +1846,11 @@ impl Manifest {
                     let verb_str = need.verb.as_str();
                     if verb_str == Verb::AI_BYPASS.as_str() {
                         return Err(ManifestError::AiBypassNotAllowedForApps {
-                            field: "session.tools[].needs[].verb",
+                            field: "mcp.tools[].needs[].verb",
                         });
                     }
                     if verb_str.starts_with("ai.") && self.ai.is_none() {
-                        return Err(ManifestError::SessionAiNeedMissingPolicy {
+                        return Err(ManifestError::McpAiNeedMissingPolicy {
                             tool: tool.name.clone(),
                             idx,
                             verb: verb_str.to_string(),
@@ -1881,7 +1860,7 @@ impl Manifest {
                     match &need.scope {
                         ScopeBinding::FromArg { arg, transform } => {
                             let a = seen_args.get(arg.as_str()).ok_or_else(|| {
-                                ManifestError::SessionNeedRefsUndeclaredArg {
+                                ManifestError::McpNeedRefsUndeclaredArg {
                                     tool: tool.name.clone(),
                                     idx,
                                     arg: arg.clone(),
@@ -1893,7 +1872,7 @@ impl Manifest {
                                 ScopeTransform::UrlHost => a.kind == ArgKind::Text,
                             };
                             if !compatible {
-                                return Err(ManifestError::SessionNeedArgKindMismatch {
+                                return Err(ManifestError::McpNeedArgKindMismatch {
                                     tool: tool.name.clone(),
                                     idx,
                                     verb: need.verb.as_str().to_string(),
@@ -1904,14 +1883,14 @@ impl Manifest {
                         }
                         ScopeBinding::FromArgMap { arg, values } => {
                             if !seen_args.contains_key(arg.as_str()) {
-                                return Err(ManifestError::SessionNeedRefsUndeclaredArg {
+                                return Err(ManifestError::McpNeedRefsUndeclaredArg {
                                     tool: tool.name.clone(),
                                     idx,
                                     arg: arg.clone(),
                                 });
                             }
                             if values.is_empty() {
-                                return Err(ManifestError::SessionNeedInvalid {
+                                return Err(ManifestError::McpNeedInvalid {
                                     tool: tool.name.clone(),
                                     idx,
                                     detail: "from-arg-map values must not be empty".to_string(),
@@ -1920,14 +1899,14 @@ impl Manifest {
                         }
                         ScopeBinding::FromArgOrWild { arg, wild_when } => {
                             let bound = seen_args.get(arg.as_str()).ok_or_else(|| {
-                                ManifestError::SessionNeedRefsUndeclaredArg {
+                                ManifestError::McpNeedRefsUndeclaredArg {
                                     tool: tool.name.clone(),
                                     idx,
                                     arg: arg.clone(),
                                 }
                             })?;
                             if !bound.kind.binds_to_scope() {
-                                return Err(ManifestError::SessionNeedArgKindMismatch {
+                                return Err(ManifestError::McpNeedArgKindMismatch {
                                     tool: tool.name.clone(),
                                     idx,
                                     verb: need.verb.as_str().to_string(),
@@ -1939,7 +1918,7 @@ impl Manifest {
                                 .get(wild_when.as_str())
                                 .is_some_and(|arg| arg.kind == ArgKind::Bool)
                             {
-                                return Err(ManifestError::SessionNeedInvalid {
+                                return Err(ManifestError::McpNeedInvalid {
                                     tool: tool.name.clone(),
                                     idx,
                                     detail: format!(
@@ -1952,7 +1931,7 @@ impl Manifest {
                         ScopeBinding::Wild => {}
                     }
                     validate_optional_need_binding(need, &seen_args).map_err(|detail| {
-                        ManifestError::SessionNeedInvalid {
+                        ManifestError::McpNeedInvalid {
                             tool: tool.name.clone(),
                             idx,
                             detail,
@@ -2020,14 +1999,14 @@ impl Manifest {
         supplied: &BTreeMap<String, serde_json::Value>,
         paths: &super::args::PathContext,
     ) -> Result<EffectiveCall, ManifestError> {
-        let operation =
-            self.operations
-                .get(op_name)
-                .ok_or_else(|| ManifestError::NeedInvalid {
-                    op: op_name.to_string(),
-                    idx: 0,
-                    detail: "unknown operation".to_string(),
-                })?;
+        let operation = self
+            .operations
+            .get(op_name)
+            .ok_or_else(|| ManifestError::NeedInvalid {
+                op: op_name.to_string(),
+                idx: 0,
+                detail: "unknown operation".to_string(),
+            })?;
         let (mut values, defaulted) =
             resolve_effective_args(&operation.args, supplied, Some(paths)).map_err(|detail| {
                 ManifestError::NeedInvalid {
@@ -2119,12 +2098,10 @@ impl Manifest {
                         idx,
                         detail: format!("arg `{arg}` was not supplied"),
                     })?;
-                    mapped_scopes(value, values).map_err(|detail| {
-                        ManifestError::NeedInvalid {
-                            op: op_name.to_string(),
-                            idx,
-                            detail: format!("arg `{arg}` {detail}"),
-                        }
+                    mapped_scopes(value, values).map_err(|detail| ManifestError::NeedInvalid {
+                        op: op_name.to_string(),
+                        idx,
+                        detail: format!("arg `{arg}` {detail}"),
                     })?
                 }
                 ScopeBinding::FromArgOrWild { arg, wild_when } => {
@@ -2149,13 +2126,13 @@ impl Manifest {
                                     idx,
                                     arg: arg.clone(),
                                 })?;
-                        scopes_from_arg_value(decl, value, ScopeTransform::Identity).ok_or_else(|| {
-                            ManifestError::NeedInvalid {
+                        scopes_from_arg_value(decl, value, ScopeTransform::Identity).ok_or_else(
+                            || ManifestError::NeedInvalid {
                                 op: op_name.to_string(),
                                 idx,
                                 detail: format!("arg `{arg}` cannot populate a scope"),
-                            }
-                        })?
+                            },
+                        )?
                     }
                 }
                 ScopeBinding::Fixed { scope } => vec![scope.clone()],
@@ -2170,33 +2147,34 @@ impl Manifest {
         }
         Ok(out)
     }
-    /// Resolve a session tool's needs into concrete [`Cap`](super::cap::Cap)s
+    /// Resolve an MCP tool's needs into concrete [`Cap`](super::cap::Cap)s
     /// for a specific MCP `tools/call` invocation. Mirrors
     /// [`resolve_needs`](Self::resolve_needs) but reads from the
-    /// `session.tools[]` table instead of `operations`. Returns
-    /// `NeedInvalid` if the manifest has no session block or the tool
+    /// `mcp.tools[]` table instead of `operations`. Returns
+    /// `NeedInvalid` if the manifest has no `mcp` block or the tool
     /// name is unknown.
-    pub fn resolve_session_tool_needs(
+    pub fn resolve_mcp_tool_needs(
         &self,
         tool_name: &str,
         args: &BTreeMap<String, serde_json::Value>,
     ) -> Result<Vec<Vec<super::cap::Cap>>, ManifestError> {
-        let args = self.resolve_session_tool_args(tool_name, args)?;
-        let session = self
-            .mcp_service()
-            .ok_or_else(|| ManifestError::SessionNeedInvalid {
+        let args = self.resolve_mcp_tool_args(tool_name, args)?;
+        let service = self
+            .mcp
+            .as_ref()
+            .ok_or_else(|| ManifestError::McpNeedInvalid {
                 tool: tool_name.to_string(),
                 idx: 0,
-                detail: "manifest has no `session` block".into(),
+                detail: "manifest has no `mcp` block".into(),
             })?;
-        let tool = session
+        let tool = service
             .tools
             .iter()
             .find(|t| t.name == tool_name)
-            .ok_or_else(|| ManifestError::SessionNeedInvalid {
+            .ok_or_else(|| ManifestError::McpNeedInvalid {
                 tool: tool_name.to_string(),
                 idx: 0,
-                detail: "unknown session tool".into(),
+                detail: "unknown mcp tool".into(),
             })?;
         let mut out = Vec::with_capacity(tool.needs.len());
         for (idx, need) in tool.needs.iter().enumerate() {
@@ -2204,85 +2182,79 @@ impl Manifest {
                 out.push(Vec::new());
                 continue;
             }
-            let scopes =
-                match &need.scope {
-                    ScopeBinding::FromArg { arg, transform } => {
-                        let val =
-                            args.get(arg)
-                                .ok_or_else(|| ManifestError::SessionNeedInvalid {
-                                    tool: tool_name.to_string(),
-                                    idx,
-                                    detail: format!("arg `{arg}` not supplied at call time"),
-                                })?;
-                        let arg_decl =
-                            tool.args.iter().find(|a| a.name == *arg).ok_or_else(|| {
-                                ManifestError::SessionNeedRefsUndeclaredArg {
-                                    tool: tool_name.to_string(),
-                                    idx,
-                                    arg: arg.clone(),
-                                }
-                            })?;
-                        scopes_from_arg_value(arg_decl, val, *transform).ok_or_else(|| {
-                            ManifestError::SessionNeedInvalid {
-                                tool: tool_name.to_string(),
-                                idx,
-                                detail: format!(
-                                    "arg `{arg}` value is not a {kind:?}",
-                                    kind = arg_decl.kind
-                                ),
-                            }
-                        })?
-                    }
-                    ScopeBinding::FromArgMap { arg, values } => {
-                        let value =
-                            args.get(arg)
-                                .ok_or_else(|| ManifestError::SessionNeedInvalid {
-                                    tool: tool_name.to_string(),
-                                    idx,
-                                    detail: format!("arg `{arg}` was not supplied"),
-                                })?;
-                        mapped_scopes(value, values).map_err(|detail| {
-                            ManifestError::SessionNeedInvalid {
-                                tool: tool_name.to_string(),
-                                idx,
-                                detail: format!("arg `{arg}` {detail}"),
-                            }
-                        })?
-                    }
-                    ScopeBinding::FromArgOrWild { arg, wild_when } => {
-                        if args
-                            .get(wild_when)
-                            .and_then(serde_json::Value::as_bool)
-                            .unwrap_or(false)
-                        {
-                            vec![Scope::Wild]
-                        } else {
-                            let value =
-                                args.get(arg)
-                                    .ok_or_else(|| ManifestError::SessionNeedInvalid {
-                                        tool: tool_name.to_string(),
-                                        idx,
-                                        detail: format!("arg `{arg}` not supplied at call time"),
-                                    })?;
-                            let decl = tool.args.iter().find(|decl| decl.name == *arg).ok_or_else(
-                                || ManifestError::SessionNeedRefsUndeclaredArg {
-                                    tool: tool_name.to_string(),
-                                    idx,
-                                    arg: arg.clone(),
-                                },
-                            )?;
-                            scopes_from_arg_value(decl, value, ScopeTransform::Identity).ok_or_else(|| {
-                                ManifestError::SessionNeedInvalid {
-                                    tool: tool_name.to_string(),
-                                    idx,
-                                    detail: format!("arg `{arg}` cannot populate a scope"),
-                                }
-                            })?
+            let scopes = match &need.scope {
+                ScopeBinding::FromArg { arg, transform } => {
+                    let val = args.get(arg).ok_or_else(|| ManifestError::McpNeedInvalid {
+                        tool: tool_name.to_string(),
+                        idx,
+                        detail: format!("arg `{arg}` not supplied at call time"),
+                    })?;
+                    let arg_decl = tool.args.iter().find(|a| a.name == *arg).ok_or_else(|| {
+                        ManifestError::McpNeedRefsUndeclaredArg {
+                            tool: tool_name.to_string(),
+                            idx,
+                            arg: arg.clone(),
                         }
+                    })?;
+                    scopes_from_arg_value(arg_decl, val, *transform).ok_or_else(|| {
+                        ManifestError::McpNeedInvalid {
+                            tool: tool_name.to_string(),
+                            idx,
+                            detail: format!(
+                                "arg `{arg}` value is not a {kind:?}",
+                                kind = arg_decl.kind
+                            ),
+                        }
+                    })?
+                }
+                ScopeBinding::FromArgMap { arg, values } => {
+                    let value = args.get(arg).ok_or_else(|| ManifestError::McpNeedInvalid {
+                        tool: tool_name.to_string(),
+                        idx,
+                        detail: format!("arg `{arg}` was not supplied"),
+                    })?;
+                    mapped_scopes(value, values).map_err(|detail| {
+                        ManifestError::McpNeedInvalid {
+                            tool: tool_name.to_string(),
+                            idx,
+                            detail: format!("arg `{arg}` {detail}"),
+                        }
+                    })?
+                }
+                ScopeBinding::FromArgOrWild { arg, wild_when } => {
+                    if args
+                        .get(wild_when)
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false)
+                    {
+                        vec![Scope::Wild]
+                    } else {
+                        let value = args.get(arg).ok_or_else(|| ManifestError::McpNeedInvalid {
+                            tool: tool_name.to_string(),
+                            idx,
+                            detail: format!("arg `{arg}` not supplied at call time"),
+                        })?;
+                        let decl =
+                            tool.args
+                                .iter()
+                                .find(|decl| decl.name == *arg)
+                                .ok_or_else(|| ManifestError::McpNeedRefsUndeclaredArg {
+                                    tool: tool_name.to_string(),
+                                    idx,
+                                    arg: arg.clone(),
+                                })?;
+                        scopes_from_arg_value(decl, value, ScopeTransform::Identity).ok_or_else(
+                            || ManifestError::McpNeedInvalid {
+                                tool: tool_name.to_string(),
+                                idx,
+                                detail: format!("arg `{arg}` cannot populate a scope"),
+                            },
+                        )?
                     }
-                    ScopeBinding::Fixed { scope } => vec![scope.clone()],
-                    ScopeBinding::Wild => vec![Scope::Wild],
-                };
+                }
+                ScopeBinding::Fixed { scope } => vec![scope.clone()],
+                ScopeBinding::Wild => vec![Scope::Wild],
+            };
             out.push(
                 scopes
                     .into_iter()
@@ -2293,36 +2265,35 @@ impl Manifest {
         Ok(out)
     }
 
-    pub fn resolve_session_tool_call(
+    pub fn resolve_mcp_tool_call(
         &self,
         tool_name: &str,
         supplied: &BTreeMap<String, serde_json::Value>,
         paths: &super::args::PathContext,
     ) -> Result<EffectiveCall, ManifestError> {
         let tool = self
-            .mcp_service()
-            .and_then(|session| session.tools.iter().find(|tool| tool.name == tool_name))
-            .ok_or_else(|| ManifestError::SessionNeedInvalid {
+            .mcp
+            .as_ref()
+            .and_then(|service| service.tools.iter().find(|tool| tool.name == tool_name))
+            .ok_or_else(|| ManifestError::McpNeedInvalid {
                 tool: tool_name.to_string(),
                 idx: 0,
-                detail: "unknown session tool".to_string(),
+                detail: "unknown mcp tool".to_string(),
             })?;
-        let (mut values, defaulted) =
-            resolve_effective_args(&tool.args, supplied, Some(paths)).map_err(|detail| {
-                ManifestError::SessionNeedInvalid {
-                    tool: tool_name.to_string(),
-                    idx: 0,
-                    detail,
-                }
+        let (mut values, defaulted) = resolve_effective_args(&tool.args, supplied, Some(paths))
+            .map_err(|detail| ManifestError::McpNeedInvalid {
+                tool: tool_name.to_string(),
+                idx: 0,
+                detail,
             })?;
         canonicalize_url_scope_args(&tool.args, &tool.needs, &mut values).map_err(|detail| {
-            ManifestError::SessionNeedInvalid {
+            ManifestError::McpNeedInvalid {
                 tool: tool_name.to_string(),
                 idx: 0,
                 detail,
             }
         })?;
-        let needs = self.resolve_session_tool_needs(tool_name, &values)?;
+        let needs = self.resolve_mcp_tool_needs(tool_name, &values)?;
         Ok(EffectiveCall {
             values,
             needs,
@@ -2330,39 +2301,41 @@ impl Manifest {
         })
     }
 
-    /// Validate a session call and apply every literal manifest default.
+    /// Validate an MCP tool call and apply every literal manifest default.
     /// This map is shared by capability derivation, transient authority,
     /// and the forwarded MCP invocation.
-    pub fn resolve_session_tool_args(
+    pub fn resolve_mcp_tool_args(
         &self,
         tool_name: &str,
         args: &BTreeMap<String, serde_json::Value>,
     ) -> Result<BTreeMap<String, serde_json::Value>, ManifestError> {
-        let session = self
-            .mcp_service()
-            .ok_or_else(|| ManifestError::SessionNeedInvalid {
+        let service = self
+            .mcp
+            .as_ref()
+            .ok_or_else(|| ManifestError::McpNeedInvalid {
                 tool: tool_name.to_string(),
                 idx: 0,
-                detail: "manifest has no `session` block".to_string(),
+                detail: "manifest has no `mcp` block".to_string(),
             })?;
-        let tool = session
+        let tool = service
             .tools
             .iter()
             .find(|tool| tool.name == tool_name)
-            .ok_or_else(|| ManifestError::SessionNeedInvalid {
+            .ok_or_else(|| ManifestError::McpNeedInvalid {
                 tool: tool_name.to_string(),
                 idx: 0,
-                detail: "unknown session tool".to_string(),
+                detail: "unknown mcp tool".to_string(),
             })?;
-        let (mut resolved, _) = resolve_effective_args(&tool.args, args, None).map_err(|detail| {
-            ManifestError::SessionNeedInvalid {
-                tool: tool_name.to_string(),
-                idx: 0,
-                detail,
-            }
-        })?;
+        let (mut resolved, _) =
+            resolve_effective_args(&tool.args, args, None).map_err(|detail| {
+                ManifestError::McpNeedInvalid {
+                    tool: tool_name.to_string(),
+                    idx: 0,
+                    detail,
+                }
+            })?;
         canonicalize_url_scope_args(&tool.args, &tool.needs, &mut resolved).map_err(|detail| {
-            ManifestError::SessionNeedInvalid {
+            ManifestError::McpNeedInvalid {
                 tool: tool_name.to_string(),
                 idx: 0,
                 detail,
@@ -2372,17 +2345,15 @@ impl Manifest {
     }
 }
 
-fn validate_need_condition(
-    need: &Need,
-    args: &BTreeMap<&str, &Arg>,
-) -> Result<(), String> {
+fn validate_need_condition(need: &Need, args: &BTreeMap<&str, &Arg>) -> Result<(), String> {
     let Some(condition) = &need.when else {
         return Ok(());
     };
     let (arg_name, expected) = match condition {
         NeedCondition::ArgPresent { arg } => (arg, None),
-        NeedCondition::ArgEquals { arg, value }
-        | NeedCondition::ArgNotEquals { arg, value } => (arg, Some(value)),
+        NeedCondition::ArgEquals { arg, value } | NeedCondition::ArgNotEquals { arg, value } => {
+            (arg, Some(value))
+        }
     };
     let declaration = args
         .get(arg_name.as_str())
@@ -2447,10 +2418,7 @@ fn validate_required_when(
     validate_need_condition(&synthetic_need, args)
 }
 
-fn validate_optional_need_binding(
-    need: &Need,
-    args: &BTreeMap<&str, &Arg>,
-) -> Result<(), String> {
+fn validate_optional_need_binding(need: &Need, args: &BTreeMap<&str, &Arg>) -> Result<(), String> {
     let bound_arg = match &need.scope {
         ScopeBinding::FromArg { arg, .. }
         | ScopeBinding::FromArgMap { arg, .. }
@@ -2518,7 +2486,7 @@ fn validate_literal_path_scopes(binding: &ScopeBinding) -> Result<(), String> {
     }
 }
 
-fn is_valid_session_tool_name(s: &str) -> bool {
+fn is_valid_mcp_tool_name(s: &str) -> bool {
     let mut bytes = s.bytes();
     match bytes.next() {
         Some(b) if b.is_ascii_lowercase() => {}

@@ -70,17 +70,15 @@ progress.
 
 ## AI support
 
-- **Stable:** `ai.chat`. Passing `origin="external-content"`
-  automatically selects `ai.chat.untrusted`.
-- **Compatibility only:** embed, image, vision, audio, and video helpers
-  retain their signatures but are deprecated, experimental, and currently
-  unsupported. They raise `ai.AiUnsupported` before invoking `cos`.
+`ai.chat` is the public model API. Passing `origin="external-content"`
+automatically selects `ai.chat.untrusted`. Unsupported modalities are not
+published as placeholder APIs.
 
 ## Configuration
 
 | Env var          | Effect                                                                |
 |------------------|-----------------------------------------------------------------------|
-| `COS_BIN`        | Path to the `cos` binary. Defaults to looking up `cos` in `$PATH`.    |
+| `CLAW_COS_BIN`   | Path to the `cos` binary. Defaults to looking up `cos` in `$PATH`.    |
 | `COS_APP_ID`     | App id, used by `ai.chat` / `tools.call`.                             |
 | `COS_APP_MANIFEST` | Verified manifest snapshot used by `mcp.App.from_manifest()`.       |
 

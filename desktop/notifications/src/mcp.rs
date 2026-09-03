@@ -14,10 +14,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use claw_os_sdk::mcp::{Server, Tool, ToolResult};
-use serde_json::{Value, json};
-use zbus::Connection;
+use claw_os_sdk::mcp::{App, CallContext, Tool, ToolResult};
+use serde_json::{json, Value};
 use zbus::zvariant::Value as ZValue;
+use zbus::Connection;
 
 #[zbus::proxy(
     interface = "org.freedesktop.Notifications",
@@ -45,8 +45,7 @@ struct PostTool;
 
 fn sender_name(input: &Value) -> String {
     input
-        .get("app")
-        .or_else(|| input.get("app_name"))
+        .get("app_name")
         .and_then(|value| value.as_str())
         .filter(|value| !value.is_empty())
         .unwrap_or("Claw OS Agent")
@@ -59,31 +58,13 @@ impl Tool for PostTool {
         "notify.post"
     }
 
-    fn description(&self) -> &'static str {
-        "Post a desktop notification via org.freedesktop.Notifications. \
-         Returns the notification id that can be passed to notify.close."
-    }
-
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "summary": { "type": "string", "description": "One-line title shown in bold." },
-                "body":    { "type": "string", "description": "Multi-line body text." },
-                "icon":    { "type": "string", "description": "Icon name or absolute path. Defaults to com.clawos.Notifications." },
-                "app":     { "type": "string", "description": "Sender app name shown in the popup." },
-                "expire_ms": { "type": "integer", "description": "Auto-dismiss after this many ms. -1 = daemon default, 0 = never." },
-                "transient": { "type": "boolean", "description": "If true, the popup is not added to the notification log." }
-            },
-            "required": ["summary"],
-            "additionalProperties": false
-        })
-    }
-
-    async fn exec(&self, input: Value) -> ToolResult {
+    async fn handle(&self, input: Value, context: CallContext) -> ToolResult {
+        if let Err(error) = context.check_cancelled() {
+            return ToolResult::error(error.to_string());
+        }
         let summary = match input.get("summary").and_then(|v| v.as_str()) {
             Some(s) if !s.is_empty() => s.to_string(),
-            _ => return ToolResult::err("missing required field: summary"),
+            _ => return ToolResult::error("missing required field: summary"),
         };
         let body = input
             .get("body")
@@ -99,7 +80,7 @@ impl Tool for PostTool {
         let expire_ms = match input.get("expire_ms").and_then(|v| v.as_i64()) {
             Some(value) => match i32::try_from(value) {
                 Ok(value) => value,
-                Err(_) => return ToolResult::err("expire_ms is outside the supported range"),
+                Err(_) => return ToolResult::error("expire_ms is outside the supported range"),
             },
             None => -1,
         };
@@ -110,11 +91,11 @@ impl Tool for PostTool {
 
         let conn = match Connection::session().await {
             Ok(c) => c,
-            Err(e) => return ToolResult::err(format!("connect session bus: {e}")),
+            Err(e) => return ToolResult::error(format!("connect session bus: {e}")),
         };
         let proxy = match NotificationsProxy::new(&conn).await {
             Ok(p) => p,
-            Err(e) => return ToolResult::err(format!("create proxy: {e}")),
+            Err(e) => return ToolResult::error(format!("create proxy: {e}")),
         };
 
         let transient_val = ZValue::Bool(transient);
@@ -127,8 +108,8 @@ impl Tool for PostTool {
             .notify(&app, 0, &icon, &summary, &body, &[], hints, expire_ms)
             .await
         {
-            Ok(id) => ToolResult::ok(json!({ "id": id }).to_string()),
-            Err(e) => ToolResult::err(format!("notify call failed: {e}")),
+            Ok(id) => ToolResult::text(json!({ "id": id }).to_string()),
+            Err(e) => ToolResult::error(format!("notify call failed: {e}")),
         }
     }
 }
@@ -141,41 +122,29 @@ impl Tool for CloseTool {
         "notify.close"
     }
 
-    fn description(&self) -> &'static str {
-        "Dismiss a notification by id (the value returned from notify.post)."
-    }
-
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "id": { "type": "integer", "description": "Notification id from notify.post." }
-            },
-            "required": ["id"],
-            "additionalProperties": false
-        })
-    }
-
-    async fn exec(&self, input: Value) -> ToolResult {
+    async fn handle(&self, input: Value, context: CallContext) -> ToolResult {
+        if let Err(error) = context.check_cancelled() {
+            return ToolResult::error(error.to_string());
+        }
         let id = match input
             .get("id")
             .and_then(|v| v.as_u64())
             .and_then(|value| u32::try_from(value).ok())
         {
             Some(n) => n,
-            None => return ToolResult::err("missing or non-integer field: id"),
+            None => return ToolResult::error("missing or non-integer field: id"),
         };
         let conn = match Connection::session().await {
             Ok(c) => c,
-            Err(e) => return ToolResult::err(format!("connect session bus: {e}")),
+            Err(e) => return ToolResult::error(format!("connect session bus: {e}")),
         };
         let proxy = match NotificationsProxy::new(&conn).await {
             Ok(p) => p,
-            Err(e) => return ToolResult::err(format!("create proxy: {e}")),
+            Err(e) => return ToolResult::error(format!("create proxy: {e}")),
         };
         match proxy.close_notification(id).await {
-            Ok(()) => ToolResult::ok(json!({ "ok": true }).to_string()),
-            Err(e) => ToolResult::err(format!("close call failed: {e}")),
+            Ok(()) => ToolResult::text(json!({ "ok": true }).to_string()),
+            Err(e) => ToolResult::error(format!("close call failed: {e}")),
         }
     }
 }
@@ -185,13 +154,12 @@ pub(crate) fn run() -> anyhow::Result<()> {
         .enable_all()
         .build()?;
     rt.block_on(async {
-        Server::new("cosmic-notifications", env!("CARGO_PKG_VERSION"))
-            .tool(Arc::new(PostTool))
-            .tool(Arc::new(CloseTool))
-            .serve_stdio()
-            .await
-            .map_err(|e| anyhow::anyhow!("MCP server exited: {e}"))
+        let mut app = App::from_environment()?;
+        app.bind(Arc::new(PostTool))?;
+        app.bind(Arc::new(CloseTool))?;
+        app.serve_stdio().await
     })
+    .map_err(|error| anyhow::anyhow!("MCP server exited: {error}"))
 }
 
 #[cfg(test)]

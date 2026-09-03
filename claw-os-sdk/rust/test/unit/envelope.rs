@@ -2,29 +2,41 @@ use super::*;
 use serde_json::json;
 
 #[test]
-fn accept_flat_success() {
-    let env = Envelope::accept(json!({"decision": "allow", "verb": "fs.read"}));
+fn decode_success_envelope() {
+    let env = Envelope::decode(json!({
+        "ok": true,
+        "wire_version": 1,
+        "data": {"verb": "fs.read"}
+    }))
+    .unwrap();
     assert!(env.ok);
-    assert_eq!(env.wire_version, 1);
-    assert_eq!(env.data.unwrap()["decision"], "allow");
+    assert_eq!(env.data.unwrap()["verb"], "fs.read");
 }
 
 #[test]
-fn accept_flat_error() {
-    let env = Envelope::accept(json!({"error": "nope", "code": "PERMISSION_DENIED"}));
+fn decode_error_envelope() {
+    let env = Envelope::decode(json!({
+        "ok": false,
+        "wire_version": 1,
+        "error": "nope",
+        "code": "PERMISSION_DENIED"
+    }))
+    .unwrap();
     assert!(!env.ok);
     assert_eq!(env.error.as_deref(), Some("nope"));
     assert_eq!(env.code.as_deref(), Some("PERMISSION_DENIED"));
 }
 
 #[test]
-fn accept_native_v1() {
-    let env = Envelope::accept(json!({
-        "ok": true,
-        "wire_version": 1,
-        "data": {"verb": "fs.read"}
-    }));
-    assert!(env.ok);
+fn rejects_flat_and_incoherent_envelopes() {
+    for value in [
+        json!({"verb": "fs.read"}),
+        json!({"ok": true, "wire_version": 1, "error": "nope", "code": "INTERNAL_ERROR"}),
+        json!({"ok": false, "wire_version": 1, "error": "nope"}),
+        json!({"ok": true, "wire_version": 2, "data": {}}),
+    ] {
+        assert!(Envelope::decode(value).is_err());
+    }
 }
 
 #[test]

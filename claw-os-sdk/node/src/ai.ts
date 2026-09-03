@@ -3,8 +3,7 @@
 // `chat` is the stable model API and shells out to
 // `cos ai chat --app <id>`. The kernel derives `ai.chat` or
 // `ai.chat.untrusted` from origin, then runs capability checks, budget,
-// safety, and audit. Multimodal names remain as deprecated experimental
-// compatibility shims and fail before invoking `cos`.
+// safety, and audit.
 //
 // Apps never name a verb and never pick a model. They describe what
 // they want; the gate picks the verb and the machine owner configures
@@ -24,9 +23,7 @@ import {
   BridgeError,
   Denied,
   Unavailable,
-  asObject,
   cosCallJson,
-  hasError,
 } from "./transport";
 import {
   WireDecodeError,
@@ -41,15 +38,6 @@ import {
 export class AiError extends BridgeError {}
 /** The `cos` binary could not be invoked or returned garbage. */
 export class AiUnavailable extends AiError {}
-/** An experimental compatibility modality is currently unsupported. */
-export class AiUnsupported extends AiError {
-  readonly modality: string;
-  constructor(modality: string) {
-    super(`${modality}: currently unsupported; only chat/chat-untrusted are stable`);
-    this.modality = modality;
-  }
-}
-
 /** A gate (capability / origin / budget / safety) refused the call.
  * `payload` is the structured envelope the kernel returned. */
 export class AiDenied extends AiError {
@@ -140,93 +128,21 @@ export function chat(prompt: string, opts: ChatOptions = {}): AiResponse {
   });
 }
 
-/** @deprecated Experimental compatibility shim; currently unsupported. */
-export function embed(
-  _prompt: string,
-  _opts: Pick<ChatOptions, "origin" | "maxUnits" | "appId"> = {},
-): AiResponse {
-  throw new AiUnsupported("embed");
-}
-
-/** @deprecated Experimental compatibility shim; currently unsupported. */
-export function imageGenerate(
-  _prompt: string,
-  _output: string,
-  _opts: Pick<ChatOptions, "origin" | "maxUnits" | "appId"> = {},
-): AiResponse {
-  throw new AiUnsupported("image.generate");
-}
-
-/** @deprecated Experimental compatibility shim; currently unsupported. */
-export function imageAnalyze(
-  _image: string,
-  _opts: Pick<ChatOptions, "origin" | "maxUnits" | "appId"> = {},
-): AiResponse {
-  throw new AiUnsupported("image.analyze");
-}
-
-/** @deprecated Experimental compatibility shim; currently unsupported. */
-export function visionAnalyze(
-  _prompt: string,
-  _image: string,
-  _opts: Pick<ChatOptions, "origin" | "maxUnits" | "system" | "appId"> = {},
-): AiResponse {
-  throw new AiUnsupported("vision.analyze");
-}
-
-/** @deprecated Experimental compatibility shim; currently unsupported. */
-export function audioTts(
-  _prompt: string,
-  _output: string,
-  _opts: Pick<ChatOptions, "origin" | "maxUnits" | "appId"> = {},
-): AiResponse {
-  throw new AiUnsupported("audio.tts");
-}
-
-/** @deprecated Experimental compatibility shim; currently unsupported. */
-export function audioStt(
-  _audio: string,
-  _opts: Pick<ChatOptions, "origin" | "maxUnits" | "appId"> = {},
-): AiResponse {
-  throw new AiUnsupported("audio.stt");
-}
-
-/** @deprecated Experimental compatibility shim; currently unsupported. */
-export function videoGenerate(
-  _prompt: string,
-  _output: string,
-  _opts: Pick<ChatOptions, "origin" | "maxUnits" | "appId"> = {},
-): AiResponse {
-  throw new AiUnsupported("video.generate");
-}
-
-/** @deprecated Experimental compatibility shim; currently unsupported. */
-export function videoAnalyze(
-  _prompt: string,
-  _video: string,
-  _opts: Pick<ChatOptions, "origin" | "maxUnits" | "appId"> = {},
-): AiResponse {
-  throw new AiUnsupported("video.analyze");
-}
-
 /** Current-period budget snapshot for an app. */
 export function budget(appId?: string): Budget {
   const app = appId || process.env.COS_APP_ID;
   if (!app) throw new AiError("budget: app_id is required");
-  const { envelope, status } = cosCallJson("cos agent budget show", [
-    "agent",
-    "budget",
-    "show",
-    app,
-  ]);
-  if (status !== 0 || hasError(envelope)) {
-    const env = asObject(envelope);
-    throw new AiUnavailable(
-      `cos agent budget show failed: ${String(env["error"] ?? status)}`,
-    );
+  let data: unknown;
+  try {
+    data = cosCallJson("cos agent budget show", ["agent", "budget", "show", app]);
+  } catch (error) {
+    if (error instanceof Denied || error instanceof Unavailable) {
+      throw new AiUnavailable(error.message);
+    }
+    throw error;
   }
   try {
-    validateBudgetShow(envelope);
+    validateBudgetShow(data);
   } catch (error) {
     if (error instanceof WireDecodeError) {
       throw new AiUnavailable(`budget response decode failed: ${error.message}`);
@@ -234,8 +150,8 @@ export function budget(appId?: string): Budget {
     throw error;
   }
   return {
-    period: envelope.period,
-    unitsUsed: envelope.units_used,
+    period: data.period,
+    unitsUsed: data.units_used,
     unitsCap: 0,
   };
 }
@@ -268,33 +184,24 @@ function dispatch(a: DispatchArgs): AiResponse {
     }
     if (a.tools && a.tools.length) argv.push("--tools", a.tools.join(","));
 
-    let outcome;
+    let data: unknown;
     try {
-      outcome = cosCallJson(`cos ai ${a.modality}`, argv);
+      data = cosCallJson(`cos ai ${a.modality}`, argv);
     } catch (e) {
+      if (e instanceof Denied) raiseForError(e.payload);
       if (e instanceof Unavailable) throw new AiUnavailable(e.message);
       throw e;
     }
-    if (outcome.status !== 0 || hasError(outcome.envelope)) {
-      raiseForError(asObject(outcome.envelope));
-    }
-    return parseResponse(outcome.envelope);
+    return parseResponse(data);
   } finally {
     rmSync(privateDir, { recursive: true, force: true });
   }
 }
 
 function raiseForError(env: Record<string, unknown>): never {
-  const code = String(env["code"] ?? "").toUpperCase();
+  const code = String(env["code"]);
   if (code === "BUDGET_EXCEEDED") throw new AiBudgetExceeded(env);
   if (code === "SAFETY_VIOLATION") throw new AiSafetyViolation(env);
-  const msg = String(env["error"] ?? "").toLowerCase();
-  if (msg.includes("budget") && (msg.includes("exceed") || msg.includes("over"))) {
-    throw new AiBudgetExceeded(env);
-  }
-  if (msg.includes("safety") || msg.includes("redact") || msg.includes("injection")) {
-    throw new AiSafetyViolation(env);
-  }
   throw new AiDenied(env);
 }
 

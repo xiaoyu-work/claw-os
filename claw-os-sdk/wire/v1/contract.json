@@ -4,6 +4,7 @@
     "schemas": [
       "ai",
       "budget_show",
+      "envelope",
       "mcp_call_context",
       "tool_catalog",
       "tool"

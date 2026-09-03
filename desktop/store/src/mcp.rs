@@ -6,12 +6,8 @@
 //! plus a thin `cosmic-store` GUI launcher. The agent never shells
 //! out to `apt` directly.
 //!
-//! Tools:
-//!   - `store.search(query, limit)` — `cos app pkg search`
-//!   - `store.installed()`          — `cos app pkg list`
-//!   - `store.show(name)`           — `cos app pkg show`
-//!   - `store.open(name?)`          — spawn the store GUI, optionally
-//!     deep-linked to a package
+//! The authoritative tool catalog and capability contract live in
+//! `apps/cosmic-store/app.json`.
 //!
 //! Install/remove are intentionally **not** exposed: those are
 //! impactful operations that should go through the kernel-level
@@ -23,8 +19,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use claw_os_sdk::mcp::{Server, Tool, ToolResult};
-use serde_json::{Value, json};
+use claw_os_sdk::mcp::{App, CallContext, Tool, ToolResult};
+use serde_json::{json, Value};
 
 fn cos_bin() -> String {
     std::env::var("CLAW_COS_BIN").unwrap_or_else(|_| "cos".into())
@@ -67,27 +63,13 @@ impl Tool for SearchTool {
     fn name(&self) -> &'static str {
         "store.search"
     }
-    fn description(&self) -> &'static str {
-        "Search the system package catalogue (apt) for installable \
-         packages matching a query. Routes through the kernel's \
-         apps/pkg so it's capability-gated and audited. Returns \
-         package name + short description for each hit."
-    }
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "minLength": 1},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 25}
-            },
-            "required": ["query"],
-            "additionalProperties": false
-        })
-    }
-    async fn exec(&self, input: Value) -> ToolResult {
+    async fn handle(&self, input: Value, context: CallContext) -> ToolResult {
+        if let Err(error) = context.check_cancelled() {
+            return ToolResult::error(error.to_string());
+        }
         let query = match input.get("query").and_then(|v| v.as_str()) {
             Some(s) => s.to_string(),
-            None => return ToolResult::err("missing query"),
+            None => return ToolResult::error("missing query"),
         };
         let limit = input
             .get("limit")
@@ -95,9 +77,13 @@ impl Tool for SearchTool {
             .unwrap_or(25)
             .clamp(1, 100)
             .to_string();
-        match invoke_app("pkg", "search", &["--query", &query, "--limit", &limit]).await {
-            Ok(v) => ToolResult::ok(v.to_string()),
-            Err(e) => ToolResult::err(format!("store.search: {e}")),
+        let result = invoke_app("pkg", "search", &["--query", &query, "--limit", &limit]).await;
+        if let Err(error) = context.check_cancelled() {
+            return ToolResult::error(error.to_string());
+        }
+        match result {
+            Ok(v) => ToolResult::text(v.to_string()),
+            Err(e) => ToolResult::error(format!("store.search: {e}")),
         }
     }
 }
@@ -113,16 +99,17 @@ impl Tool for InstalledTool {
     fn name(&self) -> &'static str {
         "store.installed"
     }
-    fn description(&self) -> &'static str {
-        "List packages dpkg considers installed on this system."
-    }
-    fn input_schema(&self) -> Value {
-        json!({ "type": "object", "additionalProperties": false })
-    }
-    async fn exec(&self, _input: Value) -> ToolResult {
-        match invoke_app("pkg", "list", &[]).await {
-            Ok(v) => ToolResult::ok(v.to_string()),
-            Err(e) => ToolResult::err(format!("store.installed: {e}")),
+    async fn handle(&self, _input: Value, context: CallContext) -> ToolResult {
+        if let Err(error) = context.check_cancelled() {
+            return ToolResult::error(error.to_string());
+        }
+        let result = invoke_app("pkg", "list", &[]).await;
+        if let Err(error) = context.check_cancelled() {
+            return ToolResult::error(error.to_string());
+        }
+        match result {
+            Ok(v) => ToolResult::text(v.to_string()),
+            Err(e) => ToolResult::error(format!("store.installed: {e}")),
         }
     }
 }
@@ -138,27 +125,21 @@ impl Tool for ShowTool {
     fn name(&self) -> &'static str {
         "store.show"
     }
-    fn description(&self) -> &'static str {
-        "Show full metadata for one package (version, description, \
-         dependencies). Use this after store.search to confirm the \
-         agent has the right hit before recommending it to the user."
-    }
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": { "name": {"type": "string", "minLength": 1} },
-            "required": ["name"],
-            "additionalProperties": false
-        })
-    }
-    async fn exec(&self, input: Value) -> ToolResult {
+    async fn handle(&self, input: Value, context: CallContext) -> ToolResult {
+        if let Err(error) = context.check_cancelled() {
+            return ToolResult::error(error.to_string());
+        }
         let name = match input.get("name").and_then(|v| v.as_str()) {
             Some(s) => s.to_string(),
-            None => return ToolResult::err("missing name"),
+            None => return ToolResult::error("missing name"),
         };
-        match invoke_app("pkg", "show", &["--name", &name]).await {
-            Ok(v) => ToolResult::ok(v.to_string()),
-            Err(e) => ToolResult::err(format!("store.show: {e}")),
+        let result = invoke_app("pkg", "show", &["--name", &name]).await;
+        if let Err(error) = context.check_cancelled() {
+            return ToolResult::error(error.to_string());
+        }
+        match result {
+            Ok(v) => ToolResult::text(v.to_string()),
+            Err(e) => ToolResult::error(format!("store.show: {e}")),
         }
     }
 }
@@ -174,21 +155,10 @@ impl Tool for OpenTool {
     fn name(&self) -> &'static str {
         "store.open"
     }
-    fn description(&self) -> &'static str {
-        "Open the App Store GUI. Pass `name` to land the user on \
-         a specific package's detail page. Use this to hand control \
-         back when the user wants to install / remove themselves."
-    }
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "name": {"type": "string", "description": "Optional package name to focus on."}
-            },
-            "additionalProperties": false
-        })
-    }
-    async fn exec(&self, input: Value) -> ToolResult {
+    async fn handle(&self, input: Value, context: CallContext) -> ToolResult {
+        if let Err(error) = context.check_cancelled() {
+            return ToolResult::error(error.to_string());
+        }
         let name = input
             .get("name")
             .and_then(|v| v.as_str())
@@ -203,9 +173,9 @@ impl Tool for OpenTool {
         })
         .await;
         match res {
-            Ok(Ok(_)) => ToolResult::ok(json!({"opened": true}).to_string()),
-            Ok(Err(e)) => ToolResult::err(format!("store.open: {e}")),
-            Err(e) => ToolResult::err(format!("store.open join: {e}")),
+            Ok(Ok(_)) => ToolResult::text(json!({"opened": true}).to_string()),
+            Ok(Err(e)) => ToolResult::error(format!("store.open: {e}")),
+            Err(e) => ToolResult::error(format!("store.open join: {e}")),
         }
     }
 }
@@ -219,13 +189,12 @@ pub fn run() -> anyhow::Result<()> {
         .enable_all()
         .build()?;
     rt.block_on(async {
-        Server::new("cosmic-store", env!("CARGO_PKG_VERSION"))
-            .tool(Arc::new(SearchTool))
-            .tool(Arc::new(InstalledTool))
-            .tool(Arc::new(ShowTool))
-            .tool(Arc::new(OpenTool))
-            .serve_stdio()
-            .await
-            .map_err(|e| anyhow::anyhow!("cosmic-store MCP server exited: {e}"))
+        let mut app = App::from_environment()?;
+        app.bind(Arc::new(SearchTool))?;
+        app.bind(Arc::new(InstalledTool))?;
+        app.bind(Arc::new(ShowTool))?;
+        app.bind(Arc::new(OpenTool))?;
+        app.serve_stdio().await
     })
+    .map_err(|error| anyhow::anyhow!("cosmic-store MCP server exited: {error}"))
 }

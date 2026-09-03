@@ -11,12 +11,8 @@ skills, hooks, sessions, recall). Apps must not use it. ``cos ai``
 is the App-developer-facing primitive: raw, gated LLM access with
 no loop and no kernel state.
 
-Apps **never** name a verb. ``embed``, image, vision, audio, and video
-helpers retain their signatures as deprecated, experimental
-compatibility shims. They are currently unsupported and always raise
-``AiUnsupported`` before invoking ``cos``.
-
-Apps also do **not** pick the model. The machine owner configures one
+Apps **never** name a verb and do **not** pick the model. The machine owner
+configures one
 provider/model in ``/etc/cos/agent.toml`` and every app's call uses
 that. ``chat`` exposes ``origin``, ``max_units``, and prompt controls,
 never a ``model`` argument.
@@ -49,7 +45,6 @@ kernel — not the app — controls budget, safety, and audit.
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import subprocess
@@ -57,10 +52,10 @@ import tempfile
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional
 
+from ._transport import WIRE_ARG, WireDenied, WireUnavailable, decode_response
 from .generated import (
     WireDecodeError,
     WireJsonValue,
-    decode_wire_json,
     validate_ai,
     validate_budget_show,
     wire_integer_to_int,
@@ -71,18 +66,6 @@ from .generated import (
 # default is long enough for slow providers but bounded so a hung child
 # never blocks the calling app forever.
 _DEFAULT_TIMEOUT_S = 60
-
-
-def _truncate(value: Any, limit: int = 200) -> str:
-    """Return ``str(value)`` truncated to ``limit`` chars with an ellipsis
-    marker. Used to keep large response payloads — which routinely
-    contain the user's prompt and the model's reply — out of exception
-    strings that flow into logs.
-    """
-    s = repr(value) if not isinstance(value, str) else value
-    if len(s) <= limit:
-        return s
-    return s[:limit] + f"... [{len(s) - limit} more bytes elided]"
 
 
 # ---------------------------------------------------------------------------
@@ -96,17 +79,6 @@ class AiError(Exception):
 
 class AiUnavailable(AiError):
     """The ``cos`` binary could not be invoked or returned garbage."""
-
-
-class AiUnsupported(AiError):
-    """An experimental compatibility modality is currently unsupported."""
-
-    def __init__(self, modality: str):
-        self.modality = modality
-        super().__init__(
-            f"{modality}: currently unsupported; "
-            "only chat/chat-untrusted are stable"
-        )
 
 
 class AiDenied(AiError):
@@ -228,106 +200,12 @@ def chat(
     )
 
 
-def embed(
-    prompt: str,
-    *,
-    origin: str = "trusted",
-    max_units: Optional[int] = None,
-    app_id: Optional[str] = None,
-) -> AiResponse:
-    """Deprecated experimental compatibility shim; currently unsupported."""
-    raise AiUnsupported("embed")
-
-
-def image_generate(
-    prompt: str,
-    *,
-    output: str,
-    origin: str = "trusted",
-    max_units: Optional[int] = None,
-    app_id: Optional[str] = None,
-) -> AiResponse:
-    """Deprecated experimental compatibility shim; currently unsupported."""
-    raise AiUnsupported("image.generate")
-
-
-def image_analyze(
-    *,
-    image: str,
-    origin: str = "trusted",
-    max_units: Optional[int] = None,
-    app_id: Optional[str] = None,
-) -> AiResponse:
-    """Deprecated experimental compatibility shim; currently unsupported."""
-    raise AiUnsupported("image.analyze")
-
-
-def vision_analyze(
-    prompt: str,
-    *,
-    image: str,
-    origin: str = "trusted",
-    max_units: Optional[int] = None,
-    system: Optional[str] = None,
-    app_id: Optional[str] = None,
-) -> AiResponse:
-    """Deprecated experimental compatibility shim; currently unsupported."""
-    raise AiUnsupported("vision.analyze")
-
-
-def audio_tts(
-    prompt: str,
-    *,
-    output: str,
-    origin: str = "trusted",
-    max_units: Optional[int] = None,
-    app_id: Optional[str] = None,
-) -> AiResponse:
-    """Deprecated experimental compatibility shim; currently unsupported."""
-    raise AiUnsupported("audio.tts")
-
-
-def audio_stt(
-    *,
-    audio: str,
-    origin: str = "trusted",
-    max_units: Optional[int] = None,
-    app_id: Optional[str] = None,
-) -> AiResponse:
-    """Deprecated experimental compatibility shim; currently unsupported."""
-    raise AiUnsupported("audio.stt")
-
-
-def video_generate(
-    prompt: str,
-    *,
-    output: str,
-    origin: str = "trusted",
-    max_units: Optional[int] = None,
-    app_id: Optional[str] = None,
-) -> AiResponse:
-    """Deprecated experimental compatibility shim; currently unsupported."""
-    raise AiUnsupported("video.generate")
-
-
-def video_analyze(
-    *,
-    video: str,
-    prompt: Optional[str] = None,
-    origin: str = "trusted",
-    max_units: Optional[int] = None,
-    app_id: Optional[str] = None,
-) -> AiResponse:
-    """Deprecated experimental compatibility shim; currently unsupported."""
-    raise AiUnsupported("video.analyze")
-
-
 def budget(app_id: Optional[str] = None) -> Budget:
     """Return the current-period budget snapshot for an app."""
     app = app_id or os.environ.get("COS_APP_ID")
     if not app:
         raise AiError("budget: app_id is required")
-    cmd = [_cos_binary(), "agent", "budget", "show", app]
+    cmd = [_cos_binary(), WIRE_ARG, "agent", "budget", "show", app]
     try:
         proc = subprocess.run(
             cmd,
@@ -340,23 +218,11 @@ def budget(app_id: Optional[str] = None) -> Budget:
         raise AiUnavailable(
             f"cos agent budget show timed out after {_DEFAULT_TIMEOUT_S}s"
         ) from exc
-    text = (proc.stdout or "").strip() or (proc.stderr or "").strip()
-    if not text:
-        raise AiUnavailable(
-            f"cos agent budget show returned no output (exit {proc.returncode})"
-        )
+    text = (proc.stdout or "").strip()
     try:
-        env = decode_wire_json(text)
-    except (json.JSONDecodeError, ValueError) as exc:
-        raise AiUnavailable(
-            f"cos agent budget show returned non-JSON output: {_truncate(text)}"
-        ) from exc
-    if proc.returncode != 0:
-        # A non-zero exit always means failure, even if stdout happened
-        # to be valid JSON — the body may be a partial frame.
-        raise AiUnavailable(
-            f"cos agent budget show exited {proc.returncode}: {_truncate(text)}"
-        )
+        env = decode_response(text, proc.returncode, "cos agent budget show")
+    except (WireDenied, WireUnavailable) as exc:
+        raise AiUnavailable(str(exc)) from exc
     try:
         validate_budget_show(env)
     except WireDecodeError as exc:
@@ -391,7 +257,16 @@ def _dispatch(
         )
 
     with tempfile.TemporaryDirectory(prefix="claw-ai-") as private_dir:
-        cmd = [_cos_binary(), "ai", "chat", "--app", app, "--origin", origin]
+        cmd = [
+            _cos_binary(),
+            WIRE_ARG,
+            "ai",
+            "chat",
+            "--app",
+            app,
+            "--origin",
+            origin,
+        ]
 
         def add_private_file(flag: str, name: str, value: str) -> None:
             path = os.path.join(private_dir, name)
@@ -423,27 +298,13 @@ def _dispatch(
             raise AiUnavailable(
                 f"cos ai {modality} timed out after {_DEFAULT_TIMEOUT_S}s"
             ) from exc
-    payload_text = (proc.stdout or "").strip() or (proc.stderr or "").strip()
-    if not payload_text:
-        raise AiUnavailable(
-            f"cos ai chat returned no output (exit {proc.returncode})"
-        )
-
+    payload_text = (proc.stdout or "").strip()
     try:
-        envelope = decode_wire_json(payload_text)
-    except (json.JSONDecodeError, ValueError) as exc:
-        raise AiUnavailable(
-            f"cos ai chat returned non-JSON output: {_truncate(payload_text)}"
-        ) from exc
-
-    if proc.returncode != 0:
-        if isinstance(envelope, Mapping):
-            _raise_for_error(envelope)
-        raise AiUnavailable(
-            f"cos ai chat exited {proc.returncode}: {_truncate(payload_text)}"
-        )
-    if isinstance(envelope, Mapping) and "error" in envelope:
-        _raise_for_error(envelope)
+        envelope = decode_response(payload_text, proc.returncode, "cos ai chat")
+    except WireDenied as exc:
+        _raise_for_error(exc.payload)
+    except WireUnavailable as exc:
+        raise AiUnavailable(str(exc)) from exc
 
     return _parse_response(envelope)
 
@@ -491,21 +352,16 @@ def _parse_response(env: Any) -> AiResponse:
 
 
 def _raise_for_error(env: Mapping[str, Any]) -> None:
-    code = str(env.get("code") or "").upper()
+    code = str(env["code"])
     if code == "BUDGET_EXCEEDED":
         raise AiBudgetExceeded(env)
     if code == "SAFETY_VIOLATION":
-        raise AiSafetyViolation(env)
-    msg = (env.get("error") or "").lower()
-    if "budget" in msg and ("exceed" in msg or "over" in msg):
-        raise AiBudgetExceeded(env)
-    if "safety" in msg or "redact" in msg or "injection" in msg:
         raise AiSafetyViolation(env)
     raise AiDenied(env)
 
 
 def _cos_binary() -> str:
-    override = os.environ.get("COS_BIN")
+    override = os.environ.get("CLAW_COS_BIN")
     if override:
         return override
     found = shutil.which("cos")

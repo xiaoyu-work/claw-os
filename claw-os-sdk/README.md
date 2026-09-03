@@ -35,7 +35,7 @@ claw-os-sdk/
 │   └── src/
 │       ├── lib.rs               top-level re-exports + transport
 │       ├── envelope.rs          common envelope parse / error
-│       ├── ai.rs                stable chat + unsupported compatibility shims
+│       ├── ai.rs                gated chat API
 │       ├── mcp/                 native App MCP server runtime
 │       ├── tools.rs             tools::call / tools::catalog
 │       └── generated.rs         codegen output (envelope types)

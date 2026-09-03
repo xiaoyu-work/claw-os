@@ -1,6 +1,36 @@
 use super::*;
 
 #[test]
+fn wire_codes_follow_error_semantics() {
+    assert_eq!(
+        AiError::UnknownApp("missing".into()).wire_code(),
+        "UNKNOWN_APP"
+    );
+    assert_eq!(AiError::BadOrigin("bad".into()).wire_code(), "INVALID_ARGS");
+    assert_eq!(
+        AiError::Denied(serde_json::json!({"decision": "deny"})).wire_code(),
+        "PERMISSION_DENIED"
+    );
+    assert_eq!(
+        AiError::Budget(BudgetError::OverUnitCap {
+            app: "notes".into(),
+            used: 10,
+            cap: 10,
+        })
+        .wire_code(),
+        "BUDGET_EXCEEDED"
+    );
+    assert_eq!(
+        AiError::Provider("offline".into()).wire_code(),
+        "KERNEL_UNAVAILABLE"
+    );
+    assert_eq!(
+        AiError::Internal("broken".into()).wire_code(),
+        "INTERNAL_ERROR"
+    );
+}
+
+#[test]
 fn parse_origin_known() {
     assert_eq!(parse_origin("trusted").unwrap(), PromptOrigin::Trusted);
     assert_eq!(
@@ -28,10 +58,7 @@ fn modality_derive_chat_untrusted_from_external_origin() {
         prompt: Some("hi".into()),
         ..Default::default()
     };
-    assert_eq!(
-        Modality::derive(&req).unwrap(),
-        Modality::ChatUntrusted
-    );
+    assert_eq!(Modality::derive(&req).unwrap(), Modality::ChatUntrusted);
 }
 
 #[test]
@@ -55,10 +82,7 @@ fn modality_derive_image_generate_from_image_output() {
         image_output: Some(PathBuf::from("/tmp/out.png")),
         ..Default::default()
     };
-    assert_eq!(
-        Modality::derive(&req).unwrap(),
-        Modality::ImageGenerate
-    );
+    assert_eq!(Modality::derive(&req).unwrap(), Modality::ImageGenerate);
 }
 
 #[test]
@@ -69,10 +93,7 @@ fn modality_derive_image_analyze_no_prompt() {
         image_input: Some(PathBuf::from("/tmp/in.png")),
         ..Default::default()
     };
-    assert_eq!(
-        Modality::derive(&req).unwrap(),
-        Modality::ImageAnalyze
-    );
+    assert_eq!(Modality::derive(&req).unwrap(), Modality::ImageAnalyze);
 }
 
 #[test]
@@ -84,10 +105,7 @@ fn modality_derive_vision_analyze_with_prompt() {
         image_input: Some(PathBuf::from("/tmp/in.png")),
         ..Default::default()
     };
-    assert_eq!(
-        Modality::derive(&req).unwrap(),
-        Modality::VisionAnalyze
-    );
+    assert_eq!(Modality::derive(&req).unwrap(), Modality::VisionAnalyze);
 }
 
 #[test]
@@ -122,10 +140,7 @@ fn modality_derive_video_generate() {
         video_output: Some(PathBuf::from("/tmp/out.mp4")),
         ..Default::default()
     };
-    assert_eq!(
-        Modality::derive(&req).unwrap(),
-        Modality::VideoGenerate
-    );
+    assert_eq!(Modality::derive(&req).unwrap(), Modality::VideoGenerate);
 }
 
 #[test]
@@ -136,10 +151,7 @@ fn modality_derive_video_analyze() {
         video_input: Some(PathBuf::from("/tmp/in.mp4")),
         ..Default::default()
     };
-    assert_eq!(
-        Modality::derive(&req).unwrap(),
-        Modality::VideoAnalyze
-    );
+    assert_eq!(Modality::derive(&req).unwrap(), Modality::VideoAnalyze);
 }
 
 #[test]

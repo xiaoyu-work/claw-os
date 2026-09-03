@@ -69,6 +69,7 @@ fn extension(
         protocol: crate::extension_host::protocol::PROTOCOL_VERSION,
         task_id: task.to_string(),
         session_id: Some(session.to_string()),
+        app_id: None,
         owner_uid: 1000,
         extension_uid: 61_000,
         owner_gid: 1000,

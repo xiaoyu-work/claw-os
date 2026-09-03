@@ -26,11 +26,22 @@ from claw_os_sdk.generated import (
     encode_wire_json,
     validate_ai,
     validate_budget_show,
+    validate_envelope,
     validate_mcp_call_context,
     validate_tool,
     validate_tool_catalog,
     wire_integer_to_int,
 )
+
+
+def _wire_success_json(data_json: str) -> str:
+    return f'{{"ok":true,"wire_version":1,"data":{data_json}}}'
+
+
+def _wire_error(error: str, code: str) -> str:
+    return json.dumps(
+        {"ok": False, "wire_version": 1, "error": error, "code": code}
+    )
 
 
 def _valid_ai() -> dict:
@@ -47,6 +58,26 @@ def _valid_ai() -> dict:
 
 
 class WireValidationTests(unittest.TestCase):
+    def test_envelope_contract_is_strict(self) -> None:
+        validate_envelope(
+            {"ok": True, "wire_version": 1, "data": {"value": 1}}
+        )
+        validate_envelope(
+            {
+                "ok": False,
+                "wire_version": 1,
+                "error": "denied",
+                "code": "PERMISSION_DENIED",
+            }
+        )
+        for payload in (
+            {"value": 1},
+            {"ok": False, "wire_version": 1, "error": "missing code"},
+            {"ok": True, "wire_version": 2, "data": {}},
+        ):
+            with self.subTest(payload=payload), self.assertRaises(WireDecodeError):
+                validate_envelope(payload)
+
     def test_ai_validator_enforces_shared_contract(self) -> None:
         cases = []
 
@@ -179,13 +210,19 @@ class WireValidationTests(unittest.TestCase):
             subprocess,
             "run",
             return_value=subprocess.CompletedProcess(
-                ["cos"], 0, '{"app":"notes","period":"2026-08","units_used":7}', ""
+                ["cos"],
+                0,
+                _wire_success_json(
+                    '{"app":"notes","period":"2026-08","units_used":7}'
+                ),
+                "",
             ),
-        ):
+        ) as run:
             budget = ai.budget("notes")
         self.assertEqual(budget.period, "2026-08")
         self.assertEqual(budget.units_used, 7)
         self.assertEqual(budget.units_cap, 0)
+        self.assertEqual(run.call_args.args[0][:2], ["cos", "--wire=1"])
 
     def test_mcp_call_context_is_closed_and_depth_bounded(self) -> None:
         context = {
@@ -241,7 +278,7 @@ class WireValidationTests(unittest.TestCase):
         ):
             with self.assertRaises(tools.ToolUnavailable) as tool_error:
                 tools.call("echo", app_id="notes")
-        self.assertIn("WIRE_TYPE", str(tool_error.exception))
+        self.assertIn("WIRE_ONE_OF", str(tool_error.exception))
         self.assertIn(" at $:", str(tool_error.exception))
 
     def test_proposed_input_round_trips_directly_through_tools_call(self) -> None:
@@ -258,7 +295,9 @@ class WireValidationTests(unittest.TestCase):
         completed = subprocess.CompletedProcess(
             ["cos"],
             0,
-            '{"tool":"echo","app_id":"notes","status":"ok","result":null}',
+            _wire_success_json(
+                '{"tool":"echo","app_id":"notes","status":"ok","result":null}'
+            ),
             "",
         )
         with mock.patch.object(tools, "_cos_binary", return_value="cos"), mock.patch.object(
@@ -277,7 +316,9 @@ class WireValidationTests(unittest.TestCase):
         tool_completed = subprocess.CompletedProcess(
             ["cos"],
             0,
-            f'{{"tool":"echo","app_id":"notes","status":"ok","result":{lexeme}}}',
+            _wire_success_json(
+                f'{{"tool":"echo","app_id":"notes","status":"ok","result":{lexeme}}}'
+            ),
             "",
         )
         with mock.patch.object(tools, "_cos_binary", return_value="cos"), mock.patch.object(
@@ -291,12 +332,14 @@ class WireValidationTests(unittest.TestCase):
             ["cos"],
             0,
             (
-                '{"tools":[{"name":"echo","summary":"Echo","verb":"ipc.invoke",'
-                '"stability":"stable","args_schema":{"minimum":'
-                + lexeme
-                + '},"returns_schema":{"maximum":'
-                + lexeme
-                + "}}]}"
+                _wire_success_json(
+                    '{"tools":[{"name":"echo","summary":"Echo","verb":"ipc.invoke",'
+                    '"stability":"stable","args_schema":{"minimum":'
+                    + lexeme
+                    + '},"returns_schema":{"maximum":'
+                    + lexeme
+                    + "}}]}"
+                )
             ),
             "",
         )
@@ -311,7 +354,9 @@ class WireValidationTests(unittest.TestCase):
         completed = subprocess.CompletedProcess(
             ["cos"],
             0,
-            '{"tool":"echo","app_id":"notes","status":"ok","result":null}',
+            _wire_success_json(
+                '{"tool":"echo","app_id":"notes","status":"ok","result":null}'
+            ),
             "",
         )
         for args in (None, "scalar", [1, True]):
@@ -383,11 +428,39 @@ class WireValidationTests(unittest.TestCase):
         self.assertEqual(value.lexeme, lexeme)
         self.assertEqual(encode_wire_json(value), lexeme)
 
-    def test_stable_error_code_precedes_opaque_message(self) -> None:
+    def test_stable_error_code_determines_typed_error(self) -> None:
         with self.assertRaises(ai.AiBudgetExceeded):
-            ai._raise_for_error({"error": "opaque", "code": "budget_exceeded"})
+            ai._raise_for_error(
+                {"error": "safety words", "code": "BUDGET_EXCEEDED"}
+            )
         with self.assertRaises(ai.AiSafetyViolation):
-            ai._raise_for_error({"error": "opaque", "code": "SaFeTy_ViOlAtIoN"})
+            ai._raise_for_error(
+                {"error": "budget words", "code": "SAFETY_VIOLATION"}
+            )
+
+    def test_transport_rejects_flat_and_incoherent_wire_replies(self) -> None:
+        for completed in (
+            subprocess.CompletedProcess(["cos"], 0, '{"value":1}', ""),
+            subprocess.CompletedProcess(
+                ["cos"],
+                1,
+                _wire_success_json('{"value":1}'),
+                "",
+            ),
+            subprocess.CompletedProcess(
+                ["cos"],
+                0,
+                _wire_error("denied", "PERMISSION_DENIED"),
+                "",
+            ),
+        ):
+            with self.subTest(completed=completed), mock.patch.object(
+                tools, "_cos_binary", return_value="cos"
+            ), mock.patch.object(
+                tools, "_run_with_timeout", return_value=completed
+            ):
+                with self.assertRaises(tools.ToolUnavailable):
+                    tools.call("echo", {}, app_id="notes")
 
 
 if __name__ == "__main__":

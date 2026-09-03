@@ -62,10 +62,9 @@ and audit before model or computer operations run.
 
 ## AI support
 
-- **Stable:** `ai.chat`. Setting `origin: "external-content"`
-  automatically selects `ai.chat.untrusted`.
-- Embed, image, vision, audio, and video helpers are currently unsupported.
-  They throw `ai.AiUnsupported` before invoking `cos`.
+`ai.chat` is the public model API. Setting `origin: "external-content"`
+automatically selects `ai.chat.untrusted`. Unsupported modalities are not
+published as placeholder APIs.
 
 ### What you never do
 
@@ -86,13 +85,12 @@ All errors extend `transport.BridgeError`:
   refused the call; `.payload` carries the structured kernel envelope.
 - `ai.AiUnavailable` / `tools.ToolUnavailable` — transport failure
   (binary missing, timeout, non-JSON output).
-- `ai.AiUnsupported` — an unavailable multimodal helper was called.
 - `tools.ToolDenied` — capability / unknown-tool / arg-shape refusal.
 
 ## Binary resolution
 
-The SDK runs `cos` from `$PATH`. Override with `CLAW_COS_BIN` (or
-`COS_BIN`) — used by tests and dev setups.
+The SDK runs `cos` from `$PATH`. Override with `CLAW_COS_BIN` for
+tests and dev setups.
 
 ## Develop
 

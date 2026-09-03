@@ -3,6 +3,28 @@ import sys
 from pathlib import Path
 
 
+def authenticated_mcp_params(params, *, call_id="test-call"):
+    """Attach the Gateway-owned context required by an App MCP call."""
+
+    value = dict(params or {})
+    meta = dict(value.get("_meta", {}))
+    meta["claw-os.dev/call-context"] = {
+        "wire_version": 1,
+        "call_id": call_id,
+        "trace_id": "test-trace",
+        "depth": 0,
+        "session_id": "test-session",
+        "task_id": "test-task",
+        "caller": {
+            "kind": "system-agent",
+            "id": "test-agent-session",
+            "owner_uid": 1000,
+        },
+    }
+    value["_meta"] = meta
+    return value
+
+
 def load_local_module(path, name, *, clear_modules=()):
     path = Path(path)
     apps_root = Path(__file__).resolve().parent / "apps"

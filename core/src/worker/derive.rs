@@ -170,7 +170,7 @@ impl SessionLifetime {
 
 /// Everything the kernel knows about one long-lived App session server.
 ///
-/// An App with a `session` block runs its declared entry as a stdio
+/// An App with an `mcp` block runs its declared entry as a stdio
 /// JSON-RPC peer that outlives every individual tool call. That shape
 /// is the reason this is not [`AppOperationInput`]: an operation worker
 /// is derived once for one bound call and dies with it, while a session
@@ -239,10 +239,8 @@ pub fn app_operation(input: AppOperationInput<'_>) -> Result<LaunchPolicy, Strin
     let data_dir = app_partition(Path::new(input.data_dir), input.app_id)?;
 
     let package_mount = match input.package_identity {
-        Some(identity) => {
-            Mount::read_only(app_dir.clone(), app_dir.clone(), MountClass::Package)
-                .expecting(identity)
-        }
+        Some(identity) => Mount::read_only(app_dir.clone(), app_dir.clone(), MountClass::Package)
+            .expecting(identity),
         None => Mount::read_only(app_dir.clone(), app_dir.clone(), MountClass::Package),
     };
     let mut mounts = vec![
@@ -257,8 +255,7 @@ pub fn app_operation(input: AppOperationInput<'_>) -> Result<LaunchPolicy, Strin
             continue;
         }
         mounts.push(
-            Mount::read_only(path.clone(), path.clone(), MountClass::Package)
-                .expecting(*identity),
+            Mount::read_only(path.clone(), path.clone(), MountClass::Package).expecting(*identity),
         );
     }
     mounts.extend(runtime_mounts());
@@ -321,8 +318,7 @@ pub fn mcp_server(input: McpServerInput<'_>) -> Result<LaunchPolicy, String> {
     mounts.extend(program_mount(&input.program));
     for (path, identity) in &input.pinned_entries {
         mounts.push(
-            Mount::read_only(path.clone(), path.clone(), MountClass::Package)
-                .expecting(*identity),
+            Mount::read_only(path.clone(), path.clone(), MountClass::Package).expecting(*identity),
         );
     }
     let workdir = match &input.cwd {
@@ -886,7 +882,7 @@ fn resolve_write_target(pattern: &str) -> Result<Option<PathBuf>, String> {
             return Err(format!(
                 "write scope `{pattern}` is ambiguous: a write grant must name an exact \
                  path or a `**` subtree"
-            ))
+            ));
         }
     };
 

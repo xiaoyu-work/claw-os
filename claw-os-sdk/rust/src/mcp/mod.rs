@@ -1,66 +1,60 @@
-//! Embeddable MCP (Model Context Protocol) stdio server for Claw OS
-//! native Apps.
+//! Manifest-bound MCP runtime for Claw OS Apps.
 //!
-//! This module is the Rust counterpart to `claw_os_sdk.mcp`. It lets
-//! any Rust binary (typically a desktop GUI App) opt into a second
-//! mode in which it speaks MCP JSON-RPC over stdio so the kernel
-//! agent can invoke its tools.
+//! [`App`] reads identity, tool descriptions, and input schemas only from the
+//! authoritative App manifest. Rust code binds implementation to each declared
+//! name:
 //!
-//! ## Usage shape
-//!
-//! ```ignore
-//! use claw_os_sdk::mcp::{Server, Tool, ToolResult};
-//! use async_trait::async_trait;
+//! ```no_run
 //! use std::sync::Arc;
 //!
-//! struct EchoTool;
+//! use async_trait::async_trait;
+//! use claw_os_sdk::mcp::{App, CallContext, Tool, ToolResult};
+//! use serde_json::Value;
+//!
+//! struct Echo;
 //!
 //! #[async_trait]
-//! impl Tool for EchoTool {
-//!     fn name(&self) -> &'static str { "echo" }
-//!     fn description(&self) -> &'static str { "Echo the `text` arg back." }
-//!     fn input_schema(&self) -> serde_json::Value {
-//!         serde_json::json!({
-//!             "type": "object",
-//!             "properties": {"text": {"type": "string"}},
-//!             "required": ["text"],
-//!             "additionalProperties": false,
-//!         })
+//! impl Tool for Echo {
+//!     fn name(&self) -> &str {
+//!         "echo"
 //!     }
-//!     async fn exec(&self, input: serde_json::Value) -> ToolResult {
-//!         let t = input.get("text").and_then(|v| v.as_str()).unwrap_or("");
-//!         ToolResult::ok(t.to_string())
+//!
+//!     async fn handle(&self, args: Value, context: CallContext) -> ToolResult {
+//!         if let Err(cancelled) = context.check_cancelled() {
+//!             return ToolResult::error(cancelled.to_string());
+//!         }
+//!         match args["text"].as_str() {
+//!             Some(text) => ToolResult::text(text),
+//!             None => ToolResult::error("validated text argument was unavailable"),
+//!         }
 //!     }
 //! }
 //!
-//! #[tokio::main(flavor = "current_thread")]
-//! async fn main() {
-//!     // Typical App pattern: switch on the env var the kernel sets.
-//!     if std::env::var("COS_MCP_SERVER").as_deref() != Ok("1") {
-//!         // ...run the GUI / normal mode here...
-//!         return;
-//!     }
-//!     Server::new("my-app", env!("CARGO_PKG_VERSION"))
-//!         .tool(Arc::new(EchoTool))
-//!         .serve_stdio()
-//!         .await
-//!         .expect("MCP server failed");
-//! }
+//! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+//! let mut app = App::from_environment()?;
+//! app.bind(Arc::new(Echo))?;
+//! app.serve_stdio().await?;
+//! # Ok(())
+//! # }
 //! ```
 //!
-//! ## Scope
-//!
-//! Server-only. Clients live in the kernel (`core/src/agent/tools/mcp/
-//! client.rs`). Keeping this implementation in the public SDK lets
-//! native Apps expose MCP tools without depending on kernel or
-//! `cos-runtime` internals.
+//! [`CallContext::deadline_unix_ms`] exposes the authenticated wire deadline
+//! without narrowing it to a platform-specific system-time range.
 
 mod generated;
+mod manifest;
 pub mod protocol;
-pub mod server;
-pub mod tool;
+mod server;
+mod tool;
 pub mod transport;
 
-pub use server::{Server, ServerError};
-pub use tool::{Tool, ToolResult};
-pub use transport::{StdioTransport, Transport, TransportError};
+pub use crate::generated::{McpCallContext, McpPrincipal};
+pub use manifest::MAX_MANIFEST_BYTES;
+pub use server::{App, AppError, CALL_CONTEXT_META_KEY, ERR_SERVER_BUSY};
+pub use tool::{
+    CallCancelled, CallContext, CallContextError, Progress, Tool, ToolResult, ToolResultError,
+};
+pub use transport::{
+    in_memory_pair, Frame, InMemoryTransport, StdioTransport, Transport, TransportError,
+    MAX_FRAME_BYTES,
+};

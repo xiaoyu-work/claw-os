@@ -21,7 +21,6 @@ fn assert_clean(rendered: &str) {
             "broker audit record leaked {secret}: {rendered}"
         );
     }
-
 }
 
 #[test]
@@ -45,6 +44,16 @@ fn mcp_lifecycle_audit_is_exact_without_remote_text_or_arguments() {
         descriptor_digest: Some("descriptor-ref".to_string()),
         capability_generation: Some("generation-ref".to_string()),
         untrusted_remote_name: Some(audit_policy::text_digest(remote_name)),
+        app_tool: None,
+        invoke_target: None,
+        call_id: None,
+        trace_id: None,
+        parent_call_id: None,
+        call_depth: None,
+        deadline_unix_ms: None,
+        caller_kind: None,
+        caller_id: None,
+        caller_app_id: None,
         manifest_digest: Some("manifest-ref".to_string()),
         success: false,
         latency_ms: 2,
@@ -78,7 +87,10 @@ fn launch_handles_are_never_written_to_the_audit_trail() {
     let rendered = request_audit(
         "app_session.bind",
         json!({"session_id": "app-1", "handle": "d34db33f-launch-handle", "pid": 4242}),
-        &Response::ok(crate::clawd::protocol::RequestId::unknown(), json!({"bound": true})),
+        &Response::ok(
+            crate::clawd::protocol::RequestId::unknown(),
+            json!({"bound": true}),
+        ),
     );
     assert_clean(&rendered);
     let record: Value = serde_json::from_str(&rendered).expect("parse");
@@ -102,7 +114,11 @@ fn credential_material_never_reaches_the_audit_trail() {
             "credential": "ya29.oauth-access-token",
             "refresh_token": "hunter2-password",
         }),
-        &Response::error(crate::clawd::protocol::RequestId::unknown(), "request_failed", "credential is not eligible"),
+        &Response::error(
+            crate::clawd::protocol::RequestId::unknown(),
+            "request_failed",
+            "credential is not eligible",
+        ),
     );
     assert_clean(&rendered);
     let record: Value = serde_json::from_str(&rendered).expect("parse");
@@ -117,7 +133,11 @@ fn handler_errors_that_echo_input_are_stored_as_class_and_digest() {
     let rendered = request_audit(
         "system.users.control",
         json!({"session": "app-1", "action": "create"}),
-        &Response::error(crate::clawd::protocol::RequestId::unknown(), "request_failed", message),
+        &Response::error(
+            crate::clawd::protocol::RequestId::unknown(),
+            "request_failed",
+            message,
+        ),
     );
     assert_clean(&rendered);
     let record: Value = serde_json::from_str(&rendered).expect("parse");

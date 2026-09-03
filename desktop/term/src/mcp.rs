@@ -6,16 +6,14 @@
 //! capability gate as everything else (`cos_runtime::exec::*`), with
 //! audit logging and timeout enforcement built in.
 //!
-//! Every command the agent runs through `term.run` is **traceable in
-//! the kernel audit log** — there is no way to bypass it. That's the
-//! whole point of routing terminal exec through this server instead
-//! of letting the agent shell out directly.
+//! `apps/cosmic-term/app.json` is authoritative for the tool catalog and
+//! manifest-derived process and filesystem grants.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use claw_os_sdk::mcp::{Server, Tool, ToolResult};
-use serde_json::{Value, json};
+use claw_os_sdk::mcp::{App, CallContext, Tool, ToolResult};
+use serde_json::{json, Value};
 
 // ---------------------------------------------------------------------------
 // term.run — capability-gated single-shot command execution
@@ -29,48 +27,28 @@ impl Tool for RunTool {
         "term.run"
     }
 
-    fn description(&self) -> &'static str {
-        "Run a single shell command, capture stdout/stderr, exit code \
-         and timeout state. Goes through `cos app exec run` so the \
-         kernel's capability gate and audit log apply. Use this instead \
-         of asking the user to copy-paste a command into a terminal."
-    }
-
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "argv": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "minItems": 1,
-                    "description": "Program + arguments. The first element is the binary."
-                },
-                "timeout_secs": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 600,
-                    "default": 30,
-                    "description": "Kill the process after this many seconds."
-                }
-            },
-            "required": ["argv"],
-            "additionalProperties": false
-        })
-    }
-
-    async fn exec(&self, input: Value) -> ToolResult {
-        let argv: Vec<String> = match input
-            .get("argv")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(str::to_string))
-                    .collect::<Vec<_>>()
-            }) {
-            Some(v) if !v.is_empty() => v,
-            _ => return ToolResult::err("argv must be a non-empty array of strings"),
+    async fn handle(&self, input: Value, context: CallContext) -> ToolResult {
+        if let Err(error) = context.check_cancelled() {
+            return ToolResult::error(error.to_string());
+        }
+        let command = match input.get("command").and_then(|v| v.as_str()) {
+            Some(command) => command.to_string(),
+            None => return ToolResult::error("missing command"),
         };
+        let arguments: Vec<String> = input
+            .get("arguments")
+            .and_then(Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut argv = Vec::with_capacity(arguments.len() + 1);
+        argv.push(command);
+        argv.extend(arguments);
         let timeout = input
             .get("timeout_secs")
             .and_then(|v| v.as_u64())
@@ -84,7 +62,7 @@ impl Tool for RunTool {
         .await;
 
         match res {
-            Ok(Ok(r)) => ToolResult::ok(
+            Ok(Ok(r)) => ToolResult::text(
                 json!({
                     "stdout": r.stdout,
                     "stderr": r.stderr,
@@ -93,8 +71,8 @@ impl Tool for RunTool {
                 })
                 .to_string(),
             ),
-            Ok(Err(e)) => ToolResult::err(format!("term.run: {e}")),
-            Err(e) => ToolResult::err(format!("term.run join: {e}")),
+            Ok(Err(e)) => ToolResult::error(format!("term.run: {e}")),
+            Err(e) => ToolResult::error(format!("term.run join: {e}")),
         }
     }
 }
@@ -111,33 +89,22 @@ impl Tool for WhichTool {
         "term.which"
     }
 
-    fn description(&self) -> &'static str {
-        "Resolve a program name to its absolute path on $PATH. \
-         Use this before suggesting commands to confirm the binary \
-         exists on the user's system."
-    }
-
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "program": {"type": "string"}
-            },
-            "required": ["program"],
-            "additionalProperties": false
-        })
-    }
-
-    async fn exec(&self, input: Value) -> ToolResult {
+    async fn handle(&self, input: Value, context: CallContext) -> ToolResult {
+        if let Err(error) = context.check_cancelled() {
+            return ToolResult::error(error.to_string());
+        }
         let program = match input.get("program").and_then(|v| v.as_str()) {
             Some(s) => s.to_string(),
-            None => return ToolResult::err("missing program"),
+            None => return ToolResult::error("missing program"),
         };
         let res = tokio::task::spawn_blocking(move || cos_runtime::exec::which(&program)).await;
+        if let Err(error) = context.check_cancelled() {
+            return ToolResult::error(error.to_string());
+        }
         match res {
             Ok(Ok(r)) => {
                 let found = r.path.is_some();
-                ToolResult::ok(
+                ToolResult::text(
                     json!({
                         "program": r.program,
                         "path": r.path,
@@ -146,8 +113,8 @@ impl Tool for WhichTool {
                     .to_string(),
                 )
             }
-            Ok(Err(e)) => ToolResult::err(format!("term.which: {e}")),
-            Err(e) => ToolResult::err(format!("term.which join: {e}")),
+            Ok(Err(e)) => ToolResult::error(format!("term.which: {e}")),
+            Err(e) => ToolResult::error(format!("term.which join: {e}")),
         }
     }
 }
@@ -164,28 +131,10 @@ impl Tool for OpenTool {
         "term.open"
     }
 
-    fn description(&self) -> &'static str {
-        "Open an interactive terminal window, optionally cd'd into a \
-         working directory. Use this to hand control back to the user \
-         after the agent has finished a long-running operation in the \
-         background, e.g. 'I've finished cloning the repo — opening a \
-         terminal in /home/cos/proj for you.'"
-    }
-
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "cwd": {
-                    "type": "string",
-                    "description": "Initial working directory. Absolute path."
-                }
-            },
-            "additionalProperties": false
-        })
-    }
-
-    async fn exec(&self, input: Value) -> ToolResult {
+    async fn handle(&self, input: Value, context: CallContext) -> ToolResult {
+        if let Err(error) = context.check_cancelled() {
+            return ToolResult::error(error.to_string());
+        }
         let cwd = input
             .get("cwd")
             .and_then(|v| v.as_str())
@@ -200,9 +149,9 @@ impl Tool for OpenTool {
         })
         .await;
         match res {
-            Ok(Ok(_)) => ToolResult::ok(json!({"opened": true}).to_string()),
-            Ok(Err(e)) => ToolResult::err(format!("term.open: {e}")),
-            Err(e) => ToolResult::err(format!("term.open join: {e}")),
+            Ok(Ok(_)) => ToolResult::text(json!({"opened": true}).to_string()),
+            Ok(Err(e)) => ToolResult::error(format!("term.open: {e}")),
+            Err(e) => ToolResult::error(format!("term.open join: {e}")),
         }
     }
 }
@@ -216,12 +165,11 @@ pub(crate) fn run() -> anyhow::Result<()> {
         .enable_all()
         .build()?;
     rt.block_on(async {
-        Server::new("cosmic-term", env!("CARGO_PKG_VERSION"))
-            .tool(Arc::new(RunTool))
-            .tool(Arc::new(WhichTool))
-            .tool(Arc::new(OpenTool))
-            .serve_stdio()
-            .await
-            .map_err(|e| anyhow::anyhow!("cosmic-term MCP server exited: {e}"))
+        let mut app = App::from_environment()?;
+        app.bind(Arc::new(RunTool))?;
+        app.bind(Arc::new(WhichTool))?;
+        app.bind(Arc::new(OpenTool))?;
+        app.serve_stdio().await
     })
+    .map_err(|error| anyhow::anyhow!("cosmic-term MCP server exited: {error}"))
 }

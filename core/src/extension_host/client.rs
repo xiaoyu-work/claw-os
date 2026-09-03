@@ -12,8 +12,8 @@ use crate::clawd::wire::RequestId;
 
 use super::protocol::{
     ControlRequest, ControlResponse, ExtensionBinding, ExtensionErrorCategory, HostAction,
-    HostResult,
-    DEFAULT_REQUEST_TIMEOUT_MS, MAX_CONTROL_FRAME_BYTES, PROTOCOL_VERSION, READY_TIMEOUT_MS,
+    HostResult, DEFAULT_REQUEST_TIMEOUT_MS, MAX_CONTROL_FRAME_BYTES, PROTOCOL_VERSION,
+    READY_TIMEOUT_MS,
 };
 
 #[derive(Debug, Clone)]
@@ -239,56 +239,29 @@ impl ExtensionHostClient {
         result.map_err(|error| error.message)
     }
 
-    pub async fn open_app(&self, app_id: String) -> Result<usize, String> {
-        let started = std::time::Instant::now();
-        let digest = app_manifest_digest(&app_id);
-        let result = self
-            .request(HostAction::AppOpen {
-                app_id: app_id.clone(),
-            })
-            .await
-            .and_then(|result| match result {
-                HostResult::AppOpened { tool_count } => Ok(tool_count),
-                _ => Err(ClientFault::protocol(
-                    "extension host returned the wrong App-open result",
-                )),
-            });
-        self.emit_result(
-            super::protocol::ExtensionKind::App,
-            super::protocol::LifecycleAction::Attach,
-            &app_id,
-            digest.as_deref(),
-            started.elapsed(),
-            &result,
-        );
-        if result.is_ok() {
-            self.emit_result(
-                super::protocol::ExtensionKind::App,
-                super::protocol::LifecycleAction::Ready,
-                &app_id,
-                digest.as_deref(),
-                started.elapsed(),
-                &result,
-            );
-        }
-        result.map_err(|error| error.message)
-    }
-
     pub async fn call_app(
         &self,
         app_id: String,
         tool: String,
         arguments: Value,
+        context: crate::agent::tools::app_gateway::McpCallContext,
         timeout: Duration,
     ) -> Result<crate::agent::tools::mcp::protocol::CallToolResult, String> {
         let started = std::time::Instant::now();
         let digest = app_manifest_digest(&app_id);
+        let audit = super::protocol::AppInvocationAudit::new(
+            app_id.clone(),
+            tool.clone(),
+            self.binding.capability_generation.clone(),
+            context,
+        )?;
         let result = self
             .request_with_timeout(
                 HostAction::AppCall {
                     app_id: app_id.clone(),
                     tool,
                     arguments,
+                    audit: audit.clone(),
                 },
                 timeout.saturating_add(Duration::from_secs(5)),
                 true,
@@ -300,35 +273,11 @@ impl ExtensionHostClient {
                     "extension host returned the wrong App-call result",
                 )),
             });
-        self.emit_result(
-            super::protocol::ExtensionKind::App,
+        self.emit_app_result(
             action_for_result(&result),
             &app_id,
             digest.as_deref(),
-            started.elapsed(),
-            &result,
-        );
-        result.map_err(|error| error.message)
-    }
-
-    pub async fn close_app(&self, app_id: String) -> Result<bool, String> {
-        let started = std::time::Instant::now();
-        let result = self
-            .request(HostAction::AppClose {
-                app_id: app_id.clone(),
-            })
-            .await
-            .and_then(|result| match result {
-                HostResult::AppClosed { closed } => Ok(closed),
-                _ => Err(ClientFault::protocol(
-                    "extension host returned the wrong App-close result",
-                )),
-            });
-        self.emit_result(
-            super::protocol::ExtensionKind::App,
-            super::protocol::LifecycleAction::Detach,
-            &app_id,
-            app_manifest_digest(&app_id).as_deref(),
+            &audit,
             started.elapsed(),
             &result,
         );
@@ -451,11 +400,12 @@ impl ExtensionHostClient {
         timeout: Duration,
         cancel_on_timeout: bool,
     ) -> ClientResult<HostResult> {
-        self.binding.validate_worker(
-            std::process::id(),
-            crate::proc::read_start_time_ticks_pub(std::process::id()),
-        )
-        .map_err(ClientFault::protocol)?;
+        self.binding
+            .validate_worker(
+                std::process::id(),
+                crate::proc::read_start_time_ticks_pub(std::process::id()),
+            )
+            .map_err(ClientFault::protocol)?;
         let request = ControlRequest::new(
             &self.binding,
             action,
@@ -484,18 +434,17 @@ impl ExtensionHostClient {
 
     async fn exchange(&self, request: ControlRequest) -> ClientResult<HostResult> {
         let path = Path::new(&self.binding.control_socket);
-        let mut stream = UnixStream::connect(path)
-            .await
-            .map_err(|error| {
-                ClientFault::new(
-                    ExtensionErrorCategory::Connect,
-                    format!("connect extension host {}: {error}", path.display()),
-                )
-            })?;
+        let mut stream = UnixStream::connect(path).await.map_err(|error| {
+            ClientFault::new(
+                ExtensionErrorCategory::Connect,
+                format!("connect extension host {}: {error}", path.display()),
+            )
+        })?;
         verify_host_peer(&stream, &self.binding)
             .map_err(|error| ClientFault::new(ExtensionErrorCategory::Crash, error))?;
-        let body = serde_json::to_vec(&request)
-            .map_err(|error| ClientFault::protocol(format!("encode extension-host request: {error}")))?;
+        let body = serde_json::to_vec(&request).map_err(|error| {
+            ClientFault::protocol(format!("encode extension-host request: {error}"))
+        })?;
         if body.len() > MAX_CONTROL_FRAME_BYTES {
             return Err(ClientFault::protocol(
                 "extension-host request exceeds its frame limit",
@@ -521,8 +470,9 @@ impl ExtensionHostClient {
                 format!("read extension-host response: {}", fault.message()),
             )
         })?;
-        let response: ControlResponse = serde_json::from_slice(&body)
-            .map_err(|_| ClientFault::protocol("extension-host response is not a valid envelope"))?;
+        let response: ControlResponse = serde_json::from_slice(&body).map_err(|_| {
+            ClientFault::protocol("extension-host response is not a valid envelope")
+        })?;
         if response.protocol != PROTOCOL_VERSION {
             return Err(ClientFault::protocol(format!(
                 "extension-host response protocol is v{}, expected v{}",
@@ -598,6 +548,7 @@ impl ExtensionHostClient {
                     binding_digest: self.binding_digest.clone(),
                     lease_digest: self.lease_digest.clone(),
                     stage: None,
+                    app: None,
                     mcp: None,
                     manifest_digest: manifest_digest.map(str::to_string),
                     success,
@@ -622,6 +573,64 @@ impl ExtensionHostClient {
             success,
             Duration::ZERO,
             error,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn emit_app(
+        &self,
+        action: super::protocol::LifecycleAction,
+        extension_id: &str,
+        manifest_digest: Option<&str>,
+        app: &super::protocol::AppInvocationAudit,
+        success: bool,
+        latency: Duration,
+        error: Option<&str>,
+    ) {
+        let (Some(audit), Some(session_id)) =
+            (self.audit.as_ref(), self.binding.session_id.as_ref())
+        else {
+            return;
+        };
+        let _ = audit.send(crate::agentd::protocol::WorkerFrame::Audit {
+            task_id: self.binding.task_id.clone(),
+            record: Box::new(
+                crate::agentd::protocol::RuntimeAuditRecord::ExtensionLifecycle {
+                    session_id: session_id.clone(),
+                    kind: super::protocol::ExtensionKind::App,
+                    action,
+                    extension_id: super::protocol::clamp_text(extension_id, 128),
+                    binding_digest: self.binding_digest.clone(),
+                    lease_digest: self.lease_digest.clone(),
+                    stage: Some(super::protocol::AuditStage::Gateway),
+                    app: Some(Box::new(app.clone())),
+                    mcp: None,
+                    manifest_digest: manifest_digest.map(str::to_string),
+                    success,
+                    latency_ms: latency.as_millis().min(u128::from(u64::MAX)) as u64,
+                    error: crate::audit_policy::optional_text_digest(error),
+                },
+            ),
+        });
+    }
+
+    fn emit_app_result<T>(
+        &self,
+        action: super::protocol::LifecycleAction,
+        extension_id: &str,
+        manifest_digest: Option<&str>,
+        app: &super::protocol::AppInvocationAudit,
+        latency: Duration,
+        result: &ClientResult<T>,
+    ) {
+        self.emit_app(
+            action,
+            extension_id,
+            manifest_digest,
+            app,
+            result.is_ok(),
+            latency,
+            result.as_ref().err().map(|error| error.message.as_str()),
         );
     }
 
@@ -652,6 +661,7 @@ impl ExtensionHostClient {
                     binding_digest: self.binding_digest.clone(),
                     lease_digest: self.lease_digest.clone(),
                     stage: Some(stage),
+                    app: None,
                     mcp: Some(mcp.clone()),
                     manifest_digest: Some(mcp.descriptor_digest.clone()),
                     success,

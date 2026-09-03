@@ -2,9 +2,7 @@
 //!
 //! [`chat`] shells out to `cos ai chat --app <id>`. Passing
 //! `origin("external-content")` makes the kernel select
-//! `ai.chat.untrusted`. Multimodal helper names remain as deprecated,
-//! experimental compatibility shims, but are currently unsupported
-//! and fail before invoking `cos`.
+//! `ai.chat.untrusted`.
 //!
 //! ```no_run
 //! use claw_os_sdk::ai;
@@ -84,15 +82,11 @@ pub enum AiError {
     #[error("ai: {0}")]
     InvalidArg(String),
 
-    /// Experimental compatibility shim for a modality that is not stable.
-    #[error("{modality}: currently unsupported; only chat/chat-untrusted are stable")]
-    UnsupportedModality { modality: &'static str },
-
     /// Gate refused (caps / origin / unknown app / unknown verb).
     #[error("ai denied: {message}")]
     Denied {
         message: String,
-        code: Option<String>,
+        code: String,
         payload: serde_json::Value,
     },
 
@@ -116,8 +110,7 @@ pub enum AiError {
 // Options builder
 // ---------------------------------------------------------------------------
 
-/// Options for [`chat`]. Compatibility shims retain this type in their
-/// signatures but do not inspect it.
+/// Options for [`chat`].
 #[derive(Debug, Default, Clone)]
 pub struct ChatOpts {
     origin: Option<String>,
@@ -128,10 +121,22 @@ pub struct ChatOpts {
 }
 
 impl ChatOpts {
-    pub fn origin(mut self, o: impl Into<String>)    -> Self { self.origin = Some(o.into()); self }
-    pub fn max_units(mut self, n: u64)               -> Self { self.max_units = Some(n); self }
-    pub fn system(mut self, s: impl Into<String>)    -> Self { self.system = Some(s.into()); self }
-    pub fn app(mut self, id: impl Into<String>)      -> Self { self.app_id = Some(id.into()); self }
+    pub fn origin(mut self, o: impl Into<String>) -> Self {
+        self.origin = Some(o.into());
+        self
+    }
+    pub fn max_units(mut self, n: u64) -> Self {
+        self.max_units = Some(n);
+        self
+    }
+    pub fn system(mut self, s: impl Into<String>) -> Self {
+        self.system = Some(s.into());
+        self
+    }
+    pub fn app(mut self, id: impl Into<String>) -> Self {
+        self.app_id = Some(id.into());
+        self
+    }
     pub fn tools<I, S>(mut self, tools: I) -> Self
     where
         I: IntoIterator<Item = S>,
@@ -152,54 +157,6 @@ pub fn chat(prompt: &str, opts: ChatOpts) -> Result<AiResponse, AiError> {
         return Err(AiError::InvalidArg("chat: prompt must be non-empty".into()));
     }
     dispatch(prompt, opts)
-}
-
-/// Deprecated experimental compatibility shim; currently unsupported.
-#[deprecated(note = "experimental compatibility shim; currently unsupported")]
-pub fn embed(_prompt: &str, _opts: ChatOpts) -> Result<AiResponse, AiError> {
-    Err(AiError::UnsupportedModality { modality: "embed" })
-}
-
-/// Deprecated experimental compatibility shim; currently unsupported.
-#[deprecated(note = "experimental compatibility shim; currently unsupported")]
-pub fn image_generate(_prompt: &str, _output: &str, _opts: ChatOpts) -> Result<AiResponse, AiError> {
-    Err(AiError::UnsupportedModality { modality: "image.generate" })
-}
-
-/// Deprecated experimental compatibility shim; currently unsupported.
-#[deprecated(note = "experimental compatibility shim; currently unsupported")]
-pub fn image_analyze(_image: &str, _opts: ChatOpts) -> Result<AiResponse, AiError> {
-    Err(AiError::UnsupportedModality { modality: "image.analyze" })
-}
-
-/// Deprecated experimental compatibility shim; currently unsupported.
-#[deprecated(note = "experimental compatibility shim; currently unsupported")]
-pub fn vision_analyze(_prompt: &str, _image: &str, _opts: ChatOpts) -> Result<AiResponse, AiError> {
-    Err(AiError::UnsupportedModality { modality: "vision.analyze" })
-}
-
-/// Deprecated experimental compatibility shim; currently unsupported.
-#[deprecated(note = "experimental compatibility shim; currently unsupported")]
-pub fn audio_tts(_prompt: &str, _output: &str, _opts: ChatOpts) -> Result<AiResponse, AiError> {
-    Err(AiError::UnsupportedModality { modality: "audio.tts" })
-}
-
-/// Deprecated experimental compatibility shim; currently unsupported.
-#[deprecated(note = "experimental compatibility shim; currently unsupported")]
-pub fn audio_stt(_audio: &str, _opts: ChatOpts) -> Result<AiResponse, AiError> {
-    Err(AiError::UnsupportedModality { modality: "audio.stt" })
-}
-
-/// Deprecated experimental compatibility shim; currently unsupported.
-#[deprecated(note = "experimental compatibility shim; currently unsupported")]
-pub fn video_generate(_prompt: &str, _output: &str, _opts: ChatOpts) -> Result<AiResponse, AiError> {
-    Err(AiError::UnsupportedModality { modality: "video.generate" })
-}
-
-/// Deprecated experimental compatibility shim; currently unsupported.
-#[deprecated(note = "experimental compatibility shim; currently unsupported")]
-pub fn video_analyze(_video: &str, _prompt: Option<&str>, _opts: ChatOpts) -> Result<AiResponse, AiError> {
-    Err(AiError::UnsupportedModality { modality: "video.analyze" })
 }
 
 // ---------------------------------------------------------------------------
@@ -263,22 +220,28 @@ fn dispatch(prompt: &str, opts: ChatOpts) -> Result<AiResponse, AiError> {
         .app_id
         .clone()
         .or_else(|| std::env::var("COS_APP_ID").ok())
-        .ok_or_else(|| AiError::InvalidArg(
-            "chat: app id is required (pass .app(...) or set COS_APP_ID)".into()
-        ))?;
+        .ok_or_else(|| {
+            AiError::InvalidArg(
+                "chat: app id is required (pass .app(...) or set COS_APP_ID)".into(),
+            )
+        })?;
 
     let origin = opts.origin.clone().unwrap_or_else(|| "trusted".into());
 
     let mut argv: Vec<OsString> = vec![
-        "ai".into(), "chat".into(),
-        "--app".into(), app.into(),
-        "--origin".into(), origin.into(),
+        "ai".into(),
+        "chat".into(),
+        "--app".into(),
+        app.into(),
+        "--origin".into(),
+        origin.into(),
     ];
     let prompt_file = PrivateInputFile::new("prompt", prompt)?;
     argv.push("--prompt-file".into());
     argv.push(prompt_file.path().as_os_str().to_owned());
     if let Some(n) = opts.max_units {
-        argv.push("--max-units".into()); argv.push(n.to_string().into());
+        argv.push("--max-units".into());
+        argv.push(n.to_string().into());
     }
     let system_file = opts
         .system
@@ -309,17 +272,11 @@ fn dispatch(prompt: &str, opts: ChatOpts) -> Result<AiResponse, AiError> {
 }
 
 fn parse_response(mut value: serde_json::Value) -> Result<AiResponse, AiError> {
-    if let Some(err) = value.get("error").and_then(|v| v.as_str()) {
-        return Err(classify_ai_error(err, &value));
-    }
-    crate::generated::validate_ai(&value).map_err(|error| {
-        AiError::Unavailable(format!("ai response decode failed: {error}"))
-    })?;
+    crate::generated::validate_ai(&value)
+        .map_err(|error| AiError::Unavailable(format!("ai response decode failed: {error}")))?;
     crate::generated::normalize_ai_integers(&mut value);
-    let resp: AiResponse =
-        serde_json::from_value(value).map_err(|e| {
-            AiError::Unavailable(format!("ai response decode failed: {e}"))
-        })?;
+    let resp: AiResponse = serde_json::from_value(value)
+        .map_err(|e| AiError::Unavailable(format!("ai response decode failed: {e}")))?;
     Ok(resp)
 }
 
@@ -330,7 +287,15 @@ fn parse_response(mut value: serde_json::Value) -> Result<AiResponse, AiError> {
 fn redact_payload(value: &serde_json::Value) -> serde_json::Value {
     let mut redacted = value.clone();
     if let Some(obj) = redacted.as_object_mut() {
-        for key in ["text", "prompt", "messages", "embedding", "embeddings", "data", "raw"] {
+        for key in [
+            "text",
+            "prompt",
+            "messages",
+            "embedding",
+            "embeddings",
+            "data",
+            "raw",
+        ] {
             if let Some(v) = obj.get_mut(key) {
                 let bytes = serde_json::to_string(v).map(|s| s.len()).unwrap_or(0);
                 *v = serde_json::json!({
@@ -347,20 +312,12 @@ fn classify_ai_error(message: &str, payload: &serde_json::Value) -> AiError {
     let code = payload
         .get("code")
         .and_then(|v| v.as_str())
-        .map(str::to_string);
-    let lower = message.to_lowercase();
-    if let Some(c) = code.as_deref() {
-        match c.to_ascii_uppercase().as_str() {
-            "BUDGET_EXCEEDED" => return AiError::BudgetExceeded(message.to_string()),
-            "SAFETY_VIOLATION" => return AiError::SafetyViolation(message.to_string()),
-            _ => {}
-        }
-    }
-    if lower.contains("budget") {
-        return AiError::BudgetExceeded(message.to_string());
-    }
-    if lower.contains("safety") || lower.contains("blocked") {
-        return AiError::SafetyViolation(message.to_string());
+        .expect("validated wire error envelope must include code")
+        .to_string();
+    match code.as_str() {
+        "BUDGET_EXCEEDED" => return AiError::BudgetExceeded(message.to_string()),
+        "SAFETY_VIOLATION" => return AiError::SafetyViolation(message.to_string()),
+        _ => {}
     }
     AiError::Denied {
         message: message.to_string(),
@@ -376,8 +333,5 @@ fn classify_ai_error(message: &str, payload: &serde_json::Value) -> AiError {
 
 #[cfg(test)]
 mod tests {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/test/unit/ai.rs"
-    ));
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/ai.rs"));
 }

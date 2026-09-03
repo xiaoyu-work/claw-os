@@ -9,12 +9,13 @@
 //! `~/Pictures` (or the supplied `save_dir`).
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use async_trait::async_trait;
-use claw_os_sdk::mcp::{Tool, ToolResult};
-use serde_json::{Value, json};
+use claw_os_sdk::mcp::{App, AppError, CallContext, Tool, ToolResult};
+use serde_json::{json, Value};
 
-use crate::{CaptureOptions, capture};
+use crate::{capture, CaptureOptions};
 
 pub(crate) struct CaptureTool;
 
@@ -24,38 +25,10 @@ impl Tool for CaptureTool {
         "screenshot.capture"
     }
 
-    fn description(&self) -> &'static str {
-        "Capture the screen via xdg-desktop-portal. \
-         Saves a PNG to `save_dir` (or the default Pictures directory) \
-         and returns the absolute path. If the portal puts the image \
-         on the clipboard instead, the returned path is empty."
-    }
-
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "interactive": {
-                    "type": "boolean",
-                    "default": false,
-                    "description": "Let the user pick a region via the portal UI."
-                },
-                "modal": {
-                    "type": "boolean",
-                    "default": true,
-                    "description": "Render the portal as modal."
-                },
-                "save_dir": {
-                    "type": "string",
-                    "description": "Absolute path of the directory to save the PNG to. \
-                                    Must already exist."
-                }
-            },
-            "additionalProperties": false
-        })
-    }
-
-    async fn exec(&self, input: Value) -> ToolResult {
+    async fn handle(&self, input: Value, context: CallContext) -> ToolResult {
+        if let Err(error) = context.check_cancelled() {
+            return ToolResult::error(error.to_string());
+        }
         let interactive = input
             .get("interactive")
             .and_then(|v| v.as_bool())
@@ -72,18 +45,25 @@ impl Tool for CaptureTool {
             save_dir,
         };
 
-        match capture(opts).await {
-            Ok(outcome) if outcome.cancelled => ToolResult::ok(
+        let result = capture(opts).await;
+        match result {
+            Ok(outcome) if outcome.cancelled => ToolResult::text(
                 json!({"cancelled": true, "path": null}).to_string(),
             ),
-            Ok(outcome) => ToolResult::ok(
+            Ok(outcome) => ToolResult::text(
                 json!({
                     "cancelled": false,
                     "path": if outcome.path.is_empty() { Value::Null } else { Value::String(outcome.path) }
                 })
                 .to_string(),
             ),
-            Err(err) => ToolResult::err(format!("screenshot capture failed: {err}")),
+            Err(err) => ToolResult::error(format!("screenshot capture failed: {err}")),
         }
     }
+}
+
+pub(crate) async fn run() -> Result<(), AppError> {
+    let mut app = App::from_environment()?;
+    app.bind(Arc::new(CaptureTool))?;
+    app.serve_stdio().await
 }

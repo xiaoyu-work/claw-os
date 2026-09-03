@@ -92,10 +92,8 @@ class AiToolCall(TypedDict):
 class App(TypedDict, total=False):
     """App-verb invocation reply.
 
-    Reply shape for `cos app <id> <verb> [args]`. The payload is the verb's own
-    JSON output — what schema you get depends on which verb you called. The
-    kernel guarantees only that the body is valid JSON (or stderr-routed when
-    stdout would be ambiguous).
+    Success data for `cos --wire=1 app <id> <verb> [args]`. The kernel places
+    the operation-specific object under the wire envelope's `data` field.
     """
     verb: str
     app: str
@@ -116,9 +114,7 @@ class _EnvelopeRequired(TypedDict):
 class Envelope(_EnvelopeRequired, total=False):
     """Envelope.
 
-    Common wrapper around every wire v1 reply. Forward-compatible target shape —
-    the current kernel still emits flat per-command shapes that SDKs adapt to
-    this envelope.
+    Common wrapper around every wire v1 reply requested with `cos --wire=1`.
     """
     audit_id: str
     data: Dict[str, Any]
@@ -134,10 +130,9 @@ class _ManifestRequired(TypedDict):
 class Manifest(_ManifestRequired, total=False):
     """App manifest (app.json).
 
-    The manifest every app under COS_APPS_DIR must provide. MCP-first Apps
-    declare one versioned service with tools, lifecycle, caller restrictions,
-    capability needs, and optional AI and desktop surfaces. Legacy operations
-    and session remain during migration.
+    The manifest every app under COS_APPS_DIR must provide. MCP Apps declare one
+    versioned service with tools, lifecycle, caller restrictions, capability
+    needs, and optional AI and desktop surfaces.
     """
     schema_version: int
     summary: "Localizedtext"
@@ -146,8 +141,7 @@ class Manifest(_ManifestRequired, total=False):
     entry: str
     operations: Dict[str, Any]
     ai: "Aipolicy"
-    session: "Session"
-    mcp: "Session"
+    mcp: "Mcpservice"
     desktop: "Desktop"
     dependencies: Dict[str, Any]
 
@@ -287,8 +281,8 @@ class Aibudget(TypedDict, total=False):
     """
     monthly_units: int
 
-class Session(TypedDict, total=False):
-    """session.
+class Mcpservice(TypedDict, total=False):
+    """mcpService.
 
     Long-lived MCP server the app launches for stateful, agent-driven tool
     calls.
@@ -297,7 +291,7 @@ class Session(TypedDict, total=False):
     transport: str
     lifecycle: str
     access: "Mcpaccess"
-    tools: List["Sessiontool"]
+    tools: List["Mcptool"]
 
 class Mcpaccess(TypedDict, total=False):
     """mcpAccess.
@@ -309,12 +303,12 @@ class Mcpaccess(TypedDict, total=False):
     apps: List[str]
     external_agents: bool
 
-class _SessiontoolRequired(TypedDict):
+class _McptoolRequired(TypedDict):
     name: str
     summary: "Localizedtext"
 
-class Sessiontool(_SessiontoolRequired, total=False):
-    """sessionTool.
+class Mcptool(_McptoolRequired, total=False):
+    """mcpTool.
 
     One MCP-callable tool. Mirrors operation: args + needs drive the model's
     view and the kernel's enforcement.
@@ -763,6 +757,12 @@ _WIRE_SCHEMA_BUDGET_SHOW: Dict[str, Any] = decode_wire_json(r'''{"$id":"https://
 def validate_budget_show(value: Any) -> None:
     """Validate a value against wire/v1/budget_show.schema.json."""
     _validate_wire_schema(_WIRE_SCHEMA_BUDGET_SHOW, _WIRE_SCHEMA_BUDGET_SHOW, value, "BudgetShow", "$")
+
+_WIRE_SCHEMA_ENVELOPE: Dict[str, Any] = decode_wire_json(r'''{"$id":"https://claw-os.dev/wire/v1/envelope.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"description":"Common wrapper around every wire v1 reply requested with `cos --wire=1`.","oneOf":[{"additionalProperties":false,"properties":{"audit_id":{"type":"string"},"data":{"type":"object"},"ok":{"const":true},"wire_version":{"const":1,"type":"integer"}},"required":["ok","wire_version","data"],"type":"object"},{"additionalProperties":false,"properties":{"audit_id":{"type":"string"},"code":{"minLength":1,"type":"string"},"detail":{"type":"object"},"error":{"minLength":1,"type":"string"},"ok":{"const":false},"wire_version":{"const":1,"type":"integer"}},"required":["ok","wire_version","error","code"],"type":"object"}],"properties":{"audit_id":{"description":"Audit log entry id (ULID).","type":"string"},"code":{"description":"Stable error code from wire/v1/error_codes.md.","minLength":1,"type":"string"},"data":{"description":"Request-specific success payload. See the per-family schema for shape.","type":"object"},"detail":{"description":"Request-specific error payload.","type":"object"},"error":{"description":"Human-readable error summary. Present only when ok is false.","minLength":1,"type":"string"},"ok":{"description":"true iff the kernel accepted and dispatched the call.","type":"boolean"},"wire_version":{"const":1,"type":"integer"}},"required":["ok","wire_version"],"title":"Envelope","type":"object"}''')
+
+def validate_envelope(value: Any) -> None:
+    """Validate a value against wire/v1/envelope.schema.json."""
+    _validate_wire_schema(_WIRE_SCHEMA_ENVELOPE, _WIRE_SCHEMA_ENVELOPE, value, "Envelope", "$")
 
 _WIRE_SCHEMA_MCP_CALL_CONTEXT: Dict[str, Any] = decode_wire_json(r'''{"$defs":{"McpPrincipal":{"additionalProperties":false,"properties":{"app_id":{"pattern":"^[a-z][a-z0-9_-]*$","type":"string","x-full-match":true},"id":{"maxLength":256,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$","type":"string","x-full-match":true},"kind":{"enum":["system-agent","app","app-agent","external-agent","cli"],"type":"string"},"owner_uid":{"maximum":4294967295,"minimum":0,"type":"integer"}},"required":["kind","id","owner_uid"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/mcp_call_context.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"description":"Authenticated call identity and lineage injected by the Claw MCP Gateway over the private App-host transport. Caller-supplied MCP arguments must never populate this object.","properties":{"call_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$","type":"string","x-full-match":true},"caller":{"$ref":"#/$defs/McpPrincipal"},"deadline_unix_ms":{"maximum":9007199254740991,"minimum":1,"type":"integer"},"depth":{"maximum":16,"minimum":0,"type":"integer"},"parent_call_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$","type":"string","x-full-match":true},"session_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$","type":"string","x-full-match":true},"task_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$","type":"string","x-full-match":true},"trace_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$","type":"string","x-full-match":true},"wire_version":{"const":1,"maximum":1,"minimum":1,"type":"integer"}},"required":["wire_version","call_id","trace_id","depth","caller"],"title":"MCP call context","type":"object"}''')
 

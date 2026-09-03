@@ -52,17 +52,16 @@ Typical usage
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import subprocess
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional
 
+from ._transport import WIRE_ARG, WireDenied, WireUnavailable, decode_response
 from .generated import (
     WireDecodeError,
     WireJsonValue,
-    decode_wire_json,
     encode_wire_json,
     validate_tool,
     validate_tool_catalog,
@@ -73,17 +72,6 @@ from .generated import (
 # wedged child never blocks the calling app forever.
 _DEFAULT_TIMEOUT_S = 60
 _MISSING = object()
-
-
-def _truncate(value: Any, limit: int = 200) -> str:
-    """Redact a payload (tool args, kernel response) for inclusion in
-    exception messages. Tool envelopes routinely carry the model's
-    proposed arguments — those flow into logs if echoed verbatim.
-    """
-    s = repr(value) if not isinstance(value, str) else value
-    if len(s) <= limit:
-        return s
-    return s[:limit] + f"... [{len(s) - limit} more bytes elided]"
 
 
 # ---------------------------------------------------------------------------
@@ -181,6 +169,7 @@ def call(
     args_payload = encode_wire_json({} if args is _MISSING else args)
     cmd = [
         _cos_binary(),
+        WIRE_ARG,
         "ai",
         "tool",
         name,
@@ -191,26 +180,13 @@ def call(
     ]
 
     proc = _run_with_timeout(cmd, f"cos ai tool {name}")
-    text = (proc.stdout or "").strip() or (proc.stderr or "").strip()
-    if not text:
-        raise ToolUnavailable(
-            f"cos ai tool {name} returned no output (exit {proc.returncode})"
-        )
+    text = (proc.stdout or "").strip()
     try:
-        envelope = decode_wire_json(text)
-    except (json.JSONDecodeError, ValueError) as exc:
-        raise ToolUnavailable(
-            f"cos ai tool {name} returned non-JSON output: {_truncate(text)}"
-        ) from exc
-
-    if proc.returncode != 0:
-        if isinstance(envelope, Mapping):
-            raise ToolDenied(envelope)
-        raise ToolUnavailable(
-            f"cos ai tool {name} exited {proc.returncode}: {_truncate(text)}"
-        )
-    if isinstance(envelope, Mapping) and "error" in envelope:
-        raise ToolDenied(envelope)
+        envelope = decode_response(text, proc.returncode, f"cos ai tool {name}")
+    except WireDenied as exc:
+        raise ToolDenied(exc.payload) from exc
+    except WireUnavailable as exc:
+        raise ToolUnavailable(str(exc)) from exc
 
     try:
         validate_tool(envelope)
@@ -232,26 +208,15 @@ def catalog() -> List[CatalogEntry]:
     consulting this list; the catalog evolves and a tool can be
     deprecated or renamed between releases.
     """
-    cmd = [_cos_binary(), "ai", "tools"]
+    cmd = [_cos_binary(), WIRE_ARG, "ai", "tools"]
     proc = _run_with_timeout(cmd, "cos ai tools")
-    text = (proc.stdout or "").strip() or (proc.stderr or "").strip()
-    if not text:
-        raise ToolUnavailable(
-            f"cos ai tools returned no output (exit {proc.returncode})"
-        )
+    text = (proc.stdout or "").strip()
     try:
-        envelope = decode_wire_json(text)
-    except (json.JSONDecodeError, ValueError) as exc:
-        raise ToolUnavailable(
-            f"cos ai tools returned non-JSON output: {_truncate(text)}"
-        ) from exc
-
-    if proc.returncode != 0 or (
-        isinstance(envelope, Mapping) and "error" in envelope
-    ):
-        raise ToolDenied(
-            envelope if isinstance(envelope, Mapping) else {"error": str(envelope)}
-        )
+        envelope = decode_response(text, proc.returncode, "cos ai tools")
+    except WireDenied as exc:
+        raise ToolDenied(exc.payload) from exc
+    except WireUnavailable as exc:
+        raise ToolUnavailable(str(exc)) from exc
 
     try:
         validate_tool_catalog(envelope)
@@ -318,7 +283,7 @@ def _run_with_timeout(cmd: List[str], label: str) -> subprocess.CompletedProcess
 
 
 def _cos_binary() -> str:
-    override = os.environ.get("COS_BIN")
+    override = os.environ.get("CLAW_COS_BIN")
     if override:
         return override
     found = shutil.which("cos")

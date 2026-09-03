@@ -64,10 +64,8 @@ export interface AiToolCall {
 
 /**
  * App-verb invocation reply.
- * Reply shape for `cos app <id> <verb> [args]`. The payload is the verb's own
- * JSON output — what schema you get depends on which verb you called. The
- * kernel guarantees only that the body is valid JSON (or stderr-routed when
- * stdout would be ambiguous).
+ * Success data for `cos --wire=1 app <id> <verb> [args]`. The kernel places
+ * the operation-specific object under the wire envelope's `data` field.
  */
 export interface App {
   verb?: string;
@@ -86,9 +84,7 @@ export interface BudgetShow {
 
 /**
  * Envelope.
- * Common wrapper around every wire v1 reply. Forward-compatible target shape —
- * the current kernel still emits flat per-command shapes that SDKs adapt to
- * this envelope.
+ * Common wrapper around every wire v1 reply requested with `cos --wire=1`.
  */
 export interface Envelope {
   ok: boolean;
@@ -102,10 +98,9 @@ export interface Envelope {
 
 /**
  * App manifest (app.json).
- * The manifest every app under COS_APPS_DIR must provide. MCP-first Apps
- * declare one versioned service with tools, lifecycle, caller restrictions,
- * capability needs, and optional AI and desktop surfaces. Legacy operations
- * and session remain during migration.
+ * The manifest every app under COS_APPS_DIR must provide. MCP Apps declare one
+ * versioned service with tools, lifecycle, caller restrictions, capability
+ * needs, and optional AI and desktop surfaces.
  */
 export interface Manifest {
   id: string;
@@ -118,8 +113,7 @@ export interface Manifest {
   entry?: string;
   operations?: Record<string, unknown>;
   ai?: Aipolicy;
-  session?: Session;
-  mcp?: Session;
+  mcp?: Mcpservice;
   desktop?: Desktop;
   dependencies?: Record<string, unknown>;
 }
@@ -263,16 +257,16 @@ export interface Aibudget {
 }
 
 /**
- * session.
+ * mcpService.
  * Long-lived MCP server the app launches for stateful, agent-driven tool
  * calls.
  */
-export interface Session {
+export interface Mcpservice {
   entry?: string;
   transport?: "stdio";
   lifecycle?: "lazy" | "always-on" | "while-app-running";
   access?: Mcpaccess;
-  tools?: Sessiontool[];
+  tools?: Mcptool[];
 }
 
 /**
@@ -287,11 +281,11 @@ export interface Mcpaccess {
 }
 
 /**
- * sessionTool.
+ * mcpTool.
  * One MCP-callable tool. Mirrors operation: args + needs drive the model's
  * view and the kernel's enforcement.
  */
-export interface Sessiontool {
+export interface Mcptool {
   name: string;
   summary: Localizedtext;
   args?: Arg[];
@@ -718,6 +712,17 @@ export function validateBudgetShow(value: unknown): asserts value is BudgetShow 
 
 export function normalizeBudgetShowIntegers(value: unknown): void {
   normalizeWireIntegers(_WIRE_SCHEMA_BUDGET_SHOW, _WIRE_SCHEMA_BUDGET_SHOW, value);
+}
+
+const _WIRE_SCHEMA_ENVELOPE: WireRule = decodeWireJson("{\"$id\":\"https://claw-os.dev/wire/v1/envelope.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":\"Common wrapper around every wire v1 reply requested with `cos --wire=1`.\",\"oneOf\":[{\"additionalProperties\":false,\"properties\":{\"audit_id\":{\"type\":\"string\"},\"data\":{\"type\":\"object\"},\"ok\":{\"const\":true},\"wire_version\":{\"const\":1,\"type\":\"integer\"}},\"required\":[\"ok\",\"wire_version\",\"data\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"audit_id\":{\"type\":\"string\"},\"code\":{\"minLength\":1,\"type\":\"string\"},\"detail\":{\"type\":\"object\"},\"error\":{\"minLength\":1,\"type\":\"string\"},\"ok\":{\"const\":false},\"wire_version\":{\"const\":1,\"type\":\"integer\"}},\"required\":[\"ok\",\"wire_version\",\"error\",\"code\"],\"type\":\"object\"}],\"properties\":{\"audit_id\":{\"description\":\"Audit log entry id (ULID).\",\"type\":\"string\"},\"code\":{\"description\":\"Stable error code from wire/v1/error_codes.md.\",\"minLength\":1,\"type\":\"string\"},\"data\":{\"description\":\"Request-specific success payload. See the per-family schema for shape.\",\"type\":\"object\"},\"detail\":{\"description\":\"Request-specific error payload.\",\"type\":\"object\"},\"error\":{\"description\":\"Human-readable error summary. Present only when ok is false.\",\"minLength\":1,\"type\":\"string\"},\"ok\":{\"description\":\"true iff the kernel accepted and dispatched the call.\",\"type\":\"boolean\"},\"wire_version\":{\"const\":1,\"type\":\"integer\"}},\"required\":[\"ok\",\"wire_version\"],\"title\":\"Envelope\",\"type\":\"object\"}") as WireRule;
+
+export function validateEnvelope(value: unknown): asserts value is Envelope & Record<string, unknown> {
+  validateWireSchema(_WIRE_SCHEMA_ENVELOPE, _WIRE_SCHEMA_ENVELOPE, value, "Envelope", "$");
+  normalizeWireIntegers(_WIRE_SCHEMA_ENVELOPE, _WIRE_SCHEMA_ENVELOPE, value);
+}
+
+export function normalizeEnvelopeIntegers(value: unknown): void {
+  normalizeWireIntegers(_WIRE_SCHEMA_ENVELOPE, _WIRE_SCHEMA_ENVELOPE, value);
 }
 
 const _WIRE_SCHEMA_MCP_CALL_CONTEXT: WireRule = decodeWireJson("{\"$defs\":{\"McpPrincipal\":{\"additionalProperties\":false,\"properties\":{\"app_id\":{\"pattern\":\"^[a-z][a-z0-9_-]*$\",\"type\":\"string\",\"x-full-match\":true},\"id\":{\"maxLength\":256,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$\",\"type\":\"string\",\"x-full-match\":true},\"kind\":{\"enum\":[\"system-agent\",\"app\",\"app-agent\",\"external-agent\",\"cli\"],\"type\":\"string\"},\"owner_uid\":{\"maximum\":4294967295,\"minimum\":0,\"type\":\"integer\"}},\"required\":[\"kind\",\"id\",\"owner_uid\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/mcp_call_context.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":\"Authenticated call identity and lineage injected by the Claw MCP Gateway over the private App-host transport. Caller-supplied MCP arguments must never populate this object.\",\"properties\":{\"call_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:-]*$\",\"type\":\"string\",\"x-full-match\":true},\"caller\":{\"$ref\":\"#/$defs/McpPrincipal\"},\"deadline_unix_ms\":{\"maximum\":9007199254740991,\"minimum\":1,\"type\":\"integer\"},\"depth\":{\"maximum\":16,\"minimum\":0,\"type\":\"integer\"},\"parent_call_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:-]*$\",\"type\":\"string\",\"x-full-match\":true},\"session_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$\",\"type\":\"string\",\"x-full-match\":true},\"task_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$\",\"type\":\"string\",\"x-full-match\":true},\"trace_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:-]*$\",\"type\":\"string\",\"x-full-match\":true},\"wire_version\":{\"const\":1,\"maximum\":1,\"minimum\":1,\"type\":\"integer\"}},\"required\":[\"wire_version\",\"call_id\",\"trace_id\",\"depth\",\"caller\"],\"title\":\"MCP call context\",\"type\":\"object\"}") as WireRule;

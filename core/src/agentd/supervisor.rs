@@ -819,8 +819,6 @@ struct ExtensionRuntime {
     host_session_id: Option<String>,
 }
 
-
-
 #[allow(clippy::too_many_arguments)]
 async fn start_extension_host(
     identity: &spawn::WorkerIdentity,
@@ -902,6 +900,7 @@ async fn start_extension_host(
         containment,
         &job.id,
         job.session_id.as_deref(),
+        session.and_then(|session| session.app_id.as_deref()),
         host_session_id.as_deref(),
         worker_pid,
         worker_start_time_ticks,
@@ -1925,8 +1924,12 @@ fn record_worker_audit(lease: &Lease, record: &RuntimeAuditRecord) {
         return;
     }
     if let RuntimeAuditRecord::ExtensionLifecycle {
+        kind,
+        extension_id,
         binding_digest,
         lease_digest,
+        stage,
+        app,
         mcp,
         ..
     } = record
@@ -1951,6 +1954,19 @@ fn record_worker_audit(lease: &Lease, record: &RuntimeAuditRecord) {
             mcp.validate().is_err() || mcp.capability_generation != lease.capability_generation
         }) {
             tracing::warn!(task = %lease.task_id, "discarding MCP audit for a substituted capability generation");
+            return;
+        }
+        if mcp.is_some() && app.is_some() {
+            tracing::warn!(task = %lease.task_id, "discarding ambiguous extension invocation audit");
+            return;
+        }
+        if app.as_ref().is_some_and(|app| {
+            *kind != crate::extension_host::protocol::ExtensionKind::App
+                || *stage != Some(crate::extension_host::protocol::AuditStage::Gateway)
+                || extension_id != &app.app_id
+                || app.validate_audit_binding(binding).is_err()
+        }) {
+            tracing::warn!(task = %lease.task_id, "discarding App audit for a substituted call context");
             return;
         }
     }

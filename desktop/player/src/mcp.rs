@@ -14,11 +14,11 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use claw_os_sdk::mcp::{Server, Tool, ToolResult};
-use serde_json::{Value, json};
-use zbus::Connection;
+use claw_os_sdk::mcp::{App, CallContext, Tool, ToolResult};
+use serde_json::{json, Value};
 use zbus::fdo::DBusProxy;
 use zbus::names::OwnedBusName;
+use zbus::Connection;
 
 #[zbus::proxy(
     interface = "org.mpris.MediaPlayer2.Player",
@@ -35,7 +35,9 @@ trait MediaPlayer2Player {
     #[zbus(property)]
     fn playback_status(&self) -> zbus::Result<String>;
     #[zbus(property)]
-    fn metadata(&self) -> zbus::Result<std::collections::HashMap<String, zbus::zvariant::OwnedValue>>;
+    fn metadata(
+        &self,
+    ) -> zbus::Result<std::collections::HashMap<String, zbus::zvariant::OwnedValue>>;
 }
 
 /// Find the first `org.mpris.MediaPlayer2.*` service on the session
@@ -65,48 +67,41 @@ where
 {
     let conn = match Connection::session().await {
         Ok(c) => c,
-        Err(e) => return ToolResult::err(format!("session bus: {e}")),
+        Err(e) => return ToolResult::error(format!("session bus: {e}")),
     };
     let name = match find_player(&conn).await {
         Ok(n) => n,
-        Err(e) => return ToolResult::err(e),
+        Err(e) => return ToolResult::error(e),
     };
     let builder = match MediaPlayer2PlayerProxy::builder(&conn).destination(name) {
         Ok(b) => b,
-        Err(e) => return ToolResult::err(format!("proxy destination: {e}")),
+        Err(e) => return ToolResult::error(format!("proxy destination: {e}")),
     };
     let proxy = match builder.build().await {
         Ok(p) => p,
-        Err(e) => return ToolResult::err(format!("proxy build: {e}")),
+        Err(e) => return ToolResult::error(format!("proxy build: {e}")),
     };
     match action(proxy).await {
         Ok(v) => match serde_json::to_string(&v) {
-            Ok(s) => ToolResult::ok(s),
-            Err(e) => ToolResult::err(format!("encode: {e}")),
+            Ok(s) => ToolResult::text(s),
+            Err(e) => ToolResult::error(format!("encode: {e}")),
         },
-        Err(e) => ToolResult::err(e),
+        Err(e) => ToolResult::error(e),
     }
 }
 
 macro_rules! mpris_action_tool {
-    ($struct_name:ident, $tool_name:literal, $desc:literal, $method:ident) => {
+    ($struct_name:ident, $tool_name:literal, $method:ident) => {
         struct $struct_name;
         #[async_trait]
         impl Tool for $struct_name {
             fn name(&self) -> &'static str {
                 $tool_name
             }
-            fn description(&self) -> &'static str {
-                $desc
-            }
-            fn input_schema(&self) -> Value {
-                json!({
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": false
-                })
-            }
-            async fn exec(&self, _input: Value) -> ToolResult {
+            async fn handle(&self, _input: Value, context: CallContext) -> ToolResult {
+                if let Err(error) = context.check_cancelled() {
+                    return ToolResult::error(error.to_string());
+                }
                 with_player(|p| async move {
                     p.$method().await.map_err(|e| format!("{}: {e}", $tool_name))?;
                     Ok(json!({"ok": true}))
@@ -117,12 +112,12 @@ macro_rules! mpris_action_tool {
     };
 }
 
-mpris_action_tool!(PlayTool, "player.play", "Resume playback on the active MPRIS player.", play);
-mpris_action_tool!(PauseTool, "player.pause", "Pause the active MPRIS player.", pause);
-mpris_action_tool!(StopTool, "player.stop", "Stop playback on the active MPRIS player.", stop);
-mpris_action_tool!(NextTool, "player.next", "Skip to the next track.", next);
-mpris_action_tool!(PrevTool, "player.previous", "Skip to the previous track.", previous);
-mpris_action_tool!(TogglePlayPauseTool, "player.toggle", "Toggle play/pause.", play_pause);
+mpris_action_tool!(PlayTool, "player.play", play);
+mpris_action_tool!(PauseTool, "player.pause", pause);
+mpris_action_tool!(StopTool, "player.stop", stop);
+mpris_action_tool!(NextTool, "player.next", next);
+mpris_action_tool!(PrevTool, "player.previous", previous);
+mpris_action_tool!(TogglePlayPauseTool, "player.toggle", play_pause);
 
 struct StatusTool;
 
@@ -131,21 +126,19 @@ impl Tool for StatusTool {
     fn name(&self) -> &'static str {
         "player.status"
     }
-    fn description(&self) -> &'static str {
-        "Return the current playback status (Playing/Paused/Stopped) and \
-         metadata (title, artist, album, length-µs) of the active MPRIS player."
-    }
-    fn input_schema(&self) -> Value {
-        json!({ "type": "object", "properties": {}, "additionalProperties": false })
-    }
-    async fn exec(&self, _input: Value) -> ToolResult {
+    async fn handle(&self, _input: Value, context: CallContext) -> ToolResult {
+        if let Err(error) = context.check_cancelled() {
+            return ToolResult::error(error.to_string());
+        }
         with_player(|p| async move {
-            let status = p.playback_status().await.map_err(|e| format!("playback_status: {e}"))?;
+            let status = p
+                .playback_status()
+                .await
+                .map_err(|e| format!("playback_status: {e}"))?;
             let meta = p.metadata().await.map_err(|e| format!("metadata: {e}"))?;
             // Pick a few standard MPRIS keys; downcast best-effort.
             let pick = |k: &str| -> Option<String> {
-                meta.get(k)
-                    .and_then(|v| <String>::try_from(v.clone()).ok())
+                meta.get(k).and_then(|v| <String>::try_from(v.clone()).ok())
             };
             let pick_arr = |k: &str| -> Vec<String> {
                 meta.get(k)
@@ -173,16 +166,15 @@ pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {
         .enable_all()
         .build()?;
     rt.block_on(async {
-        Server::new("cosmic-player", env!("CARGO_PKG_VERSION"))
-            .tool(Arc::new(PlayTool))
-            .tool(Arc::new(PauseTool))
-            .tool(Arc::new(StopTool))
-            .tool(Arc::new(NextTool))
-            .tool(Arc::new(PrevTool))
-            .tool(Arc::new(TogglePlayPauseTool))
-            .tool(Arc::new(StatusTool))
-            .serve_stdio()
-            .await
+        let mut app = App::from_environment()?;
+        app.bind(Arc::new(PlayTool))?;
+        app.bind(Arc::new(PauseTool))?;
+        app.bind(Arc::new(StopTool))?;
+        app.bind(Arc::new(NextTool))?;
+        app.bind(Arc::new(PrevTool))?;
+        app.bind(Arc::new(TogglePlayPauseTool))?;
+        app.bind(Arc::new(StatusTool))?;
+        app.serve_stdio().await
     })?;
     Ok(())
 }

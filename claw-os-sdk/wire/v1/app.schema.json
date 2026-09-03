@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://claw-os.dev/wire/v1/app.schema.json",
   "title": "App-verb invocation reply",
-  "description": "Reply shape for `cos app <id> <verb> [args]`. The payload is the verb's own JSON output — what schema you get depends on which verb you called. The kernel guarantees only that the body is valid JSON (or stderr-routed when stdout would be ambiguous).",
+  "description": "Success data for `cos --wire=1 app <id> <verb> [args]`. The kernel places the operation-specific object under the wire envelope's `data` field.",
   "type": "object",
   "additionalProperties": true,
   "properties": {

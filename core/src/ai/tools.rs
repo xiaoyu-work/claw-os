@@ -196,6 +196,73 @@ pub struct ToolResult {
     pub result: Value,
 }
 
+#[derive(Debug)]
+pub(super) enum ToolExecutionError {
+    UnknownTool(String),
+    UnknownApp(String),
+    InvalidArgs(String),
+    PermissionDenied {
+        message: String,
+        detail: Option<Value>,
+        reason: &'static str,
+    },
+    Internal(String),
+}
+
+impl ToolExecutionError {
+    pub(super) fn wire_code(&self) -> &'static str {
+        match self {
+            Self::UnknownTool(_) => "UNKNOWN_VERB",
+            Self::UnknownApp(_) => "UNKNOWN_APP",
+            Self::InvalidArgs(_) => "INVALID_ARGS",
+            Self::PermissionDenied { .. } => "PERMISSION_DENIED",
+            Self::Internal(_) => "INTERNAL_ERROR",
+        }
+    }
+
+    pub(super) fn to_wire_error(&self) -> String {
+        let mut error = json!({
+            "error": self.to_string(),
+            "code": self.wire_code(),
+        });
+        let detail = match self {
+            Self::PermissionDenied {
+                detail: Some(detail),
+                ..
+            } if detail.is_object() => Some(detail.clone()),
+            _ => None,
+        };
+        if let Some(detail) = detail {
+            error["detail"] = detail;
+        }
+        error.to_string()
+    }
+
+    fn audit_class(&self) -> (&'static str, &'static str) {
+        match self {
+            Self::UnknownTool(_) => ("denied", "unknown_tool"),
+            Self::UnknownApp(_) => ("denied", "unknown_app"),
+            Self::InvalidArgs(_) => ("denied", "invalid_args"),
+            Self::PermissionDenied { reason, .. } => ("denied", reason),
+            Self::Internal(_) => ("error", "tool_impl_error"),
+        }
+    }
+}
+
+impl std::fmt::Display for ToolExecutionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnknownTool(message)
+            | Self::UnknownApp(message)
+            | Self::InvalidArgs(message)
+            | Self::Internal(message)
+            | Self::PermissionDenied { message, .. } => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for ToolExecutionError {}
+
 /// Execute one Tool call. Performs:
 ///   1. Catalog lookup (`unknown_tool` if missing).
 ///   2. Manifest allowlist check.
@@ -210,11 +277,11 @@ pub struct ToolResult {
 /// Identity enforcement is the caller's responsibility — `cos ai tool`
 /// validates the env claim, registered App session, and process ancestry
 /// before reaching this function, sharing the gate with `cos ai chat`.
-pub fn execute(
+pub(super) fn execute(
     tool_name: &str,
     app_id: &str,
     args: &Value,
-) -> Result<ToolResult, String> {
+) -> Result<ToolResult, ToolExecutionError> {
     let started = std::time::Instant::now();
     let outcome = execute_inner(tool_name, app_id, args);
     let duration_ms = started.elapsed().as_millis() as u64;
@@ -242,35 +309,15 @@ pub fn execute(
             );
             crate::agent::llm::run_log::record(&rec);
         }
-        Err(msg) => {
-            // Bucket the error. Order matters because some paths emit
-            // structured prefixes the rest of the system also greps on:
-            //
-            //   * `denied: ...`                 — caps::require failed
-            //   * `tool not in ai.tools: ...`   — App's manifest didn't
-            //                                     declare this Tool
-            //   * `no ai policy: ...`           — manifest has no `ai`
-            //                                     block at all
-            //   * unknown-tool path              — catalog lookup missed
-            //   * everything else                — tool-impl failure
-            let (decision, denial_reason) = if msg.starts_with("denied:") {
-                ("denied", Some("caps_denied"))
-            } else if msg.starts_with("tool not in ai.tools:") {
-                ("denied", Some("tool_not_in_policy"))
-            } else if msg.starts_with("no ai policy:") {
-                ("denied", Some("no_ai_policy"))
-            } else if tool_name_unknown(tool_name) {
-                ("denied", Some("unknown_tool"))
-            } else {
-                ("error", Some("tool_impl_error"))
-            };
+        Err(error) => {
+            let (decision, denial_reason) = error.audit_class();
             let rec = crate::agent::llm::run_log::LlmRunRecord::from_tool_call(
                 tool_name,
                 app_id,
                 &verb_str,
                 decision,
-                denial_reason,
-                Some(msg),
+                Some(denial_reason),
+                Some(&error.to_string()),
                 duration_ms,
                 session_ref,
             );
@@ -280,39 +327,42 @@ pub fn execute(
     outcome
 }
 
-fn tool_name_unknown(name: &str) -> bool {
-    lookup(name).is_none()
-}
-
 /// Resolve `app_id` to its installed manifest and require `tool_name`
 /// to appear in the manifest's `ai.tools[]` allowlist. The kernel
 /// uses `COS_APPS_DIR` (default `/usr/lib/cos/apps`) to discover
 /// installed Apps — same convention `cos ai chat` uses.
 ///
-/// Error message prefixes are stable: callers of [`execute`] grep on
-/// them to attribute the right `denial_reason` to the audit log, so
-/// **do not** rename them without updating the bucket logic above.
-fn require_tool_in_app_policy(app_id: &str, tool_name: &str) -> Result<(), String> {
+/// Errors remain typed through audit and wire serialization so callers
+/// never infer authorization state from human-readable text.
+fn require_tool_in_app_policy(app_id: &str, tool_name: &str) -> Result<(), ToolExecutionError> {
     let apps_dir = std::env::var("COS_APPS_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| std::path::PathBuf::from("/usr/lib/cos/apps"));
     let discovered = apps::discover_verified(&apps_dir);
     let app = discovered
         .get(app_id)
-        .ok_or_else(|| format!("unknown app: {app_id}"))?;
+        .ok_or_else(|| ToolExecutionError::UnknownApp(format!("unknown app: {app_id}")))?;
     let Some(policy) = app.manifest.ai.as_ref() else {
-        return Err(format!(
-            "no ai policy: app `{app_id}` has no `ai` block in its manifest — \
-             it cannot use `cos ai tool`. Add an `ai.tools[]` allowlist and re-install."
-        ));
+        return Err(ToolExecutionError::PermissionDenied {
+            message: format!(
+                "no ai policy: app `{app_id}` has no `ai` block in its manifest — \
+                 it cannot use `cos ai tool`. Add an `ai.tools[]` allowlist and re-install."
+            ),
+            detail: None,
+            reason: "no_ai_policy",
+        });
     };
     if !policy.tools.iter().any(|t| t == tool_name) {
-        return Err(format!(
-            "tool not in ai.tools: `{tool_name}` is not in app `{app_id}`'s \
-             manifest `ai.tools[]` allowlist (declared: {:?}). Add it to the \
-             manifest and re-install.",
-            policy.tools
-        ));
+        return Err(ToolExecutionError::PermissionDenied {
+            message: format!(
+                "tool not in ai.tools: `{tool_name}` is not in app `{app_id}`'s \
+                 manifest `ai.tools[]` allowlist (declared: {:?}). Add it to the \
+                 manifest and re-install.",
+                policy.tools
+            ),
+            detail: None,
+            reason: "tool_not_in_policy",
+        });
     }
     Ok(())
 }
@@ -321,14 +371,18 @@ fn execute_inner(
     tool_name: &str,
     app_id: &str,
     args: &Value,
-) -> Result<ToolResult, String> {
-    let tool = lookup(tool_name)
-        .ok_or_else(|| format!("unknown tool: {tool_name}. try one of: {:?}", list_names()))?;
+) -> Result<ToolResult, ToolExecutionError> {
+    let tool = lookup(tool_name).ok_or_else(|| {
+        ToolExecutionError::UnknownTool(format!(
+            "unknown tool: {tool_name}. try one of: {:?}",
+            list_names()
+        ))
+    })?;
 
     // Argument shape is checked before the App-policy lookup so bad
     // calls report as such instead of leaking "your manifest doesn't
     // declare this tool" for a request that was malformed anyway.
-    let scope = derive_scope(tool, args)?;
+    let scope = derive_scope(tool, args).map_err(ToolExecutionError::InvalidArgs)?;
 
     require_tool_in_app_policy(app_id, tool.name)?;
 
@@ -338,26 +392,46 @@ fn execute_inner(
                 args["path"].as_str().expect("derive_scope validated path"),
                 FsTargetKind::RegularFile,
                 |opened_scope| {
-                    require(tool.verb, opened_scope).map_err(|d| format!("denied: {}", d.to_json()))
+                    require(tool.verb, opened_scope).map_err(|denial| {
+                        ToolExecutionError::PermissionDenied {
+                            message: format!("denied: {}", denial.summary()),
+                            detail: Some(denial.to_json()),
+                            reason: "caps_denied",
+                        }
+                    })
                 },
             )?;
-            impl_fs_read_text(args, target)?
+            impl_fs_read_text(args, target).map_err(ToolExecutionError::Internal)?
         }
         "fs.list" => {
             let target = open_and_authorize_fs_target(
                 args["path"].as_str().expect("derive_scope validated path"),
                 FsTargetKind::Directory,
                 |opened_scope| {
-                    require(tool.verb, opened_scope).map_err(|d| format!("denied: {}", d.to_json()))
+                    require(tool.verb, opened_scope).map_err(|denial| {
+                        ToolExecutionError::PermissionDenied {
+                            message: format!("denied: {}", denial.summary()),
+                            detail: Some(denial.to_json()),
+                            reason: "caps_denied",
+                        }
+                    })
                 },
             )?;
-            impl_fs_list(args, target)?
+            impl_fs_list(args, target).map_err(ToolExecutionError::Internal)?
         }
         "kv.get" => {
-            require(tool.verb, scope).map_err(|d| format!("denied: {}", d.to_json()))?;
-            impl_kv_get(app_id, args)?
+            require(tool.verb, scope).map_err(|denial| ToolExecutionError::PermissionDenied {
+                message: format!("denied: {}", denial.summary()),
+                detail: Some(denial.to_json()),
+                reason: "caps_denied",
+            })?;
+            impl_kv_get(app_id, args).map_err(ToolExecutionError::Internal)?
         }
-        other => return Err(format!("tool {other} has no impl wired up")),
+        other => {
+            return Err(ToolExecutionError::Internal(format!(
+                "tool {other} has no impl wired up"
+            )))
+        }
     };
 
     Ok(ToolResult {
@@ -482,13 +556,13 @@ fn open_and_authorize_fs_target<F>(
     raw_path: &str,
     kind: FsTargetKind,
     authorize: F,
-) -> Result<OpenedFsTarget, String>
+) -> Result<OpenedFsTarget, ToolExecutionError>
 where
-    F: FnOnce(Scope) -> Result<(), String>,
+    F: FnOnce(Scope) -> Result<(), ToolExecutionError>,
 {
-    let path = resolve_fs_path(raw_path)?;
-    let target = OpenedFsTarget::open(&path, kind)?;
-    authorize(target.scope()?)?;
+    let path = resolve_fs_path(raw_path).map_err(ToolExecutionError::InvalidArgs)?;
+    let target = OpenedFsTarget::open(&path, kind).map_err(ToolExecutionError::Internal)?;
+    authorize(target.scope().map_err(ToolExecutionError::Internal)?)?;
     Ok(target)
 }
 
@@ -680,7 +754,10 @@ fn impl_kv_get(app_id: &str, args: &Value) -> Result<Value, String> {
     // Minimal stub backed by per-App on-disk JSON. The full KV impl
     // is tracked separately; this gets us an end-to-end loop for App
     // AI tool calls without blocking on the larger data.kv design.
-    let dir = crate::paths::data_dir().join("apps").join(app_id).join("kv");
+    let dir = crate::paths::data_dir()
+        .join("apps")
+        .join(app_id)
+        .join("kv");
     let file = dir.join(format!("{}.json", sanitize_key(key)));
     let value: Option<String> = match std::fs::read_to_string(&file) {
         Ok(s) => Some(s),

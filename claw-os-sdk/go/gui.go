@@ -30,23 +30,14 @@ import (
 	"time"
 )
 
-// GUICommand is the command value the bridge passes (and the default
-// `desktop.exec`) when an app is launched as a GUI.
-const GUICommand = "--gui"
 const askClawLauncher = "/usr/local/bin/cos-ask-claw-launcher"
 const askClawProtocol = 1
 const askClawRequestLimit = 32 * 1024
 
-// IsGUILaunch reports whether the current invocation is a desktop GUI
-// launch. It prefers the COS_APP_GUI environment variable the bridge
-// sets for the long-lived GUI process; as a fallback (so apps with a
-// custom desktop.exec still work) a command equal to GUICommand is also
-// treated as a GUI launch. Pass "" when you have no command value.
-func IsGUILaunch(command string) bool {
-	if os.Getenv("COS_APP_GUI") == "1" {
-		return true
-	}
-	return command == GUICommand
+// IsGUILaunch reports whether the bridge marked this process as an
+// authenticated desktop launch.
+func IsGUILaunch() bool {
+	return os.Getenv("COS_APP_GUI") == "1"
 }
 
 // GuiContext is the kernel context handed to a desktop app at launch.
@@ -58,19 +49,22 @@ type GuiContext struct {
 	Files []string
 }
 
-// Context builds the GuiContext for the current GUI launch. AppID is
-// read from COS_APP_ID (set by the kernel when it spawns the GUI).
-// files defaults to the launcher's file arguments (decoded from
-// COS_ARGS_JSON) when nil.
-func Context(files []string) *GuiContext {
+// Context builds the GuiContext for the current GUI launch. It rejects
+// missing App identity and malformed host arguments. Files defaults to
+// the launcher's COS_ARGS_JSON array when nil.
+func Context(files []string) (*GuiContext, error) {
 	appID := os.Getenv("COS_APP_ID")
 	if appID == "" {
-		appID = "unknown"
+		return nil, fmt.Errorf("COS_APP_ID is required for a GUI launch")
 	}
 	if files == nil {
-		files = filesFromEnv()
+		var err error
+		files, err = filesFromEnv()
+		if err != nil {
+			return nil, err
+		}
 	}
-	return &GuiContext{AppID: appID, Files: files}
+	return &GuiContext{AppID: appID, Files: files}, nil
 }
 
 // OpenAgentOverlay summons the system "Ask Claw" agent overlay through the
@@ -227,14 +221,14 @@ func validateAskClawLauncher() error {
 	return nil
 }
 
-func filesFromEnv() []string {
+func filesFromEnv() ([]string, error) {
 	raw := os.Getenv("COS_ARGS_JSON")
 	if raw == "" {
-		return nil
+		return nil, nil
 	}
 	var parsed []string
 	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
-		return nil
+		return nil, fmt.Errorf("COS_ARGS_JSON must be an array of strings: %w", err)
 	}
-	return parsed
+	return parsed, nil
 }

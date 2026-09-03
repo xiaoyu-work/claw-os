@@ -9,7 +9,7 @@
 //   import { ai, tools, gui, mcp } from "@claw-os/sdk";
 //
 //   export function run(command: string, args: Record<string, unknown>) {
-//     if (gui.isGuiLaunch(command)) {
+//     if (gui.isGuiLaunch()) {
 //       return startWindow(gui.context());           // desktop surface
 //     }
 //     const res = ai.chat(String(args.body), { origin: "external-content" });

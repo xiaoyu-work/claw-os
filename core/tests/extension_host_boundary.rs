@@ -15,7 +15,6 @@ use cos::extension_host::{broker, client, spawn};
 const HOST_BIN: &str = env!("CARGO_BIN_EXE_claw-extension-host");
 const APP_RUNNER_BIN: &str = env!("CARGO_BIN_EXE_claw-app-runner");
 const LEAK_MARKER: &str = "COS_EXTENSION_TEST_BROKER_SECRET";
-const TEST_CAPABILITY_GENERATION: &str = "aaaaaaaaaaaaaaaa";
 const TEST_MCP_SERVER: &str = r#"import json
 import sys
 
@@ -113,11 +112,7 @@ impl TestEnvironment {
             .unwrap_or_else(|| HOST_BIN.into());
         let host_bin = runtime.path().join("claw-extension-host");
         std::fs::copy(host_source, &host_bin).ok()?;
-        std::fs::set_permissions(
-            &host_bin,
-            std::fs::Permissions::from_mode(0o755),
-        )
-        .ok()?;
+        std::fs::set_permissions(&host_bin, std::fs::Permissions::from_mode(0o755)).ok()?;
         let app_runner = runtime.path().join("claw-app-runner");
         std::fs::copy(APP_RUNNER_BIN, &app_runner).ok()?;
         if !std::process::Command::new("strip")
@@ -163,32 +158,32 @@ impl TestEnvironment {
 }
 
 fn make_owner_writable(path: &std::path::Path, uid: u32, gid: u32) -> std::io::Result<()> {
-        use std::os::unix::ffi::OsStrExt;
-        use std::os::unix::fs::PermissionsExt;
-        let raw = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
-        if unsafe { libc::chown(raw.as_ptr(), uid, gid) } != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o770))
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::PermissionsExt;
+    let raw = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+    if unsafe { libc::chown(raw.as_ptr(), uid, gid) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o770))
 }
 
 fn make_root_readable(path: &std::path::Path) -> std::io::Result<()> {
-        use std::os::unix::fs::PermissionsExt;
-        let metadata = std::fs::symlink_metadata(path)?;
-        if metadata.is_dir() {
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))?;
-            for entry in std::fs::read_dir(path)? {
-                make_root_readable(&entry?.path())?;
-            }
-        } else {
-            let mode = if metadata.permissions().mode() & 0o111 != 0 {
-                0o555
-            } else {
-                0o444
-            };
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))?;
+    use std::os::unix::fs::PermissionsExt;
+    let metadata = std::fs::symlink_metadata(path)?;
+    if metadata.is_dir() {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))?;
+        for entry in std::fs::read_dir(path)? {
+            make_root_readable(&entry?.path())?;
         }
-        Ok(())
+    } else {
+        let mode = if metadata.permissions().mode() & 0o111 != 0 {
+            0o555
+        } else {
+            0o444
+        };
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))?;
+    }
+    Ok(())
 }
 
 fn write_mcp_server(root: &std::path::Path) -> PathBuf {
@@ -223,6 +218,7 @@ fn write_echo_app(root: &std::path::Path) {
     std::fs::write(
         app.join("app.json"),
         serde_json::json!({
+            "schema_version": 2,
             "id": "echo-app",
             "version": "0.1.0",
             "name": {"en": "Echo App"},
@@ -234,7 +230,7 @@ fn write_echo_app(root: &std::path::Path) {
                     "needs": []
                 }
             },
-            "session": {
+            "mcp": {
                 "transport": "stdio",
                 "entry": "server.py",
                 "tools": [{
@@ -332,18 +328,35 @@ async fn worker_child() {
     assert_eq!(output["command"], "echo");
     assert!(output["env_leak"].is_null(), "{output}");
 
-    assert_eq!(
-        client
-            .open_app("echo-app".to_string())
-            .await
-            .expect("open hosted App session"),
-        1
-    );
+    let call_context = cos::agent::tools::app_gateway::McpCallContext {
+        wire_version: cos::agent::tools::app_gateway::CALL_CONTEXT_WIRE_VERSION,
+        call_id: "call-boundary".to_string(),
+        trace_id: "call-boundary".to_string(),
+        parent_call_id: None,
+        depth: 0,
+        deadline_unix_ms: Some(
+            (std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_millis() as u64
+                + 5_000)
+                .min(binding.expires_at_ms),
+        ),
+        session_id: binding.session_id.clone(),
+        task_id: Some(binding.task_id.clone()),
+        caller: cos::agent::tools::app_gateway::McpPrincipal {
+            kind: cos::agent::tools::app_gateway::McpPrincipalKind::SystemAgent,
+            id: binding.session_id.clone().expect("bound session"),
+            owner_uid: binding.owner_uid,
+            app_id: None,
+        },
+    };
     let app_call = client
         .call_app(
             "echo-app".to_string(),
             "ping".to_string(),
             serde_json::json!({}),
+            call_context,
             Duration::from_secs(5),
         )
         .await
@@ -354,11 +367,6 @@ async fn worker_child() {
             cos::agent::tools::mcp::protocol::ContentItem::Text { text } if text == "pong"
         )
     }));
-    assert!(client
-        .close_app("echo-app".to_string())
-        .await
-        .expect("close hosted App session"));
-
     let spoof = cos::clawd::client::request(
         &binding.broker_socket,
         cos::clawd::wire::Request::build(
@@ -395,17 +403,14 @@ async fn worker_child() {
         .await
         .expect("attach hosted MCP");
     let descriptor_digest =
-        cos::agent::tools::mcp::integration::sanitized_descriptor_digest_for_test(
-            mcp_name,
-            tools,
-        )
-        .expect("descriptor digest");
+        cos::agent::tools::mcp::integration::sanitized_descriptor_digest_for_test(mcp_name, tools)
+            .expect("descriptor digest");
     let audit = cos::extension_host::protocol::McpInvocationAudit {
         policy_identity: "mcp_hosted_echo_ping".to_string(),
         server_identity: mcp_name.to_string(),
         handle_digest: cos::crypto::sha256_hex(b"extension-boundary-handle"),
         descriptor_digest: descriptor_digest.clone(),
-        capability_generation: TEST_CAPABILITY_GENERATION.to_string(),
+        capability_generation: binding.capability_generation.clone(),
         untrusted_remote_name: cos::audit_policy::text_digest("ping"),
     };
     let value = client
@@ -517,18 +522,14 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
         std::os::unix::net::UnixListener::bind(&primary_path).expect("primary broker fixture");
     std::fs::set_permissions(&primary_path, std::fs::Permissions::from_mode(0o660))
         .expect("protect primary broker fixture");
-    let primary_raw =
-        std::ffi::CString::new(primary_path.to_string_lossy().as_bytes()).unwrap();
+    let primary_raw = std::ffi::CString::new(primary_path.to_string_lossy().as_bytes()).unwrap();
     assert_eq!(
         unsafe { libc::chown(primary_raw.as_ptr(), 0, identity.gid) },
         0
     );
-    let isolation = cos::agentd::spawn::ExecutionIsolation::capture(
-        &primary_path,
-        identity.uid,
-        execution_gid,
-    )
-    .expect("capture execution isolation");
+    let isolation =
+        cos::agentd::spawn::ExecutionIsolation::capture(&primary_path, identity.uid, execution_gid)
+            .expect("capture execution isolation");
     let paths = spawn::HostPaths::create(&identity).expect("host paths");
     let listener =
         broker::bind_listener(&paths, extension_identity.uid, execution_gid).expect("listener");
@@ -538,8 +539,23 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
     let task_session = "task-session";
     let host_session = "extension-session";
     let expires = cos::agentd::grant::now_ms() + 120_000;
+    let caps = CapSet::from_caps([
+        Cap::new(Verb::AGENT_INVOKE, Scope::name("echo-app")),
+        Cap::new(Verb::AGENT_INVOKE, Scope::name("echo-app/ping")),
+    ]);
+    let capability_generation = cos::agent::tools::exposure::capability_generation(&caps);
     cos::storage::install_routed_extension_reader(identity.uid, extension_identity.uid)
         .expect("install routed registry reader");
+    let mut approved_paths = vec![
+        spawn::approve_runtime_path(&identity.home, identity.uid).expect("approve owner home"),
+        spawn::approve_runtime_path(env._apps.path(), identity.uid).expect("approve App root"),
+        spawn::approve_runtime_path(env._runtime.path(), identity.uid)
+            .expect("approve test runtime"),
+    ];
+    if let Some(sdk_dir) = std::env::var_os("COS_SDK_PYTHON_DIR").map(PathBuf::from) {
+        approved_paths
+            .push(spawn::approve_runtime_path(&sdk_dir, identity.uid).expect("approve Python SDK"));
+    }
     let mut host = spawn::spawn_host(
         &identity,
         &extension_identity,
@@ -547,50 +563,79 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
         &containment,
         task_id,
         Some(task_session),
+        None,
         Some(host_session),
         worker_pid,
         Some(worker_start),
         "0123456789abcdef0123456789abcdef",
         expires,
-        TEST_CAPABILITY_GENERATION,
-        vec![
-            spawn::approve_runtime_path(&identity.home, identity.uid).expect("approve owner home"),
-            spawn::approve_runtime_path(env._apps.path(), identity.uid).expect("approve App root"),
-            spawn::approve_runtime_path(env._runtime.path(), identity.uid)
-                .expect("approve test runtime"),
-        ],
+        &capability_generation,
+        approved_paths,
         paths,
     )
     .expect("spawn host");
 
-    let caps = CapSet::from_caps([Cap::new(Verb::AGENT_INVOKE, Scope::name("echo-app"))]);
-    cos::proc::register_session_for_owner(cos::proc::SessionInfo {
-        session_id: host_session.to_string(),
-        pid: host.pid,
-        command: vec!["claw-extension-host".to_string()],
-        started_at: chrono::Utc::now().to_rfc3339(),
-        stdout_path: String::new(),
-        stderr_path: String::new(),
-        group: Some(cos::extension_host::protocol::EXTENSION_HOST_GROUP.to_string()),
-        parent: Some(task_session.to_string()),
-        workdir: Some(identity.home.to_string_lossy().into_owned()),
-        exit_code: None,
-        ended_at: None,
-        tier: None,
-        scope: None,
-        priority: None,
-        caps: Some(caps),
-        transient_caps: None,
-        role: Some("worker".to_string()),
-        app_id: None,
-        pending_bind: false,
-        start_time_ticks: host.start_time_ticks,
-        client: cos::session::SessionClient::new(
-            cos::session::SessionSource::BrokerTask,
-            false,
-            true,
-        ),
-    }, uid)
+    cos::proc::register_session_for_owner(
+        cos::proc::SessionInfo {
+            session_id: task_session.to_string(),
+            pid: worker_pid,
+            command: vec!["claw-agentd-worker".to_string()],
+            started_at: chrono::Utc::now().to_rfc3339(),
+            stdout_path: String::new(),
+            stderr_path: String::new(),
+            group: Some("agent".to_string()),
+            parent: None,
+            workdir: Some(identity.home.to_string_lossy().into_owned()),
+            exit_code: None,
+            ended_at: None,
+            tier: None,
+            scope: None,
+            priority: None,
+            caps: Some(caps.clone()),
+            transient_caps: None,
+            role: Some("agent-host".to_string()),
+            app_id: None,
+            pending_bind: false,
+            start_time_ticks: Some(worker_start),
+            client: cos::session::SessionClient::new(
+                cos::session::SessionSource::BrokerTask,
+                false,
+                true,
+            ),
+        },
+        uid,
+    )
+    .expect("register task session");
+    cos::proc::register_session_for_owner(
+        cos::proc::SessionInfo {
+            session_id: host_session.to_string(),
+            pid: host.pid,
+            command: vec!["claw-extension-host".to_string(), task_id.to_string()],
+            started_at: chrono::Utc::now().to_rfc3339(),
+            stdout_path: String::new(),
+            stderr_path: String::new(),
+            group: Some(cos::extension_host::protocol::EXTENSION_HOST_GROUP.to_string()),
+            parent: Some(task_session.to_string()),
+            workdir: Some(identity.home.to_string_lossy().into_owned()),
+            exit_code: None,
+            ended_at: None,
+            tier: None,
+            scope: None,
+            priority: None,
+            caps: Some(caps),
+            transient_caps: None,
+            role: Some("worker".to_string()),
+            app_id: None,
+            pending_bind: false,
+            start_time_ticks: host.start_time_ticks,
+            client: cos::session::SessionClient::new(
+                cos::session::SessionSource::BrokerTask,
+                false,
+                true,
+            ),
+        },
+        uid,
+    )
     .expect("register host session");
     let lease = Arc::new(broker::ExtensionLease::new(
         task_id.to_string(),
@@ -627,8 +672,8 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
         .await
         .expect("worker boundary timed out")
         .expect("wait worker boundary");
-    let audit = std::fs::read_to_string(env._data.path().join("clawd/audit.jsonl"))
-        .unwrap_or_default();
+    let audit =
+        std::fs::read_to_string(env._data.path().join("clawd/audit.jsonl")).unwrap_or_default();
     assert!(
         output.status.success(),
         "worker stdout:\n{}\nworker stderr:\n{}\naudit:\n{}",
@@ -657,6 +702,7 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
     lease.close();
     broker_task.abort();
     cos::proc::deregister_session_for_owner(host_session, uid);
+    cos::proc::deregister_session_for_owner(task_session, uid);
     cos::storage::remove_routed_extension_reader(identity.uid, extension_identity.uid)
         .expect("remove routed registry reader");
     host.cgroup.cleanup().await.expect("clean host containment");

@@ -183,10 +183,7 @@ fn resolve_needs_substitutes_runtime_arg_value() {
     let caps = m.resolve_needs("rm", &args).unwrap();
     assert_eq!(caps.len(), 1);
     assert_eq!(caps[0][0].verb, Verb::FS_DELETE);
-    assert_eq!(
-        caps[0][0].scope,
-        Scope::path("/home/jay/x.md")
-    );
+    assert_eq!(caps[0][0].scope, Scope::path("/home/jay/x.md"));
 }
 
 #[test]
@@ -219,10 +216,7 @@ fn resolve_needs_uses_literal_arg_default() {
 
     assert_eq!(caps.len(), 1);
     assert_eq!(caps[0][0].verb, Verb::FS_READ);
-    assert_eq!(
-        caps[0][0].scope,
-        Scope::path("/workspace")
-    );
+    assert_eq!(caps[0][0].scope, Scope::path("/workspace"));
 }
 
 #[test]
@@ -262,20 +256,14 @@ fn resolve_needs_uses_validated_default_binding() {
 
     let caps = manifest.resolve_needs("download", &args).unwrap();
 
-    assert_eq!(
-        caps[0][0].scope,
-        Scope::path("~/archive.tar")
-    );
+    assert_eq!(caps[0][0].scope, Scope::path("~/archive.tar"));
 
     args.insert(
         "url".to_string(),
         serde_json::json!("https://example.com/releases/"),
     );
     let fallback = manifest.resolve_needs("download", &args).unwrap();
-    assert_eq!(
-        fallback[0][0].scope,
-        Scope::path("~/download")
-    );
+    assert_eq!(fallback[0][0].scope, Scope::path("~/download"));
 }
 
 #[test]
@@ -348,18 +336,16 @@ fn null_defaults_and_ambiguous_positionals_are_rejected() {
         }"#,
     )
     .unwrap_err();
-    assert!(matches!(
-        ambiguous,
-        ManifestError::ArgDefaultInvalid { .. }
-    ));
+    assert!(matches!(ambiguous, ManifestError::ArgDefaultInvalid { .. }));
 }
 
 #[test]
-fn session_tool_defaults_feed_arguments_and_capabilities() {
+fn mcp_tool_defaults_feed_arguments_and_capabilities() {
     let manifest = Manifest::from_json(
         r#"{
+              "schema_version": 2,
             "id":"session-defaults","version":"0.1","name":"Session defaults",
-            "session":{"tools":[{
+            "mcp":{"tools":[{
                 "name":"session-defaults.read","summary":"Read",
                 "args":[
                     {"name":"key","kind":"name","default":"primary"},
@@ -371,12 +357,12 @@ fn session_tool_defaults_feed_arguments_and_capabilities() {
     )
     .unwrap();
     let resolved = manifest
-        .resolve_session_tool_args("session-defaults.read", &BTreeMap::new())
+        .resolve_mcp_tool_args("session-defaults.read", &BTreeMap::new())
         .unwrap();
     assert_eq!(resolved["key"], serde_json::json!("primary"));
     assert_eq!(resolved["limit"], serde_json::json!(10));
     let caps = manifest
-        .resolve_session_tool_needs("session-defaults.read", &BTreeMap::new())
+        .resolve_mcp_tool_needs("session-defaults.read", &BTreeMap::new())
         .unwrap();
     assert_eq!(caps[0][0].scope, Scope::name("primary"));
 }
@@ -415,23 +401,15 @@ fn conditional_needs_skip_only_explicit_inactive_cases() {
     )
     .unwrap();
 
-    let local = manifest
-        .resolve_needs("explain", &BTreeMap::new())
-        .unwrap();
+    let local = manifest.resolve_needs("explain", &BTreeMap::new()).unwrap();
     assert_eq!(local, [Vec::new(), Vec::new()]);
 
     let mut cloud_file = BTreeMap::new();
     cloud_file.insert("file".to_string(), serde_json::json!("/workspace/a.txt"));
     cloud_file.insert("provider".to_string(), serde_json::json!("cloud"));
     let active = manifest.resolve_needs("explain", &cloud_file).unwrap();
-    assert_eq!(
-        active[0][0].scope,
-        Scope::path("/workspace/a.txt")
-    );
-    assert_eq!(
-        active[1][0].scope,
-        Scope::name("default/TOKEN")
-    );
+    assert_eq!(active[0][0].scope, Scope::path("/workspace/a.txt"));
+    assert_eq!(active[1][0].scope, Scope::name("default/TOKEN"));
 }
 
 #[test]
@@ -475,10 +453,7 @@ fn repeatable_scope_arguments_resolve_one_capability_per_value() {
             .iter()
             .map(|cap| cap.scope.clone())
             .collect::<Vec<_>>(),
-        [
-            Scope::path("/workspace/a"),
-            Scope::path("/workspace/b")
-        ]
+        [Scope::path("/workspace/a"), Scope::path("/workspace/b")]
     );
 }
 
@@ -507,10 +482,7 @@ fn scope_transforms_derive_exact_parent_and_url_host_resources() {
     let tag = manifest
         .resolve_needs(
             "tag",
-            &BTreeMap::from([(
-                "path".to_string(),
-                serde_json::json!("/workspace/note.txt"),
-            )]),
+            &BTreeMap::from([("path".to_string(), serde_json::json!("/workspace/note.txt"))]),
         )
         .unwrap();
     assert_eq!(tag[0][0].scope, Scope::path("/workspace"));
@@ -588,11 +560,7 @@ fn python_and_rust_share_url_host_scope_vectors() {
             let expected = vector["scope"].as_str().unwrap();
             let resolved = resolved.unwrap();
             assert_eq!(resolved.values["url"], canonical_url, "{url}");
-            assert_eq!(
-                resolved.needs[0][0].scope,
-                Scope::host(expected),
-                "{url}"
-            );
+            assert_eq!(resolved.needs[0][0].scope, Scope::host(expected), "{url}");
         }
     }
 }
@@ -808,10 +776,7 @@ fn resolve_needs_with_fixed_scope() {
     );
     let caps = m.resolve_needs("tail", &BTreeMap::new()).unwrap();
     assert_eq!(caps[0][0].verb, Verb::DATA_LOG_READ);
-    assert_eq!(
-        caps[0][0].scope,
-        Scope::name("system/*")
-    );
+    assert_eq!(caps[0][0].scope, Scope::name("system/*"));
 }
 
 #[test]
@@ -1120,17 +1085,18 @@ fn manifest_without_ai_block_skips_tool_catalog_check() {
 }
 
 // -----------------------------------------------------------------
-// Session block tests (Phase 11)
+// MCP service block tests
 // -----------------------------------------------------------------
 
 #[test]
-fn session_block_parses_with_minimal_tool() {
+fn mcp_block_parses_with_minimal_tool() {
     let m = parse(
         r#"{
+              "schema_version": 2,
               "id": "kv",
               "version": "0.1",
               "name": "KV",
-              "session": {
+              "mcp": {
                 "entry": "server.py",
                 "tools": [
                   {
@@ -1146,11 +1112,11 @@ fn session_block_parses_with_minimal_tool() {
               }
             }"#,
     );
-    let session = m.session.expect("session block parsed");
-    assert_eq!(session.entry.as_deref(), Some("server.py"));
-    assert_eq!(session.transport, SessionTransport::Stdio);
-    assert_eq!(session.tools.len(), 1);
-    assert_eq!(session.tools[0].name, "kv.list");
+    let service = m.mcp.expect("mcp block parsed");
+    assert_eq!(service.entry.as_deref(), Some("server.py"));
+    assert_eq!(service.transport, McpTransport::Stdio);
+    assert_eq!(service.tools.len(), 1);
+    assert_eq!(service.tools[0].name, "kv.list");
 }
 
 #[test]
@@ -1180,7 +1146,7 @@ fn mcp_first_service_parses_lifecycle_access_and_tools() {
             }"#,
     );
     assert_eq!(manifest.schema_version, Some(2));
-    let service = manifest.mcp_service().expect("MCP service");
+    let service = manifest.mcp.as_ref().expect("MCP service");
     assert_eq!(service.entry.as_deref(), Some("server.py"));
     assert_eq!(service.lifecycle, McpLifecycle::AlwaysOn);
     assert!(service.access.system_agent);
@@ -1200,7 +1166,7 @@ fn mcp_first_service_uses_restrictive_caller_defaults() {
               "mcp": {"tools":[]}
             }"#,
     );
-    let service = manifest.mcp_service().expect("MCP service");
+    let service = manifest.mcp.as_ref().expect("MCP service");
     assert_eq!(service.lifecycle, McpLifecycle::Lazy);
     assert!(service.access.system_agent);
     assert!(service.access.apps.is_empty());
@@ -1222,20 +1188,24 @@ fn mcp_first_service_requires_schema_version_two() {
 }
 
 #[test]
-fn mcp_first_service_rejects_legacy_session_and_invalid_callers() {
-    let conflict = Manifest::from_json(
+fn a_removed_session_block_is_rejected() {
+    let error = Manifest::from_json(
         r#"{
-              "schema_version": 2,
-              "id": "email",
-              "version": "1.0.0",
-              "name": "Email",
-              "session": {"tools":[]},
-              "mcp": {"tools":[]}
+              "id": "kv",
+              "version": "0.1",
+              "name": "KV",
+              "session": {
+                "entry": "server.py",
+                "tools": [{"name": "kv.list", "summary": "List keys."}]
+              }
             }"#,
     )
     .unwrap_err();
-    assert!(matches!(conflict, ManifestError::McpLegacySessionConflict));
+    assert!(matches!(error, ManifestError::RemovedSessionField));
+}
 
+#[test]
+fn mcp_first_service_rejects_invalid_callers() {
     let invalid = Manifest::from_json(
         r#"{
               "schema_version": 2,
@@ -1286,19 +1256,20 @@ fn mcp_first_service_rejects_legacy_session_and_invalid_callers() {
 }
 
 #[test]
-fn session_tool_default_entry_per_runtime() {
-    assert_eq!(Runtime::Python.default_session_entry(), "server.py");
-    assert_eq!(Runtime::Node.default_session_entry(), "server.js");
+fn mcp_tool_default_entry_per_runtime() {
+    assert_eq!(Runtime::Python.default_mcp_entry(), "server.py");
+    assert_eq!(Runtime::Node.default_mcp_entry(), "server.js");
 }
 
 #[test]
-fn session_tool_resolve_needs_from_arg() {
+fn mcp_tool_resolve_needs_from_arg() {
     let m = parse(
         r#"{
+              "schema_version": 2,
               "id": "kv",
               "version": "0.1",
               "name": "KV",
-              "session": {
+              "mcp": {
                 "tools": [
                   {
                     "name": "kv.get",
@@ -1316,21 +1287,19 @@ fn session_tool_resolve_needs_from_arg() {
     );
     let mut args = BTreeMap::new();
     args.insert("key".to_string(), serde_json::json!("user/jay"));
-    let caps = m.resolve_session_tool_needs("kv.get", &args).unwrap();
+    let caps = m.resolve_mcp_tool_needs("kv.get", &args).unwrap();
     assert_eq!(caps.len(), 1);
     assert_eq!(caps[0][0].verb, Verb::DATA_KV_READ);
-    assert_eq!(
-        caps[0][0].scope,
-        Scope::name("user/jay")
-    );
+    assert_eq!(caps[0][0].scope, Scope::name("user/jay"));
 }
 
 #[test]
-fn session_repeatable_scope_arg_resolves_every_capability() {
+fn mcp_repeatable_scope_arg_resolves_every_capability() {
     let manifest = parse(
         r#"{
+              "schema_version": 2,
           "id":"files","version":"0.1","name":"Files",
-          "session":{"tools":[{
+          "mcp":{"tools":[{
             "name":"files.read","summary":"Read files",
             "args":[{"name":"path","kind":"path","repeatable":true}],
             "needs":[{"verb":"fs.read","scope":{"kind":"from-arg","arg":"path"},
@@ -1343,7 +1312,7 @@ fn session_repeatable_scope_arg_resolves_every_capability() {
         serde_json::json!(["/workspace/a", "/workspace/b"]),
     )]);
     let resolved = manifest
-        .resolve_session_tool_needs("files.read", &args)
+        .resolve_mcp_tool_needs("files.read", &args)
         .unwrap();
     assert_eq!(resolved[0].len(), 2);
     assert_eq!(resolved[0][0].scope, Scope::path("/workspace/a"));
@@ -1351,11 +1320,12 @@ fn session_repeatable_scope_arg_resolves_every_capability() {
 }
 
 #[test]
-fn session_effective_call_matches_one_shot_argument_semantics() {
+fn mcp_effective_call_matches_one_shot_argument_semantics() {
     let manifest = parse(
         r#"{
+              "schema_version": 2,
           "id":"session-parity","version":"0.1","name":"Session parity",
-          "session":{"tools":[{
+          "mcp":{"tools":[{
             "name":"files.read","summary":"Read files",
             "args":[
               {"name":"path","kind":"path","repeatable":true},
@@ -1378,12 +1348,9 @@ fn session_effective_call_matches_one_shot_argument_semantics() {
         home: "/home/test".into(),
         cwd: Some("/workspace".into()),
     };
-    let supplied = BTreeMap::from([(
-        "path".to_string(),
-        serde_json::json!(["a.txt", "b.txt"]),
-    )]);
+    let supplied = BTreeMap::from([("path".to_string(), serde_json::json!(["a.txt", "b.txt"]))]);
     let effective = manifest
-        .resolve_session_tool_call("files.read", &supplied, &paths)
+        .resolve_mcp_tool_call("files.read", &supplied, &paths)
         .unwrap();
     assert_eq!(
         effective.values["path"],
@@ -1396,56 +1363,63 @@ fn session_effective_call_matches_one_shot_argument_semantics() {
 
     let invalid = BTreeMap::from([("mode".to_string(), serde_json::json!("unsafe"))]);
     assert!(manifest
-        .resolve_session_tool_call("files.read", &invalid, &paths)
+        .resolve_mcp_tool_call("files.read", &invalid, &paths)
         .is_err());
     let undeclared = BTreeMap::from([
         ("path".to_string(), serde_json::json!(["a.txt"])),
-        ("protocol_metadata".to_string(), serde_json::json!("not-an-argument")),
+        (
+            "protocol_metadata".to_string(),
+            serde_json::json!("not-an-argument"),
+        ),
     ]);
     let error = manifest
-        .resolve_session_tool_call("files.read", &undeclared, &paths)
+        .resolve_mcp_tool_call("files.read", &undeclared, &paths)
         .unwrap_err();
-    assert!(error.to_string().contains("unknown argument `protocol_metadata`"));
+    assert!(error
+        .to_string()
+        .contains("unknown argument `protocol_metadata`"));
 }
 
 #[test]
-fn session_tool_resolve_needs_unknown_tool_errors() {
+fn mcp_tool_resolve_needs_unknown_tool_errors() {
     let m = parse(
         r#"{
+              "schema_version": 2,
               "id": "kv",
               "version": "0.1",
               "name": "KV",
-              "session": { "tools": [] }
+              "mcp": { "tools": [] }
             }"#,
     );
     let err = m
-        .resolve_session_tool_needs("kv.ghost", &BTreeMap::new())
+        .resolve_mcp_tool_needs("kv.ghost", &BTreeMap::new())
         .unwrap_err();
-    assert!(matches!(err, ManifestError::SessionNeedInvalid { .. }));
+    assert!(matches!(err, ManifestError::McpNeedInvalid { .. }));
 }
 
 #[test]
-fn session_tool_resolve_needs_no_session_errors() {
+fn mcp_tool_resolve_needs_without_mcp_block_errors() {
     let m = parse(r#"{"id":"kv","version":"0","name":"KV"}"#);
     let err = m
-        .resolve_session_tool_needs("kv.get", &BTreeMap::new())
+        .resolve_mcp_tool_needs("kv.get", &BTreeMap::new())
         .unwrap_err();
     match err {
-        ManifestError::SessionNeedInvalid { detail, .. } => {
-            assert!(detail.contains("no `session` block"));
+        ManifestError::McpNeedInvalid { detail, .. } => {
+            assert!(detail.contains("no `mcp` block"));
         }
-        other => panic!("expected SessionNeedInvalid, got {other:?}"),
+        other => panic!("expected McpNeedInvalid, got {other:?}"),
     }
 }
 
 #[test]
-fn session_tool_invalid_name_rejected() {
+fn mcp_tool_invalid_name_rejected() {
     let err = Manifest::from_json(
         r#"{
+              "schema_version": 2,
               "id": "kv",
               "version": "0.1",
               "name": "KV",
-              "session": {
+              "mcp": {
                 "tools": [
                   {"name": "KV.Get", "summary": "Get"}
                 ]
@@ -1453,17 +1427,18 @@ fn session_tool_invalid_name_rejected() {
             }"#,
     )
     .unwrap_err();
-    assert!(matches!(err, ManifestError::SessionToolInvalidName { .. }));
+    assert!(matches!(err, ManifestError::McpToolInvalidName { .. }));
 }
 
 #[test]
-fn session_duplicate_tool_name_rejected() {
+fn mcp_duplicate_tool_name_rejected() {
     let err = Manifest::from_json(
         r#"{
+              "schema_version": 2,
               "id": "kv",
               "version": "0.1",
               "name": "KV",
-              "session": {
+              "mcp": {
                 "tools": [
                   {"name": "kv.get", "summary": "Get"},
                   {"name": "kv.get", "summary": "Get again"}
@@ -1472,17 +1447,18 @@ fn session_duplicate_tool_name_rejected() {
             }"#,
     )
     .unwrap_err();
-    assert!(matches!(err, ManifestError::SessionDuplicateTool { .. }));
+    assert!(matches!(err, ManifestError::McpDuplicateTool { .. }));
 }
 
 #[test]
-fn session_need_refs_undeclared_arg_rejected() {
+fn mcp_need_refs_undeclared_arg_rejected() {
     let err = Manifest::from_json(
         r#"{
+              "schema_version": 2,
               "id": "kv",
               "version": "0.1",
               "name": "KV",
-              "session": {
+              "mcp": {
                 "tools": [
                   {
                     "name": "kv.get",
@@ -1501,18 +1477,19 @@ fn session_need_refs_undeclared_arg_rejected() {
     .unwrap_err();
     assert!(matches!(
         err,
-        ManifestError::SessionNeedRefsUndeclaredArg { .. }
+        ManifestError::McpNeedRefsUndeclaredArg { .. }
     ));
 }
 
 #[test]
-fn session_need_binding_to_text_arg_rejected() {
+fn mcp_need_binding_to_text_arg_rejected() {
     let err = Manifest::from_json(
         r#"{
+              "schema_version": 2,
               "id": "kv",
               "version": "0.1",
               "name": "KV",
-              "session": {
+              "mcp": {
                 "tools": [
                   {
                     "name": "kv.get",
@@ -1529,20 +1506,18 @@ fn session_need_binding_to_text_arg_rejected() {
             }"#,
     )
     .unwrap_err();
-    assert!(matches!(
-        err,
-        ManifestError::SessionNeedArgKindMismatch { .. }
-    ));
+    assert!(matches!(err, ManifestError::McpNeedArgKindMismatch { .. }));
 }
 
 #[test]
-fn session_ai_verb_without_policy_rejected() {
+fn mcp_ai_verb_without_policy_rejected() {
     let err = Manifest::from_json(
         r#"{
+              "schema_version": 2,
               "id": "summarize",
               "version": "0.1",
               "name": "Summarize",
-              "session": {
+              "mcp": {
                 "tools": [
                   {
                     "name": "summarize.run",
@@ -1558,10 +1533,7 @@ fn session_ai_verb_without_policy_rejected() {
             }"#,
     )
     .unwrap_err();
-    assert!(matches!(
-        err,
-        ManifestError::SessionAiNeedMissingPolicy { .. }
-    ));
+    assert!(matches!(err, ManifestError::McpAiNeedMissingPolicy { .. }));
 }
 
 #[test]

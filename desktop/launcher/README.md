@@ -46,3 +46,10 @@ Translation files may be found in the i18n directory. New translations may copy 
 ## Profiling async tasks with tokio-console
 
 To debug issues with asynchronous code, install [tokio-console](https://github.com/tokio-rs/console) and run it within a separate terminal. Then kill the **cosmic-launcher** process a couple times in quick succession to prevent **cosmic-session** from spawning it again. Then you can start **cosmic-launcher** with **tokio-console** support either by running `just tokio-console` from this repository to test code changes, or `env TOKIO_CONSOLE=1 cosmic-launcher` to enable it with the installed version of **cosmic-launcher**.
+
+## Claw OS MCP service
+
+The App Host starts `/usr/bin/cosmic-launcher` with `COS_MCP_SERVER=1`.
+`apps/cosmic-launcher/app.json` owns the native MCP contract. The
+implementation delegates to the capability-gated CLI operations in
+`apps/launcher/app.json`.

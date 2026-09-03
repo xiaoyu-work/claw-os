@@ -15,7 +15,7 @@
 //     const r = tools.call(c.name, c.input);
 //   }
 
-import { BridgeError, Unavailable, asObject, cosCallJson, hasError } from "./transport";
+import { BridgeError, Denied, Unavailable, cosCallJson } from "./transport";
 import {
   WireDecodeError,
   materializeWireValue,
@@ -83,25 +83,23 @@ export function call(
   }
 
   const argv = ["ai", "tool", name, "--app", app, "--args", stringifyWireJson(args)];
-  let outcome;
+  let data: unknown;
   try {
-    outcome = cosCallJson(`cos ai tool ${name}`, argv);
+    data = cosCallJson(`cos ai tool ${name}`, argv);
   } catch (e) {
+    if (e instanceof Denied) throw new ToolDenied(e.payload);
     if (e instanceof Unavailable) throw new ToolUnavailable(e.message);
     throw e;
   }
-  if (outcome.status !== 0 || hasError(outcome.envelope)) {
-    throw new ToolDenied(asObject(outcome.envelope));
-  }
   try {
-    validateTool(outcome.envelope);
+    validateTool(data);
   } catch (error) {
     if (error instanceof WireDecodeError) {
       throw new ToolUnavailable(`tool result decode failed: ${error.message}`);
     }
     throw error;
   }
-  const env = outcome.envelope;
+  const env = data;
   return {
     name: env.tool,
     appId: env.app_id,
@@ -119,25 +117,23 @@ export function call(
  * releases.
  */
 export function catalog(): CatalogEntry[] {
-  let outcome;
+  let data: unknown;
   try {
-    outcome = cosCallJson("cos ai tools", ["ai", "tools"]);
+    data = cosCallJson("cos ai tools", ["ai", "tools"]);
   } catch (e) {
+    if (e instanceof Denied) throw new ToolDenied(e.payload);
     if (e instanceof Unavailable) throw new ToolUnavailable(e.message);
     throw e;
   }
-  if (outcome.status !== 0 || hasError(outcome.envelope)) {
-    throw new ToolDenied(asObject(outcome.envelope));
-  }
   try {
-    validateToolCatalog(outcome.envelope);
+    validateToolCatalog(data);
   } catch (error) {
     if (error instanceof WireDecodeError) {
       throw new ToolUnavailable(`catalog decode failed: ${error.message}`);
     }
     throw error;
   }
-  const env = outcome.envelope;
+  const env = data;
   return env.tools.map((row) => ({
       name: row.name,
       summary: row.summary,

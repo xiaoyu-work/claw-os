@@ -86,9 +86,13 @@ pub enum ProvenanceError {
     },
     #[error("{path}: {reason}")]
     Io { path: PathBuf, reason: String },
-    #[error("{path}: developer trust grant is stale (tree digest changed); re-run `cos provenance dev-trust`")]
+    #[error(
+        "{path}: developer trust grant is stale (tree digest changed); re-run `cos provenance dev-trust`"
+    )]
     StaleDeveloperGrant { path: PathBuf },
-    #[error("{path}: unsigned package and no developer trust grant; install a signed package or run `cos provenance dev-trust --kind {kind} --id {id} --path {path}`")]
+    #[error(
+        "{path}: unsigned package and no developer trust grant; install a signed package or run `cos provenance dev-trust --kind {kind} --id {id} --path {path}`"
+    )]
     Unsigned {
         path: PathBuf,
         kind: &'static str,
@@ -578,7 +582,7 @@ pub fn verify_package(
             return Err(ProvenanceError::Io {
                 path: dir.join(ENVELOPE_FILE),
                 reason: e.to_string(),
-            })
+            });
         }
     };
 
@@ -829,11 +833,12 @@ fn declared_entrypoints(
                         .clone()
                         .unwrap_or_else(|| manifest.runtime.default_entry().to_string()),
                 );
-                if let Some(session) = manifest.session.as_ref() {
+                if let Some(service) = manifest.mcp.as_ref() {
                     out.push(
-                        session.entry.clone().unwrap_or_else(|| {
-                            manifest.runtime.default_session_entry().to_string()
-                        }),
+                        service
+                            .entry
+                            .clone()
+                            .unwrap_or_else(|| manifest.runtime.default_mcp_entry().to_string()),
                     );
                 }
             }

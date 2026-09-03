@@ -1,0 +1,306 @@
+{
+  "id": "ffmpeg",
+  "version": "0.1.0",
+  "schema_version": 2,
+  "name": {
+    "en": "FFmpeg media toolkit"
+  },
+  "summary": {
+    "en": "Probe and convert audio and video files with FFmpeg."
+  },
+  "runtime": "python",
+  "dependencies": {
+    "binaries": [
+      "ffmpeg",
+      "ffprobe"
+    ]
+  },
+  "mcp": {
+    "entry": "main.py",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "tools": [
+      {
+        "name": "media.probe",
+        "summary": {
+          "en": "Inspect a media file and return its format and streams."
+        },
+        "args": [
+          {
+            "name": "path",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "Absolute path to the media file."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "path"
+            },
+            "why": {
+              "en": "Read the requested media file."
+            }
+          },
+          {
+            "verb": "proc.spawn",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "ffprobe"
+              }
+            },
+            "why": {
+              "en": "Run FFprobe to inspect the media file."
+            }
+          }
+        ]
+      },
+      {
+        "name": "media.convert",
+        "summary": {
+          "en": "Transcode or repackage a media file into a requested output."
+        },
+        "args": [
+          {
+            "name": "input",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "Absolute source media path."
+            }
+          },
+          {
+            "name": "output",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "Absolute destination media path."
+            }
+          },
+          {
+            "name": "video_codec",
+            "kind": "text",
+            "required": false,
+            "default": "copy",
+            "label": {
+              "en": "FFmpeg video codec name."
+            }
+          },
+          {
+            "name": "audio_codec",
+            "kind": "text",
+            "required": false,
+            "default": "copy",
+            "label": {
+              "en": "FFmpeg audio codec name."
+            }
+          },
+          {
+            "name": "overwrite",
+            "kind": "bool",
+            "required": false,
+            "default": false,
+            "label": {
+              "en": "Allow replacing an existing output file."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "input"
+            },
+            "why": {
+              "en": "Read the source media file."
+            }
+          },
+          {
+            "verb": "fs.write",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "output"
+            },
+            "why": {
+              "en": "Write the converted media file."
+            }
+          },
+          {
+            "verb": "proc.spawn",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "ffmpeg"
+              }
+            },
+            "why": {
+              "en": "Run FFmpeg to convert the media file."
+            }
+          }
+        ]
+      },
+      {
+        "name": "media.thumbnail",
+        "summary": {
+          "en": "Extract one still frame from a video."
+        },
+        "args": [
+          {
+            "name": "input",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "Absolute source video path."
+            }
+          },
+          {
+            "name": "output",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "Absolute destination image path."
+            }
+          },
+          {
+            "name": "at",
+            "kind": "text",
+            "required": false,
+            "default": "00:00:01",
+            "label": {
+              "en": "FFmpeg timestamp at which to capture the frame."
+            }
+          },
+          {
+            "name": "overwrite",
+            "kind": "bool",
+            "required": false,
+            "default": false,
+            "label": {
+              "en": "Allow replacing an existing output image."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "input"
+            },
+            "why": {
+              "en": "Read the source video."
+            }
+          },
+          {
+            "verb": "fs.write",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "output"
+            },
+            "why": {
+              "en": "Write the extracted image."
+            }
+          },
+          {
+            "verb": "proc.spawn",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "ffmpeg"
+              }
+            },
+            "why": {
+              "en": "Run FFmpeg to extract the image."
+            }
+          }
+        ]
+      },
+      {
+        "name": "media.extract_audio",
+        "summary": {
+          "en": "Extract the audio track from a media file."
+        },
+        "args": [
+          {
+            "name": "input",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "Absolute source media path."
+            }
+          },
+          {
+            "name": "output",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "Absolute destination audio path."
+            }
+          },
+          {
+            "name": "audio_codec",
+            "kind": "text",
+            "required": false,
+            "default": "copy",
+            "label": {
+              "en": "FFmpeg audio codec name."
+            }
+          },
+          {
+            "name": "overwrite",
+            "kind": "bool",
+            "required": false,
+            "default": false,
+            "label": {
+              "en": "Allow replacing an existing output file."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "input"
+            },
+            "why": {
+              "en": "Read the source media file."
+            }
+          },
+          {
+            "verb": "fs.write",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "output"
+            },
+            "why": {
+              "en": "Write the extracted audio file."
+            }
+          },
+          {
+            "verb": "proc.spawn",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "ffmpeg"
+              }
+            },
+            "why": {
+              "en": "Run FFmpeg to extract the audio track."
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

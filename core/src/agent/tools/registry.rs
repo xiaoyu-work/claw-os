@@ -136,7 +136,7 @@ impl RegistryDeps {
         };
         let app_sessions = crate::apps::discover_verified(&paths.apps_dir)
             .values()
-            .filter(|app| app.manifest.session.is_some())
+            .filter(|app| app.manifest.mcp.is_some())
             .map(|app| super::cos_apps_session::RegisteredAppSession {
                 manifest: Arc::new(app.manifest.clone()),
                 app_dir: app.dir.clone(),
@@ -629,7 +629,7 @@ impl ToolRegistry {
                         return ResolvedToolCall {
                             call: call.clone(),
                             kind: ResolvedToolKind::Rejected(error),
-                        }
+                        };
                     }
                 };
                 let resolved = progressive::resolved_tool_call(call, target_name.clone(), input);

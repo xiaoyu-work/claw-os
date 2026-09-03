@@ -10,7 +10,7 @@
 // "App X is making this call".
 
 import { spawnSync } from "node:child_process";
-import { decodeWireJson } from "./generated";
+import { WireDecodeError, decodeWireJson, validateEnvelope } from "./generated";
 
 /** Default per-call timeout. Bounded so a wedged child never blocks
  * the calling app forever, but long enough for slow providers. */
@@ -19,15 +19,15 @@ export const DEFAULT_TIMEOUT_MS = 60_000;
 /** Max bytes captured from a child's stdout/stderr (8 MiB). Generous
  * enough for embeddings / base64 artifact paths without unbounded RAM. */
 const MAX_BUFFER = 8 * 1024 * 1024;
+const WIRE_ARG = "--wire=1";
 
 /**
  * Resolve the `cos` binary.
  *
- * Honors `CLAW_COS_BIN` then `COS_BIN` (both used across the SDK family
- * and dev/test setups), falling back to `cos` on `$PATH`.
+ * Honors `CLAW_COS_BIN`, falling back to `cos` on `$PATH`.
  */
 export function cosBinary(): string {
-  return process.env.CLAW_COS_BIN || process.env.COS_BIN || "cos";
+  return process.env.CLAW_COS_BIN || "cos";
 }
 
 /** Base class for every error the transport (or a module built on it)
@@ -54,30 +54,21 @@ function truncate(value: string, limit = 200): string {
   return value.slice(0, limit) + `... [${value.length - limit} more bytes elided]`;
 }
 
-/** Outcome of a `cos` invocation: the parsed envelope plus the process
- * exit status (so callers can treat a non-zero exit as failure even
- * when stdout happened to be valid JSON). */
-export interface CosOutcome {
-  envelope: unknown;
-  status: number;
-}
-
 /**
- * Run `cos <args>` synchronously and parse its stdout as JSON.
+ * Run `cos --wire=1 <args>` synchronously and return the success data.
  *
  * `label` names the logical call (e.g. `"cos ai chat"`) for error
  * messages. Throws {@link Unavailable} for transport problems (binary
- * missing, timeout, non-JSON). The envelope is returned untouched;
- * callers decide what a non-zero `status` or an `error` field means in
- * their domain.
+ * missing, timeout, malformed protocol). Throws {@link Denied} for a
+ * valid kernel error envelope.
  */
 export function cosCallJson(
   label: string,
   args: string[],
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
-): CosOutcome {
+): unknown {
   const bin = cosBinary();
-  const res = spawnSync(bin, args, {
+  const res = spawnSync(bin, [WIRE_ARG, ...args], {
     encoding: "utf8",
     timeout: timeoutMs,
     maxBuffer: MAX_BUFFER,
@@ -97,9 +88,9 @@ export function cosCallJson(
     throw new Unavailable(`could not spawn ${bin}: ${res.error.message}`);
   }
 
-  const text = (res.stdout || "").trim() || (res.stderr || "").trim();
+  const text = (res.stdout || "").trim();
   if (!text) {
-    throw new Unavailable(`${label} returned no output (exit ${res.status})`);
+    throw new Unavailable(`${label} returned no wire response (exit ${res.status})`);
   }
 
   let envelope: unknown;
@@ -108,22 +99,24 @@ export function cosCallJson(
   } catch {
     throw new Unavailable(`${label} returned non-JSON output: ${truncate(text)}`);
   }
+  try {
+    validateEnvelope(envelope);
+  } catch (error) {
+    if (error instanceof WireDecodeError) {
+      throw new Unavailable(`${label} returned an invalid wire envelope: ${error.message}`);
+    }
+    throw error;
+  }
 
-  return { envelope, status: res.status ?? 0 };
-}
-
-/** True when an envelope is an object carrying an `error` field. */
-export function hasError(envelope: unknown): envelope is Record<string, unknown> {
-  return (
-    typeof envelope === "object" &&
-    envelope !== null &&
-    "error" in (envelope as Record<string, unknown>)
-  );
-}
-
-/** Narrow an envelope to a plain object, or `{}` if it isn't one. */
-export function asObject(envelope: unknown): Record<string, unknown> {
-  return typeof envelope === "object" && envelope !== null
-    ? (envelope as Record<string, unknown>)
-    : {};
+  const status = res.status ?? -1;
+  if (envelope.ok) {
+    if (status !== 0) {
+      throw new Unavailable(`${label} returned a success envelope with exit ${status}`);
+    }
+    return envelope.data;
+  }
+  if (status === 0) {
+    throw new Unavailable(`${label} returned an error envelope with exit 0`);
+  }
+  throw new Denied(envelope);
 }

@@ -7,9 +7,7 @@ and is generated or hand-written to satisfy that contract.
 
 Public modules
 --------------
-- :mod:`claw_os_sdk.ai`       — stable text chat wrappers around
-  ``cos ai chat``. Multimodal compatibility helpers are experimental
-  and currently raise :class:`claw_os_sdk.ai.AiUnsupported`.
+- :mod:`claw_os_sdk.ai`       — text chat through ``cos ai chat``.
 - :mod:`claw_os_sdk.tools`    — call other apps' verbs from inside an
   app (``tools.call``, ``tools.catalog``, ``tools.for_chat``).
 - :mod:`claw_os_sdk.gui`      — desktop GUI bootstrap: the kernel context

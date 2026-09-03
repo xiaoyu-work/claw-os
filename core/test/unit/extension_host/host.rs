@@ -15,6 +15,7 @@ fn state() -> HostState {
         protocol: PROTOCOL_VERSION,
         task_id: "task-a".to_string(),
         session_id: Some("session-a".to_string()),
+        app_id: None,
         owner_uid: worker_uid,
         extension_uid: 61_000,
         owner_gid,

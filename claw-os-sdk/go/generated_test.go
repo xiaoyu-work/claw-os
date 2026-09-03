@@ -33,6 +33,26 @@ func validAIWire(t *testing.T) map[string]any {
 	}`)
 }
 
+func TestWireEnvelopeAcceptsOnlyCoherentV1Branches(t *testing.T) {
+	for _, body := range []string{
+		`{"ok":true,"wire_version":1,"data":{"value":1}}`,
+		`{"ok":false,"wire_version":1,"error":"denied","code":"PERMISSION_DENIED"}`,
+	} {
+		if err := ValidateEnvelope(decodeWireValue(t, body)); err != nil {
+			t.Fatalf("%s: %v", body, err)
+		}
+	}
+	for _, body := range []string{
+		`{"value":1}`,
+		`{"ok":false,"wire_version":1,"error":"missing code"}`,
+		`{"ok":true,"wire_version":2,"data":{}}`,
+	} {
+		if err := ValidateEnvelope(decodeWireValue(t, body)); err == nil {
+			t.Fatalf("%s: expected validation error", body)
+		}
+	}
+}
+
 func TestAIValidatorEnforcesSharedContract(t *testing.T) {
 	cases := []struct {
 		mutate func(map[string]any)

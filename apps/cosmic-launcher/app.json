@@ -1,0 +1,238 @@
+{
+  "id": "cosmic-launcher",
+  "version": "0.1.0",
+  "schema_version": 2,
+  "name": {
+    "en": "Launcher"
+  },
+  "summary": {
+    "en": "Search and launch installed desktop applications through the native launcher."
+  },
+  "runtime": "binary",
+  "mcp": {
+    "entry": "/usr/bin/cosmic-launcher",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "tools": [
+      {
+        "name": "launcher.find",
+        "summary": {
+          "en": "Fuzzy-search installed desktop applications and return ranked AppIDs."
+        },
+        "args": [
+          {
+            "name": "query",
+            "kind": "text",
+            "required": true,
+            "label": {
+              "en": "Application name, comment, category, or keyword to find."
+            }
+          },
+          {
+            "name": "limit",
+            "kind": "integer",
+            "required": false,
+            "default": 10,
+            "label": {
+              "en": "Maximum matches; values are clamped to 1 through 50."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "path",
+                "value": "/usr/share/applications/**"
+              }
+            },
+            "why": {
+              "en": "Read desktop entries shipped by system packages."
+            }
+          },
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "path",
+                "value": "/usr/local/share/applications/**"
+              }
+            },
+            "why": {
+              "en": "Read desktop entries installed locally by an administrator."
+            }
+          },
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "path",
+                "value": "~/.local/share/applications/**"
+              }
+            },
+            "why": {
+              "en": "Read desktop entries installed in the user's home directory."
+            }
+          }
+        ]
+      },
+      {
+        "name": "launcher.list",
+        "summary": {
+          "en": "List installed visible desktop entries, optionally including hidden entries."
+        },
+        "args": [
+          {
+            "name": "include_hidden",
+            "kind": "bool",
+            "required": false,
+            "default": false,
+            "label": {
+              "en": "Include desktop entries marked Hidden."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "path",
+                "value": "/usr/share/applications/**"
+              }
+            },
+            "why": {
+              "en": "Read desktop entries shipped by system packages."
+            }
+          },
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "path",
+                "value": "/usr/local/share/applications/**"
+              }
+            },
+            "why": {
+              "en": "Read desktop entries installed locally by an administrator."
+            }
+          },
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "path",
+                "value": "~/.local/share/applications/**"
+              }
+            },
+            "why": {
+              "en": "Read desktop entries installed in the user's home directory."
+            }
+          }
+        ]
+      },
+      {
+        "name": "launcher.open",
+        "summary": {
+          "en": "Launch an installed application by AppID with optional file, URI, or other text arguments."
+        },
+        "args": [
+          {
+            "name": "app_id",
+            "kind": "name",
+            "required": true,
+            "label": {
+              "en": "Desktop AppID without the .desktop suffix."
+            }
+          },
+          {
+            "name": "extras",
+            "kind": "text",
+            "required": false,
+            "repeatable": true,
+            "default": [],
+            "label": {
+              "en": "Ordered file, URI, or other text arguments passed to the desktop entry."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "desktop.launch",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "app_id"
+            },
+            "why": {
+              "en": "Open the graphical application you asked to launch."
+            }
+          },
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "path",
+                "value": "/usr/share/applications/**"
+              }
+            },
+            "why": {
+              "en": "Read desktop entries shipped by system packages."
+            }
+          },
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "path",
+                "value": "/usr/local/share/applications/**"
+              }
+            },
+            "why": {
+              "en": "Read desktop entries installed locally by an administrator."
+            }
+          },
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "path",
+                "value": "~/.local/share/applications/**"
+              }
+            },
+            "why": {
+              "en": "Read desktop entries installed in the user's home directory."
+            }
+          }
+        ]
+      },
+      {
+        "name": "launcher.recent",
+        "summary": {
+          "en": "Read the recent-launch journal, newest first."
+        },
+        "args": [
+          {
+            "name": "limit",
+            "kind": "integer",
+            "required": false,
+            "default": 20,
+            "label": {
+              "en": "Maximum recent entries; values are clamped to 1 through 200."
+            }
+          }
+        ],
+        "needs": []
+      }
+    ]
+  }
+}

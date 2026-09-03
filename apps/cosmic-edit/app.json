@@ -1,0 +1,309 @@
+{
+  "id": "cosmic-edit",
+  "version": "0.1.0",
+  "schema_version": 2,
+  "name": {
+    "en": "Text Editor"
+  },
+  "summary": {
+    "en": "Read, edit, open, summarize, explain, and rewrite text files."
+  },
+  "runtime": "binary",
+  "ai": {
+    "budget": {
+      "monthly_units": 200000
+    },
+    "safety": "strict",
+    "origins": [
+      "external-content"
+    ]
+  },
+  "mcp": {
+    "entry": "/usr/bin/cosmic-edit",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "tools": [
+      {
+        "name": "edit.read",
+        "summary": {
+          "en": "Read a file as UTF-8 text through the filesystem capability gate."
+        },
+        "args": [
+          {
+            "name": "path",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "File to read."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "path"
+            },
+            "why": {
+              "en": "Read the file you asked to inspect."
+            }
+          }
+        ]
+      },
+      {
+        "name": "edit.write",
+        "summary": {
+          "en": "Overwrite a file with new UTF-8 text."
+        },
+        "args": [
+          {
+            "name": "path",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "File to overwrite."
+            }
+          },
+          {
+            "name": "content",
+            "kind": "text",
+            "required": true,
+            "label": {
+              "en": "Complete replacement contents."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.write",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "path"
+            },
+            "why": {
+              "en": "Write the replacement text to the requested file."
+            }
+          }
+        ]
+      },
+      {
+        "name": "edit.replace_range",
+        "summary": {
+          "en": "Replace exactly one occurrence of text while preserving the rest of the file."
+        },
+        "args": [
+          {
+            "name": "path",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "File to edit."
+            }
+          },
+          {
+            "name": "find",
+            "kind": "text",
+            "required": true,
+            "label": {
+              "en": "Non-empty text that must occur exactly once."
+            }
+          },
+          {
+            "name": "replace",
+            "kind": "text",
+            "required": true,
+            "label": {
+              "en": "Replacement text."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "path"
+            },
+            "why": {
+              "en": "Read the file to verify the requested match is unique."
+            }
+          },
+          {
+            "verb": "fs.write",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "path"
+            },
+            "why": {
+              "en": "Write the file after replacing the unique match."
+            }
+          }
+        ]
+      },
+      {
+        "name": "edit.open",
+        "summary": {
+          "en": "Open the text editor, optionally focused on one file."
+        },
+        "args": [
+          {
+            "name": "path",
+            "kind": "path",
+            "required": false,
+            "label": {
+              "en": "File to open; omit to open an empty editor window."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "proc.spawn",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "cosmic-edit"
+              }
+            },
+            "why": {
+              "en": "Open the native text editor for the user."
+            }
+          }
+        ]
+      },
+      {
+        "name": "edit.summarize",
+        "summary": {
+          "en": "Summarize a file through the bundled document App and OS AI gate."
+        },
+        "args": [
+          {
+            "name": "path",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "File to summarize."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "path"
+            },
+            "why": {
+              "en": "Read the file so its contents can be summarized."
+            }
+          },
+          {
+            "verb": "ai.chat.untrusted",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Send the file text through the OS AI gate for summarization."
+            }
+          },
+          {
+            "verb": "memory.write",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "self-ref",
+                "value": "doc"
+              }
+            },
+            "why": {
+              "en": "Remember the summary using the document App's existing scope."
+            }
+          }
+        ]
+      },
+      {
+        "name": "edit.explain",
+        "summary": {
+          "en": "Generate a plain-language explanation of a file."
+        },
+        "args": [
+          {
+            "name": "path",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "File to explain."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "path"
+            },
+            "why": {
+              "en": "Read the file so its contents can be explained."
+            }
+          },
+          {
+            "verb": "ai.chat.untrusted",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Send the file text through the OS AI gate for explanation."
+            }
+          }
+        ]
+      },
+      {
+        "name": "edit.rewrite",
+        "summary": {
+          "en": "Propose rewritten file contents from a natural-language instruction without writing them back."
+        },
+        "args": [
+          {
+            "name": "path",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "File whose contents should be rewritten."
+            }
+          },
+          {
+            "name": "instruction",
+            "kind": "text",
+            "required": true,
+            "label": {
+              "en": "Natural-language rewrite instruction."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "path"
+            },
+            "why": {
+              "en": "Read the file so its contents can be rewritten."
+            }
+          },
+          {
+            "verb": "ai.chat.untrusted",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Send the file text and instruction through the OS AI gate."
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -32,12 +32,13 @@ fn write_kv_app(root: &Path) {
     std::fs::write(
         dir.join("app.json"),
         serde_json::json!({
+            "schema_version": 2,
             "id": "kv",
             "version": "0.1.0",
             "name": {"en": "KV"},
             "summary": {"en": "Key/value."},
             "operations": {},
-            "session": {
+            "mcp": {
                 "entry": "server.py",
                 "tools": [
                     {
@@ -95,6 +96,35 @@ fn signed_copy_of_repo_apps() -> std::path::PathBuf {
     root
 }
 
+fn source_python_sdk() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("repository root")
+        .join("claw-os-sdk")
+        .join("python")
+        .join("src")
+}
+
+fn test_call_context() -> crate::agent::tools::app_gateway::McpCallContext {
+    let call_id = format!("call-{}", uuid::Uuid::new_v4().simple());
+    crate::agent::tools::app_gateway::McpCallContext {
+        wire_version: crate::agent::tools::app_gateway::CALL_CONTEXT_WIRE_VERSION,
+        trace_id: call_id.clone(),
+        call_id,
+        parent_call_id: None,
+        depth: 0,
+        deadline_unix_ms: Some(crate::agentd::grant::now_ms() + 60_000),
+        session_id: Some("test-session".to_string()),
+        task_id: None,
+        caller: crate::agent::tools::app_gateway::McpPrincipal {
+            kind: crate::agent::tools::app_gateway::McpPrincipalKind::SystemAgent,
+            id: "test-session".to_string(),
+            owner_uid: 1000,
+            app_id: None,
+        },
+    }
+}
+
 fn copy_tree(src: &Path, dst: &Path) {
     std::fs::create_dir_all(dst).unwrap();
     for entry in std::fs::read_dir(src).unwrap().filter_map(Result::ok) {
@@ -110,7 +140,7 @@ fn copy_tree(src: &Path, dst: &Path) {
 }
 
 #[test]
-fn register_all_emits_one_tool_per_manifest_entry_plus_meta() {
+fn register_manifests_emits_one_tool_per_manifest_entry() {
     let _g = env_lock();
     let tmp = tempfile::tempdir().unwrap();
     write_kv_app(tmp.path());
@@ -118,12 +148,17 @@ fn register_all_emits_one_tool_per_manifest_entry_plus_meta() {
     std::env::set_var("COS_APPS_DIR", tmp.path());
 
     let mut r = ToolRegistry::new();
-    register_all(&mut r);
+    let apps = crate::apps::discover_verified(tmp.path())
+        .values()
+        .map(|app| RegisteredAppSession {
+            manifest: Arc::new(app.manifest.clone()),
+            app_dir: app.dir.clone(),
+        })
+        .collect::<Vec<_>>();
+    register_manifests(&mut r, tmp.path(), &apps);
     let names = r.names_unfiltered();
-    // One session tool + two meta-tools.
+    assert_eq!(names.len(), 1, "got {names:?}");
     assert!(names.contains(&"app_kv__kv_get"), "got {names:?}");
-    assert!(names.contains(&"cos_app_session_open"));
-    assert!(names.contains(&"cos_app_session_close"));
 
     match prev {
         Some(v) => std::env::set_var("COS_APPS_DIR", v),
@@ -283,11 +318,13 @@ async fn pilot_kv_e2e_call_chain() {
     std::env::set_var("COS_CAPS_MODE", "permissive");
     let _session = crate::test_env::TestSessionGuard::admin(data.path());
     let _local_sessions = crate::test_env::TestEnvVarGuard::set("COS_TEST_LOCAL_APP_SESSIONS", "1");
+    let _source_sdk =
+        crate::test_env::TestEnvVarGuard::set("COS_SDK_PYTHON_DIR", source_python_sdk());
 
     // Make sure no stale entry from a previous test run survives.
     let _ = close_session("kv").await;
 
-    let opened = open_session("kv").await.expect("open kv");
+    let opened = open_session("kv", "kv.set").await.expect("open kv");
     assert!(
         opened.1 >= 5,
         "kv should advertise ≥5 tools, got {}",
@@ -297,29 +334,45 @@ async fn pilot_kv_e2e_call_chain() {
     // 1) set, get — verify in-memory state survives.
     let r = opened
         .0
-        .call_tool("kv.set", Some(serde_json::json!({"key":"x","value":"42"})))
+        .call_tool_with_context(
+            "kv.set",
+            Some(serde_json::json!({"key":"x","value":"42"})),
+            test_call_context(),
+        )
         .await
         .expect("set");
     assert!(!r.is_error.unwrap_or(false));
 
     let r = opened
         .0
-        .call_tool("kv.get", Some(serde_json::json!({"key":"x"})))
+        .call_tool_with_context(
+            "kv.get",
+            Some(serde_json::json!({"key":"x"})),
+            test_call_context(),
+        )
         .await
         .expect("get");
     let text = first_text(&r);
     assert!(text.contains("42"), "kv.get returned: {text}");
 
-    let r = opened.0.call_tool("kv.list", None).await.expect("list");
+    let r = opened
+        .0
+        .call_tool_with_context("kv.list", None, test_call_context())
+        .await
+        .expect("list");
     let text = first_text(&r);
     assert!(text.contains("\"x\""), "kv.list returned: {text}");
 
     let closed = close_session("kv").await;
     assert!(closed);
-    let opened2 = open_session("kv").await.expect("re-open kv");
+    let opened2 = open_session("kv", "kv.get").await.expect("re-open kv");
     let r = opened2
         .0
-        .call_tool("kv.get", Some(serde_json::json!({"key":"x"})))
+        .call_tool_with_context(
+            "kv.get",
+            Some(serde_json::json!({"key":"x"})),
+            test_call_context(),
+        )
         .await
         .expect("get after restart");
     let text = first_text(&r);
@@ -386,6 +439,8 @@ async fn open_race_single_child() {
     std::env::set_var("COS_CAPS_MODE", "permissive");
     let _session = crate::test_env::TestSessionGuard::admin(data.path());
     let _local_sessions = crate::test_env::TestEnvVarGuard::set("COS_TEST_LOCAL_APP_SESSIONS", "1");
+    let _source_sdk =
+        crate::test_env::TestEnvVarGuard::set("COS_SDK_PYTHON_DIR", source_python_sdk());
 
     let _ = close_session("kv").await;
 
@@ -393,8 +448,8 @@ async fn open_race_single_child() {
     // would race past the manager probe and each spawn its own
     // server. With the per-app lock, the second blocks until the
     // first finishes, then short-circuits.
-    let t1 = tokio::spawn(async { open_session("kv").await });
-    let t2 = tokio::spawn(async { open_session("kv").await });
+    let t1 = tokio::spawn(async { open_session("kv", "kv.get").await });
+    let t2 = tokio::spawn(async { open_session("kv", "kv.get").await });
     let (r1, r2) = (t1.await.unwrap(), t2.await.unwrap());
     let (c1, _) = r1.expect("first open");
     let (c2, _) = r2.expect("second open");
@@ -447,10 +502,12 @@ async fn injected_app_root_is_used_for_discovery_and_execution() {
     let _caps = crate::test_env::TestEnvVarGuard::set("COS_CAPS_MODE", "permissive");
     let _session = crate::test_env::TestSessionGuard::admin(temp.path());
     let _local_sessions = crate::test_env::TestEnvVarGuard::set("COS_TEST_LOCAL_APP_SESSIONS", "1");
+    let _source_sdk =
+        crate::test_env::TestEnvVarGuard::set("COS_SDK_PYTHON_DIR", source_python_sdk());
     let app = crate::apps::find_verified(&injected_root, "kv").expect("injected kv app");
 
     let _ = close_session_at("kv", &injected_root).await;
-    let opened = open_session_at("kv", &app.dir, &injected_root, &app.manifest)
+    let opened = open_session_at("kv", &app.dir, &injected_root, "kv.get")
         .await
         .expect("open from injected root");
 
@@ -480,12 +537,13 @@ fn session_package(root: &Path, id: &str, entrypoints: &[&str]) -> std::path::Pa
     std::fs::write(
         dir.join("app.json"),
         serde_json::json!({
+            "schema_version": 2,
             "id": id,
             "version": "1.0.0",
             "name": id,
             "runtime": "python",
             "operations": {},
-            "session": {
+            "mcp": {
                 "transport": "stdio",
                 "entry": "server.py",
                 "tools": []
@@ -541,6 +599,79 @@ fn the_session_entry_must_be_a_declared_signed_entrypoint() {
         error.contains("not a declared, signed entrypoint"),
         "unexpected: {error}"
     );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[cfg(unix)]
+#[test]
+fn both_launch_shapes_export_the_verified_manifest_path() {
+    let _lock = crate::caps::test_env_lock::env_lock();
+    let root = crate::test_env::secure_scratch_dir("session-manifest-env");
+    let apps = root.join("apps");
+    std::fs::create_dir_all(&apps).unwrap();
+    let dir = session_package(&apps, "manifest-env", &["server.py"]);
+    let launch = launch_for(&dir, "manifest-env").expect("verified");
+    let plan = plan_session_launch(crate::provenance::fsec::effective_uid(), &launch, &apps)
+        .expect("plan the launch");
+
+    // The App is told where its own verified manifest is, by absolute
+    // path, and that path is the one the read-only package mount
+    // reproduces inside the sandbox.
+    let expected = plan.app_dir.join("app.json");
+    let expected = expected.to_string_lossy().into_owned();
+    assert_eq!(
+        plan.extra_env.get("COS_APP_MANIFEST"),
+        Some(&expected),
+        "the plan did not export the verified manifest path"
+    );
+    // Host activation for dual-mode native binaries, and nothing more.
+    assert_eq!(
+        plan.extra_env.get("COS_MCP_SERVER").map(String::as_str),
+        Some("1")
+    );
+
+    // Both worker shapes are derived from this one plan, so both carry
+    // it: the reusable server and the single-call worker.
+    for lifetime in [
+        crate::worker::derive::SessionLifetime::Reusable,
+        crate::worker::derive::SessionLifetime::SingleCall,
+    ] {
+        let policy = crate::worker::derive::app_session(crate::worker::derive::AppSessionInput {
+            app_id: &plan.identity.app_id,
+            app_dir: &plan.app_dir,
+            program: plan.program.clone(),
+            argv: plan.argv.clone(),
+            caps: &crate::caps::CapSet::new(),
+            lifetime,
+            session_id: "manifest-env-probe",
+            data_dir: &plan.data_dir,
+            apps_dir: &plan.apps_dir,
+            extra_env: plan.extra_env.clone(),
+            package_identity: None,
+            pinned_entries: Vec::new(),
+            transports: &plan.transports,
+        })
+        .expect("derive the launch policy");
+        assert_eq!(
+            policy.env.get("COS_APP_MANIFEST"),
+            Some(&expected),
+            "the {} worker lost the manifest path",
+            lifetime.as_str()
+        );
+        // Read-only, and inside the package mount rather than beside
+        // it: the App can read the bytes that were verified and cannot
+        // rewrite them.
+        let package_mount = policy
+            .mounts
+            .iter()
+            .find(|mount| {
+                mount.class == crate::worker::MountClass::Package
+                    && std::path::Path::new(&expected).starts_with(&mount.target)
+            })
+            .unwrap_or_else(|| panic!("no package mount covers {expected}"));
+        assert_eq!(package_mount.mode, crate::worker::MountMode::ReadOnly);
+    }
 
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -657,12 +788,13 @@ fn signed_probe_app(apps: &Path, id: &str, body: &str) -> std::path::PathBuf {
     std::fs::write(
         dir.join("app.json"),
         serde_json::json!({
+            "schema_version": 2,
             "id": id,
             "version": "1.0.0",
             "name": id,
             "runtime": "python",
             "operations": {},
-            "session": {
+            "mcp": {
                 "transport": "stdio",
                 "entry": "server.py",
                 "tools": [
@@ -854,7 +986,13 @@ impl ProbeFixture {
             crate::test_env::TestEnvVarGuard::set("COS_CAPS_MODE", "permissive"),
             crate::test_env::TestEnvVarGuard::set("COS_TEST_LOCAL_APP_SESSIONS", "1"),
         ];
-        let session = crate::test_env::TestSessionGuard::admin(&data);
+        let session = crate::test_env::TestSessionGuard::admin_with_caps(
+            &data,
+            [crate::caps::Cap::new(
+                crate::caps::Verb::AGENT_INVOKE,
+                crate::caps::Scope::name(format!("{id}/*")),
+            )],
+        );
         Self {
             root,
             apps,
@@ -875,14 +1013,15 @@ impl ProbeFixture {
         let app = crate::apps::find_verified(&self.apps, &self.id).expect("verified app");
         let manifest = Arc::new(app.manifest.clone());
         let index = manifest
-            .session
+            .mcp
             .as_ref()
-            .expect("session block")
+            .expect("mcp block")
             .tools
             .iter()
             .position(|tool| tool.name == name)
             .expect("declared tool");
         AppSessionTool::from_manifest_tool(manifest, app.dir, self.apps.clone(), index)
+            .expect("valid MCP tool")
     }
 }
 
@@ -906,6 +1045,29 @@ fn err_text(result: ToolResult) -> String {
     result.content
 }
 
+fn tool_context() -> crate::agent::tools::exposure::ToolExposureContext {
+    let session = crate::proc::current_session_info_for_caps().expect("authenticated test session");
+    let owner_uid =
+        crate::paths::current_owner_uid_override().unwrap_or_else(|| unsafe { libc::geteuid() });
+    crate::agent::tools::exposure::ToolExposureContext::from_trusted_session(
+        &session,
+        None,
+        None,
+        owner_uid,
+        crate::agent::tools::exposure::ExecutionHost::Direct,
+        crate::agent::tools::guardrails::Guardrails::default(),
+    )
+    .with_identity(
+        session.session_id,
+        owner_uid,
+        crate::session::SessionSource::LocalCli,
+    )
+}
+
+async fn exec_tool(tool: &AppSessionTool, input: Value) -> ToolResult {
+    crate::agent::tools::exposure::scope(tool_context(), tool.exec(input)).await
+}
+
 async fn session_is_open(app_id: &str, apps_root: &Path) -> bool {
     let Ok(key) = session_key(app_id, apps_root) else {
         return false;
@@ -924,9 +1086,7 @@ async fn the_transient_grant_exists_only_while_the_call_is_in_flight() {
         &fixture.id,
         &fixture.apps.join(&fixture.id),
         &fixture.apps,
-        &crate::apps::find_verified(&fixture.apps, &fixture.id)
-            .unwrap()
-            .manifest,
+        "probe",
     )
     .await
     .expect("open the probe session");
@@ -954,7 +1114,10 @@ async fn the_transient_grant_exists_only_while_the_call_is_in_flight() {
     let _ = std::fs::remove_file(&go);
 
     let tool = fixture.tool("probe.hold");
-    let call = tokio::spawn(async move { tool.exec(json!({"key": "x"})).await });
+    let context = tool_context();
+    let call = tokio::spawn(async move {
+        crate::agent::tools::exposure::scope(context, tool.exec(json!({"key": "x"}))).await
+    });
 
     // Wait for the server to confirm the call is in flight.
     let deadline = Instant::now() + Duration::from_secs(20);
@@ -982,7 +1145,7 @@ async fn the_transient_grant_exists_only_while_the_call_is_in_flight() {
 
     // A second call for a different key must not inherit the first.
     let tool = fixture.tool("probe.echo");
-    let _ = tool.exec(json!({"key": "y"})).await;
+    let _ = exec_tool(&tool, json!({"key": "y"})).await;
     assert!(
         transient(&session_id).is_empty(),
         "the grant outlived the second call"
@@ -1000,7 +1163,7 @@ async fn an_oversized_frame_ends_the_session_instead_of_being_buffered() {
     let _ = close_session_at(&fixture.id, &fixture.apps).await;
 
     let tool = fixture.tool("probe.flood");
-    let error = err_text(tool.exec(json!({})).await);
+    let error = err_text(exec_tool(&tool, json!({})).await);
     assert!(
         error.contains("failed") || error.contains("frame"),
         "unexpected: {error}"
@@ -1020,7 +1183,7 @@ async fn a_replaced_package_is_never_served_from_the_cache() {
     let _ = close_session_at(&fixture.id, &fixture.apps).await;
 
     let tool = fixture.tool("probe.echo");
-    ok_text(tool.exec(json!({"key": "a"})).await);
+    ok_text(exec_tool(&tool, json!({"key": "a"})).await);
     let first = {
         let key = session_key(&fixture.id, &fixture.apps).unwrap();
         let table = manager().lock().await;
@@ -1033,7 +1196,7 @@ async fn a_replaced_package_is_never_served_from_the_cache() {
     };
 
     // A second call reuses the same child: nothing changed.
-    ok_text(tool.exec(json!({"key": "b"})).await);
+    ok_text(exec_tool(&tool, json!({"key": "b"})).await);
     {
         let key = session_key(&fixture.id, &fixture.apps).unwrap();
         let table = manager().lock().await;
@@ -1053,7 +1216,7 @@ async fn a_replaced_package_is_never_served_from_the_cache() {
     crate::test_env::sign_test_package(&dir, crate::provenance::PackageKind::App, &fixture.id);
     crate::provenance::verify::invalidate_cache();
 
-    ok_text(tool.exec(json!({"key": "c"})).await);
+    ok_text(exec_tool(&tool, json!({"key": "c"})).await);
     let second = {
         let key = session_key(&fixture.id, &fixture.apps).unwrap();
         let table = manager().lock().await;
@@ -1089,7 +1252,7 @@ async fn a_revoked_package_ends_the_open_session_on_the_next_call() {
     let _ = close_session_at(&fixture.id, &fixture.apps).await;
 
     let tool = fixture.tool("probe.echo");
-    ok_text(tool.exec(json!({"key": "a"})).await);
+    ok_text(exec_tool(&tool, json!({"key": "a"})).await);
     assert!(session_is_open(&fixture.id, &fixture.apps).await);
     let child_pid = {
         let key = session_key(&fixture.id, &fixture.apps).unwrap();
@@ -1106,7 +1269,7 @@ async fn a_revoked_package_ends_the_open_session_on_the_next_call() {
     crate::test_env::revoke_test_package(&digest);
     crate::provenance::verify::invalidate_cache();
 
-    let error = err_text(tool.exec(json!({"key": "b"})).await);
+    let error = err_text(exec_tool(&tool, json!({"key": "b"})).await);
     assert!(
         error.to_lowercase().contains("trust") || error.contains("revoked"),
         "unexpected: {error}"
@@ -1143,6 +1306,7 @@ fn the_call_classifier_separates_brokered_from_resource_bearing_calls() {
             Cap::new(Verb::DATA_KV_READ, Scope::name("x")),
             Cap::new(Verb::UI_NOTIFY, Scope::Wild),
             Cap::new(Verb::MEMORY_WRITE, Scope::self_ref("probe")),
+            Cap::new(Verb::FS_META, Scope::name("bash")),
         ]),
         CallPlacement::Reusable
     );
@@ -1201,7 +1365,7 @@ async fn an_unbounded_resource_grant_is_refused_at_authorization() {
     // `probe.anywhere` asks for `fs.write` over everything. The
     // launcher says so, with the reason, instead of granting it and
     // letting the App discover a permission error mid-operation.
-    let error = err_text(fixture.tool("probe.anywhere").exec(json!({})).await);
+    let error = err_text(exec_tool(&fixture.tool("probe.anywhere"), json!({})).await);
     assert!(
         error.contains("cannot be authorized"),
         "unexpected: {error}"
@@ -1223,7 +1387,7 @@ async fn a_resource_bearing_call_runs_in_its_own_worker_and_leaves_nothing_behin
 
     // Warm the reusable session with a brokered call so there is
     // something for the ephemeral worker to be distinct from.
-    ok_text(fixture.tool("probe.echo").exec(json!({"key": "a"})).await);
+    ok_text(exec_tool(&fixture.tool("probe.echo"), json!({"key": "a"})).await);
     assert!(session_is_open(&fixture.id, &fixture.apps).await);
     let (reusable_pid, reusable_session) = {
         let key = session_key(&fixture.id, &fixture.apps).unwrap();
@@ -1239,10 +1403,11 @@ async fn a_resource_bearing_call_runs_in_its_own_worker_and_leaves_nothing_behin
     std::fs::write(sibling.join("secret.txt"), "owner only").unwrap();
 
     let body = ok_text(
-        fixture
-            .tool("probe.write")
-            .exec(json!({"dir": granted.to_string_lossy()}))
-            .await,
+        exec_tool(
+            &fixture.tool("probe.write"),
+            json!({"dir": granted.to_string_lossy()}),
+        )
+        .await,
     );
     let body = crate::agent::trust::envelope::parse(&body).expect("labelled App result");
     let body: serde_json::Value = serde_json::from_str(&body.payload).expect("tool body");
@@ -1293,16 +1458,31 @@ async fn a_resource_bearing_call_runs_in_its_own_worker_and_leaves_nothing_behin
 }
 
 // ---------------------------------------------------------------------------
-// The shipped desktop session Apps
+// The shipped MCP Apps
 // ---------------------------------------------------------------------------
+
+/// Every App bundled in this repository that ships an `mcp` block:
+/// the sample key/value App plus the nine native Desktop entries the
+/// kernel's fixed table names.
+const SHIPPED_MCP_APPS: &[&str] = &[
+    "kv",
+    "cosmic-files",
+    "cosmic-edit",
+    "cosmic-store",
+    "cosmic-settings",
+    "cosmic-term",
+    "cosmic-launcher",
+    "cosmic-player",
+    "cosmic-screenshot",
+    "cosmic-notifications",
+];
 
 /// The manifests bundled in this repository, read from `apps/`.
 ///
-/// These are the four Apps that actually ship a `session` block, and
-/// this is the check that the launcher can still make sense of each
-/// one: the entry resolves, every tool's arguments bind, and the
-/// capabilities each call needs land somewhere the launcher can
-/// actually put them.
+/// These are the Apps that actually ship an `mcp` block, and this is
+/// the check that the launcher can still make sense of each one: the
+/// entry resolves, every tool's arguments bind, and the capabilities
+/// each call needs land somewhere the launcher can actually put them.
 fn shipped_manifest(id: &str) -> crate::caps::manifest::Manifest {
     let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -1317,26 +1497,21 @@ fn shipped_manifest(id: &str) -> crate::caps::manifest::Manifest {
 }
 
 #[test]
-fn every_shipped_session_app_resolves_its_entry_and_its_calls() {
+fn every_shipped_mcp_app_resolves_its_entry_and_its_calls() {
     let paths = crate::caps::args::PathContext {
         home: std::path::PathBuf::from("/home/tester"),
         cwd: None,
     };
-    for id in [
-        "kv",
-        "cosmic-player",
-        "cosmic-screenshot",
-        "cosmic-notifications",
-    ] {
+    for &id in SHIPPED_MCP_APPS {
         let manifest = shipped_manifest(id);
-        let session = manifest
-            .session
+        let service = manifest
+            .mcp
             .as_ref()
-            .unwrap_or_else(|| panic!("`{id}` lost its session block"));
-        let entry = session
+            .unwrap_or_else(|| panic!("`{id}` lost its `mcp` block"));
+        let entry = service
             .entry
             .clone()
-            .unwrap_or_else(|| manifest.runtime.default_session_entry().to_string());
+            .unwrap_or_else(|| manifest.runtime.default_mcp_entry().to_string());
         // An absolute entry is only meaningful for the fixed vendor
         // rows; every other shipped App must stay inside its package.
         if entry.starts_with('/') {
@@ -1346,7 +1521,7 @@ fn every_shipped_session_app_resolves_its_entry_and_its_calls() {
                 "`{id}` names `{entry}` outside its package without a kernel row"
             );
         }
-        for tool in &session.tools {
+        for tool in &service.tools {
             let supplied: BTreeMap<String, serde_json::Value> = tool
                 .args
                 .iter()
@@ -1365,7 +1540,7 @@ fn every_shipped_session_app_resolves_its_entry_and_its_calls() {
                 })
                 .collect();
             let effective = manifest
-                .resolve_session_tool_call(&tool.name, &supplied, &paths)
+                .resolve_mcp_tool_call(&tool.name, &supplied, &paths)
                 .unwrap_or_else(|e| panic!("`{id}` tool `{}`: {e}", tool.name));
             let caps: Vec<_> = effective.needs.into_iter().flatten().collect();
             // Every shipped call must be placeable. `Unsupported` here
@@ -1392,6 +1567,28 @@ fn every_shipped_session_app_resolves_its_entry_and_its_calls() {
 }
 
 #[test]
+fn every_shipped_native_desktop_app_names_its_kernel_row() {
+    // The nine native Desktop Apps are the only shipped manifests that
+    // may name a program outside their package, and each must name
+    // exactly the one the kernel table holds for it. A manifest that
+    // drifted off its row would be refused at launch, so catching it
+    // here is the difference between a build failure and a dead tool.
+    for &id in &SHIPPED_MCP_APPS[1..] {
+        let manifest = shipped_manifest(id);
+        let entry = manifest
+            .mcp
+            .as_ref()
+            .and_then(|service| service.entry.clone())
+            .unwrap_or_else(|| panic!("`{id}` declares no `mcp.entry`"));
+        assert_eq!(
+            crate::worker::trusted_desktop::allowlisted_system_program(id),
+            Some(entry.as_str()),
+            "`{id}` names `{entry}`, which is not its kernel row"
+        );
+    }
+}
+
+#[test]
 fn the_screenshot_call_is_bound_to_the_directory_it_was_given() {
     let manifest = shipped_manifest("cosmic-screenshot");
     let paths = crate::caps::args::PathContext {
@@ -1401,7 +1598,7 @@ fn the_screenshot_call_is_bound_to_the_directory_it_was_given() {
     // With no `save_dir` the manifest default applies, and the grant
     // follows it rather than covering every path.
     let effective = manifest
-        .resolve_session_tool_call("screenshot.capture", &BTreeMap::new(), &paths)
+        .resolve_mcp_tool_call("screenshot.capture", &BTreeMap::new(), &paths)
         .expect("default capture");
     let caps: Vec<_> = effective.needs.into_iter().flatten().collect();
     assert_eq!(caps.len(), 1);
@@ -1418,7 +1615,7 @@ fn the_screenshot_call_is_bound_to_the_directory_it_was_given() {
         serde_json::json!("/home/tester/shots"),
     )]);
     let effective = manifest
-        .resolve_session_tool_call("screenshot.capture", &supplied, &paths)
+        .resolve_mcp_tool_call("screenshot.capture", &supplied, &paths)
         .expect("explicit capture");
     let caps: Vec<_> = effective.needs.into_iter().flatten().collect();
     assert_eq!(
@@ -1443,12 +1640,13 @@ fn only_the_allowlisted_ids_may_name_a_program_outside_their_package() {
     std::fs::write(
         dir.join("app.json"),
         serde_json::json!({
+            "schema_version": 2,
             "id": "impostor",
             "version": "1.0.0",
             "name": "impostor",
             "runtime": "binary",
             "operations": {},
-            "session": {
+            "mcp": {
                 "transport": "stdio",
                 "entry": "/usr/bin/cosmic-player",
                 "tools": []
@@ -1501,12 +1699,7 @@ async fn a_single_call_worker_is_torn_down_on_error_and_on_timeout() {
 
     // Warm the reusable session so "nothing leaked into it" is a claim
     // about a session that actually exists.
-    ok_text(
-        fixture
-            .tool("probe.echo")
-            .exec(json!({"key": "warm"}))
-            .await,
-    );
+    ok_text(exec_tool(&fixture.tool("probe.echo"), json!({"key": "warm"})).await);
     let reusable = {
         let key = session_key(&fixture.id, &fixture.apps).unwrap();
         let table = manager().lock().await;
@@ -1516,7 +1709,7 @@ async fn a_single_call_worker_is_torn_down_on_error_and_on_timeout() {
 
     // A tool error: the grant is cleared and the worker destroyed on
     // the way out, exactly as on the success path.
-    let error = err_text(fixture.tool("probe.write_error").exec(args.clone()).await);
+    let error = err_text(exec_tool(&fixture.tool("probe.write_error"), args.clone()).await);
     assert!(error.contains("fixture refused"), "unexpected: {error}");
     assert_eq!(
         transient_count(&reusable),
@@ -1534,7 +1727,7 @@ async fn a_single_call_worker_is_torn_down_on_error_and_on_timeout() {
     let mut tool = fixture.tool("probe.write_hang");
     tool.timeout = Duration::from_secs(3);
     let started = Instant::now();
-    let error = err_text(tool.exec(args).await);
+    let error = err_text(exec_tool(&tool, args).await);
     assert!(error.contains("timed out"), "unexpected: {error}");
     assert!(
         started.elapsed() < Duration::from_secs(30),
@@ -1553,12 +1746,7 @@ async fn a_single_call_worker_is_torn_down_on_error_and_on_timeout() {
 
     // And through all of it the reusable worker is untouched.
     assert!(session_is_open(&fixture.id, &fixture.apps).await);
-    ok_text(
-        fixture
-            .tool("probe.echo")
-            .exec(json!({"key": "after"}))
-            .await,
-    );
+    ok_text(exec_tool(&fixture.tool("probe.echo"), json!({"key": "after"})).await);
 
     let _ = close_session_at(&fixture.id, &fixture.apps).await;
 }
@@ -1579,7 +1767,10 @@ async fn a_cancelled_call_still_clears_its_grant_and_kills_its_worker() {
     // return would: nothing here is on a success path.
     let tool = fixture.tool("probe.write_hang");
     let dir = granted.to_string_lossy().to_string();
-    let call = tokio::spawn(async move { tool.exec(json!({"dir": dir})).await });
+    let context = tool_context();
+    let call = tokio::spawn(async move {
+        crate::agent::tools::exposure::scope(context, tool.exec(json!({"dir": dir}))).await
+    });
     tokio::time::sleep(Duration::from_secs(3)).await;
     call.abort();
     let _ = call.await;
@@ -1664,17 +1855,17 @@ async fn a_server_that_never_reads_its_input_does_not_wedge_the_launcher() {
     // The fixture reads stdin line by line and answers each request, so
     // a burst of concurrent calls has to be absorbed rather than
     // deadlock the writer. Each still gets its own correlated answer.
-    ok_text(
-        fixture
-            .tool("probe.echo")
-            .exec(json!({"key": "warm"}))
-            .await,
-    );
+    ok_text(exec_tool(&fixture.tool("probe.echo"), json!({"key": "warm"})).await);
     let mut calls = Vec::new();
     for index in 0..12 {
         let tool = fixture.tool("probe.echo");
+        let context = tool_context();
         calls.push(tokio::spawn(async move {
-            tool.exec(json!({"key": format!("k{index}")})).await
+            crate::agent::tools::exposure::scope(
+                context,
+                tool.exec(json!({"key": format!("k{index}")})),
+            )
+            .await
         }));
     }
     let started = Instant::now();

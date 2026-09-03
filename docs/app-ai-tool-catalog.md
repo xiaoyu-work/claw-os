@@ -9,10 +9,10 @@ AI gate. Every entry below is:
   against the App's grant before any side-effect, so listing a Tool
   in `ai.tools[]` does *not* widen the App's permissions.
 
-* **Identity-pinned** — every call goes through the same
-  `enforce_identity` path as `cos ai chat`. The `--app <id>` flag
-  must match `COS_APP_ID` injected by the kernel. Cross-App
-  impersonation is impossible without kernel complicity.
+* **Identity-pinned** — the bridge derives the App identity from the
+  verified package and binds the launch to a daemon-registered workload.
+  Process environment and CLI flags are runtime inputs, not independent
+  identity proofs.
 
 * **Audited** — `cos ai tool` writes one `LlmRunRecord` per
   invocation to the same `<log_dir>/ai.jsonl` stream as `cos ai
@@ -31,15 +31,11 @@ For the higher-level architecture and the line between `cos ai`
 (App-facing primitive) and `cos agent` (kernel's own Agent product),
 see [`docs/app-ai-integration.md`](./app-ai-integration.md).
 
-> **App-defined tools live in a separate namespace.** The catalog
-> below is the *kernel-provided* Tool set Apps consume. Apps can also
-> *expose* their own Tools so the kernel agent can hold a stateful
-> Session across multiple Apps — see
-> [§12 in app-ai-integration.md](./app-ai-integration.md#12-app-session-tools-apps-as-mcp-servers).
-> The two surfaces don't overlap: catalog tools are kernel-owned and
-> shared; App-session tools are App-owned, declared in the manifest's
-> `session.tools[]`, and reach the model under registry names like
-> `app_kv__kv_get`.
+> **App-defined tools live in the App Mesh.** The catalog below is the
+> *kernel-provided* Tool set an App may expose to its own model request.
+> Agent-to-App and App-to-App tools are App-owned, declared in signed
+> `app.json.mcp.tools[]`, and called through the authenticated Gateway.
+> See [App, Agent, and AI Integration](./app-ai-integration.md).
 
 ---
 

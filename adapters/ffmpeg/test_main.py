@@ -13,7 +13,7 @@ import tempfile
 import textwrap
 import unittest
 
-from test_support import load_local_module
+from test_support import authenticated_mcp_params, load_local_module
 
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -44,6 +44,8 @@ class _Capture:
 def _rpc(app, method: str, params: dict | None = None, msg_id: int = 1) -> dict:
     frame = {"jsonrpc": "2.0", "id": msg_id, "method": method}
     if params is not None:
+        if method == "tools/call":
+            params = authenticated_mcp_params(params, call_id=f"test-{msg_id}")
         frame["params"] = params
     with _Capture() as out:
         app._handle_line(json.dumps(frame))

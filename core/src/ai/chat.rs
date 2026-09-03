@@ -55,7 +55,7 @@
 //! process ancestry all agree with `--app`. No environment variable is
 //! trusted as an identity boundary by itself.
 
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use super::gate;
 
@@ -80,7 +80,7 @@ pub fn chat_cmd(args: &[String]) -> Result<Value, String> {
         args.get(i + 1)
             .cloned()
             .map(std::path::PathBuf::from)
-            .ok_or_else(|| format!("missing path for {flag}"))
+            .ok_or_else(|| super::invalid_args(format!("missing path for {flag}")))
     }
 
     let mut i = 0;
@@ -102,14 +102,14 @@ pub fn chat_cmd(args: &[String]) -> Result<Value, String> {
                 origin = args
                     .get(i + 1)
                     .cloned()
-                    .ok_or_else(|| "missing value for --origin".to_string())?;
+                    .ok_or_else(|| super::invalid_args("missing value for --origin"))?;
                 i += 2;
             }
             "--max-units" => {
                 max_units = Some(
                     args.get(i + 1)
                         .and_then(|s| s.parse().ok())
-                        .ok_or_else(|| "--max-units expects an integer".to_string())?,
+                        .ok_or_else(|| super::invalid_args("--max-units expects an integer"))?,
                 );
                 i += 2;
             }
@@ -152,11 +152,15 @@ pub fn chat_cmd(args: &[String]) -> Result<Value, String> {
             "--tools" => {
                 let raw = args
                     .get(i + 1)
-                    .ok_or_else(|| "missing value for --tools".to_string())?;
+                    .ok_or_else(|| super::invalid_args("missing value for --tools"))?;
                 tools = parse_tools_flag(raw);
                 i += 2;
             }
-            other => return Err(format!("unknown flag for `cos ai chat`: {other}")),
+            other => {
+                return Err(super::invalid_args(format!(
+                    "unknown flag for `cos ai chat`: {other}"
+                )));
+            }
         }
     }
 
@@ -180,33 +184,41 @@ pub fn chat_cmd(args: &[String]) -> Result<Value, String> {
         None
     };
     if let Some(modality) = unsupported {
-        return Err(format!(
-            "modality `{modality}` is currently unsupported; only chat/chat-untrusted are stable"
+        return Err(super::wire_error(
+            "UNKNOWN_VERB",
+            format!(
+                "modality `{modality}` is currently unsupported; only chat/chat-untrusted are stable"
+            ),
+            None,
         ));
     }
 
-    let app = app.ok_or_else(|| "--app is required".to_string())?;
-    enforce_identity_for(&app)?;
+    let app = app.ok_or_else(|| super::invalid_args("--app is required"))?;
+    enforce_identity_for(&app).map_err(|error| super::permission_denied(error, None))?;
 
     let prompt_text: Option<String> = match (prompt, prompt_file) {
         (Some(_), Some(_)) => {
-            return Err("--prompt and --prompt-file are mutually exclusive".to_string());
+            return Err(super::invalid_args(
+                "--prompt and --prompt-file are mutually exclusive",
+            ));
         }
         (Some(p), None) => Some(p),
         (None, Some(path)) => Some(
             std::fs::read_to_string(&path)
-                .map_err(|e| format!("--prompt-file {path}: {e}"))?,
+                .map_err(|e| super::invalid_args(format!("--prompt-file {path}: {e}")))?,
         ),
         (None, None) => None,
     };
     let system_text: Option<String> = match (system, system_file) {
         (Some(_), Some(_)) => {
-            return Err("--system and --system-file are mutually exclusive".to_string());
+            return Err(super::invalid_args(
+                "--system and --system-file are mutually exclusive",
+            ));
         }
         (Some(value), None) => Some(value),
         (None, Some(path)) => Some(
             std::fs::read_to_string(&path)
-                .map_err(|e| format!("--system-file {path}: {e}"))?,
+                .map_err(|e| super::invalid_args(format!("--system-file {path}: {e}")))?,
         ),
         (None, None) => None,
     };
@@ -227,10 +239,15 @@ pub fn chat_cmd(args: &[String]) -> Result<Value, String> {
         tools,
     };
 
-    match gate::chat_blocking(req) {
-        Ok(r) => Ok(serde_json::to_value(r).unwrap_or(json!({}))),
-        Err(e) => Err(e.to_string()),
-    }
+    let result = gate::chat_blocking(req).map_err(|error| {
+        let detail = match &error {
+            gate::AiError::Denied(denial) => Some(denial.clone()),
+            _ => None,
+        };
+        super::wire_error(error.wire_code(), error.to_string(), detail)
+    })?;
+    serde_json::to_value(result)
+        .map_err(|error| super::wire_error("INTERNAL_ERROR", error.to_string(), None))
 }
 
 /// Verify the caller is the App they claim to be.
@@ -289,8 +306,5 @@ fn parse_tools_flag(raw: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/test/unit/ai/chat.rs"
-    ));
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/ai/chat.rs"));
 }

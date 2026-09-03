@@ -78,11 +78,7 @@ fn run() -> Result<(), String> {
     let bootstrap = read_bootstrap()?;
     let enforce_groups = bootstrap.enforce_groups;
     let binding = bootstrap.into_current_binding()?;
-    require_hardened_identity(
-        binding.extension_uid,
-        binding.owner_gid,
-        enforce_groups,
-    )?;
+    require_hardened_identity(binding.extension_uid, binding.owner_gid, enforce_groups)?;
     let isolation = super::child_isolation::IsolationAuthority::from_binding(&binding)?;
     let control_socket = PathBuf::from(&binding.control_socket);
 
@@ -387,35 +383,31 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
             }
             Ok(HostResult::AppOutput { output })
         }
-        HostAction::AppOpen { app_id } => {
-            validate_name(&app_id, "App id")?;
-            let tool_count =
-                crate::agent::tools::cos_apps_session::host_open_session(&app_id).await?;
-            Ok(HostResult::AppOpened { tool_count })
-        }
         HostAction::AppCall {
             app_id,
             tool,
             arguments,
+            audit,
         } => {
             validate_name(&app_id, "App id")?;
             validate_text(&tool, "App tool", 256)?;
             if !arguments.is_object() && !arguments.is_null() {
                 return Err("App tool arguments must be an object".to_string());
             }
+            if audit.app_id != app_id || audit.tool != tool {
+                return Err("App invocation audit does not match its target".to_string());
+            }
+            audit.validate_live_binding(&state.binding)?;
             let value = crate::agent::tools::cos_apps_session::host_call_session(
                 &app_id,
                 &tool,
                 arguments,
+                audit.context,
+                audit.capability_generation,
                 Duration::from_millis(MAX_REQUEST_TIMEOUT_MS),
             )
             .await?;
             Ok(HostResult::AppCall { value })
-        }
-        HostAction::AppClose { app_id } => {
-            validate_name(&app_id, "App id")?;
-            let closed = crate::agent::tools::cos_apps_session::host_close_session(&app_id).await;
-            Ok(HostResult::AppClosed { closed })
         }
         HostAction::McpAttach { spec } => attach_mcp(spec, &state).await,
         HostAction::McpCall {
@@ -424,15 +416,17 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
             descriptor_digest,
             audit,
             arguments,
-        } => call_mcp(
-            &server,
-            &tool,
-            &descriptor_digest,
-            &audit,
-            arguments,
-            &state,
-        )
-        .await,
+        } => {
+            call_mcp(
+                &server,
+                &tool,
+                &descriptor_digest,
+                &audit,
+                arguments,
+                &state,
+            )
+            .await
+        }
         HostAction::McpDetach { server } => {
             validate_name(&server, "MCP server")?;
             let detached = state.mcp.lock().await.remove(&server).is_some();

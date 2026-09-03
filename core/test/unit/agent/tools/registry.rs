@@ -481,34 +481,6 @@ async fn execution_rechecks_exact_validated_arguments_after_exposure() {
 }
 
 #[test]
-fn worker_does_not_advertise_unreachable_app_session_tools() {
-    let mut registry = ToolRegistry::new();
-    registry.register(Arc::new(
-        crate::agent::tools::cos_apps_session::CosAppSessionOpen::default(),
-    ));
-    let caps = crate::caps::CapSet::from_caps([crate::caps::Cap::new(
-        crate::caps::Verb::AGENT_INVOKE,
-        crate::caps::Scope::name("**"),
-    )]);
-    let direct = ToolExposureContext::isolated(Guardrails::permissive())
-        .with_identity("direct", 1000, crate::session::SessionSource::LocalCli)
-        .with_capabilities(caps.clone())
-        .with_host(crate::agent::tools::exposure::ExecutionHost::Direct);
-    let worker = ToolExposureContext::isolated(Guardrails::permissive())
-        .with_identity("worker", 1000, crate::session::SessionSource::BrokerTask)
-        .with_capabilities(caps)
-        .with_host(crate::agent::tools::exposure::ExecutionHost::AgentWorker);
-
-    assert!(registry
-        .names_for(&direct)
-        .contains(&"cos_app_session_open"));
-    assert!(!registry
-        .names_for(&worker)
-        .contains(&"cos_app_session_open"));
-    assert!(registry.get_for(&worker, "cos_app_session_open").is_none());
-}
-
-#[test]
 fn oauth_schema_requires_trusted_attended_source_not_just_local_presence() {
     let registry = default_registry();
     let cli = ToolExposureContext::isolated(Guardrails::permissive())
