@@ -3,6 +3,19 @@ use std::path::PathBuf;
 
 use super::transport::PeerProcess;
 
+#[derive(Debug, Clone)]
+pub struct AuthenticatedExtensionHost {
+    pub purpose: crate::extension_host::protocol::HostPurpose,
+    pub lease_id: String,
+    pub authority_session_id: Option<String>,
+    pub host_session_id: Option<String>,
+    pub owner_uid: u32,
+    pub extension_uid: u32,
+    pub capability_generation: String,
+    pub host_pid: u32,
+    pub host_start_time_ticks: Option<u64>,
+}
+
 /// The peer a request came from.
 ///
 /// Built from credentials the kernel attached to the request and confirmed
@@ -35,6 +48,8 @@ pub struct ClientIdentity {
     /// never read from request JSON or the peer's environment.
     #[serde(skip)]
     pub attended_local: bool,
+    #[serde(skip)]
+    pub extension_host: Option<AuthenticatedExtensionHost>,
 }
 
 impl ClientIdentity {
@@ -48,6 +63,7 @@ impl ClientIdentity {
             execution_uid: None,
             start_time_ticks: Some(process.start_time_ticks),
             attended_local,
+            extension_host: None,
         }
     }
 
@@ -59,6 +75,7 @@ impl ClientIdentity {
             execution_uid: None,
             start_time_ticks: None,
             attended_local: false,
+            extension_host: None,
         }
     }
 
@@ -70,6 +87,7 @@ impl ClientIdentity {
         execution_uid: u32,
         gid: u32,
         start_time_ticks: u64,
+        extension_host: AuthenticatedExtensionHost,
     ) -> Self {
         Self {
             pid: Some(pid),
@@ -78,6 +96,7 @@ impl ClientIdentity {
             execution_uid: Some(execution_uid),
             start_time_ticks: Some(start_time_ticks),
             attended_local: false,
+            extension_host: Some(extension_host),
         }
     }
 

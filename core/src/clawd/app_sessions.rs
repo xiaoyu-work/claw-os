@@ -685,7 +685,143 @@ fn release_session_lock(session_id: &str) {
     }
 }
 
-pub async fn set_transient(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+pub(crate) async fn prepare_app_service_call(
+    params: Value,
+    client: &ClientIdentity,
+) -> Result<super::app_services::PreparedAppServiceCall, BrokerError> {
+    let extension = client
+        .extension_host
+        .as_ref()
+        .ok_or_else(|| BrokerError::authorization("App service calls require a private task host"))?
+        .clone();
+    if extension.purpose != crate::extension_host::protocol::HostPurpose::Task
+        || extension.owner_uid != client.require_uid()?
+        || client.execution_uid != Some(extension.extension_uid)
+        || client.pid != Some(extension.host_pid)
+        || client.start_time_ticks != extension.host_start_time_ticks
+        || crate::proc::read_start_time_ticks_pub(extension.host_pid)
+            != extension.host_start_time_ticks
+    {
+        return Err(BrokerError::authorization(
+            "App service call did not come from its live task host",
+        ));
+    }
+
+    let app_id = required_string(&params, "app_id")?;
+    let tool = required_string(&params, "tool")?;
+    let arguments = params
+        .get("arguments")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "App service call arguments must be an object".to_string())?;
+    let audit: crate::extension_host::protocol::AppInvocationAudit = params
+        .get("audit")
+        .cloned()
+        .ok_or_else(|| "App service call omitted its audit binding".to_string())
+        .and_then(|value| {
+            serde_json::from_value(value)
+                .map_err(|error| format!("invalid App service audit binding: {error}"))
+        })?;
+    audit.validate_shape()?;
+    if audit.app_id != app_id
+        || audit.tool != tool
+        || audit.capability_generation != extension.capability_generation
+        || audit.context.task_id.as_deref() != Some(extension.lease_id.as_str())
+        || audit.context.session_id.as_deref() != extension.authority_session_id.as_deref()
+    {
+        return Err(BrokerError::authorization(
+            "App service audit does not match its authenticated task",
+        ));
+    }
+
+    let uid = client.require_uid()?;
+    let home = client.require_home_dir()?;
+    let launcher = authenticate_launcher(client, uid, home.clone()).await?;
+    if launcher.parent.as_deref() != extension.host_session_id.as_deref() {
+        return Err(BrokerError::authorization(
+            "App service call did not come from the authenticated task host session",
+        ));
+    }
+    let delegation = Delegation::new(&launcher, uid, &home, &params)?;
+    validate_mcp_call_context(&audit.context, &launcher, &delegation, uid, &home).await?;
+
+    let app = installed_app(&app_id)?;
+    crate::agent::tools::app_gateway::authorize_manifest(&app.manifest, &audit.context.caller)?;
+    let generation = crate::agent::tools::exposure::capability_generation(&delegation.ceiling);
+    if generation != audit.capability_generation {
+        return Err(BrokerError::authorization(
+            "MCP App caller capabilities changed before daemon authorization",
+        ));
+    }
+    let service = app
+        .manifest
+        .mcp
+        .as_ref()
+        .ok_or_else(|| format!("App `{app_id}` does not expose an MCP service"))?;
+    let declared_tool = service
+        .tools
+        .iter()
+        .find(|candidate| candidate.name == tool)
+        .ok_or_else(|| format!("App `{app_id}` has no mcp tool `{tool}`"))?;
+    let supplied: BTreeMap<String, Value> = arguments
+        .iter()
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect();
+    let effective = app
+        .manifest
+        .resolve_mcp_tool_call(&tool, &supplied, &delegation.paths)
+        .map_err(|error| format!("resolve `{tool}` capabilities: {error}"))?;
+    let placement_caps = effective
+        .needs
+        .iter()
+        .flatten()
+        .cloned()
+        .collect::<Vec<_>>();
+    let placement = crate::agent::tools::cos_apps_session::classify_call(&placement_caps);
+    if let crate::agent::tools::cos_apps_session::CallPlacement::Unsupported(reason) = &placement {
+        return Err(BrokerError::authorization(format!(
+            "App `{app_id}` tool `{tool}` cannot be authorized: {reason}"
+        )));
+    }
+    let authorized_mounts =
+        crate::worker::derive::authorize_granted_path_mounts(&CapSet::from_caps(placement_caps))
+            .map_err(BrokerError::authorization)?;
+    let ceiling = app_ceiling(&app)?;
+    let mut plan = derive_plan(
+        &declared_tool.needs,
+        &effective.needs,
+        &delegation,
+        &ceiling,
+        &app_id,
+    )?;
+    let invoke = crate::agent::tools::app_gateway::invoke_cap(&app_id, &tool)?;
+    plan.require(invoke.clone(), &delegation);
+    let authorized = authorize_plan(&delegation, plan, &ceiling, &app_id)?;
+    let package = crate::provenance::runtime::PackageRef::of(app.require_verified()?);
+    let deadline_ms = audit
+        .context
+        .deadline_unix_ms
+        .ok_or_else(|| "App service call omitted its deadline".to_string())?;
+    Ok(super::app_services::PreparedAppServiceCall {
+        owner_uid: uid,
+        app_id,
+        tool,
+        arguments: Value::Object(effective.values.into_iter().collect()),
+        context: audit.context,
+        capability_generation: generation,
+        package,
+        caps: target_session_caps(authorized, &invoke),
+        placement,
+        authorized_mounts,
+        lifecycle: service.lifecycle,
+        deadline_ms,
+    })
+}
+
+pub async fn set_transient(
+    state: &DaemonState,
+    params: Value,
+    client: &ClientIdentity,
+) -> Result<Value, String> {
     let uid = client.require_uid()?;
     let home = client.require_home_dir()?;
     let session_id = required_string(&params, "session_id")?;
@@ -719,12 +855,29 @@ pub async fn set_transient(params: Value, client: &ClientIdentity) -> Result<Val
     }
     let child_pid = bound.pid;
 
-    let call = match params.get("call") {
+    let authorization = match params.get("authorization") {
         None | Some(Value::Null) => None,
-        Some(Value::Object(_)) => params.get("call"),
-        Some(_) => return Err("App session call must be an object".to_string()),
+        Some(Value::String(token)) => Some(token.as_str()),
+        Some(_) => return Err("App session authorization must be a token".to_string()),
     };
-    let widening = call.is_some();
+    let action_digest = match params.get("action_digest") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(digest))
+            if digest.len() == 64
+                && digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()) =>
+        {
+            Some(digest.as_str())
+        }
+        Some(_) => return Err("App session action digest is invalid".to_string()),
+    };
+    if authorization.is_some() != action_digest.is_some() {
+        return Err(
+            "App session authorization and action digest must be supplied together".to_string(),
+        );
+    }
+    let widening = authorization.is_some();
 
     // The same authoritative ceiling as `register`, resolved again from
     // the installed package. A transient re-scope is the obvious way to
@@ -752,49 +905,46 @@ pub async fn set_transient(params: Value, client: &ClientIdentity) -> Result<Val
     // Derive and authorize the requested capabilities *before* anything
     // is written. A launch that cannot settle its approvals leaves both
     // the registry and the authority untouched.
-    let (caps, call_context) = match call {
+    let (caps, call_context) = match authorization {
         None => (None, None),
-        Some(call) => {
-            let (app, ceiling) = verified
+        Some(token) => {
+            let supplied_action_digest =
+                action_digest.ok_or_else(|| "App session action digest is missing".to_string())?;
+            let (app, _) = verified
                 .as_ref()
                 .ok_or_else(|| "App session tool call needs a verified package".to_string())?;
-            let launcher = authenticate_launcher(client, uid, home.clone()).await?;
-            let delegation = Delegation::new(&launcher, uid, &home, &params)?;
-            let context: crate::agent::tools::app_gateway::McpCallContext = call
-                .get("context")
-                .cloned()
-                .ok_or_else(|| "MCP App call omitted its authenticated context".to_string())
-                .and_then(|value| {
-                    serde_json::from_value(value)
-                        .map_err(|error| format!("invalid MCP App call context: {error}"))
-                })?;
-            validate_mcp_call_context(&context, &launcher, &delegation, uid, &home).await?;
-            crate::agent::tools::app_gateway::authorize_manifest(&app.manifest, &context.caller)?;
-            let capability_generation = required_string(call, "capability_generation")?;
-            if capability_generation
-                != crate::agent::tools::exposure::capability_generation(&delegation.ceiling)
-            {
-                return Err(
-                    "MCP App caller capabilities changed before daemon authorization".to_string(),
-                );
-            }
-            let supplied_package = required_package_ref(call)?;
             let expected_package =
                 crate::provenance::runtime::PackageRef::of(app.require_verified()?);
-            if supplied_package != expected_package {
-                return Err("MCP App package changed before daemon authorization".to_string());
+            let pending = state.consume_app_authorization(token, supplied_action_digest)?;
+            let extension = client.extension_host.as_ref().ok_or_else(|| {
+                "App call authorization requires a private App service host".to_string()
+            })?;
+            if extension.purpose != crate::extension_host::protocol::HostPurpose::AppService
+                || pending.owner_uid != uid
+                || pending.app_id != app_id
+                || pending.package != expected_package
+                || pending.service_host_session_id
+                    != extension.host_session_id.as_deref().unwrap_or_default()
+                || pending.service_host_pid != extension.host_pid
+                || pending.service_host_start_time_ticks != extension.host_start_time_ticks
+                || pending.service_extension_uid != extension.extension_uid
+                || client.pid != Some(extension.host_pid)
+                || bound.parent.as_deref() != Some(pending.service_host_session_id.as_str())
+                || !crate::proc::process_descends_from(child_pid, extension.host_pid)
+            {
+                return Err(
+                    "App call authorization does not match this service host and child session"
+                        .to_string(),
+                );
             }
-            let tool = required_string(call, "tool")?;
-            let mut plan =
-                mcp_tool_plan(app, call, &delegation, ceiling).map_err(|error| error.message)?;
-            let invoke = crate::agent::tools::app_gateway::invoke_cap(&app_id, &tool)?;
-            plan.require(invoke.clone(), &delegation);
-            let authorized = authorize_plan(&delegation, plan, ceiling, &app_id)
-                .map_err(|error| error.message)?;
-            (
-                Some(target_session_caps(authorized, &invoke)),
-                Some(context),
-            )
+            pending.context.validate()?;
+            if pending.capability_generation.is_empty()
+                || pending.tool.is_empty()
+                || pending.expires_at_ms > pending.context.deadline_unix_ms.unwrap_or_default()
+            {
+                return Err("App call authorization is internally inconsistent".to_string());
+            }
+            (Some(pending.caps), Some(pending.context))
         }
     };
 
@@ -1104,8 +1254,13 @@ fn is_trusted_extension_host_launcher(
     start_time_ticks: Option<u64>,
 ) -> bool {
     sessions.iter().any(|session| {
-        session.group.as_deref() == Some(crate::extension_host::protocol::EXTENSION_HOST_GROUP)
-            && session.app_id.is_none()
+        matches!(
+            session.group.as_deref(),
+            Some(
+                crate::extension_host::protocol::EXTENSION_HOST_GROUP
+                    | crate::extension_host::protocol::APP_SERVICE_HOST_GROUP
+            )
+        ) && session.app_id.is_none()
             && session.pid == pid
             && session.start_time_ticks == start_time_ticks
             && session_process_is_current(session)

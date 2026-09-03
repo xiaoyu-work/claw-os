@@ -313,7 +313,7 @@ async fn worker_child() {
             Ok(_) => panic!("old binding installed in a replacement worker"),
             Err(error) => error,
         };
-        assert!(error.contains("different worker"), "{error}");
+        assert!(error.contains("different controller"), "{error}");
         return;
     }
 
@@ -351,7 +351,7 @@ async fn worker_child() {
             app_id: None,
         },
     };
-    let app_call = client
+    let error = client
         .call_app(
             "echo-app".to_string(),
             "ping".to_string(),
@@ -360,13 +360,8 @@ async fn worker_child() {
             Duration::from_secs(5),
         )
         .await
-        .expect("call hosted App session");
-    assert!(app_call.content.iter().any(|item| {
-        matches!(
-            item,
-            cos::agent::tools::mcp::protocol::ContentItem::Text { text } if text == "pong"
-        )
-    }));
+        .expect_err("a task Host must not execute an App call locally");
+    assert!(error.contains("manager is unavailable"), "{error}");
     let spoof = cos::clawd::client::request(
         &binding.broker_socket,
         cos::clawd::wire::Request::build(
@@ -552,21 +547,31 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
         spawn::approve_runtime_path(env._runtime.path(), identity.uid)
             .expect("approve test runtime"),
     ];
-    if let Some(sdk_dir) = std::env::var_os("COS_SDK_PYTHON_DIR").map(PathBuf::from) {
-        approved_paths
-            .push(spawn::approve_runtime_path(&sdk_dir, identity.uid).expect("approve Python SDK"));
+    if let Some(paths) = std::env::var_os("COS_SDK_PYTHON_DIR") {
+        for sdk_dir in std::env::split_paths(&paths).filter(|path| !path.as_os_str().is_empty()) {
+            approved_paths.push(
+                spawn::approve_runtime_path(&sdk_dir, identity.uid).expect("approve Python SDK"),
+            );
+        }
     }
+    let launch = spawn::HostLaunchSpec {
+        purpose: cos::extension_host::protocol::HostPurpose::Task,
+        lease_id: task_id.to_string(),
+        authority_session_id: Some(task_session.to_string()),
+        app_id: None,
+        host_session_id: Some(host_session.to_string()),
+        controller_uid: identity.uid,
+        controller_gid: execution_gid,
+        controller_pid: worker_pid,
+        controller_start_time_ticks: Some(worker_start),
+        package: None,
+    };
     let mut host = spawn::spawn_host(
         &identity,
         &extension_identity,
         &isolation,
         &containment,
-        task_id,
-        Some(task_session),
-        None,
-        Some(host_session),
-        worker_pid,
-        Some(worker_start),
+        &launch,
         "0123456789abcdef0123456789abcdef",
         expires,
         &capability_generation,
@@ -638,12 +643,14 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
     )
     .expect("register host session");
     let lease = Arc::new(broker::ExtensionLease::new(
+        cos::extension_host::protocol::HostPurpose::Task,
         task_id.to_string(),
         Some(task_session.to_string()),
         Some(host_session.to_string()),
         uid,
         extension_identity.uid,
         execution_gid,
+        capability_generation,
         worker_pid,
         Some(worker_start),
         host.pid,

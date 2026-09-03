@@ -9,6 +9,20 @@ fn packaged_uid_range_is_below_systemd_dynamic_users() {
 }
 
 #[test]
+fn task_and_service_identity_pools_are_disjoint() {
+    assert_eq!(TASK_IDENTITY_COUNT, 56);
+    assert_eq!(SERVICE_IDENTITY_COUNT, 8);
+    assert_eq!(TASK_IDENTITY_COUNT + SERVICE_IDENTITY_COUNT, IDENTITY_COUNT);
+    for index in 0..IDENTITY_COUNT as usize {
+        let task = identity_supports_purpose(index, super::super::protocol::HostPurpose::Task);
+        let service =
+            identity_supports_purpose(index, super::super::protocol::HostPurpose::AppService);
+        assert_ne!(task, service);
+        assert_eq!(task, index < TASK_IDENTITY_COUNT as usize);
+    }
+}
+
+#[test]
 fn nss_reverse_lookup_detects_mapped_accounts() {
     let uid = unsafe { libc::geteuid() } as u32;
     assert!(account_by_uid(uid).unwrap().is_some());

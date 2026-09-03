@@ -23,6 +23,7 @@ macro_rules! require_sandbox {
             eprintln!("skipping: {}", availability.refusal());
             return;
         }
+        let _app_runner = crate::test_env::use_stripped_app_runner();
     };
 }
 
@@ -164,6 +165,32 @@ fn register_manifests_emits_one_tool_per_manifest_entry() {
         Some(v) => std::env::set_var("COS_APPS_DIR", v),
         None => std::env::remove_var("COS_APPS_DIR"),
     }
+}
+
+#[test]
+fn hosted_child_failures_keep_their_retirement_category() {
+    use crate::extension_host::protocol::ExtensionErrorCategory;
+
+    assert_eq!(
+        client_error_category(&ClientError::Server {
+            code: -32000,
+            message: "rejected".to_string(),
+            data: None,
+        }),
+        ExtensionErrorCategory::RemoteCallFailure
+    );
+    assert_eq!(
+        client_error_category(&ClientError::Timeout(Duration::from_secs(1))),
+        ExtensionErrorCategory::Timeout
+    );
+    assert_eq!(
+        client_error_category(&ClientError::ConnectionClosed),
+        ExtensionErrorCategory::Crash
+    );
+    assert_eq!(
+        client_error_category(&ClientError::Decode("bad response".to_string())),
+        ExtensionErrorCategory::Protocol
+    );
 }
 
 #[test]
@@ -634,6 +661,7 @@ fn both_launch_shapes_export_the_verified_manifest_path() {
             program: plan.program.clone(),
             argv: plan.argv.clone(),
             caps: &crate::caps::CapSet::new(),
+            authorized_mounts: &[],
             lifetime,
             session_id: "manifest-env-probe",
             data_dir: &plan.data_dir,
@@ -1056,7 +1084,55 @@ fn tool_context() -> crate::agent::tools::exposure::ToolExposureContext {
 }
 
 async fn exec_tool(tool: &AppSessionTool, input: Value) -> ToolResult {
-    crate::agent::tools::exposure::scope(tool_context(), tool.exec(input)).await
+    let (_, caps) =
+        match resolve_daemon_authorized_call(&tool.manifest, &tool.manifest_tool_name, &input) {
+            Ok(resolved) => resolved,
+            Err(error) => return ToolResult::err(error),
+        };
+    let authorized_mounts = match crate::worker::derive::authorize_granted_path_mounts(
+        &crate::caps::CapSet::from_caps(caps),
+    ) {
+        Ok(mounts) => mounts,
+        Err(error) => return ToolResult::err(error),
+    };
+    match host_call_session(
+        &tool.app_id,
+        &tool.manifest_tool_name,
+        input,
+        authorized_mounts,
+        test_call_context(),
+        "0123456789abcdef0123456789abcdef".to_string(),
+        tool.timeout,
+    )
+    .await
+    {
+        Ok(result) => {
+            let (content, is_error) = render_call_result(result);
+            if is_error {
+                ToolResult::err(content)
+            } else {
+                ToolResult::ok(content)
+            }
+        }
+        Err(error) => ToolResult::err(error.to_string()),
+    }
+}
+
+#[tokio::test]
+async fn model_visible_app_tools_require_the_authenticated_task_host() {
+    let _lock = env_lock();
+    let fixture = ProbeFixture::new("session-host-required", "probe");
+    let tool = fixture.tool("probe.echo");
+    let result =
+        crate::agent::tools::exposure::scope(tool_context(), tool.exec(json!({"key": "x"}))).await;
+    assert!(result.is_error);
+    assert!(
+        result
+            .content
+            .contains("require the authenticated task App Host"),
+        "{}",
+        result.content
+    );
 }
 
 async fn session_is_open(app_id: &str, apps_root: &Path) -> bool {
@@ -1105,10 +1181,7 @@ async fn the_transient_grant_exists_only_while_the_call_is_in_flight() {
     let _ = std::fs::remove_file(&go);
 
     let tool = fixture.tool("probe.hold");
-    let context = tool_context();
-    let call = tokio::spawn(async move {
-        crate::agent::tools::exposure::scope(context, tool.exec(json!({"key": "x"}))).await
-    });
+    let call = tokio::spawn(async move { exec_tool(&tool, json!({"key": "x"})).await });
 
     // Wait for the server to confirm the call is in flight.
     let deadline = Instant::now() + Duration::from_secs(20);
@@ -1346,6 +1419,87 @@ fn the_call_classifier_separates_brokered_from_resource_bearing_calls() {
 }
 
 #[cfg(unix)]
+#[test]
+fn service_host_does_not_recanonicalize_daemon_authorized_paths() {
+    use std::os::unix::fs::symlink;
+
+    use crate::caps::{Cap, Scope, Verb};
+
+    let manifest: Manifest = serde_json::from_value(serde_json::json!({
+        "schema_version": 2,
+        "id": "path-probe",
+        "version": "1.0.0",
+        "name": {"en": "Path probe"},
+        "runtime": "python",
+        "operations": {},
+        "mcp": {
+            "transport": "stdio",
+            "entry": "main.py",
+            "tools": [{
+                "name": "probe.read",
+                "summary": {"en": "Read a path."},
+                "args": [{"name": "path", "kind": "path", "required": true}],
+                "needs": [{
+                    "verb": "fs.read",
+                    "scope": {"kind": "from-arg", "arg": "path"},
+                    "why": {"en": "Read the selected path."}
+                }]
+            }]
+        }
+    }))
+    .expect("manifest");
+    let temp = tempfile::tempdir().expect("tempdir");
+    let requested = temp.path().join("requested");
+    let secret = temp.path().join("secret");
+    std::fs::write(&secret, "secret").expect("secret");
+    let requested_text = requested.to_string_lossy().into_owned();
+    let supplied = BTreeMap::from([("path".to_string(), Value::String(requested_text.clone()))]);
+    let effective = manifest
+        .resolve_mcp_tool_call(
+            "probe.read",
+            &supplied,
+            &crate::caps::args::PathContext {
+                home: temp.path().to_path_buf(),
+                cwd: Some(temp.path().to_path_buf()),
+            },
+        )
+        .expect("daemon resolution");
+    let daemon_caps = effective
+        .needs
+        .iter()
+        .flatten()
+        .cloned()
+        .collect::<Vec<_>>();
+    let authorized_mounts = crate::worker::derive::authorize_granted_path_mounts(
+        &crate::caps::CapSet::from_caps(daemon_caps),
+    )
+    .expect("daemon mount authorization");
+    symlink(&secret, &requested).expect("replace path with symlink");
+    assert_eq!(
+        std::fs::canonicalize(&requested).expect("canonicalized replacement"),
+        secret
+    );
+
+    let input = Value::Object(effective.values.into_iter().collect());
+    let (args, caps) =
+        resolve_daemon_authorized_call(&manifest, "probe.read", &input).expect("host resolution");
+    assert_eq!(
+        args.get("path"),
+        Some(&Value::String(requested_text.clone()))
+    );
+    assert_eq!(
+        caps,
+        vec![Cap::new(Verb::FS_READ, Scope::path(requested_text))]
+    );
+    let error = crate::worker::derive::bind_authorized_path_mounts(
+        &crate::caps::CapSet::from_caps(caps),
+        &authorized_mounts,
+    )
+    .expect_err("changed mount resolution must fail");
+    assert!(error.contains("changed after authorization"), "{error}");
+}
+
+#[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_unbounded_resource_grant_is_refused_at_authorization() {
     let _lock = env_lock();
@@ -1366,6 +1520,62 @@ async fn an_unbounded_resource_grant_is_refused_at_authorization() {
         !session_is_open(&fixture.id, &fixture.apps).await,
         "a refused call still brought a session up"
     );
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_single_call_app_cannot_execute_before_its_grant_is_installed() {
+    let _lock = env_lock();
+    require_sandbox!();
+    let fixture = ProbeFixture::new("session-launch-gate", "probe");
+    let app_dir = fixture.apps.join(&fixture.id);
+    let body = PROBE_SERVER.replacen(
+        "DATA = os.environ.get(\"COS_DATA_DIR\", \"/tmp\")",
+        "DATA = os.environ.get(\"COS_DATA_DIR\", \"/tmp\")\n\
+         open(os.path.join(DATA, \"startup\"), \"w\").write(\"executed\")",
+        1,
+    );
+    std::fs::write(app_dir.join("server.py"), body).unwrap();
+    crate::test_env::sign_test_package(&app_dir, crate::provenance::PackageKind::App, &fixture.id);
+    crate::provenance::verify::invalidate_cache();
+
+    let owner_uid = session_key(&fixture.id, &fixture.apps).unwrap().0;
+    let (_, launch, plan) =
+        resolve_session_launch(&fixture.id, &app_dir, &fixture.apps, owner_uid).unwrap();
+    let granted = fixture.root.join("granted");
+    std::fs::create_dir_all(&granted).unwrap();
+    let call_caps = vec![crate::caps::Cap::new(
+        crate::caps::Verb::FS_WRITE,
+        crate::caps::Scope::path(granted.to_string_lossy().into_owned()),
+    )];
+    let caps = crate::caps::CapSet::from_caps(call_caps.iter().cloned());
+    let authorized_mounts = crate::worker::derive::authorize_granted_path_mounts(&caps).unwrap();
+    let mut worker =
+        SingleCallWorker::start(&launch, &plan, "probe.write", &caps, &authorized_mounts)
+            .await
+            .unwrap();
+    let startup = fixture.partition().join("startup");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        !startup.exists(),
+        "App package code ran while its launch authorization was still blocked"
+    );
+
+    let mut guard = worker
+        .authorize(&call_caps, "test-authorization", "test-action")
+        .await
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !startup.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "authorized App did not pass the launch gate"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    guard.complete();
+    drop(guard);
+    worker.destroy();
 }
 
 #[cfg(unix)]
@@ -1761,10 +1971,7 @@ async fn a_cancelled_call_still_clears_its_grant_and_kills_its_worker() {
     // return would: nothing here is on a success path.
     let tool = fixture.tool("probe.write_hang");
     let dir = granted.to_string_lossy().to_string();
-    let context = tool_context();
-    let call = tokio::spawn(async move {
-        crate::agent::tools::exposure::scope(context, tool.exec(json!({"dir": dir}))).await
-    });
+    let call = tokio::spawn(async move { exec_tool(&tool, json!({"dir": dir})).await });
     tokio::time::sleep(Duration::from_secs(3)).await;
     call.abort();
     let _ = call.await;
@@ -1853,13 +2060,8 @@ async fn a_server_that_never_reads_its_input_does_not_wedge_the_launcher() {
     let mut calls = Vec::new();
     for index in 0..12 {
         let tool = fixture.tool("probe.echo");
-        let context = tool_context();
         calls.push(tokio::spawn(async move {
-            crate::agent::tools::exposure::scope(
-                context,
-                tool.exec(json!({"key": format!("k{index}")})),
-            )
-            .await
+            exec_tool(&tool, json!({"key": format!("k{index}")})).await
         }));
     }
     let started = Instant::now();

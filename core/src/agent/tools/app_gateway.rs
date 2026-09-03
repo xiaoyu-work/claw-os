@@ -137,19 +137,29 @@ impl McpCallContext {
 
     pub fn for_extension_caller(
         binding: &ExtensionBinding,
+        lease_deadline_ms: u64,
         timeout: Duration,
     ) -> Result<Self, String> {
-        Self::for_extension_caller_with_generation(binding, timeout).map(|(context, _)| context)
+        Self::for_extension_caller_with_generation(binding, lease_deadline_ms, timeout)
+            .map(|(context, _)| context)
     }
 
     pub fn for_extension_caller_with_generation(
         binding: &ExtensionBinding,
+        lease_deadline_ms: u64,
         timeout: Duration,
     ) -> Result<(Self, String), String> {
-        binding.validate_fresh_worker(
+        binding.validate_worker(
             std::process::id(),
             crate::proc::read_start_time_ticks_pub(std::process::id()),
         )?;
+        let now = crate::agentd::grant::now_ms();
+        if lease_deadline_ms <= now
+            || lease_deadline_ms
+                > now.saturating_add(crate::extension_host::protocol::MAX_TASK_LEASE_DURATION_MS)
+        {
+            return Err("MCP App caller task lease has expired or is invalid".to_string());
+        }
         let exposure = crate::agent::tools::exposure::current()
             .ok_or_else(|| "MCP App call has no trusted tool context".to_string())?;
         if exposure.capability_generation() != binding.capability_generation {
@@ -157,8 +167,8 @@ impl McpCallContext {
                 "MCP App caller capabilities do not match the authenticated task".to_string(),
             );
         }
-        let context = Self::from_exposure(&exposure, timeout, Some(binding.expires_at_ms))?;
-        context.validate_extension_binding(binding)?;
+        let context = Self::from_exposure(&exposure, timeout, Some(lease_deadline_ms))?;
+        context.validate_extension_binding_for_lease(binding, lease_deadline_ms)?;
         Ok((context, binding.capability_generation.clone()))
     }
 
@@ -234,23 +244,42 @@ impl McpCallContext {
     }
 
     pub fn validate_extension_binding(&self, binding: &ExtensionBinding) -> Result<(), String> {
-        self.validate_extension_binding_inner(binding, true)
+        self.validate_extension_binding_inner(binding, true, Some(binding.expires_at_ms))
+    }
+
+    pub(crate) fn validate_extension_binding_for_lease(
+        &self,
+        binding: &ExtensionBinding,
+        lease_deadline_ms: u64,
+    ) -> Result<(), String> {
+        self.validate_extension_binding_inner(binding, true, Some(lease_deadline_ms))
+    }
+
+    pub(crate) fn validate_extension_runtime_binding(
+        &self,
+        binding: &ExtensionBinding,
+    ) -> Result<(), String> {
+        self.validate_extension_binding_inner(binding, true, None)
     }
 
     pub fn validate_extension_audit_binding(
         &self,
         binding: &ExtensionBinding,
     ) -> Result<(), String> {
-        self.validate_extension_binding_inner(binding, false)
+        self.validate_extension_binding_inner(binding, false, None)
     }
 
     fn validate_extension_binding_inner(
         &self,
         binding: &ExtensionBinding,
         require_live_deadline: bool,
+        lease_deadline_ms: Option<u64>,
     ) -> Result<(), String> {
         self.validate()?;
         binding.validate_shape()?;
+        if binding.purpose != crate::extension_host::protocol::HostPurpose::Task {
+            return Err("MCP call context requires a task extension host".to_string());
+        }
         let session_id = binding
             .session_id
             .as_deref()
@@ -272,8 +301,15 @@ impl McpCallContext {
             || self.parent_call_id.is_some()
             || self.depth != 0
             || self.deadline_unix_ms.is_none_or(|deadline| {
-                (require_live_deadline && deadline <= crate::agentd::grant::now_ms())
-                    || deadline > binding.expires_at_ms
+                let now = crate::agentd::grant::now_ms();
+                (require_live_deadline && deadline <= now)
+                    || lease_deadline_ms.is_some_and(|lease| deadline > lease)
+                    || (require_live_deadline
+                        && lease_deadline_ms.is_none()
+                        && deadline
+                            > now.saturating_add(
+                                crate::extension_host::protocol::MAX_REQUEST_TIMEOUT_MS,
+                            ))
             })
         {
             return Err("MCP call context does not match the authenticated task".to_string());

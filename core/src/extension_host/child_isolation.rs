@@ -110,7 +110,6 @@ impl IsolationAuthority {
             if canonical.starts_with(approved_path) {
                 return Ok(canonical);
             }
-
         }
         Err(format!(
             "extension root {} is outside broker-approved owner/package paths",
@@ -327,8 +326,8 @@ fn prepare_impl(
     if let Some(root) = authorized_root.as_deref() {
         roots.push(root.to_path_buf());
     }
-    for key in ["COS_SDK_PYTHON_DIR"] {
-        if let Some(path) = std::env::var_os(key).map(PathBuf::from) {
+    if let Some(paths) = std::env::var_os("COS_SDK_PYTHON_DIR") {
+        for path in std::env::split_paths(&paths).filter(|path| !path.as_os_str().is_empty()) {
             if path.exists() {
                 roots.push(path);
             }
@@ -483,8 +482,7 @@ fn resolve_runtime_program(
             candidate.display()
         )
     })?;
-    let authorized = authorized_root
-        .is_some_and(|root| canonical.starts_with(root));
+    let authorized = authorized_root.is_some_and(|root| canonical.starts_with(root));
     if !authorized && !is_system_runtime_path(&canonical) {
         authority.authorize_root(&canonical)?;
     }
@@ -810,13 +808,7 @@ fn snapshot_runtime_tree(
         ));
     }
     let mut budget = RuntimeSnapshotBudget { files: 0, bytes: 0 };
-    snapshot_runtime_entry(
-        &canonical,
-        snapshot,
-        root.dev(),
-        &mut budget,
-        authority,
-    )?;
+    snapshot_runtime_entry(&canonical, snapshot, root.dev(), &mut budget, authority)?;
     let after = fs::symlink_metadata(&canonical)
         .map_err(|error| format!("recheck runtime tree {}: {error}", canonical.display()))?;
     if after.dev() != root.dev() || after.ino() != root.ino() {
@@ -961,13 +953,7 @@ fn validate_and_bind_runtime_tree(
         ));
     }
     let mut count = 0usize;
-    validate_runtime_tree_entry(
-        &canonical,
-        &canonical,
-        root.dev(),
-        &mut count,
-        authority,
-    )?;
+    validate_runtime_tree_entry(&canonical, &canonical, root.dev(), &mut count, authority)?;
     let after = fs::symlink_metadata(&canonical)
         .map_err(|error| format!("recheck runtime tree {}: {error}", canonical.display()))?;
     if after.dev() != root.dev() || after.ino() != root.ino() {

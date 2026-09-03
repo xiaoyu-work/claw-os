@@ -13,6 +13,7 @@ fn state() -> HostState {
     }];
     let binding = super::super::protocol::ExtensionBinding {
         protocol: PROTOCOL_VERSION,
+        purpose: super::super::protocol::HostPurpose::Task,
         task_id: "task-a".to_string(),
         session_id: Some("session-a".to_string()),
         app_id: None,
@@ -20,9 +21,12 @@ fn state() -> HostState {
         extension_uid: 61_000,
         owner_gid,
         capability_generation: "a".repeat(16),
+        package: None,
         approved_paths: approved_paths.clone(),
-        worker_pid: pid,
-        worker_start_time_ticks: crate::proc::read_start_time_ticks_pub(pid),
+        controller_uid: worker_uid,
+        controller_gid: owner_gid,
+        controller_pid: pid,
+        controller_start_time_ticks: crate::proc::read_start_time_ticks_pub(pid),
         host_pid: pid,
         host_start_time_ticks: crate::proc::read_start_time_ticks_pub(pid),
         lease_nonce: "0123456789abcdef0123456789abcdef".to_string(),
@@ -39,10 +43,10 @@ fn state() -> HostState {
         binding,
         task_id: "task-a".to_string(),
         session_id: Some("session-a".to_string()),
-        worker_uid,
-        owner_gid,
-        worker_pid: pid,
-        worker_start_time_ticks: crate::proc::read_start_time_ticks_pub(pid),
+        controller_uid: worker_uid,
+        controller_gid: owner_gid,
+        controller_pid: pid,
+        controller_start_time_ticks: crate::proc::read_start_time_ticks_pub(pid),
         lease_nonce: "0123456789abcdef0123456789abcdef".to_string(),
         recent: Mutex::new(VecDeque::new()),
         active: Mutex::new(HashMap::new()),
@@ -88,19 +92,19 @@ fn route_spoofing_cross_session_and_grant_replay_are_rejected() {
     cross_session.session_id = Some("session-b".to_string());
     assert!(validate_request(&cross_session, process(), &state)
         .unwrap_err()
-        .contains("task lease"));
+        .contains("host lease"));
 
     let mut wrong_nonce = make_request(&state);
     wrong_nonce.lease_nonce = "ffffffffffffffffffffffffffffffff".to_string();
     assert!(validate_request(&wrong_nonce, process(), &state)
         .unwrap_err()
-        .contains("task lease"));
+        .contains("host lease"));
 
     let mut substituted_binding = make_request(&state);
     substituted_binding.binding_digest = "f".repeat(64);
     assert!(validate_request(&substituted_binding, process(), &state)
         .unwrap_err()
-        .contains("task lease"));
+        .contains("host lease"));
 }
 
 #[test]
@@ -110,7 +114,7 @@ fn another_process_cannot_drive_the_host_control_socket() {
     other.pid = other.pid.saturating_add(1);
     assert!(validate_request(&make_request(&state), other, &state)
         .unwrap_err()
-        .contains("different worker"));
+        .contains("different controller"));
 }
 
 #[test]
@@ -136,4 +140,40 @@ async fn cancellation_aborts_the_exact_active_request() {
     assert!(cancel_active(&state, &id));
     assert!(task.await.unwrap_err().is_cancelled());
     assert!(!cancel_active(&state, &id));
+}
+
+#[tokio::test]
+async fn task_and_service_hosts_cannot_swap_app_actions() {
+    let task = Arc::new(state());
+    let error = dispatch(
+        HostAction::WarmApp {
+            app_id: "notes".to_string(),
+        },
+        task,
+    )
+    .await
+    .expect_err("task host must not warm a persistent service");
+    assert!(error.contains("App service"), "{error}");
+
+    let mut service = state();
+    service.binding.purpose = super::super::protocol::HostPurpose::AppService;
+    service.binding.app_id = Some("notes".to_string());
+    service.binding.package = Some(crate::provenance::runtime::PackageRef {
+        kind: crate::provenance::PackageKind::App,
+        id: "notes".to_string(),
+        content_digest: "a".repeat(64),
+        publisher_key_id: None,
+        tier: "system".to_string(),
+    });
+    let error = dispatch(
+        HostAction::RunApp {
+            app_id: "notes".to_string(),
+            command: "show".to_string(),
+            args: Vec::new(),
+        },
+        Arc::new(service),
+    )
+    .await
+    .expect_err("service host must not run task actions");
+    assert!(error.contains("cannot run App"), "{error}");
 }

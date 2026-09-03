@@ -188,14 +188,21 @@ fn user_routes_drop_personal_and_credential_fields() {
 #[test]
 fn nested_caller_objects_are_never_walked() {
     let facts = request_facts(
-        "app_session.set_transient",
+        "app_service.call",
         &json!({
-            "session_id": "app-1",
-            "handle": "d34db33f-launch-handle",
-            "call": {"tool": "send", "arguments": {"authorization": "sk-live-provider-key"}},
+            "app_id": "mail",
+            "tool": "messages.send",
+            "arguments": {"authorization": "sk-live-provider-key"},
+            "context": {
+                "caller": {
+                    "kind": "app",
+                    "id": "mail-agent",
+                    "authorization": "sk-live-provider-key",
+                }
+            },
         }),
     );
-    assert_eq!(facts.params["call"], json!({"type": "object", "len": 2}));
+    assert_eq!(facts.params["context"], Value::Null);
     assert_no_secrets(&render(&facts));
 }
 

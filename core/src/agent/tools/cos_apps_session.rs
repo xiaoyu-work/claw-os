@@ -65,7 +65,8 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use tokio::process::{Child, Command};
+use tokio::io::AsyncWriteExt;
+use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::{Mutex, OwnedMutexGuard};
 use tokio::time::timeout;
 
@@ -490,6 +491,96 @@ struct BroughtUp {
     policy_digest: String,
 }
 
+#[derive(Debug)]
+pub(crate) struct HostedAppError {
+    category: crate::extension_host::protocol::ExtensionErrorCategory,
+    message: String,
+}
+
+impl HostedAppError {
+    fn new(
+        category: crate::extension_host::protocol::ExtensionErrorCategory,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            category,
+            message: message.into(),
+        }
+    }
+
+    fn remote(message: impl Into<String>) -> Self {
+        Self::new(
+            crate::extension_host::protocol::ExtensionErrorCategory::RemoteCallFailure,
+            message,
+        )
+    }
+
+    fn connect(message: impl Into<String>) -> Self {
+        Self::new(
+            crate::extension_host::protocol::ExtensionErrorCategory::Connect,
+            message,
+        )
+    }
+
+    fn timeout(message: impl Into<String>) -> Self {
+        Self::new(
+            crate::extension_host::protocol::ExtensionErrorCategory::Timeout,
+            message,
+        )
+    }
+
+    fn crash(message: impl Into<String>) -> Self {
+        Self::new(
+            crate::extension_host::protocol::ExtensionErrorCategory::Crash,
+            message,
+        )
+    }
+
+    fn protocol(message: impl Into<String>) -> Self {
+        Self::new(
+            crate::extension_host::protocol::ExtensionErrorCategory::Protocol,
+            message,
+        )
+    }
+
+    pub(crate) fn category(&self) -> crate::extension_host::protocol::ExtensionErrorCategory {
+        self.category
+    }
+}
+
+impl std::fmt::Display for HostedAppError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for HostedAppError {}
+
+impl From<String> for HostedAppError {
+    fn from(message: String) -> Self {
+        Self::remote(message)
+    }
+}
+
+fn client_error_category(
+    error: &ClientError,
+) -> crate::extension_host::protocol::ExtensionErrorCategory {
+    use crate::extension_host::protocol::ExtensionErrorCategory;
+
+    match error {
+        ClientError::Server { .. } => ExtensionErrorCategory::RemoteCallFailure,
+        ClientError::Timeout(_) => ExtensionErrorCategory::Timeout,
+        ClientError::Transport(_) | ClientError::ConnectionClosed => ExtensionErrorCategory::Crash,
+        ClientError::Encode(_) | ClientError::Decode(_) | ClientError::Protocol(_) => {
+            ExtensionErrorCategory::Protocol
+        }
+    }
+}
+
+fn hosted_client_error(prefix: &str, error: ClientError) -> HostedAppError {
+    HostedAppError::new(client_error_category(&error), format!("{prefix}: {error}"))
+}
+
 /// Everything the sandbox derivation for one App session reads, resolved
 /// once from the verified snapshot.
 ///
@@ -532,6 +623,7 @@ impl SessionLaunchPlan {
             program: self.program.clone(),
             argv: self.argv.clone(),
             caps: session.granted_caps(),
+            authorized_mounts: &[],
             lifetime: crate::worker::derive::SessionLifetime::Reusable,
             session_id: session.id(),
             data_dir: &self.data_dir,
@@ -693,7 +785,7 @@ async fn bring_up_app(
     plan: &SessionLaunchPlan,
     tool: &str,
     timeout_dur: Duration,
-) -> Result<BroughtUp, String> {
+) -> Result<BroughtUp, HostedAppError> {
     let app_id = plan.identity.app_id.clone();
     let app_id = app_id.as_str();
 
@@ -741,6 +833,7 @@ async fn bring_up_app(
         crate::worker::derive::SessionLifetime::Reusable,
         &plan.transports,
         None,
+        &[],
     )?;
     let policy_digest = prepared.facts["policy"]
         .as_str()
@@ -759,27 +852,29 @@ async fn bring_up_app(
         .stderr(Stdio::piped());
     let mut child = command
         .spawn()
-        .map_err(|e| format!("spawn `{app_id}` session: {e}"))?;
+        .map_err(|e| HostedAppError::connect(format!("spawn `{app_id}` session: {e}")))?;
     let Some(child_pid) = child.id() else {
         kill_and_reap_child(child, &resources, None);
-        return Err(format!("spawned `{app_id}` session has no pid"));
+        return Err(HostedAppError::crash(format!(
+            "spawned `{app_id}` session has no pid"
+        )));
     };
     if let Err(error) = app_session.bind_process(child_pid) {
         kill_and_reap_child(child, &resources, Some(child_pid));
-        return Err(error);
+        return Err(HostedAppError::protocol(error));
     }
     let stdin = match child.stdin.take() {
         Some(stdin) => stdin,
         None => {
             kill_and_reap_child(child, &resources, Some(child_pid));
-            return Err("child stdin unavailable".to_string());
+            return Err(HostedAppError::crash("child stdin unavailable"));
         }
     };
     let stdout = match child.stdout.take() {
         Some(stdout) => stdout,
         None => {
             kill_and_reap_child(child, &resources, Some(child_pid));
-            return Err("child stdout unavailable".to_string());
+            return Err(HostedAppError::crash("child stdout unavailable"));
         }
     };
     // Pipe + prefix child stderr so per-app log lines are
@@ -818,14 +913,14 @@ async fn bring_up_app(
         Ok(Ok(v)) => v,
         Ok(Err(e)) => {
             kill_and_reap_child(child, &resources, Some(child_pid));
-            return Err(format!("initialize: {e}"));
+            return Err(hosted_client_error("initialize", e));
         }
         Err(_) => {
             kill_and_reap_child(child, &resources, Some(child_pid));
-            return Err(format!(
+            return Err(HostedAppError::timeout(format!(
                 "initialize timed out after {}s",
                 timeout_dur.as_secs()
-            ));
+            )));
         }
     };
     if init.protocol_version != PROTOCOL_VERSION {
@@ -845,14 +940,14 @@ async fn bring_up_app(
         Ok(Ok(v)) => v.tools.len(),
         Ok(Err(e)) => {
             kill_and_reap_child(child, &resources, Some(child_pid));
-            return Err(format!("tools/list: {e}"));
+            return Err(hosted_client_error("tools/list", e));
         }
         Err(_) => {
             kill_and_reap_child(child, &resources, Some(child_pid));
-            return Err(format!(
+            return Err(HostedAppError::timeout(format!(
                 "tools/list timed out after {}s",
                 timeout_dur.as_secs()
-            ));
+            )));
         }
     };
 
@@ -891,7 +986,7 @@ fn kill_and_reap_child(mut child: Child, resources: &LaunchResources, pid: Optio
 
 /// The decision the launcher takes before it sends a request anywhere.
 #[derive(Clone, Debug, Eq, PartialEq)]
-enum CallPlacement {
+pub(crate) enum CallPlacement {
     /// Every capability this call was granted is answerable through the
     /// broker endpoint. The reusable session may serve it: nothing about
     /// the sandbox has to change, so nothing about it is left changed.
@@ -923,7 +1018,7 @@ enum CallPlacement {
 ///   resource — a bare wildcard, a glob matching nothing — cannot
 ///   become either. Granting it would look like success and behave like
 ///   a permission error, so it is refused here instead.
-fn classify_call(caps: &[crate::caps::Cap]) -> CallPlacement {
+pub(crate) fn classify_call(caps: &[crate::caps::Cap]) -> CallPlacement {
     use crate::caps::{Scope, Verb};
 
     let mut placement = CallPlacement::Reusable;
@@ -1001,7 +1096,10 @@ fn scope_label(scope: &crate::caps::Scope) -> String {
 /// capability set: there is no later call to inherit it, and no other
 /// caller to observe it.
 struct SingleCallWorker {
-    client: Arc<McpClient>,
+    client: Option<Arc<McpClient>>,
+    gate_stdin: Option<ChildStdin>,
+    gate_stdout: Option<ChildStdout>,
+    gate_token: String,
     child: Option<Child>,
     child_pid: u32,
     identity: crate::bridge::AppIdentitySession,
@@ -1012,13 +1110,13 @@ struct SingleCallWorker {
 }
 
 impl SingleCallWorker {
-    /// Launch, bind and hand-shake a worker for `caps`.
+    /// Launch and bind a worker for `caps`.
     async fn start(
         launch: &crate::bridge::AppLaunch,
         plan: &SessionLaunchPlan,
         tool: &str,
         caps: &crate::caps::CapSet,
-        timeout_dur: Duration,
+        authorized_mounts: &[crate::worker::AuthorizedMount],
     ) -> Result<Self, String> {
         let app_id = plan.identity.app_id.as_str();
         let binding = launch.bind(&plan.entry.bound_entrypoints())?;
@@ -1030,12 +1128,25 @@ impl SingleCallWorker {
         let mut identity = crate::bridge::AppIdentitySession::for_mcp(launch, tool)?;
         bound.assert_pinned()?;
 
+        let gate_token = uuid::Uuid::new_v4().simple().to_string();
+        let app_program = plan
+            .program
+            .to_str()
+            .ok_or_else(|| format!("App `{app_id}` session program is not UTF-8"))?
+            .to_string();
+        let mut gated_argv = vec![
+            "--launch-gate".to_string(),
+            gate_token.clone(),
+            "--".to_string(),
+            app_program,
+        ];
+        gated_argv.extend(plan.argv.iter().cloned());
         let prepared = crate::bridge::prepare_app_session_worker(
             &identity,
             app_id,
             &plan.app_dir,
-            plan.program.clone(),
-            plan.argv.clone(),
+            crate::bridge::app_runner_path(),
+            gated_argv,
             &plan.data_dir,
             &plan.apps_dir,
             plan.extra_env.clone(),
@@ -1043,6 +1154,7 @@ impl SingleCallWorker {
             crate::worker::derive::SessionLifetime::SingleCall,
             &plan.transports,
             Some(caps),
+            authorized_mounts,
         )?;
         let crate::worker::PreparedLaunch {
             command, resources, ..
@@ -1069,7 +1181,8 @@ impl SingleCallWorker {
             crate::provenance::runtime::bind_process(owner, identity.id(), child_pid);
         }
 
-        let (Some(stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
+        let (Some(gate_stdin), Some(gate_stdout)) = (child.stdin.take(), child.stdout.take())
+        else {
             if identity.uses_local_backend() {
                 crate::provenance::runtime::deregister(owner, identity.id());
             }
@@ -1086,18 +1199,69 @@ impl SingleCallWorker {
                 }
             });
         }
-        let transport = StdioTransport::from_pair(Box::new(stdout), Box::new(stdin));
-        let client: Arc<McpClient> = McpClient::new(transport);
-        client.start().await;
-        let mut worker = Self {
-            client,
+        Ok(Self {
+            client: None,
+            gate_stdin: Some(gate_stdin),
+            gate_stdout: Some(gate_stdout),
+            gate_token,
             child: Some(child),
             child_pid,
             identity,
             sandbox: resources,
             _bound: bound,
-        };
-        let init = worker.client.initialize(
+        })
+    }
+
+    /// Install this call's daemon authorization, then release the trusted
+    /// runner to exec the untrusted App. Package code cannot run before this
+    /// method succeeds.
+    async fn authorize(
+        &mut self,
+        caps: &[crate::caps::Cap],
+        authorization: &str,
+        action_digest: &str,
+    ) -> Result<SingleCallGrant, HostedAppError> {
+        let guard =
+            SingleCallGrant::install(self.identity.control(), caps, authorization, action_digest)
+                .map_err(HostedAppError::remote)?;
+        if let Err(error) = self.release_launch_gate().await {
+            drop(guard);
+            self.destroy();
+            return Err(HostedAppError::crash(error));
+        }
+        Ok(guard)
+    }
+
+    async fn release_launch_gate(&mut self) -> Result<(), String> {
+        let mut stdin = self
+            .gate_stdin
+            .take()
+            .ok_or_else(|| "single-call App launch gate is unavailable".to_string())?;
+        let stdout = self
+            .gate_stdout
+            .take()
+            .ok_or_else(|| "single-call App output is unavailable".to_string())?;
+        stdin
+            .write_all(self.gate_token.as_bytes())
+            .await
+            .map_err(|error| format!("release single-call App launch gate: {error}"))?;
+        stdin
+            .flush()
+            .await
+            .map_err(|error| format!("flush single-call App launch gate: {error}"))?;
+        let transport = StdioTransport::from_pair(Box::new(stdout), Box::new(stdin));
+        let client: Arc<McpClient> = McpClient::new(transport);
+        client.start().await;
+        self.client = Some(client);
+        Ok(())
+    }
+
+    async fn initialize(&mut self, timeout_dur: Duration) -> Result<(), HostedAppError> {
+        let client =
+            self.client.as_ref().cloned().ok_or_else(|| {
+                HostedAppError::protocol("single-call App launch was not authorized")
+            })?;
+        let init = client.initialize(
             Implementation {
                 name: "cos-agent".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
@@ -1107,27 +1271,34 @@ impl SingleCallWorker {
         match timeout(timeout_dur, init).await {
             Ok(Ok(_)) => {}
             Ok(Err(e)) => {
-                worker.destroy();
-                return Err(format!("initialize: {e}"));
+                self.destroy();
+                return Err(hosted_client_error("initialize", e));
             }
             Err(_) => {
-                worker.destroy();
-                return Err(format!(
+                self.destroy();
+                return Err(HostedAppError::timeout(format!(
                     "initialize timed out after {}s",
                     timeout_dur.as_secs()
-                ));
+                )));
             }
         }
-        let _ = worker
-            .client
-            .notify("notifications/initialized", None)
-            .await;
-        Ok(worker)
+        let _ = client.notify("notifications/initialized", None).await;
+        Ok(())
+    }
+
+    fn client(&self) -> Result<Arc<McpClient>, HostedAppError> {
+        self.client
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| HostedAppError::protocol("single-call App launch was not authorized"))
     }
 
     /// Kill the whole cgroup and process group, reap, and drop the
     /// worker's kernel session. Safe to call on every outcome.
     fn destroy(&mut self) {
+        self.client.take();
+        self.gate_stdin.take();
+        self.gate_stdout.take();
         if self.identity.uses_local_backend() {
             crate::provenance::runtime::deregister(
                 crate::provenance::runtime::current_owner(),
@@ -1174,7 +1345,7 @@ async fn get_or_open(
     app_dir: &Path,
     apps_root: &Path,
     tool: &str,
-) -> Result<Arc<McpClient>, String> {
+) -> Result<Arc<McpClient>, HostedAppError> {
     open_session_at(app_id, app_dir, apps_root, tool)
         .await
         .map(|(c, _)| c)
@@ -1305,11 +1476,9 @@ impl Drop for ActiveCallGuard {
 async fn begin_active_session_call(
     app_id: &str,
     apps_root: &Path,
-    tool: &str,
-    args: &BTreeMap<String, Value>,
     caps: &[crate::caps::Cap],
-    context: super::app_gateway::McpCallContext,
-    capability_generation: String,
+    authorization: &str,
+    action_digest: &str,
 ) -> Result<ActiveCallGuard, String> {
     let key = session_key(app_id, apps_root)?;
     let (control, child_pid, call_lock, poisoned, session_id, bound, sandbox) = {
@@ -1368,11 +1537,9 @@ async fn begin_active_session_call(
     // never overlap each other's transient capabilities.
     let lock = call_lock.lock_owned().await;
     if let Err(error) = control.set_transient_call(Some(crate::bridge::TransientCall {
-        tool,
-        args,
+        authorization,
+        action_digest,
         caps: crate::caps::CapSet::from_caps(caps.iter().cloned()),
-        context,
-        capability_generation,
     })) {
         let clear_error = control.set_transient_call(None).err();
         poisoned.store(true, Ordering::SeqCst);
@@ -1416,7 +1583,7 @@ async fn open_session_at(
     app_dir: &Path,
     apps_root: &Path,
     tool: &str,
-) -> Result<(Arc<McpClient>, usize), String> {
+) -> Result<(Arc<McpClient>, usize), HostedAppError> {
     let key = session_key(app_id, apps_root)?;
     let lock = app_open_lock(&key);
     let _open_guard = lock.lock().await;
@@ -1444,7 +1611,7 @@ async fn open_session_at(
                     "shut down an open App session whose package no longer verifies"
                 );
             }
-            return Err(error);
+            return Err(error.into());
         }
     };
     // Probe under the per-app lock — another racer may have just
@@ -1593,17 +1760,16 @@ fn data_dir_string() -> String {
 /// Locate the directories containing the `claw_os_sdk` and
 /// `cos_runtime` Python packages.
 ///
-/// Honours `COS_SDK_PYTHON_DIR` first, then falls back to the
+/// Honours the path list in `COS_SDK_PYTHON_DIR` first, then falls back to the
 /// production install path (`/usr/lib/cos/python`), and finally to
 /// the in-repo dev-checkout paths at fixed offsets from
 /// `$COS_APPS_DIR`. Returns the *distinct* candidates that actually
 /// host one of the wanted packages, deduplicated and order-preserving.
 fn resolve_python_pkg_dirs(apps_dir: &std::path::Path) -> Vec<PathBuf> {
     let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Ok(v) = std::env::var("COS_SDK_PYTHON_DIR") {
-        if !v.is_empty() {
-            candidates.push(PathBuf::from(v));
-        }
+    if let Some(paths) = std::env::var_os("COS_SDK_PYTHON_DIR") {
+        candidates
+            .extend(std::env::split_paths(&paths).filter(|path| !path.as_os_str().is_empty()));
     }
     candidates.push(PathBuf::from("/usr/lib/cos/python"));
     if let Some(parent) = apps_dir.parent() {
@@ -1803,15 +1969,17 @@ impl AppSessionTool {
     /// split it into an operation and a session tool.
     async fn exec_ephemeral(
         &self,
-        args_map: &BTreeMap<String, Value>,
         caps: &[crate::caps::Cap],
+        authorized_mounts: &[crate::worker::AuthorizedMount],
         arguments: Option<Value>,
         context: super::app_gateway::McpCallContext,
-        capability_generation: String,
+        authorization: &str,
+        action_digest: &str,
         started: Instant,
-    ) -> ToolResult {
+    ) -> Result<crate::agent::tools::mcp::protocol::CallToolResult, HostedAppError> {
         let cap_set = crate::caps::CapSet::from_caps(caps.iter().cloned());
-        let fail = |message: String| -> ToolResult {
+        let fail = |error: HostedAppError| {
+            let message = error.to_string();
             emit_audit(
                 &self.app_id,
                 &self.manifest_tool_name,
@@ -1821,18 +1989,25 @@ impl AppSessionTool {
                 Some(&message),
                 started.elapsed(),
             );
-            ToolResult::err(message)
+            Err(error)
         };
 
         let owner_uid = match session_key(&self.app_id, &self.apps_root) {
             Ok(key) => key.0,
-            Err(error) => return fail(format!("resolve App session owner: {error}")),
+            Err(error) => {
+                return fail(HostedAppError::remote(format!(
+                    "resolve App session owner: {error}"
+                )));
+            }
         };
         let (_, launch, plan) =
             match resolve_session_launch(&self.app_id, &self.app_dir, &self.apps_root, owner_uid) {
                 Ok(resolved) => resolved,
                 Err(error) => {
-                    return fail(format!("could not bring up app `{}`: {error}", self.app_id));
+                    return fail(HostedAppError::remote(format!(
+                        "could not bring up app `{}`: {error}",
+                        self.app_id
+                    )));
                 }
             };
 
@@ -1841,54 +2016,76 @@ impl AppSessionTool {
             &plan,
             &self.manifest_tool_name,
             &cap_set,
-            self.timeout,
+            authorized_mounts,
         )
         .await
         {
             Ok(worker) => worker,
             Err(error) => {
-                return fail(format!(
+                return fail(HostedAppError::connect(format!(
                     "could not bring up a single-call worker for `{}`: {error}",
                     self.app_id
-                ));
+                )));
             }
         };
 
-        // The grant goes onto the ephemeral worker's own session, never
-        // the reusable one, and the guard clears it on every exit.
-        let control = worker.identity.control();
-        let mut guard = match SingleCallGrant::install(
-            control,
-            &self.manifest_tool_name,
-            args_map,
-            caps,
-            context.clone(),
-            capability_generation,
-        ) {
+        // The App is still blocked in the trusted runner here. Installing the
+        // grant and releasing exec are one ordered operation, and the guard
+        // clears the grant on every later exit.
+        let mut guard = match worker.authorize(caps, authorization, action_digest).await {
             Ok(guard) => guard,
             Err(error) => {
+                let category = error.category();
                 worker.destroy();
-                return fail(format!(
-                    "could not grant App `{}` call capabilities: {error}",
-                    self.app_id
+                return fail(HostedAppError::new(
+                    category,
+                    format!(
+                        "could not grant App `{}` call capabilities: {error}",
+                        self.app_id
+                    ),
                 ));
             }
         };
+        let client = match worker.client() {
+            Ok(client) => client,
+            Err(error) => {
+                drop(guard);
+                worker.destroy();
+                return fail(error);
+            }
+        };
 
+        let initialize_timeout = match context.remaining(self.timeout) {
+            Ok(timeout) => timeout,
+            Err(error) => {
+                drop(guard);
+                worker.destroy();
+                return fail(HostedAppError::remote(error));
+            }
+        };
+        if let Err(error) = worker.initialize(initialize_timeout).await {
+            let category = error.category();
+            drop(guard);
+            worker.destroy();
+            return fail(HostedAppError::new(
+                category,
+                format!(
+                    "could not initialize a single-call worker for `{}`: {error}",
+                    self.app_id
+                ),
+            ));
+        }
         let effective_timeout = match context.remaining(self.timeout) {
             Ok(timeout) => timeout,
             Err(error) => {
                 guard.complete();
                 drop(guard);
                 worker.destroy();
-                return fail(error);
+                return fail(HostedAppError::remote(error));
             }
         };
-        let call = worker.client.call_tool_with_context(
-            self.manifest_tool_name.clone(),
-            arguments,
-            context,
-        );
+        let call =
+            client.call_tool_with_context(self.manifest_tool_name.clone(), arguments, context);
         let outcome = timeout(effective_timeout, call).await;
         // Order matters: clear the grant, then destroy the worker. A
         // clear that fails leaves the guard poisoned, and the worker is
@@ -1899,36 +2096,31 @@ impl AppSessionTool {
 
         match outcome {
             Ok(Ok(call_result)) => {
-                let (content, is_error) = render_call_result(call_result);
+                let is_error = call_result.is_error == Some(true);
                 emit_audit(
                     &self.app_id,
                     &self.manifest_tool_name,
                     verb_csv(caps).as_str(),
                     "allowed",
                     None,
-                    if is_error {
-                        Some(content.as_str())
-                    } else {
-                        None
-                    },
+                    is_error.then_some("App returned a tool error"),
                     started.elapsed(),
                 );
-                if is_error {
-                    ToolResult::err(content)
-                } else {
-                    ToolResult::ok(content)
-                }
+                Ok(call_result)
             }
-            Ok(Err(error)) => fail(format!(
-                "app `{}` tool `{}` failed: {error}",
-                self.app_id, self.manifest_tool_name
+            Ok(Err(error)) => fail(hosted_client_error(
+                &format!(
+                    "app `{}` tool `{}` failed",
+                    self.app_id, self.manifest_tool_name
+                ),
+                error,
             )),
-            Err(_) => fail(format!(
+            Err(_) => fail(HostedAppError::timeout(format!(
                 "app `{}` tool `{}` timed out after {}s",
                 self.app_id,
                 self.manifest_tool_name,
                 effective_timeout.as_secs()
-            )),
+            ))),
         }
     }
 }
@@ -1948,18 +2140,14 @@ struct SingleCallGrant {
 impl SingleCallGrant {
     fn install(
         control: crate::bridge::AppSessionControl,
-        tool: &str,
-        args: &BTreeMap<String, Value>,
         caps: &[crate::caps::Cap],
-        context: super::app_gateway::McpCallContext,
-        capability_generation: String,
+        authorization: &str,
+        action_digest: &str,
     ) -> Result<Self, String> {
         control.set_transient_call(Some(crate::bridge::TransientCall {
-            tool,
-            args,
+            authorization,
+            action_digest,
             caps: crate::caps::CapSet::from_caps(caps.iter().cloned()),
-            context,
-            capability_generation,
         }))?;
         Ok(Self {
             control,
@@ -2045,7 +2233,6 @@ impl Tool for AppSessionTool {
         };
 
         let args_map = effective.values;
-        let caps = effective.needs.into_iter().flatten().collect::<Vec<_>>();
 
         if let Err(denial) =
             crate::caps::require(crate::caps::Verb::AGENT_INVOKE, self.invoke_scope.clone())
@@ -2063,17 +2250,25 @@ impl Tool for AppSessionTool {
             return ToolResult::err(message);
         }
 
-        let host = crate::extension_host::client::current();
-        let authority = match host.as_ref() {
-            Some(host) => super::app_gateway::McpCallContext::for_extension_caller_with_generation(
-                host.binding(),
-                self.timeout,
-            ),
-            None => {
-                super::app_gateway::McpCallContext::for_current_caller_with_generation(self.timeout)
-            }
+        let Some(host) = crate::extension_host::client::current() else {
+            let error = "App MCP calls require the authenticated task App Host".to_string();
+            emit_audit(
+                &self.app_id,
+                &self.manifest_tool_name,
+                crate::caps::Verb::AGENT_INVOKE.as_str(),
+                "denied",
+                Some(&error),
+                Some(&error),
+                started.elapsed(),
+            );
+            return ToolResult::err(error);
         };
-        let (context, capability_generation) = match authority {
+        let authority = super::app_gateway::McpCallContext::for_extension_caller_with_generation(
+            host.binding(),
+            host.lease_deadline_ms(),
+            self.timeout,
+        );
+        let (context, _) = match authority {
             Ok(authority) => authority,
             Err(error) => {
                 emit_audit(
@@ -2102,210 +2297,25 @@ impl Tool for AppSessionTool {
             return ToolResult::err(error);
         }
 
-        if let Some(host) = host {
-            return match host
-                .call_app(
-                    self.app_id.clone(),
-                    self.manifest_tool_name.clone(),
-                    Value::Object(args_map.into_iter().collect()),
-                    context,
-                    self.timeout,
-                )
-                .await
-            {
-                Ok(result) => {
-                    let (content, is_error) = render_call_result(result);
-                    if is_error {
-                        ToolResult::err(content)
-                    } else {
-                        ToolResult::ok(content)
-                    }
-                }
-                Err(error) => ToolResult::err(error),
-            };
-        }
-
-        // 2) Decide where this call's authority can safely be
-        // exercised, before anything is granted anywhere. A call whose
-        // capabilities cannot become either a broker answer or a
-        // single-call sandbox is refused here, with the reason, rather
-        // than granted and then failing inside the App as `EPERM`.
-        let placement = classify_call(&caps);
-        if let CallPlacement::Unsupported(reason) = &placement {
-            let msg = format!(
-                "app `{}` tool `{}` cannot be authorized: {reason}",
-                self.app_id, self.manifest_tool_name
-            );
-            emit_audit(
-                &self.app_id,
-                &self.manifest_tool_name,
-                verb_csv(&caps).as_str(),
-                "denied",
-                Some(&msg),
-                Some(&msg),
-                started.elapsed(),
-            );
-            return ToolResult::err(msg);
-        }
-
-        let arguments = if args_map.is_empty() {
-            None
-        } else {
-            Some(Value::Object(args_map.clone().into_iter().collect()))
-        };
-
-        if matches!(placement, CallPlacement::Ephemeral) {
-            return self
-                .exec_ephemeral(
-                    &args_map,
-                    &caps,
-                    arguments,
-                    context,
-                    capability_generation,
-                    started,
-                )
-                .await;
-        }
-
-        for cap in &caps {
-            if let Err(denial) = crate::caps::require(cap.verb, cap.scope.clone()) {
-                let msg = denial.to_string();
-                emit_audit(
-                    &self.app_id,
-                    &self.manifest_tool_name,
-                    cap.verb.as_str(),
-                    "denied",
-                    Some(&msg),
-                    Some(&msg),
-                    started.elapsed(),
-                );
-                return ToolResult::err(msg);
-            }
-        }
-
-        // 3) Open / reuse session.
-        let client = match get_or_open(
-            &self.app_id,
-            &self.app_dir,
-            &self.apps_root,
-            &self.manifest_tool_name,
-        )
-        .await
+        match host
+            .call_app(
+                self.app_id.clone(),
+                self.manifest_tool_name.clone(),
+                Value::Object(args_map.into_iter().collect()),
+                context,
+                self.timeout,
+            )
+            .await
         {
-            Ok(c) => c,
-            Err(e) => {
-                emit_audit(
-                    &self.app_id,
-                    &self.manifest_tool_name,
-                    verb_csv(&caps).as_str(),
-                    "allowed",
-                    None,
-                    Some(&e),
-                    started.elapsed(),
-                );
-                return ToolResult::err(format!("could not bring up app `{}`: {e}", self.app_id));
-            }
-        };
-        let mut active_call = match begin_active_session_call(
-            &self.app_id,
-            &self.apps_root,
-            &self.manifest_tool_name,
-            &args_map,
-            &caps,
-            context.clone(),
-            capability_generation,
-        )
-        .await
-        {
-            Ok(guard) => guard,
-            Err(error) => {
-                close_session_at(&self.app_id, &self.apps_root).await;
-                return ToolResult::err(format!(
-                    "could not grant App `{}` call capabilities: {error}",
-                    self.app_id
-                ));
-            }
-        };
-
-        // 4) Forward tools/call.
-        let effective_timeout = match context.remaining(self.timeout) {
-            Ok(timeout) => timeout,
-            Err(error) => {
-                active_call.mark_completed();
-                drop(active_call);
-                return ToolResult::err(error);
-            }
-        };
-        let call =
-            client.call_tool_with_context(self.manifest_tool_name.clone(), arguments, context);
-        let res = match timeout(effective_timeout, call).await {
-            Ok(r) => r,
-            Err(_) => {
-                let msg = format!(
-                    "app `{}` tool `{}` timed out after {}s",
-                    self.app_id,
-                    self.manifest_tool_name,
-                    effective_timeout.as_secs()
-                );
-                emit_audit(
-                    &self.app_id,
-                    &self.manifest_tool_name,
-                    verb_csv(&caps).as_str(),
-                    "allowed",
-                    None,
-                    Some(&msg),
-                    started.elapsed(),
-                );
-                drop(active_call);
-                close_session_at(&self.app_id, &self.apps_root).await;
-                return ToolResult::err(msg);
-            }
-        };
-        match res {
-            Ok(call_result) => {
-                active_call.mark_completed();
-                let (content, is_error) = render_call_result(call_result);
-                emit_audit(
-                    &self.app_id,
-                    &self.manifest_tool_name,
-                    verb_csv(&caps).as_str(),
-                    "allowed",
-                    None,
-                    if is_error {
-                        Some(content.as_str())
-                    } else {
-                        None
-                    },
-                    started.elapsed(),
-                );
+            Ok(result) => {
+                let (content, is_error) = render_call_result(result);
                 if is_error {
                     ToolResult::err(content)
                 } else {
                     ToolResult::ok(content)
                 }
             }
-            Err(e) => {
-                if matches!(e, ClientError::Server { .. }) {
-                    active_call.mark_completed();
-                } else {
-                    drop(active_call);
-                    close_session_at(&self.app_id, &self.apps_root).await;
-                }
-                let msg = format!(
-                    "app `{}` tool `{}` failed: {e}",
-                    self.app_id, self.manifest_tool_name
-                );
-                emit_audit(
-                    &self.app_id,
-                    &self.manifest_tool_name,
-                    verb_csv(&caps).as_str(),
-                    "allowed",
-                    None,
-                    Some(&msg),
-                    started.elapsed(),
-                );
-                ToolResult::err(msg)
-            }
+            Err(error) => ToolResult::err(error),
         }
     }
 }
@@ -2378,40 +2388,109 @@ fn emit_audit(
     record_run(&rec);
 }
 
+fn resolve_daemon_authorized_call(
+    manifest: &Manifest,
+    tool_name: &str,
+    input: &Value,
+) -> Result<(BTreeMap<String, Value>, Vec<crate::caps::Cap>), String> {
+    let supplied = input
+        .as_object()
+        .ok_or_else(|| "daemon-authorized App arguments must be an object".to_string())?
+        .iter()
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let args = manifest
+        .resolve_mcp_tool_args(tool_name, &supplied)
+        .map_err(|error| format!("argument validation failed: {error}"))?;
+    if args != supplied {
+        return Err(
+            "App arguments changed after daemon authorization; refusing execution".to_string(),
+        );
+    }
+    let caps = manifest
+        .resolve_mcp_tool_needs(tool_name, &args)
+        .map_err(|error| format!("capability resolution failed: {error}"))?
+        .into_iter()
+        .flatten()
+        .collect();
+    Ok((args, caps))
+}
+
 pub(crate) async fn host_call_session(
     app_id: &str,
     tool_name: &str,
     input: Value,
+    authorized_mounts: Vec<crate::worker::AuthorizedMount>,
     context: super::app_gateway::McpCallContext,
-    capability_generation: String,
+    authorization: String,
     call_timeout: Duration,
-) -> Result<crate::agent::tools::mcp::protocol::CallToolResult, String> {
+) -> Result<crate::agent::tools::mcp::protocol::CallToolResult, HostedAppError> {
     context.validate()?;
+    let action_digest = crate::clawd::app_services::app_call_action_digest(
+        app_id,
+        tool_name,
+        &input,
+        &context,
+        &authorized_mounts,
+    )?;
     let root = apps_root();
-    let app = crate::apps::find_verified(&root, app_id)?;
+    let app = match crate::apps::find_verified_fresh(&root, app_id) {
+        Ok(app) => app,
+        Err(error) => {
+            close_session_at(app_id, &root).await;
+            return Err(error.into());
+        }
+    };
     super::app_gateway::authorize_manifest(&app.manifest, &context.caller)?;
-    let supplied = json_to_arg_map(&input);
-    let paths = crate::bridge::launcher_path_context()?;
-    let effective = app
-        .manifest
-        .resolve_mcp_tool_call(tool_name, &supplied, &paths)
-        .map_err(|error| format!("argument resolution failed: {error}"))?;
-    let args = effective.values;
-    let caps = effective.needs.into_iter().flatten().collect::<Vec<_>>();
+    let (args, caps) = resolve_daemon_authorized_call(&app.manifest, tool_name, &input)?;
     let maximum_timeout = call_timeout.min(DEFAULT_TIMEOUT);
     context.remaining(maximum_timeout)?;
+    let placement = classify_call(&caps);
+    if let CallPlacement::Unsupported(reason) = &placement {
+        return Err(HostedAppError::remote(format!(
+            "app `{app_id}` tool `{tool_name}` cannot be authorized: {reason}"
+        )));
+    }
+    if matches!(placement, CallPlacement::Reusable) && !authorized_mounts.is_empty() {
+        return Err(HostedAppError::remote(
+            "reusable App call received call-scoped mount authority",
+        ));
+    }
+    let arguments = (!args.is_empty()).then(|| Value::Object(args.clone().into_iter().collect()));
+    if matches!(placement, CallPlacement::Ephemeral) {
+        let tool_index = app
+            .manifest
+            .mcp
+            .as_ref()
+            .and_then(|service| {
+                service
+                    .tools
+                    .iter()
+                    .position(|candidate| candidate.name == tool_name)
+            })
+            .ok_or_else(|| format!("App `{app_id}` has no MCP tool `{tool_name}`"))?;
+        let mut tool = AppSessionTool::from_manifest_tool(
+            Arc::new(app.manifest.clone()),
+            app.dir.clone(),
+            root,
+            tool_index,
+        )?;
+        tool.timeout = tool.timeout.min(maximum_timeout);
+        return tool
+            .exec_ephemeral(
+                &caps,
+                &authorized_mounts,
+                arguments,
+                context,
+                &authorization,
+                &action_digest,
+                Instant::now(),
+            )
+            .await;
+    }
     let client = get_or_open(app_id, &app.dir, &root, tool_name).await?;
-    let mut active = begin_active_session_call(
-        app_id,
-        &root,
-        tool_name,
-        &args,
-        &caps,
-        context.clone(),
-        capability_generation,
-    )
-    .await?;
-    let arguments = (!args.is_empty()).then(|| Value::Object(args.into_iter().collect()));
+    let mut active =
+        begin_active_session_call(app_id, &root, &caps, &authorization, &action_digest).await?;
     let effective_timeout = context.remaining(maximum_timeout)?;
     match timeout(
         effective_timeout,
@@ -2424,23 +2503,40 @@ pub(crate) async fn host_call_session(
             Ok(result)
         }
         Ok(Err(error)) => {
+            let category = client_error_category(&error);
             if matches!(error, ClientError::Server { .. }) {
                 active.mark_completed();
             } else {
                 drop(active);
                 close_session_at(app_id, &root).await;
             }
-            Err(format!("app `{app_id}` tool `{tool_name}` failed: {error}"))
+            Err(HostedAppError::new(
+                category,
+                format!("app `{app_id}` tool `{tool_name}` failed: {error}"),
+            ))
         }
         Err(_) => {
             drop(active);
             close_session_at(app_id, &root).await;
-            Err(format!(
+            Err(HostedAppError::timeout(format!(
                 "app `{app_id}` tool `{tool_name}` timed out after {}s",
                 effective_timeout.as_secs()
-            ))
+            )))
         }
     }
+}
+
+pub(crate) async fn host_warm_session(app_id: &str) -> Result<(), HostedAppError> {
+    let root = apps_root();
+    let app = crate::apps::find_verified_fresh(&root, app_id)?;
+    let first_tool = app
+        .manifest
+        .mcp
+        .as_ref()
+        .and_then(|service| service.tools.first())
+        .ok_or_else(|| format!("App `{app_id}` has no MCP tools"))?;
+    get_or_open(app_id, &app.dir, &root, &first_tool.name).await?;
+    Ok(())
 }
 
 pub(crate) async fn host_close_all_sessions() {
@@ -2452,7 +2548,7 @@ pub(crate) async fn host_close_all_sessions() {
 }
 
 #[cfg(test)]
-async fn open_session(app_id: &str, tool: &str) -> Result<(Arc<McpClient>, usize), String> {
+async fn open_session(app_id: &str, tool: &str) -> Result<(Arc<McpClient>, usize), HostedAppError> {
     let root = apps_root();
     let app = crate::apps::find(&root, app_id)
         .ok_or_else(|| format!("App `{app_id}` is not installed"))?;

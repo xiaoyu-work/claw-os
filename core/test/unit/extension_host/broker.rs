@@ -96,6 +96,17 @@ fn a_child_cannot_name_the_host_or_a_sibling_session() {
         "extension-a",
         &own_request
     ));
+
+    let app_mcp = session("app-mcp-own", "extension-a", "app-mcp");
+    let app_mcp_request = Request::build(
+        Command::SystemAudioControl,
+        serde_json::json!({"session":"app-mcp-own"}),
+    );
+    assert!(session_matches_request(
+        &app_mcp,
+        "extension-a",
+        &app_mcp_request
+    ));
 }
 
 #[test]
@@ -103,12 +114,14 @@ fn the_private_broker_lease_binds_both_process_identities() {
     let pid = std::process::id();
     let start = crate::proc::read_start_time_ticks_pub(pid);
     let lease = ExtensionLease::new(
+        super::super::protocol::HostPurpose::Task,
         "task-a".to_string(),
         Some("session-a".to_string()),
         Some("extension-a".to_string()),
         unsafe { libc::geteuid() },
         61_184,
         unsafe { libc::getegid() },
+        "a".repeat(16),
         pid,
         start,
         pid,
@@ -118,4 +131,80 @@ fn the_private_broker_lease_binds_both_process_identities() {
     assert!(lease.verify_live().is_ok());
     lease.close();
     assert!(lease.verify_live().unwrap_err().contains("closed"));
+}
+
+#[test]
+fn heartbeat_renewal_reopens_the_same_private_broker_lease() {
+    let pid = std::process::id();
+    let start = crate::proc::read_start_time_ticks_pub(pid);
+    let lease = ExtensionLease::new(
+        super::super::protocol::HostPurpose::Task,
+        "task-a".to_string(),
+        Some("session-a".to_string()),
+        Some("extension-a".to_string()),
+        unsafe { libc::geteuid() },
+        61_184,
+        unsafe { libc::getegid() },
+        "a".repeat(16),
+        pid,
+        start,
+        pid,
+        start,
+        crate::agentd::grant::now_ms().saturating_sub(1),
+    );
+    assert!(lease.verify_live().unwrap_err().contains("expired"));
+
+    let renewed = lease.renew(std::time::Duration::from_secs(60));
+    assert_eq!(lease.deadline_ms.load(Ordering::SeqCst), renewed);
+    assert!(renewed > crate::agentd::grant::now_ms());
+    assert!(lease.verify_live().is_ok());
+}
+
+fn lease(purpose: super::super::protocol::HostPurpose) -> ExtensionLease {
+    let pid = std::process::id();
+    let start = crate::proc::read_start_time_ticks_pub(pid);
+    ExtensionLease::new(
+        purpose,
+        "task-a".to_string(),
+        Some("session-a".to_string()),
+        Some("extension-a".to_string()),
+        unsafe { libc::geteuid() },
+        61_000,
+        unsafe { libc::getegid() },
+        "a".repeat(16),
+        pid,
+        start,
+        pid,
+        start,
+        crate::agentd::grant::now_ms() + 60_000,
+    )
+}
+
+#[test]
+fn only_a_task_host_can_reach_the_app_service_dispatch_route() {
+    let process = peer::PeerProcess {
+        pid: std::process::id(),
+        uid: unsafe { libc::geteuid() },
+        gid: unsafe { libc::getegid() },
+        start_time_ticks: crate::proc::read_start_time_ticks_pub(std::process::id()).unwrap(),
+    };
+    let request = Request::build(
+        Command::AppServiceCall,
+        serde_json::json!({
+            "app_id": "notes",
+            "tool": "list",
+            "arguments": {},
+            "audit": {}
+        }),
+    );
+    assert!(request_allowed(
+        &request,
+        process,
+        &lease(super::super::protocol::HostPurpose::Task),
+    ));
+    assert!(!request_allowed(
+        &request,
+        process,
+        &lease(super::super::protocol::HostPurpose::AppService),
+    ));
 }

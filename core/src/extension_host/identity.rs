@@ -12,6 +12,8 @@ pub const GROUP_GID: u32 = 60_999;
 pub const IDENTITY_PREFIX: &str = "cos-ext-";
 pub const FIRST_UID: u32 = 61_000;
 pub const IDENTITY_COUNT: u32 = 64;
+pub const TASK_IDENTITY_COUNT: u32 = 56;
+pub const SERVICE_IDENTITY_COUNT: u32 = IDENTITY_COUNT - TASK_IDENTITY_COUNT;
 pub const IDENTITY_HOME: &str = "/nonexistent";
 pub const IDENTITY_SHELL: &str = "/usr/sbin/nologin";
 pub const SYSTEMD_DYNAMIC_UID_MIN: u32 = 61_184;
@@ -87,7 +89,11 @@ impl ExtensionIdentityPool {
         })
     }
 
-    pub fn acquire(self: &Arc<Self>, owner_uid: u32) -> Result<ExtensionIdentityLease, String> {
+    pub fn acquire(
+        self: &Arc<Self>,
+        owner_uid: u32,
+        purpose: super::protocol::HostPurpose,
+    ) -> Result<ExtensionIdentityLease, String> {
         if self.validate_on_acquire {
             validate_runtime_reservation(self.execution_gid)?;
         }
@@ -95,7 +101,10 @@ impl ExtensionIdentityPool {
             .in_use
             .lock()
             .map_err(|_| "extension identity pool is poisoned".to_string())?;
-        for identity in &self.identities {
+        for (index, identity) in self.identities.iter().enumerate() {
+            if !identity_supports_purpose(index, purpose) {
+                continue;
+            }
             if identity.uid == owner_uid
                 || in_use.contains(&identity.uid)
                 || uid_has_process(identity.uid)
@@ -128,7 +137,13 @@ impl ExtensionIdentityPool {
                 cleanup_record: None,
             });
         }
-        Err("no isolated extension execution identity is available".to_string())
+        Err(format!(
+            "no isolated {} extension identity is available",
+            match purpose {
+                super::protocol::HostPurpose::Task => "task",
+                super::protocol::HostPurpose::AppService => "App service",
+            }
+        ))
     }
 
     pub fn len(&self) -> usize {
@@ -218,6 +233,11 @@ pub struct ExtensionIdentityLease {
     lock: Option<std::fs::File>,
     release_on_drop: bool,
     cleanup_record: Option<CleanupRecord>,
+}
+
+fn identity_supports_purpose(index: usize, purpose: super::protocol::HostPurpose) -> bool {
+    let service_identity = index >= TASK_IDENTITY_COUNT as usize;
+    service_identity == (purpose == super::protocol::HostPurpose::AppService)
 }
 
 impl ExtensionIdentityLease {

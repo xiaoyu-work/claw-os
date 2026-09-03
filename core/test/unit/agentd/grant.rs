@@ -67,6 +67,7 @@ fn extension(
 ) -> crate::extension_host::protocol::ExtensionBinding {
     crate::extension_host::protocol::ExtensionBinding {
         protocol: crate::extension_host::protocol::PROTOCOL_VERSION,
+        purpose: crate::extension_host::protocol::HostPurpose::Task,
         task_id: task.to_string(),
         session_id: Some(session.to_string()),
         app_id: None,
@@ -74,6 +75,7 @@ fn extension(
         extension_uid: 61_000,
         owner_gid: 1000,
         capability_generation: "a".repeat(16),
+        package: None,
         approved_paths: vec![crate::extension_host::protocol::ApprovedPath {
             path: "/home/test".to_string(),
             device: 1,
@@ -81,8 +83,10 @@ fn extension(
             owner_uid: 1000,
             mode: 0o40755,
         }],
-        worker_pid: 77,
-        worker_start_time_ticks: Some(99),
+        controller_uid: 1000,
+        controller_gid: 1000,
+        controller_pid: 77,
+        controller_start_time_ticks: Some(99),
         host_pid,
         host_start_time_ticks: Some(123),
         lease_nonce: "0123456789abcdef0123456789abcdef".to_string(),

@@ -354,6 +354,15 @@ pub struct PermissionRevoke {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct AppServiceCall {
+    pub app_id: Name,
+    pub tool: Text<LABEL_BYTES>,
+    pub arguments: Structured,
+    pub audit: crate::extension_host::protocol::AppInvocationAudit,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AppSessionRegister {
     pub app_id: Name,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -398,12 +407,10 @@ pub struct AppSessionBind {
 pub struct AppSessionSetTransient {
     pub session_id: Token,
     pub handle: Token,
-    /// One MCP session tool invocation, validated against the installed
-    /// manifest by the App session authority.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub call: Option<Structured>,
+    pub authorization: Option<Token>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent_caps: Option<Structured>,
+    pub action_digest: Option<Token>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

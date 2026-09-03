@@ -49,7 +49,7 @@ which tool calls are exposed and executed.
 | `cos_help.rs` | Read-only progressive discovery over the shared public `cos` command tree |
 | `cos_proxy/` | Structured `cos` primitive tools |
 | `cos_proxy/oauth_login.rs` | Agent-initiated trusted OAuth browser flow |
-| `cos_apps_session.rs` | Authenticated MCP App tool registration, authorization, hosting, and calls |
+| `cos_apps_session.rs` | Authenticated MCP App tool registration, task-Host relay, reusable/single-call placement, and calls through the daemon service Host |
 | `mcp/` | MCP attachment and proxy tools |
 | `memory.rs`, `recall.rs` | Agent memory tools |
 

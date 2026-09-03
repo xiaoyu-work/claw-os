@@ -20,6 +20,35 @@ pub(crate) fn lock_env() -> MutexGuard<'static, ()> {
     ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// Point App-session tests at the current build's real runner with only
+/// debug symbols removed. Cargo's unstripped test binary can exceed the
+/// production runtime snapshot limit; stripping a cached copy preserves
+/// the executable bytes under test without weakening that limit.
+pub(crate) fn use_stripped_app_runner() -> TestEnvVarGuard {
+    static RUNNER: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    let runner = RUNNER.get_or_init(|| {
+        let source = crate::bridge::app_runner_path()
+            .canonicalize()
+            .expect("resolve the current claw-app-runner");
+        let dir = secure_scratch_dir("app-runner");
+        let target = dir.join("claw-app-runner");
+        std::fs::copy(&source, &target).expect("copy claw-app-runner for tests");
+        let status = std::process::Command::new("strip")
+            .arg(&target)
+            .status()
+            .expect("run strip for the test App runner");
+        assert!(status.success(), "strip the test App runner");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755))
+                .expect("make the test App runner executable");
+        }
+        target
+    });
+    TestEnvVarGuard::set("CLAW_APP_RUNNER_BIN", runner)
+}
+
 // ---------------------------------------------------------------------------
 // Extension-provenance fixtures
 //

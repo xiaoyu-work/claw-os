@@ -20,6 +20,14 @@ pub(crate) fn app_runner_path() -> std::path::PathBuf {
             if sibling.is_file() {
                 return sibling;
             }
+            if parent.file_name() == Some(std::ffi::OsStr::new("deps")) {
+                if let Some(profile_dir) = parent.parent() {
+                    let profile_runner = profile_dir.join("claw-app-runner");
+                    if profile_runner.is_file() {
+                        return profile_runner;
+                    }
+                }
+            }
         }
     }
     "/usr/local/bin/claw-app-runner".into()
@@ -298,25 +306,17 @@ impl LaunchRequest<'_> {
     }
 }
 
-/// One serialized App MCP call and the capabilities it needs.
-///
-/// `tool`/`args` are what the daemon re-derives the call capabilities
-/// from; `caps` is the locally resolved set used by the in-process
-/// backend, where the resolver already runs inside trusted code.
+/// One daemon-issued authorization for an App MCP call.
 pub(crate) struct TransientCall<'a> {
-    pub tool: &'a str,
-    pub args: &'a BTreeMap<String, serde_json::Value>,
+    pub authorization: &'a str,
+    pub action_digest: &'a str,
     pub caps: CapSet,
-    pub context: crate::agent::tools::app_gateway::McpCallContext,
-    pub capability_generation: String,
 }
 
 #[derive(Clone)]
 pub(crate) struct AppSessionControl {
     session_id: String,
     backend: AppSessionBackend,
-    parent_caps: Option<CapSet>,
-    package: crate::provenance::runtime::PackageRef,
 }
 
 pub(crate) struct McpProcSession {
@@ -439,13 +439,7 @@ impl AppSessionControl {
     }
 
     pub fn set_transient_call(&self, call: Option<TransientCall<'_>>) -> Result<(), String> {
-        set_app_session_transient_call(
-            &self.session_id,
-            &self.backend,
-            self.parent_caps.as_ref(),
-            &self.package,
-            call,
-        )
+        set_app_session_transient_call(&self.session_id, &self.backend, call)
     }
 }
 
@@ -856,13 +850,7 @@ impl AppIdentitySession {
     }
 
     pub fn set_transient_call(&self, call: Option<TransientCall<'_>>) -> Result<(), String> {
-        set_app_session_transient_call(
-            &self.session_id,
-            &self.backend,
-            self.parent_caps.as_ref(),
-            &self.package,
-            call,
-        )
+        set_app_session_transient_call(&self.session_id, &self.backend, call)
     }
 
     pub fn proc_data_dir(&self) -> &Path {
@@ -894,8 +882,6 @@ impl AppIdentitySession {
         AppSessionControl {
             session_id: self.session_id.clone(),
             backend: self.backend.clone(),
-            parent_caps: self.parent_caps.clone(),
-            package: self.package.clone(),
         }
     }
 }
@@ -1022,6 +1008,7 @@ pub(crate) fn prepare_app_session_worker(
     lifetime: crate::worker::derive::SessionLifetime,
     transports: &[crate::worker::trusted_desktop::Transport],
     call_caps: Option<&CapSet>,
+    authorized_mounts: &[crate::worker::AuthorizedMount],
 ) -> Result<crate::worker::PreparedLaunch, String> {
     let label = format!("app-session:{app_id}");
     let tier = if transports.is_empty() {
@@ -1039,6 +1026,7 @@ pub(crate) fn prepare_app_session_worker(
         program,
         argv,
         caps,
+        authorized_mounts,
         lifetime,
         session_id: session.id(),
         data_dir,
@@ -1130,7 +1118,7 @@ pub fn run_native_app_host(
     command
         .args(args)
         .env("PATH", "/usr/local/bin:/usr/bin:/bin")
-        .env("COS_BIN", "/usr/local/bin/cos")
+        .env("CLAW_COS_BIN", "/usr/local/bin/cos")
         .env("COS_APPS_DIR", "/usr/lib/cos/apps")
         .env("COS_SDK_PYTHON_DIR", "/usr/lib/cos/python")
         .env("PYTHONNOUSERSITE", "1")
@@ -1180,8 +1168,6 @@ fn validate_root_owned_executable(_path: &Path) -> Result<(), String> {
 fn set_app_session_transient_call(
     session_id: &str,
     backend: &AppSessionBackend,
-    parent_caps: Option<&CapSet>,
-    package: &crate::provenance::runtime::PackageRef,
     call: Option<TransientCall<'_>>,
 ) -> Result<(), String> {
     match backend {
@@ -1189,25 +1175,15 @@ fn set_app_session_transient_call(
             crate::proc::set_app_session_transient_caps(session_id, call.map(|call| call.caps))
         }
         AppSessionBackend::Clawd { handle, .. } => {
-            let call = match call {
-                Some(call) => serde_json::json!({
-                    "tool": call.tool,
-                    "args": call.args,
-                    "context": call.context,
-                    "capability_generation": call.capability_generation,
-                    "package": package,
-                }),
-                None => serde_json::Value::Null,
-            };
-            let mut params = serde_json::json!({
+            let (authorization, action_digest) = call
+                .map(|call| (Some(call.authorization), Some(call.action_digest)))
+                .unwrap_or((None, None));
+            let params = serde_json::json!({
                 "session_id": session_id,
                 "handle": handle,
-                "call": call,
+                "authorization": authorization,
+                "action_digest": action_digest,
             });
-            if let Some(parent_caps) = parent_caps {
-                params["parent_caps"] = serde_json::to_value(parent_caps)
-                    .map_err(|error| format!("failed to serialize parent capabilities: {error}"))?;
-            }
             clawd_request(ClawdCommand::AppSessionSetTransient, params)
                 .map(|_| ())
                 .map_err(String::from)
@@ -1901,7 +1877,7 @@ os.environ.setdefault("COS_APPS_DIR", {apps_dir})
 _sdk_override = os.environ.get("COS_SDK_PYTHON_DIR")
 _sdk_candidates = []
 if _sdk_override:
-    _sdk_candidates.append(_sdk_override)
+    _sdk_candidates.extend(_sdk_override.split(os.pathsep))
 _sdk_candidates.append("/usr/lib/cos/python")
 _apps_root = os.environ.get("COS_APPS_DIR") or ""
 if _apps_root:

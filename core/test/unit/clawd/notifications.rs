@@ -25,6 +25,7 @@ fn broker_handlers_derive_owner_from_peer_credentials() {
         execution_uid: None,
         start_time_ticks: Some(1),
         attended_local: false,
+        extension_host: None,
     };
     let other = ClientIdentity {
         pid: Some(11),
@@ -33,6 +34,7 @@ fn broker_handlers_derive_owner_from_peer_credentials() {
         execution_uid: None,
         start_time_ticks: Some(1),
         attended_local: false,
+        extension_host: None,
     };
 
     let created = publish(
@@ -71,6 +73,7 @@ fn unprivileged_publishers_cannot_spoof_system_sources() {
         execution_uid: None,
         start_time_ticks: Some(1),
         attended_local: false,
+        extension_host: None,
     };
     let error = publish(
         json!({

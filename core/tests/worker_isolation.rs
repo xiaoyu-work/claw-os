@@ -747,22 +747,27 @@ fn a_legitimate_app_operation_reads_and_writes_only_its_declared_resources() {
 // Brokered egress, end to end
 // ---------------------------------------------------------------------------
 
-/// Repository path of the `cos_runtime` tree, so the SDK the migrated
-/// apps import is the one under test.
-fn runtime_python_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("cos-runtime")
-        .join("python")
-        .join("src")
-        .canonicalize()
-        .expect("cos-runtime python tree")
+/// Repository paths of both Python packages installed into the shared
+/// production SDK directory.
+fn source_python_dirs() -> Vec<PathBuf> {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    [
+        root.join("claw-os-sdk").join("python").join("src"),
+        root.join("cos-runtime").join("python").join("src"),
+    ]
+    .into_iter()
+    .map(|path| path.canonicalize().expect("Python SDK tree"))
+    .collect()
+}
+
+fn source_python_path() -> std::ffi::OsString {
+    std::env::join_paths(source_python_dirs()).expect("Python SDK path list")
 }
 
 /// Run `script` with brokered egress for `endpoints`.
 fn run_with_egress(script: &str, endpoints: Vec<cos::worker::Endpoint>) -> WorkerOutput {
     let dir = workspace();
-    std::env::set_var("COS_SDK_PYTHON_DIR", runtime_python_dir());
+    std::env::set_var("COS_SDK_PYTHON_DIR", source_python_path());
     let caps = CapSet::from_caps(
         endpoints
             .iter()
@@ -918,7 +923,7 @@ for host in ('example.com.', 'EXAMPLE.COM', 'ex\u00e4mple.com'):
 fn a_worker_without_an_egress_grant_has_no_broker_at_all() {
     require_sandbox!();
     let dir = workspace();
-    std::env::set_var("COS_SDK_PYTHON_DIR", runtime_python_dir());
+    std::env::set_var("COS_SDK_PYTHON_DIR", source_python_path());
     let script = r#"python3 - <<'PY' 2>&1
 from cos_runtime import egress
 print('available', egress.available())
@@ -1037,7 +1042,7 @@ fn app_memory_is_brokered_to_the_owner_store_and_scoped_to_its_source() {
     require_sandbox!();
     let package = workspace();
     let owner_data = workspace();
-    std::env::set_var("COS_SDK_PYTHON_DIR", runtime_python_dir());
+    std::env::set_var("COS_SDK_PYTHON_DIR", source_python_path());
     std::env::set_var("COS_BIN", env!("CARGO_BIN_EXE_cos"));
     // The launcher resolves the owner's agent store from its own
     // environment; the worker never sees this directory.
@@ -1185,7 +1190,7 @@ fn legacy_app_state_is_waiting_inside_the_first_sandboxed_launch() {
     require_sandbox!();
     let package = workspace();
     let owner_data = workspace();
-    std::env::set_var("COS_SDK_PYTHON_DIR", runtime_python_dir());
+    std::env::set_var("COS_SDK_PYTHON_DIR", source_python_path());
 
     // What the App wrote before workers were isolated, plus a
     // neighbour's directory that must not travel with it.
@@ -1470,7 +1475,7 @@ fn run_shipped_app(
     let stub_socket = partition.join("egress.sock");
     let stub = StubEgress::start(stub_socket.clone(), fixture);
 
-    std::env::set_var("COS_SDK_PYTHON_DIR", runtime_python_dir());
+    std::env::set_var("COS_SDK_PYTHON_DIR", source_python_path());
     // The freshly built binary, so `cos_runtime.policy`'s shell-out
     // reaches *this* kernel rather than whatever is installed on the
     // host. `cos_binary()` mounts it read-only into the sandbox.
@@ -1478,9 +1483,14 @@ fn run_shipped_app(
     let mut extra_env = std::collections::BTreeMap::new();
     // The apps tree is on `sys.path` for `_shared`, exactly as the
     // bundled wrapper arranges it.
+    let mut python_dirs = source_python_dirs();
+    python_dirs.push(apps_root.clone());
     extra_env.insert(
         "PYTHONPATH".to_string(),
-        format!("{}:{}", runtime_python_dir().display(), apps_root.display()),
+        std::env::join_paths(python_dirs)
+            .expect("App Python path list")
+            .to_string_lossy()
+            .into_owned(),
     );
 
     let mut policy = cos::worker::derive::app_operation(cos::worker::derive::AppOperationInput {

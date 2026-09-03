@@ -27,6 +27,7 @@ use cos::agentd::protocol::{
     WorkerOutcome,
 };
 use cos::agentd::spawn::{self, ExecutionIsolation, SpawnedWorker, WorkerIdentity};
+use cos::extension_host::protocol::HostPurpose;
 use tokio::io::{AsyncWriteExt, BufReader};
 
 const WORKER_BIN: &str = env!("CARGO_BIN_EXE_claw-agentd");
@@ -44,6 +45,25 @@ fn approved_paths(identity: &WorkerIdentity) -> Vec<cos::extension_host::protoco
         cos::extension_host::spawn::approve_runtime_path(&identity.home, identity.uid)
             .expect("approve worker home"),
     ]
+}
+
+fn task_host_launch(
+    identity: &WorkerIdentity,
+    isolation: &ExecutionIsolation,
+    lease_id: impl Into<String>,
+) -> cos::extension_host::spawn::HostLaunchSpec {
+    cos::extension_host::spawn::HostLaunchSpec {
+        purpose: HostPurpose::Task,
+        lease_id: lease_id.into(),
+        authority_session_id: None,
+        app_id: None,
+        host_session_id: None,
+        controller_uid: identity.uid,
+        controller_gid: isolation.execution_gid(),
+        controller_pid: std::process::id(),
+        controller_start_time_ticks: process_start(std::process::id()),
+        package: None,
+    }
 }
 
 struct Harness {
@@ -939,10 +959,6 @@ async fn a_worker_inherits_no_broker_descriptor_environment_or_privilege() {
         !environ.contains(LEAK_MARKER),
         "the worker inherited the broker's environment"
     );
-    // `/proc/<pid>/environ` exposes the exec-time environment block and may
-    // retain a key after libc removes it. The worker unit test checks the live
-    // environment; the descendant exec test checks that it is not propagated.
-    assert!(!environ.contains(protocol::TASK_HINT_ENV));
 
     let same_uid_mem = std::process::Command::new("setpriv")
         .args([
@@ -1108,19 +1124,7 @@ async fn extension_host_uses_dedicated_gid_and_cannot_open_primary_broker() {
         &harness.extension_identity,
         &harness.isolation,
         &harness.containment,
-        "gid-boundary",
-        None,
-        None,
-        None,
-        std::process::id(),
-        {
-            let stat = std::fs::read_to_string(format!("/proc/{}/stat", std::process::id()))
-                .expect("test process stat");
-            stat[stat.rfind(')').unwrap() + 1..]
-                .split_whitespace()
-                .nth(19)
-                .and_then(|value| value.parse::<u64>().ok())
-        },
+        &task_host_launch(&harness.identity, &harness.isolation, "gid-boundary"),
         "0123456789abcdef0123456789abcdef",
         expires,
         TEST_CAPABILITY_GENERATION,
@@ -1247,12 +1251,7 @@ async fn service_owned_roots_are_hardened_before_an_extension_task() {
         &harness.extension_identity,
         &harness.isolation,
         &harness.containment,
-        "service-root-task",
-        None,
-        None,
-        None,
-        std::process::id(),
-        process_start(std::process::id()),
+        &task_host_launch(&harness.identity, &harness.isolation, "service-root-task"),
         "0123456789abcdef0123456789abcdef",
         cos::agentd::grant::now_ms() + 60_000,
         TEST_CAPABILITY_GENERATION,
@@ -1281,14 +1280,6 @@ async fn same_uid_hosts_receive_distinct_private_tmp_mounts() {
     };
     let probe = install_private_tmp_probe(&harness);
     std::env::set_var(cos::extension_host::spawn::HOST_BINARY_ENV, &probe);
-    let start_time = {
-        let stat = std::fs::read_to_string(format!("/proc/{}/stat", std::process::id()))
-            .expect("test process stat");
-        stat[stat.rfind(')').unwrap() + 1..]
-            .split_whitespace()
-            .nth(19)
-            .and_then(|value| value.parse::<u64>().ok())
-    };
     let mut hosts = Vec::new();
     let mut listeners = Vec::new();
     for task in ["private-tmp-a", "private-tmp-b"] {
@@ -1308,12 +1299,7 @@ async fn same_uid_hosts_receive_distinct_private_tmp_mounts() {
             &harness.extension_identity,
             &harness.isolation,
             &harness.containment,
-            task,
-            None,
-            None,
-            None,
-            std::process::id(),
-            start_time,
+            &task_host_launch(&harness.identity, &harness.isolation, task),
             "0123456789abcdef0123456789abcdef",
             cos::agentd::grant::now_ms() + 60_000,
             TEST_CAPABILITY_GENERATION,
@@ -1368,16 +1354,18 @@ async fn extension_uid_and_seccomp_block_process_injection_and_cgroup_escape() {
         harness.isolation.execution_gid(),
     );
     assert_eq!(pool.len(), 64);
-    let first = pool.acquire(harness.identity.uid).expect("first uid lease");
+    let first = pool
+        .acquire(harness.identity.uid, HostPurpose::Task)
+        .expect("first uid lease");
     let second = pool
-        .acquire(harness.identity.uid)
+        .acquire(harness.identity.uid, HostPurpose::Task)
         .expect("second uid lease");
     assert_ne!(first.identity().uid, second.identity().uid);
     let independent_pool = cos::extension_host::identity::ExtensionIdentityPool::for_test(
         harness.isolation.execution_gid(),
     );
     let third = independent_pool
-        .acquire(harness.identity.uid)
+        .acquire(harness.identity.uid, HostPurpose::Task)
         .expect("cross-pool uid lease");
     assert_ne!(third.identity().uid, first.identity().uid);
     assert_ne!(third.identity().uid, second.identity().uid);
@@ -1429,12 +1417,7 @@ async fn extension_uid_and_seccomp_block_process_injection_and_cgroup_escape() {
         &harness.extension_identity,
         &harness.isolation,
         &harness.containment,
-        "process-isolation",
-        None,
-        None,
-        None,
-        std::process::id(),
-        process_start(std::process::id()),
+        &task_host_launch(&harness.identity, &harness.isolation, "process-isolation"),
         "0123456789abcdef0123456789abcdef",
         cos::agentd::grant::now_ms() + 60_000,
         TEST_CAPABILITY_GENERATION,
@@ -1692,7 +1675,7 @@ async fn failed_mount_cleanup_quarantines_uid_until_restart_recovery() {
     )
     .expect("create quarantine pool");
     let mut lease = pool
-        .acquire(harness.identity.uid)
+        .acquire(harness.identity.uid, HostPurpose::Task)
         .expect("acquire quarantined identity");
     lease
         .begin_task(harness.identity.uid)
@@ -1746,7 +1729,7 @@ async fn failed_mount_cleanup_quarantines_uid_until_restart_recovery() {
     )
     .expect("reload quarantine pool");
     let alternate = blocked
-        .acquire(harness.identity.uid)
+        .acquire(harness.identity.uid, HostPurpose::Task)
         .expect("use a different identity while first is quarantined");
     assert_ne!(alternate.identity().uid, first_uid);
     alternate.release().expect("release alternate identity");
@@ -1764,7 +1747,7 @@ async fn failed_mount_cleanup_quarantines_uid_until_restart_recovery() {
     )
     .expect("recover quarantined identity");
     let reused = recovered
-        .acquire(harness.identity.uid)
+        .acquire(harness.identity.uid, HostPurpose::Task)
         .expect("reuse recovered identity");
     assert_eq!(reused.identity().uid, first_uid);
     reused.release().expect("release recovered identity");
@@ -1780,9 +1763,9 @@ fn extension_identity_pool_exhausts_without_sharing_and_reuses_after_release() {
         harness.isolation.execution_gid(),
     );
     let mut leases = Vec::new();
-    for _ in 0..pool.len() {
+    for _ in 0..cos::extension_host::identity::TASK_IDENTITY_COUNT {
         leases.push(
-            pool.acquire(harness.identity.uid)
+            pool.acquire(harness.identity.uid, HostPurpose::Task)
                 .expect("acquire unique extension identity"),
         );
     }
@@ -1792,13 +1775,18 @@ fn extension_identity_pool_exhausts_without_sharing_and_reuses_after_release() {
         .collect::<Vec<_>>();
     uids.sort_unstable();
     uids.dedup();
-    assert_eq!(uids.len(), pool.len());
-    assert!(pool.acquire(harness.identity.uid).is_err());
+    assert_eq!(
+        uids.len(),
+        cos::extension_host::identity::TASK_IDENTITY_COUNT as usize
+    );
+    assert!(pool
+        .acquire(harness.identity.uid, HostPurpose::Task)
+        .is_err());
     for lease in leases {
         lease.release().expect("release exhausted identity");
     }
     let reused = pool
-        .acquire(harness.identity.uid.saturating_add(1))
+        .acquire(harness.identity.uid.saturating_add(1), HostPurpose::Task)
         .expect("reuse identity for a different owner");
     assert_eq!(
         reused.identity().uid,
@@ -1833,12 +1821,11 @@ async fn mandatory_cgroup_kills_host_first_double_fork_setsid_and_cleared_pdeath
         &harness.extension_identity,
         &harness.isolation,
         &harness.containment,
-        "daemonized-descendant",
-        None,
-        None,
-        None,
-        std::process::id(),
-        process_start(std::process::id()),
+        &task_host_launch(
+            &harness.identity,
+            &harness.isolation,
+            "daemonized-descendant",
+        ),
         "0123456789abcdef0123456789abcdef",
         expires,
         TEST_CAPABILITY_GENERATION,
@@ -1907,12 +1894,11 @@ async fn mandatory_cgroup_kill_covers_active_cancellation_and_descendants() {
         &harness.extension_identity,
         &harness.isolation,
         &harness.containment,
-        "cancel-daemonized-descendant",
-        None,
-        None,
-        None,
-        std::process::id(),
-        process_start(std::process::id()),
+        &task_host_launch(
+            &harness.identity,
+            &harness.isolation,
+            "cancel-daemonized-descendant",
+        ),
         "0123456789abcdef0123456789abcdef",
         cos::agentd::grant::now_ms() + 60_000,
         TEST_CAPABILITY_GENERATION,
@@ -2255,7 +2241,7 @@ async fn the_supervisor_runs_a_task_end_to_end_through_a_real_worker() {
         harness.isolation.execution_gid(),
     );
     let released = released_pool
-        .acquire(harness.identity.uid)
+        .acquire(harness.identity.uid, HostPurpose::Task)
         .expect("completed task released its extension uid");
     assert_eq!(
         released.identity().uid,

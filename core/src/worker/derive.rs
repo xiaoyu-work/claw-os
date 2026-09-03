@@ -31,8 +31,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use super::policy::{
-    Endpoint, LaunchPolicy, Limits, Mount, MountClass, NetworkPolicy, SeccompProfile, StdioPlan,
-    TrustTier,
+    AuthorizedMount, Endpoint, LaunchPolicy, Limits, Mount, MountClass, NetworkPolicy,
+    SeccompProfile, StdioPlan, TrustTier,
 };
 use crate::caps::{CapSet, Scope, Verb};
 
@@ -192,6 +192,9 @@ pub struct AppSessionInput<'a> {
     /// For [`SessionLifetime::SingleCall`], the exact set bound to the
     /// one request this worker exists to serve.
     pub caps: &'a CapSet,
+    /// Daemon-captured path resolution and inode identities for every
+    /// capability-derived mount. Empty for reusable workers.
+    pub authorized_mounts: &'a [AuthorizedMount],
     pub lifetime: SessionLifetime,
     pub session_id: &'a str,
     /// `COS_DATA_DIR` for this launch.
@@ -426,9 +429,17 @@ pub fn app_session(input: AppSessionInput<'_>) -> Result<LaunchPolicy, String> {
     // network reach, because only a single-call worker dies before the
     // next call can inherit it.
     let network = match input.lifetime {
-        SessionLifetime::Reusable => NetworkPolicy::Denied,
+        SessionLifetime::Reusable => {
+            if !input.authorized_mounts.is_empty() {
+                return Err("reusable App session received call-scoped mount authority".to_string());
+            }
+            NetworkPolicy::Denied
+        }
         SessionLifetime::SingleCall => {
-            mounts.extend(granted_path_mounts(input.caps)?);
+            mounts.extend(bind_authorized_path_mounts(
+                input.caps,
+                input.authorized_mounts,
+            )?);
             egress_from_caps(input.caps)
         }
     };
@@ -706,8 +717,8 @@ fn cos_binary() -> Option<PathBuf> {
 
 fn sdk_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
-    if let Some(dir) = std::env::var_os("COS_SDK_PYTHON_DIR") {
-        roots.push(PathBuf::from(dir));
+    if let Some(paths) = std::env::var_os("COS_SDK_PYTHON_DIR") {
+        roots.extend(std::env::split_paths(&paths).filter(|path| !path.as_os_str().is_empty()));
     }
     roots.push(PathBuf::from("/usr/lib/cos/python"));
     roots
@@ -742,9 +753,17 @@ fn base_env(home: &Path) -> BTreeMap<String, String> {
     env.insert("COS_PERMS_MODE".to_string(), "strict".to_string());
     env.insert(super::SANDBOX_MARKER_ENV.to_string(), "1".to_string());
     if let Some(binary) = cos_binary() {
-        env.insert("COS_BIN".to_string(), binary.to_string_lossy().into_owned());
+        env.insert(
+            "CLAW_COS_BIN".to_string(),
+            binary.to_string_lossy().into_owned(),
+        );
     }
-    if let Some(sdk) = sdk_roots().into_iter().next() {
+    if let Some(sdk) = std::env::var_os("COS_SDK_PYTHON_DIR") {
+        env.insert(
+            "COS_SDK_PYTHON_DIR".to_string(),
+            sdk.to_string_lossy().into_owned(),
+        );
+    } else if let Some(sdk) = sdk_roots().into_iter().next() {
         env.insert(
             "COS_SDK_PYTHON_DIR".to_string(),
             sdk.to_string_lossy().into_owned(),
@@ -849,6 +868,73 @@ pub fn granted_path_mounts(caps: &CapSet) -> Result<Vec<Mount>, String> {
         ));
     }
     Ok(mounts)
+}
+
+/// Snapshot every capability-derived mount at daemon authorization.
+///
+/// The resulting path and inode identities cross the App-service Host
+/// boundary with the call authorization. A worker must present the
+/// exact same plan before it can launch.
+pub fn authorize_granted_path_mounts(caps: &CapSet) -> Result<Vec<AuthorizedMount>, String> {
+    granted_path_mounts(caps)?
+        .into_iter()
+        .map(|mount| {
+            let (device, inode) = mount_identity(&mount.source)?;
+            Ok(AuthorizedMount {
+                source: mount.source,
+                target: mount.target,
+                mode: mount.mode,
+                class: mount.class,
+                device,
+                inode,
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn bind_authorized_path_mounts(
+    caps: &CapSet,
+    authorized: &[AuthorizedMount],
+) -> Result<Vec<Mount>, String> {
+    let mut current = granted_path_mounts(caps)?;
+    if current.len() != authorized.len() {
+        return Err("call-scoped filesystem resources changed after authorization".to_string());
+    }
+    for (mount, expected) in current.iter_mut().zip(authorized) {
+        if mount.source != expected.source
+            || mount.target != expected.target
+            || mount.mode != expected.mode
+            || mount.class != expected.class
+            || mount_identity(&mount.source)? != (expected.device, expected.inode)
+        {
+            return Err("call-scoped filesystem resources changed after authorization".to_string());
+        }
+        mount.expect_identity = Some((expected.device, expected.inode));
+    }
+    Ok(current)
+}
+
+#[cfg(unix)]
+fn mount_identity(path: &Path) -> Result<(u64, u64), String> {
+    use std::os::unix::fs::MetadataExt;
+
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| format!("inspect authorized mount {}: {error}", path.display()))?;
+    if metadata.file_type().is_symlink() {
+        return Err(format!(
+            "authorized mount source became a symlink: {}",
+            path.display()
+        ));
+    }
+    Ok((metadata.dev(), metadata.ino()))
+}
+
+#[cfg(not(unix))]
+fn mount_identity(path: &Path) -> Result<(u64, u64), String> {
+    Err(format!(
+        "authorized mount identity is unavailable on this platform: {}",
+        path.display()
+    ))
 }
 
 /// Resolve a write scope to the one canonical path it names.

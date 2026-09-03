@@ -1178,6 +1178,7 @@ fn test_client() -> ClientIdentity {
         execution_uid: None,
         start_time_ticks,
         attended_local: false,
+        extension_host: None,
     }
 }
 
@@ -1457,6 +1458,7 @@ fn e2e_client() -> ClientIdentity {
         execution_uid: None,
         start_time_ticks,
         attended_local: false,
+        extension_host: None,
     }
 }
 
@@ -1578,7 +1580,9 @@ fn e2e_spawn_child(harness: &mut TransientHarness) -> u32 {
 }
 
 fn e2e_set_transient(handle: &str, session_id: &str) -> Result<Value, String> {
+    let state = DaemonState::new().expect("daemon state");
     e2e_runtime().block_on(set_transient(
+        &state,
         json!({"session_id": session_id, "handle": handle}),
         &e2e_client(),
     ))
@@ -1663,335 +1667,16 @@ fn an_operation_session_cannot_accept_tool_call_authority() {
     assert_eq!(e2e_read_transient(session_id), None);
 }
 
-#[cfg(unix)]
-#[test]
-fn daemon_gateway_revalidates_every_call_and_revokes_its_target_grant() {
-    if !e2e_is_root() {
-        eprintln!("skipped: the routed capability partition can only be prepared as root");
-        return;
-    }
-    let mut harness = transient_harness();
-    let root = crate::test_env::secure_scratch_dir("clawd-app-gateway");
-    let apps = root.join("apps");
-    let app_dir = apps.join("mesh");
-    std::fs::create_dir_all(&app_dir).expect("create App");
-    std::fs::write(
-        app_dir.join("app.json"),
-        r#"{
-  "schema_version": 2,
-  "id": "mesh",
-  "version": "0.1.0",
-  "name": {"en": "Mesh"},
-  "runtime": "python",
-  "mcp": {
-    "entry": "server.py",
-    "transport": "stdio",
-    "tools": [
-      {
-        "name": "alpha",
-        "summary": {"en": "Read alpha"},
-        "needs": [{
-          "verb": "data.kv.read",
-          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "alpha"}},
-          "why": {"en": "read alpha"}
-        }]
-      },
-      {
-        "name": "beta",
-        "summary": {"en": "Read beta"},
-        "needs": [{
-          "verb": "data.kv.read",
-          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "beta"}},
-          "why": {"en": "read beta"}
-        }]
-      }
-    ]
-  }
-}"#,
-    )
-    .expect("write manifest");
-    std::fs::write(app_dir.join("server.py"), "print('mesh')\n").expect("write entrypoint");
-    crate::test_env::sign_test_package(&app_dir, crate::provenance::PackageKind::App, "mesh");
-    let _apps = crate::test_env::TestEnvVarGuard::set("COS_APPS_DIR", &apps);
-    let package = e2e_installed_package("mesh");
-    let parent_id = "gateway-parent";
-
-    let app_level_caps = CapSet::from_caps([
-        Cap::new(Verb::AGENT_INVOKE, Scope::name("mesh")),
-        Cap::new(Verb::DATA_KV_READ, Scope::name("alpha")),
-    ]);
-    e2e_install_row(e2e_gateway_parent(parent_id, app_level_caps));
-    let error = e2e_runtime()
-        .block_on(register(
-            json!({
-                "app_id": "mesh",
-                "kind": "mcp",
-                "tool": "alpha",
-                "package": package,
-            }),
-            &e2e_client(),
-        ))
-        .expect_err("App-level invoke must not authorize an exact tool");
+#[tokio::test]
+async fn app_service_dispatch_rejects_a_main_socket_identity() {
+    let error = prepare_app_service_call(json!({}), &e2e_client())
+        .await
+        .expect_err("the public broker must not synthesize a task Host identity");
     assert!(
-        error.message.contains("agent.invoke") && error.message.contains("mesh/alpha"),
-        "unexpected: {}",
+        error.message.contains("private task host"),
+        "{}",
         error.message
     );
-
-    e2e_remove_row(parent_id);
-    let parent_caps = CapSet::from_caps([
-        Cap::new(Verb::AGENT_INVOKE, Scope::name("mesh/alpha")),
-        Cap::new(Verb::DATA_KV_READ, Scope::name("alpha")),
-    ]);
-    e2e_install_row(e2e_gateway_parent(parent_id, parent_caps.clone()));
-
-    let mut substituted_package = package.clone();
-    substituted_package.content_digest = "0".repeat(64);
-    let error = e2e_runtime()
-        .block_on(register(
-            json!({
-                "app_id": "mesh",
-                "kind": "mcp",
-                "tool": "alpha",
-                "package": substituted_package,
-            }),
-            &e2e_client(),
-        ))
-        .expect_err("a substituted package must be rejected");
-    assert!(
-        error.message.contains("package changed"),
-        "unexpected: {}",
-        error.message
-    );
-
-    let registered = e2e_runtime()
-        .block_on(register(
-            json!({
-                "app_id": "mesh",
-                "kind": "mcp",
-                "tool": "alpha",
-                "package": package,
-            }),
-            &e2e_client(),
-        ))
-        .expect("register exact MCP target");
-    let session_id = registered["session_id"].as_str().unwrap().to_string();
-    let handle = registered["handle"].as_str().unwrap().to_string();
-    let at_rest = e2e_read_row(&session_id).expect("registered session");
-    assert_eq!(at_rest.group.as_deref(), Some("app-mcp"));
-    assert!(
-        at_rest.caps.as_ref().is_some_and(CapSet::is_empty),
-        "caller invoke authority entered the target session"
-    );
-
-    let child = e2e_spawn_child(&mut harness);
-    e2e_runtime()
-        .block_on(bind(
-            json!({"session_id": session_id, "handle": handle, "pid": child}),
-            &e2e_client(),
-        ))
-        .expect("bind MCP target");
-
-    let context = crate::agent::tools::app_gateway::McpCallContext {
-        wire_version: crate::agent::tools::app_gateway::CALL_CONTEXT_WIRE_VERSION,
-        call_id: "call-alpha".to_string(),
-        trace_id: "trace-alpha".to_string(),
-        parent_call_id: None,
-        depth: 0,
-        deadline_unix_ms: Some(crate::agentd::grant::now_ms() + 5_000),
-        session_id: Some(parent_id.to_string()),
-        task_id: None,
-        caller: crate::agent::tools::app_gateway::McpPrincipal {
-            kind: crate::agent::tools::app_gateway::McpPrincipalKind::SystemAgent,
-            id: parent_id.to_string(),
-            owner_uid: E2E_UID,
-            app_id: None,
-        },
-    };
-    let generation = crate::agent::tools::exposure::capability_generation(&parent_caps);
-    let call = |tool: &str,
-                context: &crate::agent::tools::app_gateway::McpCallContext,
-                generation: &str,
-                package: &crate::provenance::runtime::PackageRef| {
-        json!({
-            "session_id": session_id,
-            "handle": handle,
-            "call": {
-                "tool": tool,
-                "args": {},
-                "context": context,
-                "capability_generation": generation,
-                "package": package,
-            },
-        })
-    };
-
-    let error = e2e_runtime()
-        .block_on(set_transient(
-            call("alpha", &context, "0000000000000000", &package),
-            &e2e_client(),
-        ))
-        .expect_err("capability generation substitution must fail");
-    assert!(
-        error.contains("capabilities changed"),
-        "unexpected: {error}"
-    );
-
-    let mut no_deadline = context.clone();
-    no_deadline.deadline_unix_ms = None;
-    let error = e2e_runtime()
-        .block_on(set_transient(
-            call("alpha", &no_deadline, &generation, &package),
-            &e2e_client(),
-        ))
-        .expect_err("missing deadline must fail");
-    assert!(error.contains("deadline"), "unexpected: {error}");
-
-    let mut expired = context.clone();
-    expired.deadline_unix_ms = Some(crate::agentd::grant::now_ms().saturating_sub(1));
-    let error = e2e_runtime()
-        .block_on(set_transient(
-            call("alpha", &expired, &generation, &package),
-            &e2e_client(),
-        ))
-        .expect_err("expired deadline must fail");
-    assert!(error.contains("deadline"), "unexpected: {error}");
-
-    let mut substituted_principal = context.clone();
-    substituted_principal.caller.kind =
-        crate::agent::tools::app_gateway::McpPrincipalKind::AppAgent;
-    substituted_principal.caller.app_id = Some("caller".to_string());
-    let error = e2e_runtime()
-        .block_on(set_transient(
-            call("alpha", &substituted_principal, &generation, &package),
-            &e2e_client(),
-        ))
-        .expect_err("principal substitution must fail");
-    assert!(
-        error.contains("principal does not match"),
-        "unexpected: {error}"
-    );
-
-    let mut call_package = package.clone();
-    call_package.id = "other".to_string();
-    let error = e2e_runtime()
-        .block_on(set_transient(
-            call("alpha", &context, &generation, &call_package),
-            &e2e_client(),
-        ))
-        .expect_err("call package substitution must fail");
-    assert!(error.contains("package changed"), "unexpected: {error}");
-
-    let error = e2e_runtime()
-        .block_on(set_transient(
-            call("beta", &context, &generation, &package),
-            &e2e_client(),
-        ))
-        .expect_err("launching alpha must not authorize beta");
-    assert!(
-        error.contains("agent.invoke") && error.contains("mesh/beta"),
-        "unexpected: {error}"
-    );
-    assert_eq!(e2e_read_transient(&session_id), None);
-
-    e2e_runtime()
-        .block_on(set_transient(
-            call("alpha", &context, &generation, &package),
-            &e2e_client(),
-        ))
-        .expect("authorize exact call");
-    let transient = e2e_read_transient(&session_id).expect("call authority");
-    assert_eq!(
-        transient,
-        CapSet::from_caps([Cap::new(Verb::DATA_KV_READ, Scope::name("alpha"),)])
-    );
-    assert!(
-        !transient.iter().any(|cap| cap.verb == Verb::AGENT_INVOKE),
-        "caller invoke authority entered the target call"
-    );
-    let live = authority::authority()
-        .resolve_session(
-            &session_id,
-            &authority::Presentation {
-                uid: E2E_UID,
-                pid: child,
-                start_time_ticks: crate::proc::read_start_time_ticks_pub(child),
-                audience: authority::Audience::SystemService,
-                route: "test",
-                session_id: Some(session_id.clone()),
-            },
-        )
-        .expect("live Gateway target grant");
-    assert_eq!(live.issuer, authority::Issuer::AppGateway);
-    assert_eq!(live.caps, transient);
-
-    e2e_runtime()
-        .block_on(set_transient(
-            json!({"session_id": session_id, "handle": handle}),
-            &e2e_client(),
-        ))
-        .expect("clear call authority");
-    assert_eq!(e2e_read_transient(&session_id), None);
-    let cleared = authority::authority()
-        .resolve_session(
-            &session_id,
-            &authority::Presentation {
-                uid: E2E_UID,
-                pid: child,
-                start_time_ticks: crate::proc::read_start_time_ticks_pub(child),
-                audience: authority::Audience::SystemService,
-                route: "test",
-                session_id: Some(session_id.clone()),
-            },
-        )
-        .expect("restored at-rest session grant");
-    assert_eq!(cleared.issuer, authority::Issuer::AppSessionAuthority);
-    assert!(cleared.caps.is_empty());
-
-    std::fs::write(app_dir.join("server.py"), "print('replaced')\n").expect("replace package");
-    let error = e2e_runtime()
-        .block_on(set_transient(
-            call("alpha", &context, &generation, &package),
-            &e2e_client(),
-        ))
-        .expect_err("replaced package must fail closed");
-    assert!(
-        error.contains("changed") || error.contains("quarantined"),
-        "unexpected: {error}"
-    );
-
-    e2e_runtime()
-        .block_on(deregister(
-            json!({"session_id": session_id, "handle": handle}),
-            &e2e_client(),
-        ))
-        .expect("tear down MCP target");
-    assert!(
-        authority::authority()
-            .resolve_session(
-                &session_id,
-                &authority::Presentation {
-                    uid: E2E_UID,
-                    pid: child,
-                    start_time_ticks: crate::proc::read_start_time_ticks_pub(child),
-                    audience: authority::Audience::SystemService,
-                    route: "test",
-                    session_id: Some(session_id.clone()),
-                },
-            )
-            .is_err(),
-        "target grant survived teardown"
-    );
-    assert!(
-        crate::provenance::runtime::package_for(E2E_UID, &session_id)
-            .expect("runtime registry")
-            .is_none(),
-        "package binding survived teardown"
-    );
-
-    e2e_remove_row(parent_id);
-    crate::provenance::reload_trust();
-    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]
@@ -3744,6 +3429,7 @@ fn a_relay_refuses_a_session_whose_package_was_revoked() {
         execution_uid: None,
         start_time_ticks: ticks,
         attended_local: false,
+        extension_host: None,
     };
 
     // A relay grant names an App session, so the record *should* exist.

@@ -41,6 +41,7 @@ fn principal(kind: McpPrincipalKind, app_id: Option<&str>) -> McpPrincipal {
 fn binding() -> ExtensionBinding {
     ExtensionBinding {
         protocol: crate::extension_host::protocol::PROTOCOL_VERSION,
+        purpose: crate::extension_host::protocol::HostPurpose::Task,
         task_id: "task-a".to_string(),
         session_id: Some("session-a".to_string()),
         app_id: None,
@@ -48,6 +49,7 @@ fn binding() -> ExtensionBinding {
         extension_uid: 61_000,
         owner_gid: 1000,
         capability_generation: "a".repeat(16),
+        package: None,
         approved_paths: vec![crate::extension_host::protocol::ApprovedPath {
             path: "/usr/lib/cos".to_string(),
             device: 1,
@@ -55,8 +57,10 @@ fn binding() -> ExtensionBinding {
             owner_uid: 0,
             mode: 0o755,
         }],
-        worker_pid: std::process::id(),
-        worker_start_time_ticks: crate::proc::read_start_time_ticks_pub(std::process::id()),
+        controller_uid: 1000,
+        controller_gid: 1000,
+        controller_pid: std::process::id(),
+        controller_start_time_ticks: crate::proc::read_start_time_ticks_pub(std::process::id()),
         host_pid: std::process::id().saturating_add(1),
         host_start_time_ticks: Some(1),
         lease_nonce: "a".repeat(32),
@@ -132,6 +136,48 @@ fn call_context_is_bound_to_extension_lease() {
     let mut substituted = invocation;
     substituted.invoke_target = "email/email.send".to_string();
     assert!(substituted.validate_live_binding(&binding).is_err());
+}
+
+#[test]
+fn renewed_task_lease_supersedes_only_the_bootstrap_deadline() {
+    let mut binding = binding();
+    let now = crate::agentd::grant::now_ms();
+    binding.expires_at_ms = now + 10_000;
+    let context = McpCallContext {
+        wire_version: CALL_CONTEXT_WIRE_VERSION,
+        call_id: "call-renewed".to_string(),
+        trace_id: "call-renewed".to_string(),
+        parent_call_id: None,
+        depth: 0,
+        deadline_unix_ms: Some(now + 20_000),
+        session_id: Some("session-a".to_string()),
+        task_id: Some("task-a".to_string()),
+        caller: McpPrincipal {
+            kind: McpPrincipalKind::SystemAgent,
+            id: "session-a".to_string(),
+            owner_uid: 1000,
+            app_id: None,
+        },
+    };
+    assert!(
+        context.validate_extension_binding(&binding).is_err(),
+        "the immutable bootstrap deadline must not appear renewed"
+    );
+    context
+        .validate_extension_binding_for_lease(&binding, now + 30_000)
+        .unwrap();
+    context
+        .validate_extension_runtime_binding(&binding)
+        .unwrap();
+
+    let invocation = crate::extension_host::protocol::AppInvocationAudit::new(
+        "email",
+        "email.search",
+        binding.capability_generation.clone(),
+        context,
+    )
+    .unwrap();
+    invocation.validate_live_binding(&binding).unwrap();
 }
 
 #[test]

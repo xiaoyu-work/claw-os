@@ -74,12 +74,11 @@ fn the_worker_requires_the_dedicated_gid_and_no_supplementary_groups() {
 }
 
 #[test]
-fn adopted_channel_is_cloexec_and_bootstrap_hints_are_removed() {
+fn adopted_channel_is_cloexec_and_its_bootstrap_hint_is_removed() {
     use std::os::fd::AsRawFd;
 
     let _lock = crate::test_env::lock_env();
     let _channel_hint = crate::test_env::TestEnvVarGuard::set(protocol::CHANNEL_FD_ENV, "3");
-    let _task_hint = crate::test_env::TestEnvVarGuard::set(protocol::TASK_HINT_ENV, "task-secret");
     let (channel, _peer) = std::os::unix::net::UnixStream::pair().unwrap();
     let fd = channel.as_raw_fd();
     harden_adopted_channel(fd).unwrap();
@@ -87,7 +86,6 @@ fn adopted_channel_is_cloexec_and_bootstrap_hints_are_removed() {
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
     assert_ne!(flags & libc::FD_CLOEXEC, 0);
     assert!(std::env::var_os(protocol::CHANNEL_FD_ENV).is_none());
-    assert!(std::env::var_os(protocol::TASK_HINT_ENV).is_none());
 }
 
 #[tokio::test]

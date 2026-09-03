@@ -190,6 +190,13 @@ impl GrantClaims {
             Some(extension) => {
                 push_u64(&mut buf, 1);
                 push_u64(&mut buf, extension.protocol as u64);
+                push_bytes(
+                    &mut buf,
+                    match extension.purpose {
+                        crate::extension_host::protocol::HostPurpose::Task => b"task",
+                        crate::extension_host::protocol::HostPurpose::AppService => b"app-service",
+                    },
+                );
                 push_bytes(&mut buf, extension.task_id.as_bytes());
                 match extension.session_id.as_deref() {
                     Some(session_id) => {
@@ -202,6 +209,23 @@ impl GrantClaims {
                 push_u64(&mut buf, extension.extension_uid as u64);
                 push_u64(&mut buf, extension.owner_gid as u64);
                 push_bytes(&mut buf, extension.capability_generation.as_bytes());
+                match extension.package.as_ref() {
+                    Some(package) => {
+                        push_u64(&mut buf, 1);
+                        push_bytes(&mut buf, package.kind.as_str().as_bytes());
+                        push_bytes(&mut buf, package.id.as_bytes());
+                        push_bytes(&mut buf, package.content_digest.as_bytes());
+                        match package.publisher_key_id.as_deref() {
+                            Some(key_id) => {
+                                push_u64(&mut buf, 1);
+                                push_bytes(&mut buf, key_id.as_bytes());
+                            }
+                            None => push_u64(&mut buf, 0),
+                        }
+                        push_bytes(&mut buf, package.tier.as_bytes());
+                    }
+                    None => push_u64(&mut buf, 0),
+                }
                 push_u64(&mut buf, extension.approved_paths.len() as u64);
                 for approved in &extension.approved_paths {
                     push_bytes(&mut buf, approved.path.as_bytes());
@@ -210,8 +234,10 @@ impl GrantClaims {
                     push_u64(&mut buf, approved.owner_uid as u64);
                     push_u64(&mut buf, approved.mode as u64);
                 }
-                push_u64(&mut buf, extension.worker_pid as u64);
-                push_optional_u64(&mut buf, extension.worker_start_time_ticks);
+                push_u64(&mut buf, extension.controller_uid as u64);
+                push_u64(&mut buf, extension.controller_gid as u64);
+                push_u64(&mut buf, extension.controller_pid as u64);
+                push_optional_u64(&mut buf, extension.controller_start_time_ticks);
                 push_u64(&mut buf, extension.host_pid as u64);
                 push_optional_u64(&mut buf, extension.host_start_time_ticks);
                 push_bytes(&mut buf, extension.lease_nonce.as_bytes());

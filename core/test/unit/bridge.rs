@@ -12,8 +12,10 @@ fn default_entries_are_runtime_aware() {
 #[test]
 fn hosted_app_commands_use_the_fixed_child_isolation_wrapper() {
     let _lock = crate::test_env::lock_env();
-    let home = tempfile::tempdir().unwrap();
-    let app = tempfile::tempdir().unwrap();
+    let _runner = crate::test_env::use_stripped_app_runner();
+    let scratch = crate::test_env::secure_scratch_dir("bridge-child-isolation");
+    let home = tempfile::tempdir_in(&scratch).unwrap();
+    let app = tempfile::tempdir_in(&scratch).unwrap();
     std::fs::write(app.path().join("main.py"), b"print('ok')").unwrap();
     let _enabled = crate::test_env::TestEnvVarGuard::set("COS_EXTENSION_CHILD_ISOLATION", "1");
     let _home = crate::test_env::TestEnvVarGuard::set("HOME", home.path());

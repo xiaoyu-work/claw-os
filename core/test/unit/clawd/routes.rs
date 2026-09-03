@@ -100,6 +100,8 @@ const EXPECTED_ROOT_COMMANDS: &[&str] = &[
     "permission.revoke",
 ];
 
+const EXPECTED_PRIVATE_TASK_HOST_COMMANDS: &[&str] = &["app_service.call"];
+
 #[test]
 fn the_table_and_the_command_enum_cannot_drift() {
     assert_eq!(ROUTES.len(), Command::ALL.len());
@@ -127,6 +129,7 @@ fn route_names_are_unique_and_loggable() {
 fn the_access_allowlist_is_exactly_what_it_was() {
     let user: std::collections::BTreeSet<_> = user_commands().collect();
     let root: std::collections::BTreeSet<_> = root_commands().collect();
+    let private_host: std::collections::BTreeSet<_> = private_task_host_commands().collect();
     assert_eq!(
         user,
         EXPECTED_USER_COMMANDS.iter().copied().collect(),
@@ -136,6 +139,14 @@ fn the_access_allowlist_is_exactly_what_it_was() {
         root,
         EXPECTED_ROOT_COMMANDS.iter().copied().collect(),
         "the set of root-only routes changed"
+    );
+    assert_eq!(
+        private_host,
+        EXPECTED_PRIVATE_TASK_HOST_COMMANDS
+            .iter()
+            .copied()
+            .collect(),
+        "the set of private task Host routes changed"
     );
 }
 
@@ -212,6 +223,7 @@ fn root_only_commands_are_not_reachable_by_a_user_peer() {
         execution_uid: None,
         start_time_ticks: Some(1),
         attended_local: false,
+        extension_host: None,
     };
     let root = ClientIdentity {
         pid: Some(42),
@@ -220,6 +232,7 @@ fn root_only_commands_are_not_reachable_by_a_user_peer() {
         execution_uid: None,
         start_time_ticks: Some(1),
         attended_local: false,
+        extension_host: None,
     };
     for command in EXPECTED_ROOT_COMMANDS {
         let route = Command::parse(command).unwrap().route();
@@ -232,6 +245,27 @@ fn root_only_commands_are_not_reachable_by_a_user_peer() {
     }
     let health = Command::DaemonHealth.route();
     assert_eq!(health.authorize(&user), Ok(()));
+
+    let private = Command::AppServiceCall.route();
+    assert_eq!(private.authorize(&user), Err(Fault::NotAuthorized));
+    assert_eq!(private.authorize(&root), Err(Fault::NotAuthorized));
+    let mut task_host = user;
+    task_host.execution_uid = Some(61_000);
+    task_host.extension_host = Some(crate::clawd::client_identity::AuthenticatedExtensionHost {
+        purpose: crate::extension_host::protocol::HostPurpose::Task,
+        lease_id: "task-a".to_string(),
+        authority_session_id: Some("session-a".to_string()),
+        host_session_id: Some("host-a".to_string()),
+        owner_uid: 1000,
+        extension_uid: 61_000,
+        capability_generation: "a".repeat(16),
+        host_pid: 42,
+        host_start_time_ticks: Some(1),
+    });
+    assert_eq!(private.authorize(&task_host), Ok(()));
+    task_host.extension_host.as_mut().unwrap().purpose =
+        crate::extension_host::protocol::HostPurpose::AppService;
+    assert_eq!(private.authorize(&task_host), Err(Fault::NotAuthorized));
 }
 
 #[test]

@@ -180,10 +180,9 @@ fn harden_adopted_channel(fd: i32) -> Result<(), String> {
             std::io::Error::last_os_error()
         ));
     }
-    // These values are bootstrap hints, not descendant authority. Remove
-    // them before the runtime can launch any tool or child process.
+    // The bootstrap hint is not descendant authority. Remove it before
+    // the runtime can launch any tool or child process.
     std::env::remove_var(protocol::CHANNEL_FD_ENV);
-    std::env::remove_var(protocol::TASK_HINT_ENV);
     Ok(())
 }
 
@@ -722,6 +721,23 @@ where
                 reply,
             })) => {
                 state.deliver(correlation_id, &exchange, reply);
+            }
+            Ok(Some(BrokerFrame::ExtensionLeaseRenewed {
+                task_id: target,
+                expires_at_ms,
+            })) if target == task_id => {
+                if let Err(error) =
+                    crate::extension_host::client::renew_current_task_lease(&target, expires_at_ms)
+                {
+                    state.refuse_all(&error);
+                    state.cancelled.store(true, Ordering::SeqCst);
+                    break;
+                }
+            }
+            Ok(Some(BrokerFrame::ExtensionLeaseRenewed { .. })) => {
+                state.refuse_all("extension-host lease renewal named a different task");
+                state.cancelled.store(true, Ordering::SeqCst);
+                break;
             }
             Ok(Some(BrokerFrame::Cancel { task_id: target })) if target == task_id => break,
             Ok(Some(BrokerFrame::Shutdown)) => break,

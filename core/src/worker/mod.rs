@@ -50,8 +50,8 @@ pub mod trusted_desktop;
 
 pub use exec::{run_captured, WorkerOutput};
 pub use policy::{
-    Endpoint, LaunchPolicy, Limits, Mount, MountClass, MountMode, NetworkPolicy, SeccompProfile,
-    StdioPlan, TrustTier,
+    AuthorizedMount, Endpoint, LaunchPolicy, Limits, Mount, MountClass, MountMode, NetworkPolicy,
+    SeccompProfile, StdioPlan, TrustTier,
 };
 pub use provider::{
     availability, exemption_reason, install_relay, prepare, relay_slot, Availability,

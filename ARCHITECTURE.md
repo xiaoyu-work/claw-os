@@ -42,7 +42,7 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | `cos` CLI and router | Parse output format, dispatch primitives, apps, hidden bridges, and `cos agent` subcommands | `core/src/main.rs`, `core/src/router.rs` |
 | `clawd` broker | Versioned framed Unix-socket RPC, per-message peer identity, declarative route registry, mandatory capability-authority middleware, privileged dispatch, task ownership/lease, worker/extension supervision, and audit hook | `core/src/bin/clawd.rs`, `core/src/clawd/server.rs`, `core/src/clawd/transport/`, `core/src/clawd/routes.rs`, `core/src/clawd/authority/` |
 | `claw-agentd` worker | Unprivileged per-task process that runs the model/tool loop after privilege drop; grant-authenticated private job channel | `core/src/bin/claw-agentd.rs`, `core/src/agentd/` |
-| `claw-extension-host` | Per-task isolated-UID process that runs dynamic App/MCP code behind a worker-only control socket and a broker-owned route-filtered proxy | `core/src/bin/claw-extension-host.rs`, `core/src/extension_host/` |
+| `claw-extension-host` | Purpose-bound isolated-UID process: a task Host relays authenticated calls, while an owner/App service Host runs persistent App MCP code behind broker-owned private sockets | `core/src/bin/claw-extension-host.rs`, `core/src/extension_host/`, `core/src/clawd/app_services.rs` |
 | Agent runtime | Multi-turn model/tool loop, prompt assembly, hooks, progress, compression, and tool dispatch | `core/src/agent/runtime/` |
 | Model-input trust | Closed trust lattice, model-input source registry, labelled segments, and the bounded data fence for non-policy content | `core/src/agent/trust/` |
 | LLM abstraction | Provider registry, wire adapters, streaming accumulation, fallback chain, credentials, and usage | `core/src/agent/llm/` |
@@ -738,7 +738,9 @@ apps/<id>/app.json
        exact agent.invoke:<app>/<tool> caller authorization
        -> fresh signed-package verification
        -> manifest argument validation and target-capability derivation
-       -> task-owned Extension Host -> app-mcp sandbox
+       -> task Host authenticated relay
+       -> clawd owner/App service manager
+       -> persistent App service Host -> app-mcp sandbox
        -> MCP tools/call with authenticated call context
        -> structured result -> transient authority revocation
 ```
@@ -759,13 +761,59 @@ re-verifies the current signed package, validates the exact declared tool,
 generation, lineage, and deadline, and derives a separate target grant from
 that tool's `needs[]`. Caller invoke authority never enters the target grant.
 
-The task-owned Extension Host is the only dynamic execution boundary available
+The task-owned Extension Host is the only dynamic boundary directly available
 to `claw-agentd`. Its broker-derived binding distinguishes System Agent from
 an exact App Agent identity. The worker sends only typed App id, tool name, and
-arguments; the host owns launch, `app-mcp` registration, process binding,
-per-call authority, and teardown. The Gateway adds versioned authenticated MCP
-metadata containing caller identity, call/trace ancestry, task/session ids, and
-deadline. The reusable process holds no prior call's transient authority.
+arguments. The task Host cannot execute an App call; it relays over its private
+broker, which injects the verified task/Host lease facts. `clawd` re-authorizes
+the call, selects an owner/App-scoped service Host, and makes its canonical
+effective argument map authoritative for execution; the service Host validates
+that map against the signed schema without resolving filesystem paths again.
+For a call-scoped filesystem sandbox, `clawd` also captures the resolved mount
+plan and each source's device/inode identity. `clawd` then issues a
+single-use authorization, expiring at the caller deadline, bound to that Host,
+package, capability generation, caller context, tool, arguments, mount snapshot,
+and deadline. The public broker socket cannot synthesize this private Host
+identity.
+
+The task Host lease is rolling rather than fixed at worker bootstrap. Each
+authenticated worker heartbeat extends the supervisor's task lease and the
+private broker's `ExtensionLease`; `clawd` returns the resulting absolute
+deadline on the private worker channel. The worker applies that deadline to
+its installed Host client without changing the signed bootstrap binding.
+Renewals must name the exact task and remain within the protocol horizon.
+Missing, mismatched, or invalid acknowledgements cancel the worker, while the
+private broker's rolling lease remains the final authority on every relay.
+
+The service Host is controlled only by the exact root `clawd` process and owns
+`app-mcp` registration, process binding, execution, and teardown. `lazy`
+services survive task completion and are reclaimed after idle time;
+`always-on` services are prewarmed for routed owners and restarted within a
+bounded budget; `while-app-running` services are admitted only while the
+owner's desktop App is live. Package/trust changes, lease expiry, or Host death
+invalidate an instance. Capacity pressure may evict the least recently used
+idle `lazy` instance. The manager polls and reaps the owned Host child rather
+than treating a matching zombie pid as live; only Host/control failures consume
+the restart budget, not deterministic App tool errors. The 64 reserved
+extension identities are disjoint:
+56 remain available to short-lived task Hosts and 8 are reserved for App
+service Hosts.
+
+Broker-answerable capabilities use a reusable zero-standing-capability MCP
+child. A call needing direct filesystem or network reach gets a call-scoped
+sandbox child that is destroyed with the result. In both placements, the
+daemon ticket installs only the target tool's transient capabilities and an
+action digest prevents App/tool/argument/context substitution. Caller invoke
+authority never enters the child, and the reusable process holds no prior
+call's transient authority. A reusable child completes its zero-capability MCP
+handshake before the ticket is minted. For a call-scoped child, the sandbox
+initially executes only the trusted `claw-app-runner`, blocked on a private
+stdin gate. The service Host binds the runner's session, atomically consumes
+the daemon ticket, and only then releases the gate so the runner can `exec`
+package code and begin MCP initialization. The gate is sequencing, not
+authority: only ticket consumption installs capabilities. Before launch, the
+derived mount plan must exactly match the daemon snapshot; the Linux provider
+then rechecks and pins those inodes through `exec`.
 
 Authority-time package lookup bypasses the discovery cache and re-hashes the
 signed file tree, so replacing a package child after registration refuses the

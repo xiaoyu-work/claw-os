@@ -185,6 +185,26 @@ async fn frames_round_trip_through_the_reader() {
 }
 
 #[tokio::test]
+async fn extension_lease_renewals_round_trip_with_the_authoritative_deadline() {
+    let frame = BrokerFrame::ExtensionLeaseRenewed {
+        task_id: "task-a".to_string(),
+        expires_at_ms: 4_242,
+    };
+    let encoded = encode(&frame).expect("encode");
+    let mut reader = FrameReader::new(tokio::io::BufReader::new(encoded.as_bytes()));
+    let decoded: BrokerFrame = reader.next_frame().await.expect("read").expect("frame");
+    let BrokerFrame::ExtensionLeaseRenewed {
+        task_id,
+        expires_at_ms,
+    } = decoded
+    else {
+        panic!("expected extension lease renewal");
+    };
+    assert_eq!(task_id, "task-a");
+    assert_eq!(expires_at_ms, 4_242);
+}
+
+#[tokio::test]
 async fn an_oversized_frame_is_refused_rather_than_buffered() {
     let mut payload = Vec::with_capacity(MAX_FRAME_BYTES + 16);
     payload.extend(std::iter::repeat(b'x').take(MAX_FRAME_BYTES + 8));

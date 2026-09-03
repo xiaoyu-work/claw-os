@@ -138,6 +138,18 @@ bubblewrap as `/proc/self/fd/N`. A path swapped for a symlink, another
 directory or a fresh mount between validation and setup fails the launch
 rather than being followed.
 
+For an App Mesh single-call worker, validation starts at daemon authorization:
+the canonical source/target, mode, class and `st_dev`/`st_ino` of every
+capability-derived mount are bound into the call ticket. Session derivation
+must reproduce that exact snapshot, then the provider performs the descriptor
+pin above. A symlink or inode replacement anywhere between authorization and
+`exec` therefore refuses the call instead of changing what enters the sandbox.
+The resource sandbox first runs only the trusted `claw-app-runner`, blocked on
+its parent-owned stdin gate. The Host binds that process and consumes the
+single-use daemon ticket before releasing it to `exec` any package code, so
+neither module initialization nor an MCP handshake can race ahead of the
+transient grant.
+
 ## Networking
 
 A worker has no route: its network namespace is empty and the seccomp

@@ -133,7 +133,7 @@ impl BrokerContext {
         })
     }
 
-    fn extension_containment(
+    pub(crate) fn extension_containment(
         &self,
     ) -> Result<Arc<crate::extension_host::spawn::ContainmentRoot>, String> {
         match self.extension_containment.get_or_init(|| {
@@ -155,7 +155,7 @@ impl BrokerContext {
         }
     }
 
-    fn extension_identity_pool(
+    pub(crate) fn extension_identity_pool(
         &self,
     ) -> Result<Arc<crate::extension_host::identity::ExtensionIdentityPool>, String> {
         match self.extension_identities.get_or_init(|| {
@@ -832,7 +832,10 @@ async fn start_extension_host(
     capability_generation: &str,
     broker: BrokerContext,
 ) -> Result<ExtensionRuntime, String> {
-    let mut execution_identity = broker.extension_identity_pool()?.acquire(identity.uid)?;
+    let mut execution_identity = broker.extension_identity_pool()?.acquire(
+        identity.uid,
+        crate::extension_host::protocol::HostPurpose::Task,
+    )?;
     let extension = execution_identity.identity().clone();
     execution_identity.begin_task(identity.uid)?;
     let task_name = crate::extension_host::spawn::HostPaths::new_task_name();
@@ -893,17 +896,24 @@ async fn start_extension_host(
     let expires_at_ms = super::grant::now_ms().saturating_add(lease_duration.as_millis() as u64);
     let approved_paths = extension_approved_paths(identity, session)?;
     let cleanup_paths = paths.clone();
+    let launch = crate::extension_host::spawn::HostLaunchSpec {
+        purpose: crate::extension_host::protocol::HostPurpose::Task,
+        lease_id: job.id.clone(),
+        authority_session_id: job.session_id.clone(),
+        app_id: session.and_then(|session| session.app_id.clone()),
+        host_session_id: host_session_id.clone(),
+        controller_uid: identity.uid,
+        controller_gid: isolation.execution_gid(),
+        controller_pid: worker_pid,
+        controller_start_time_ticks: worker_start_time_ticks,
+        package: None,
+    };
     let mut host = match crate::extension_host::spawn::spawn_host(
         identity,
         &extension,
         isolation,
         containment,
-        &job.id,
-        job.session_id.as_deref(),
-        session.and_then(|session| session.app_id.as_deref()),
-        host_session_id.as_deref(),
-        worker_pid,
-        worker_start_time_ticks,
+        &launch,
         &lease_nonce,
         expires_at_ms,
         capability_generation,
@@ -977,12 +987,14 @@ async fn start_extension_host(
     }
 
     let lease = Arc::new(crate::extension_host::broker::ExtensionLease::new(
+        crate::extension_host::protocol::HostPurpose::Task,
         job.id.clone(),
         job.session_id.clone(),
         host_session_id.clone(),
         identity.uid,
         extension.uid,
         isolation.execution_gid(),
+        capability_generation.to_string(),
         worker_pid,
         worker_start_time_ticks,
         host.pid,
@@ -1005,7 +1017,7 @@ async fn start_extension_host(
     })
 }
 
-fn extension_approved_paths(
+pub(crate) fn extension_approved_paths(
     identity: &spawn::WorkerIdentity,
     session: Option<&crate::proc::SessionInfo>,
 ) -> Result<Vec<crate::extension_host::protocol::ApprovedPath>, String> {
@@ -1016,8 +1028,13 @@ fn extension_approved_paths(
             candidates.push(path);
         }
     }
-    for key in ["COS_APPS_DIR", "COS_SDK_PYTHON_DIR"] {
-        if let Some(path) = std::env::var_os(key).map(std::path::PathBuf::from) {
+    if let Some(path) = std::env::var_os("COS_APPS_DIR").map(std::path::PathBuf::from) {
+        if path.exists() {
+            candidates.push(path);
+        }
+    }
+    if let Some(paths) = std::env::var_os("COS_SDK_PYTHON_DIR") {
+        for path in std::env::split_paths(&paths).filter(|path| !path.as_os_str().is_empty()) {
             if path.exists() {
                 candidates.push(path);
             }
@@ -1300,7 +1317,22 @@ async fn pump(
                         WorkerFrame::Heartbeat { .. } => {
                             lease.deadline = Instant::now() + config.lease;
                             lease.approval_expires_at = approval_deadline(config.lease);
-                            extension_lease.renew(config.lease);
+                            let expires_at_ms = extension_lease.renew(config.lease);
+                            if send(
+                                &mut writer,
+                                &BrokerFrame::ExtensionLeaseRenewed {
+                                    task_id: job.id.clone(),
+                                    expires_at_ms,
+                                },
+                            )
+                            .await
+                            .is_err()
+                            {
+                                return TaskOutcome::Indeterminate(
+                                    "failed to acknowledge the renewed extension-host lease"
+                                        .to_string(),
+                                );
+                            }
                         }
                         WorkerFrame::Result { outcome, .. } => {
                             return TaskOutcome::Reported(outcome);
@@ -2145,7 +2177,7 @@ async fn reap(child: &mut tokio::process::Child, pid: u32) {
     }
 }
 
-async fn reap_extension_host(
+pub(crate) async fn reap_extension_host(
     host: &mut crate::extension_host::spawn::SpawnedExtensionHost,
 ) -> Result<(), String> {
     let _ = host.child.start_kill();

@@ -94,6 +94,7 @@ async fn a_root_peer_cannot_submit_an_agent_task() {
         execution_uid: None,
         start_time_ticks: Some(1),
         attended_local: false,
+        extension_host: None,
     };
     let error = submit(json!({ "prompt": "hello" }), &root)
         .await
@@ -143,6 +144,7 @@ fn retry_creates_a_new_pending_task_for_the_same_session() {
         execution_uid: None,
         start_time_ticks: crate::proc::read_start_time_ticks_pub(std::process::id()),
         attended_local: true,
+        extension_host: None,
     };
 
     let retried = retry(json!({ "id": original.id }), &client).unwrap();
