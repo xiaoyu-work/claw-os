@@ -198,12 +198,15 @@ fn run() -> Result<(), String> {
             .collect::<Vec<_>>();
         for (id, extension) in extensions {
             let mut extension = extension.lock().await;
-            if interrupted_extensions.contains(&id) {
-                extension.abort().await;
+            let cleanup = if interrupted_extensions.contains(&id) {
+                extension.abort().await
             } else {
-                let _ = extension
+                extension
                     .shutdown(super::abi::ShutdownReason::TaskComplete)
-                    .await;
+                    .await
+            };
+            if cleanup.is_err() {
+                state.fatal_shutdown.store(true, Ordering::SeqCst);
             }
         }
         let _ = std::fs::remove_file(&control_socket);
@@ -478,7 +481,7 @@ async fn serve_authenticated(
         Err(_) if event_extension_id.is_some() => {
             abort.abort();
             if let Some(extension_id) = event_extension_id.as_deref() {
-                abort_hosted_agent_extension(&state, extension_id).await;
+                abort_hosted_agent_extension(state.clone(), extension_id).await;
             }
             ControlResponse::error(
                 id,
@@ -757,8 +760,13 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
                         extensions.remove(&extension_id);
                     }
                     drop(extensions);
+                    let cleanup_state = state.clone();
                     tokio::spawn(async move {
-                        extension.abort().await;
+                        if extension.abort().await.is_err() {
+                            cleanup_state.shutting_down.store(true, Ordering::SeqCst);
+                            cleanup_state.fatal_shutdown.store(true, Ordering::SeqCst);
+                            cleanup_state.shutdown.notify_waiters();
+                        }
                     });
                     Err(error.into())
                 }
@@ -776,13 +784,17 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
             };
             let mut extension = extension.lock().await;
             if extension.binding() != &binding {
-                extension.abort().await;
-                return Err("Agent extension detach binding does not match"
-                    .to_string()
-                    .into());
+                let cleanup = extension.abort().await;
+                let error = match cleanup {
+                    Ok(()) => "Agent extension detach binding does not match".to_string(),
+                    Err(cleanup) => {
+                        format!("Agent extension detach binding does not match; {cleanup}")
+                    }
+                };
+                return Err(error.into());
             }
             if interrupted {
-                extension.abort().await;
+                return detached_after_cleanup(extension.abort().await);
             } else {
                 extension.shutdown(reason).await?;
             }
@@ -794,6 +806,11 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
                 .into())
         }
     }
+}
+
+fn detached_after_cleanup(cleanup: Result<(), String>) -> Result<HostResult, DispatchError> {
+    cleanup?;
+    Ok(HostResult::AgentExtensionDetached { detached: true })
 }
 
 fn abort_agent_extension_events(state: &HostState, extension_id: &str) -> bool {
@@ -810,12 +827,16 @@ fn abort_agent_extension_events(state: &HostState, extension_id: &str) -> bool {
     interrupted
 }
 
-async fn abort_hosted_agent_extension(state: &HostState, extension_id: &str) {
+async fn abort_hosted_agent_extension(state: Arc<HostState>, extension_id: &str) {
     let extension = state.agent_extensions.lock().await.remove(extension_id);
     if let Some(extension) = extension {
         tokio::spawn(async move {
             let mut extension = extension.lock_owned().await;
-            extension.abort().await;
+            if extension.abort().await.is_err() {
+                state.shutting_down.store(true, Ordering::SeqCst);
+                state.fatal_shutdown.store(true, Ordering::SeqCst);
+                state.shutdown.notify_waiters();
+            }
         });
     }
 }

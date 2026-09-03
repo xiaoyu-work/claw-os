@@ -152,7 +152,7 @@ upgrade replaces the whole set. Agent tasks run in `claw-agentd` processes that
   it becomes a process. Agentd worker protocol v10 and grant format v9 bind
   owner-qualified Agent-extension package receipts into the signed task
   authority. A v9 worker frame or v8 grant is rejected explicitly.
-  Extension-host control protocol v8 remains the independently floored host
+  Extension-host control protocol v9 remains the independently floored host
   channel, and the child Agent-extension ABI remains v2.
 - If the worker binary is missing or the daemon is started with
   `CLAWD_AGENTD=off`, agent tasks stop being executed and say so, while every

@@ -137,6 +137,21 @@ fn route_spoofing_cross_session_and_grant_replay_are_rejected() {
 }
 
 #[test]
+fn a_v8_ping_is_rejected_before_route_or_replay_state_is_used() {
+    let state = state();
+    let mut old = make_request(&state);
+    old.protocol = PROTOCOL_VERSION - 1;
+    let error = validate_request(&old, process(), &state).unwrap_err();
+    assert!(error.contains("protocol mismatch"), "{error}");
+    assert!(error.contains("v8"), "{error}");
+    assert!(error.contains("v9"), "{error}");
+
+    old.protocol = PROTOCOL_VERSION;
+    validate_request(&old, process(), &state)
+        .expect("version rejection must not consume the request id");
+}
+
+#[test]
 fn another_process_cannot_drive_the_host_control_socket() {
     let state = state();
     let mut other = process();
@@ -274,6 +289,10 @@ async fn saturated_events_and_stalled_readers_cannot_starve_canonical_or_priorit
         wrong_lane_response.error_category,
         Some(ExtensionErrorCategory::Protocol)
     );
+    assert!(wrong_lane_response
+        .error
+        .as_deref()
+        .is_some_and(|error| error.contains("wrong control lane")));
     drop(canonical_saturation);
 
     drop(stalled);
@@ -331,4 +350,26 @@ fn control_capacity_is_globally_bounded_and_lane_separated() {
     ] {
         assert_eq!(action.control_lane(), ControlLane::Canonical);
     }
+}
+
+#[test]
+fn interrupted_detach_acknowledges_only_proven_process_and_package_cleanup() {
+    let process_error = detached_after_cleanup(Err("root child survived".to_string()))
+        .expect_err("surviving child cannot be acknowledged");
+    assert_eq!(
+        process_error.category,
+        ExtensionErrorCategory::RemoteCallFailure
+    );
+    assert!(process_error.message.contains("root child survived"));
+
+    let package_error = detached_after_cleanup(Err("materialized package survived".to_string()))
+        .expect_err("surviving package cannot be acknowledged");
+    assert!(package_error
+        .message
+        .contains("materialized package survived"));
+
+    assert!(matches!(
+        detached_after_cleanup(Ok(())),
+        Ok(HostResult::AgentExtensionDetached { detached: true })
+    ));
 }

@@ -655,33 +655,42 @@ impl ExtensionHostClient {
         let response: ControlResponse = serde_json::from_slice(&body).map_err(|_| {
             ClientFault::protocol("extension-host response is not a valid envelope")
         })?;
-        if response.protocol != PROTOCOL_VERSION {
-            return Err(ClientFault::protocol(format!(
-                "extension-host response protocol is v{}, expected v{}",
-                response.protocol, PROTOCOL_VERSION
-            )));
-        }
-        if response.id != request.id {
-            return Err(ClientFault::protocol(
-                "extension-host response did not correlate with the request",
-            ));
-        }
-        if !response.ok {
-            let category = response
-                .error_category
-                .unwrap_or(ExtensionErrorCategory::Protocol);
-            return Err(ClientFault::new(
-                category,
-                response
-                    .error
-                    .unwrap_or_else(|| "extension host request failed".to_string()),
-            ));
-        }
-        response
-            .result
-            .ok_or_else(|| ClientFault::protocol("extension host response omitted its result"))
+        validate_control_response(&request, response)
     }
+}
 
+fn validate_control_response(
+    request: &ControlRequest,
+    response: ControlResponse,
+) -> ClientResult<HostResult> {
+    if response.protocol != PROTOCOL_VERSION {
+        return Err(ClientFault::protocol(format!(
+            "extension-host response protocol is v{}, expected v{}",
+            response.protocol, PROTOCOL_VERSION
+        )));
+    }
+    if response.id != request.id {
+        return Err(ClientFault::protocol(
+            "extension-host response did not correlate with the request",
+        ));
+    }
+    if !response.ok {
+        let category = response
+            .error_category
+            .unwrap_or(ExtensionErrorCategory::Protocol);
+        return Err(ClientFault::new(
+            category,
+            response
+                .error
+                .unwrap_or_else(|| "extension host request failed".to_string()),
+        ));
+    }
+    response
+        .result
+        .ok_or_else(|| ClientFault::protocol("extension host response omitted its result"))
+}
+
+impl ExtensionHostClient {
     fn cancel_best_effort(&self, request_id: RequestId) {
         let binding = self.binding.clone();
         std::thread::spawn(move || {

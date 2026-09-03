@@ -202,13 +202,73 @@ async fn failed_detach_exhaustion_requires_containment_escalation() {
 
 #[test]
 fn only_exact_detach_acknowledgement_proves_child_termination() {
-    let acknowledged = AtomicBool::new(false);
-    let error = classify_detach_response(Ok(false), &acknowledged).unwrap_err();
+    let state = DetachState::default();
+    let error = classify_detach_response(Ok(false), &state).unwrap_err();
     assert!(error.contains("exact child termination"), "{error}");
-    assert!(!acknowledged.load(Ordering::Acquire));
+    assert!(!state.is_resolved());
 
-    classify_detach_response(Ok(true), &acknowledged).unwrap();
-    assert!(acknowledged.load(Ordering::Acquire));
+    classify_detach_response(Ok(true), &state).unwrap();
+    assert!(state.is_resolved());
+}
+
+#[test]
+fn later_exact_detach_clears_initial_priority_busy_failure() {
+    let state = DetachState::default();
+    state.record_failure("priority control busy".to_string());
+    assert_eq!(
+        state.unresolved_failure().as_deref(),
+        Some("priority control busy")
+    );
+
+    classify_detach_response(Ok(true), &state).unwrap();
+    assert!(state.is_resolved());
+    assert_eq!(state.unresolved_failure(), None);
+}
+
+#[test]
+fn successful_containment_escalation_clears_only_transient_detach_failure() {
+    let state = DetachState::default();
+    state.record_failure("root child cleanup uncertain".to_string());
+    classify_escalation_response(Ok(()), &state).unwrap();
+    assert!(state.is_resolved());
+    assert_eq!(state.unresolved_failure(), None);
+}
+
+#[test]
+fn interrupted_cleanup_failure_requires_escalation_before_resolution() {
+    let state = DetachState::default();
+    let error = classify_detach_response(
+        Err("root child or materialized package survived".to_string()),
+        &state,
+    )
+    .unwrap_err();
+    state.record_failure(error);
+    assert!(!state.is_resolved());
+    assert!(state
+        .unresolved_failure()
+        .as_deref()
+        .is_some_and(|failure| failure.contains("survived")));
+
+    classify_escalation_response(Ok(()), &state).unwrap();
+    assert!(state.is_resolved());
+    assert_eq!(state.unresolved_failure(), None);
+}
+
+#[test]
+fn unresolved_detach_and_persistent_failures_remain_isolated() {
+    let recovered = DetachState::default();
+    let unresolved = DetachState::default();
+    let protocol_failure = "extension protocol failure".to_string();
+    recovered.record_failure("initial busy".to_string());
+    unresolved.record_failure("root child survived".to_string());
+
+    recovered.resolve();
+    assert_eq!(recovered.unresolved_failure(), None);
+    assert_eq!(
+        unresolved.unresolved_failure().as_deref(),
+        Some("root child survived")
+    );
+    assert_eq!(protocol_failure, "extension protocol failure");
 }
 
 #[tokio::test]

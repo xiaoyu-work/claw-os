@@ -2,9 +2,11 @@
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
+use std::future::Future;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
 use std::process::Stdio;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -37,6 +39,7 @@ pub(crate) struct HostedAgentExtension {
     stdout: ChildStdout,
     sequence: u64,
     materialized_root: PathBuf,
+    root_identity: ProcessIdentity,
     known_descendants: BTreeMap<u32, u64>,
 }
 
@@ -242,6 +245,23 @@ impl HostedAgentExtension {
                     .await;
             }
         };
+        let root_identity = match launch_guard
+            .child
+            .as_ref()
+            .and_then(|child| child.id())
+            .and_then(|pid| {
+                process_parent_and_start(pid).map(|(_, start_time_ticks)| ProcessIdentity {
+                    pid,
+                    start_time_ticks,
+                })
+            }) {
+            Some(identity) => identity,
+            None => {
+                return launch_guard
+                    .fail("Agent extension root process identity is unavailable".to_string())
+                    .await;
+            }
+        };
         let (materialized_root, child) = launch_guard.disarm();
         let mut hosted = Self {
             manifest,
@@ -251,6 +271,7 @@ impl HostedAgentExtension {
             stdout,
             sequence: 0,
             materialized_root,
+            root_identity,
             known_descendants: BTreeMap::new(),
         };
         let initialize = AbiRequest {
@@ -383,8 +404,8 @@ impl HostedAgentExtension {
         }
     }
 
-    pub async fn abort(&mut self) {
-        let _ = self.cleanup().await;
+    pub async fn abort(&mut self) -> Result<(), String> {
+        self.cleanup().await
     }
 
     async fn fail_closed<T>(&mut self, error: String) -> Result<T, String> {
@@ -406,11 +427,7 @@ impl HostedAgentExtension {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(error) => Err(format!("remove materialized extension package: {error}")),
         };
-        match (process, storage) {
-            (Ok(()), Ok(())) => Ok(()),
-            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
-            (Err(error), Err(storage)) => Err(format!("{error}; {storage}")),
-        }
+        combine_cleanup_results(process, storage)
     }
 
     async fn exchange(
@@ -458,21 +475,18 @@ impl HostedAgentExtension {
             })
             .collect();
         for descendant in &descendants {
-            if process_parent_and_start(descendant.pid)
-                .is_some_and(|(_, start)| start == descendant.start_time_ticks)
-            {
-                unsafe {
-                    libc::kill(descendant.pid as libc::pid_t, libc::SIGKILL);
-                }
-            }
+            signal_exact_process(*descendant, libc::SIGKILL)?;
         }
-        if tokio::time::timeout(Duration::from_millis(100), self.child.wait())
-            .await
-            .is_err()
-        {
-            let _ = self.child.start_kill();
-            let _ = tokio::time::timeout(Duration::from_secs(1), self.child.wait()).await;
-        }
+        let mut root = TokioRootChild {
+            child: &mut self.child,
+            identity: self.root_identity,
+        };
+        terminate_root_child(
+            &mut root,
+            Duration::from_millis(100),
+            Duration::from_secs(1),
+        )
+        .await?;
         reap_captured_descendants(descendants).await;
         let survivors = self
             .known_descendants
@@ -534,6 +548,99 @@ impl HostedAgentExtension {
             }
         }
     }
+}
+
+fn combine_cleanup_results(
+    process: Result<(), String>,
+    storage: Result<(), String>,
+) -> Result<(), String> {
+    match (process, storage) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+        (Err(error), Err(storage)) => Err(format!("{error}; {storage}")),
+    }
+}
+
+trait RootChildControl {
+    fn signal(&mut self, signal: i32) -> Result<(), String>;
+    fn exact_identity_live(&self) -> Result<bool, String>;
+    fn wait<'a>(&'a mut self) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>>;
+}
+
+struct TokioRootChild<'a> {
+    child: &'a mut Child,
+    identity: ProcessIdentity,
+}
+
+impl RootChildControl for TokioRootChild<'_> {
+    fn signal(&mut self, signal: i32) -> Result<(), String> {
+        signal_exact_process(self.identity, signal)
+    }
+
+    fn exact_identity_live(&self) -> Result<bool, String> {
+        exact_process_identity_live(self.identity)
+    }
+
+    fn wait<'a>(&'a mut self) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>> {
+        Box::pin(async move {
+            self.child
+                .wait()
+                .await
+                .map(|_| ())
+                .map_err(|error| format!("wait for Agent extension root process: {error}"))
+        })
+    }
+}
+
+async fn terminate_root_child(
+    child: &mut impl RootChildControl,
+    graceful_timeout: Duration,
+    kill_timeout: Duration,
+) -> Result<(), String> {
+    child.signal(libc::SIGTERM)?;
+    match tokio::time::timeout(graceful_timeout, child.wait()).await {
+        Ok(result) => result?,
+        Err(_) => {
+            child.signal(libc::SIGKILL)?;
+            match tokio::time::timeout(kill_timeout, child.wait()).await {
+                Ok(result) => result?,
+                Err(_) => {
+                    return Err(
+                        "Agent extension root process did not reap after SIGKILL".to_string()
+                    )
+                }
+            }
+        }
+    }
+    if child.exact_identity_live()? {
+        return Err("Agent extension root process identity survived reap".to_string());
+    }
+    Ok(())
+}
+
+fn signal_exact_process(identity: ProcessIdentity, signal: i32) -> Result<(), String> {
+    let Some((_, start_time_ticks)) = process_parent_and_start_checked(identity.pid)? else {
+        return Ok(());
+    };
+    if start_time_ticks != identity.start_time_ticks {
+        return Ok(());
+    }
+    if unsafe { libc::kill(identity.pid as libc::pid_t, signal) } == 0 {
+        return Ok(());
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) && !exact_process_identity_live(identity)? {
+        return Ok(());
+    }
+    Err(format!(
+        "signal Agent extension process {}: {error}",
+        identity.pid
+    ))
+}
+
+fn exact_process_identity_live(identity: ProcessIdentity) -> Result<bool, String> {
+    Ok(process_parent_and_start_checked(identity.pid)?
+        .is_some_and(|(_, start)| start == identity.start_time_ticks))
 }
 
 impl Drop for HostedAgentExtension {
@@ -700,11 +807,35 @@ fn direct_children(parent: u32) -> Vec<ProcessIdentity> {
 }
 
 fn process_parent_and_start(pid: u32) -> Option<(u32, u64)> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let fields = stat[stat.rfind(')')? + 1..]
-        .split_whitespace()
-        .collect::<Vec<_>>();
-    Some((fields.get(1)?.parse().ok()?, fields.get(19)?.parse().ok()?))
+    process_parent_and_start_checked(pid).ok().flatten()
+}
+
+fn process_parent_and_start_checked(pid: u32) -> Result<Option<(u32, u64)>, String> {
+    let stat = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(stat) => stat,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "read Agent extension process {pid} identity: {error}"
+            ))
+        }
+    };
+    let suffix = stat
+        .rfind(')')
+        .and_then(|end| stat.get(end + 1..))
+        .ok_or_else(|| format!("Agent extension process {pid} stat is malformed"))?;
+    let fields = suffix.split_whitespace().collect::<Vec<_>>();
+    let parent = fields
+        .get(1)
+        .ok_or_else(|| format!("Agent extension process {pid} stat omitted its parent"))?
+        .parse()
+        .map_err(|_| format!("Agent extension process {pid} parent is invalid"))?;
+    let start = fields
+        .get(19)
+        .ok_or_else(|| format!("Agent extension process {pid} stat omitted its start time"))?
+        .parse()
+        .map_err(|_| format!("Agent extension process {pid} start time is invalid"))?;
+    Ok(Some((parent, start)))
 }
 
 fn process_mentions_root(pid: u32, root: &Path) -> bool {

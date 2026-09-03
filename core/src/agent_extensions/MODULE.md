@@ -20,6 +20,10 @@ authorization-policy access.
   retry every unacknowledged detach within the shared finish budget, and force
   supervisor-owned host/cgroup teardown when exact child termination cannot be
   proven.
+- Keep transient detach failure per extension. A later exact detach
+  acknowledgement or accepted host-containment escalation resolves only that
+  extension's detach state; unrelated runtime/protocol failures and other
+  extensions remain independent.
 - Emit model observations at the real provider-attempt boundary with paired
   attempt ids.
 - Mint per-extension event/session/package/tool/policy-bound opaque capability

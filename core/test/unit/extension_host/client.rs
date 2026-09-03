@@ -237,6 +237,58 @@ fn categorized_response_serialization_rejects_old_spoofing_semantics() {
     assert_eq!(decoded.error_category, None);
 }
 
+#[test]
+fn canonical_ping_cannot_establish_compatibility_with_a_v8_host() {
+    let binding = binding();
+    let request = ControlRequest::new(&binding, HostAction::Ping, 1000);
+    let mut response = ControlResponse::ok(
+        request.id.clone(),
+        HostResult::Ready {
+            pid: binding.host_pid,
+            start_time_ticks: binding.host_start_time_ticks,
+            dumpable: false,
+            seccomp_mode: 2,
+        },
+    );
+    response.protocol = PROTOCOL_VERSION - 1;
+
+    let error = validate_control_response(&request, response).unwrap_err();
+    assert_eq!(error.category, ExtensionErrorCategory::Protocol);
+    assert!(
+        error.message.contains("protocol is v8"),
+        "{}",
+        error.message
+    );
+    assert!(error.message.contains("expected v9"), "{}", error.message);
+}
+
+#[test]
+fn a_v8_launcher_gets_an_explicit_bootstrap_protocol_rejection() {
+    let binding = binding();
+    let bootstrap = super::super::protocol::HostBootstrap {
+        protocol: PROTOCOL_VERSION - 1,
+        task_id: binding.task_id,
+        session_id: binding.session_id,
+        owner_uid: binding.owner_uid,
+        extension_uid: binding.extension_uid,
+        execution_gid: binding.owner_gid,
+        enforce_groups: false,
+        worker_pid: binding.worker_pid,
+        worker_start_time_ticks: binding.worker_start_time_ticks,
+        lease_nonce: binding.lease_nonce,
+        expires_at_ms: binding.expires_at_ms,
+        capability_generation: binding.capability_generation,
+        control_socket: binding.control_socket,
+        broker_socket: binding.broker_socket,
+        approved_paths: binding.approved_paths,
+        agent_extensions: binding.agent_extensions,
+    };
+    let error = bootstrap.into_current_binding().unwrap_err();
+    assert!(error.contains("bootstrap protocol mismatch"), "{error}");
+    assert!(error.contains("v8"), "{error}");
+    assert!(error.contains("v9"), "{error}");
+}
+
 fn transport_test_client(path: &std::path::Path) -> ExtensionHostClient {
     let mut binding = binding();
     binding.control_socket = path.to_string_lossy().into_owned();

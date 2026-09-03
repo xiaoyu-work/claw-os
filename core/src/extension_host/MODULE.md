@@ -32,6 +32,9 @@ extensions.
   filesystem root, a verified read-only runtime/snapshot allowlist, and
   private writable state/tmpfs only.
 - Bound frames, concurrent calls, startup/call timeouts, and replay history.
+- Version lane-specific sockets and typed busy responses as extension-host
+  control protocol v9; v8 peers fail explicit negotiation before any route is
+  admitted.
 - Admit worker control over independent canonical App/MCP, Agent-event, and
   priority lifecycle lanes. Each lane has bounded short-read admission;
   Agent events have one in flight per extension and aggregate capacity for all
@@ -46,6 +49,10 @@ extensions.
   A relist mismatch blocks the call rather than substituting a new schema.
 - Tear down the host cgroup/process tree and every child session on task
   completion, cancellation, timeout, crash, or worker loss.
+- A child detach is acknowledged only after its captured root PID/start-time
+  has been successfully waited and proven gone, every captured descendant is
+  gone, and materialized package storage is removed. Wait, signal, reap, or
+  storage uncertainty propagates to worker retry and supervisor containment.
 - Treat descriptors and results returned by hosted code as untrusted.
 - Keep every setup parent root-owned and pinned by directory descriptor.
   Create/open/remove children with `*at`/`openat2` calls; transfer only the

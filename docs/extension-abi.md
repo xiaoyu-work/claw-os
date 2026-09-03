@@ -157,8 +157,9 @@ Compatibility policy:
   always rejected.
 - The worker-to-host control protocol is separately versioned and replaced in
   lockstep with the package. Agentd worker protocol v10 and signed grant format
-  v9 carry the authenticated package receipts; extension-host control remains
-  v8 and this child ABI remains v2.
+  v9 carry the authenticated package receipts; extension-host control v9 adds
+  typed busy responses and lane-specific sockets, while this child ABI remains
+  v2.
 
 ## Observational events
 
@@ -182,11 +183,16 @@ connections without lending canonical or priority permits to event work.
 Task finish, completion acknowledgement, detach retries, worker abort, and
 forced cleanup share one total deadline. Detach acknowledgement is independent
 of worker completion: a failed detach is retried even after its FIFO worker
-has exited. If the host cannot prove exact child termination, the worker
-returns a terminal failure and requests host shutdown so `clawd` performs the
-mandatory cgroup kill/empty/quarantine cleanup. A crash, hang, malformed
-result, or limit violation normally has per-extension failure scope; inability
-to prove containment escalates to the task host.
+has exited. The host returns `detached: true` only after the captured root
+PID/start-time is successfully waited and proven gone, all known descendants
+are gone, and materialized package storage is removed. Any signal, wait, reap,
+survivor, or storage uncertainty remains unacknowledged and is retried before
+the worker requests host shutdown so `clawd` performs the mandatory cgroup
+kill/empty/quarantine cleanup. A later exact acknowledgement or accepted
+containment escalation clears that extension's transient detach error, never
+another extension's state or an independent runtime/protocol failure. A crash,
+hang, malformed result, or limit violation normally has per-extension failure
+scope; inability to prove containment escalates to the task host.
 
 Event projections are least-privilege:
 

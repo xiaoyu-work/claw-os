@@ -5,7 +5,7 @@ use crate::agent::tools::mcp::integration::McpServerSpec;
 use crate::agent::tools::mcp::protocol::{CallToolResult, ToolDescriptor};
 use crate::clawd::wire::RequestId;
 
-pub const PROTOCOL_VERSION: u32 = 8;
+pub const PROTOCOL_VERSION: u32 = 9;
 pub const MAX_CONTROL_FRAME_BYTES: usize = 8 * 1024 * 1024;
 // Long-running Agent events cannot consume the canonical App/MCP or priority
 // lifecycle lanes. Admission and action permits together are the global
@@ -64,8 +64,13 @@ pub struct HostBootstrap {
 
 impl HostBootstrap {
     pub fn into_current_binding(self) -> Result<ExtensionBinding, String> {
-        if self.protocol != PROTOCOL_VERSION
-            || self.extension_uid != unsafe { libc::geteuid() as u32 }
+        if self.protocol != PROTOCOL_VERSION {
+            return Err(format!(
+                "extension-host bootstrap protocol mismatch: launcher speaks v{}, host speaks v{}",
+                self.protocol, PROTOCOL_VERSION
+            ));
+        }
+        if self.extension_uid != unsafe { libc::geteuid() as u32 }
             || self.execution_gid != unsafe { libc::getegid() as u32 }
             || self.extension_uid == self.owner_uid
             || self.owner_uid == 0
