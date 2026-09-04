@@ -6,6 +6,7 @@ import re
 import shutil
 import subprocess
 import sys
+import unicodedata
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from _shared.env_scrub import scrub_env  # noqa: E402
@@ -16,33 +17,84 @@ from cos_runtime import policy  # noqa: E402
 ADDRESS_RE = re.compile(r"^(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$")
 PAIRING_ID_RE = re.compile(r"^[0-9A-Fa-f]{32}$")
 TIMEOUT_SECS = int(os.environ.get("CLAW_BLUETOOTH_MANAGER_TIMEOUT", "240"))
-DEVICE_COMMANDS = frozenset(
-    {"pair", "connect", "disconnect", "trust", "untrust", "forget"}
-)
 
 
-def _cos_binary():
+def _cos_binary() -> str | None:
     return os.environ.get("COS_BIN") or shutil.which("cos")
 
 
-def _address(raw, name):
+def _address(raw: object, name: str) -> str:
     if not isinstance(raw, str) or ADDRESS_RE.fullmatch(raw) is None:
         raise ValueError(f"{name} must be a Bluetooth MAC address")
     return raw.upper()
 
 
+def _state(raw: object) -> str:
+    if not isinstance(raw, str) or raw not in {"on", "off"}:
+        raise ValueError("state must be on or off")
+    return raw
+
+
+def _scan_seconds(raw: object) -> int:
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        raise ValueError("scan seconds must be an integer")
+    if not 1 <= raw <= 60:
+        raise ValueError("scan seconds must be 1..60")
+    return raw
+
+
+def _pairing_id(raw: object) -> str:
+    if not isinstance(raw, str) or PAIRING_ID_RE.fullmatch(raw) is None:
+        raise ValueError("pairing id must be exactly 32 hexadecimal characters")
+    return raw.lower()
+
+
+def _pairing_response(raw: object) -> str:
+    if (
+        not isinstance(raw, str)
+        or not 1 <= len(raw) <= 32
+        or any(unicodedata.category(character) == "Cc" for character in raw)
+    ):
+        raise ValueError(
+            "pairing response must be a string of 1..32 characters without controls"
+        )
+    return raw
+
+
+def _parse_payload(payload_text: str) -> dict:
+    try:
+        payload = json.loads(payload_text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            "Bluetooth Manager broker returned invalid JSON"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("Bluetooth Manager broker returned a non-object result")
+    if "error" in payload:
+        error = payload["error"]
+        if not isinstance(error, str) or not error:
+            raise RuntimeError(
+                "Bluetooth Manager broker returned an invalid error payload"
+            )
+        raise RuntimeError(error)
+    return payload
+
+
 def _broker(
-    action,
-    adapter=None,
-    device=None,
-    state=None,
-    seconds=None,
-    pairing_id=None,
-    response=None,
-):
+    action: str,
+    *,
+    adapter: str | None = None,
+    device: str | None = None,
+    state: str | None = None,
+    seconds: int | None = None,
+    pairing_id: str | None = None,
+    response: str | None = None,
+) -> dict:
     cos_bin = _cos_binary()
     if not cos_bin:
-        return {"error": "cos binary not found; Bluetooth Manager broker unavailable"}
+        raise FileNotFoundError(
+            "cos binary not found; Bluetooth Manager broker unavailable"
+        )
     argv = [cos_bin, "__bluetooth", action]
     if adapter is not None:
         argv.extend(["--adapter", adapter])
@@ -69,76 +121,104 @@ def _broker(
         run_options["input"] = f"{response}\n"
     try:
         result = subprocess.run(argv, **run_options)
-    except (FileNotFoundError, PermissionError) as exc:
-        return {"error": str(exc)}
-    except subprocess.TimeoutExpired:
-        return {"error": f"Bluetooth Manager broker exceeded {TIMEOUT_SECS}s"}
-    payload_text = (result.stdout or "").strip() or (result.stderr or "").strip()
-    try:
-        payload = json.loads(payload_text) if payload_text else {}
-    except json.JSONDecodeError:
-        return {"error": "Bluetooth Manager broker returned invalid JSON"}
-    if result.returncode != 0 and "error" not in payload:
-        payload["error"] = f"Bluetooth Manager broker exited {result.returncode}"
-    return payload
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"Bluetooth Manager broker executable not found: {cos_bin}"
+        ) from exc
+    except PermissionError as exc:
+        raise PermissionError(
+            f"permission denied launching Bluetooth Manager broker: {cos_bin}"
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise TimeoutError(
+            f"Bluetooth Manager broker exceeded {TIMEOUT_SECS}s for {action}"
+        ) from exc
+
+    payloads = []
+    for output in (
+        (result.stdout or "").strip(),
+        (result.stderr or "").strip(),
+    ):
+        if not output:
+            continue
+        payloads.append(_parse_payload(output))
+        if result.returncode == 0:
+            break
+    if result.returncode != 0:
+        raise RuntimeError(f"Bluetooth Manager broker exited {result.returncode}")
+    if not payloads:
+        raise RuntimeError("Bluetooth Manager broker returned invalid JSON")
+    return payloads[0]
 
 
-def run(command, args):
-    from canonical_argv import normalize_canonical_argv
-    args = normalize_canonical_argv(args)
-    if command == "status":
-        if args:
-            return {"error": "status takes no arguments"}
-        policy.require("sys.observe", name="bluetooth")
-        return _broker(command)
-    if command == "power":
-        if len(args) != 2 or args[1] not in {"on", "off"}:
-            return {"error": "power requires <adapter-address> on|off"}
-        try:
-            adapter = _address(args[0], "adapter")
-        except ValueError as exc:
-            return {"error": str(exc)}
-        policy.require("device.bluetooth", name="control")
-        return _broker(command, adapter=adapter, state=args[1])
-    if command == "scan":
-        if not 1 <= len(args) <= 2:
-            return {"error": "scan requires <adapter-address> [seconds]"}
-        try:
-            adapter = _address(args[0], "adapter")
-            seconds = int(args[1]) if len(args) == 2 else 10
-        except (ValueError, TypeError) as exc:
-            return {"error": str(exc)}
-        if not 1 <= seconds <= 60:
-            return {"error": "scan seconds must be 1..60"}
-        policy.require("device.bluetooth", name="control")
-        return _broker(command, adapter=adapter, seconds=seconds)
-    if command in DEVICE_COMMANDS:
-        if len(args) != 2:
-            return {"error": f"{command} requires <adapter-address> <device-address>"}
-        try:
-            adapter = _address(args[0], "adapter")
-            device = _address(args[1], "device")
-        except ValueError as exc:
-            return {"error": str(exc)}
-        policy.require("device.bluetooth", name="control")
-        return _broker(command, adapter=adapter, device=device)
-    if command in {"pair-status", "pair-cancel"}:
-        if len(args) != 1 or PAIRING_ID_RE.fullmatch(args[0]) is None:
-            return {"error": f"{command} requires one pairing id returned by pair"}
-        policy.require("device.bluetooth", name="control")
-        return _broker(command, pairing_id=args[0].lower())
-    if command == "pair-respond":
-        if (
-            len(args) != 2
-            or PAIRING_ID_RE.fullmatch(args[0]) is None
-            or not 1 <= len(args[1]) <= 32
-            or any(character in "\r\n\x00" or ord(character) < 32 for character in args[1])
-        ):
-            return {"error": "pair-respond requires <pairing-id> <response>"}
-        policy.require("device.bluetooth", name="control")
-        return _broker(
-            command,
-            pairing_id=args[0].lower(),
-            response=args[1],
-        )
-    return {"error": f"unknown command: {command}"}
+def status() -> dict:
+    policy.require("sys.observe", name="bluetooth")
+    return _broker("status")
+
+
+def power(adapter: str, state: str) -> dict:
+    adapter = _address(adapter, "adapter")
+    state = _state(state)
+    policy.require("device.bluetooth", name="control")
+    return _broker("power", adapter=adapter, state=state)
+
+
+def scan(adapter: str, seconds: int = 10) -> dict:
+    adapter = _address(adapter, "adapter")
+    seconds = _scan_seconds(seconds)
+    policy.require("device.bluetooth", name="control")
+    return _broker("scan", adapter=adapter, seconds=seconds)
+
+
+def _device_action(action: str, adapter: str, device: str) -> dict:
+    adapter = _address(adapter, "adapter")
+    device = _address(device, "device")
+    policy.require("device.bluetooth", name="control")
+    return _broker(action, adapter=adapter, device=device)
+
+
+def pair(adapter: str, device: str) -> dict:
+    return _device_action("pair", adapter, device)
+
+
+def pair_status(pairing_id: str) -> dict:
+    pairing_id = _pairing_id(pairing_id)
+    policy.require("device.bluetooth", name="control")
+    return _broker("pair-status", pairing_id=pairing_id)
+
+
+def pair_respond(pairing_id: str, response: str) -> dict:
+    pairing_id = _pairing_id(pairing_id)
+    response = _pairing_response(response)
+    policy.require("device.bluetooth", name="control")
+    return _broker(
+        "pair-respond",
+        pairing_id=pairing_id,
+        response=response,
+    )
+
+
+def pair_cancel(pairing_id: str) -> dict:
+    pairing_id = _pairing_id(pairing_id)
+    policy.require("device.bluetooth", name="control")
+    return _broker("pair-cancel", pairing_id=pairing_id)
+
+
+def connect(adapter: str, device: str) -> dict:
+    return _device_action("connect", adapter, device)
+
+
+def disconnect(adapter: str, device: str) -> dict:
+    return _device_action("disconnect", adapter, device)
+
+
+def trust(adapter: str, device: str) -> dict:
+    return _device_action("trust", adapter, device)
+
+
+def untrust(adapter: str, device: str) -> dict:
+    return _device_action("untrust", adapter, device)
+
+
+def forget(adapter: str, device: str) -> dict:
+    return _device_action("forget", adapter, device)
