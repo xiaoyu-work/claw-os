@@ -13,18 +13,23 @@ from cos_runtime import policy  # noqa: E402
 
 
 TIMEOUT_SECS = int(os.environ.get("CLAW_AUDIO_MANAGER_TIMEOUT", "180"))
-OUTPUT_COMMANDS = frozenset({"output-volume", "output-mute"})
-INPUT_COMMANDS = frozenset({"input-volume", "input-mute"})
+MUTE_STATES = frozenset({"on", "off", "toggle"})
 
 
-def _cos_binary():
+def _cos_binary() -> str | None:
     return os.environ.get("COS_BIN") or shutil.which("cos")
 
 
-def _broker(action, target=None, value=None):
+def _broker(
+    action: str,
+    target: int | None = None,
+    value: int | str | None = None,
+) -> dict:
     cos_bin = _cos_binary()
     if not cos_bin:
-        return {"error": "cos binary not found; Audio Manager broker unavailable"}
+        raise FileNotFoundError(
+            "cos binary not found; Audio Manager broker unavailable"
+        )
     argv = [cos_bin, "__audio", action]
     if target is not None:
         argv.extend(["--target", str(target)])
@@ -40,87 +45,111 @@ def _broker(action, target=None, value=None):
             env=scrub_env(),
             check=False,
         )
-    except (FileNotFoundError, PermissionError) as exc:
-        return {"error": str(exc)}
-    except subprocess.TimeoutExpired:
-        return {"error": f"Audio Manager broker exceeded {TIMEOUT_SECS}s"}
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"Audio Manager broker executable not found: {cos_bin}"
+        ) from exc
+    except PermissionError as exc:
+        raise PermissionError(
+            f"permission denied launching Audio Manager broker: {cos_bin}"
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise TimeoutError(
+            f"Audio Manager broker exceeded {TIMEOUT_SECS}s for {action}"
+        ) from exc
     payload_text = (result.stdout or "").strip() or (result.stderr or "").strip()
     try:
         payload = json.loads(payload_text) if payload_text else {}
-    except json.JSONDecodeError:
-        return {"error": "Audio Manager broker returned invalid JSON"}
-    if result.returncode != 0 and "error" not in payload:
-        payload["error"] = f"Audio Manager broker exited {result.returncode}"
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Audio Manager broker returned invalid JSON") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("Audio Manager broker returned a non-object result")
+    if "error" in payload:
+        error = payload["error"]
+        if not isinstance(error, str) or not error:
+            raise RuntimeError("Audio Manager broker returned an invalid error payload")
+        raise RuntimeError(error)
+    if result.returncode != 0:
+        raise RuntimeError(f"Audio Manager broker exited {result.returncode}")
     return payload
 
 
-def _integer(raw, name, minimum=0, maximum=4096):
-    try:
-        value = int(raw)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{name} must be an integer") from exc
+def _integer(
+    value: object,
+    name: str,
+    minimum: int = 0,
+    maximum: int = 4096,
+) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{name} must be an integer")
     if not minimum <= value <= maximum:
         raise ValueError(f"{name} must be {minimum}..{maximum}")
     return value
 
 
-def run(command, args):
-    from canonical_argv import normalize_canonical_argv
-    args = normalize_canonical_argv(args)
-    if command == "status":
-        if args:
-            return {"error": "status takes no arguments"}
-        policy.require("sys.observe", name="audio")
-        return _broker(command)
-    if command in {"output-volume", "input-volume"}:
-        if len(args) != 1:
-            return {"error": f"{command} requires one percentage"}
-        maximum = 150 if command == "output-volume" else 100
-        try:
-            percent = _integer(args[0], "percentage", 0, maximum)
-        except ValueError as exc:
-            return {"error": str(exc)}
-        _require_direction(command)
-        return _broker(command, value=percent)
-    if command in {"output-mute", "input-mute"}:
-        if len(args) != 1 or args[0] not in {"on", "off", "toggle"}:
-            return {"error": f"{command} requires on|off|toggle"}
-        _require_direction(command)
-        return _broker(command, value=args[0])
-    if command in {"output-default", "input-default"}:
-        if len(args) != 1:
-            return {"error": f"{command} requires one node id"}
-        try:
-            node_id = _integer(args[0], "node id", 1)
-        except ValueError as exc:
-            return {"error": str(exc)}
-        policy.require("device.media-route", name="pipewire")
-        return _broker(command, target=node_id)
-    if command in {"output-route", "input-route"}:
-        if len(args) != 2:
-            return {"error": f"{command} requires <node-id> <route-index>"}
-        try:
-            node_id = _integer(args[0], "node id", 1)
-            route = _integer(args[1], "route index")
-        except ValueError as exc:
-            return {"error": str(exc)}
-        policy.require("device.media-route", name="pipewire")
-        return _broker(command, target=node_id, value=route)
-    if command == "profile":
-        if len(args) != 2:
-            return {"error": "profile requires <device-id> <profile-index>"}
-        try:
-            device_id = _integer(args[0], "device id", 1)
-            profile = _integer(args[1], "profile index")
-        except ValueError as exc:
-            return {"error": str(exc)}
-        policy.require("device.media-route", name="pipewire")
-        return _broker(command, target=device_id, value=profile)
-    return {"error": f"unknown command: {command}"}
+def _mute_state(state: object) -> str:
+    if not isinstance(state, str) or state not in MUTE_STATES:
+        raise ValueError("mute state must be on, off, or toggle")
+    return state
 
 
-def _require_direction(command):
-    if command in OUTPUT_COMMANDS:
-        policy.require("device.audio", name="output")
-    elif command in INPUT_COMMANDS:
-        policy.require("device.microphone", name="input")
+def status() -> dict:
+    policy.require("sys.observe", name="audio")
+    return _broker("status")
+
+
+def output_volume(percent: int) -> dict:
+    percent = _integer(percent, "percentage", maximum=150)
+    policy.require("device.audio", name="output")
+    return _broker("output-volume", value=percent)
+
+
+def input_volume(percent: int) -> dict:
+    percent = _integer(percent, "percentage", maximum=100)
+    policy.require("device.microphone", name="input")
+    return _broker("input-volume", value=percent)
+
+
+def output_mute(state: str) -> dict:
+    state = _mute_state(state)
+    policy.require("device.audio", name="output")
+    return _broker("output-mute", value=state)
+
+
+def input_mute(state: str) -> dict:
+    state = _mute_state(state)
+    policy.require("device.microphone", name="input")
+    return _broker("input-mute", value=state)
+
+
+def output_default(node_id: int) -> dict:
+    node_id = _integer(node_id, "node id", minimum=1)
+    policy.require("device.media-route", name="pipewire")
+    return _broker("output-default", target=node_id)
+
+
+def input_default(node_id: int) -> dict:
+    node_id = _integer(node_id, "node id", minimum=1)
+    policy.require("device.media-route", name="pipewire")
+    return _broker("input-default", target=node_id)
+
+
+def output_route(node_id: int, route_index: int) -> dict:
+    node_id = _integer(node_id, "node id", minimum=1)
+    route_index = _integer(route_index, "route index")
+    policy.require("device.media-route", name="pipewire")
+    return _broker("output-route", target=node_id, value=route_index)
+
+
+def input_route(node_id: int, route_index: int) -> dict:
+    node_id = _integer(node_id, "node id", minimum=1)
+    route_index = _integer(route_index, "route index")
+    policy.require("device.media-route", name="pipewire")
+    return _broker("input-route", target=node_id, value=route_index)
+
+
+def profile(device_id: int, profile_index: int) -> dict:
+    device_id = _integer(device_id, "device id", minimum=1)
+    profile_index = _integer(profile_index, "profile index")
+    policy.require("device.media-route", name="pipewire")
+    return _broker("profile", target=device_id, value=profile_index)
