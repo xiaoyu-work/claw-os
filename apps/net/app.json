@@ -9,106 +9,6 @@
   },
   "icon": "🌐",
   "runtime": "python",
-  "operations": {
-    "fetch": {
-      "label": {
-        "en": "Make HTTP request (GET/POST/PUT/DELETE)"
-      },
-      "args": [
-        {
-          "name": "url",
-          "kind": "text",
-          "required": true
-        },
-        {
-          "name": "method",
-          "kind": "text",
-          "required": false,
-          "binding": "flag",
-          "default": "GET",
-          "choices": [
-            "GET",
-            "POST",
-            "PUT",
-            "DELETE"
-          ]
-        },
-        {
-          "name": "data",
-          "kind": "text",
-          "required": false,
-          "binding": "flag"
-        },
-        {
-          "name": "header",
-          "kind": "text",
-          "required": false,
-          "binding": "flag",
-          "repeatable": true
-        },
-        {
-          "name": "timeout",
-          "kind": "integer",
-          "required": false,
-          "binding": "flag",
-          "default": 30
-        }
-      ],
-      "needs": [
-        {
-          "verb": "net.dial",
-          "scope": {
-            "kind": "from-arg",
-            "arg": "url",
-            "transform": "url-host"
-          },
-          "why": {
-            "en": "Open a network connection to the URL you asked to fetch."
-          }
-        }
-      ]
-    },
-    "download": {
-      "label": {
-        "en": "Download file from URL"
-      },
-      "args": [
-        {
-          "name": "url",
-          "kind": "text",
-          "required": true
-        },
-        {
-          "name": "output",
-          "kind": "path",
-          "required": true
-        }
-      ],
-      "needs": [
-        {
-          "verb": "net.dial",
-          "scope": {
-            "kind": "from-arg",
-            "arg": "url",
-            "transform": "url-host"
-          },
-          "why": {
-            "en": "Open a network connection to the URL you asked to download from."
-          }
-        },
-        {
-          "verb": "fs.write",
-          "scope": {
-            "kind": "from-arg",
-            "arg": "output"
-          },
-          "why": {
-            "en": "Save the downloaded file to the path you specified."
-          }
-        }
-      ]
-    }
-  },
   "dependencies": {
     "system": [
       "curl",
@@ -134,12 +34,14 @@
           {
             "name": "url",
             "kind": "text",
-            "required": true
+            "required": true,
+            "binding": "positional"
           },
           {
             "name": "method",
             "kind": "text",
             "required": false,
+            "binding": "flag",
             "default": "GET",
             "choices": [
               "GET",
@@ -151,18 +53,21 @@
           {
             "name": "data",
             "kind": "text",
-            "required": false
+            "required": false,
+            "binding": "flag"
           },
           {
             "name": "header",
             "kind": "text",
             "required": false,
+            "binding": "flag",
             "repeatable": true
           },
           {
             "name": "timeout",
             "kind": "integer",
             "required": false,
+            "binding": "flag",
             "default": 30
           }
         ],
@@ -189,12 +94,14 @@
           {
             "name": "url",
             "kind": "text",
-            "required": true
+            "required": true,
+            "binding": "positional"
           },
           {
             "name": "output",
             "kind": "path",
-            "required": true
+            "required": true,
+            "binding": "positional"
           }
         ],
         "needs": [

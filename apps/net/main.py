@@ -1,49 +1,159 @@
 """net — HTTP client for API calls."""
 
-import argparse
-import json
+from __future__ import annotations
+
 import os
-import tempfile
-import urllib.error
-import urllib.request
+import re
 import sys
+import tempfile
+import unicodedata
+import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from cos_runtime import policy
-from _shared.safe_http import open_url
+from _shared import safe_http  # noqa: E402
+from cos_runtime import policy  # noqa: E402
+
 
 USER_AGENT = "cos/" + os.environ.get("COS_VERSION", "0.1.0")
-DEFAULT_TIMEOUT = int(os.environ.get("COS_NET_TIMEOUT", "30"))
-MAX_RESPONSE_BYTES = 5_000_000  # 5 MB response body limit for fetch
-MAX_DOWNLOAD_BYTES = int(os.environ.get("COS_NET_DOWNLOAD_MAX", str(512 * 1024 * 1024)))
+DEFAULT_TIMEOUT = 30
+MAX_REQUEST_DATA_BYTES = 1_000_000
+MAX_RESPONSE_BYTES = 5_000_000
+MAX_DOWNLOAD_BYTES = int(
+    os.environ.get("COS_NET_DOWNLOAD_MAX", str(512 * 1024 * 1024))
+)
+MAX_HEADER_COUNT = 100
+MAX_HEADER_LINE_BYTES = 8 * 1024
+MAX_HEADER_BYTES = 64 * 1024
+MAX_OUTPUT_PATH_CHARS = 4096
 _READ_CHUNK = 64 * 1024
+_METHODS = frozenset({"GET", "POST", "PUT", "DELETE"})
+_HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 
 
-class _DownloadLimitExceeded(Exception):
-    pass
+class DownloadLimitExceeded(RuntimeError):
+    """The response body exceeded the configured download hard limit."""
 
 
-def _read_bounded(resp, limit):
-    """Read at most ``limit`` bytes from ``resp`` and report whether
-    the response was truncated.
+def _has_control_or_newline(value: str) -> bool:
+    return any(
+        unicodedata.category(character) in {"Cc", "Zl", "Zp"}
+        for character in value
+    )
 
-    ``resp.read()`` without an argument will happily read multi-GiB
-    bodies into memory; this helper streams in 64 KiB chunks and stops
-    as soon as the cap is hit, so a malicious / misconfigured server
-    can't OOM the agent.
-    """
+
+def _validate_url(value: object) -> str:
+    if type(value) is not str or not value:
+        raise ValueError("url must be a non-empty string")
+    safe_http.parse_url(value)
+    return value
+
+
+def _validate_method(value: object) -> str:
+    if type(value) is not str or value not in _METHODS:
+        raise ValueError("method must be one of GET, POST, PUT, DELETE")
+    return value
+
+
+def _encode_data(value: object | None) -> bytes | None:
+    if value is None:
+        return None
+    if type(value) is not str:
+        raise ValueError("data must be a string")
+    encoded = value.encode("utf-8")
+    if len(encoded) > MAX_REQUEST_DATA_BYTES:
+        raise ValueError(
+            f"data exceeds size limit of {MAX_REQUEST_DATA_BYTES} bytes"
+        )
+    return encoded
+
+
+def _build_headers(values: object | None) -> dict[str, str]:
+    headers = {"User-Agent": USER_AGENT}
+    if values is None:
+        return headers
+    if type(values) is not list:
+        raise ValueError("header must be a list of 'Name: value' strings")
+    if len(values) > MAX_HEADER_COUNT:
+        raise ValueError(f"header count exceeds limit of {MAX_HEADER_COUNT}")
+
+    total_bytes = 0
+    for raw in values:
+        if type(raw) is not str:
+            raise ValueError("header entries must be strings")
+        if _has_control_or_newline(raw):
+            raise ValueError("header entries must not contain controls or newlines")
+        try:
+            line_bytes = len(raw.encode("latin-1"))
+        except UnicodeEncodeError:
+            raise ValueError(
+                "header entries must contain only Latin-1 characters"
+            ) from None
+        if line_bytes > MAX_HEADER_LINE_BYTES:
+            raise ValueError(
+                f"header entry exceeds size limit of {MAX_HEADER_LINE_BYTES} bytes"
+            )
+        total_bytes += line_bytes
+        if total_bytes > MAX_HEADER_BYTES:
+            raise ValueError(
+                f"headers exceed total size limit of {MAX_HEADER_BYTES} bytes"
+            )
+
+        name, separator, value = raw.partition(":")
+        if not separator or _HEADER_NAME_RE.fullmatch(name) is None:
+            raise ValueError("header entries must use a valid 'Name: value' form")
+        headers[name] = value.strip()
+    return headers
+
+
+def _validate_timeout(value: object) -> int:
+    if type(value) is not int:
+        raise ValueError("timeout must be an integer")
+    if not 1 <= value <= 300:
+        raise ValueError("timeout must be 1..300 seconds")
+    return value
+
+
+def _validate_output(value: object) -> str:
+    if (
+        type(value) is not str
+        or not value
+        or len(value) > MAX_OUTPUT_PATH_CHARS
+        or not os.path.isabs(value)
+        or _has_control_or_newline(value)
+    ):
+        raise ValueError(
+            "output must be a non-empty absolute canonical path without controls"
+        )
+
+    basename = os.path.basename(value)
+    if not basename or basename in {".", ".."}:
+        raise ValueError("output must name a file")
+    exists = os.path.lexists(value)
+    if exists and os.path.islink(value):
+        raise ValueError("output symlinks are not allowed")
+
+    canonical = os.path.join(
+        os.path.realpath(os.path.dirname(value)),
+        basename,
+    )
+    if exists:
+        canonical = os.path.realpath(value)
+    if canonical != value:
+        raise ValueError(f"use the canonical output path: {canonical}")
+    return canonical
+
+
+def _read_bounded(response, limit: int) -> tuple[bytes, bool]:
     chunks: list[bytes] = []
     total = 0
     truncated = False
     while True:
-        # +1 so we can detect that *more* bytes were available beyond
-        # the limit (and therefore the response was truncated).
         want = min(_READ_CHUNK, limit + 1 - total)
         if want <= 0:
             truncated = True
             break
-        chunk = resp.read(want)
+        chunk = response.read(want)
         if not chunk:
             break
         chunks.append(chunk)
@@ -57,142 +167,80 @@ def _read_bounded(resp, limit):
     return raw, truncated
 
 
-def _build_fetch_parser():
-    p = argparse.ArgumentParser(prog="cos net fetch", add_help=False)
-    p.add_argument("url")
-    p.add_argument("--method", default="GET", choices=["GET", "POST", "PUT", "DELETE"])
-    p.add_argument("--data", default=None)
-    p.add_argument("--header", action="append", default=[])
-    p.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
-    return p
+def fetch(
+    url: str,
+    method: str = "GET",
+    data: str | None = None,
+    header: list[str] | None = None,
+    timeout: int = 30,
+) -> dict[str, object]:
+    url = _validate_url(url)
+    method = _validate_method(method)
+    encoded_data = _encode_data(data)
+    headers = _build_headers(header)
+    timeout = _validate_timeout(timeout)
+    if encoded_data is not None and not any(
+        name.lower() == "content-type" for name in headers
+    ):
+        headers["Content-Type"] = "application/json"
 
-
-def _build_download_parser():
-    p = argparse.ArgumentParser(prog="cos net download", add_help=False)
-    p.add_argument("url")
-    p.add_argument("output")
-    return p
-
-
-def _parse_header(header_str):
-    """Parse 'Key: Value' into (key, value)."""
-    key, _, value = header_str.partition(":")
-    return key.strip(), value.strip()
-
-
-def cmd_fetch(args):
-    parser = _build_fetch_parser()
-    opts = parser.parse_args(args)
-
-    headers = {"User-Agent": USER_AGENT}
-    for h in opts.header:
-        k, v = _parse_header(h)
-        headers[k] = v
-
-    data = None
-    if opts.data is not None:
-        data = opts.data.encode("utf-8")
-        if "Content-Type" not in headers:
-            headers["Content-Type"] = "application/json"
-
-    req = urllib.request.Request(
-        opts.url,
-        data=data,
+    request = urllib.request.Request(
+        url,
+        data=encoded_data,
         headers=headers,
-        method=opts.method,
+        method=method,
     )
-
-    try:
-        with open_url(req, timeout=opts.timeout)[0] as resp:
-            raw, truncated = _read_bounded(resp, MAX_RESPONSE_BYTES)
-            resp_headers = dict(resp.getheaders())
-            body = raw.decode("utf-8", errors="replace")
-            result = {
-                "url": opts.url,
-                "status": resp.status,
-                "headers": resp_headers,
-                "body": body,
-            }
-            if truncated:
-                result["truncated"] = True
-            return result
-    except urllib.error.HTTPError as e:
-        body = ""
-        try:
-            body = e.read().decode("utf-8", errors="replace")
-        except Exception:
-            pass
-        return {"error": body or str(e), "status": e.code}
-    except urllib.error.URLError as e:
-        return {"error": str(e.reason)}
-    except policy.PolicyError:
-        raise
-    except Exception as e:
-        return {"error": str(e)}
+    with safe_http.open_url(request, timeout=timeout)[0] as response:
+        raw, truncated = _read_bounded(response, MAX_RESPONSE_BYTES)
+        result: dict[str, object] = {
+            "url": url,
+            "status": response.status,
+            "headers": dict(response.getheaders()),
+            "body": raw.decode("utf-8", errors="replace"),
+        }
+        if truncated:
+            result["truncated"] = True
+        return result
 
 
-def cmd_download(args):
-    parser = _build_download_parser()
-    opts = parser.parse_args(args)
-
-    output_path = opts.output
-    # ``realpath`` so the kernel's fs.write check sees the actual
-    # destination after symlink resolution; ``abspath`` alone would
-    # let a symlink in the output dir redirect the write to a path
-    # the caller doesn't have fs.write on.
-    output_path = os.path.realpath(output_path)
-
+def download(url: str, output: str) -> dict[str, object]:
+    url = _validate_url(url)
+    output_path = _validate_output(output)
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     policy.require("fs.write", path=output_path)
-
-    headers = {"User-Agent": USER_AGENT}
-    req = urllib.request.Request(opts.url, headers=headers)
-
-    temp_fd = None
-    temp_path = None
+    temp_fd: int | None = None
+    temp_path: str | None = None
+    total = 0
     try:
-        with open_url(req, timeout=DEFAULT_TIMEOUT)[0] as resp:
+        with safe_http.open_url(request, timeout=DEFAULT_TIMEOUT)[0] as response:
             parent = os.path.dirname(output_path)
-            if parent:
-                os.makedirs(parent, exist_ok=True)
-            temp_parent = parent or "."
-            # mkstemp creates the file with mode 0o600. Keeping it beside the
-            # destination also guarantees that os.replace stays on one filesystem.
+            os.makedirs(parent, exist_ok=True)
             temp_fd, temp_path = tempfile.mkstemp(
-                dir=temp_parent,
+                dir=parent,
                 prefix=f".{os.path.basename(output_path)}.",
                 suffix=".tmp",
             )
+            os.fchmod(temp_fd, 0o600)
             temp_file = os.fdopen(temp_fd, "wb", closefd=True)
             temp_fd = None
-            total = 0
-            with temp_file as f:
+            with temp_file as file:
                 while True:
                     remaining = MAX_DOWNLOAD_BYTES - total
-                    chunk = resp.read(min(_READ_CHUNK, remaining + 1))
+                    chunk = response.read(min(_READ_CHUNK, remaining + 1))
                     if not chunk:
                         break
                     if len(chunk) > remaining:
-                        raise _DownloadLimitExceeded
-                    f.write(chunk)
+                        raise DownloadLimitExceeded(
+                            "download exceeds size limit of "
+                            f"{MAX_DOWNLOAD_BYTES} bytes"
+                        )
+                    file.write(chunk)
                     total += len(chunk)
-                f.flush()
-                os.fsync(f.fileno())
+                file.flush()
+                os.fsync(file.fileno())
         os.replace(temp_path, output_path)
         temp_path = None
-        return {"url": opts.url, "path": output_path, "bytes": total}
-    except _DownloadLimitExceeded:
-        return {
-            "error": f"download exceeds size limit of {MAX_DOWNLOAD_BYTES} bytes",
-            "limit": MAX_DOWNLOAD_BYTES,
-        }
-    except urllib.error.HTTPError as e:
-        return {"error": str(e), "status": e.code}
-    except urllib.error.URLError as e:
-        return {"error": str(e.reason)}
-    except policy.PolicyError:
-        raise
-    except Exception as e:
-        return {"error": str(e)}
+        return {"url": url, "path": output_path, "bytes": total}
     finally:
         if temp_fd is not None:
             try:
@@ -204,20 +252,3 @@ def cmd_download(args):
                 os.unlink(temp_path)
             except OSError:
                 pass
-
-
-def run(command, args):
-    """Entry point called by cos."""
-    handlers = {
-        "fetch": cmd_fetch,
-        "download": cmd_download,
-    }
-    handler = handlers.get(command)
-    if handler is None:
-        return {"error": f"unknown command: {command}"}
-    try:
-        return handler(args)
-    except policy.PermissionDenied as denied:
-        return {"error": str(denied), "denial": denied.denial}
-    except policy.PolicyUnavailable as exc:
-        return {"error": f"capability check failed: {exc}"}
