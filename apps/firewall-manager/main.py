@@ -17,31 +17,105 @@ from cos_runtime import policy  # noqa: E402
 ID_RE = re.compile(r"^[0-9A-Fa-f]{32}$")
 IFACE_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,15}$")
 TIMEOUT_SECS = int(os.environ.get("CLAW_FIREWALL_MANAGER_TIMEOUT", "180"))
+ACTIONS = frozenset({"allow", "deny"})
+DIRECTIONS = frozenset({"input", "output"})
+PROTOCOLS = frozenset({"tcp", "udp"})
 
 
-def _cos_binary():
+def _cos_binary() -> str | None:
     return os.environ.get("COS_BIN") or shutil.which("cos")
 
 
-def _broker(action, **values):
+def _choice(value: object, label: str, choices: frozenset[str]) -> str:
+    if not isinstance(value, str) or value not in choices:
+        expected = " or ".join(sorted(choices))
+        raise ValueError(f"{label} must be {expected}")
+    return value
+
+
+def _port(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("port must be an integer")
+    if not 1 <= value <= 65535:
+        raise ValueError("port must be 1..65535")
+    return value
+
+
+def _remote_cidr(value: object) -> str:
+    if not isinstance(value, str):
+        raise ValueError("remote must be a CIDR string")
+    try:
+        return str(ipaddress.ip_network(value, strict=False))
+    except ValueError as exc:
+        raise ValueError("invalid remote CIDR") from exc
+
+
+def _interface(value: object) -> str:
+    if not isinstance(value, str) or IFACE_RE.fullmatch(value) is None:
+        raise ValueError("invalid interface name")
+    return value
+
+
+def _identifier(value: object, label: str) -> str:
+    if not isinstance(value, str) or ID_RE.fullmatch(value) is None:
+        raise ValueError(f"{label} must be exactly 32 hexadecimal characters")
+    return value.lower()
+
+
+def _require_confirmation(action: str, confirm: object) -> None:
+    if confirm is not True:
+        raise ValueError(f"{action} requires confirm=true")
+
+
+def _parse_payload(payload_text: str) -> dict:
+    try:
+        payload = json.loads(payload_text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Firewall Manager broker returned invalid JSON") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("Firewall Manager broker returned a non-object result")
+    if "error" in payload:
+        error = payload["error"]
+        if not isinstance(error, str) or not error:
+            raise RuntimeError(
+                "Firewall Manager broker returned an invalid error payload"
+            )
+        raise RuntimeError(error)
+    return payload
+
+
+def _broker(
+    action: str,
+    *,
+    rule_action: str | None = None,
+    direction: str | None = None,
+    protocol: str | None = None,
+    port: int | None = None,
+    remote: str | None = None,
+    interface: str | None = None,
+    rule_id: str | None = None,
+    token: str | None = None,
+    confirm: bool = False,
+) -> dict:
     cos_bin = _cos_binary()
     if not cos_bin:
-        return {"error": "cos binary not found; Firewall Manager broker unavailable"}
+        raise FileNotFoundError(
+            "cos binary not found; Firewall Manager broker unavailable"
+        )
     argv = [cos_bin, "__firewall", action]
-    for key in [
-        "rule_action",
-        "direction",
-        "protocol",
-        "port",
-        "remote",
-        "interface",
-        "rule_id",
-        "token",
+    for flag, value in [
+        ("--rule-action", rule_action),
+        ("--direction", direction),
+        ("--protocol", protocol),
+        ("--port", str(port) if port is not None else None),
+        ("--remote", remote),
+        ("--interface", interface),
+        ("--rule-id", rule_id),
+        ("--token", token),
     ]:
-        value = values.get(key)
         if value is not None:
-            argv.extend([f"--{key.replace('_', '-')}", str(value)])
-    if values.get("confirm"):
+            argv.extend([flag, value])
+    if confirm:
         argv.append("--confirm")
     try:
         result = subprocess.run(
@@ -53,82 +127,80 @@ def _broker(action, **values):
             env=scrub_env(),
             check=False,
         )
-    except (FileNotFoundError, PermissionError) as exc:
-        return {"error": str(exc)}
-    except subprocess.TimeoutExpired:
-        return {"error": f"Firewall Manager broker exceeded {TIMEOUT_SECS}s"}
-    payload_text = (result.stdout or "").strip() or (result.stderr or "").strip()
-    try:
-        payload = json.loads(payload_text) if payload_text else {}
-    except json.JSONDecodeError:
-        return {"error": "Firewall Manager broker returned invalid JSON"}
-    if result.returncode != 0 and "error" not in payload:
-        payload["error"] = f"Firewall Manager broker exited {result.returncode}"
-    return payload
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"Firewall Manager broker executable not found: {cos_bin}"
+        ) from exc
+    except PermissionError as exc:
+        raise PermissionError(
+            f"permission denied launching Firewall Manager broker: {cos_bin}"
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise TimeoutError(
+            f"Firewall Manager broker exceeded {TIMEOUT_SECS}s for {action}"
+        ) from exc
+
+    payloads = []
+    for output in (result.stdout.strip(), result.stderr.strip()):
+        if not output:
+            continue
+        payloads.append(_parse_payload(output))
+        if result.returncode == 0:
+            break
+    if result.returncode != 0:
+        raise RuntimeError(f"Firewall Manager broker exited {result.returncode}")
+    if not payloads:
+        raise RuntimeError("Firewall Manager broker returned invalid JSON")
+    return payloads[0]
 
 
-def run(command, args):
-    from canonical_argv import normalize_canonical_argv
-    args = normalize_canonical_argv(args, bool_flags={"confirm"})
-    if command == "status":
-        if args:
-            return {"error": "status takes no arguments"}
-        policy.require("sys.observe", name="firewall")
-        return _broker(command)
-    if command == "add":
-        if len(args) < 4:
-            return {"error": "add requires <allow|deny> <input|output> <tcp|udp> <port> [--remote CIDR] [--interface IFACE]"}
-        rule_action, direction, protocol = args[:3]
-        if rule_action not in {"allow", "deny"} or direction not in {"input", "output"} or protocol not in {"tcp", "udp"}:
-            return {"error": "invalid firewall action, direction, or protocol"}
-        try:
-            port = int(args[3])
-        except ValueError:
-            return {"error": "port must be an integer"}
-        if not 1 <= port <= 65535:
-            return {"error": "port must be 1..65535"}
-        remote = None
-        interface = None
-        index = 4
-        while index < len(args):
-            if args[index] == "--remote" and index + 1 < len(args):
-                try:
-                    remote = str(ipaddress.ip_network(args[index + 1], strict=False))
-                except ValueError:
-                    return {"error": "invalid remote CIDR"}
-                index += 2
-            elif args[index] == "--interface" and index + 1 < len(args):
-                if IFACE_RE.fullmatch(args[index + 1]) is None:
-                    return {"error": "invalid interface name"}
-                interface = args[index + 1]
-                index += 2
-            else:
-                return {"error": f"unexpected add argument: {args[index]}"}
-        policy.require("net.firewall", name="manage")
-        return _broker(
-            command,
-            rule_action=rule_action,
-            direction=direction,
-            protocol=protocol,
-            port=port,
-            remote=remote,
-            interface=interface,
-        )
-    if command == "delete":
-        if len(args) != 1 or ID_RE.fullmatch(args[0]) is None:
-            return {"error": "delete requires one managed rule id"}
-        policy.require("net.firewall", name="manage")
-        return _broker(command, rule_id=args[0].lower())
-    if command == "clear":
-        if args != ["--confirm"]:
-            return {"error": "clear requires --confirm"}
-        policy.require("net.firewall", name="manage")
-        return _broker(command, confirm=True)
-    if command == "restore":
-        confirm = "--confirm" in args
-        values = [value for value in args if value != "--confirm"]
-        if len(values) != 1 or not confirm or ID_RE.fullmatch(values[0]) is None:
-            return {"error": "restore requires <backup-token> --confirm"}
-        policy.require("net.firewall", name="manage")
-        return _broker(command, token=values[0].lower(), confirm=True)
-    return {"error": f"unknown command: {command}"}
+def status() -> dict:
+    policy.require("sys.observe", name="firewall")
+    return _broker("status")
+
+
+def add(
+    action: str,
+    direction: str,
+    protocol: str,
+    port: int,
+    remote: str | None = None,
+    interface: str | None = None,
+) -> dict:
+    action = _choice(action, "action", ACTIONS)
+    direction = _choice(direction, "direction", DIRECTIONS)
+    protocol = _choice(protocol, "protocol", PROTOCOLS)
+    port = _port(port)
+    if remote is not None:
+        remote = _remote_cidr(remote)
+    if interface is not None:
+        interface = _interface(interface)
+    policy.require("net.firewall", name="manage")
+    return _broker(
+        "add",
+        rule_action=action,
+        direction=direction,
+        protocol=protocol,
+        port=port,
+        remote=remote,
+        interface=interface,
+    )
+
+
+def delete(rule_id: str) -> dict:
+    rule_id = _identifier(rule_id, "rule_id")
+    policy.require("net.firewall", name="manage")
+    return _broker("delete", rule_id=rule_id)
+
+
+def clear(confirm: bool) -> dict:
+    _require_confirmation("clear", confirm)
+    policy.require("net.firewall", name="manage")
+    return _broker("clear", confirm=True)
+
+
+def restore(backup_token: str, confirm: bool) -> dict:
+    backup_token = _identifier(backup_token, "backup_token")
+    _require_confirmation("restore", confirm)
+    policy.require("net.firewall", name="manage")
+    return _broker("restore", token=backup_token, confirm=True)
