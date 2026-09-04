@@ -9,526 +9,6 @@
   },
   "icon": "📦",
   "runtime": "python",
-  "operations": {
-    "status": {
-      "label": {
-        "en": "Inspect all container runtimes"
-      },
-      "needs": [
-        {
-          "verb": "sys.container",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "observe"
-            }
-          },
-          "why": {
-            "en": "Read system and user container inventories."
-          }
-        }
-      ]
-    },
-    "list": {
-      "label": {
-        "en": "List containers"
-      },
-      "args": [
-        {
-          "name": "runtime",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "namespace",
-          "kind": "name",
-          "required": false
-        }
-      ],
-      "needs": [
-        {
-          "verb": "sys.container",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "observe"
-            }
-          },
-          "why": {
-            "en": "Read container names, images, state, ports, and identifiers."
-          }
-        }
-      ]
-    },
-    "inspect": {
-      "label": {
-        "en": "Inspect a container"
-      },
-      "args": [
-        {
-          "name": "runtime",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "target",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "namespace",
-          "kind": "name",
-          "required": false
-        }
-      ],
-      "needs": [
-        {
-          "verb": "sys.container",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "observe"
-            }
-          },
-          "why": {
-            "en": "Read full container configuration and runtime state."
-          }
-        }
-      ]
-    },
-    "logs": {
-      "label": {
-        "en": "Read container logs"
-      },
-      "args": [
-        {
-          "name": "runtime",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "target",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "lines",
-          "kind": "integer",
-          "required": false,
-          "default": 100,
-          "binding": "positional"
-        },
-        {
-          "name": "namespace",
-          "kind": "name",
-          "required": false,
-          "binding": "flag"
-        }
-      ],
-      "needs": [
-        {
-          "verb": "sys.container",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "observe"
-            }
-          },
-          "why": {
-            "en": "Read potentially sensitive stdout/stderr retained for this container."
-          }
-        }
-      ]
-    },
-    "processes": {
-      "label": {
-        "en": "List processes in a container"
-      },
-      "args": [
-        {
-          "name": "runtime",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "target",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "namespace",
-          "kind": "name",
-          "required": false
-        }
-      ],
-      "needs": [
-        {
-          "verb": "sys.container",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "observe"
-            }
-          },
-          "why": {
-            "en": "Read process state inside the selected container."
-          }
-        }
-      ]
-    },
-    "stats": {
-      "label": {
-        "en": "Read container resource statistics"
-      },
-      "args": [
-        {
-          "name": "runtime",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "target",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "namespace",
-          "kind": "name",
-          "required": false
-        }
-      ],
-      "needs": [
-        {
-          "verb": "sys.container",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "observe"
-            }
-          },
-          "why": {
-            "en": "Read CPU, memory, network, and block-I/O usage."
-          }
-        }
-      ]
-    },
-    "namespaces": {
-      "label": {
-        "en": "Inspect container namespaces and cgroups"
-      },
-      "args": [
-        {
-          "name": "runtime",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "target",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "namespace",
-          "kind": "name",
-          "required": false
-        }
-      ],
-      "needs": [
-        {
-          "verb": "sys.container",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "observe"
-            }
-          },
-          "why": {
-            "en": "Read namespace inode identities, capabilities, seccomp, and cgroup membership."
-          }
-        }
-      ]
-    },
-    "start": {
-      "label": {
-        "en": "Start a container"
-      },
-      "args": [
-        {
-          "name": "runtime",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "target",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "namespace",
-          "kind": "name",
-          "required": false
-        }
-      ],
-      "needs": [
-        {
-          "verb": "sys.container",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "control"
-            }
-          },
-          "why": {
-            "en": "Start the selected container."
-          }
-        }
-      ]
-    },
-    "stop": {
-      "label": {
-        "en": "Stop a container"
-      },
-      "args": [
-        {
-          "name": "runtime",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "target",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "namespace",
-          "kind": "name",
-          "required": false
-        }
-      ],
-      "needs": [
-        {
-          "verb": "sys.container",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "control"
-            }
-          },
-          "why": {
-            "en": "Stop the selected container."
-          }
-        }
-      ]
-    },
-    "restart": {
-      "label": {
-        "en": "Restart a container"
-      },
-      "args": [
-        {
-          "name": "runtime",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "target",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "namespace",
-          "kind": "name",
-          "required": false
-        }
-      ],
-      "needs": [
-        {
-          "verb": "sys.container",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "control"
-            }
-          },
-          "why": {
-            "en": "Restart the selected container."
-          }
-        }
-      ]
-    },
-    "pause": {
-      "label": {
-        "en": "Pause a container"
-      },
-      "args": [
-        {
-          "name": "runtime",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "target",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "namespace",
-          "kind": "name",
-          "required": false
-        }
-      ],
-      "needs": [
-        {
-          "verb": "sys.container",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "control"
-            }
-          },
-          "why": {
-            "en": "Freeze the selected container workload."
-          }
-        }
-      ]
-    },
-    "unpause": {
-      "label": {
-        "en": "Unpause a container"
-      },
-      "args": [
-        {
-          "name": "runtime",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "target",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "namespace",
-          "kind": "name",
-          "required": false
-        }
-      ],
-      "needs": [
-        {
-          "verb": "sys.container",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "control"
-            }
-          },
-          "why": {
-            "en": "Resume the selected paused container."
-          }
-        }
-      ]
-    },
-    "kill": {
-      "label": {
-        "en": "Signal a container"
-      },
-      "args": [
-        {
-          "name": "runtime",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "target",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "signal",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "namespace",
-          "kind": "name",
-          "required": false
-        }
-      ],
-      "needs": [
-        {
-          "verb": "sys.container",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "control"
-            }
-          },
-          "why": {
-            "en": "Send a bounded signal to the selected container."
-          }
-        }
-      ]
-    },
-    "remove": {
-      "label": {
-        "en": "Remove a stopped container"
-      },
-      "args": [
-        {
-          "name": "runtime",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "target",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "namespace",
-          "kind": "name",
-          "required": false
-        },
-        {
-          "name": "confirm",
-          "kind": "bool",
-          "required": true,
-          "binding": "flag",
-          "choices": [
-            true
-          ]
-        }
-      ],
-      "needs": [
-        {
-          "verb": "sys.container",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "control"
-            }
-          },
-          "why": {
-            "en": "Permanently remove container metadata without deleting volumes."
-          }
-        }
-      ]
-    }
-  },
   "schema_version": 2,
   "mcp": {
     "entry": "server.py",
@@ -569,12 +49,23 @@
           {
             "name": "runtime",
             "kind": "name",
-            "required": true
+            "required": true,
+            "choices": [
+              "docker",
+              "podman",
+              "podman-root",
+              "containerd"
+            ]
           },
           {
             "name": "namespace",
             "kind": "name",
-            "required": false
+            "required": false,
+            "required_when": {
+              "kind": "arg-equals",
+              "arg": "runtime",
+              "value": "containerd"
+            }
           }
         ],
         "needs": [
@@ -602,7 +93,13 @@
           {
             "name": "runtime",
             "kind": "name",
-            "required": true
+            "required": true,
+            "choices": [
+              "docker",
+              "podman",
+              "podman-root",
+              "containerd"
+            ]
           },
           {
             "name": "target",
@@ -612,7 +109,12 @@
           {
             "name": "namespace",
             "kind": "name",
-            "required": false
+            "required": false,
+            "required_when": {
+              "kind": "arg-equals",
+              "arg": "runtime",
+              "value": "containerd"
+            }
           }
         ],
         "needs": [
@@ -640,7 +142,13 @@
           {
             "name": "runtime",
             "kind": "name",
-            "required": true
+            "required": true,
+            "choices": [
+              "docker",
+              "podman",
+              "podman-root",
+              "containerd"
+            ]
           },
           {
             "name": "target",
@@ -651,12 +159,19 @@
             "name": "lines",
             "kind": "integer",
             "required": false,
-            "default": 100
+            "default": 100,
+            "binding": "positional"
           },
           {
             "name": "namespace",
             "kind": "name",
-            "required": false
+            "required": false,
+            "required_when": {
+              "kind": "arg-equals",
+              "arg": "runtime",
+              "value": "containerd"
+            },
+            "binding": "flag"
           }
         ],
         "needs": [
@@ -684,7 +199,13 @@
           {
             "name": "runtime",
             "kind": "name",
-            "required": true
+            "required": true,
+            "choices": [
+              "docker",
+              "podman",
+              "podman-root",
+              "containerd"
+            ]
           },
           {
             "name": "target",
@@ -694,7 +215,12 @@
           {
             "name": "namespace",
             "kind": "name",
-            "required": false
+            "required": false,
+            "required_when": {
+              "kind": "arg-equals",
+              "arg": "runtime",
+              "value": "containerd"
+            }
           }
         ],
         "needs": [
@@ -722,7 +248,13 @@
           {
             "name": "runtime",
             "kind": "name",
-            "required": true
+            "required": true,
+            "choices": [
+              "docker",
+              "podman",
+              "podman-root",
+              "containerd"
+            ]
           },
           {
             "name": "target",
@@ -732,7 +264,12 @@
           {
             "name": "namespace",
             "kind": "name",
-            "required": false
+            "required": false,
+            "required_when": {
+              "kind": "arg-equals",
+              "arg": "runtime",
+              "value": "containerd"
+            }
           }
         ],
         "needs": [
@@ -760,7 +297,13 @@
           {
             "name": "runtime",
             "kind": "name",
-            "required": true
+            "required": true,
+            "choices": [
+              "docker",
+              "podman",
+              "podman-root",
+              "containerd"
+            ]
           },
           {
             "name": "target",
@@ -770,7 +313,12 @@
           {
             "name": "namespace",
             "kind": "name",
-            "required": false
+            "required": false,
+            "required_when": {
+              "kind": "arg-equals",
+              "arg": "runtime",
+              "value": "containerd"
+            }
           }
         ],
         "needs": [
@@ -798,7 +346,13 @@
           {
             "name": "runtime",
             "kind": "name",
-            "required": true
+            "required": true,
+            "choices": [
+              "docker",
+              "podman",
+              "podman-root",
+              "containerd"
+            ]
           },
           {
             "name": "target",
@@ -808,7 +362,12 @@
           {
             "name": "namespace",
             "kind": "name",
-            "required": false
+            "required": false,
+            "required_when": {
+              "kind": "arg-equals",
+              "arg": "runtime",
+              "value": "containerd"
+            }
           }
         ],
         "needs": [
@@ -836,7 +395,13 @@
           {
             "name": "runtime",
             "kind": "name",
-            "required": true
+            "required": true,
+            "choices": [
+              "docker",
+              "podman",
+              "podman-root",
+              "containerd"
+            ]
           },
           {
             "name": "target",
@@ -846,7 +411,12 @@
           {
             "name": "namespace",
             "kind": "name",
-            "required": false
+            "required": false,
+            "required_when": {
+              "kind": "arg-equals",
+              "arg": "runtime",
+              "value": "containerd"
+            }
           }
         ],
         "needs": [
@@ -874,7 +444,13 @@
           {
             "name": "runtime",
             "kind": "name",
-            "required": true
+            "required": true,
+            "choices": [
+              "docker",
+              "podman",
+              "podman-root",
+              "containerd"
+            ]
           },
           {
             "name": "target",
@@ -884,7 +460,12 @@
           {
             "name": "namespace",
             "kind": "name",
-            "required": false
+            "required": false,
+            "required_when": {
+              "kind": "arg-equals",
+              "arg": "runtime",
+              "value": "containerd"
+            }
           }
         ],
         "needs": [
@@ -912,7 +493,13 @@
           {
             "name": "runtime",
             "kind": "name",
-            "required": true
+            "required": true,
+            "choices": [
+              "docker",
+              "podman",
+              "podman-root",
+              "containerd"
+            ]
           },
           {
             "name": "target",
@@ -922,7 +509,12 @@
           {
             "name": "namespace",
             "kind": "name",
-            "required": false
+            "required": false,
+            "required_when": {
+              "kind": "arg-equals",
+              "arg": "runtime",
+              "value": "containerd"
+            }
           }
         ],
         "needs": [
@@ -950,7 +542,13 @@
           {
             "name": "runtime",
             "kind": "name",
-            "required": true
+            "required": true,
+            "choices": [
+              "docker",
+              "podman",
+              "podman-root",
+              "containerd"
+            ]
           },
           {
             "name": "target",
@@ -960,7 +558,12 @@
           {
             "name": "namespace",
             "kind": "name",
-            "required": false
+            "required": false,
+            "required_when": {
+              "kind": "arg-equals",
+              "arg": "runtime",
+              "value": "containerd"
+            }
           }
         ],
         "needs": [
@@ -988,7 +591,13 @@
           {
             "name": "runtime",
             "kind": "name",
-            "required": true
+            "required": true,
+            "choices": [
+              "docker",
+              "podman",
+              "podman-root",
+              "containerd"
+            ]
           },
           {
             "name": "target",
@@ -998,12 +607,25 @@
           {
             "name": "signal",
             "kind": "name",
-            "required": true
+            "required": true,
+            "choices": [
+              "TERM",
+              "KILL",
+              "HUP",
+              "INT",
+              "USR1",
+              "USR2"
+            ]
           },
           {
             "name": "namespace",
             "kind": "name",
-            "required": false
+            "required": false,
+            "required_when": {
+              "kind": "arg-equals",
+              "arg": "runtime",
+              "value": "containerd"
+            }
           }
         ],
         "needs": [
@@ -1031,7 +653,13 @@
           {
             "name": "runtime",
             "kind": "name",
-            "required": true
+            "required": true,
+            "choices": [
+              "docker",
+              "podman",
+              "podman-root",
+              "containerd"
+            ]
           },
           {
             "name": "target",
@@ -1041,7 +669,12 @@
           {
             "name": "namespace",
             "kind": "name",
-            "required": false
+            "required": false,
+            "required_when": {
+              "kind": "arg-equals",
+              "arg": "runtime",
+              "value": "containerd"
+            }
           },
           {
             "name": "confirm",
@@ -1049,7 +682,8 @@
             "required": true,
             "choices": [
               true
-            ]
+            ],
+            "binding": "flag"
           }
         ],
         "needs": [
