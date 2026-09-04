@@ -21,22 +21,28 @@ CONTROL_TIMEOUT_SECS = int(os.environ.get("CLAW_SYSTEMD_TIMEOUT", "180"))
 MUTATING = frozenset({"start", "stop", "restart", "reload", "enable", "disable"})
 
 
-def _valid_unit(unit):
-    return (
-        isinstance(unit, str)
-        and len(unit) <= 255
-        and UNIT_RE.fullmatch(unit) is not None
-    )
+def _validate_unit(unit: str) -> None:
+    if (
+        not isinstance(unit, str)
+        or len(unit) > 255
+        or UNIT_RE.fullmatch(unit) is None
+    ):
+        raise ValueError(
+            "unit must be a valid systemd name ending in "
+            ".service, .socket, .timer, .mount, .target, or .path"
+        )
 
 
-def _cos_binary():
+def _cos_binary() -> str | None:
     return os.environ.get("COS_BIN") or shutil.which("cos")
 
 
-def _broker(action, unit):
+def _broker(action: str, unit: str) -> dict:
     cos_bin = _cos_binary()
     if not cos_bin:
-        return {"error": "cos binary not found; privileged systemd broker unavailable"}
+        raise FileNotFoundError(
+            "cos binary not found; privileged systemd broker unavailable"
+        )
     try:
         result = subprocess.run(
             [cos_bin, "__systemd", action, unit],
@@ -47,40 +53,40 @@ def _broker(action, unit):
             env=scrub_env(),
             check=False,
         )
-    except FileNotFoundError as exc:
-        return {"error": str(exc)}
-    except subprocess.TimeoutExpired:
-        return {"error": f"systemd broker exceeded its timeout for {action} {unit}"}
+    except (FileNotFoundError, PermissionError) as exc:
+        raise RuntimeError(f"systemd broker execution failed: {exc}") from exc
+    except subprocess.TimeoutExpired as exc:
+        timeout = QUERY_TIMEOUT_SECS if action == "status" else CONTROL_TIMEOUT_SECS
+        raise RuntimeError(
+            f"systemd broker exceeded {timeout}s for {action} {unit}"
+        ) from exc
 
     payload_text = (result.stdout or "").strip() or (result.stderr or "").strip()
     try:
         payload = json.loads(payload_text) if payload_text else {}
-    except json.JSONDecodeError:
-        return {
-            "error": "systemd broker returned invalid JSON",
-            "exit_code": result.returncode,
-        }
-    if result.returncode != 0 and "error" not in payload:
-        payload["error"] = f"systemd broker exited {result.returncode}"
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("systemd broker returned invalid JSON") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("systemd broker returned a non-object result")
+    error = payload.get("error")
+    if error is not None:
+        if not isinstance(error, str) or not error:
+            raise RuntimeError("systemd broker returned an invalid error payload")
+        raise RuntimeError(error)
+    if result.returncode != 0:
+        raise RuntimeError(f"systemd broker exited {result.returncode}")
     return payload
 
 
-def run(command, args):
-    from canonical_argv import normalize_canonical_argv
-    args = normalize_canonical_argv(args)
-    if command not in MUTATING | {"status"}:
-        return {"error": f"unknown command: {command}"}
-    if len(args) != 1 or not _valid_unit(args[0]):
-        return {
-            "error": (
-                f"{command} requires one valid unit name ending in "
-                ".service, .socket, .timer, .mount, .target, or .path"
-            )
-        }
+def status(unit: str) -> dict:
+    _validate_unit(unit)
+    policy.require("sys.observe", name=unit)
+    return _broker("status", unit)
 
-    unit = args[0]
-    if command == "status":
-        policy.require("sys.observe", name=unit)
-    else:
-        policy.require("sys.service", name=unit)
-    return _broker(command, unit)
+
+def control(action: str, unit: str) -> dict:
+    if action not in MUTATING:
+        raise ValueError(f"unknown systemd action: {action}")
+    _validate_unit(unit)
+    policy.require("sys.service", name=unit)
+    return _broker(action, unit)

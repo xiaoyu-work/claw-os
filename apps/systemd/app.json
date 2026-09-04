@@ -9,176 +9,6 @@
   },
   "icon": "🛠",
   "runtime": "python",
-  "operations": {
-    "status": {
-      "label": {
-        "en": "Inspect a systemd unit"
-      },
-      "args": [
-        {
-          "name": "unit",
-          "kind": "name",
-          "required": true
-        }
-      ],
-      "needs": [
-        {
-          "verb": "sys.observe",
-          "scope": {
-            "kind": "from-arg",
-            "arg": "unit"
-          },
-          "why": {
-            "en": "Read the unit's load, active, sub-state, and enablement state."
-          }
-        }
-      ]
-    },
-    "start": {
-      "label": {
-        "en": "Start a systemd unit"
-      },
-      "args": [
-        {
-          "name": "unit",
-          "kind": "name",
-          "required": true
-        }
-      ],
-      "needs": [
-        {
-          "verb": "sys.service",
-          "scope": {
-            "kind": "from-arg",
-            "arg": "unit"
-          },
-          "why": {
-            "en": "Start this native system service."
-          }
-        }
-      ]
-    },
-    "stop": {
-      "label": {
-        "en": "Stop a systemd unit"
-      },
-      "args": [
-        {
-          "name": "unit",
-          "kind": "name",
-          "required": true
-        }
-      ],
-      "needs": [
-        {
-          "verb": "sys.service",
-          "scope": {
-            "kind": "from-arg",
-            "arg": "unit"
-          },
-          "why": {
-            "en": "Stop this native system service."
-          }
-        }
-      ]
-    },
-    "restart": {
-      "label": {
-        "en": "Restart a systemd unit"
-      },
-      "args": [
-        {
-          "name": "unit",
-          "kind": "name",
-          "required": true
-        }
-      ],
-      "needs": [
-        {
-          "verb": "sys.service",
-          "scope": {
-            "kind": "from-arg",
-            "arg": "unit"
-          },
-          "why": {
-            "en": "Restart this native system service."
-          }
-        }
-      ]
-    },
-    "reload": {
-      "label": {
-        "en": "Reload a systemd unit"
-      },
-      "args": [
-        {
-          "name": "unit",
-          "kind": "name",
-          "required": true
-        }
-      ],
-      "needs": [
-        {
-          "verb": "sys.service",
-          "scope": {
-            "kind": "from-arg",
-            "arg": "unit"
-          },
-          "why": {
-            "en": "Ask this service to reload its configuration."
-          }
-        }
-      ]
-    },
-    "enable": {
-      "label": {
-        "en": "Enable a systemd unit"
-      },
-      "args": [
-        {
-          "name": "unit",
-          "kind": "name",
-          "required": true
-        }
-      ],
-      "needs": [
-        {
-          "verb": "sys.service",
-          "scope": {
-            "kind": "from-arg",
-            "arg": "unit"
-          },
-          "why": {
-            "en": "Enable this unit for future boots."
-          }
-        }
-      ]
-    },
-    "disable": {
-      "label": {
-        "en": "Disable a systemd unit"
-      },
-      "args": [
-        {
-          "name": "unit",
-          "kind": "name",
-          "required": true
-        }
-      ],
-      "needs": [
-        {
-          "verb": "sys.service",
-          "scope": {
-            "kind": "from-arg",
-            "arg": "unit"
-          },
-          "why": {
-            "en": "Disable this unit for future boots."
-          }
-        }
-      ]
-    }
-  },
   "schema_version": 2,
   "mcp": {
     "entry": "server.py",
@@ -198,7 +28,8 @@
           {
             "name": "unit",
             "kind": "name",
-            "required": true
+            "required": true,
+            "binding": "positional"
           }
         ],
         "needs": [
@@ -223,7 +54,8 @@
           {
             "name": "unit",
             "kind": "name",
-            "required": true
+            "required": true,
+            "binding": "positional"
           }
         ],
         "needs": [
@@ -248,7 +80,8 @@
           {
             "name": "unit",
             "kind": "name",
-            "required": true
+            "required": true,
+            "binding": "positional"
           }
         ],
         "needs": [
@@ -273,7 +106,8 @@
           {
             "name": "unit",
             "kind": "name",
-            "required": true
+            "required": true,
+            "binding": "positional"
           }
         ],
         "needs": [
@@ -298,7 +132,8 @@
           {
             "name": "unit",
             "kind": "name",
-            "required": true
+            "required": true,
+            "binding": "positional"
           }
         ],
         "needs": [
@@ -323,7 +158,8 @@
           {
             "name": "unit",
             "kind": "name",
-            "required": true
+            "required": true,
+            "binding": "positional"
           }
         ],
         "needs": [
@@ -348,7 +184,8 @@
           {
             "name": "unit",
             "kind": "name",
-            "required": true
+            "required": true,
+            "binding": "positional"
           }
         ],
         "needs": [
