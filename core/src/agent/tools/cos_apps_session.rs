@@ -1014,7 +1014,8 @@ pub(crate) enum CallPlacement {
 /// sandbox that other calls share". Three answers:
 ///
 /// * a capability the broker answers (`data.kv.*`, `memory.*`,
-///   `ui.notify`, an admitted `system.*` route) needs no policy at all;
+///   `ui.notify`, `net.probe`, an admitted `system.*` route) needs no
+///   policy at all;
 /// * a filesystem or network capability naming one exact resource
 ///   becomes a mount or an egress rule, which a live worker cannot
 ///   grow, so it gets a worker of its own;

@@ -36,6 +36,7 @@ const EXPECTED_USER_COMMANDS: &[&str] = &[
     "system.hardware.inspect",
     "system.location.query",
     "system.network.control",
+    "system.network.diagnose",
     "system.package.install",
     "system.package.control",
     "system.package.restore",

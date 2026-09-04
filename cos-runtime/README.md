@@ -20,6 +20,8 @@ detail:
 | `cos_runtime::net` | (not applicable) | Route `net.*` ops similarly |
 | `cos_runtime::ask_claw` | (not applicable) | Serialize bounded typed desktop context and directly supervise a transient Agent overlay |
 | (not applicable) | `cos_runtime.snapshot` | Copy-on-write before every gated fs mutation |
+| (not applicable) | `cos_runtime.browser_bridge` | Send attached-browser actions to the daemon-owned typed provider over a bounded private stdin bridge |
+| (not applicable) | `cos_runtime.network_diagnostics` | Send host-network inspection and bounded probe requests to the daemon-owned typed provider |
 
 These modules talk wire-v1 too, but they're the *kernel side* of that wire —
 the consumers are the bundled apps in this repo, not external apps.

@@ -401,6 +401,7 @@ fn is_forbidden(command: Command) -> bool {
 fn required_verbs(command: Command) -> &'static [Verb] {
     match command.as_str() {
         "system.network.control" => &[Verb::NET_MANAGE],
+        "system.network.diagnose" => &[Verb::SYS_OBSERVE, Verb::NET_RESOLVE, Verb::NET_PROBE],
         "system.firewall.control" => &[Verb::NET_FIREWALL],
         "system.audio.control" => &[Verb::DEVICE_AUDIO, Verb::DEVICE_MEDIA_ROUTE],
         "system.bluetooth.control" => &[Verb::DEVICE_BLUETOOTH],

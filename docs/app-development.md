@@ -598,7 +598,9 @@ this while writing the manifest:
   cloud-metadata, private and CGNAT addresses. TLS is established by the
   caller over the returned stream, against the hostname it asked for. A
   wildcard host scope grants nothing, because there is no identity to
-  check against.
+  check against. `net.probe` is deliberately different: it authorizes a
+  bounded, daemon-mediated reachability check for one exact endpoint and
+  never adds an egress socket or IP networking to the App sandbox.
 * **Filesystem globs.** `*` matches one segment and is expanded entry
   by entry, so `Documents/*` exposes the entries in `Documents` and not
   their children. `**` covers a subtree and is refused outright when

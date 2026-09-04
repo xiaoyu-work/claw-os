@@ -182,7 +182,7 @@
           "description": "Capability verb. Must be a verb the kernel recognises (core/src/caps/verb.rs).",
           "enum": [
             "fs.read", "fs.write", "fs.delete", "fs.exec", "fs.watch", "fs.meta",
-            "net.dial", "net.listen", "net.raw", "net.resolve", "net.manage", "net.firewall",
+            "net.dial", "net.listen", "net.raw", "net.resolve", "net.probe", "net.manage", "net.firewall",
             "proc.spawn", "proc.signal", "proc.observe",
             "sys.observe", "sys.crash", "sys.container", "sys.config", "sys.events", "sys.identity", "sys.security", "sys.storage",
             "sys.service", "sys.package", "sys.mount", "sys.snapshot", "sys.time", "sys.power", "sys.kernel",

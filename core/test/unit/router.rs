@@ -27,6 +27,24 @@ fn browser_bridge_preserves_broker_authorization_classification() {
 }
 
 #[test]
+fn netdiag_bridge_request_is_bounded_and_cannot_assert_a_session() {
+    let parsed =
+        parse_netdiag_bridge_request(Some(b"{\"action\":\"dns\",\"target\":\"example.com\"}"))
+            .unwrap();
+    assert_eq!(parsed["action"], "dns");
+    assert!(parse_netdiag_bridge_request(Some(
+        b"{\"action\":\"dns\",\"target\":\"example.com\",\"session\":\"forged\"}"
+    ))
+    .unwrap_err()
+    .contains("must not supply session"));
+    assert!(
+        parse_netdiag_bridge_request(Some(&vec![b'x'; NETDIAG_BRIDGE_REQUEST_BYTES + 1]))
+            .unwrap_err()
+            .contains("exceeds")
+    );
+}
+
+#[test]
 fn app_stdin_opt_in_resolves_only_installed_manifest_operations() {
     let root = tempfile::tempdir().unwrap();
     let app = root.path().join("pipe");

@@ -174,8 +174,10 @@ Bundled consumers are migrated: `apps/_shared/safe_http.py`,
 `email` HTTP paths, and both SMTP senders (`apps/email`,
 `apps/gateway/email`) via `cos_runtime.smtp`. Each uses the broker
 inside a sandbox and its ordinary pinned dial outside one.
-`netdiag`'s raw TCP probe reports the restriction explicitly rather than
-returning a connection error that reads like the host being down.
+`netdiag` never receives a network transport. Its MCP worker submits a
+closed diagnostic request through the per-launch relay; `clawd` reads the
+host interface and route view, resolves the exact authorized target, and
+performs bounded TCP probes against that one resolution.
 `apps/test_no_direct_network.py` fails the build if a sandboxed bundled
 operation grows a new direct dial.
 

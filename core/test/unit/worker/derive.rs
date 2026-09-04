@@ -326,7 +326,10 @@ fn only_exact_host_grants_become_endpoints() {
 
 #[test]
 fn no_network_grant_means_denied() {
-    let network = egress_from_caps(&caps(vec![Cap::new(Verb::FS_READ, Scope::path("/tmp"))]));
+    let network = egress_from_caps(&caps(vec![
+        Cap::new(Verb::FS_READ, Scope::path("/tmp")),
+        Cap::new(Verb::NET_PROBE, Scope::host("example.com:443")),
+    ]));
     assert!(matches!(network, NetworkPolicy::Denied));
 }
 

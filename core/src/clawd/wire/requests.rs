@@ -777,6 +777,19 @@ pub struct NetworkControl {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct NetworkDiagnose {
+    pub session: Token,
+    pub action: Token,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<Text<LABEL_BYTES>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempts: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PackageInstall {
     pub session: Token,
     /// Overwritten with `install` by the route before dispatch; kept

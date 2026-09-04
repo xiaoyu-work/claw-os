@@ -156,6 +156,16 @@ pub const CATALOG: &[CapMeta] = &[
         Risk::Low,
     ),
     CapMeta::new(
+        Verb::NET_PROBE,
+        ScopeKind::Host,
+        LocalizedStr::new("Probe network reachability"),
+        LocalizedStr::new(
+            "Run a bounded daemon-mediated connection check without giving the app network access.",
+        ),
+        "🩺",
+        Risk::Low,
+    ),
+    CapMeta::new(
         Verb::NET_MANAGE,
         ScopeKind::Name,
         LocalizedStr::new("Change network connections"),

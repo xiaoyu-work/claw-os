@@ -9,6 +9,8 @@ with Claw OS.
 
 - Perform capability policy checks against the hidden core bridge.
 - Provide internal runtime/session helpers consistently across languages.
+- Carry bounded bundled-App requests to daemon-owned browser and network
+  providers without exposing privileged host sockets.
 - Bind bundled Python App business handlers to manifest-authoritative MCP tools.
 - Own the typed, bounded Ask Claw context and desktop overlay launch contract.
 - Carry bundled attached-browser requests over stdin to the typed daemon
@@ -20,6 +22,8 @@ with Claw OS.
 | Path | Role |
 | --- | --- |
 | `python/src/cos_runtime/` | Python policy/runtime helpers |
+| `python/src/cos_runtime/_broker_bridge.py` | Shared bounded stdin transport for typed private `cos` bridges |
+| `python/src/cos_runtime/network_diagnostics.py` | Typed client for daemon-owned host-network diagnostics |
 | `python/src/cos_runtime/mcp.py` | Strict bundled-App MCP operation binding |
 | `python/src/cos_runtime/browser_bridge.py` | Private bounded stdin bridge to `system.browser.control`; sensitive values never enter argv |
 | `rust/` | Rust internal runtime crate |

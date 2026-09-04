@@ -1377,6 +1377,7 @@ fn the_call_classifier_separates_brokered_from_resource_bearing_calls() {
             Cap::new(Verb::UI_NOTIFY, Scope::Wild),
             Cap::new(Verb::MEMORY_WRITE, Scope::self_ref("probe")),
             Cap::new(Verb::FS_META, Scope::name("bash")),
+            Cap::new(Verb::NET_PROBE, Scope::host("example.com:443")),
         ]),
         CallPlacement::Reusable
     );

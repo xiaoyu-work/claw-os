@@ -101,6 +101,22 @@ fn browser_route_requires_one_of_the_browser_capability_families() {
 }
 
 #[test]
+fn network_diagnostic_route_requires_one_of_its_capability_families() {
+    let command = Command::SystemNetworkDiagnose;
+    for cap in [
+        Cap::new(Verb::SYS_OBSERVE, Scope::name("network")),
+        Cap::new(Verb::NET_RESOLVE, Scope::host("example.com")),
+        Cap::new(Verb::NET_PROBE, Scope::host("example.com:443")),
+    ] {
+        let granted = relaying_authority(vec![cap]);
+        admit(command, &granted).expect("network diagnostic capability justifies the route");
+    }
+
+    let unrelated = relaying_authority(vec![Cap::new(Verb::NET_MANAGE, Scope::Wild)]);
+    assert!(admit(command, &unrelated).is_err());
+}
+
+#[test]
 fn admission_and_policy_read_the_capability_set_live() {
     // The registry row is absent in a unit test, so the fallback is
     // what is seen. The assertion is that `live_caps()` — a read, not a

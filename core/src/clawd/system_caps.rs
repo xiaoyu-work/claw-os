@@ -128,6 +128,8 @@ const BASELINE: &[(Verb, Baseline)] = &[
     (Verb::NET_RAW, Baseline::Denied),
     // Resolution alone is a working exfiltration and discovery channel.
     (Verb::NET_RESOLVE, Baseline::Denied),
+    // A probe reaches the named endpoint, even though no socket reaches the App.
+    (Verb::NET_PROBE, Baseline::Denied),
     (Verb::NET_MANAGE, Baseline::Denied),
     (Verb::NET_FIREWALL, Baseline::Denied),
     // -- Processes ---------------------------------------------------

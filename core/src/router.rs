@@ -30,6 +30,7 @@ use app_commands::dispatch_app;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const BROWSER_BRIDGE_REQUEST_BYTES: usize = 128 * 1024;
+const NETDIAG_BRIDGE_REQUEST_BYTES: usize = 4 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CommandErrorKind {
@@ -303,7 +304,15 @@ fn request_clawd(command: Command, params: Value) -> Result<Value, String> {
 }
 
 fn request_browser_clawd(params: Value) -> Result<Value, String> {
-    let request = crate::clawd::protocol::Request::build(Command::SystemBrowserControl, params);
+    request_wire_clawd(Command::SystemBrowserControl, params)
+}
+
+fn request_netdiag_clawd(params: Value) -> Result<Value, String> {
+    request_wire_clawd(Command::SystemNetworkDiagnose, params)
+}
+
+fn request_wire_clawd(command: Command, params: Value) -> Result<Value, String> {
+    let request = crate::clawd::protocol::Request::build(command, params);
     let response =
         crate::clawd::client::request_blocking(crate::paths::clawd_socket_path(), request)
             .map_err(|error| {
@@ -312,26 +321,30 @@ fn request_browser_clawd(params: Value) -> Result<Value, String> {
                 } else {
                     "unavailable"
                 };
-                browser_wire_failure(code, &error.to_string())
+                system_wire_failure(code, &error.to_string())
             })?;
     if response.ok {
         return response.result.ok_or_else(|| {
-            browser_wire_failure(
+            system_wire_failure(
                 "indeterminate",
-                "clawd system.browser.control response had no result",
+                &format!("clawd {command} response had no result"),
             )
         });
     }
     let error = response.error.ok_or_else(|| {
-        browser_wire_failure(
+        system_wire_failure(
             "indeterminate",
-            "clawd system.browser.control request failed without an error",
+            &format!("clawd {command} request failed without an error"),
         )
     })?;
-    Err(browser_wire_failure(&error.code, &error.message))
+    Err(system_wire_failure(&error.code, &error.message))
 }
 
 fn browser_wire_failure(code: &str, message: &str) -> String {
+    system_wire_failure(code, message)
+}
+
+fn system_wire_failure(code: &str, message: &str) -> String {
     let code = match code {
         "not_authorized" => "PERMISSION_DENIED",
         "unavailable" => "KERNEL_UNAVAILABLE",
@@ -461,6 +474,20 @@ fn dispatch_credential_typed(args: &[String]) -> CommandResult<Option<String>> {
 fn parse_browser_bridge_request(
     provided: Option<&[u8]>,
 ) -> Result<serde_json::Map<String, Value>, String> {
+    parse_internal_bridge_request(provided, BROWSER_BRIDGE_REQUEST_BYTES, "browser")
+}
+
+fn parse_netdiag_bridge_request(
+    provided: Option<&[u8]>,
+) -> Result<serde_json::Map<String, Value>, String> {
+    parse_internal_bridge_request(provided, NETDIAG_BRIDGE_REQUEST_BYTES, "network diagnostic")
+}
+
+fn parse_internal_bridge_request(
+    provided: Option<&[u8]>,
+    max_bytes: usize,
+    service: &str,
+) -> Result<serde_json::Map<String, Value>, String> {
     let owned;
     let bytes = if let Some(provided) = provided {
         provided
@@ -468,31 +495,33 @@ fn parse_browser_bridge_request(
         let mut data = Vec::new();
         std::io::stdin()
             .lock()
-            .take(BROWSER_BRIDGE_REQUEST_BYTES.saturating_add(1) as u64)
+            .take(max_bytes.saturating_add(1) as u64)
             .read_to_end(&mut data)
-            .map_err(|error| format!("read internal browser request: {error}"))?;
+            .map_err(|error| format!("read internal {service} request: {error}"))?;
         owned = data;
         &owned
     };
     if bytes.is_empty() {
-        return Err("internal browser request is empty".to_string());
+        return Err(format!("internal {service} request is empty"));
     }
-    if bytes.len() > BROWSER_BRIDGE_REQUEST_BYTES {
+    if bytes.len() > max_bytes {
         return Err(format!(
-            "internal browser request exceeds {BROWSER_BRIDGE_REQUEST_BYTES} bytes"
+            "internal {service} request exceeds {max_bytes} bytes"
         ));
     }
     let value: Value = serde_json::from_slice(bytes)
-        .map_err(|error| format!("decode internal browser request: {error}"))?;
+        .map_err(|error| format!("decode internal {service} request: {error}"))?;
     let object = value
         .as_object()
         .cloned()
-        .ok_or_else(|| "internal browser request must be a JSON object".to_string())?;
+        .ok_or_else(|| format!("internal {service} request must be a JSON object"))?;
     if object.contains_key("session") {
-        return Err("internal browser request must not supply session authority".to_string());
+        return Err(format!(
+            "internal {service} request must not supply session authority"
+        ));
     }
     if !object.contains_key("action") {
-        return Err("internal browser request requires action".to_string());
+        return Err(format!("internal {service} request requires action"));
     }
     Ok(object)
 }
@@ -697,6 +726,20 @@ fn dispatch_with_stdin_impl(
                 "credential": credential,
             }),
         )?;
+        return Ok(Some(value.to_string()));
+    }
+
+    if name == "__netdiag" {
+        if args.len() != 3 || args[1] != "request" || args[2] != "--request-stdin" {
+            return Err(
+                "internal network diagnostic bridge requires `request --request-stdin`".to_string(),
+            );
+        }
+        let mut request = parse_netdiag_bridge_request(stdin_data.as_deref())?;
+        let session = env::var("COS_SESSION")
+            .map_err(|_| "internal network diagnostic command requires COS_SESSION".to_string())?;
+        request.insert("session".to_string(), Value::String(session));
+        let value = request_netdiag_clawd(Value::Object(request))?;
         return Ok(Some(value.to_string()));
     }
 

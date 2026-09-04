@@ -18,6 +18,8 @@ claw-os repo (under ``apps/*``) can:
   exact manifest-declared MCP tools.
 * :mod:`cos_runtime.browser_bridge` — carry attached-browser requests
   over stdin to the daemon-owned typed provider.
+* :mod:`cos_runtime.network_diagnostics` — carry host-network inspection
+  and bounded probe requests to the daemon-owned typed provider.
 
 These helpers shell out to the ``cos`` binary when they cross a kernel
 boundary and assume the process was spawned by the kernel with a valid
@@ -25,7 +27,14 @@ boundary and assume the process was spawned by the kernel with a valid
 intentional.
 """
 
-from . import browser_bridge, mcp, memory, policy, snapshot
+from . import browser_bridge, mcp, memory, network_diagnostics, policy, snapshot
 
-__all__ = ["browser_bridge", "mcp", "memory", "policy", "snapshot"]
+__all__ = [
+    "browser_bridge",
+    "mcp",
+    "memory",
+    "network_diagnostics",
+    "policy",
+    "snapshot",
+]
 __version__ = "0.1.0"

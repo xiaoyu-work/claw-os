@@ -1,83 +1,183 @@
+import json
 import pathlib
-import socket
-import time
+from decimal import Decimal
 from unittest import mock
+
+import pytest
 
 from test_support import load_local_module
 
 
+APP_DIR = pathlib.Path(__file__).parent
 main = load_local_module(
-    pathlib.Path(__file__).with_name("main.py"),
+    APP_DIR / "main.py",
     "claw_test_netdiag_main",
 )
 
 
-def test_target_parser_handles_host_port_and_ipv6():
-    assert main._parse_target("example.com:8443")[:2] == ("example.com", 8443)
-    assert main._parse_target("[::1]:8080")[:2] == ("::1", 8080)
+def test_manifest_is_mcp_only():
+    manifest = json.loads((APP_DIR / "app.json").read_text(encoding="utf-8"))
+    assert "operations" not in manifest
+    assert [tool["name"] for tool in manifest["mcp"]["tools"]] == [
+        "netdiag.interfaces",
+        "netdiag.routes",
+        "netdiag.dns",
+        "netdiag.tcp",
+        "netdiag.diagnose",
+    ]
+    server = (APP_DIR / "server.py").read_text(encoding="utf-8")
+    assert "App.from_manifest()" in server
+    assert "serve_manifest_operations" not in server
+    assert "def run(" not in (APP_DIR / "main.py").read_text(encoding="utf-8")
+    needs = [
+        need["verb"]
+        for tool in manifest["mcp"]["tools"]
+        for need in tool.get("needs", [])
+    ]
+    assert "net.dial" not in needs
+    assert needs.count("net.probe") == 2
 
 
-def test_dns_authorizes_exact_target():
-    answer = [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("203.0.113.10", 443))]
+def test_interfaces_use_exact_observation_scope():
+    expected = {"interfaces": [], "count": 0}
     with mock.patch.object(main.policy, "require") as require, mock.patch.object(
-        main.socket, "getaddrinfo", return_value=answer
-    ):
-        result = main.cmd_dns(["example.com"])
+        main.network_diagnostics,
+        "request",
+        return_value=expected,
+    ) as request:
+        assert main.interfaces() == expected
+    require.assert_called_once_with("sys.observe", name="network")
+    request.assert_called_once_with("interfaces")
+
+
+def test_dns_uses_exact_target_scope():
+    expected = {"resolved": True, "addresses": [{"ip": "203.0.113.10"}]}
+    with mock.patch.object(main.policy, "require") as require, mock.patch.object(
+        main.network_diagnostics,
+        "request",
+        return_value=expected,
+    ) as request:
+        assert main.dns("example.com") == expected
     require.assert_called_once_with("net.resolve", host="example.com")
-    assert result["resolved"] is True
+    request.assert_called_once_with("dns", target="example.com")
 
 
-def test_diagnose_stops_at_dns_failure():
-    with mock.patch.object(
-        main,
-        "cmd_interfaces",
-        return_value={"interfaces": [{"name": "eth0", "operstate": "up"}]},
-    ), mock.patch.object(
-        main,
-        "cmd_routes",
-        return_value={"default_routes": [{"interface": "eth0"}]},
-    ), mock.patch.object(
-        main,
-        "cmd_tcp",
-        return_value={"resolved": False, "error": "name not found"},
+def test_tcp_requires_explicit_port_and_passes_bounded_defaults():
+    expected = {"reachable": True}
+    with mock.patch.object(main.policy, "require") as require, mock.patch.object(
+        main.network_diagnostics,
+        "request",
+        return_value=expected,
+    ) as request:
+        assert main.tcp("example.com:443") == expected
+    assert require.call_args_list == [
+        mock.call("net.resolve", host="example.com:443"),
+        mock.call("net.probe", host="example.com:443"),
+    ]
+    request.assert_called_once_with(
+        "tcp",
+        target="example.com:443",
+        attempts=3,
+        timeout_ms=5000,
+    )
+
+
+def test_diagnose_uses_all_exact_capabilities():
+    expected = {"status": "ok"}
+    with mock.patch.object(main.policy, "require") as require, mock.patch.object(
+        main.network_diagnostics,
+        "request",
+        return_value=expected,
+    ) as request:
+        assert main.diagnose("[2001:db8::1]:443") == expected
+    assert require.call_args_list == [
+        mock.call("sys.observe", name="network"),
+        mock.call("net.resolve", host="[2001:db8::1]:443"),
+        mock.call("net.probe", host="[2001:db8::1]:443"),
+    ]
+    request.assert_called_once_with("diagnose", target="[2001:db8::1]:443")
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "",
+        " example.com",
+        "https://example.com",
+        "example.com/path",
+        "example.com:0",
+        "example.com:65536",
+        "[127.0.0.1]:443",
+    ],
+)
+def test_invalid_targets_are_rejected_before_policy(target):
+    with mock.patch.object(main.policy, "require") as require, mock.patch.object(
+        main.network_diagnostics,
+        "request",
+    ) as request:
+        with pytest.raises(ValueError):
+            main.dns(target)
+    require.assert_not_called()
+    request.assert_not_called()
+
+
+def test_tcp_requires_explicit_port_before_policy():
+    with mock.patch.object(main.policy, "require") as require, mock.patch.object(
+        main.network_diagnostics,
+        "request",
+    ) as request:
+        with pytest.raises(ValueError, match="explicit host:port"):
+            main.tcp("example.com")
+    require.assert_not_called()
+    request.assert_not_called()
+
+
+def test_tcp_accepts_lossless_sdk_decimal_timeout():
+    with mock.patch.object(main.policy, "require"), mock.patch.object(
+        main.network_diagnostics,
+        "request",
+        return_value={"reachable": True},
+    ) as request:
+        main.tcp("example.com:443", 1, Decimal("0.1"))
+    request.assert_called_once_with(
+        "tcp",
+        target="example.com:443",
+        attempts=1,
+        timeout_ms=100,
+    )
+
+
+@pytest.mark.parametrize(
+    ("attempts", "timeout"),
+    [
+        (0, 5),
+        (True, 5),
+        (6, 1),
+        (1, 0),
+        (1, True),
+        (5, 4.1),
+        (3, Decimal("6.6666")),
+    ],
+)
+def test_invalid_probe_options_are_rejected_before_policy(attempts, timeout):
+    with mock.patch.object(main.policy, "require") as require, mock.patch.object(
+        main.network_diagnostics,
+        "request",
+    ) as request:
+        with pytest.raises(ValueError):
+            main.tcp("example.com:443", attempts, timeout)
+    require.assert_not_called()
+    request.assert_not_called()
+
+
+def test_provider_failures_are_not_returned_as_success_data():
+    with mock.patch.object(main.policy, "require"), mock.patch.object(
+        main.network_diagnostics,
+        "request",
+        side_effect=main.network_diagnostics.NetworkDiagnosticsFailed("provider failed"),
     ):
-        result = main.cmd_diagnose(["bad.example"])
-    assert result["status"] == "critical"
-    assert result["findings"][0]["stage"] == "dns"
-
-
-def test_socket_creation_failure_is_structured():
-    target = (socket.AF_INET6, socket.SOCK_STREAM, socket.IPPROTO_TCP, ("::1", 443, 0, 0))
-    with mock.patch.object(main.socket, "socket", side_effect=OSError("IPv6 disabled")):
-        result = main._connect_target(target, 1)
-    assert result["ok"] is False
-    assert "IPv6 disabled" in result["error"]
-
-
-def test_diagnose_does_not_turn_probe_error_into_success():
-    with mock.patch.object(
-        main,
-        "cmd_interfaces",
-        return_value={"interfaces": [{"name": "eth0", "operstate": "up"}]},
-    ), mock.patch.object(
-        main,
-        "cmd_routes",
-        return_value={"default_routes": [{"interface": "eth0"}]},
-    ), mock.patch.object(
-        main,
-        "cmd_tcp",
-        return_value={"error": "probe configuration failed"},
-    ):
-        result = main.cmd_diagnose(["example.com"])
-    assert result["status"] == "critical"
-    assert result["findings"][0]["stage"] == "probe"
-
-
-def test_dns_resolution_timeout_is_bounded():
-    with mock.patch.object(main.socket, "getaddrinfo", side_effect=lambda *a, **k: time.sleep(1)):
-        started = time.monotonic()
-        with mock.patch.object(main, "DEFAULT_TIMEOUT", 0.05):
-            result = main.cmd_dns(["example.com"])
-    assert time.monotonic() - started < 0.5
-    assert result["resolved"] is False
-    assert "exceeded" in result["error"]
+        with pytest.raises(
+            main.network_diagnostics.NetworkDiagnosticsFailed,
+            match="provider failed",
+        ):
+            main.dns("example.com")

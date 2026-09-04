@@ -40,8 +40,8 @@ use super::{
     accessibility, app_services, app_sessions, audio, backup, bluetooth, browser, camera,
     clipboard, config_editor, containers, context, context_events, crash, credentials, desktop,
     display, event_center, firewall, hardware, journal as journal_ops, location, memory, network,
-    notifications, packages, permissions, power, printer, scheduler, security, snapshots, storage,
-    system_journal, systemd, tasks, transactions, usage, usb_guard, users,
+    network_diagnostics, notifications, packages, permissions, power, printer, scheduler, security,
+    snapshots, storage, system_journal, systemd, tasks, transactions, usage, usb_guard, users,
 };
 
 /// Who may reach a route at all.
@@ -1477,6 +1477,27 @@ routes! {
         run: |c| {
             let authority = c.authority()?;
     network::control(c.params, c.client, authority).await.map_err(BrokerError::from)
+        },
+    }
+    SystemNetworkDiagnose {
+        name: "system.network.diagnose",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget {
+            max_in_flight: 8,
+            deadline: Deadline::Interruptible(Duration::from_secs(30)),
+        },
+        authority: session(Audience::SystemService),
+        body: body::NetworkDiagnose,
+        audit: &[
+            ("session", FieldRule::Token),
+            ("action", FieldRule::Token),
+            ("attempts", FieldRule::Count),
+            ("timeout_ms", FieldRule::Count),
+        ],
+        run: |c| {
+            let authority = c.authority()?;
+    network_diagnostics::diagnose(c.params, authority).await
         },
     }
     SystemPackageInstall {

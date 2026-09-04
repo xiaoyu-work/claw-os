@@ -154,10 +154,6 @@ EXCEPTIONS: dict[str, set[str]] = {
         "smtplib.SMTP",
         "smtplib.SMTP_SSL",
     },
-    # explicit denial: a raw TCP probe is what this operation *is*, and
-    # it reports the sandbox restriction rather than a false "host
-    # down".
-    "apps/netdiag/main.py": {"socket.socket", "socket.getaddrinfo"},
     # trusted-native exemption: the native host runs outside the
     # sandbox under the kernel-side allowlist, and its socket is
     # AF_UNIX.

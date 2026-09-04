@@ -802,6 +802,15 @@ the full `scheme://host:effective-port` `expected_origin`, `allow_secret`, and
 script re-check the expected origin at the execution point; screenshot capture
 also rejects activation or navigation changes during the capture interval.
 
+The MCP-only `netdiag` App similarly has no host network namespace or direct
+socket path. Its private runtime helper sends a closed request through
+`cos __netdiag` to `system.network.diagnose`. `clawd` requires the authenticated
+`netdiag` App identity, spends `sys.observe:name:network` and the exact
+`net.resolve` / `net.probe` target capabilities required by the selected action,
+then reads host interface and route state or performs bounded DNS resolution
+and DNS-pinned TCP probes. TCP and staged diagnosis require an explicit port;
+there is no worker-network or direct-socket fallback.
+
 Agent-to-App and App-to-App calls use the private App Gateway. The caller must
 hold exact authority for `<app-id>/<tool-name>`, and the target manifest's
 `mcp.access` policy must admit the authenticated principal. `clawd` then

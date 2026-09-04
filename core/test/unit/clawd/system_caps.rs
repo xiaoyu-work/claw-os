@@ -167,6 +167,10 @@ fn system_agent_caps_withhold_egress_execution_secrets_and_system_mutation() {
             "net.resolve must not cover {host}"
         );
         assert!(
+            !caps.covers(&Cap::new(Verb::NET_PROBE, Scope::host(host))),
+            "net.probe must not cover {host}"
+        );
+        assert!(
             !caps.covers(&Cap::new(Verb::BROWSER_NAV, Scope::host(host))),
             "browser.nav must not cover {host}"
         );
