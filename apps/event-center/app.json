@@ -9,90 +9,6 @@
   },
   "icon": "📡",
   "runtime": "python",
-  "operations": {
-    "status": {
-      "label": {
-        "en": "Inspect event-source health"
-      },
-      "needs": [
-        {
-          "verb": "sys.events",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "observe"
-            }
-          },
-          "why": {
-            "en": "Read watcher status and active pidfd subscriptions."
-          }
-        }
-      ]
-    },
-    "recent": {
-      "label": {
-        "en": "Read recent system events"
-      },
-      "args": [
-        {
-          "name": "limit",
-          "kind": "integer",
-          "required": false,
-          "default": 100,
-          "binding": "positional"
-        },
-        {
-          "name": "source",
-          "kind": "name",
-          "required": false,
-          "binding": "flag"
-        }
-      ],
-      "needs": [
-        {
-          "verb": "sys.events",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "observe"
-            }
-          },
-          "why": {
-            "en": "Read persistent system event records, including sensitive security/process context."
-          }
-        }
-      ]
-    },
-    "watch-pid": {
-      "label": {
-        "en": "Subscribe to one process exit"
-      },
-      "args": [
-        {
-          "name": "pid",
-          "kind": "integer",
-          "required": true
-        }
-      ],
-      "needs": [
-        {
-          "verb": "sys.events",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "observe"
-            }
-          },
-          "why": {
-            "en": "Open a pidfd and emit a race-free event when the selected process exits."
-          }
-        }
-      ]
-    }
-  },
   "schema_version": 2,
   "mcp": {
     "entry": "server.py",
@@ -134,12 +50,14 @@
             "name": "limit",
             "kind": "integer",
             "required": false,
-            "default": 100
+            "default": 100,
+            "binding": "positional"
           },
           {
             "name": "source",
             "kind": "name",
-            "required": false
+            "required": false,
+            "binding": "flag"
           }
         ],
         "needs": [
