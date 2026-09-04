@@ -1026,6 +1026,10 @@ fans out to the combined Docker/WSL channel and the independent APT channel.
 - The desktop Agent UI and HTTP bridge compile against
   `desktop/agent/protocol`; the bridge translates clawd/core models into this
   versioned presentation contract and rejects incompatible versions explicitly.
+- The desktop entry and compositor shortcuts execute the fixed packaged
+  `/usr/local/bin/cos-agent-ui` directly for ordinary window and context-free
+  overlay activation. There is no Python App manifest or proxy launcher for
+  the Agent UI.
 - Desktop Ask Claw launchers and the Agent UI share the
   `cos_runtime::ask_claw` activation contract; host reducers never name the
   Agent UI executable or hand-build context JSON. The runtime directly spawns

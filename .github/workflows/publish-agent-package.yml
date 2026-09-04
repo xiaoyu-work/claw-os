@@ -131,7 +131,6 @@ jobs:
           test "$(stat -c '%a' "$skill_extract/usr/lib/cos/skills/claw-os")" = "755"
           test "$(stat -c '%a' "$skill_extract/usr/lib/cos/skills/claw-os/SKILL.md")" = "644"
           ! grep -q './etc/cos/oauth.conf$' "$RUNNER_TEMP/claw-os-agent.files"
-          ! grep -q '/apps/agent/' "$RUNNER_TEMP/claw-os-agent.files"
           ! grep -q '/apps/panel-calendar/' "$RUNNER_TEMP/claw-os-agent.files"
 
       # Update downgrade protection has to be *in* the artifact, not

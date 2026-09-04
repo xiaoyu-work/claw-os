@@ -496,7 +496,7 @@ sed -i "s/COS_VERSION=\".*\"/COS_VERSION=\"$VERSION\"/" \
     "$AGENT_STAGE/etc/cos/profile.sh"
 
 # All non-graphical apps belong to the reusable agent. The manifests in
-# apps.list are Agent UI/COSMIC/panel integrations owned by claw-os-desktop.
+# apps.list are COSMIC/panel integrations owned by claw-os-desktop.
 DESKTOP_APPS_FILE="$SCRIPT_DIR/claw-os-desktop/apps.list"
 while IFS= read -r app_id; do
     [ -n "$app_id" ] || continue

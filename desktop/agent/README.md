@@ -135,8 +135,7 @@ The bridge binds an ephemeral port when `COS_AGENT_BRIDGE_PORT` is
 unset (the systemd default), generates a random bearer token, and
 atomically writes both values to
 `$XDG_RUNTIME_DIR/cos-agent-bridge/endpoint.json` with mode `0600`.
-The native UI and `cos app agent` launcher read this file and attach
-the token to every bridge request.
+The native UI reads this file and attaches the token to every bridge request.
 
 ## Protocol compatibility
 

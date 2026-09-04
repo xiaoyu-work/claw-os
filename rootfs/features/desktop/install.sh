@@ -303,12 +303,11 @@ chroot "$ROOTFS" env \
 
     # ----------------------------------------------------------------------
     # ClawOS Agent UI + bridge — separate workspace (no justfile) under
-    # desktop/agent/. com.clawos.Agent.desktop expects /usr/local/bin/cos-agent-ui
-    # via `cos app agent open`; the cos-agent-bridge.service user unit
-    # invokes /usr/local/bin/cos-agent-bridge. These binaries and the secure
-    # SDK launcher helper must be
-    # produced here or the desktop agent app fails to launch with
-    #   {"error":"cos-agent-ui is not installed"}.
+    # desktop/agent/. com.clawos.Agent.desktop and the compositor shortcuts
+    # invoke /usr/local/bin/cos-agent-ui directly; the
+    # cos-agent-bridge.service user unit invokes
+    # /usr/local/bin/cos-agent-bridge. These binaries and the secure SDK
+    # launcher helper must be produced here or the desktop Agent cannot start.
     # ----------------------------------------------------------------------
     if [ ! -f /build/desktop-src/agent/Cargo.toml ]; then
         echo "error: required desktop Agent workspace is missing" >&2

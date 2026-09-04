@@ -102,8 +102,8 @@
     (modifiers: [Super], key: "space"): System(InputSourceSwitch),
     (modifiers: [Super], key: "t"): System(Terminal),
 
-    (modifiers: [Super], key: "a"): Spawn("cos app agent overlay"),
-    (modifiers: [Super, Shift], key: "a"): Spawn("cos app agent overlay --voice"),
+    (modifiers: [Super], key: "a"): Spawn("/usr/local/bin/cos-agent-ui --overlay"),
+    (modifiers: [Super, Shift], key: "a"): Spawn("/usr/local/bin/cos-agent-ui --overlay --voice"),
     (modifiers: [Super], key: "grave"): System(AppLibrary),
     (modifiers: [Super], key: "w"): System(WorkspaceOverview),
     (modifiers: [Super], key: "slash"): System(Launcher),

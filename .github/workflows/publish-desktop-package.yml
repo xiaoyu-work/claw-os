@@ -100,7 +100,6 @@ jobs:
           grep -q './usr/local/bin/cos-agent-ui$' "$RUNNER_TEMP/claw-os-desktop.files"
           grep -q './usr/local/bin/cos-agent-bridge$' "$RUNNER_TEMP/claw-os-desktop.files"
           grep -q './usr/local/bin/cos-ask-claw-launcher$' "$RUNNER_TEMP/claw-os-desktop.files"
-          grep -q './usr/lib/cos/apps/agent/app.json$' "$RUNNER_TEMP/claw-os-desktop.files"
           grep -q './usr/share/applications/com.clawos.Agent.desktop$' "$RUNNER_TEMP/claw-os-desktop.files"
 
       # One shared script binds the embedded manifest to the built

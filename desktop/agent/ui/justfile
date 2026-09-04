@@ -27,10 +27,8 @@ build-release *args: (build-debug '--release' args)
 check *args:
     cargo clippy --all-features {{args}}
 
-# Install just the binary; the .desktop launcher is shared with the
-# legacy React UI under `rootfs/overlay/usr/share/applications/` and
-# points at `cos app agent open`, which routes through `apps/agent`
-# and now prefers `cos-agent-ui` when present.
+# Install the native UI and the secure SDK launcher. The desktop entry is
+# supplied by the rootfs desktop overlay and invokes `cos-agent-ui` directly.
 install:
     install -Dm0755 {{bin-src}} {{bin-dst}}
     install -Dm0755 {{launcher-src}} {{launcher-dst}}
