@@ -1,8 +1,8 @@
 """kv — persistent MCP service for the agent.
 
-Mirrors the verbs in `main.py` (the CLI/one-shot path) but stays live
-across calls so the agent can chain `kv.set` → `kv.get` → `kv.list`
-without re-loading the store JSON each round-trip.
+The service stays live across calls so the agent can chain
+`kv.set` → `kv.get` → `kv.list` without re-loading the store JSON
+each round-trip.
 
 The kernel runs the cap check before forwarding any `tools/call` to
 us (using `app.json`'s `mcp.tools[].needs[]`), so handlers here
@@ -17,11 +17,9 @@ import fnmatch
 import json
 import os
 import sys
-from typing import Dict, Optional
 
-# Use the shared atomic-write helper so both kv entry points (this
-# MCP service + the one-shot main.py) commit to disk under the
-# same lock-then-replace discipline.
+# Use the shared atomic-write helper to commit store updates under
+# the same lock-then-replace discipline used by other bundled apps.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from _shared.atomic import atomic_write_bytes  # noqa: E402
 
@@ -34,7 +32,7 @@ LOCK_PATH = STORE_PATH + ".lock"
 app = App.from_manifest()
 
 
-_cache: Optional[Dict[str, str]] = None
+_cache: dict[str, str] | None = None
 
 
 def _lock_path() -> str:
@@ -42,7 +40,7 @@ def _lock_path() -> str:
     return LOCK_PATH
 
 
-def _load() -> Dict[str, str]:
+def _load() -> dict[str, str]:
     """Return the in-memory cache, loading from disk on first access.
 
     Caching lets callers chain operations through one lazy service
@@ -51,7 +49,9 @@ def _load() -> Dict[str, str]:
     global _cache
     if _cache is not None:
         return _cache
-    if not os.path.isfile(STORE_PATH):
+    try:
+        os.stat(STORE_PATH)
+    except FileNotFoundError:
         _cache = {}
         return _cache
     lock = _lock_path()
@@ -59,17 +59,24 @@ def _load() -> Dict[str, str]:
         fcntl.flock(lock_fd, fcntl.LOCK_SH)
         try:
             try:
-                with open(STORE_PATH, "r") as f:
-                    data = json.load(f)
-            except (OSError, json.JSONDecodeError, ValueError):
-                data = {}
+                with open(STORE_PATH, "r", encoding="utf-8") as f:
+                    loaded: object = json.load(f)
+            except FileNotFoundError:
+                loaded = {}
         finally:
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
-    _cache = data if isinstance(data, dict) else {}
+    if not isinstance(loaded, dict):
+        raise ValueError("kv store must contain a JSON object")
+    data: dict[str, str] = {}
+    for key, value in loaded.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise ValueError("kv store must contain only string keys and values")
+        data[key] = value
+    _cache = data
     return _cache
 
 
-def _save(data: Dict[str, str]) -> None:
+def _save(data: dict[str, str]) -> None:
     """Persist ``data`` atomically: acquire the exclusive lock, then
     write via ``atomic_write_bytes`` so a concurrent reader never sees
     a truncated store. The old code opened the file in ``"w"`` mode,
@@ -110,7 +117,7 @@ def kv_del(key: str) -> dict:
 
 
 @app.tool("kv.list")
-def kv_list(pattern: str) -> dict:
+def kv_list(pattern: str = "*") -> dict:
     data = _load()
     keys = sorted(k for k in data if fnmatch.fnmatch(k, pattern))
     return {"pattern": pattern, "keys": keys}
