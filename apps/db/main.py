@@ -1,6 +1,8 @@
 """SQLite database — create, query, and manage databases."""
 
+from contextlib import closing
 import os
+from pathlib import Path
 import re
 import sqlite3
 
@@ -16,9 +18,17 @@ MAX_ROWS = 1000  # Maximum rows returned from a single query
 # old `_db_path(name)` from being turned into a path-traversal
 # primitive by a caller passing ``../../../tmp/pwned``.
 _VALID_DB_NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_\-.]*$")
+_READ_ONLY_ACTIONS = frozenset(
+    {
+        sqlite3.SQLITE_FUNCTION,
+        sqlite3.SQLITE_READ,
+        sqlite3.SQLITE_RECURSIVE,
+        sqlite3.SQLITE_SELECT,
+    }
+)
 
 
-class _InvalidName(Exception):
+class _InvalidName(ValueError):
     """Sentinel raised by ``_db_path`` for a bad database name."""
 
 
@@ -30,7 +40,6 @@ def _validate_name(name):
     * empty / non-string input
     * anything containing ``/``, ``\\``, ``\\0``, or ``..``
     * leading ``.`` (hidden / dotfile abuse)
-    * anything that PurePosixPath would not treat as a bare basename
     """
     if not isinstance(name, str) or not name:
         raise _InvalidName("database name must be a non-empty string")
@@ -44,15 +53,10 @@ def _validate_name(name):
         raise _InvalidName(
             f"invalid database name {name!r}: must be a single path component"
         )
-    if not _VALID_DB_NAME.match(name):
+    if _VALID_DB_NAME.fullmatch(name) is None:
         raise _InvalidName(
             f"invalid database name {name!r}: only [A-Za-z0-9_.-] allowed"
         )
-    # belt-and-braces: PurePosixPath should agree this is a bare basename.
-    import pathlib
-
-    if pathlib.PurePosixPath(name).name != name:
-        raise _InvalidName(f"invalid database name {name!r}")
     return name
 
 
@@ -72,133 +76,149 @@ def _db_path(name):
     real_full = os.path.realpath(full)
     if os.path.dirname(real_full) != real_dir:
         raise _InvalidName(f"resolved path {real_full!r} escapes db dir {real_dir!r}")
-    return full
+    return real_full
 
 
-def cmd_query(args):
+def _validate_sql(sql: object) -> str:
+    if not isinstance(sql, str) or not sql.strip():
+        raise ValueError("sql must be a non-empty string")
+    return sql
+
+
+def _validate_table(table: object) -> str:
+    if not isinstance(table, str) or not table:
+        raise ValueError("table must be a non-empty string")
+    return table
+
+
+def _open_read_only(path: str) -> sqlite3.Connection:
+    connection = sqlite3.connect(f"{Path(path).as_uri()}?mode=ro", uri=True)
+    connection.execute("PRAGMA query_only = ON")
+    return connection
+
+
+def _read_authorizer(
+    action: int,
+    _arg1: str | None,
+    _arg2: str | None,
+    _database: str | None,
+    _trigger: str | None,
+) -> int:
+    if action in _READ_ONLY_ACTIONS:
+        return sqlite3.SQLITE_OK
+    return sqlite3.SQLITE_DENY
+
+
+def _same_database_authorizer(
+    action: int,
+    _arg1: str | None,
+    _arg2: str | None,
+    _database: str | None,
+    _trigger: str | None,
+) -> int:
+    if action in {sqlite3.SQLITE_ATTACH, sqlite3.SQLITE_DETACH}:
+        return sqlite3.SQLITE_DENY
+    return sqlite3.SQLITE_OK
+
+
+def _bounded_rows(cursor: sqlite3.Cursor) -> tuple[list[list[object]], int | None]:
+    rows = cursor.fetchmany(MAX_ROWS + 1)
+    if len(rows) <= MAX_ROWS:
+        return [list(row) for row in rows], None
+
+    total_rows = len(rows)
+    while batch := cursor.fetchmany(MAX_ROWS):
+        total_rows += len(batch)
+    return [list(row) for row in rows[:MAX_ROWS]], total_rows
+
+
+def query(database: str, sql: str) -> dict[str, object]:
     """Run a SELECT query on a database."""
-    if len(args) < 2:
-        return {"error": "usage: db query <database> <sql>"}
-    name = args[0]
-    sql = " ".join(args[1:])
-    # Validate the name BEFORE policy.require — a hostile name (null
-    # byte, traversal, ...) would otherwise leak into the policy
-    # check's subprocess argv and surface as an opaque ValueError.
+    database = _validate_name(database)
+    sql = _validate_sql(sql)
+    policy.require("data.db.read", name=database)
+    path = _db_path(database)
     try:
-        _validate_name(name)
-    except _InvalidName as exc:
-        return {"error": str(exc)}
-    policy.require("data.db.read", name=name)
-    try:
-        path = _db_path(name)
-    except _InvalidName as exc:
-        return {"error": str(exc)}
-    try:
-        with sqlite3.connect(path) as conn:
-            cur = conn.execute(sql)
-            columns = [desc[0] for desc in cur.description] if cur.description else []
-            rows = cur.fetchall()
-            total_rows = len(rows)
-            truncated = total_rows > MAX_ROWS
-            if truncated:
-                rows = rows[:MAX_ROWS]
-            result = {
-                "database": name,
+        with closing(_open_read_only(path)) as connection:
+            connection.set_authorizer(_read_authorizer)
+            cursor = connection.execute(sql)
+            columns = (
+                [description[0] for description in cursor.description]
+                if cursor.description
+                else []
+            )
+            rows, total_rows = _bounded_rows(cursor)
+            result: dict[str, object] = {
+                "database": database,
                 "columns": columns,
-                "rows": [list(r) for r in rows],
+                "rows": rows,
                 "count": len(rows),
             }
-            if truncated:
+            if total_rows is not None:
                 result["truncated"] = True
                 result["total_rows"] = total_rows
             return result
-    except sqlite3.Error as e:
-        return {"error": str(e)}
+    except sqlite3.Error as exc:
+        raise RuntimeError(f"database query failed: {exc}") from exc
 
 
-def cmd_exec(args):
-    """Execute SQL statements (CREATE, INSERT, UPDATE, DELETE)."""
-    if len(args) < 2:
-        return {"error": "usage: db exec <database> <sql>"}
-    name = args[0]
-    sql = " ".join(args[1:])
+def execute(database: str, sql: str) -> dict[str, object]:
+    """Execute one SQL statement (CREATE, INSERT, UPDATE, DELETE)."""
+    database = _validate_name(database)
+    sql = _validate_sql(sql)
+    policy.require("data.db.write", name=database)
+    path = _db_path(database)
     try:
-        _validate_name(name)
-    except _InvalidName as exc:
-        return {"error": str(exc)}
-    policy.require("data.db.write", name=name)
-    try:
-        path = _db_path(name)
-    except _InvalidName as exc:
-        return {"error": str(exc)}
-    try:
-        with sqlite3.connect(path) as conn:
-            cur = conn.execute(sql)
-            conn.commit()
+        with closing(sqlite3.connect(path)) as connection:
+            connection.set_authorizer(_same_database_authorizer)
+            cursor = connection.execute(sql)
+            connection.commit()
             return {
-                "database": name,
+                "database": database,
                 "statement": sql,
-                "rows_affected": cur.rowcount,
+                "rows_affected": cursor.rowcount,
             }
-    except sqlite3.Error as e:
-        return {"error": str(e)}
+    except sqlite3.Error as exc:
+        raise RuntimeError(f"database execution failed: {exc}") from exc
 
 
-def cmd_tables(args):
+def tables(database: str) -> dict[str, object]:
     """List tables in a database."""
-    if len(args) < 1:
-        return {"error": "usage: db tables <database>"}
-    name = args[0]
+    database = _validate_name(database)
+    policy.require("data.db.read", name=database)
+    path = _db_path(database)
     try:
-        _validate_name(name)
-    except _InvalidName as exc:
-        return {"error": str(exc)}
-    policy.require("data.db.read", name=name)
-    try:
-        path = _db_path(name)
-    except _InvalidName as exc:
-        return {"error": str(exc)}
-    try:
-        with sqlite3.connect(path) as conn:
-            cur = conn.execute(
+        with closing(_open_read_only(path)) as connection:
+            cursor = connection.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
             )
-            tables = [row[0] for row in cur.fetchall()]
-            return {"database": name, "tables": tables}
-    except sqlite3.Error as e:
-        return {"error": str(e)}
+            names = [row[0] for row in cursor.fetchall()]
+            return {"database": database, "tables": names}
+    except sqlite3.Error as exc:
+        raise RuntimeError(f"database table listing failed: {exc}") from exc
 
 
-def cmd_schema(args):
+def schema(database: str, table: str) -> dict[str, object]:
     """Show the CREATE TABLE statement for a table."""
-    if len(args) < 2:
-        return {"error": "usage: db schema <database> <table>"}
-    name = args[0]
-    table = args[1]
+    database = _validate_name(database)
+    table = _validate_table(table)
+    policy.require("data.db.read", name=database)
+    path = _db_path(database)
     try:
-        _validate_name(name)
-    except _InvalidName as exc:
-        return {"error": str(exc)}
-    policy.require("data.db.read", name=name)
-    try:
-        path = _db_path(name)
-    except _InvalidName as exc:
-        return {"error": str(exc)}
-    try:
-        with sqlite3.connect(path) as conn:
-            cur = conn.execute(
+        with closing(_open_read_only(path)) as connection:
+            cursor = connection.execute(
                 "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
                 (table,),
             )
-            row = cur.fetchone()
+            row = cursor.fetchone()
             if row is None:
-                return {"error": f"table not found: {table}"}
-            return {"database": name, "table": table, "schema": row[0]}
-    except sqlite3.Error as e:
-        return {"error": str(e)}
+                raise ValueError(f"table not found: {table}")
+            return {"database": database, "table": table, "schema": row[0]}
+    except sqlite3.Error as exc:
+        raise RuntimeError(f"database schema lookup failed: {exc}") from exc
 
 
-def cmd_databases(args):
+def databases() -> dict[str, object]:
     """List all databases in the data directory.
 
     Filters to entries with a ``.db`` suffix that pass the same
@@ -217,39 +237,17 @@ def cmd_databases(args):
             _validate_name(db_name)
         except _InvalidName:
             continue
-        full_path = os.path.join(DB_DIR, entry)
+        full_path = _db_path(db_name)
         size = os.path.getsize(full_path)
         try:
-            with sqlite3.connect(full_path) as conn:
-                cur = conn.execute(
+            with closing(_open_read_only(full_path)) as connection:
+                cursor = connection.execute(
                     "SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
                 )
-                table_count = cur.fetchone()[0]
-        except sqlite3.Error:
-            table_count = 0
+                table_count = cursor.fetchone()[0]
+        except sqlite3.Error as exc:
+            raise RuntimeError(
+                f"database listing failed for {db_name}: {exc}"
+            ) from exc
         databases.append({"name": db_name, "size": size, "tables": table_count})
     return {"databases": databases}
-
-
-COMMANDS = {
-    "query": cmd_query,
-    "exec": cmd_exec,
-    "tables": cmd_tables,
-    "schema": cmd_schema,
-    "databases": cmd_databases,
-}
-
-
-def run(command, args):
-    from canonical_argv import normalize_canonical_argv
-    args = normalize_canonical_argv(args)
-    """Entry point called by cos."""
-    handler = COMMANDS.get(command)
-    if handler is None:
-        return {"error": f"unknown command: {command}"}
-    try:
-        return handler(args)
-    except policy.PermissionDenied as denied:
-        return {"error": str(denied), "denial": denied.denial}
-    except policy.PolicyUnavailable as exc:
-        return {"error": f"capability check failed: {exc}"}

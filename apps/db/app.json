@@ -9,138 +9,6 @@
   },
   "icon": "🗄️",
   "runtime": "python",
-  "operations": {
-    "query": {
-      "label": {
-        "en": "Run a SELECT query on a database"
-      },
-      "args": [
-        {
-          "name": "database",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "sql",
-          "kind": "text",
-          "required": true,
-          "repeatable": true
-        }
-      ],
-      "needs": [
-        {
-          "verb": "data.db.read",
-          "scope": {
-            "kind": "from-arg",
-            "arg": "database"
-          },
-          "why": {
-            "en": "Read rows from the database you asked to query."
-          }
-        }
-      ]
-    },
-    "exec": {
-      "label": {
-        "en": "Execute SQL statements (CREATE, INSERT, UPDATE, DELETE)"
-      },
-      "args": [
-        {
-          "name": "database",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "sql",
-          "kind": "text",
-          "required": true,
-          "repeatable": true
-        }
-      ],
-      "needs": [
-        {
-          "verb": "data.db.write",
-          "scope": {
-            "kind": "from-arg",
-            "arg": "database"
-          },
-          "why": {
-            "en": "Modify the database you asked to execute SQL on."
-          }
-        }
-      ]
-    },
-    "tables": {
-      "label": {
-        "en": "List tables in a database"
-      },
-      "args": [
-        {
-          "name": "database",
-          "kind": "name",
-          "required": true
-        }
-      ],
-      "needs": [
-        {
-          "verb": "data.db.read",
-          "scope": {
-            "kind": "from-arg",
-            "arg": "database"
-          },
-          "why": {
-            "en": "Read the schema of the database to list its tables."
-          }
-        }
-      ]
-    },
-    "schema": {
-      "label": {
-        "en": "Show schema of a table"
-      },
-      "args": [
-        {
-          "name": "database",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "table",
-          "kind": "text",
-          "required": true
-        }
-      ],
-      "needs": [
-        {
-          "verb": "data.db.read",
-          "scope": {
-            "kind": "from-arg",
-            "arg": "database"
-          },
-          "why": {
-            "en": "Read the schema of the named table from the database."
-          }
-        }
-      ]
-    },
-    "databases": {
-      "label": {
-        "en": "List available databases"
-      },
-      "needs": [
-        {
-          "verb": "data.db.read",
-          "scope": {
-            "kind": "wild"
-          },
-          "why": {
-            "en": "Enumerate every database stored on this machine."
-          }
-        }
-      ],
-      "args": []
-    }
-  },
   "schema_version": 2,
   "mcp": {
     "entry": "server.py",
@@ -160,13 +28,14 @@
           {
             "name": "database",
             "kind": "name",
-            "required": true
+            "required": true,
+            "binding": "positional"
           },
           {
             "name": "sql",
             "kind": "text",
             "required": true,
-            "repeatable": true
+            "binding": "positional"
           }
         ],
         "needs": [
@@ -185,19 +54,20 @@
       {
         "name": "db.exec",
         "summary": {
-          "en": "Execute SQL statements (CREATE, INSERT, UPDATE, DELETE)"
+          "en": "Execute one SQL statement (CREATE, INSERT, UPDATE, DELETE)"
         },
         "args": [
           {
             "name": "database",
             "kind": "name",
-            "required": true
+            "required": true,
+            "binding": "positional"
           },
           {
             "name": "sql",
             "kind": "text",
             "required": true,
-            "repeatable": true
+            "binding": "positional"
           }
         ],
         "needs": [
@@ -222,7 +92,8 @@
           {
             "name": "database",
             "kind": "name",
-            "required": true
+            "required": true,
+            "binding": "positional"
           }
         ],
         "needs": [
@@ -247,12 +118,14 @@
           {
             "name": "database",
             "kind": "name",
-            "required": true
+            "required": true,
+            "binding": "positional"
           },
           {
             "name": "table",
             "kind": "text",
-            "required": true
+            "required": true,
+            "binding": "positional"
           }
         ],
         "needs": [
