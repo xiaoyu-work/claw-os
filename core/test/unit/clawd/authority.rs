@@ -95,6 +95,7 @@ fn route_audiences_match_their_families() {
             name if name.starts_with("permission.") => Audience::Permission,
             name if name.starts_with("transaction.") => Audience::Transaction,
             name if name == "app_service.call"
+                || name == "app_service.cli_call"
                 || name.starts_with("app_session.")
                 || name.starts_with("mcp_session.") =>
             {

@@ -128,7 +128,7 @@
       "properties": {
         "name": { "type": "string", "description": "Identifier referenced by from-arg scope bindings." },
         "kind": { "type": "string", "enum": ["path", "host", "name", "text", "number", "integer", "bool"], "description": "Value kind. path/host/name can populate a scope; text/number/integer/bool cannot." },
-        "binding": { "type": "string", "enum": ["positional", "flag"], "description": "How one-shot CLI argv binds this value. Omitted booleans retain their historical flag form; every other omitted binding is positional." },
+        "binding": { "type": "string", "enum": ["positional", "flag"], "description": "How one-shot CLI argv binds this value. Omitted booleans retain their historical flag form; every other omitted binding is positional. On an MCP tool arg this is CLI-only metadata: it keeps `cos app <id> <command>` syntax stable without operations and is never emitted into the model-facing MCP inputSchema." },
         "required": { "type": "boolean" },
         "required_when": { "$ref": "#/$defs/needCondition", "description": "Require and accept this argument only when an earlier declared argument satisfies the condition." },
         "repeatable": { "type": "boolean", "description": "Bind every occurrence in order and expose an array value. Repeatable positional args must be last; repeatable booleans are rejected." },
@@ -352,12 +352,8 @@
         "summary": { "$ref": "#/$defs/localizedText" },
         "args": {
           "type": "array",
-          "items": {
-            "allOf": [
-              { "$ref": "#/$defs/arg" },
-              { "not": { "required": ["binding"] } }
-            ]
-          }
+          "items": { "$ref": "#/$defs/arg" },
+          "description": "Declared input parameters. Same shape as an operation arg. An optional `binding` (positional/flag) is one-shot CLI metadata only: it keeps `cos app <id> <command>` syntax stable when the App has no operations and is never surfaced in the model-facing MCP inputSchema."
         },
         "needs": { "type": "array", "items": { "$ref": "#/$defs/need" } }
       }

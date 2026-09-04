@@ -54,6 +54,11 @@ const EXPECTED_USER_COMMANDS: &[&str] = &[
     "app_session.bind",
     "app_session.set_transient",
     "app_session.deregister",
+    // The human `cos app <id> <command>` surface for MCP-only Apps. It is
+    // `Access::User` (an unprivileged local CLI peer), a distinct command
+    // from the `Access::PrivateTaskHost` `app_service.call`, and the daemon
+    // derives every authority fact from the peer rather than the request.
+    "app_service.cli_call",
     // The launcher's relay: addressed by a grant `clawd` issued to that
     // exact process, and refused for every route a session may not
     // reach. It is `Access::User` because the launcher is unprivileged.
@@ -212,6 +217,53 @@ fn unrouted_commands_are_not_dispatchable() {
     assert!(Command::parse("DAEMON.HEALTH").is_none());
     assert!(Command::parse("context.update").is_some());
     assert!(Command::parse("scheduler.run").is_some());
+}
+
+#[test]
+fn cli_and_private_app_service_routes_are_separate() {
+    // The two App-service routes are distinct commands with distinct access
+    // classes: the human CLI route is `Access::User`, the private task-host
+    // route is `Access::PrivateTaskHost`. They never collapse into one.
+    let cli = Command::AppServiceCliCall.route();
+    let private = Command::AppServiceCall.route();
+    assert_ne!(cli.command, private.command);
+    assert_ne!(cli.name, private.name);
+    assert_eq!(cli.access, Access::User);
+    assert_eq!(private.access, Access::PrivateTaskHost);
+
+    let user = ClientIdentity {
+        pid: Some(42),
+        uid: Some(1000),
+        gid: Some(1000),
+        execution_uid: None,
+        start_time_ticks: Some(1),
+        attended_local: false,
+        extension_host: None,
+    };
+
+    // A direct (non-task-host) user peer reaches the CLI route but is refused
+    // the private task-host route outright — a direct client cannot reach the
+    // private App-service path at all.
+    assert_eq!(cli.authorize(&user), Ok(()));
+    assert_eq!(private.authorize(&user), Err(Fault::NotAuthorized));
+
+    // The private route stays task-host-only; the CLI route never grants a
+    // task-host principal (that is enforced when the request is prepared, not
+    // in the access table).
+    let mut task_host = user;
+    task_host.execution_uid = Some(61_000);
+    task_host.extension_host = Some(crate::clawd::client_identity::AuthenticatedExtensionHost {
+        purpose: crate::extension_host::protocol::HostPurpose::Task,
+        lease_id: "task-a".to_string(),
+        authority_session_id: Some("session-a".to_string()),
+        host_session_id: Some("host-a".to_string()),
+        owner_uid: 1000,
+        extension_uid: 61_000,
+        capability_generation: "a".repeat(16),
+        host_pid: 42,
+        host_start_time_ticks: Some(1),
+    });
+    assert_eq!(private.authorize(&task_host), Ok(()));
 }
 
 #[test]

@@ -369,3 +369,66 @@ fn bundled_schema_exposes_repeatables_choices_and_stdin() {
     let schema = operation_schema(&googlechat.operations["send"]);
     assert_eq!(schema["parameters"][1]["binding"], "flag");
 }
+
+#[test]
+fn mcp_only_cli_command_lookup_and_schema() {
+    use crate::caps::manifest::ArgBinding;
+    let manifest = Manifest::from_json(
+        r#"{
+              "schema_version": 2,
+              "id": "kv",
+              "version": "0.1",
+              "name": {"en": "KV"},
+              "mcp": {
+                "tools": [
+                  {
+                    "name": "kv.get",
+                    "summary": {"en": "Get a value."},
+                    "args": [
+                      {"name": "key", "kind": "text", "required": true, "binding": "positional"},
+                      {"name": "raw", "kind": "bool", "binding": "flag"}
+                    ]
+                  }
+                ]
+              }
+            }"#,
+    )
+    .unwrap();
+
+    // The staged gate: no operations + an mcp service => MCP-only CLI dispatch.
+    assert!(is_mcp_only_cli(&manifest));
+
+    // Exact `<app_id>.<command>` lookup; a non-matching command is rejected
+    // rather than guessed, and the bare tool name is not a command.
+    let tool = mcp_tool_for_command(&manifest, "get").unwrap();
+    assert_eq!(tool.name, "kv.get");
+    assert_eq!(tool.args[0].effective_binding(), ArgBinding::Positional);
+    assert_eq!(tool.args[1].effective_binding(), ArgBinding::Flag);
+    assert!(mcp_tool_for_command(&manifest, "missing").is_err());
+    assert!(mcp_tool_for_command(&manifest, "kv.get").is_err());
+
+    // The CLI schema is derived from the tool and carries `binding` metadata,
+    // and MCP tools take no piped stdin in this foundation.
+    let schema = tool_schema(tool);
+    assert_eq!(schema["parameters"][0]["binding"], "positional");
+    assert_eq!(schema["parameters"][1]["binding"], "flag");
+    assert_eq!(schema["stdin"], false);
+}
+
+#[test]
+fn an_operation_app_is_not_treated_as_mcp_only() {
+    // Staged migration: an App that still declares operations keeps the legacy
+    // CLI dispatch even when it also exposes an mcp service.
+    let manifest = Manifest::from_json(
+        r#"{
+              "schema_version": 2,
+              "id": "hybrid",
+              "version": "0.1",
+              "name": {"en": "Hybrid"},
+              "operations": {"say": {"label": {"en": "Say"}}},
+              "mcp": {"tools": [{"name": "hybrid.say", "summary": {"en": "Say"}}]}
+            }"#,
+    )
+    .unwrap();
+    assert!(!is_mcp_only_cli(&manifest));
+}

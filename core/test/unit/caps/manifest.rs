@@ -1180,7 +1180,30 @@ fn manifest_and_mcp_objects_reject_unknown_fields() {
 }
 
 #[test]
-fn mcp_tool_args_reject_cli_bindings() {
+fn mcp_tool_args_accept_cli_bindings_but_reject_invalid_values() {
+    // `binding` is now accepted on an MCP tool arg as one-shot CLI metadata.
+    let manifest = Manifest::from_json(
+        r#"{
+              "schema_version": 2,
+              "id": "closed",
+              "version": "1",
+              "name": {"en": "Closed"},
+              "mcp": {"tools":[{
+                "name":"closed.run",
+                "summary": {"en": "Run"},
+                "args":[
+                  {"name":"message","kind":"text","binding":"positional"},
+                  {"name":"loud","kind":"bool","binding":"flag"}
+                ]
+              }]}
+            }"#,
+    )
+    .expect("mcp tool args may carry CLI binding metadata");
+    let tool = &manifest.mcp.as_ref().unwrap().tools[0];
+    assert_eq!(tool.args[0].binding, Some(ArgBinding::Positional));
+    assert_eq!(tool.args[1].binding, Some(ArgBinding::Flag));
+
+    // An out-of-enum binding value is still rejected during deserialization.
     let error = Manifest::from_json(
         r#"{
               "schema_version": 2,
@@ -1190,15 +1213,12 @@ fn mcp_tool_args_reject_cli_bindings() {
               "mcp": {"tools":[{
                 "name":"closed.run",
                 "summary": {"en": "Run"},
-                "args":[{"name":"value","kind":"text","binding":"flag"}]
+                "args":[{"name":"value","kind":"text","binding":"sideways"}]
               }]}
             }"#,
     )
     .unwrap_err();
-    assert!(matches!(
-        error,
-        ManifestError::McpArgBindingNotAllowed { .. }
-    ));
+    assert!(matches!(error, ManifestError::Json(_)));
 }
 
 #[test]

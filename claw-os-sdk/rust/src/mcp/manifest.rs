@@ -284,6 +284,7 @@ fn parse_arguments(tool_name: &str, raw_args: &[Value]) -> Result<Vec<ManifestAr
             &[
                 "name",
                 "kind",
+                "binding",
                 "required",
                 "required_when",
                 "repeatable",
@@ -292,6 +293,16 @@ fn parse_arguments(tool_name: &str, raw_args: &[Value]) -> Result<Vec<ManifestAr
                 "label",
             ],
         )?;
+        // `binding` is one-shot CLI metadata only. The server never binds argv,
+        // so it is validated for shape and otherwise ignored; it must not reach
+        // the model-facing input schema.
+        if let Some(binding) = object.get("binding") {
+            if !matches!(binding.as_str(), Some("positional") | Some("flag")) {
+                return Err(AppError::Manifest(format!(
+                    "tool `{tool_name}` arg `{name}` has invalid binding"
+                )));
+            }
+        }
         let required = optional_bool(object, "required", tool_name, name)?;
         let repeatable = optional_bool(object, "repeatable", tool_name, name)?;
         if repeatable && kind == ArgumentKind::Bool {

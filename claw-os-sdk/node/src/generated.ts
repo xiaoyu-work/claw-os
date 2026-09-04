@@ -268,7 +268,7 @@ export interface Mcpaccess {
 export interface Mcptool {
   name: string;
   summary: Localizedtext;
-  args?: unknown[];
+  args?: Arg[];
   needs?: Need[];
 }
 

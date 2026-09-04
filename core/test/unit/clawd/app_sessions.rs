@@ -3468,3 +3468,92 @@ fn a_relay_refuses_a_session_whose_package_was_revoked() {
     crate::provenance::runtime::deregister(crate::provenance::fsec::effective_uid(), session_id);
     let _ = std::fs::remove_dir_all(&scratch);
 }
+
+// ---------------------------------------------------------------------------
+// Authenticated local CLI App-service path (`app_service.cli_call`).
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn cli_app_service_dispatch_rejects_an_extension_host_identity() {
+    // The CLI principal is derived from the peer. A daemon-owned task Host (or
+    // any Extension Host) can neither reach this route nor forge a CLI identity
+    // through it, so its request is refused before any launcher authentication.
+    let mut client = e2e_client();
+    client.extension_host = Some(crate::clawd::client_identity::AuthenticatedExtensionHost {
+        purpose: crate::extension_host::protocol::HostPurpose::Task,
+        lease_id: "task-a".to_string(),
+        authority_session_id: Some("session-a".to_string()),
+        host_session_id: Some("host-a".to_string()),
+        owner_uid: E2E_UID,
+        extension_uid: 61_000,
+        capability_generation: "a".repeat(16),
+        host_pid: client.pid.unwrap_or(1),
+        host_start_time_ticks: client.start_time_ticks,
+    });
+    let error = prepare_cli_app_service_call(
+        json!({ "app_id": "fs", "tool": "fs.read", "arguments": {} }),
+        &client,
+    )
+    .await
+    .expect_err("a task host must never forge a CLI principal");
+    assert!(
+        error.message.contains("Extension Host"),
+        "{}",
+        error.message
+    );
+}
+
+#[test]
+fn cli_principal_is_daemon_derived_and_the_context_is_exact() {
+    use crate::agent::tools::app_gateway::{
+        McpCallContext, McpPrincipal, McpPrincipalKind, CALL_CONTEXT_WIRE_VERSION,
+    };
+
+    // The principal id encodes only authenticated facts about the exact peer.
+    assert_eq!(
+        cli_principal_id(1000, 4242, Some(99)),
+        "cli.uid1000.pid4242.start99"
+    );
+    assert_eq!(cli_principal_id(1000, 4242, None), "cli.uid1000.pid4242");
+
+    let context = McpCallContext {
+        wire_version: CALL_CONTEXT_WIRE_VERSION,
+        call_id: "cli-abc".to_string(),
+        trace_id: "cli-abc".to_string(),
+        parent_call_id: None,
+        depth: 0,
+        deadline_unix_ms: Some(crate::agentd::grant::now_ms() + 1_000),
+        session_id: None,
+        task_id: None,
+        caller: McpPrincipal {
+            kind: McpPrincipalKind::Cli,
+            id: cli_principal_id(1000, 4242, Some(99)),
+            owner_uid: 1000,
+            app_id: None,
+        },
+    };
+    context
+        .validate()
+        .expect("a daemon-derived CLI context is structurally valid");
+}
+
+#[test]
+fn cli_target_caps_separate_the_callers_invoke_authority() {
+    // App code receives only the target capabilities of the call. The caller's
+    // exact `agent.invoke:<app>/<tool>` authority is required to authorize the
+    // call but is never handed to the App session.
+    let invoke = crate::agent::tools::app_gateway::invoke_cap("fs", "fs.read").unwrap();
+    let target = Cap::new(Verb::FS_READ, Scope::path("/workspace/x"));
+    let mut set = CapSet::new();
+    set.insert(invoke.clone());
+    set.insert(target.clone());
+    let app_caps = target_session_caps(set, &invoke);
+    assert!(
+        app_caps.iter().any(|cap| *cap == target),
+        "target capabilities must reach App code"
+    );
+    assert!(
+        !app_caps.iter().any(|cap| *cap == invoke),
+        "the caller's invoke authority must never reach App code"
+    );
+}

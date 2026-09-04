@@ -1233,7 +1233,7 @@ fn manifest_validation_rejects_session_only_fields_and_invalid_contracts() {
             {
                 "name": "closed",
                 "summary": {"en": "Closed"},
-                "args": [{"name": "x", "kind": "text", "binding": "flag"}]
+                "args": [{"name": "x", "kind": "text", "binding": "sideways"}]
             }
         ])),
     ] {
@@ -1245,6 +1245,28 @@ fn manifest_validation_rejects_session_only_fields_and_invalid_contracts() {
             Err(AppError::Manifest(_))
         ));
     }
+}
+
+#[test]
+fn mcp_tool_arg_binding_is_cli_metadata_excluded_from_input_schema() {
+    let app = load_app(&manifest(json!([
+        {
+            "name": "bind",
+            "summary": {"en": "Bind"},
+            "args": [
+                {"name": "message", "kind": "text", "binding": "positional"},
+                {"name": "loud", "kind": "bool", "binding": "flag"}
+            ]
+        }
+    ])));
+    let tool = &app.tools[0];
+    let props = &tool.input_schema["properties"];
+    assert!(props["message"].is_object());
+    assert!(props["loud"].is_object());
+    // `binding` is one-shot CLI metadata only; it must not leak into the
+    // model-facing MCP inputSchema.
+    let serialized = serde_json::to_string(&tool.input_schema).unwrap();
+    assert!(!serialized.contains("binding"));
 }
 
 #[test]

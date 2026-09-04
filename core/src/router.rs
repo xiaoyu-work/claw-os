@@ -1609,6 +1609,148 @@ fn run_app_command(
     }
 }
 
+/// Dispatch a human `cos app <id> <command>` for an MCP-only App.
+///
+/// The command names one MCP tool by the fixed `<app_id>.<command>`
+/// convention. The exact tool, the CLI-bound arguments and the caller's
+/// authenticated identity are handed to the daemon-owned
+/// `AppServiceManager` over the `Access::User` `app_service.cli_call`
+/// route — the App's declared MCP handler runs there, never `main.py`,
+/// never an unbrokered local child, and never as a Task Host. This is a
+/// migration gate, not a runtime fallback: an MCP-only App never falls
+/// back to operations/main.py on any error.
+fn run_app_mcp_command(
+    app_name: &str,
+    command: &str,
+    args: &[String],
+    app: &apps::App,
+    stdin_data: Option<Vec<u8>>,
+) -> Result<Option<String>, String> {
+    let start = Instant::now();
+    let audit = audit_path();
+
+    let tool = apps::mcp_tool_for_command(&app.manifest, command)?;
+    let tool_name = tool.name.clone();
+    let invoke_target = format!("{app_name}/{tool_name}");
+
+    // stdin is not part of the MCP tool contract in this foundation. Reject an
+    // explicit top-level `--stdin` in the option region, or any forwarded
+    // stdin bytes, rather than silently dropping input. Piped-input Apps will
+    // migrate to explicit typed content arguments later.
+    if stdin_data.is_some() || mcp_stdin_requested(args) {
+        return Err(format!(
+            "cos app {app_name} {command}: MCP tools do not accept piped stdin; \
+             remove --stdin (typed content arguments will come with migration)"
+        ));
+    }
+
+    // Capability gate: the caller must hold exact `agent.invoke:<app>/<tool>`
+    // authority. The daemon independently re-derives and enforces this; the
+    // local check keeps a denied call from ever reaching the socket.
+    if command != "__schema__" {
+        if let Err(denial) =
+            caps::require(caps::Verb::AGENT_INVOKE, caps::Scope::name(&invoke_target))
+        {
+            return Err(denial.summary());
+        }
+    }
+
+    // One manifest-derived binder maps CLI argv to the tool's declared args
+    // (unknown flags and excess positionals are rejected here). The daemon
+    // fills manifest defaults and validates required/choice constraints from
+    // the same manifest, so the two never diverge.
+    let bound = caps::args::bind_supplied_cli_args(&tool.args, args)
+        .map_err(|error| format!("cos app {app_name} {command}: {error}"))?;
+    let arguments = Value::Object(bound.into_iter().collect());
+
+    let request = crate::clawd::protocol::Request::build(
+        Command::AppServiceCliCall,
+        json!({
+            "app_id": app_name,
+            "tool": tool_name,
+            "arguments": arguments,
+        }),
+    );
+    let response =
+        crate::clawd::client::request_blocking(crate::paths::clawd_socket_path(), request)?;
+    if response.ok {
+        let result = response
+            .result
+            .ok_or_else(|| "clawd app_service.cli_call response had no result".to_string())?;
+        let rendered = render_call_tool_result(&result);
+        let status = if rendered.is_err() { "error" } else { "ok" };
+        let error_msg = rendered.as_ref().err().map(String::as_str);
+        audit::log_entry(&audit, app_name, command, args, start, status, error_msg);
+        rendered
+    } else {
+        // Preserve the typed broker error category and any peer-only data
+        // (e.g. the approval request ids an App launch is waiting on).
+        let error = response
+            .error
+            .ok_or_else(|| "clawd app_service.cli_call request failed".to_string())?;
+        audit::log_entry(&audit, app_name, command, args, start, "error", Some(&error.message));
+        let mut payload = json!({ "error": error.message, "code": error.code });
+        if let Some(data) = error.data {
+            payload["data"] = data;
+        }
+        Err(payload.to_string())
+    }
+}
+
+/// Whether the pre-`--` option region requests top-level `--stdin`.
+fn mcp_stdin_requested(args: &[String]) -> bool {
+    args.iter()
+        .take_while(|arg| arg.as_str() != "--")
+        .any(|arg| arg == "--stdin")
+}
+
+/// Render a daemon-returned MCP `CallToolResult` for the terminal.
+///
+/// A structured result prints its structured value as JSON — the App
+/// service always mirrors it into a text content block as canonical JSON,
+/// so the text carries the structured value even though the broker result
+/// type only models `content` + `isError`. A plain-text result prints its
+/// text. `isError` produces a nonzero CLI error carrying the server's
+/// text, never success-shaped output.
+fn render_call_tool_result(result: &Value) -> Result<Option<String>, String> {
+    let is_error = result
+        .get("isError")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let text = result
+        .get("content")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter(|item| item.get("type").and_then(Value::as_str) == Some("text"))
+                .filter_map(|item| item.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default();
+
+    if is_error {
+        return Err(if text.is_empty() {
+            "App tool call reported an error".to_string()
+        } else {
+            text
+        });
+    }
+    // Prefer an explicit structured value when present, otherwise the text
+    // content (which the App service fills with canonical JSON for structured
+    // results and with plain text otherwise).
+    if let Some(structured) = result.get("structuredContent") {
+        if !structured.is_null() {
+            return Ok(Some(structured.to_string()));
+        }
+    }
+    if text.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(text))
+}
+
 /// `cos app <name> <desktop.exec> [files...]` — launch an app's desktop
 /// GUI surface. The GUI itself is "World A" (the app draws its own
 /// window in any toolkit), so this does **not** require `agent.invoke`;

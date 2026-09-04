@@ -1204,6 +1204,28 @@ pub async fn call(
         .map_err(|error| BrokerError::execution(format!("encode App service result: {error}")))
 }
 
+/// Authenticated local CLI App invocation (`Access::User`).
+///
+/// The daemon derives identity, call context, capabilities, package,
+/// owner uid and deadline entirely from the peer — the request supplies
+/// only the exact App id, tool and arguments. The prepared call is then
+/// handed to the same [`AppServiceManager`] path as the private task
+/// host, so lifecycle, restart, capacity, ticketing and the launch gate
+/// are shared and there is no alternate App process path.
+pub async fn cli_call(
+    state: &DaemonState,
+    params: Value,
+    client: &ClientIdentity,
+) -> Result<Value, BrokerError> {
+    let prepared = super::app_sessions::prepare_cli_app_service_call(params, client).await?;
+    let manager = state
+        .app_service_manager()
+        .ok_or_else(|| BrokerError::unavailable("App service manager is unavailable"))?;
+    let result = manager.call(prepared).await?;
+    serde_json::to_value(result)
+        .map_err(|error| BrokerError::execution(format!("encode App service result: {error}")))
+}
+
 #[cfg(test)]
 mod tests {
     include!(concat!(

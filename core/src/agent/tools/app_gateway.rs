@@ -331,7 +331,11 @@ pub fn authorize_manifest(manifest: &Manifest, caller: &McpPrincipal) -> Result<
             .as_ref()
             .is_some_and(|app| service.access.apps.iter().any(|allowed| allowed == app)),
         McpPrincipalKind::ExternalAgent => service.access.external_agents,
-        McpPrincipalKind::Cli => false,
+        // An authenticated local CLI principal may explicitly address a
+        // service even when `access.system_agent` is false. Access is a
+        // caller restriction, not authority: the CLI path still derives and
+        // enforces exact `agent.invoke:<app>/<tool>` authority in the daemon.
+        McpPrincipalKind::Cli => true,
     };
     if !allowed {
         return Err(format!(

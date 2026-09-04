@@ -1056,9 +1056,17 @@ func parseMCPArguments(toolName string, rawArgs []any) ([]mcpArgument, error) {
 		if err := rejectMCPUnknownFields(
 			object,
 			fmt.Sprintf("tool %q arg %q", toolName, name),
-			"name", "kind", "required", "required_when", "repeatable", "choices", "default", "label",
+			"name", "kind", "binding", "required", "required_when", "repeatable", "choices", "default", "label",
 		); err != nil {
 			return nil, err
+		}
+		// `binding` is one-shot CLI metadata only. Validate its shape and
+		// otherwise ignore it; it never reaches the model-facing input schema.
+		if rawBinding, present := object["binding"]; present {
+			binding, ok := rawBinding.(string)
+			if !ok || (binding != "positional" && binding != "flag") {
+				return nil, &MCPManifestError{Message: fmt.Sprintf("tool %q arg %q has invalid binding", toolName, name)}
+			}
 		}
 		required, err := optionalMCPBool(object, "required", toolName, name)
 		if err != nil {

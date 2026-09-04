@@ -296,7 +296,7 @@ class Mcptool(_McptoolRequired, total=False):
     One MCP-callable tool. Mirrors operation: args + needs drive the model's
     view and the kernel's enforcement.
     """
-    args: List[Any]
+    args: List["Arg"]
     needs: List["Need"]
 
 class Desktop(TypedDict, total=False):

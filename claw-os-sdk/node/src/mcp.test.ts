@@ -185,7 +185,7 @@ test("manifest contract is closed and requires tools", () => {
       mcp: {
         tools: [{
           ...tool,
-          args: [{ name: "value", kind: "text", binding: "flag" }],
+          args: [{ name: "value", kind: "text", binding: "sideways" }],
         }],
       },
     },
@@ -193,6 +193,32 @@ test("manifest contract is closed and requires tools", () => {
   ]) {
     assert.throws(() => App.fromManifest(writeManifest(manifest)), ManifestError);
   }
+});
+
+test("mcp tool arg binding is CLI-only metadata excluded from input schema", async () => {
+  const app = App.fromManifest(manifestPath([
+    {
+      name: "test_app.compose",
+      summary: { en: "Compose" },
+      args: [
+        { name: "message", kind: "text", binding: "positional" },
+        { name: "loud", kind: "bool", binding: "flag" },
+      ],
+    },
+  ]));
+  app.tool("test_app.compose", ({ message }) => message);
+  const harness = new Harness(app);
+  harness.send({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} });
+  const reply = await harness.waitFor((frame) => frame.id === 1);
+  const [entry] = (reply.result as Frame).tools as Frame[];
+  const schema = entry.inputSchema as Frame;
+  const properties = schema.properties as Frame;
+  // `binding` is one-shot CLI metadata only; it must not surface in the
+  // model-facing MCP inputSchema.
+  assert.ok(!JSON.stringify(schema).includes("binding"));
+  assert.ok(properties.message);
+  assert.ok(properties.loud);
+  await harness.close();
 });
 
 test("tools/list is derived only from the manifest", async () => {

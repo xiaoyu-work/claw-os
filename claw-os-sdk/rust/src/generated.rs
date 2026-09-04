@@ -315,7 +315,7 @@ pub struct Mcptool {
     pub name: String,
     pub summary: Localizedtext,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub args: Option<Vec<serde_json::Value>>,
+    pub args: Option<Vec<Arg>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub needs: Option<Vec<Need>>,
 }

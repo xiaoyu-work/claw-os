@@ -759,12 +759,40 @@ operations remain one-shot commands. For an operation launch, `clawd` re-reads
 the installed manifest, derives capabilities from the operation and effective
 arguments, and binds a strictly narrower grant to the launched process tree.
 
+A staged migration moves each App from legacy `operations` + `main.py
+run(command, args)` to a single `mcp.tools` contract with direct
+`claw_os_sdk.mcp` handlers. During that transition the human `cos app <id>
+<command>` surface is gated per App: an App that still declares any `operations`
+keeps the operation launch above, while an **MCP-only** App (empty `operations`
+with an `mcp` service) dispatches the same human command through a dedicated
+authenticated-CLI broker route, `app_service.cli_call` (`Access::User`). This is
+a migration gate, not a runtime fallback: an MCP-only App never runs `main.py`,
+never launches an unbrokered local child, and never falls back to
+operations on error. The command maps to exactly one tool by the
+`<app-id>.<command>` convention; ambiguous or non-matching commands are refused,
+and `--stdin` is rejected because the MCP tool contract carries no piped input
+yet.
+
 Agent-to-App and App-to-App calls use the private App Gateway. The caller must
 hold exact authority for `<app-id>/<tool-name>`, and the target manifest's
 `mcp.access` policy must admit the authenticated principal. `clawd` then
 re-verifies the current signed package, validates the exact declared tool,
 generation, lineage, and deadline, and derives a separate target grant from
 that tool's `needs[]`. Caller invoke authority never enters the target grant.
+
+The authenticated local CLI path shares that authority model but derives its
+principal differently. `app_service.cli_call` accepts only the exact App id,
+tool, and arguments; `clawd` mints an `McpPrincipalKind::Cli` caller and derives
+the call context, capability ceiling, verified package, owner uid, and deadline
+from the peer's kernel-reported identity, its process ancestry / registered
+launcher session, and the installed manifest — never from the request. A CLI
+principal may address a service even when `mcp.access.system_agent` is false,
+but it still needs exact `agent.invoke:<app>/<tool>` authority, and the target
+`needs[]` are independently derived, ceiling-clamped, approved, single-call
+bound, and audited. An Extension Host can neither reach this route nor forge a
+CLI identity, and the route can never mint a private-task-host principal. Both
+the CLI and task-host paths converge on the same owner/App service manager, so
+there is no alternate App process path.
 
 The task-owned Extension Host is the only dynamic boundary directly available
 to `claw-agentd`. Its broker-derived binding distinguishes System Agent from

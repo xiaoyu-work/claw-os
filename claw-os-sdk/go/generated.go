@@ -240,7 +240,7 @@ type Mcpaccess struct {
 type Mcptool struct {
 	Name string `json:"name"`
 	Summary Localizedtext `json:"summary"`
-	Args []interface{} `json:"args,omitempty"`
+	Args []Arg `json:"args,omitempty"`
 	Needs []Need `json:"needs,omitempty"`
 }
 

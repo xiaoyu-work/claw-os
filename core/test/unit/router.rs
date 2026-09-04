@@ -1797,3 +1797,151 @@ fn credential_dispatch_exposes_a_typed_command_error() {
     assert!(std::error::Error::source(&error).is_some());
     assert_eq!(error.to_string(), "unknown credential command: bogus");
 }
+
+#[test]
+fn mcp_stdin_is_only_requested_in_the_option_region() {
+    assert!(mcp_stdin_requested(&["--stdin".to_string()]));
+    assert!(mcp_stdin_requested(&["a".to_string(), "--stdin".to_string()]));
+    // After `--` the token is ordinary App data, not the stdin switch.
+    assert!(!mcp_stdin_requested(&[
+        "--".to_string(),
+        "--stdin".to_string()
+    ]));
+    assert!(!mcp_stdin_requested(&["value".to_string()]));
+}
+
+#[test]
+fn render_structured_mcp_result_prints_canonical_json() {
+    // A structured App result is mirrored into a text content block as
+    // canonical JSON; the CLI prints that structured value.
+    let result = json!({
+        "content": [{"type": "text", "text": "{\"ok\":true,\"count\":2}"}],
+    });
+    let rendered = render_call_tool_result(&result).unwrap().unwrap();
+    assert_eq!(rendered, "{\"ok\":true,\"count\":2}");
+}
+
+#[test]
+fn render_plain_text_mcp_result_prints_text() {
+    let result = json!({ "content": [{"type": "text", "text": "hello"}] });
+    let rendered = render_call_tool_result(&result).unwrap().unwrap();
+    assert_eq!(rendered, "hello");
+}
+
+#[test]
+fn render_error_mcp_result_is_a_nonzero_error_with_server_text() {
+    // `isError` must produce a CLI error carrying the server's text, never a
+    // success-shaped output.
+    let result = json!({
+        "content": [{"type": "text", "text": "file not found"}],
+        "isError": true,
+    });
+    let error = render_call_tool_result(&result).unwrap_err();
+    assert_eq!(error, "file not found");
+}
+
+#[test]
+fn render_empty_mcp_result_prints_nothing() {
+    let result = json!({ "content": [] });
+    assert_eq!(render_call_tool_result(&result).unwrap(), None);
+}
+
+#[cfg(unix)]
+fn write_mcp_only_app(apps: &std::path::Path, id: &str) -> std::path::PathBuf {
+    let app_dir = apps.join(id);
+    std::fs::create_dir_all(&app_dir).unwrap();
+    let manifest = json!({
+        "id": id,
+        "version": "1.0.0",
+        "schema_version": 2,
+        "name": {"en": id},
+        "runtime": "python",
+        "mcp": {
+            "entry": "server.py",
+            "tools": [{
+                "name": format!("{id}.get"),
+                "summary": {"en": "Get a value."},
+                "args": [{"name": "key", "kind": "text", "required": true, "binding": "positional"}]
+            }]
+        }
+    });
+    std::fs::write(
+        app_dir.join("app.json"),
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    // A `main.py` that would leave a marker if it were ever executed. The
+    // MCP-only CLI path must never run it.
+    write_runtime_test_executable(
+        &app_dir.join("main.py"),
+        "import os\nfrom pathlib import Path\n\
+         Path(os.environ['COS_DATA_DIR'], f\"{os.environ['COS_APP_ID']}.ran\").touch()\n\
+         def run(command, args):\n    return {}\n",
+    );
+    write_runtime_test_executable(&app_dir.join("server.py"), "def run(c, a):\n    return {}\n");
+    reseal_app(&app_dir, id);
+    app_dir
+}
+
+#[cfg(unix)]
+#[test]
+fn mcp_only_app_uses_daemon_dispatch_and_never_falls_back_to_main_py() {
+    with_runtime_app_test_env(|apps, data, _proc_data| {
+        let id = "kvonly";
+        write_mcp_only_app(apps, id);
+        let ran_marker = data.join("apps").join(id).join(format!("{id}.ran"));
+
+        // App schema and per-command schema resolve from `mcp.tools` when
+        // `operations` is empty, and never execute App code.
+        let schema = dispatch(&["app".to_string(), id.to_string(), "--schema".to_string()])
+            .unwrap()
+            .unwrap();
+        assert!(schema.contains("\"get\""));
+        let command_schema = dispatch(&[
+            "app".to_string(),
+            id.to_string(),
+            "get".to_string(),
+            "--schema".to_string(),
+        ])
+        .unwrap()
+        .unwrap();
+        assert!(command_schema.contains("\"key\""));
+        assert!(!ran_marker.exists(), "schema inspection ran App code");
+
+        // Running the command dispatches to the daemon-owned AppServiceManager.
+        // The daemon is not present in this unit test, so the call fails — but
+        // it must never fall back to executing `main.py` locally.
+        let result = dispatch(&[
+            "app".to_string(),
+            id.to_string(),
+            "get".to_string(),
+            "k".to_string(),
+        ]);
+        assert!(
+            result.is_err(),
+            "MCP-only dispatch must reach the daemon rather than run locally"
+        );
+        assert!(
+            !ran_marker.exists(),
+            "MCP-only App must never fall back to executing main.py"
+        );
+
+        // A non-matching command is rejected by the exact `<app_id>.<command>`
+        // convention rather than run.
+        let unknown = dispatch(&["app".to_string(), id.to_string(), "nope".to_string()]);
+        assert!(unknown.is_err());
+        assert!(!ran_marker.exists());
+
+        // Top-level `--stdin` is rejected for MCP tools in this foundation; the
+        // daemon is never contacted and no code runs.
+        let stdin = dispatch(&[
+            "app".to_string(),
+            id.to_string(),
+            "get".to_string(),
+            "--stdin".to_string(),
+            "k".to_string(),
+        ]);
+        assert!(stdin.is_err());
+        assert!(!ran_marker.exists());
+    });
+}

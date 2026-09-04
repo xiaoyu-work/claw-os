@@ -1025,8 +1025,6 @@ pub enum ManifestError {
     McpDuplicateTool { name: String },
     #[error("mcp tool `{tool}`: arg `{arg}` declared twice")]
     McpDuplicateArg { tool: String, arg: String },
-    #[error("mcp tool `{tool}`: arg `{arg}` cannot declare CLI-only `binding`")]
-    McpArgBindingNotAllowed { tool: String, arg: String },
     #[error("mcp tool `{tool}`: arg `{arg}` default is invalid: {detail}")]
     McpArgDefaultInvalid {
         tool: String,
@@ -1448,12 +1446,10 @@ impl Manifest {
 
                 let mut seen_args: BTreeMap<&str, &Arg> = BTreeMap::new();
                 for arg in &tool.args {
-                    if arg.binding.is_some() {
-                        return Err(ManifestError::McpArgBindingNotAllowed {
-                            tool: tool.name.clone(),
-                            arg: arg.name.clone(),
-                        });
-                    }
+                    // `binding` is one-shot CLI metadata only. It is accepted on
+                    // an MCP tool arg (its enum is validated during
+                    // deserialization) but never reaches the model-facing MCP
+                    // inputSchema; the MCP object call is bound by name.
                     if seen_args.insert(arg.name.as_str(), arg).is_some() {
                         return Err(ManifestError::McpDuplicateArg {
                             tool: tool.name.clone(),

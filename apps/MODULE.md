@@ -3,7 +3,12 @@
 ## Purpose
 
 `apps/` contains bundled Apps. Agent/App callers use their authenticated MCP
-tools; optional operations remain the human `cos app` CLI surface.
+tools; optional operations remain the human `cos app` CLI surface. A staged
+migration is moving Apps to an MCP-only contract: an App with no `operations`
+but an `mcp` service serves its human `cos app <id> <command>` surface from
+`mcp.tools` (one tool per command by the `<app-id>.<command>` convention), so an
+MCP tool arg may carry the optional one-shot CLI `binding` metadata. Do not
+migrate bundled Apps as part of infrastructure changes to that gate.
 
 ## Responsibilities
 

@@ -16,6 +16,20 @@ capability needs. The removed `session` block is rejected. Optional
 `operations` remain the human-facing `cos app <id> <operation>` CLI surface;
 they are not a second Agent tool contract.
 
+A staged migration is moving Apps off `operations` + `main.py run(command,
+args)` and onto the single `mcp.tools` contract. Until an App migrates it keeps
+its `operations`. Once an App declares **no** `operations` but still exposes an
+`mcp` service, the human `cos app <id> <command>` surface is served from
+`mcp.tools`: each command maps to exactly one tool by the `<app-id>.<command>`
+convention, and the call is dispatched to the App's MCP handler through the
+daemon rather than by running `main.py`. To keep CLI syntax stable without
+`operations`, an MCP tool arg may carry the same optional one-shot CLI
+`binding` (`positional`/`flag`) as an operation arg. `binding` is CLI-only
+metadata: it never appears in the model-facing MCP `inputSchema`, and the
+default binding is unchanged (`bool` → flag, everything else → positional).
+MCP-only commands do not accept `--stdin`; piped-input Apps keep their
+`operations` until they migrate to explicit typed content arguments.
+
 For Python, bind the manifest's tool names without duplicating their schemas:
 
 ```python

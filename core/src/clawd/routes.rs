@@ -982,6 +982,19 @@ routes! {
         ],
         run: |c| app_services::call(c.state, c.params, c.client).await,
     }
+    AppServiceCliCall {
+        name: "app_service.cli_call",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::launch(),
+        authority: peer(Audience::AppLaunch),
+        body: body::AppServiceCliCall,
+        audit: &[
+            ("app_id", FieldRule::Token),
+            ("tool", FieldRule::Token),
+        ],
+        run: |c| app_services::cli_call(c.state, c.params, c.client).await,
+    }
     AppSessionRegister {
         name: "app_session.register",
         access: Access::User,

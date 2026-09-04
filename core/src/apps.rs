@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use crate::caps::manifest::{Arg, ArgKind, Manifest, Operation};
+use crate::caps::manifest::{Arg, ArgKind, Manifest, McpTool, Operation};
 use crate::provenance::{self, PackageKind, VerifiedPackage, VerifyOptions};
 
 /// An app manifest loaded from `app.json`. There is one manifest format
@@ -301,6 +301,56 @@ pub fn operation_schema(operation: &Operation) -> Value {
         "description": operation.summary.current(),
         "parameters": parameters,
         "stdin": operation.stdin,
+    })
+}
+
+/// Whether an App is MCP-only for CLI dispatch purposes: it declares no
+/// legacy `operations` yet exposes an `mcp` service. This is the staged
+/// migration gate — an App with any operation keeps the legacy
+/// `run(command, args)` CLI dispatch unchanged.
+pub fn is_mcp_only_cli(manifest: &Manifest) -> bool {
+    manifest.operations.is_empty() && manifest.mcp.is_some()
+}
+
+/// Resolve a human `cos app <id> <command>` to the exact MCP tool it
+/// names, by the fixed `<app_id>.<command>` convention.
+///
+/// Only exposed when the App is MCP-only (no operations). The mapping is
+/// exact: an ambiguous or non-matching command is rejected rather than
+/// guessed, so CLI syntax stays stable and unforgeable.
+pub fn mcp_tool_for_command<'a>(
+    manifest: &'a Manifest,
+    command: &str,
+) -> Result<&'a McpTool, String> {
+    let service = manifest
+        .mcp
+        .as_ref()
+        .ok_or_else(|| format!("App `{}` exposes no MCP service", manifest.id))?;
+    let expected = format!("{}.{command}", manifest.id);
+    let mut matches = service
+        .tools
+        .iter()
+        .filter(|tool| tool.name == expected);
+    let tool = matches
+        .next()
+        .ok_or_else(|| format!("unknown command: no MCP tool `{expected}`"))?;
+    if matches.next().is_some() {
+        return Err(format!("ambiguous command: multiple MCP tools named `{expected}`"));
+    }
+    Ok(tool)
+}
+
+/// Build the stable CLI schema for one MCP tool, mirroring
+/// [`operation_schema`]. Reuses [`arg_schema`], so `binding` metadata
+/// surfaces here for CLI introspection while the model-facing MCP
+/// `inputSchema` (generated separately) never carries it. MCP tools do
+/// not take piped stdin in this foundation.
+pub fn tool_schema(tool: &McpTool) -> Value {
+    let parameters = tool.args.iter().map(arg_schema).collect::<Vec<_>>();
+    json!({
+        "description": tool.summary.current(),
+        "parameters": parameters,
+        "stdin": false,
     })
 }
 

@@ -88,7 +88,11 @@ fn manifest_access_restricts_each_authenticated_principal_class() {
     assert!(
         authorize_manifest(&manifest, &principal(McpPrincipalKind::SystemAgent, None)).is_err()
     );
-    assert!(authorize_manifest(&manifest, &principal(McpPrincipalKind::Cli, None)).is_err());
+    // An authenticated local CLI principal may explicitly address a service
+    // even though this manifest sets `access.system_agent = false`. Access is
+    // a caller restriction, not authority; the CLI path still enforces exact
+    // `agent.invoke:<app>/<tool>` authority in the daemon.
+    assert!(authorize_manifest(&manifest, &principal(McpPrincipalKind::Cli, None)).is_ok());
     assert!(authorize_manifest(&manifest, &principal(McpPrincipalKind::App, Some("crm"))).is_ok());
     assert!(authorize_manifest(
         &manifest,
@@ -98,6 +102,38 @@ fn manifest_access_restricts_each_authenticated_principal_class() {
     assert!(
         authorize_manifest(&manifest, &principal(McpPrincipalKind::ExternalAgent, None)).is_ok()
     );
+}
+
+#[test]
+fn cli_principal_is_allowed_but_never_valid_on_the_task_host_binding() {
+    // A CLI principal is allowed to address any MCP service's manifest, but it
+    // can never satisfy the private task-host extension binding: that path only
+    // accepts SystemAgent/AppAgent principals, so a CLI identity stays
+    // impossible on the private Task Host path.
+    let manifest = manifest();
+    assert!(authorize_manifest(&manifest, &principal(McpPrincipalKind::Cli, None)).is_ok());
+
+    let binding = binding();
+    let context = McpCallContext {
+        wire_version: CALL_CONTEXT_WIRE_VERSION,
+        call_id: "cli-a".to_string(),
+        trace_id: "cli-a".to_string(),
+        parent_call_id: None,
+        depth: 0,
+        deadline_unix_ms: Some(crate::agentd::grant::now_ms() + 1_000),
+        session_id: None,
+        task_id: None,
+        caller: McpPrincipal {
+            kind: McpPrincipalKind::Cli,
+            id: "cli.uid1000.pid42.start1".to_string(),
+            owner_uid: 1000,
+            app_id: None,
+        },
+    };
+    // The daemon-derived CLI context is structurally valid on its own...
+    context.validate().unwrap();
+    // ...but it can never be bound to a private task-host lease.
+    assert!(context.validate_extension_binding(&binding).is_err());
 }
 
 #[test]

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
-use super::{apps_dir, launch_app_gui, run_app_command};
+use super::{apps_dir, launch_app_gui, run_app_command, run_app_mcp_command};
 use crate::apps;
 use crate::cli_help::{show_app_command_schema, show_app_help, show_app_schema, show_apps};
 
@@ -122,6 +122,20 @@ pub(super) fn dispatch_app(
     // code, so a quarantined App can still describe itself.
     if schema_requested(&cmd_args) {
         return show_app_command_schema(app_name, command, app);
+    }
+
+    // Staged migration gate: an App with no legacy `operations` but an
+    // `mcp` service dispatches its human `cos app <id> <command>` through
+    // the daemon-owned AppServiceManager instead of running `main.py`. An
+    // App that still declares any operation keeps the legacy
+    // `run(command, args)` dispatch unchanged. This is a migration gate,
+    // not a runtime fallback: an MCP-only App never falls back to
+    // operations/main.py on any error.
+    if apps::is_mcp_only_cli(&app.manifest) {
+        // Reject an ambiguous or non-matching command before launch.
+        apps::mcp_tool_for_command(&app.manifest, command)?;
+        require_runnable(app)?;
+        return run_app_mcp_command(app_name, command, &cmd_args, app, stdin_data);
     }
 
     // Validate command exists

@@ -132,7 +132,7 @@ class ManifestBindingTests(unittest.TestCase):
                         {
                             "name": "value",
                             "kind": "text",
-                            "binding": "flag",
+                            "binding": "sideways",
                         }
                     ],
                 }
@@ -145,6 +145,37 @@ class ManifestBindingTests(unittest.TestCase):
                 self.addCleanup(directory.cleanup)
                 with self.assertRaises(mcp.ManifestError):
                     mcp.App.from_manifest(path)
+
+    def test_mcp_tool_arg_binding_is_cli_metadata(self) -> None:
+        directory, path = _write_manifest(
+            _manifest(
+                {
+                    "name": "mail.compose",
+                    "summary": {"en": "Compose."},
+                    "args": [
+                        {"name": "message", "kind": "text", "binding": "positional"},
+                        {"name": "loud", "kind": "bool", "binding": "flag"},
+                    ],
+                }
+            )
+        )
+        self.addCleanup(directory.cleanup)
+        app = mcp.App.from_manifest(path)
+
+        @app.tool("mail.compose")
+        def compose(message: str, loud: bool = False) -> dict[str, Any]:
+            return {"message": message, "loud": loud}
+
+        frames = _drive(
+            app,
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+        )
+        tool = frames[0]["result"]["tools"][0]
+        # `binding` is one-shot CLI metadata only; it must not surface in the
+        # model-facing MCP inputSchema.
+        self.assertNotIn("binding", json.dumps(tool["inputSchema"]))
+        self.assertIn("message", tool["inputSchema"]["properties"])
+        self.assertIn("loud", tool["inputSchema"]["properties"])
 
     def test_manifest_is_the_only_tool_descriptor_source(self) -> None:
         directory, path = _write_manifest(

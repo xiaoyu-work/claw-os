@@ -266,6 +266,29 @@ paths a second time. Filesystem calls also carry a daemon-captured mount
 source/target/mode/class and device/inode snapshot, which the worker must match
 before launch.
 
+Authenticated local **CLI** App calls arrive through a separate
+`app_service.cli_call` route (`Access::User`). It is the human `cos app <id>
+<command>` counterpart to `app_service.call` and never overlaps it: the request
+body carries only the exact App id, tool, and arguments. The daemon derives the
+caller principal (`McpPrincipalKind::Cli`), call context, capability ceiling,
+verified package, owner uid, and deadline from the peer's `ClientIdentity`, its
+process ancestry / registered launcher session, and the installed manifest —
+never from the request, and never accepting a caller-supplied identity, call
+context, audit binding, capabilities, package identity, owner uid, or deadline.
+An Extension Host (task or App-service) can neither reach this route nor forge a
+CLI identity through it, and the route can never mint a private-task-host
+principal. A CLI principal may address a service even when
+`mcp.access.system_agent` is false, but it must still hold exact
+`agent.invoke:<app>/<tool>` authority; the target `needs[]` are independently
+derived, ceiling-clamped, approved, single-call bound, and audited, and App
+code receives only the target capabilities, never the caller's invoke
+authority. Both routes converge on the same `AppServiceManager`, so lifecycle,
+restart, capacity, ticketing, and the launch gate are shared and there is no
+alternate App process path, compatibility fallback, raw MCP invocation, or
+local execution. This CLI path is selected only for MCP-only Apps (empty
+`operations` plus an `mcp` service); Apps that still declare operations keep the
+legacy `run(command, args)` dispatch until they migrate.
+
 The service manager keys instances by owner uid and App id, not by task, so a
 `lazy` or `always-on` MCP service can survive the task that first used it.
 Execution crosses a second private broker into an App-service-purpose Host.

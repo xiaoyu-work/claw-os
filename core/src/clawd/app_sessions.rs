@@ -745,13 +745,41 @@ pub(crate) async fn prepare_app_service_call(
     validate_mcp_call_context(&audit.context, &launcher, &delegation, uid, &home).await?;
 
     let app = installed_app(&app_id)?;
-    crate::agent::tools::app_gateway::authorize_manifest(&app.manifest, &audit.context.caller)?;
     let generation = crate::agent::tools::exposure::capability_generation(&delegation.ceiling);
     if generation != audit.capability_generation {
         return Err(BrokerError::authorization(
             "MCP App caller capabilities changed before daemon authorization",
         ));
     }
+    let supplied: BTreeMap<String, Value> = arguments
+        .iter()
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect();
+    finalize_prepared_app_service_call(&app, &app_id, &tool, &supplied, &delegation, audit.context, uid)
+}
+
+/// Derive a fully authorized [`PreparedAppServiceCall`] from an
+/// already-authenticated invocation.
+///
+/// This is the shared tail of both the private-task-host and the local
+/// CLI paths: given the verified App, the exact tool and arguments, the
+/// authenticated delegation, and a daemon-derived call context, it
+/// resolves the manifest tool, derives and ceiling-clamps the target
+/// capabilities, requires (and separates out) the caller's exact
+/// `agent.invoke:<app>/<tool>` authority, and packages the result. The
+/// App only ever receives the target capabilities; the invoke authority
+/// stays with the caller and never reaches App code.
+fn finalize_prepared_app_service_call(
+    app: &App,
+    app_id: &str,
+    tool: &str,
+    supplied: &BTreeMap<String, Value>,
+    delegation: &Delegation,
+    context: crate::agent::tools::app_gateway::McpCallContext,
+    uid: u32,
+) -> Result<super::app_services::PreparedAppServiceCall, BrokerError> {
+    crate::agent::tools::app_gateway::authorize_manifest(&app.manifest, &context.caller)?;
+    let generation = crate::agent::tools::exposure::capability_generation(&delegation.ceiling);
     let service = app
         .manifest
         .mcp
@@ -762,13 +790,9 @@ pub(crate) async fn prepare_app_service_call(
         .iter()
         .find(|candidate| candidate.name == tool)
         .ok_or_else(|| format!("App `{app_id}` has no mcp tool `{tool}`"))?;
-    let supplied: BTreeMap<String, Value> = arguments
-        .iter()
-        .map(|(name, value)| (name.clone(), value.clone()))
-        .collect();
     let effective = app
         .manifest
-        .resolve_mcp_tool_call(&tool, &supplied, &delegation.paths)
+        .resolve_mcp_tool_call(tool, supplied, &delegation.paths)
         .map_err(|error| format!("resolve `{tool}` capabilities: {error}"))?;
     let placement_caps = effective
         .needs
@@ -785,28 +809,27 @@ pub(crate) async fn prepare_app_service_call(
     let authorized_mounts =
         crate::worker::derive::authorize_granted_path_mounts(&CapSet::from_caps(placement_caps))
             .map_err(BrokerError::authorization)?;
-    let ceiling = app_ceiling(&app)?;
+    let ceiling = app_ceiling(app)?;
     let mut plan = derive_plan(
         &declared_tool.needs,
         &effective.needs,
-        &delegation,
+        delegation,
         &ceiling,
-        &app_id,
+        app_id,
     )?;
-    let invoke = crate::agent::tools::app_gateway::invoke_cap(&app_id, &tool)?;
-    plan.require(invoke.clone(), &delegation);
-    let authorized = authorize_plan(&delegation, plan, &ceiling, &app_id)?;
+    let invoke = crate::agent::tools::app_gateway::invoke_cap(app_id, tool)?;
+    plan.require(invoke.clone(), delegation);
+    let authorized = authorize_plan(delegation, plan, &ceiling, app_id)?;
     let package = crate::provenance::runtime::PackageRef::of(app.require_verified()?);
-    let deadline_ms = audit
-        .context
+    let deadline_ms = context
         .deadline_unix_ms
         .ok_or_else(|| "App service call omitted its deadline".to_string())?;
     Ok(super::app_services::PreparedAppServiceCall {
         owner_uid: uid,
-        app_id,
-        tool,
+        app_id: app_id.to_string(),
+        tool: tool.to_string(),
         arguments: Value::Object(effective.values.into_iter().collect()),
-        context: audit.context,
+        context,
         capability_generation: generation,
         package,
         caps: target_session_caps(authorized, &invoke),
@@ -815,6 +838,94 @@ pub(crate) async fn prepare_app_service_call(
         lifecycle: service.lifecycle,
         deadline_ms,
     })
+}
+
+/// The daemon-derived workload id for an authenticated local CLI
+/// principal.
+///
+/// Encodes only kernel-reported facts about the exact peer — its uid,
+/// pid and process start time — in a form that satisfies the call
+/// context's workload-id grammar. It is never anything the request
+/// supplied and is never shared with a sibling launcher.
+fn cli_principal_id(uid: u32, pid: u32, start_time_ticks: Option<u64>) -> String {
+    match start_time_ticks {
+        Some(ticks) => format!("cli.uid{uid}.pid{pid}.start{ticks}"),
+        None => format!("cli.uid{uid}.pid{pid}"),
+    }
+}
+
+/// Authenticated local CLI App invocation preparation.
+///
+/// The request body carries only the exact App id, tool and arguments.
+/// Everything with authority — the caller principal, call context,
+/// capability ceiling, target capabilities, verified package, owner uid
+/// and deadline — is derived here from the peer's [`ClientIdentity`],
+/// its process ancestry / registered launcher session, the verified
+/// package and the installed manifest. The caller principal is a fresh
+/// [`McpPrincipalKind::Cli`] the daemon mints; a private task host can
+/// never reach this route, and this route can never mint a task host
+/// principal.
+pub(crate) async fn prepare_cli_app_service_call(
+    params: Value,
+    client: &ClientIdentity,
+) -> Result<super::app_services::PreparedAppServiceCall, BrokerError> {
+    use crate::agent::tools::app_gateway::{
+        McpCallContext, McpPrincipal, McpPrincipalKind, CALL_CONTEXT_WIRE_VERSION,
+    };
+
+    // The CLI principal is derived from the peer itself. A daemon-owned
+    // Extension Host (task host or App service host) is not a human CLI
+    // process and must never drive this route, so a task host can neither
+    // reach it nor forge a CLI identity through it.
+    if client.extension_host.is_some() {
+        return Err(BrokerError::authorization(
+            "App service CLI calls do not come from an Extension Host",
+        ));
+    }
+
+    let app_id = required_string(&params, "app_id")?;
+    let tool = required_string(&params, "tool")?;
+    let arguments = params
+        .get("arguments")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "App service CLI call arguments must be an object".to_string())?;
+
+    let uid = client.require_uid()?;
+    let home = client.require_home_dir()?;
+    // Identity, ceiling and path context come from the authenticated peer
+    // and its process ancestry / registered launcher session. `Value::Null`
+    // is passed as the params for ceiling derivation so no caller-supplied
+    // `parent_caps` (or any other field) can influence the launcher ceiling.
+    let launcher = authenticate_launcher(client, uid, home.clone()).await?;
+    let delegation = Delegation::new(&launcher, uid, &home, &Value::Null)?;
+
+    let now = crate::agentd::grant::now_ms();
+    let deadline_ms = now.saturating_add(crate::extension_host::protocol::MAX_REQUEST_TIMEOUT_MS);
+    let call_id = format!("cli-{}", uuid::Uuid::new_v4().simple());
+    let context = McpCallContext {
+        wire_version: CALL_CONTEXT_WIRE_VERSION,
+        trace_id: call_id.clone(),
+        call_id,
+        parent_call_id: None,
+        depth: 0,
+        deadline_unix_ms: Some(deadline_ms),
+        session_id: None,
+        task_id: None,
+        caller: McpPrincipal {
+            kind: McpPrincipalKind::Cli,
+            id: cli_principal_id(uid, launcher.pid, launcher.start_time_ticks),
+            owner_uid: uid,
+            app_id: None,
+        },
+    };
+    context.validate().map_err(BrokerError::authorization)?;
+
+    let app = installed_app(&app_id)?;
+    let supplied: BTreeMap<String, Value> = arguments
+        .iter()
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect();
+    finalize_prepared_app_service_call(&app, &app_id, &tool, &supplied, &delegation, context, uid)
 }
 
 pub async fn set_transient(

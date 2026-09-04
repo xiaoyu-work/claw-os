@@ -361,6 +361,25 @@ pub struct AppServiceCall {
     pub audit: crate::extension_host::protocol::AppInvocationAudit,
 }
 
+/// An authenticated local CLI App invocation.
+///
+/// Deliberately carries only the exact target the human named — App id,
+/// tool, and validated arguments. It has no audit binding, call context,
+/// caller identity, capability set, package identity, owner uid, or
+/// deadline: the daemon derives every one of those from the peer's
+/// [`ClientIdentity`](super::super::client_identity::ClientIdentity),
+/// its process ancestry / registered launcher session, the verified
+/// package, and the installed manifest. This is the Access::User
+/// counterpart to the private-task-host [`AppServiceCall`], and it can
+/// never mint a private Task Host principal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppServiceCliCall {
+    pub app_id: Name,
+    pub tool: Text<LABEL_BYTES>,
+    pub arguments: Structured,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AppSessionRegister {

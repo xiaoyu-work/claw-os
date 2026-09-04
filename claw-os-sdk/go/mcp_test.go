@@ -479,6 +479,43 @@ func TestMCPQueueBoundAndSingleActiveCall(t *testing.T) {
 	}
 }
 
+func TestMCPToolArgBindingIsCLIMetadata(t *testing.T) {
+	path := writeMCPTestManifest(t, `{
+		"name":"example.run",
+		"summary":{"en":"Run the example"},
+		"args":[
+			{"name":"message","kind":"text","binding":"positional"},
+			{"name":"loud","kind":"bool","binding":"flag"}
+		]
+	}`)
+	app, err := LoadMCPApp(path)
+	if err != nil {
+		t.Fatalf("manifest with CLI binding metadata failed to load: %v", err)
+	}
+	if err := app.Bind("example.run", func(map[string]any, *MCPCall) (any, error) { return nil, nil }); err != nil {
+		t.Fatal(err)
+	}
+	frames := serveMCPFrames(t, app, `{"jsonrpc":"2.0","id":"list","method":"tools/list"}`)
+	list := frameByID(t, frames, `"list"`)["result"].(map[string]any)
+	tool := list["tools"].([]any)[0].(map[string]any)
+	schemaBytes, err := json.Marshal(tool["inputSchema"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	// `binding` is one-shot CLI metadata only; it must not leak into the
+	// model-facing MCP inputSchema.
+	if strings.Contains(string(schemaBytes), "binding") {
+		t.Fatalf("binding leaked into input schema: %s", schemaBytes)
+	}
+	properties := tool["inputSchema"].(map[string]any)["properties"].(map[string]any)
+	if _, ok := properties["message"]; !ok {
+		t.Fatalf("missing message property: %#v", properties)
+	}
+	if _, ok := properties["loud"]; !ok {
+		t.Fatalf("missing loud property: %#v", properties)
+	}
+}
+
 func TestMCPManifestValidationAndMissingBindings(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -488,7 +525,7 @@ func TestMCPManifestValidationAndMissingBindings(t *testing.T) {
 		{name: "duplicate tools", tools: `{"name":"a.run","summary":{"en":"A"}},{"name":"a.run","summary":{"en":"B"}}`},
 		{name: "summary must be localized", tools: `{"name":"a.run","summary":"A"}`},
 		{name: "unsupported session arg field", tools: `{"name":"a.run","summary":{"en":"A"},"args":[{"name":"x","kind":"text","aliases":["--x"]}]}`},
-		{name: "CLI binding", tools: `{"name":"a.run","summary":{"en":"A"},"args":[{"name":"x","kind":"text","binding":"flag"}]}`},
+		{name: "invalid CLI binding", tools: `{"name":"a.run","summary":{"en":"A"},"args":[{"name":"x","kind":"text","binding":"sideways"}]}`},
 		{name: "unknown tool field", tools: `{"name":"a.run","summary":{"en":"A"},"unknown":true}`},
 		{name: "condition references later arg", tools: `{"name":"a.run","summary":{"en":"A"},"args":[{"name":"x","kind":"text","required_when":{"kind":"arg-present","arg":"y"}},{"name":"y","kind":"text"}]}`},
 	}

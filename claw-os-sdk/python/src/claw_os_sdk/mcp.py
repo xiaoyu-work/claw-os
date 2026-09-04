@@ -1004,6 +1004,7 @@ def _manifest_input_schema(
             {
                 "name",
                 "kind",
+                "binding",
                 "required",
                 "required_when",
                 "repeatable",
@@ -1025,6 +1026,13 @@ def _manifest_input_schema(
         if json_type is None:
             raise ManifestError(
                 f"tool `{tool_name}` arg `{name}` has invalid kind `{kind}`"
+            )
+        # `binding` is one-shot CLI metadata only: validated for shape here and
+        # deliberately never copied into the model-facing input schema.
+        binding = raw_arg.get("binding")
+        if binding is not None and binding not in ("positional", "flag"):
+            raise ManifestError(
+                f"tool `{tool_name}` arg `{name}` has invalid binding `{binding}`"
             )
         choices = raw_arg.get("choices", [])
         if not isinstance(choices, list):

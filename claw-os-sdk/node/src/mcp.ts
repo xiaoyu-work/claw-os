@@ -1008,6 +1008,7 @@ function parseArguments(
     rejectUnknownFields(raw, `tool \`${toolName}\` arg \`${raw.name}\``, [
       "name",
       "kind",
+      "binding",
       "required",
       "required_when",
       "repeatable",
@@ -1015,6 +1016,11 @@ function parseArguments(
       "default",
       "label",
     ]);
+    // `binding` is one-shot CLI metadata only. Validate its shape and otherwise
+    // ignore it; it must never reach the model-facing input schema.
+    if (raw.binding !== undefined && raw.binding !== "positional" && raw.binding !== "flag") {
+      throw new ManifestError(`tool \`${toolName}\` arg \`${raw.name}\` has invalid binding`);
+    }
     if (raw.required !== undefined && typeof raw.required !== "boolean") {
       throw new ManifestError(`tool \`${toolName}\` arg \`${raw.name}\` required must be boolean`);
     }
