@@ -1,41 +1,59 @@
 """notify — Send notifications to the user."""
 
+from __future__ import annotations
+
 import fcntl
 import json
 import os
+import sys
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timezone
+from typing import TypeVar
 
-from cos_runtime import policy
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from _shared.atomic import atomic_write_bytes  # noqa: E402
+
+from cos_runtime import policy  # noqa: E402
 
 
 DATA_DIR = os.environ.get("COS_DATA_DIR", "/var/lib/cos")
 NOTIFICATIONS_FILE = os.path.join(DATA_DIR, "notifications.json")
+_T = TypeVar("_T")
 
 
-def _load_notifications():
-    """Load notifications from disk, returning a list."""
-    if not os.path.isfile(NOTIFICATIONS_FILE):
+def _load_notifications() -> list[dict[str, object]]:
+    """Load and validate the notifications store."""
+    try:
+        with open(NOTIFICATIONS_FILE, "r", encoding="utf-8") as notifications_file:
+            loaded: object = json.load(notifications_file)
+    except FileNotFoundError:
         return []
-    with open(NOTIFICATIONS_FILE, "r") as f:
-        try:
-            return json.load(f)
-        except (json.JSONDecodeError, ValueError):
-            return []
+
+    if not isinstance(loaded, list):
+        raise ValueError("notifications store must contain a JSON list")
+
+    notifications: list[dict[str, object]] = []
+    for index, entry in enumerate(loaded):
+        if not isinstance(entry, dict):
+            raise ValueError(
+                f"notifications store entry {index} must be a JSON object"
+            )
+        notifications.append(entry)
+    return notifications
 
 
-def _save_notifications(notifications):
-    """Save notifications list to disk."""
-    os.makedirs(os.path.dirname(NOTIFICATIONS_FILE), exist_ok=True)
-    with open(NOTIFICATIONS_FILE, "w") as f:
-        json.dump(notifications, f, indent=2)
+def _save_notifications(notifications: list[dict[str, object]]) -> None:
+    """Atomically save notifications while the caller holds the store lock."""
+    payload = json.dumps(notifications, indent=2).encode("utf-8")
+    atomic_write_bytes(NOTIFICATIONS_FILE, payload)
 
 
-def _with_lock(fn):
+def _with_lock(fn: Callable[[], _T]) -> _T:
     """Run fn while holding an exclusive lock on the notifications file."""
     os.makedirs(os.path.dirname(NOTIFICATIONS_FILE), exist_ok=True)
     lock_path = NOTIFICATIONS_FILE + ".lock"
-    with open(lock_path, "w") as lock_fd:
+    with open(lock_path, "a+", encoding="utf-8") as lock_fd:
         fcntl.flock(lock_fd, fcntl.LOCK_EX)
         try:
             return fn()
@@ -43,25 +61,18 @@ def _with_lock(fn):
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
 
 
-def _cmd_send(args):
-    """Send a notification. Usage: send [--urgent] <message>"""
-    urgent = False
-    message_parts = []
+def send(message: str, urgent: bool = False) -> dict[str, object]:
+    """Persist a notification after validating and authorizing the request."""
+    if not isinstance(message, str) or not message.strip():
+        raise ValueError("message must be a non-empty string")
+    if type(urgent) is not bool:
+        raise ValueError("urgent must be a boolean")
 
-    for arg in args:
-        if arg == "--urgent":
-            urgent = True
-        else:
-            message_parts.append(arg)
-
-    if not message_parts:
-        return {"error": "send requires a message"}
-
-    message = " ".join(message_parts)
+    policy.require("ui.notify", wild=True)
     notification_id = uuid.uuid4().hex[:8]
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
-    entry = {
+    entry: dict[str, object] = {
         "id": notification_id,
         "message": message,
         "urgent": urgent,
@@ -69,7 +80,7 @@ def _cmd_send(args):
         "read": False,
     }
 
-    def do_send():
+    def do_send() -> None:
         notifications = _load_notifications()
         notifications.append(entry)
         _save_notifications(notifications)
@@ -84,24 +95,15 @@ def _cmd_send(args):
     }
 
 
-def _cmd_list(args):
-    """List recent notifications. Usage: list [--limit N]"""
-    limit = 20
-    i = 0
-    while i < len(args):
-        if args[i] == "--limit" and i + 1 < len(args):
-            try:
-                limit = int(args[i + 1])
-            except ValueError:
-                return {"error": f"invalid limit: {args[i + 1]}"}
-            i += 2
-        else:
-            return {"error": f"unknown argument: {args[i]}"}
+def list_notifications(limit: int = 20) -> dict[str, object]:
+    """Return the newest notifications first."""
+    if not isinstance(limit, int) or isinstance(limit, bool):
+        raise ValueError("limit must be an integer")
+    if not 1 <= limit <= 100:
+        raise ValueError("limit must be 1..100")
 
-    def do_list():
-        return _load_notifications()
-
-    notifications = _with_lock(do_list)
+    policy.require("data.inbox.read", wild=True)
+    notifications = _with_lock(_load_notifications)
     total = len(notifications)
     recent = list(reversed(notifications))[:limit]
 
@@ -109,26 +111,3 @@ def _cmd_list(args):
         "notifications": recent,
         "total": total,
     }
-
-
-def run(command, args):
-    """Entry point called by cos."""
-    from canonical_argv import normalize_canonical_argv
-    args = normalize_canonical_argv(args, bool_flags={"urgent"})
-    commands = {
-        "send": _cmd_send,
-        "list": _cmd_list,
-    }
-    handler = commands.get(command)
-    if handler is None:
-        return {"error": f"unknown command: {command}"}
-    try:
-        if command == "send":
-            policy.require("ui.notify", wild=True)
-        elif command == "list":
-            policy.require("data.inbox.read", wild=True)
-        return handler(args)
-    except policy.PermissionDenied as denied:
-        return {"error": str(denied), "denial": denied.denial}
-    except policy.PolicyUnavailable as exc:
-        return {"error": f"capability check failed: {exc}"}

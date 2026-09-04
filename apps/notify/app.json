@@ -9,64 +9,6 @@
   },
   "icon": "🔔",
   "runtime": "python",
-  "operations": {
-    "send": {
-      "label": {
-        "en": "Send a notification message"
-      },
-      "needs": [
-        {
-          "verb": "ui.notify",
-          "scope": {
-            "kind": "wild"
-          },
-          "why": {
-            "en": "Display a notification to you on the screen."
-          }
-        }
-      ],
-      "args": [
-        {
-          "name": "message",
-          "kind": "text",
-          "required": true,
-          "repeatable": true
-        },
-        {
-          "name": "urgent",
-          "kind": "bool",
-          "required": false,
-          "binding": "flag",
-          "default": false
-        }
-      ]
-    },
-    "list": {
-      "label": {
-        "en": "List recent notifications"
-      },
-      "needs": [
-        {
-          "verb": "data.inbox.read",
-          "scope": {
-            "kind": "wild"
-          },
-          "why": {
-            "en": "Read your stored notifications history."
-          }
-        }
-      ],
-      "args": [
-        {
-          "name": "limit",
-          "kind": "integer",
-          "required": false,
-          "binding": "flag",
-          "default": 20
-        }
-      ]
-    }
-  },
   "schema_version": 2,
   "mcp": {
     "entry": "server.py",
@@ -86,8 +28,7 @@
           {
             "name": "message",
             "kind": "text",
-            "required": true,
-            "repeatable": true
+            "required": true
           },
           {
             "name": "urgent",
@@ -118,6 +59,7 @@
             "name": "limit",
             "kind": "integer",
             "required": false,
+            "binding": "flag",
             "default": 20
           }
         ],

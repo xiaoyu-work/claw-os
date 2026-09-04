@@ -1,4 +1,20 @@
-from cos_runtime.mcp import serve_manifest_operations
-from main import run
+from claw_os_sdk.mcp import App
 
-serve_manifest_operations(run)
+from main import list_notifications, send
+
+
+app = App.from_manifest()
+
+
+@app.tool("notify.send")
+def notify_send(message: str, urgent: bool = False) -> dict[str, object]:
+    return send(message, urgent)
+
+
+@app.tool("notify.list")
+def notify_list(limit: int = 20) -> dict[str, object]:
+    return list_notifications(limit)
+
+
+if __name__ == "__main__":
+    app.serve()
