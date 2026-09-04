@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+from typing import Literal
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from _shared.env_scrub import scrub_env  # noqa: E402
@@ -13,17 +14,30 @@ from cos_runtime import policy  # noqa: E402
 
 
 TIMEOUT_SECS = int(os.environ.get("CLAW_NETWORK_MANAGER_TIMEOUT", "180"))
-READ_ACTIONS = frozenset({"status", "wifi-list", "connection-list", "vpn-list"})
+RadioState = Literal["on", "off"]
 
 
-def _cos_binary():
+def _cos_binary() -> str | None:
     return os.environ.get("COS_BIN") or shutil.which("cos")
 
 
-def _broker(action, target=None, state=None, credential=None):
+def _require_name(value: object, label: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{label} must be a non-empty string")
+    return value
+
+
+def _broker(
+    action: str,
+    target: str | None = None,
+    state: RadioState | None = None,
+    credential: str | None = None,
+) -> dict:
     cos_bin = _cos_binary()
     if not cos_bin:
-        return {"error": "cos binary not found; NetworkManager broker unavailable"}
+        raise FileNotFoundError(
+            "cos binary not found; Network Manager broker unavailable"
+        )
     argv = [cos_bin, "__network", action]
     if target is not None:
         argv.extend(["--target", target])
@@ -41,48 +55,94 @@ def _broker(action, target=None, state=None, credential=None):
             env=scrub_env(),
             check=False,
         )
-    except (FileNotFoundError, PermissionError) as exc:
-        return {"error": str(exc)}
-    except subprocess.TimeoutExpired:
-        return {"error": f"NetworkManager broker exceeded {TIMEOUT_SECS}s"}
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"Network Manager broker exceeded {TIMEOUT_SECS}s"
+        ) from exc
     payload_text = (result.stdout or "").strip() or (result.stderr or "").strip()
     try:
         payload = json.loads(payload_text) if payload_text else {}
-    except json.JSONDecodeError:
-        return {"error": "NetworkManager broker returned invalid JSON"}
-    if result.returncode != 0 and "error" not in payload:
-        payload["error"] = f"NetworkManager broker exited {result.returncode}"
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Network Manager broker returned invalid JSON") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("Network Manager broker returned a non-object result")
+    if "error" in payload:
+        error = payload["error"]
+        if not isinstance(error, str) or not error:
+            raise RuntimeError("Network Manager broker returned an invalid error payload")
+        raise RuntimeError(error)
+    if result.returncode != 0:
+        raise RuntimeError(f"Network Manager broker exited {result.returncode}")
     return payload
 
 
-def run(command, args):
-    from canonical_argv import normalize_canonical_argv
-    args = normalize_canonical_argv(args)
-    if command in READ_ACTIONS:
-        if args:
-            return {"error": f"{command} takes no arguments"}
-        policy.require("sys.observe", name="network")
-        return _broker(command)
-    if command == "wifi-connect":
-        if not 1 <= len(args) <= 2:
-            return {"error": "wifi-connect requires <ssid> [credential]"}
-        ssid = args[0]
-        credential = args[1] if len(args) == 2 else None
-        policy.require("net.manage", name="wifi")
-        if credential:
-            policy.require("secret.read", name=credential)
-        return _broker(command, ssid, None, credential)
-    if command in {"wifi-disconnect", "wifi-forget", "vpn-up", "vpn-down"}:
-        if len(args) != 1:
-            return {"error": f"{command} requires one target"}
-        policy.require(
-            "net.manage",
-            name="vpn" if command.startswith("vpn-") else "wifi",
-        )
-        return _broker(command, args[0])
-    if command in {"wifi-toggle", "airplane"}:
-        if len(args) != 1 or args[0] not in {"on", "off"}:
-            return {"error": f"{command} requires on|off"}
-        policy.require("net.manage", name="wifi" if command == "wifi-toggle" else "airplane")
-        return _broker(command, None, args[0])
-    return {"error": f"unknown command: {command}"}
+def status() -> dict:
+    policy.require("sys.observe", name="network")
+    return _broker("status")
+
+
+def list_wifi() -> dict:
+    policy.require("sys.observe", name="network")
+    return _broker("wifi-list")
+
+
+def list_connections() -> dict:
+    policy.require("sys.observe", name="network")
+    return _broker("connection-list")
+
+
+def list_vpns() -> dict:
+    policy.require("sys.observe", name="network")
+    return _broker("vpn-list")
+
+
+def connect_wifi(ssid: str, credential: str | None = None) -> dict:
+    ssid = _require_name(ssid, "ssid")
+    if credential is not None:
+        credential = _require_name(credential, "credential")
+    policy.require("net.manage", name="wifi")
+    if credential is not None:
+        policy.require("secret.read", name=credential)
+    return _broker("wifi-connect", target=ssid, credential=credential)
+
+
+def disconnect_wifi(device: str) -> dict:
+    device = _require_name(device, "device")
+    policy.require("net.manage", name="wifi")
+    return _broker("wifi-disconnect", target=device)
+
+
+def forget_wifi(connection: str) -> dict:
+    connection = _require_name(connection, "connection")
+    policy.require("net.manage", name="wifi")
+    return _broker("wifi-forget", target=connection)
+
+
+def _require_state(value: object, action: str) -> RadioState:
+    if not isinstance(value, str) or value not in {"on", "off"}:
+        raise ValueError(f"{action} requires on|off")
+    return value
+
+
+def set_wifi(state: RadioState) -> dict:
+    state = _require_state(state, "wifi-toggle")
+    policy.require("net.manage", name="wifi")
+    return _broker("wifi-toggle", state=state)
+
+
+def set_airplane_mode(state: RadioState) -> dict:
+    state = _require_state(state, "airplane")
+    policy.require("net.manage", name="airplane")
+    return _broker("airplane", state=state)
+
+
+def activate_vpn(profile: str) -> dict:
+    profile = _require_name(profile, "profile")
+    policy.require("net.manage", name="vpn")
+    return _broker("vpn-up", target=profile)
+
+
+def deactivate_vpn(profile: str) -> dict:
+    profile = _require_name(profile, "profile")
+    policy.require("net.manage", name="vpn")
+    return _broker("vpn-down", target=profile)
