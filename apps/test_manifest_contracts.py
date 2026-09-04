@@ -1,7 +1,8 @@
-"""Static invariants for first-party app manifests.
+"""Static invariants for first-party App manifests.
 
-These checks parse source without importing app entrypoints. They keep operation
-dispatch and parser shape subordinate to app.json without running app code.
+These checks parse source without importing App entrypoints. They keep legacy
+operation dispatch and direct MCP bindings subordinate to app.json without
+running App code.
 """
 
 from __future__ import annotations
@@ -425,9 +426,27 @@ def _sources():
     for path in sorted(APPS_ROOT.rglob("main.py")):
         manifest_path = path.with_name("app.json")
         if manifest_path.is_file():
-            yield path, ast.parse(path.read_text(encoding="utf-8")), json.loads(
-                manifest_path.read_text(encoding="utf-8")
-            )
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if manifest.get("operations"):
+                yield path, ast.parse(path.read_text(encoding="utf-8")), manifest
+
+
+def _mcp_tool_bindings(tree: ast.Module) -> list[str]:
+    bindings: list[str] = []
+    for node in tree.body:
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for decorator in node.decorator_list:
+            if (
+                isinstance(decorator, ast.Call)
+                and isinstance(decorator.func, ast.Attribute)
+                and decorator.func.attr == "tool"
+                and len(decorator.args) == 1
+                and isinstance(decorator.args[0], ast.Constant)
+                and isinstance(decorator.args[0].value, str)
+            ):
+                bindings.append(decorator.args[0].value)
+    return bindings
 
 
 def test_manifest_operations_match_dispatch() -> None:
@@ -762,15 +781,13 @@ def test_every_manifest_matches_published_schema_contract() -> None:
     }
     drift: list[str] = []
 
-    def check_args(path, surface, args, *, mcp=False):
+    def check_args(path, surface, args):
         positions = {arg["name"]: index for index, arg in enumerate(args)}
         for index, arg in enumerate(args):
             if arg.get("kind") not in kinds:
                 drift.append(f"{path}:{surface}.{arg.get('name')} unknown kind")
             binding = arg.get("binding")
-            if mcp and binding is not None:
-                drift.append(f"{path}:{surface}.{arg.get('name')} MCP binding")
-            elif binding is not None and binding not in bindings:
+            if binding is not None and binding not in bindings:
                 drift.append(f"{path}:{surface}.{arg.get('name')} unknown binding")
             if arg.get("default") is None and "default" in arg:
                 drift.append(f"{path}:{surface}.{arg.get('name')} null default")
@@ -928,7 +945,6 @@ def test_every_manifest_matches_published_schema_contract() -> None:
                 manifest_path,
                 tool["name"],
                 tool.get("args", []),
-                mcp=True,
             )
             check_needs(
                 manifest_path,
@@ -1003,6 +1019,54 @@ def test_manifest_bound_mcp_tools_match_operations() -> None:
                     "operation": declaration.get("needs", []),
                     "tool": tool.get("needs", []),
                 }
+    assert not drift, drift
+
+
+def test_mcp_only_apps_bind_direct_sdk_handlers() -> None:
+    drift: dict[str, object] = {}
+    for path in sorted(APPS_ROOT.rglob("app.json")):
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        if manifest.get("runtime") != "python" or manifest.get("operations"):
+            continue
+        service = manifest.get("mcp")
+        if not isinstance(service, dict):
+            continue
+        entry = service.get("entry")
+        server_path = path.parent / entry if isinstance(entry, str) else None
+        relative = str(path.relative_to(APPS_ROOT))
+        if server_path is None or not server_path.is_file():
+            drift[relative] = "missing MCP server entry"
+            continue
+        source = server_path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        imports_sdk_app = any(
+            isinstance(node, ast.ImportFrom)
+            and node.module == "claw_os_sdk.mcp"
+            and any(alias.name == "App" for alias in node.names)
+            for node in tree.body
+        )
+        expected = [tool["name"] for tool in service.get("tools", [])]
+        bound = _mcp_tool_bindings(tree)
+        legacy_run = path.with_name("main.py")
+        defines_legacy_run = legacy_run.is_file() and any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "run"
+            for node in ast.parse(legacy_run.read_text(encoding="utf-8")).body
+        )
+        if (
+            not imports_sdk_app
+            or "serve_manifest_operations" in source
+            or len(bound) != len(expected)
+            or set(bound) != set(expected)
+            or defines_legacy_run
+        ):
+            drift[relative] = {
+                "expected": sorted(expected),
+                "bound": sorted(bound),
+                "direct_sdk": imports_sdk_app,
+                "legacy_bridge": "serve_manifest_operations" in source,
+                "legacy_run": defines_legacy_run,
+            }
     assert not drift, drift
 
 
@@ -1082,7 +1146,7 @@ def test_published_schema_rejects_removed_app_contracts() -> None:
 
     mcp_binding = json.loads(json.dumps(mcp_first))
     mcp_binding["mcp"]["tools"][0]["args"][0]["binding"] = "flag"
-    assert list(validator.iter_errors(mcp_binding))
+    validator.validate(mcp_binding)
 
     for path, field in (
         (("mcp",), "unknown"),

@@ -3,6 +3,8 @@ import os
 import pathlib
 from unittest import mock
 
+import pytest
+
 from test_support import load_local_module
 
 
@@ -22,7 +24,7 @@ def test_magnifier_uses_accessibility_control_scope():
     with mock.patch.dict(os.environ, {"COS_BIN": "/usr/local/bin/cos"}), mock.patch.object(
         main.policy, "require"
     ) as require, mock.patch.object(main.subprocess, "run", return_value=completed) as run:
-        result = main.run("magnifier", ["on"])
+        result = main.set_toggle("magnifier", "on")
     require.assert_called_once_with("ui.accessibility", name="control")
     assert run.call_args.args[0] == [
         "/usr/local/bin/cos",
@@ -36,6 +38,6 @@ def test_magnifier_uses_accessibility_control_scope():
 
 def test_invalid_filter_is_rejected_before_policy():
     with mock.patch.object(main.policy, "require") as require:
-        result = main.run("filter", ["custom"])
-    assert "error" in result
+        with pytest.raises(ValueError, match="filter requires one of"):
+            main.set_filter("custom")
     require.assert_not_called()

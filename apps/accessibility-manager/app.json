@@ -9,136 +9,6 @@
   },
   "icon": "♿",
   "runtime": "python",
-  "operations": {
-    "status": {
-      "label": {
-        "en": "Inspect accessibility state"
-      },
-      "needs": [
-        {
-          "verb": "sys.observe",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "accessibility"
-            }
-          },
-          "why": {
-            "en": "Read COSMIC accessibility protocol and AT-SPI status."
-          }
-        }
-      ]
-    },
-    "screen-reader": {
-      "label": {
-        "en": "Enable or disable screen reader"
-      },
-      "args": [
-        {
-          "name": "state",
-          "kind": "name",
-          "required": true
-        }
-      ],
-      "needs": [
-        {
-          "verb": "ui.accessibility",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "control"
-            }
-          },
-          "why": {
-            "en": "Change AT-SPI IsEnabled and ScreenReaderEnabled together."
-          }
-        }
-      ]
-    },
-    "magnifier": {
-      "label": {
-        "en": "Enable or disable magnifier"
-      },
-      "args": [
-        {
-          "name": "state",
-          "kind": "name",
-          "required": true
-        }
-      ],
-      "needs": [
-        {
-          "verb": "ui.accessibility",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "control"
-            }
-          },
-          "why": {
-            "en": "Change the COSMIC compositor magnifier state."
-          }
-        }
-      ]
-    },
-    "invert": {
-      "label": {
-        "en": "Enable or disable color inversion"
-      },
-      "args": [
-        {
-          "name": "state",
-          "kind": "name",
-          "required": true
-        }
-      ],
-      "needs": [
-        {
-          "verb": "ui.accessibility",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "control"
-            }
-          },
-          "why": {
-            "en": "Change COSMIC screen inversion while preserving the selected filter."
-          }
-        }
-      ]
-    },
-    "filter": {
-      "label": {
-        "en": "Set color-vision filter"
-      },
-      "args": [
-        {
-          "name": "filter",
-          "kind": "name",
-          "required": true
-        }
-      ],
-      "needs": [
-        {
-          "verb": "ui.accessibility",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "control"
-            }
-          },
-          "why": {
-            "en": "Set or disable the COSMIC greyscale/daltonization filter."
-          }
-        }
-      ]
-    }
-  },
   "schema_version": 2,
   "mcp": {
     "entry": "server.py",
@@ -179,7 +49,11 @@
           {
             "name": "state",
             "kind": "name",
-            "required": true
+            "required": true,
+            "choices": [
+              "on",
+              "off"
+            ]
           }
         ],
         "needs": [
@@ -207,7 +81,11 @@
           {
             "name": "state",
             "kind": "name",
-            "required": true
+            "required": true,
+            "choices": [
+              "on",
+              "off"
+            ]
           }
         ],
         "needs": [
@@ -235,7 +113,11 @@
           {
             "name": "state",
             "kind": "name",
-            "required": true
+            "required": true,
+            "choices": [
+              "on",
+              "off"
+            ]
           }
         ],
         "needs": [
@@ -263,7 +145,14 @@
           {
             "name": "filter",
             "kind": "name",
-            "required": true
+            "required": true,
+            "choices": [
+              "off",
+              "greyscale",
+              "protanopia",
+              "deuteranopia",
+              "tritanopia"
+            ]
           }
         ],
         "needs": [
