@@ -1,6 +1,7 @@
 {
   "id": "search",
   "version": "0.1.0",
+  "schema_version": 2,
   "name": {
     "en": "Web Search"
   },
@@ -9,221 +10,6 @@
   },
   "icon": "🔎",
   "runtime": "python",
-  "operations": {
-    "web": {
-      "label": {
-        "en": "Search the web for information (returns titles, URLs, snippets)"
-      },
-      "args": [
-        {
-          "name": "provider",
-          "kind": "name",
-          "required": true,
-          "binding": "flag",
-          "choices": [
-            "google",
-            "brave"
-          ]
-        },
-        {
-          "name": "query",
-          "kind": "text",
-          "required": true,
-          "repeatable": true
-        },
-        {
-          "name": "max-results",
-          "kind": "integer",
-          "required": false,
-          "binding": "flag",
-          "default": 5
-        }
-      ],
-      "needs": [
-        {
-          "verb": "net.dial",
-          "scope": {
-            "kind": "from-arg-map",
-            "arg": "provider",
-            "values": {
-              "google": {
-                "kind": "host",
-                "value": "www.googleapis.com"
-              },
-              "brave": {
-                "kind": "host",
-                "value": "api.search.brave.com"
-              }
-            }
-          },
-          "why": {
-            "en": "Call the search provider's API (Google or Brave) to fetch results."
-          }
-        },
-        {
-          "verb": "memory.write",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "self-ref",
-              "value": "search"
-            }
-          },
-          "why": {
-            "en": "Remember the search so the agent can recall what was looked up."
-          }
-        },
-        {
-          "verb": "secret.read",
-          "scope": {
-            "kind": "from-arg-map",
-            "arg": "provider",
-            "values": {
-              "google": {
-                "kind": "name",
-                "value": "default/GOOGLE_SEARCH_API_KEY"
-              },
-              "brave": {
-                "kind": "name",
-                "value": "default/BRAVE_SEARCH_API_KEY"
-              }
-            }
-          },
-          "why": {
-            "en": "Load only the selected search provider's API key."
-          }
-        },
-        {
-          "verb": "secret.read",
-          "scope": {
-            "kind": "from-arg-map",
-            "arg": "provider",
-            "values": {
-              "google": {
-                "kind": "name",
-                "value": "default/GOOGLE_SEARCH_ENGINE_ID"
-              }
-            }
-          },
-          "why": {
-            "en": "Load the Google Custom Search engine id when Google is selected."
-          },
-          "when": {
-            "kind": "arg-equals",
-            "arg": "provider",
-            "value": "google"
-          }
-        }
-      ]
-    },
-    "image": {
-      "label": {
-        "en": "Search for images (returns titles, URLs, thumbnails)"
-      },
-      "args": [
-        {
-          "name": "provider",
-          "kind": "name",
-          "required": true,
-          "binding": "flag",
-          "choices": [
-            "google",
-            "brave"
-          ]
-        },
-        {
-          "name": "query",
-          "kind": "text",
-          "required": true,
-          "repeatable": true
-        },
-        {
-          "name": "max-results",
-          "kind": "integer",
-          "required": false,
-          "binding": "flag",
-          "default": 5
-        }
-      ],
-      "needs": [
-        {
-          "verb": "net.dial",
-          "scope": {
-            "kind": "from-arg-map",
-            "arg": "provider",
-            "values": {
-              "google": {
-                "kind": "host",
-                "value": "www.googleapis.com"
-              },
-              "brave": {
-                "kind": "host",
-                "value": "api.search.brave.com"
-              }
-            }
-          },
-          "why": {
-            "en": "Call the image search provider's API to fetch results."
-          }
-        },
-        {
-          "verb": "memory.write",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "self-ref",
-              "value": "search"
-            }
-          },
-          "why": {
-            "en": "Remember the image search so the agent can recall what was looked up."
-          }
-        },
-        {
-          "verb": "secret.read",
-          "scope": {
-            "kind": "from-arg-map",
-            "arg": "provider",
-            "values": {
-              "google": {
-                "kind": "name",
-                "value": "default/GOOGLE_SEARCH_API_KEY"
-              },
-              "brave": {
-                "kind": "name",
-                "value": "default/BRAVE_SEARCH_API_KEY"
-              }
-            }
-          },
-          "why": {
-            "en": "Load only the selected search provider's API key."
-          }
-        },
-        {
-          "verb": "secret.read",
-          "scope": {
-            "kind": "from-arg-map",
-            "arg": "provider",
-            "values": {
-              "google": {
-                "kind": "name",
-                "value": "default/GOOGLE_SEARCH_ENGINE_ID"
-              }
-            }
-          },
-          "why": {
-            "en": "Load the Google Custom Search engine id when Google is selected."
-          },
-          "when": {
-            "kind": "arg-equals",
-            "arg": "provider",
-            "value": "google"
-          }
-        }
-      ]
-    }
-  },
-  "schema_version": 2,
   "mcp": {
     "entry": "server.py",
     "transport": "stdio",
@@ -236,13 +22,14 @@
       {
         "name": "search.web",
         "summary": {
-          "en": "Search the web for information (returns titles, URLs, snippets)"
+          "en": "Search the web for information through the explicitly selected provider. Returns titles, URLs, and snippets."
         },
         "args": [
           {
             "name": "provider",
             "kind": "name",
             "required": true,
+            "binding": "flag",
             "choices": [
               "google",
               "brave"
@@ -252,12 +39,13 @@
             "name": "query",
             "kind": "text",
             "required": true,
-            "repeatable": true
+            "binding": "positional"
           },
           {
-            "name": "max-results",
+            "name": "max_results",
             "kind": "integer",
             "required": false,
+            "binding": "flag",
             "default": 5
           }
         ],
@@ -279,7 +67,7 @@
               }
             },
             "why": {
-              "en": "Call the search provider's API (Google or Brave) to fetch results."
+              "en": "Call only the selected search provider's API."
             }
           },
           {
@@ -341,13 +129,14 @@
       {
         "name": "search.image",
         "summary": {
-          "en": "Search for images (returns titles, URLs, thumbnails)"
+          "en": "Search for images through the explicitly selected provider. Returns titles, URLs, thumbnails, and dimensions."
         },
         "args": [
           {
             "name": "provider",
             "kind": "name",
             "required": true,
+            "binding": "flag",
             "choices": [
               "google",
               "brave"
@@ -357,12 +146,13 @@
             "name": "query",
             "kind": "text",
             "required": true,
-            "repeatable": true
+            "binding": "positional"
           },
           {
-            "name": "max-results",
+            "name": "max_results",
             "kind": "integer",
             "required": false,
+            "binding": "flag",
             "default": 5
           }
         ],
@@ -384,7 +174,7 @@
               }
             },
             "why": {
-              "en": "Call the image search provider's API to fetch results."
+              "en": "Call only the selected image search provider's API."
             }
           },
           {
@@ -417,7 +207,7 @@
               }
             },
             "why": {
-              "en": "Load only the selected search provider's API key."
+              "en": "Load only the selected image search provider's API key."
             }
           },
           {

@@ -1,190 +1,75 @@
-"""Tests for the search app."""
+"""Tests for the explicit-provider search App."""
 
+import ast
 import json
-import os
 import pathlib
-import sys
 import urllib.error
-import urllib.request
+import urllib.parse
 from unittest import mock
 
-# Ensure the app directory is importable.
-sys.path.insert(0, os.path.dirname(__file__))
-sys.path.insert(
-    0,
-    os.path.join(
-        os.path.dirname(__file__), os.pardir, os.pardir,
-        "claw-os-sdk", "python", "src",
-    ),
-)  # for `from claw_os_sdk import …`
-sys.path.insert(
-    0,
-    os.path.join(
-        os.path.dirname(__file__), os.pardir, os.pardir,
-        "cos-runtime", "python", "src",
-    ),
-)  # for `from cos_runtime import …`
+import pytest
 
 from test_support import load_local_module
 
-search_main = load_local_module(
-    pathlib.Path(__file__).with_name("main.py"),
+
+APP_DIR = pathlib.Path(__file__).parent
+MANIFEST_PATH = APP_DIR / "app.json"
+SERVER_PATH = APP_DIR / "server.py"
+TOOL_NAMES = ["search.web", "search.image"]
+
+main = load_local_module(
+    APP_DIR / "main.py",
     "claw_test_search_main",
     clear_modules=("_shared",),
 )
-run = search_main.run
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+class _Response:
+    def __init__(self, payload: object):
+        self.body = json.dumps(payload).encode("utf-8")
+        self.read_limit = None
 
-def _clear_credentials():
-    """Remove all search credentials from env."""
-    for key in [
-        "GOOGLE_SEARCH_API_KEY",
-        "GOOGLE_SEARCH_ENGINE_ID",
-        "BRAVE_SEARCH_API_KEY",
-    ]:
-        os.environ.pop(key, None)
+    def __enter__(self):
+        return self
 
+    def __exit__(self, *_args):
+        return False
 
-def _set_google_credentials():
-    os.environ["GOOGLE_SEARCH_API_KEY"] = "fake-google-key"
-    os.environ["GOOGLE_SEARCH_ENGINE_ID"] = "fake-cx"
+    def read(self, limit: int) -> bytes:
+        self.read_limit = limit
+        return self.body
 
 
-def _set_brave_credentials():
-    os.environ["BRAVE_SEARCH_API_KEY"] = "fake-brave-key"
+def _server_bindings() -> dict[str, ast.FunctionDef]:
+    bindings: dict[str, ast.FunctionDef] = {}
+    for node in ast.parse(SERVER_PATH.read_text(encoding="utf-8")).body:
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        for decorator in node.decorator_list:
+            if (
+                isinstance(decorator, ast.Call)
+                and isinstance(decorator.func, ast.Attribute)
+                and isinstance(decorator.func.value, ast.Name)
+                and decorator.func.value.id == "app"
+                and decorator.func.attr == "tool"
+                and len(decorator.args) == 1
+                and isinstance(decorator.args[0], ast.Constant)
+                and isinstance(decorator.args[0].value, str)
+            ):
+                bindings[decorator.args[0].value] = node
+    return bindings
 
 
-# ---------------------------------------------------------------------------
-# Error cases — no credentials
-# ---------------------------------------------------------------------------
-
-def test_web_no_credentials():
-    """Without API keys, should return helpful error."""
-    _clear_credentials()
-    result = run("web", ["test query"])
-    assert "error" in result
-    assert result["auth_required"] is True
-    assert result["retryable"] is False
-    assert "No search provider configured" in result["error"]
+def _credential_values(name: str) -> tuple[str, None]:
+    return {
+        "GOOGLE_SEARCH_API_KEY": "google-key",
+        "GOOGLE_SEARCH_ENGINE_ID": "google-cx",
+        "BRAVE_SEARCH_API_KEY": "brave-key",
+    }[name], None
 
 
-def test_image_no_credentials():
-    """Without API keys, image search returns helpful error."""
-    _clear_credentials()
-    result = run("image", ["test query"])
-    assert "error" in result
-    assert result["auth_required"] is True
-    assert result["retryable"] is False
-
-
-def test_google_credentials_load_from_store():
-    _clear_credentials()
-    values = {
-        "GOOGLE_SEARCH_API_KEY": ("stored-key", None),
-        "GOOGLE_SEARCH_ENGINE_ID": ("stored-cx", None),
-    }
-    with mock.patch.object(
-        search_main,
-        "load_credential",
-        side_effect=lambda name: values[name],
-    ):
-        assert search_main._google_credentials() == ("stored-key", "stored-cx")
-
-
-# ---------------------------------------------------------------------------
-# Error cases — missing query
-# ---------------------------------------------------------------------------
-
-def test_web_missing_query():
-    result = run("web", [])
-    assert "error" in result
-    assert "missing" in result["error"].lower() or "query" in result["error"].lower()
-
-
-def test_image_missing_query():
-    result = run("image", [])
-    assert "error" in result
-
-
-# ---------------------------------------------------------------------------
-# Unknown command
-# ---------------------------------------------------------------------------
-
-def test_unknown_command():
-    result = run("bogus", [])
-    assert "error" in result
-    assert "unknown command" in result["error"]
-
-
-# ---------------------------------------------------------------------------
-# Argument parsing edge cases
-# ---------------------------------------------------------------------------
-
-def test_max_results_missing_value():
-    _clear_credentials()
-    _set_google_credentials()
-    result = run("web", ["query", "--max-results"])
-    assert "error" in result
-
-
-def test_max_results_invalid_value():
-    _clear_credentials()
-    _set_google_credentials()
-    result = run("web", ["query", "--max-results", "abc"])
-    assert "error" in result
-
-
-def test_provider_missing_value():
-    _clear_credentials()
-    _set_google_credentials()
-    result = run("web", ["query", "--provider"])
-    assert "error" in result
-
-
-def test_provider_unknown_value():
-    _clear_credentials()
-    _set_google_credentials()
-    result = run("web", ["query", "--provider", "bing"])
-    assert "error" in result
-    assert "unknown provider" in result["error"]
-
-
-def test_canonical_inline_provider_and_delimited_query_reach_handler():
-    with (
-        mock.patch.object(
-            search_main, "_pick_provider", return_value=("brave", {"key": "test"})
-        ),
-        mock.patch.object(
-            search_main,
-            "_brave_web",
-            side_effect=lambda query, _limit, _config: {"query": query, "results": []},
-        ),
-        mock.patch.object(search_main, "_remember_search"),
-        mock.patch.object(search_main.policy, "require"),
-    ):
-        result = run("web", ["--provider=brave", "--", "--provider"])
-    assert result["query"] == "--provider"
-
-
-def test_provider_explicit_not_configured():
-    """Requesting a provider that isn't configured returns a clear error."""
-    _clear_credentials()
-    result = run("web", ["query", "--provider", "brave"])
-    assert "error" in result
-    assert "Brave" in result["error"]
-
-
-# ---------------------------------------------------------------------------
-# Successful Google web search (mocked)
-# ---------------------------------------------------------------------------
-
-def _mock_google_web_response():
-    """Return a bytes payload mimicking Google Custom Search JSON."""
-    return json.dumps({
+def _google_web_payload() -> dict[str, object]:
+    return {
         "searchInformation": {"totalResults": "12345"},
         "items": [
             {
@@ -193,176 +78,320 @@ def _mock_google_web_response():
                 "snippet": "An example snippet.",
             }
         ],
-    }).encode()
+    }
 
 
-def test_web_google_success():
-    _clear_credentials()
-    _set_google_credentials()
+def _brave_image_payload() -> dict[str, object]:
+    return {
+        "results": [
+            {
+                "title": "Brave Image",
+                "url": "https://example.com/image.jpg",
+                "thumbnail": {"src": "https://example.com/thumb.jpg"},
+                "properties": {"width": 1280, "height": 720},
+                "source": "example.com",
+            }
+        ]
+    }
 
-    fake_resp = mock.MagicMock()
-    fake_resp.read.return_value = _mock_google_web_response()
-    fake_resp.__enter__ = mock.MagicMock(return_value=fake_resp)
-    fake_resp.__exit__ = mock.MagicMock(return_value=False)
 
-    with mock.patch.object(search_main, "open_url", return_value=(fake_resp, "https://example.test/", [])):
-        result = run("web", ["example query"])
+def test_manifest_and_handlers_are_mcp_only_and_aligned():
+    manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+    assert "operations" not in manifest
 
-    assert "error" not in result
+    tools = manifest["mcp"]["tools"]
+    assert [tool["name"] for tool in tools] == TOOL_NAMES
+    expected_args = [
+        {
+            "name": "provider",
+            "kind": "name",
+            "required": True,
+            "binding": "flag",
+            "choices": ["google", "brave"],
+        },
+        {
+            "name": "query",
+            "kind": "text",
+            "required": True,
+            "binding": "positional",
+        },
+        {
+            "name": "max_results",
+            "kind": "integer",
+            "required": False,
+            "binding": "flag",
+            "default": 5,
+        },
+    ]
+    assert tools[0]["args"] == expected_args
+    assert tools[1]["args"] == expected_args
+    for tool in tools:
+        needs = tool["needs"]
+        assert needs[0]["scope"]["kind"] == "from-arg-map"
+        assert needs[0]["scope"]["arg"] == "provider"
+        assert needs[0]["scope"]["values"] == {
+            "google": {"kind": "host", "value": main.GOOGLE_HOST},
+            "brave": {"kind": "host", "value": main.BRAVE_HOST},
+        }
+        assert needs[2]["scope"]["values"] == {
+            "google": {
+                "kind": "name",
+                "value": "default/GOOGLE_SEARCH_API_KEY",
+            },
+            "brave": {
+                "kind": "name",
+                "value": "default/BRAVE_SEARCH_API_KEY",
+            },
+        }
+        assert needs[3]["when"] == {
+            "kind": "arg-equals",
+            "arg": "provider",
+            "value": "google",
+        }
+
+    source = SERVER_PATH.read_text(encoding="utf-8")
+    assert "from claw_os_sdk.mcp import App" in source
+    assert "serve_manifest_operations" not in source
+    bindings = _server_bindings()
+    assert list(bindings) == TOOL_NAMES
+    for function in bindings.values():
+        assert [argument.arg for argument in function.args.args] == [
+            "provider",
+            "query",
+            "max_results",
+        ]
+        assert ast.literal_eval(function.args.defaults[0]) == 5
+
+    main_tree = ast.parse((APP_DIR / "main.py").read_text(encoding="utf-8"))
+    assert not any(
+        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "run"
+        for node in main_tree.body
+    )
+
+
+@pytest.mark.parametrize("provider", [None, "", "bing", 7])
+def test_provider_is_required_before_credentials_or_policy(provider):
+    with mock.patch.object(main, "load_credential") as load, mock.patch.object(
+        main.policy, "require"
+    ) as require:
+        with pytest.raises(ValueError, match="provider must be google or brave"):
+            main.web(provider, "query")
+
+    load.assert_not_called()
+    require.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("query", "max_results", "message"),
+    [
+        ("", 5, "query must"),
+        ("   ", 5, "query must"),
+        (None, 5, "query must"),
+        ("x" * (main.MAX_QUERY_CHARS + 1), 5, "query must"),
+        ("query", 0, "max_results must"),
+        ("query", 11, "max_results must"),
+        ("query", True, "max_results must"),
+        ("query", "5", "max_results must"),
+    ],
+)
+def test_request_arguments_are_rejected_before_credentials(
+    query,
+    max_results,
+    message,
+):
+    with mock.patch.object(main, "load_credential") as load:
+        with pytest.raises(ValueError, match=message):
+            main.web("google", query, max_results)
+
+    load.assert_not_called()
+
+
+def test_google_web_search_loads_only_google_credentials():
+    response = _Response(_google_web_payload())
+    with mock.patch.object(
+        main,
+        "load_credential",
+        side_effect=_credential_values,
+    ) as load, mock.patch.object(
+        main.policy,
+        "require",
+    ) as require, mock.patch.object(
+        main.memory,
+        "remember",
+    ) as remember, mock.patch.object(
+        main,
+        "open_url",
+        return_value=(response, "https://example.test/", []),
+    ) as open_url:
+        result = main.web("google", "example query", 5)
+
     assert result["provider"] == "google"
     assert result["query"] == "example query"
     assert result["count"] == 1
     assert result["total_results"] == 12345
     assert result["results"][0]["title"] == "Example Result"
-    assert result["results"][0]["url"] == "https://example.com"
+    assert load.call_args_list == [
+        mock.call("GOOGLE_SEARCH_API_KEY"),
+        mock.call("GOOGLE_SEARCH_ENGINE_ID"),
+    ]
+    require.assert_called_once_with("net.dial", host=main.GOOGLE_HOST)
+    request = open_url.call_args.args[0]
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(request.full_url).query)
+    assert query["q"] == ["example query"]
+    assert query["num"] == ["5"]
+    assert response.read_limit == main.MAX_RESPONSE_BYTES + 1
+    remember.assert_called_once()
+    assert remember.call_args.kwargs["source"] == "search"
+    assert "--provider google" in remember.call_args.kwargs["link"]
 
 
-# ---------------------------------------------------------------------------
-# Successful Brave web search (mocked)
-# ---------------------------------------------------------------------------
+def test_brave_image_search_loads_only_brave_credential():
+    response = _Response(_brave_image_payload())
+    with mock.patch.object(
+        main,
+        "load_credential",
+        side_effect=_credential_values,
+    ) as load, mock.patch.object(
+        main.policy,
+        "require",
+    ) as require, mock.patch.object(
+        main.memory,
+        "remember",
+    ), mock.patch.object(
+        main,
+        "open_url",
+        return_value=(response, "https://example.test/", []),
+    ) as open_url:
+        result = main.image("brave", "architecture", 3)
 
-def _mock_brave_web_response():
-    return json.dumps({
-        "web": {
-            "totalResults": 999,
-            "results": [
-                {
-                    "title": "Brave Result",
-                    "url": "https://brave.com",
-                    "description": "A brave snippet.",
-                }
-            ],
-        }
-    }).encode()
-
-
-def test_web_brave_success():
-    _clear_credentials()
-    _set_brave_credentials()
-
-    fake_resp = mock.MagicMock()
-    fake_resp.read.return_value = _mock_brave_web_response()
-    fake_resp.__enter__ = mock.MagicMock(return_value=fake_resp)
-    fake_resp.__exit__ = mock.MagicMock(return_value=False)
-
-    with mock.patch.object(search_main, "open_url", return_value=(fake_resp, "https://example.test/", [])):
-        result = run("web", ["brave query"])
-
-    assert "error" not in result
     assert result["provider"] == "brave"
-    assert result["query"] == "brave query"
-    assert result["results"][0]["url"] == "https://brave.com"
-
-
-# ---------------------------------------------------------------------------
-# Google image search (mocked)
-# ---------------------------------------------------------------------------
-
-def _mock_google_image_response():
-    return json.dumps({
-        "items": [
-            {
-                "title": "Cat Photo",
-                "link": "https://example.com/cat.jpg",
-                "displayLink": "example.com",
-                "image": {
-                    "thumbnailLink": "https://example.com/cat_thumb.jpg",
-                    "width": 1920,
-                    "height": 1080,
-                },
-            }
-        ],
-    }).encode()
-
-
-def test_image_google_success():
-    _clear_credentials()
-    _set_google_credentials()
-
-    fake_resp = mock.MagicMock()
-    fake_resp.read.return_value = _mock_google_image_response()
-    fake_resp.__enter__ = mock.MagicMock(return_value=fake_resp)
-    fake_resp.__exit__ = mock.MagicMock(return_value=False)
-
-    with mock.patch.object(search_main, "open_url", return_value=(fake_resp, "https://example.test/", [])):
-        result = run("image", ["cute cats"])
-
-    assert "error" not in result
-    assert result["provider"] == "google"
     assert result["count"] == 1
-    assert result["results"][0]["width"] == 1920
-    assert result["results"][0]["source"] == "example.com"
+    assert result["results"][0]["width"] == 1280
+    assert result["results"][0]["thumbnail"].endswith("/thumb.jpg")
+    load.assert_called_once_with("BRAVE_SEARCH_API_KEY")
+    require.assert_called_once_with("net.dial", host=main.BRAVE_HOST)
+    request = open_url.call_args.args[0]
+    headers = {name.lower(): value for name, value in request.header_items()}
+    assert headers["x-subscription-token"] == "brave-key"
 
 
-# ---------------------------------------------------------------------------
-# Provider isolation
-# ---------------------------------------------------------------------------
+def test_inherited_secret_environment_is_not_a_credential_fallback():
+    with mock.patch.dict(
+        main.os.environ,
+        {
+            "GOOGLE_SEARCH_API_KEY": "inherited-key",
+            "GOOGLE_SEARCH_ENGINE_ID": "inherited-cx",
+        },
+    ), mock.patch.object(
+        main,
+        "load_credential",
+        return_value=(None, "credential unavailable"),
+    ) as load:
+        with pytest.raises(RuntimeError, match="credential unavailable"):
+            main.web("google", "query")
 
-def test_web_google_failure_does_not_cross_into_brave_scope():
-    """A Google-scoped invocation must not load or call Brave implicitly."""
-    _clear_credentials()
-    _set_google_credentials()
-    _set_brave_credentials()
-
-    call_count = {"n": 0}
-
-    def _side_effect(req, timeout=None):
-        call_count["n"] += 1
-        if call_count["n"] == 1:
-            # First call (Google) → fail
-            raise urllib.error.HTTPError(
-                url=req.full_url, code=403, msg="Forbidden",
-                hdrs={}, fp=mock.MagicMock(read=lambda: b"forbidden"),
-            )
-        # Second call (Brave) → succeed
-        fake_resp = mock.MagicMock()
-        fake_resp.read.return_value = _mock_brave_web_response()
-        fake_resp.__enter__ = mock.MagicMock(return_value=fake_resp)
-        fake_resp.__exit__ = mock.MagicMock(return_value=False)
-        return fake_resp, req.full_url, []
-
-    with mock.patch.object(search_main, "open_url", side_effect=_side_effect):
-        result = run("web", ["fallback test", "--provider", "google"])
-
-    assert "error" in result
-    assert result["provider"] == "google"
-    assert call_count["n"] == 1
+    load.assert_called_once_with("GOOGLE_SEARCH_API_KEY")
 
 
-# ---------------------------------------------------------------------------
-# Multi-word query parsing
-# ---------------------------------------------------------------------------
+def test_google_failure_does_not_fall_back_to_brave():
+    error = urllib.error.HTTPError(
+        url="https://www.googleapis.com/?key=secret-key",
+        code=403,
+        msg="Forbidden",
+        hdrs={},
+        fp=mock.MagicMock(read=lambda _limit: b"forbidden"),
+    )
 
-def test_multiword_query():
-    _clear_credentials()
-    _set_google_credentials()
+    def credential(name):
+        if name == "BRAVE_SEARCH_API_KEY":
+            raise AssertionError("Brave credential must not be loaded")
+        return _credential_values(name)
 
-    fake_resp = mock.MagicMock()
-    fake_resp.read.return_value = _mock_google_web_response()
-    fake_resp.__enter__ = mock.MagicMock(return_value=fake_resp)
-    fake_resp.__exit__ = mock.MagicMock(return_value=False)
+    with mock.patch.object(
+        main,
+        "load_credential",
+        side_effect=credential,
+    ), mock.patch.object(
+        main.policy,
+        "require",
+    ), mock.patch.object(
+        main.memory,
+        "remember",
+    ) as remember, mock.patch.object(
+        main,
+        "open_url",
+        side_effect=error,
+    ):
+        with pytest.raises(RuntimeError, match="HTTP 403") as raised:
+            main.web("google", "no fallback")
 
-    with mock.patch.object(search_main, "open_url", return_value=(fake_resp, "https://example.test/", [])):
-        result = run("web", ["rust", "async", "runtime", "--max-results", "3"])
-
-    assert result["query"] == "rust async runtime"
+    assert "secret-key" not in str(raised.value)
+    remember.assert_not_called()
 
 
-# ---------------------------------------------------------------------------
-# Max results clamping
-# ---------------------------------------------------------------------------
+def test_memory_failure_is_not_silently_ignored():
+    response = _Response(_google_web_payload())
+    with mock.patch.object(
+        main,
+        "load_credential",
+        side_effect=_credential_values,
+    ), mock.patch.object(
+        main.policy,
+        "require",
+    ), mock.patch.object(
+        main.memory,
+        "remember",
+        side_effect=main.memory.MemoryUnavailable("memory unavailable"),
+    ), mock.patch.object(
+        main,
+        "open_url",
+        return_value=(response, "https://example.test/", []),
+    ):
+        with pytest.raises(main.memory.MemoryUnavailable, match="memory unavailable"):
+            main.web("google", "remember this")
 
-def test_max_results_clamped_to_limit():
-    _clear_credentials()
-    _set_google_credentials()
 
-    fake_resp = mock.MagicMock()
-    fake_resp.read.return_value = _mock_google_web_response()
-    fake_resp.__enter__ = mock.MagicMock(return_value=fake_resp)
-    fake_resp.__exit__ = mock.MagicMock(return_value=False)
+def test_oversized_provider_response_is_rejected():
+    response = _Response({})
+    response.body = b"x" * (main.MAX_RESPONSE_BYTES + 1)
+    with mock.patch.object(
+        main,
+        "open_url",
+        return_value=(response, "https://example.test/", []),
+    ):
+        with pytest.raises(RuntimeError, match="response exceeds"):
+            main._request_json(f"https://{main.GOOGLE_HOST}/")
 
-    with mock.patch.object(search_main, "open_url", return_value=(fake_resp, "https://example.test/", [])) as mock_open:
-        run("web", ["test", "--max-results", "50"])
-        # The URL should have num=10, not 50
-        called_req = mock_open.call_args[0][0]
-        assert "num=10" in called_req.full_url
+
+def test_invalid_provider_json_is_rejected():
+    response = _Response({})
+    response.body = b"{"
+    with mock.patch.object(
+        main,
+        "open_url",
+        return_value=(response, "https://example.test/", []),
+    ):
+        with pytest.raises(RuntimeError, match="invalid JSON"):
+            main._request_json(f"https://{main.GOOGLE_HOST}/")
+
+
+def test_invalid_result_shape_is_rejected():
+    response = _Response({"items": "not-a-list"})
+    with mock.patch.object(
+        main,
+        "load_credential",
+        side_effect=_credential_values,
+    ), mock.patch.object(
+        main.policy,
+        "require",
+    ), mock.patch.object(
+        main.memory,
+        "remember",
+    ), mock.patch.object(
+        main,
+        "open_url",
+        return_value=(response, "https://example.test/", []),
+    ):
+        with pytest.raises(RuntimeError, match="invalid `items` results"):
+            main.web("google", "query")

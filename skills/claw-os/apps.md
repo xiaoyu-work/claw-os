@@ -14,18 +14,19 @@ cos app web submit https://example.com/form --data '{"q": "search term"}'
 
 ## Web Search
 
-Search the web via Google or Brave (auto-fallback):
+Search the web through an explicitly selected Google or Brave provider:
 
 ```bash
-cos app search web "Rust async runtime" --max-results 5
-cos app search image "architecture diagram" --max-results 5
+cos app search web --provider brave "Rust async runtime" --max-results 5
+cos app search image --provider brave "architecture diagram" --max-results 5
 ```
 
 Requires credentials:
 ```bash
+cos credential store BRAVE_SEARCH_API_KEY "BSA..." --tier 1
+# Or configure Google:
 cos credential store GOOGLE_SEARCH_API_KEY "AIza..." --tier 1
 cos credential store GOOGLE_SEARCH_ENGINE_ID "a1b2c3..." --tier 1
-# Or: cos credential store BRAVE_SEARCH_API_KEY "BSA..." --tier 1
 ```
 
 ## Email

@@ -1,10 +1,10 @@
-"""search — Web and image search for Claw OS.
+"""Explicit-provider web and image search for Claw OS."""
 
-Google Custom Search with Brave fallback.  Uses only stdlib (urllib).
-"""
+from __future__ import annotations
 
 import json
 import os
+import shlex
 import sys
 import urllib.error
 import urllib.parse
@@ -15,292 +15,271 @@ from _shared.credentials import load_credential  # noqa: E402
 from _shared.safe_http import open_url  # noqa: E402
 from cos_runtime import memory, policy  # noqa: E402
 
+
 VERSION = os.environ.get("COS_VERSION", "0.1.0")
 USER_AGENT = "cos/" + VERSION
 TIMEOUT = 15
 MAX_RESULTS_DEFAULT = 5
 MAX_RESULTS_LIMIT = 10
+MAX_QUERY_CHARS = 2048
+MAX_RESPONSE_BYTES = 5 * 1024 * 1024
 
 GOOGLE_HOST = "www.googleapis.com"
 BRAVE_HOST = "api.search.brave.com"
-
-# ---------------------------------------------------------------------------
-# Credential helpers
-# ---------------------------------------------------------------------------
-
-def _google_credentials():
-    """Return (api_key, engine_id) or (None, None)."""
-    api_key = os.environ.get("GOOGLE_SEARCH_API_KEY")
-    if not api_key:
-        api_key, _ = load_credential("GOOGLE_SEARCH_API_KEY")
-    engine_id = os.environ.get("GOOGLE_SEARCH_ENGINE_ID")
-    if not engine_id:
-        engine_id, _ = load_credential("GOOGLE_SEARCH_ENGINE_ID")
-    if api_key and engine_id:
-        return api_key, engine_id
-    return None, None
+PROVIDERS = frozenset({"google", "brave"})
 
 
-def _brave_credential():
-    """Return api_key or None."""
-    value = os.environ.get("BRAVE_SEARCH_API_KEY")
-    if value:
-        return value
-    return load_credential("BRAVE_SEARCH_API_KEY")[0]
+def _validate_request(
+    provider: object,
+    query: object,
+    max_results: object,
+) -> tuple[str, str, int]:
+    if not isinstance(provider, str) or provider not in PROVIDERS:
+        raise ValueError("provider must be google or brave")
+    if (
+        not isinstance(query, str)
+        or not query.strip()
+        or len(query) > MAX_QUERY_CHARS
+    ):
+        raise ValueError(
+            f"query must be a non-empty string of at most {MAX_QUERY_CHARS} characters"
+        )
+    if (
+        type(max_results) is not int
+        or not 1 <= max_results <= MAX_RESULTS_LIMIT
+    ):
+        raise ValueError(f"max_results must be between 1 and {MAX_RESULTS_LIMIT}")
+    return provider, query, max_results
 
 
-def _pick_provider(preferred=None):
-    """Choose a search provider.  Returns (provider, config) or (None, error_dict)."""
-    if preferred not in {None, "google", "brave"}:
-        return None, {
-            "error": "invalid search provider; expected google or brave",
-            "retryable": False,
+def _credential(name: str) -> str:
+    value, error = load_credential(name)
+    if error is not None or value is None:
+        raise RuntimeError(error or f"credential default/{name} has no value")
+    return value
+
+
+def _provider_config(provider: str) -> dict[str, str]:
+    if provider == "google":
+        return {
+            "key": _credential("GOOGLE_SEARCH_API_KEY"),
+            "cx": _credential("GOOGLE_SEARCH_ENGINE_ID"),
         }
-    if preferred == "google":
-        google_key, google_cx = _google_credentials()
-        if google_key and google_cx:
-            return "google", {"key": google_key, "cx": google_cx}
-        return None, {
-            "error": "Google Search credentials are not configured",
-            "auth_required": True,
-            "retryable": False,
-            "required_credentials": [
-                "GOOGLE_SEARCH_API_KEY",
-                "GOOGLE_SEARCH_ENGINE_ID",
-            ],
+    if provider == "brave":
+        return {"key": _credential("BRAVE_SEARCH_API_KEY")}
+    raise ValueError("provider must be google or brave")
+
+
+def _read_json_response(response) -> dict[str, object]:
+    body = response.read(MAX_RESPONSE_BYTES + 1)
+    if len(body) > MAX_RESPONSE_BYTES:
+        raise RuntimeError(
+            f"search provider response exceeds {MAX_RESPONSE_BYTES} bytes"
+        )
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("search provider returned invalid JSON") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("search provider returned a non-object response")
+    return payload
+
+
+def _request_json(
+    url: str,
+    headers: dict[str, str] | None = None,
+) -> dict[str, object]:
+    request_headers = {"User-Agent": USER_AGENT}
+    if headers is not None:
+        request_headers.update(headers)
+    request = urllib.request.Request(url, headers=request_headers)
+    try:
+        with open_url(request, timeout=TIMEOUT)[0] as response:
+            return _read_json_response(response)
+    except urllib.error.HTTPError as exc:
+        exc.close()
+        raise RuntimeError(
+            f"search provider returned HTTP {exc.code}"
+        ) from None
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"search provider request failed: {exc.reason}") from exc
+    except TimeoutError as exc:
+        raise TimeoutError(f"search provider exceeded {TIMEOUT}s") from exc
+
+
+def _items(payload: dict[str, object], key: str) -> list[dict[str, object]]:
+    value = payload.get(key, [])
+    if not isinstance(value, list) or not all(
+        isinstance(item, dict) for item in value
+    ):
+        raise RuntimeError(f"search provider returned invalid `{key}` results")
+    return value
+
+
+def _text(item: dict[str, object], key: str) -> str:
+    value = item.get(key, "")
+    if not isinstance(value, str):
+        raise RuntimeError(f"search provider returned non-string `{key}`")
+    return value
+
+
+def _total_results(value: object) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, bool):
+        raise RuntimeError("search provider returned an invalid total result count")
+    try:
+        total = int(value)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            "search provider returned an invalid total result count"
+        ) from exc
+    if total < 0:
+        raise RuntimeError("search provider returned an invalid total result count")
+    return total
+
+
+def _dimension(item: dict[str, object], key: str) -> int:
+    value = item.get(key, 0)
+    if type(value) is not int or value < 0:
+        raise RuntimeError(f"search provider returned invalid `{key}`")
+    return value
+
+
+def _google_web(
+    query: str,
+    max_results: int,
+    config: dict[str, str],
+) -> dict[str, object]:
+    params = urllib.parse.urlencode(
+        {
+            "q": query,
+            "key": config["key"],
+            "cx": config["cx"],
+            "num": max_results,
         }
-
-    if preferred == "brave":
-        brave_key = _brave_credential()
-        if brave_key:
-            return "brave", {"key": brave_key}
-        return None, {
-            "error": "Brave Search credentials are not configured",
-            "auth_required": True,
-            "retryable": False,
-            "required_credentials": ["BRAVE_SEARCH_API_KEY"],
+    )
+    payload = _request_json(f"https://{GOOGLE_HOST}/customsearch/v1?{params}")
+    results = [
+        {
+            "title": _text(item, "title"),
+            "url": _text(item, "link"),
+            "snippet": _text(item, "snippet"),
         }
+        for item in _items(payload, "items")[:max_results]
+    ]
+    search_information = payload.get("searchInformation", {})
+    if not isinstance(search_information, dict):
+        raise RuntimeError("Google returned invalid search information")
+    return {
+        "query": query,
+        "provider": "google",
+        "results": results,
+        "count": len(results),
+        "total_results": _total_results(search_information.get("totalResults")),
+    }
 
-    # No preference — Google first, then Brave
-    google_key, google_cx = _google_credentials()
-    if google_key and google_cx:
-        return "google", {"key": google_key, "cx": google_cx}
-    brave_key = _brave_credential()
-    if brave_key:
-        return "brave", {"key": brave_key}
 
-    return None, {
-        "error": "No search provider configured",
-        "auth_required": True,
-        "retryable": False,
-        "providers": {
-            "google": ["GOOGLE_SEARCH_API_KEY", "GOOGLE_SEARCH_ENGINE_ID"],
-            "brave": ["BRAVE_SEARCH_API_KEY"],
+def _google_image(
+    query: str,
+    max_results: int,
+    config: dict[str, str],
+) -> dict[str, object]:
+    params = urllib.parse.urlencode(
+        {
+            "q": query,
+            "key": config["key"],
+            "cx": config["cx"],
+            "searchType": "image",
+            "num": max_results,
+        }
+    )
+    payload = _request_json(f"https://{GOOGLE_HOST}/customsearch/v1?{params}")
+    results = []
+    for item in _items(payload, "items")[:max_results]:
+        image = item.get("image", {})
+        if not isinstance(image, dict):
+            raise RuntimeError("Google returned invalid image metadata")
+        results.append(
+            {
+                "title": _text(item, "title"),
+                "url": _text(item, "link"),
+                "thumbnail": _text(image, "thumbnailLink"),
+                "width": _dimension(image, "width"),
+                "height": _dimension(image, "height"),
+                "source": _text(item, "displayLink"),
+            }
+        )
+    return {
+        "query": query,
+        "provider": "google",
+        "results": results,
+        "count": len(results),
+    }
+
+
+def _brave_web(
+    query: str,
+    max_results: int,
+    config: dict[str, str],
+) -> dict[str, object]:
+    params = urllib.parse.urlencode({"q": query, "count": max_results})
+    payload = _request_json(
+        f"https://{BRAVE_HOST}/res/v1/web/search?{params}",
+        headers={
+            "Accept": "application/json",
+            "X-Subscription-Token": config["key"],
         },
+    )
+    web = payload.get("web", {})
+    if not isinstance(web, dict):
+        raise RuntimeError("Brave returned invalid web search metadata")
+    results = [
+        {
+            "title": _text(item, "title"),
+            "url": _text(item, "url"),
+            "snippet": _text(item, "description"),
+        }
+        for item in _items(web, "results")[:max_results]
+    ]
+    return {
+        "query": query,
+        "provider": "brave",
+        "results": results,
+        "count": len(results),
+        "total_results": _total_results(web.get("totalResults")),
     }
 
 
-# ---------------------------------------------------------------------------
-# Argument parsing
-# ---------------------------------------------------------------------------
-
-def _parse_args(args):
-    """Parse [query_words...] [--max-results N] [--provider google|brave].
-
-    Returns (query, max_results, provider) or (None, None, error_dict).
-    """
-    from canonical_argv import parse_canonical_argv
-    try:
-        query_parts, options = parse_canonical_argv(
-            args, value_flags={"max-results", "provider"}
+def _brave_image(
+    query: str,
+    max_results: int,
+    config: dict[str, str],
+) -> dict[str, object]:
+    params = urllib.parse.urlencode({"q": query, "count": max_results})
+    payload = _request_json(
+        f"https://{BRAVE_HOST}/res/v1/images/search?{params}",
+        headers={
+            "Accept": "application/json",
+            "X-Subscription-Token": config["key"],
+        },
+    )
+    results = []
+    for item in _items(payload, "results")[:max_results]:
+        properties = item.get("properties", {})
+        thumbnail = item.get("thumbnail", {})
+        if not isinstance(properties, dict) or not isinstance(thumbnail, dict):
+            raise RuntimeError("Brave returned invalid image metadata")
+        results.append(
+            {
+                "title": _text(item, "title"),
+                "url": _text(item, "url"),
+                "thumbnail": _text(thumbnail, "src"),
+                "width": _dimension(properties, "width"),
+                "height": _dimension(properties, "height"),
+                "source": _text(item, "source"),
+            }
         )
-    except ValueError as error:
-        return None, None, None, {"error": str(error)}
-
-    provider = options.get("provider")
-    if provider is not None and provider not in ("google", "brave"):
-        return None, None, None, {
-            "error": f"unknown provider: {provider} (choose google or brave)"
-        }
-    try:
-        max_results = int(options.get("max_results", MAX_RESULTS_DEFAULT))
-    except ValueError:
-        return None, None, None, {
-            "error": f"invalid --max-results value: {options['max_results']}"
-        }
-    max_results = min(MAX_RESULTS_LIMIT, max(1, max_results))
-
-    query = " ".join(query_parts)
-    if not query:
-        return None, None, None, {"error": "missing search query"}
-
-    return query, max_results, provider, None
-
-
-# ---------------------------------------------------------------------------
-# HTTP helper
-# ---------------------------------------------------------------------------
-
-def _request_json(url, headers=None):
-    """GET *url* and return parsed JSON, or an error dict."""
-    hdrs = {"User-Agent": USER_AGENT}
-    if headers:
-        hdrs.update(headers)
-    req = urllib.request.Request(url, headers=hdrs)
-    try:
-        # Authorized, transport-approved and redirect-checked: inside a
-        # sandbox this is the brokered egress tunnel, and every hop is
-        # re-authorized against `net.dial` before it is followed.
-        with open_url(req, timeout=TIMEOUT)[0] as resp:
-            body = resp.read().decode("utf-8", errors="replace")
-            return json.loads(body), None
-    except urllib.error.HTTPError as e:
-        detail = ""
-        try:
-            detail = e.read().decode("utf-8", errors="replace")
-        except Exception:
-            pass
-        return None, {"error": f"HTTP {e.code}: {detail or str(e)}", "status": e.code}
-    except urllib.error.URLError as e:
-        return None, {"error": str(e.reason)}
-    except Exception as e:
-        return None, {"error": str(e)}
-
-
-# ---------------------------------------------------------------------------
-# Google Custom Search
-# ---------------------------------------------------------------------------
-
-def _google_web(query, max_results, config):
-    params = urllib.parse.urlencode({
-        "q": query,
-        "key": config["key"],
-        "cx": config["cx"],
-        "num": max_results,
-    })
-    url = f"https://www.googleapis.com/customsearch/v1?{params}"
-    data, err = _request_json(url)
-    if err:
-        return err
-
-    results = []
-    for item in data.get("items", []):
-        results.append({
-            "title": item.get("title", ""),
-            "url": item.get("link", ""),
-            "snippet": item.get("snippet", ""),
-        })
-
-    total_str = data.get("searchInformation", {}).get("totalResults", "0")
-    try:
-        total = int(total_str)
-    except (ValueError, TypeError):
-        total = 0
-
-    return {
-        "query": query,
-        "provider": "google",
-        "results": results,
-        "count": len(results),
-        "total_results": total,
-    }
-
-
-def _google_image(query, max_results, config):
-    params = urllib.parse.urlencode({
-        "q": query,
-        "key": config["key"],
-        "cx": config["cx"],
-        "searchType": "image",
-        "num": max_results,
-    })
-    url = f"https://www.googleapis.com/customsearch/v1?{params}"
-    data, err = _request_json(url)
-    if err:
-        return err
-
-    results = []
-    for item in data.get("items", []):
-        img = item.get("image", {})
-        results.append({
-            "title": item.get("title", ""),
-            "url": item.get("link", ""),
-            "thumbnail": item.get("image", {}).get("thumbnailLink", ""),
-            "width": img.get("width", 0),
-            "height": img.get("height", 0),
-            "source": item.get("displayLink", ""),
-        })
-
-    return {
-        "query": query,
-        "provider": "google",
-        "results": results,
-        "count": len(results),
-    }
-
-
-# ---------------------------------------------------------------------------
-# Brave Search
-# ---------------------------------------------------------------------------
-
-def _brave_web(query, max_results, config):
-    params = urllib.parse.urlencode({"q": query, "count": max_results})
-    url = f"https://api.search.brave.com/res/v1/web/search?{params}"
-    headers = {
-        "Accept": "application/json",
-        "X-Subscription-Token": config["key"],
-    }
-    data, err = _request_json(url, headers=headers)
-    if err:
-        return err
-
-    results = []
-    for item in data.get("web", {}).get("results", []):
-        results.append({
-            "title": item.get("title", ""),
-            "url": item.get("url", ""),
-            "snippet": item.get("description", ""),
-        })
-
-    total = data.get("web", {}).get("totalResults", 0)
-    if isinstance(total, str):
-        try:
-            total = int(total)
-        except (ValueError, TypeError):
-            total = 0
-
-    return {
-        "query": query,
-        "provider": "brave",
-        "results": results,
-        "count": len(results),
-        "total_results": total,
-    }
-
-
-def _brave_image(query, max_results, config):
-    params = urllib.parse.urlencode({"q": query, "count": max_results})
-    url = f"https://api.search.brave.com/res/v1/images/search?{params}"
-    headers = {
-        "Accept": "application/json",
-        "X-Subscription-Token": config["key"],
-    }
-    data, err = _request_json(url, headers=headers)
-    if err:
-        return err
-
-    results = []
-    for item in data.get("results", []):
-        props = item.get("properties", {})
-        results.append({
-            "title": item.get("title", ""),
-            "url": item.get("url", ""),
-            "thumbnail": item.get("thumbnail", {}).get("src", ""),
-            "width": props.get("width", 0),
-            "height": props.get("height", 0),
-            "source": item.get("source", ""),
-        })
-
     return {
         "query": query,
         "provider": "brave",
@@ -309,89 +288,69 @@ def _brave_image(query, max_results, config):
     }
 
 
-# ---------------------------------------------------------------------------
-# Commands
-# ---------------------------------------------------------------------------
+def _remember_search(
+    kind: str,
+    query: str,
+    provider: str,
+    result: dict[str, object],
+) -> None:
+    count = result["count"]
+    memory.remember(
+        source="search",
+        text=(
+            f"{kind.capitalize()} search {query!r} via {provider} "
+            f"returned {count} result(s)"
+        ),
+        kind="event",
+        tags=["search", kind, provider],
+        link=(
+            f"cos app search {kind} --provider {provider} "
+            f"{shlex.quote(query)}"
+        ),
+    )
 
-def cmd_web(args):
-    """Search the web for information."""
-    query, max_results, preferred, parse_err = _parse_args(args)
-    if parse_err:
-        return parse_err
 
-    provider, config = _pick_provider(preferred)
-    if provider is None:
-        return config  # config is the error dict
-
+def _search(
+    kind: str,
+    provider: str,
+    query: str,
+    max_results: int,
+) -> dict[str, object]:
+    provider, query, max_results = _validate_request(
+        provider,
+        query,
+        max_results,
+    )
+    config = _provider_config(provider)
     host = GOOGLE_HOST if provider == "google" else BRAVE_HOST
     policy.require("net.dial", host=host)
 
-    if provider == "google":
+    if (kind, provider) == ("web", "google"):
         result = _google_web(query, max_results, config)
-    else:
+    elif (kind, provider) == ("web", "brave"):
         result = _brave_web(query, max_results, config)
-    if isinstance(result, dict):
-        result.setdefault("provider", provider)
-    _remember_search("web", query, result)
-    return result
-
-
-def cmd_image(args):
-    """Search for images."""
-    query, max_results, preferred, parse_err = _parse_args(args)
-    if parse_err:
-        return parse_err
-
-    provider, config = _pick_provider(preferred)
-    if provider is None:
-        return config  # config is the error dict
-
-    host = GOOGLE_HOST if provider == "google" else BRAVE_HOST
-    policy.require("net.dial", host=host)
-
-    if provider == "google":
+    elif (kind, provider) == ("image", "google"):
         result = _google_image(query, max_results, config)
-    else:
+    elif (kind, provider) == ("image", "brave"):
         result = _brave_image(query, max_results, config)
-    if isinstance(result, dict):
-        result.setdefault("provider", provider)
-    _remember_search("image", query, result)
+    else:
+        raise ValueError("search kind must be web or image")
+
+    _remember_search(kind, query, provider, result)
     return result
 
 
-def _remember_search(kind, query, result):
-    try:
-        if not isinstance(result, dict) or "error" in result:
-            return
-        provider = result.get("provider") or "unknown"
-        count = result.get("count") or len(result.get("results") or [])
-        memory.remember(
-            source="search",
-            text=f"{kind.capitalize()} search '{query}' via {provider} → {count} result(s)",
-            kind="event",
-            tags=["search", kind, provider],
-            link=f"cos app search {kind} --query \"{query}\"",
-        )
-    except memory.MemoryError:
-        pass
+def web(
+    provider: str,
+    query: str,
+    max_results: int = MAX_RESULTS_DEFAULT,
+) -> dict[str, object]:
+    return _search("web", provider, query, max_results)
 
 
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
-
-def run(command, args):
-    """Called by cos router."""
-    commands = {
-        "web": cmd_web,
-        "image": cmd_image,
-    }
-    handler = commands.get(command)
-    if not handler:
-        return {"error": f"unknown command: {command}"}
-    try:
-        return handler(args)
-    except policy.PermissionDenied as denied:
-        return {"error": str(denied), "denial": denied.denial}
-    except policy.PolicyUnavailable as exc:
-        return {"error": f"capability check failed: {exc}"}
+def image(
+    provider: str,
+    query: str,
+    max_results: int = MAX_RESULTS_DEFAULT,
+) -> dict[str, object]:
+    return _search("image", provider, query, max_results)
