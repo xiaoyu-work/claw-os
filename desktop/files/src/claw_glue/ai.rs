@@ -137,8 +137,8 @@ pub async fn rewrite(path: PathBuf, instruction: String) -> Result<String, Strin
 
 /// Indexed full-text search across the user's documents. Routes
 /// through `cos app docs search --query <q> --max-results <n>`
-/// (Recoll, see `apps/docs`). `max_results` is clamped by the app
-/// itself to a sane upper bound, so we pass it through unchanged.
+/// (Recoll, see `apps/docs`). The App validates `max_results` against
+/// its supported range.
 pub async fn search(query: String, max_results: usize) -> Result<Vec<SearchHit>, String> {
     let max = max_results.to_string();
     let value = invoke_app(

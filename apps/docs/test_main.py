@@ -1,47 +1,51 @@
-"""Tests for the docs (Recoll) app.
-
-Stubs ``recollq`` and ``recollindex`` by pointing
-``CLAW_RECOLLQ_BIN`` / ``CLAW_RECOLLINDEX_BIN`` at shell scripts in a
-tmpdir. Each test gets its own fake ``~/.recoll``.
-"""
+"""Tests for the Recoll-backed docs App."""
 
 from __future__ import annotations
 
+import ast
+import json
 import os
 import pathlib
 import shutil
 import stat
 import sys
 import tempfile
-import textwrap
 import unittest
+from unittest import mock
 
 from test_support import load_local_module
 
 
-_HERE = pathlib.Path(__file__).resolve().parent
-
+APP_DIR = pathlib.Path(__file__).resolve().parent
+MANIFEST_PATH = APP_DIR / "app.json"
+SERVER_PATH = APP_DIR / "server.py"
+TOOL_NAMES = [
+    "docs.search",
+    "docs.index",
+    "docs.status",
+    "docs.configure",
+]
 
 _RECOLLQ_STUB = r"""#!/bin/sh
-# Args observed by the test
 printf '%s\n' "$@" > "$RECOLLQ_ARGS_LOG"
+printf '%s\n' "$HOME" > "$RECOLLQ_HOME_LOG"
 
-# Detect the query: with our caller we pass `-t -n N:0 -F "url mtype mtime abstract" <query>`
-# The last positional arg is the query.
 QUERY=
 for arg in "$@"; do
     QUERY=$arg
 done
 
-# Configurable failure
 if [ -n "$RECOLLQ_FAIL" ]; then
     echo "stub recollq forced failure" 1>&2
     exit "${RECOLLQ_EXIT:-1}"
 fi
+if [ -n "$RECOLLQ_MALFORMED" ]; then
+    printf '%s\n' '"unterminated'
+    exit 0
+fi
 
 case "$QUERY" in
   *empty*)
-    # produce zero hits
     exit 0
     ;;
   *)
@@ -49,239 +53,360 @@ case "$QUERY" in
 "file:///home/jay/Documents/budget-q3.xlsx" "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" "1700000000" "Q3 budget proposal: marketing 1.2M, R&D 3.5M"
 "file:///home/jay/Documents/notes/budget plan.md" "text/markdown" "1701000000" "Quarterly budget plan v3"
 OUT
-    exit 0
     ;;
 esac
 """
 
-
 _RECOLLINDEX_STUB = r"""#!/bin/sh
 printf '%s\n' "$@" > "$RECOLLINDEX_ARGS_LOG"
+printf '%s\n' "$HOME" > "$RECOLLINDEX_HOME_LOG"
 echo "Indexing ~/Documents..." 1>&2
 exit "${RECOLLINDEX_EXIT:-0}"
 """
 
 
-_COS_STUB = r"""#!/bin/sh
-# Permissive stub used in tests — every policy check returns allow.
-case "$2" in
-  check)
-    echo '{"decision":"allow"}'
-    exit 0
-    ;;
-esac
-echo "stub cos: unsupported subcommand: $@" 1>&2
-exit 99
-"""
-
-
-def _write_stub(path: pathlib.Path, content: str):
-    path.write_text(content)
+def _write_stub(path: pathlib.Path, content: str) -> None:
+    path.write_text(content, encoding="utf-8")
     path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+
+def _server_bindings() -> dict[str, ast.FunctionDef]:
+    bindings: dict[str, ast.FunctionDef] = {}
+    for node in ast.parse(SERVER_PATH.read_text(encoding="utf-8")).body:
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        for decorator in node.decorator_list:
+            if (
+                isinstance(decorator, ast.Call)
+                and isinstance(decorator.func, ast.Attribute)
+                and isinstance(decorator.func.value, ast.Name)
+                and decorator.func.value.id == "app"
+                and decorator.func.attr == "tool"
+                and len(decorator.args) == 1
+                and isinstance(decorator.args[0], ast.Constant)
+                and isinstance(decorator.args[0].value, str)
+            ):
+                bindings[decorator.args[0].value] = node
+    return bindings
 
 
 class DocsAppTests(unittest.TestCase):
     def setUp(self):
         self.tmp = pathlib.Path(tempfile.mkdtemp(prefix="docs-app-"))
-        self.fake_home = self.tmp / "home"
-        self.fake_home.mkdir()
-        (self.fake_home / ".recoll").mkdir()
+        self.owner_home = self.tmp / "owner"
+        self.private_home = self.tmp / "private"
+        self.owner_home.mkdir()
+        self.private_home.mkdir()
+        (self.owner_home / ".recoll").mkdir()
 
-        # stub bins
         self.recollq = self.tmp / "recollq"
         self.recollindex = self.tmp / "recollindex"
-        self.cos = self.tmp / "cos"
         _write_stub(self.recollq, _RECOLLQ_STUB)
         _write_stub(self.recollindex, _RECOLLINDEX_STUB)
-        _write_stub(self.cos, _COS_STUB)
 
         self.q_args = self.tmp / "recollq.args"
-        self.idx_args = self.tmp / "recollindex.args"
+        self.q_home = self.tmp / "recollq.home"
+        self.index_args = self.tmp / "recollindex.args"
+        self.index_home = self.tmp / "recollindex.home"
 
-        # Environment for the app
-        self._saved_env = {}
-        for k, v in {
-            "HOME": str(self.fake_home),
-            "CLAW_RECOLLQ_BIN": str(self.recollq),
-            "CLAW_RECOLLINDEX_BIN": str(self.recollindex),
+        self._saved_env: dict[str, str | None] = {}
+        environment = {
+            "HOME": str(self.private_home),
+            "COS_OWNER_HOME": str(self.owner_home),
             "RECOLLQ_ARGS_LOG": str(self.q_args),
-            "RECOLLINDEX_ARGS_LOG": str(self.idx_args),
-            "COS_BIN": str(self.cos),
-        }.items():
-            self._saved_env[k] = os.environ.get(k)
-            os.environ[k] = v
-        for var in ("RECOLLQ_FAIL", "RECOLLQ_EXIT", "RECOLLINDEX_EXIT"):
-            self._saved_env[var] = os.environ.get(var)
-            os.environ.pop(var, None)
+            "RECOLLQ_HOME_LOG": str(self.q_home),
+            "RECOLLINDEX_ARGS_LOG": str(self.index_args),
+            "RECOLLINDEX_HOME_LOG": str(self.index_home),
+        }
+        for key, value in environment.items():
+            self._saved_env[key] = os.environ.get(key)
+            os.environ[key] = value
+        for variable in (
+            "CLAW_RECOLLQ_BIN",
+            "CLAW_RECOLLINDEX_BIN",
+            "RECOLLQ_FAIL",
+            "RECOLLQ_EXIT",
+            "RECOLLQ_MALFORMED",
+            "RECOLLINDEX_EXIT",
+        ):
+            self._saved_env[variable] = os.environ.get(variable)
+            os.environ.pop(variable, None)
 
-        # Fresh import so module-level HOME picks up our fake $HOME
-        sys.path.insert(0, str(_HERE))
+        sys.path.insert(0, str(APP_DIR))
         sys.path.insert(
             0,
-            str(_HERE.parent.parent / "claw-os-sdk" / "python" / "src"),
-        )  # for `from claw_os_sdk import …`
+            str(APP_DIR.parent.parent / "claw-os-sdk" / "python" / "src"),
+        )
         sys.path.insert(
             0,
-            str(_HERE.parent.parent / "cos-runtime" / "python" / "src"),
-        )  # for `from cos_runtime import …`
+            str(APP_DIR.parent.parent / "cos-runtime" / "python" / "src"),
+        )
         self.module_name = f"claw_test_docs_main_{id(self)}"
         self.main = load_local_module(
-            _HERE / "main.py",
+            APP_DIR / "main.py",
             self.module_name,
             clear_modules=("_shared",),
         )
+        self.main.RECOLLQ_BIN = str(self.recollq)
+        self.main.RECOLLINDEX_BIN = str(self.recollindex)
+        self.policy_patcher = mock.patch.object(self.main.policy, "require")
+        self.policy = self.policy_patcher.start()
 
     def tearDown(self):
+        self.policy_patcher.stop()
         shutil.rmtree(self.tmp, ignore_errors=True)
-        for k, v in self._saved_env.items():
-            if v is None:
-                os.environ.pop(k, None)
+        for key, value in self._saved_env.items():
+            if value is None:
+                os.environ.pop(key, None)
             else:
-                os.environ[k] = v
-        for p in (
-            str(_HERE),
-            str(_HERE.parent.parent / "claw-os-sdk" / "python" / "src"),
-            str(_HERE.parent.parent / "cos-runtime" / "python" / "src"),
+                os.environ[key] = value
+        for path in (
+            str(APP_DIR),
+            str(APP_DIR.parent.parent / "claw-os-sdk" / "python" / "src"),
+            str(APP_DIR.parent.parent / "cos-runtime" / "python" / "src"),
         ):
             try:
-                sys.path.remove(p)
+                sys.path.remove(path)
             except ValueError:
                 pass
         sys.modules.pop(self.module_name, None)
 
-    # ---- configure ----
+    def _create_index(self) -> pathlib.Path:
+        index = self.owner_home / ".recoll" / "xapiandb"
+        index.mkdir()
+        return index
 
-    def test_configure_creates_default_config(self):
-        result = self.main.run("configure", [])
+    def test_manifest_and_handlers_are_mcp_only_and_aligned(self):
+        manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+        self.assertNotIn("operations", manifest)
+        self.assertNotIn("ai", manifest)
+
+        tools = manifest["mcp"]["tools"]
+        self.assertEqual([tool["name"] for tool in tools], TOOL_NAMES)
+        self.assertEqual(
+            tools[0]["args"],
+            [
+                {
+                    "name": "query",
+                    "kind": "text",
+                    "required": True,
+                    "binding": "flag",
+                },
+                {
+                    "name": "max_results",
+                    "kind": "integer",
+                    "required": False,
+                    "binding": "flag",
+                    "default": 20,
+                },
+            ],
+        )
+
+        source = SERVER_PATH.read_text(encoding="utf-8")
+        self.assertIn("from claw_os_sdk.mcp import App", source)
+        self.assertNotIn("serve_manifest_operations", source)
+        bindings = _server_bindings()
+        self.assertEqual(list(bindings), TOOL_NAMES)
+        self.assertEqual(
+            [argument.arg for argument in bindings["docs.search"].args.args],
+            ["query", "max_results"],
+        )
+        self.assertEqual(
+            ast.literal_eval(bindings["docs.search"].args.defaults[0]),
+            20,
+        )
+
+        main_tree = ast.parse((APP_DIR / "main.py").read_text(encoding="utf-8"))
+        main_source = (APP_DIR / "main.py").read_text(encoding="utf-8")
+        self.assertIn('RECOLLQ_BIN = "/usr/bin/recollq"', main_source)
+        self.assertIn('RECOLLINDEX_BIN = "/usr/bin/recollindex"', main_source)
+        self.assertNotIn("CLAW_RECOLLQ_BIN", main_source)
+        self.assertNotIn("CLAW_RECOLLINDEX_BIN", main_source)
+        self.assertFalse(
+            any(
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == "run"
+                for node in main_tree.body
+            )
+        )
+
+    def test_owner_home_is_daemon_supplied_not_private_home(self):
+        self.assertEqual(self.main.OWNER_HOME, self.owner_home)
+        self.assertEqual(self.main.RECOLL_DIR, self.owner_home / ".recoll")
+        self.assertNotEqual(self.main.RECOLL_DIR, self.private_home / ".recoll")
+
+    def test_owner_home_has_no_missing_or_noncanonical_fallback(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("COS_OWNER_HOME", None)
+            with self.assertRaisesRegex(RuntimeError, "COS_OWNER_HOME is required"):
+                self.main._owner_home()
+        with mock.patch.dict(
+            os.environ,
+            {"COS_OWNER_HOME": str(self.owner_home / ".." / "owner")},
+        ):
+            with self.assertRaisesRegex(RuntimeError, "absolute canonical path"):
+                self.main._owner_home()
+
+    def test_configure_creates_default_config_atomically(self):
+        result = self.main.configure()
+
+        config = self.owner_home / ".recoll" / "recoll.conf"
         self.assertTrue(result["created"])
-        conf = self.fake_home / ".recoll" / "recoll.conf"
-        self.assertTrue(conf.exists())
-        text = conf.read_text()
-        self.assertIn("topdirs", text)
-        self.assertIn("~/Documents", text)
+        self.assertTrue(config.exists())
+        self.assertIn("topdirs", config.read_text(encoding="utf-8"))
+        self.assertFalse((self.private_home / ".recoll" / "recoll.conf").exists())
+        self.policy.assert_called_once_with(
+            "fs.write",
+            path=str(self.owner_home / ".recoll"),
+        )
 
     def test_configure_is_idempotent(self):
-        self.main.run("configure", [])
-        result = self.main.run("configure", [])
+        self.main.configure()
+        result = self.main.configure()
+
         self.assertFalse(result["created"])
-        self.assertIn("already exists", result["message"])
+        self.assertIn("left untouched", result["message"])
 
-    def test_configure_rejects_args(self):
-        result = self.main.run("configure", ["--surprise"])
-        self.assertIn("error", result)
+    def test_status_when_nothing_is_configured(self):
+        result = self.main.status()
 
-    # ---- status ----
-
-    def test_status_when_nothing_configured(self):
-        result = self.main.run("status", [])
         self.assertFalse(result["config_exists"])
         self.assertFalse(result["index_exists"])
         self.assertEqual(result["topdirs"], [])
+        self.policy.assert_called_once_with(
+            "fs.read",
+            path=str(self.owner_home / ".recoll"),
+        )
 
-    def test_status_reads_topdirs_from_config(self):
-        self.main.run("configure", [])
-        result = self.main.run("status", [])
+    def test_status_reads_config_and_index_metadata(self):
+        self.main.configure()
+        index = self._create_index()
+        (index / "termlist.glass").write_bytes(b"\0" * 16)
+        self.policy.reset_mock()
+
+        result = self.main.status()
+
         self.assertTrue(result["config_exists"])
-        self.assertIn("~/Documents", result["topdirs"])
-
-    def test_status_reports_index_presence(self):
-        self.main.run("configure", [])
-        # Simulate a built index
-        idx = self.fake_home / ".recoll" / "xapiandb"
-        idx.mkdir()
-        (idx / "termlist.glass").write_bytes(b"\0" * 16)
-        result = self.main.run("status", [])
         self.assertTrue(result["index_exists"])
-        self.assertIn("termlist.glass", result["index_files"])
+        self.assertIn("~/Documents", result["topdirs"])
+        self.assertEqual(result["index_files"], ["termlist.glass"])
         self.assertIsInstance(result["last_indexed"], int)
 
-    # ---- search ----
+    def test_status_surfaces_invalid_config_encoding(self):
+        self.main.RECOLL_CONF.write_bytes(b"\xff")
 
-    def test_search_requires_index(self):
-        # No xapiandb yet
-        result = self.main.run("search", ["--query", "budget"])
+        with self.assertRaises(UnicodeDecodeError):
+            self.main.status()
+
+    def test_search_without_index_returns_actionable_hint(self):
+        result = self.main.search("budget")
+
         self.assertEqual(result["count"], 0)
-        self.assertIn("hint", result)
+        self.assertIn("cos app docs index", result["hint"])
+        self.assertEqual(
+            self.policy.call_args_list,
+            [
+                mock.call("proc.spawn", name="recollq"),
+                mock.call("fs.read", path=str(self.owner_home / ".recoll")),
+            ],
+        )
 
-    def test_search_parses_recollq_output(self):
-        # Pretend an index exists
-        (self.fake_home / ".recoll" / "xapiandb").mkdir()
-        result = self.main.run("search", ["--query", "budget", "--max-results", "5"])
+    def test_search_parses_results_and_uses_owner_config(self):
+        self._create_index()
+
+        result = self.main.search("budget", 5)
+
         self.assertEqual(result["query"], "budget")
         self.assertEqual(result["count"], 2)
         self.assertEqual(
-            result["results"][0]["path"], "/home/jay/Documents/budget-q3.xlsx"
+            result["results"][0]["path"],
+            "/home/jay/Documents/budget-q3.xlsx",
         )
-        self.assertEqual(result["results"][0]["mime"].split("/")[0], "application")
         self.assertIn("Q3 budget", result["results"][0]["snippet"])
-        # Path with embedded space is preserved
         self.assertEqual(
-            result["results"][1]["path"], "/home/jay/Documents/notes/budget plan.md"
+            result["results"][1]["path"],
+            "/home/jay/Documents/notes/budget plan.md",
         )
-        # Recollq received the right argv
-        args = self.q_args.read_text().splitlines()
-        self.assertIn("-t", args)
-        self.assertIn("-n", args)
-        self.assertIn("5:0", args)
-        self.assertIn("budget", args)
-
-    def test_search_clamps_max_results(self):
-        (self.fake_home / ".recoll" / "xapiandb").mkdir()
-        self.main.run("search", ["--query", "budget", "--max-results", "999999"])
-        args = self.q_args.read_text().splitlines()
-        # MAX_MAX_RESULTS is 200
-        self.assertIn("200:0", args)
+        arguments = self.q_args.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(arguments[:2], ["-c", str(self.owner_home / ".recoll")])
+        self.assertIn("5:0", arguments)
+        self.assertEqual(arguments[-1], "budget")
+        self.assertEqual(
+            self.q_home.read_text(encoding="utf-8").strip(),
+            str(self.owner_home),
+        )
 
     def test_search_zero_hits(self):
-        (self.fake_home / ".recoll" / "xapiandb").mkdir()
-        result = self.main.run("search", ["--query", "empty"])
-        self.assertEqual(result["count"], 0)
-        self.assertEqual(result["results"], [])
+        self._create_index()
 
-    def test_search_empty_query_rejected(self):
-        (self.fake_home / ".recoll" / "xapiandb").mkdir()
-        result = self.main.run("search", ["--query", "   "])
-        self.assertIn("error", result)
+        result = self.main.search("empty")
+
+        self.assertEqual(result["results"], [])
+        self.assertEqual(result["count"], 0)
+
+    def test_search_rejects_invalid_arguments_before_policy(self):
+        for query in ("", "   ", None):
+            with self.subTest(query=query):
+                with self.assertRaisesRegex(ValueError, "query must"):
+                    self.main.search(query)
+        for limit in (0, 201, True, "5"):
+            with self.subTest(limit=limit):
+                with self.assertRaisesRegex(ValueError, "max_results must"):
+                    self.main.search("budget", limit)
+        self.policy.assert_not_called()
 
     def test_search_surfaces_recollq_failure(self):
-        (self.fake_home / ".recoll" / "xapiandb").mkdir()
+        self._create_index()
         os.environ["RECOLLQ_FAIL"] = "1"
         os.environ["RECOLLQ_EXIT"] = "2"
-        result = self.main.run("search", ["--query", "anything"])
-        self.assertIn("error", result)
-        self.assertIn("exit 2", result["error"])
 
-    # ---- index ----
+        with self.assertRaisesRegex(RuntimeError, "recollq exited 2"):
+            self.main.search("anything")
+
+    def test_search_rejects_malformed_recoll_output(self):
+        self._create_index()
+        os.environ["RECOLLQ_MALFORMED"] = "1"
+
+        with self.assertRaisesRegex(RuntimeError, "malformed result line"):
+            self.main.search("anything")
 
     def test_index_requires_config(self):
-        result = self.main.run("index", [])
-        self.assertIn("error", result)
-        self.assertIn("recoll.conf", result["error"])
+        with self.assertRaisesRegex(FileNotFoundError, "recoll.conf"):
+            self.main.index()
 
-    def test_index_runs_recollindex_when_configured(self):
-        self.main.run("configure", [])
-        result = self.main.run("index", [])
+    def test_index_runs_fixed_binary_with_owner_config(self):
+        self.main.configure()
+        self.policy.reset_mock()
+
+        result = self.main.index()
+
         self.assertTrue(result["ok"])
         self.assertEqual(result["exit"], 0)
         self.assertGreaterEqual(result["elapsed_secs"], 0.0)
+        self.assertEqual(
+            self.index_args.read_text(encoding="utf-8").splitlines(),
+            ["-c", str(self.owner_home / ".recoll")],
+        )
+        self.assertEqual(
+            self.index_home.read_text(encoding="utf-8").strip(),
+            str(self.owner_home),
+        )
+        self.assertEqual(
+            self.policy.call_args_list,
+            [
+                mock.call("proc.spawn", name="recollindex"),
+                mock.call("fs.read", wild=True),
+                mock.call("fs.write", path=str(self.owner_home / ".recoll")),
+            ],
+        )
 
     def test_index_surfaces_nonzero_exit(self):
-        self.main.run("configure", [])
+        self.main.configure()
         os.environ["RECOLLINDEX_EXIT"] = "5"
-        result = self.main.run("index", [])
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["exit"], 5)
 
-    def test_index_rejects_args(self):
-        self.main.run("configure", [])
-        result = self.main.run("index", ["junk"])
-        self.assertIn("error", result)
+        with self.assertRaisesRegex(RuntimeError, "recollindex exited 5"):
+            self.main.index()
 
-    # ---- dispatcher ----
-
-    def test_unknown_command(self):
-        result = self.main.run("nope", [])
-        self.assertIn("error", result)
 
 if __name__ == "__main__":
     unittest.main()

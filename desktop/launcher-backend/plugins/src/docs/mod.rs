@@ -22,8 +22,6 @@ const QUERY_TIMEOUT_SECS: u64 = 5;
 #[derive(Debug, Deserialize)]
 struct SearchEnvelope {
     #[serde(default)]
-    error: Option<String>,
-    #[serde(default)]
     hint: Option<String>,
     #[serde(default)]
     results: Vec<SearchHit>,
@@ -197,14 +195,8 @@ impl SearchContext {
 
         match outcome {
             Ok(envelope) => {
-                if let Some(err) = envelope.error {
-                    self.append_message(0, String::from("docs: error"), err).await;
-                    return;
-                }
                 if envelope.results.is_empty() {
-                    let msg = envelope
-                        .hint
-                        .unwrap_or_else(|| String::from("No matches"));
+                    let msg = envelope.hint.unwrap_or_else(|| String::from("No matches"));
                     self.append_message(0, String::from("docs: no results"), msg)
                         .await;
                     return;
@@ -217,7 +209,8 @@ impl SearchContext {
                 }
             }
             Err(why) => {
-                self.append_message(0, String::from("docs: error"), why).await;
+                self.append_message(0, String::from("docs: error"), why)
+                    .await;
             }
         }
     }
@@ -243,7 +236,10 @@ async fn run_query(query: &str) -> Result<SearchEnvelope, String> {
     let output = match tokio::time::timeout(timeout, cmd.output()).await {
         Ok(Ok(output)) => output,
         Ok(Err(why)) => {
-            return Err(format!("failed to spawn `{} app docs search`: {}", bin, why));
+            return Err(format!(
+                "failed to spawn `{} app docs search`: {}",
+                bin, why
+            ));
         }
         Err(_) => {
             return Err(format!(
@@ -253,17 +249,43 @@ async fn run_query(query: &str) -> Result<SearchEnvelope, String> {
         }
     };
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let status = output.status.to_string();
+    decode_search_output(
+        output.status.success(),
+        &status,
+        &output.stdout,
+        &output.stderr,
+    )
+}
+
+fn decode_search_output(
+    success: bool,
+    status: &str,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> Result<SearchEnvelope, String> {
+    let stdout = String::from_utf8_lossy(stdout);
     let trimmed = stdout.trim();
-    if trimmed.is_empty() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stderr = stderr.trim();
-        return Err(if stderr.is_empty() {
-            format!("cos produced no output ({})", output.status)
+    if !success {
+        let stderr = String::from_utf8_lossy(stderr);
+        let detail = if stderr.trim().is_empty() {
+            trimmed
         } else {
-            format!("cos: {}", stderr)
+            stderr.trim()
+        };
+        return Err(if detail.is_empty() {
+            format!("cos failed without a diagnostic ({status})")
+        } else {
+            format!("cos failed ({status}): {detail}")
         });
     }
-    serde_json::from_str::<SearchEnvelope>(trimmed)
-        .map_err(|e| format!("bad JSON from cos: {}", e))
+    if trimmed.is_empty() {
+        return Err("cos produced no output".to_string());
+    }
+    serde_json::from_str::<SearchEnvelope>(trimmed).map_err(|e| format!("bad JSON from cos: {}", e))
+}
+
+#[cfg(test)]
+mod tests {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/docs.rs"));
 }

@@ -25,7 +25,7 @@ installed.
 Recoll is strong for exact terms, names, numbers, and code tokens. Config and
 index data live under `~/.recoll/`.
 
-The current `apps/docs.search` operation does **not** query either semantic
+The current `docs.search` MCP tool does **not** query either semantic
 store and does not perform result fusion.
 
 ## Filesystem Semantic Prototype: `claw-semantic`
