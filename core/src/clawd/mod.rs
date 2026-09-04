@@ -8,6 +8,7 @@ pub mod audit;
 pub mod authority;
 pub mod backup;
 pub mod bluetooth;
+pub mod browser;
 pub mod camera;
 pub mod client;
 pub mod client_identity;

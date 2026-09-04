@@ -29,6 +29,7 @@ use crate::triggers;
 use app_commands::dispatch_app;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+const BROWSER_BRIDGE_REQUEST_BYTES: usize = 128 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CommandErrorKind {
@@ -204,8 +205,8 @@ fn scheduler_request(params: &Value) -> Result<Value, SchedulerCallError> {
     let request = crate::clawd::protocol::Request::build(Command::SchedulerRun, params.clone());
     let response =
         crate::clawd::client::request_blocking(crate::paths::clawd_socket_path(), request)
-            .map_err(|message| SchedulerCallError {
-                message,
+            .map_err(|error| SchedulerCallError {
+                message: error.to_string(),
                 data: None,
             })?;
     if response.ok {
@@ -299,6 +300,49 @@ fn request_clawd(command: Command, params: Value) -> Result<Value, String> {
             .map(|error| error.message)
             .unwrap_or_else(|| format!("clawd {command} request failed")))
     }
+}
+
+fn request_browser_clawd(params: Value) -> Result<Value, String> {
+    let request = crate::clawd::protocol::Request::build(Command::SystemBrowserControl, params);
+    let response =
+        crate::clawd::client::request_blocking(crate::paths::clawd_socket_path(), request)
+            .map_err(|error| {
+                let code = if error.may_have_dispatched() {
+                    "indeterminate"
+                } else {
+                    "unavailable"
+                };
+                browser_wire_failure(code, &error.to_string())
+            })?;
+    if response.ok {
+        return response.result.ok_or_else(|| {
+            browser_wire_failure(
+                "indeterminate",
+                "clawd system.browser.control response had no result",
+            )
+        });
+    }
+    let error = response.error.ok_or_else(|| {
+        browser_wire_failure(
+            "indeterminate",
+            "clawd system.browser.control request failed without an error",
+        )
+    })?;
+    Err(browser_wire_failure(&error.code, &error.message))
+}
+
+fn browser_wire_failure(code: &str, message: &str) -> String {
+    let code = match code {
+        "not_authorized" => "PERMISSION_DENIED",
+        "unavailable" => "KERNEL_UNAVAILABLE",
+        "indeterminate" => "INDETERMINATE",
+        _ => "EXECUTION_FAILED",
+    };
+    json!({
+        "error": message,
+        "code": code,
+    })
+    .to_string()
 }
 
 fn should_proxy_scheduler_command() -> bool {
@@ -412,6 +456,45 @@ fn dispatch_credential_typed(args: &[String]) -> CommandResult<Option<String>> {
             Err(CommandError::credential(command, message, error))
         }
     }
+}
+
+fn parse_browser_bridge_request(
+    provided: Option<&[u8]>,
+) -> Result<serde_json::Map<String, Value>, String> {
+    let owned;
+    let bytes = if let Some(provided) = provided {
+        provided
+    } else {
+        let mut data = Vec::new();
+        std::io::stdin()
+            .lock()
+            .take(BROWSER_BRIDGE_REQUEST_BYTES.saturating_add(1) as u64)
+            .read_to_end(&mut data)
+            .map_err(|error| format!("read internal browser request: {error}"))?;
+        owned = data;
+        &owned
+    };
+    if bytes.is_empty() {
+        return Err("internal browser request is empty".to_string());
+    }
+    if bytes.len() > BROWSER_BRIDGE_REQUEST_BYTES {
+        return Err(format!(
+            "internal browser request exceeds {BROWSER_BRIDGE_REQUEST_BYTES} bytes"
+        ));
+    }
+    let value: Value = serde_json::from_slice(bytes)
+        .map_err(|error| format!("decode internal browser request: {error}"))?;
+    let object = value
+        .as_object()
+        .cloned()
+        .ok_or_else(|| "internal browser request must be a JSON object".to_string())?;
+    if object.contains_key("session") {
+        return Err("internal browser request must not supply session authority".to_string());
+    }
+    if !object.contains_key("action") {
+        return Err("internal browser request requires action".to_string());
+    }
+    Ok(object)
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -733,6 +816,18 @@ fn dispatch_with_stdin_impl(
         return Ok(Some(value.to_string()));
     }
 
+    if name == "__browser" {
+        if args.len() != 3 || args[1] != "request" || args[2] != "--request-stdin" {
+            return Err("internal browser bridge requires `request --request-stdin`".to_string());
+        }
+        let mut request = parse_browser_bridge_request(stdin_data.as_deref())?;
+        let session = env::var("COS_SESSION")
+            .map_err(|_| "internal browser command requires COS_SESSION".to_string())?;
+        request.insert("session".to_string(), Value::String(session));
+        let value = request_browser_clawd(Value::Object(request))?;
+        return Ok(Some(value.to_string()));
+    }
+
     if name == "__bluetooth" {
         let action = args
             .get(1)
@@ -757,6 +852,7 @@ fn dispatch_with_stdin_impl(
                 if input.len() > 64 {
                     return Err("Bluetooth response exceeds 64 bytes".to_string());
                 }
+
                 let input = input.trim_end_matches(['\r', '\n']);
                 if input.is_empty() {
                     return Err("Bluetooth response from stdin is empty".to_string());
@@ -1588,7 +1684,15 @@ fn run_app_command(
     {
         Ok(launch) => launch,
         Err(reason) => {
-            audit::log_entry(&audit, app_name, command, args, start, "error", Some(&reason));
+            audit::log_entry(
+                &audit,
+                app_name,
+                command,
+                args,
+                start,
+                "error",
+                Some(&reason),
+            );
             return Err(reason);
         }
     };

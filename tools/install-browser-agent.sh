@@ -43,18 +43,11 @@ chmod -R a+rX "${EXT_DEST}"
 
 echo "[claw] installing native host        → ${HOST_DEST}"
 install -d -m 0755 "${HOST_DEST}"
-# Copy the entire native host tree to a stable system path so the NM
-# launcher does not point at the source checkout (which may move, be
-# read-only on /, or be unreadable to the Chromium sandbox).
-if [[ -d "${APP_SRC}" ]]; then
-  cp -a "${APP_SRC}/." "${HOST_DEST}/"
-  chmod -R a+rX "${HOST_DEST}"
-  if [[ -f "${HOST_DEST}/native_host.py" ]]; then
-    chmod 0755 "${HOST_DEST}/native_host.py"
-  fi
-else
-  echo "warning: ${APP_SRC} does not exist — ${HOST_DEST} left empty" >&2
+if [[ ! -f "${APP_SRC}/native_host.py" ]]; then
+  echo "native host source is missing: ${APP_SRC}/native_host.py" >&2
+  exit 1
 fi
+install -m 0755 "${APP_SRC}/native_host.py" "${HOST_DEST}/native_host.py"
 
 echo "[claw] installing native-host launcher → ${HOST_LAUNCHER}"
 install -d -m 0755 "$(dirname "${HOST_LAUNCHER}")"
@@ -126,7 +119,6 @@ Next steps:
 
 To verify the bridge:
   ls -l \$XDG_RUNTIME_DIR/claw-browser.sock     # socket should exist
-  cos perms grant browser.tabs.read --wild      # one-time per session
-  cos app browser-attached tabs.list            # should print your tabs
+  cos app browser-attached tabs.list            # approval-gated tab list
 
 MSG

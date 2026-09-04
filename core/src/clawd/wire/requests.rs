@@ -31,6 +31,7 @@ const PATH_BYTES: usize = 4096;
 const LABEL_BYTES: usize = 1024;
 const COMMAND_BYTES: usize = 8192;
 const NOTIFICATION_BODY_BYTES: usize = 16 * 1024;
+const BROWSER_VALUE_BYTES: usize = 64 * 1024;
 
 pub type NoBody = NoParams;
 
@@ -632,6 +633,29 @@ pub struct CrashInspect {
     pub limit: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub since_minutes: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserControl {
+    pub session: Token,
+    pub action: Token,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab_id: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_url: Option<Text<PATH_BYTES>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<Text<PATH_BYTES>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selector: Option<Text<COMMAND_BYTES>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<Text<LABEL_BYTES>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<Text<BROWSER_VALUE_BYTES>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expr: Option<Text<BROWSER_VALUE_BYTES>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<Token>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

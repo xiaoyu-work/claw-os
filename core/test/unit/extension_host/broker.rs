@@ -37,7 +37,8 @@ fn child_proxy_is_an_explicit_session_route_allowlist() {
             );
         assert_eq!(child_route(route), expected, "route {}", route.name);
     }
-    assert_eq!(CHILD_PROVIDER_ROUTES.len(), 29);
+    assert_eq!(CHILD_PROVIDER_ROUTES.len(), 30);
+    assert!(child_route(Command::SystemBrowserControl.route()));
     assert!(!child_route(Command::TaskCancel.route()));
     assert!(!child_route(Command::AppSessionRegister.route()));
     assert!(!child_route(Command::PermissionDecide.route()));

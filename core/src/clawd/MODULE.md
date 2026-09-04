@@ -31,6 +31,7 @@ and agent tasks.
 | `server.rs` | Socket lifecycle and request admission order, agentd supervision start |
 | `transport/` | Frame reader/writer, per-message peer credentials, admission ceilings |
 | `wire/` | Versioned envelope, bounded field types, one typed request body per route |
+| `client.rs` | Broker client with correlation checks and pre-/post-dispatch transport classification |
 | `routes.rs` | The route registry: wire name, typed decode, access class, budget, audit fields, authorization descriptor, handler |
 | `authority/` | The capability authority: grants, opaque handles, attenuation, the route middleware and its audit facts |
 | `agent_client.rs` | Client RPC for agent task submit/result/cancel/status |
@@ -41,6 +42,7 @@ and agent tasks.
 | `../extension_host/broker.rs` | Purpose-bound private proxy: verifies SCM credentials, Host/child ancestry, route class, and nearest child session before normal dispatch |
 | `scheduler.rs` | Proactive-scheduler authority: validates `cos cron` / `cos triggers` requests and derives what a job may carry |
 | `notifications.rs` | Notification RPC handlers, due-nudge fanout, and external delivery dispatcher |
+| `browser.rs` | Attached-browser provider: exact action capabilities, expected-origin injection, owner socket validation, and bounded Native Messaging frames |
 | `system_caps.rs` | System capability derivation |
 | `session_scope.rs` | Trusted-session override and its owner-policy clamp |
 | Service modules | One privileged capability provider per domain |

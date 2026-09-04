@@ -1233,8 +1233,8 @@ fn clawd_request(
         crate::paths::clawd_socket_path(),
         crate::clawd::protocol::Request::build(command, params),
     )
-    .map_err(|message| ClawdCallError {
-        message,
+    .map_err(|error| ClawdCallError {
+        message: error.to_string(),
         data: None,
     })?;
     if response.ok {

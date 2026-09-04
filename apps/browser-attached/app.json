@@ -1,11 +1,12 @@
 {
   "id": "browser-attached",
   "version": "0.1.0",
+  "schema_version": 2,
   "name": {
     "en": "Browser (attached)"
   },
   "summary": {
-    "en": "Drive the user's logged-in Chromium tabs via the Claw Agent WebExtension and a Native Messaging bridge"
+    "en": "Drive the user's logged-in Chromium tabs through a daemon-authorized Native Messaging bridge"
   },
   "icon": "🦾",
   "runtime": "python",
@@ -18,314 +19,6 @@
       "external-content"
     ]
   },
-  "operations": {
-    "tabs.list": {
-      "label": {
-        "en": "List open tabs (id, title, url, active)"
-      },
-      "needs": [
-        {
-          "verb": "browser.tabs.read",
-          "scope": {
-            "kind": "wild"
-          },
-          "why": {
-            "en": "Read which tabs are open in your browser."
-          }
-        }
-      ]
-    },
-    "tabs.activate": {
-      "label": {
-        "en": "Bring a tab to the foreground"
-      },
-      "args": [
-        {
-          "name": "id",
-          "kind": "text",
-          "required": true
-        }
-      ],
-      "needs": [
-        {
-          "verb": "browser.tabs.read",
-          "scope": {
-            "kind": "wild"
-          },
-          "why": {
-            "en": "Switch focus between tabs you already have open."
-          }
-        }
-      ]
-    },
-    "nav.go": {
-      "label": {
-        "en": "Navigate a tab to a URL"
-      },
-      "args": [
-        {
-          "name": "id",
-          "kind": "text",
-          "required": true
-        },
-        {
-          "name": "url",
-          "kind": "text",
-          "required": true
-        }
-      ],
-      "needs": [
-        {
-          "verb": "browser.nav",
-          "scope": {
-            "kind": "wild"
-          },
-          "why": {
-            "en": "Load the URL you specified in the chosen tab. The runtime check is scoped to that URL's host."
-          }
-        },
-        {
-          "verb": "memory.write",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "self-ref",
-              "value": "browser-attached"
-            }
-          },
-          "why": {
-            "en": "Remember which URLs you navigated to so the agent can recall them later."
-          }
-        }
-      ]
-    },
-    "dom.query": {
-      "label": {
-        "en": "Find elements in a tab by CSS selector"
-      },
-      "args": [
-        {
-          "name": "id",
-          "kind": "text",
-          "required": true
-        },
-        {
-          "name": "selector",
-          "kind": "text",
-          "required": true
-        }
-      ],
-      "needs": [
-        {
-          "verb": "browser.dom.read",
-          "scope": {
-            "kind": "wild"
-          },
-          "why": {
-            "en": "Read the rendered DOM of the page in that tab."
-          }
-        }
-      ]
-    },
-    "dom.click": {
-      "label": {
-        "en": "Click an element previously located by dom.query"
-      },
-      "args": [
-        {
-          "name": "id",
-          "kind": "text",
-          "required": true
-        },
-        {
-          "name": "ref",
-          "kind": "text",
-          "required": true
-        }
-      ],
-      "needs": [
-        {
-          "verb": "browser.dom.write",
-          "scope": {
-            "kind": "wild"
-          },
-          "why": {
-            "en": "Synthesise a click on a page element on your behalf."
-          }
-        }
-      ]
-    },
-    "dom.fill": {
-      "label": {
-        "en": "Fill a non-secret input field"
-      },
-      "args": [
-        {
-          "name": "id",
-          "kind": "text",
-          "required": true
-        },
-        {
-          "name": "ref",
-          "kind": "text",
-          "required": true
-        },
-        {
-          "name": "value",
-          "kind": "text",
-          "required": true
-        }
-      ],
-      "needs": [
-        {
-          "verb": "browser.dom.write",
-          "scope": {
-            "kind": "wild"
-          },
-          "why": {
-            "en": "Type the given value into a non-secret form field."
-          }
-        }
-      ]
-    },
-    "dom.fill_secret": {
-      "label": {
-        "en": "Fill a password / payment / OTP field — always asks for approval"
-      },
-      "args": [
-        {
-          "name": "id",
-          "kind": "text",
-          "required": true
-        },
-        {
-          "name": "ref",
-          "kind": "text",
-          "required": true
-        },
-        {
-          "name": "value",
-          "kind": "text",
-          "required": true
-        }
-      ],
-      "needs": [
-        {
-          "verb": "browser.input.secret",
-          "scope": {
-            "kind": "wild"
-          },
-          "why": {
-            "en": "Enter a credential or other secret into a sensitive field."
-          }
-        }
-      ]
-    },
-    "page.snapshot": {
-      "label": {
-        "en": "Return an accessibility-tree summary of the current page"
-      },
-      "args": [
-        {
-          "name": "id",
-          "kind": "text",
-          "required": true
-        },
-        {
-          "name": "kind",
-          "kind": "text",
-          "required": false
-        }
-      ],
-      "needs": [
-        {
-          "verb": "browser.dom.read",
-          "scope": {
-            "kind": "wild"
-          },
-          "why": {
-            "en": "Read the rendered DOM and accessibility metadata of the page."
-          }
-        }
-      ]
-    },
-    "page.screenshot": {
-      "label": {
-        "en": "Screenshot the visible portion of a tab"
-      },
-      "args": [
-        {
-          "name": "id",
-          "kind": "text",
-          "required": true
-        },
-        {
-          "name": "output",
-          "kind": "path",
-          "required": true
-        }
-      ],
-      "needs": [
-        {
-          "verb": "browser.dom.read",
-          "scope": {
-            "kind": "wild"
-          },
-          "why": {
-            "en": "Capture what is currently displayed in the tab."
-          }
-        },
-        {
-          "verb": "fs.write",
-          "scope": {
-            "kind": "from-arg",
-            "arg": "output"
-          },
-          "why": {
-            "en": "Save the screenshot to the path you specified."
-          }
-        }
-      ]
-    },
-    "eval": {
-      "label": {
-        "en": "Run arbitrary JavaScript in a tab — admin-only, always asks"
-      },
-      "args": [
-        {
-          "name": "id",
-          "kind": "text",
-          "required": true
-        },
-        {
-          "name": "expr",
-          "kind": "text",
-          "required": true
-        }
-      ],
-      "needs": [
-        {
-          "verb": "browser.eval",
-          "scope": {
-            "kind": "wild"
-          },
-          "why": {
-            "en": "Run arbitrary JavaScript inside the page context."
-          }
-        }
-      ]
-    }
-  },
-  "dependencies": {
-    "binaries": [],
-    "optional_binaries": [
-      "chromium",
-      "chromium-browser",
-      "google-chrome-stable",
-      "google-chrome"
-    ]
-  },
-  "schema_version": 2,
   "mcp": {
     "entry": "server.py",
     "transport": "stdio",
@@ -338,7 +31,7 @@
       {
         "name": "browser-attached.tabs.list",
         "summary": {
-          "en": "List open tabs (id, title, url, active)"
+          "en": "List open tabs with their ids, titles, URLs, and active state."
         },
         "needs": [
           {
@@ -355,13 +48,14 @@
       {
         "name": "browser-attached.tabs.activate",
         "summary": {
-          "en": "Bring a tab to the foreground"
+          "en": "Bring an open tab to the foreground."
         },
         "args": [
           {
-            "name": "id",
-            "kind": "text",
-            "required": true
+            "name": "tab_id",
+            "kind": "integer",
+            "required": true,
+            "binding": "positional"
           }
         ],
         "needs": [
@@ -379,28 +73,32 @@
       {
         "name": "browser-attached.nav.go",
         "summary": {
-          "en": "Navigate a tab to a URL"
+          "en": "Navigate a tab to an HTTP or HTTPS URL."
         },
         "args": [
           {
-            "name": "id",
-            "kind": "text",
-            "required": true
+            "name": "tab_id",
+            "kind": "integer",
+            "required": true,
+            "binding": "positional"
           },
           {
             "name": "url",
             "kind": "text",
-            "required": true
+            "required": true,
+            "binding": "positional"
           }
         ],
         "needs": [
           {
             "verb": "browser.nav",
             "scope": {
-              "kind": "wild"
+              "kind": "from-arg",
+              "arg": "url",
+              "transform": "url-host"
             },
             "why": {
-              "en": "Load the URL you specified in the chosen tab. The runtime check is scoped to that URL's host."
+              "en": "Load only the URL host you specified in the chosen tab."
             }
           },
           {
@@ -413,7 +111,7 @@
               }
             },
             "why": {
-              "en": "Remember which URLs you navigated to so the agent can recall them later."
+              "en": "Remember the completed navigation for later recall."
             }
           }
         ]
@@ -421,28 +119,38 @@
       {
         "name": "browser-attached.dom.query",
         "summary": {
-          "en": "Find elements in a tab by CSS selector"
+          "en": "Find page elements by CSS selector after binding the request to the tab's current URL."
         },
         "args": [
           {
-            "name": "id",
-            "kind": "text",
-            "required": true
+            "name": "tab_id",
+            "kind": "integer",
+            "required": true,
+            "binding": "positional"
           },
           {
             "name": "selector",
             "kind": "text",
-            "required": true
+            "required": true,
+            "binding": "positional"
+          },
+          {
+            "name": "page_url",
+            "kind": "text",
+            "required": true,
+            "binding": "flag"
           }
         ],
         "needs": [
           {
             "verb": "browser.dom.read",
             "scope": {
-              "kind": "wild"
+              "kind": "from-arg",
+              "arg": "page_url",
+              "transform": "url-host"
             },
             "why": {
-              "en": "Read the rendered DOM of the page in that tab."
+              "en": "Read the rendered DOM only while the target tab remains on the declared host."
             }
           }
         ]
@@ -450,28 +158,38 @@
       {
         "name": "browser-attached.dom.click",
         "summary": {
-          "en": "Click an element previously located by dom.query"
+          "en": "Click an element returned by dom.query on the declared page host."
         },
         "args": [
           {
-            "name": "id",
-            "kind": "text",
-            "required": true
+            "name": "tab_id",
+            "kind": "integer",
+            "required": true,
+            "binding": "positional"
           },
           {
-            "name": "ref",
+            "name": "reference",
             "kind": "text",
-            "required": true
+            "required": true,
+            "binding": "positional"
+          },
+          {
+            "name": "page_url",
+            "kind": "text",
+            "required": true,
+            "binding": "flag"
           }
         ],
         "needs": [
           {
             "verb": "browser.dom.write",
             "scope": {
-              "kind": "wild"
+              "kind": "from-arg",
+              "arg": "page_url",
+              "transform": "url-host"
             },
             "why": {
-              "en": "Synthesise a click on a page element on your behalf."
+              "en": "Click a page element only while the target tab remains on the declared host."
             }
           }
         ]
@@ -479,33 +197,44 @@
       {
         "name": "browser-attached.dom.fill",
         "summary": {
-          "en": "Fill a non-secret input field"
+          "en": "Fill a non-secret page field on the declared page host."
         },
         "args": [
           {
-            "name": "id",
-            "kind": "text",
-            "required": true
+            "name": "tab_id",
+            "kind": "integer",
+            "required": true,
+            "binding": "positional"
           },
           {
-            "name": "ref",
+            "name": "reference",
             "kind": "text",
-            "required": true
+            "required": true,
+            "binding": "positional"
           },
           {
             "name": "value",
             "kind": "text",
-            "required": true
+            "required": true,
+            "binding": "positional"
+          },
+          {
+            "name": "page_url",
+            "kind": "text",
+            "required": true,
+            "binding": "flag"
           }
         ],
         "needs": [
           {
             "verb": "browser.dom.write",
             "scope": {
-              "kind": "wild"
+              "kind": "from-arg",
+              "arg": "page_url",
+              "transform": "url-host"
             },
             "why": {
-              "en": "Type the given value into a non-secret form field."
+              "en": "Type into a non-secret field only while the target tab remains on the declared host."
             }
           }
         ]
@@ -513,33 +242,44 @@
       {
         "name": "browser-attached.dom.fill_secret",
         "summary": {
-          "en": "Fill a password / payment / OTP field — always asks for approval"
+          "en": "Fill a password, payment, or OTP field on the declared page host after explicit approval."
         },
         "args": [
           {
-            "name": "id",
-            "kind": "text",
-            "required": true
+            "name": "tab_id",
+            "kind": "integer",
+            "required": true,
+            "binding": "positional"
           },
           {
-            "name": "ref",
+            "name": "reference",
             "kind": "text",
-            "required": true
+            "required": true,
+            "binding": "positional"
           },
           {
             "name": "value",
             "kind": "text",
-            "required": true
+            "required": true,
+            "binding": "positional"
+          },
+          {
+            "name": "page_url",
+            "kind": "text",
+            "required": true,
+            "binding": "flag"
           }
         ],
         "needs": [
           {
             "verb": "browser.input.secret",
             "scope": {
-              "kind": "wild"
+              "kind": "from-arg",
+              "arg": "page_url",
+              "transform": "url-host"
             },
             "why": {
-              "en": "Enter a credential or other secret into a sensitive field."
+              "en": "Enter a credential or other secret only while the target tab remains on the declared host."
             }
           }
         ]
@@ -547,28 +287,43 @@
       {
         "name": "browser-attached.page.snapshot",
         "summary": {
-          "en": "Return an accessibility-tree summary of the current page"
+          "en": "Return a bounded accessibility or text snapshot from the declared page host."
         },
         "args": [
           {
-            "name": "id",
-            "kind": "text",
-            "required": true
+            "name": "tab_id",
+            "kind": "integer",
+            "required": true,
+            "binding": "positional"
           },
           {
             "name": "kind",
+            "kind": "name",
+            "required": false,
+            "binding": "flag",
+            "default": "ax",
+            "choices": [
+              "ax",
+              "text"
+            ]
+          },
+          {
+            "name": "page_url",
             "kind": "text",
-            "required": false
+            "required": true,
+            "binding": "flag"
           }
         ],
         "needs": [
           {
             "verb": "browser.dom.read",
             "scope": {
-              "kind": "wild"
+              "kind": "from-arg",
+              "arg": "page_url",
+              "transform": "url-host"
             },
             "why": {
-              "en": "Read the rendered DOM and accessibility metadata of the page."
+              "en": "Read page content only while the target tab remains on the declared host."
             }
           }
         ]
@@ -576,28 +331,38 @@
       {
         "name": "browser-attached.page.screenshot",
         "summary": {
-          "en": "Screenshot the visible portion of a tab"
+          "en": "Capture the visible portion of a tab on the declared page host and atomically create a new PNG."
         },
         "args": [
           {
-            "name": "id",
-            "kind": "text",
-            "required": true
+            "name": "tab_id",
+            "kind": "integer",
+            "required": true,
+            "binding": "positional"
           },
           {
             "name": "output",
             "kind": "path",
-            "required": true
+            "required": true,
+            "binding": "positional"
+          },
+          {
+            "name": "page_url",
+            "kind": "text",
+            "required": true,
+            "binding": "flag"
           }
         ],
         "needs": [
           {
             "verb": "browser.dom.read",
             "scope": {
-              "kind": "wild"
+              "kind": "from-arg",
+              "arg": "page_url",
+              "transform": "url-host"
             },
             "why": {
-              "en": "Capture what is currently displayed in the tab."
+              "en": "Capture the tab only while it remains on the declared host."
             }
           },
           {
@@ -607,7 +372,7 @@
               "arg": "output"
             },
             "why": {
-              "en": "Save the screenshot to the path you specified."
+              "en": "Create the screenshot at the new path you specified without replacing an existing file."
             }
           }
         ]
@@ -615,28 +380,38 @@
       {
         "name": "browser-attached.eval",
         "summary": {
-          "en": "Run arbitrary JavaScript in a tab — admin-only, always asks"
+          "en": "Run JavaScript in the declared page host after admin approval."
         },
         "args": [
           {
-            "name": "id",
-            "kind": "text",
-            "required": true
+            "name": "tab_id",
+            "kind": "integer",
+            "required": true,
+            "binding": "positional"
           },
           {
             "name": "expr",
             "kind": "text",
-            "required": true
+            "required": true,
+            "binding": "positional"
+          },
+          {
+            "name": "page_url",
+            "kind": "text",
+            "required": true,
+            "binding": "flag"
           }
         ],
         "needs": [
           {
             "verb": "browser.eval",
             "scope": {
-              "kind": "wild"
+              "kind": "from-arg",
+              "arg": "page_url",
+              "transform": "url-host"
             },
             "why": {
-              "en": "Run arbitrary JavaScript inside the page context."
+              "en": "Run JavaScript only while the target tab remains on the declared host."
             }
           }
         ]

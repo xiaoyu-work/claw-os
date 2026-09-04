@@ -16,13 +16,16 @@ claw-os repo (under ``apps/*``) can:
   (gated by the ``memory.write`` capability bound to the app's id).
 * :mod:`cos_runtime.mcp`      — bind bundled App operations to their
   exact manifest-declared MCP tools.
+* :mod:`cos_runtime.browser_bridge` — carry attached-browser requests
+  over stdin to the daemon-owned typed provider.
 
-All three shell out to the ``cos`` binary and assume the process was
-spawned by the kernel with a valid ``COS_SESSION`` env var. They
-will fail loudly outside that context, which is intentional.
+These helpers shell out to the ``cos`` binary when they cross a kernel
+boundary and assume the process was spawned by the kernel with a valid
+``COS_SESSION`` env var. They fail loudly outside that context, which is
+intentional.
 """
 
-from . import mcp, memory, policy, snapshot
+from . import browser_bridge, mcp, memory, policy, snapshot
 
-__all__ = ["mcp", "memory", "policy", "snapshot"]
+__all__ = ["browser_bridge", "mcp", "memory", "policy", "snapshot"]
 __version__ = "0.1.0"

@@ -1,49 +1,52 @@
-# cos app browser-attached
+# `cos app browser-attached`
 
-Drive the user's **running** Chromium tabs from the kernel — login cookies,
-SSO, MFA, and saved sessions are all reused because we don't launch a new
-browser, we attach to the one the user is already in.
+Drive the user's running Chromium tabs while preserving their cookies, SSO,
+MFA, extensions, and visible browser state.
 
-The pipeline:
-
-```
-cos app browser-attached <verb>
-        │
-        ▼  AF_UNIX  $XDG_RUNTIME_DIR/claw-browser.sock
-native_host.py    (spawned by Chromium per WebExtension load)
-        │
-        ▼  Chromium Native Messaging  (stdio, 4-byte LE length-prefixed JSON)
-extensions/claw-agent-browser  (MV3 background service worker)
-        │
-        ▼  chrome.* APIs + content scripts
-user's tabs
+```text
+CLI or Agent
+  -> authenticated App Gateway
+  -> MCP-only browser-attached App
+  -> private stdin runtime bridge
+  -> typed system.browser.control route
+  -> clawd exact-capability check
+  -> root-only Native Messaging socket
+  -> Chromium extension and top-frame content script
+  -> user's tab
 ```
 
-## Verbs
+The App sandbox never receives the browser socket. `clawd` maps the closed
+request schema to a fixed extension verb and injects `expected_origin`,
+`allow_secret`, and `allow_eval` only after authorization. The extension and
+content script verify the full `scheme://host:effective-port` origin
+immediately before acting.
 
-| verb               | caps required                | notes                                                |
-|--------------------|------------------------------|------------------------------------------------------|
-| `tabs.list`        | `browser.tabs.read:wild`     | id, title, url, active flag for every tab            |
-| `tabs.activate`    | `browser.tabs.read:wild`     | bring a tab to foreground                            |
-| `nav.go`           | `browser.nav:host=<url-host>`| load a URL in a tab                                  |
-| `dom.query`        | `browser.dom.read:host=…`    | find elements by CSS selector; typed values are redacted |
-| `dom.click`        | `browser.dom.write:host=…`   | click element by ref                                 |
-| `dom.fill`         | `browser.dom.write:host=…`   | refuses if the field looks like a secret             |
-| `dom.fill_secret`  | `browser.input.secret:host=…`| fills secret fields — always asks for approval       |
-| `page.snapshot`    | `browser.dom.read:host=…`    | redacted accessibility/text summary for the planner  |
-| `page.screenshot`  | `browser.dom.read` + `fs.write`| save visible-tab PNG to `--output`                 |
-| `eval`             | `browser.eval:host=…`        | admin-only, always asks for approval                 |
+## Tools
 
-Every verb runs `policy.require()` **before** the request is sent to the
-extension, so a deny never reaches the user's tab.
+| Tool | Required capability | Scope |
+| --- | --- | --- |
+| `tabs.list` | `browser.tabs.read` | wild |
+| `tabs.activate` | `browser.tabs.read` | wild |
+| `nav.go` | `browser.nav` + `memory.write` | URL host + App self-ref |
+| `dom.query` | `browser.dom.read` | `page_url` host |
+| `dom.click` | `browser.dom.write` | `page_url` host |
+| `dom.fill` | `browser.dom.write` | `page_url` host |
+| `dom.fill_secret` | `browser.input.secret` | `page_url` host |
+| `page.snapshot` | `browser.dom.read` | `page_url` host |
+| `page.screenshot` | `browser.dom.read` + `fs.write` | `page_url` host + new output path |
+| `eval` | `browser.eval` | `page_url` host |
+
+Use the URL returned by `tabs.list` as `--page-url` for tab-content tools.
+`dom.fill_secret` and `eval` remain admin-only and approval-gated.
 
 ## Files
 
-* `app.json` — manifest: operations, args, declared `needs`
-* `main.py`  — verb handlers, policy checks, socket client
-* `native_host.py` — Chromium-spawned bridge: NM stdio ↔ unix socket
+| Path | Role |
+| --- | --- |
+| `app.json` | Authoritative MCP tool, argument, and capability contract |
+| `main.py` | Typed business operations and local policy checks |
+| `server.py` | Direct `claw_os_sdk.mcp` handlers |
+| `native_host.py` | Root-client-only Unix socket to Chromium Native Messaging bridge |
 
-The WebExtension itself lives in `extensions/claw-agent-browser/`.
-
-See `docs/browser-attached-design.md` for the full architecture and the
-threat / trust model.
+See [`docs/browser-attached-design.md`](../../docs/browser-attached-design.md)
+for the full trust and data-flow design.

@@ -29,6 +29,7 @@ const EXPECTED_USER_COMMANDS: &[&str] = &[
     "system.config.control",
     "system.crash.inspect",
     "system.desktop.control",
+    "system.browser.control",
     "system.display.control",
     "system.events.control",
     "system.firewall.control",

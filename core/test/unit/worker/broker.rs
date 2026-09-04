@@ -88,6 +88,19 @@ fn a_launch_holding_the_family_verb_is_admitted() {
 }
 
 #[test]
+fn browser_route_requires_one_of_the_browser_capability_families() {
+    let command = Command::SystemBrowserControl;
+    let granted = relaying_authority(vec![Cap::new(
+        Verb::BROWSER_DOM_READ,
+        Scope::host("example.com:443"),
+    )]);
+    admit(command, &granted).expect("browser.dom.read justifies the browser route");
+
+    let unrelated = relaying_authority(vec![Cap::new(Verb::NET_DIAL, Scope::Wild)]);
+    assert!(admit(command, &unrelated).is_err());
+}
+
+#[test]
 fn admission_and_policy_read_the_capability_set_live() {
     // The registry row is absent in a unit test, so the fallback is
     // what is seen. The assertion is that `live_caps()` — a read, not a
@@ -171,7 +184,7 @@ fn the_endpoint_answers_a_policy_check_and_refuses_identity_control() {
     let ask = |command: &str, params: serde_json::Value| -> serde_json::Value {
         let mut stream = UnixStream::connect(endpoint.socket_path()).expect("connect");
         let body = serde_json::json!({
-            "v": 1,
+            "v": crate::clawd::wire::PROTOCOL_VERSION,
             "id": "test",
             "command": command,
             "params": params,
@@ -204,6 +217,7 @@ fn the_endpoint_answers_a_policy_check_and_refuses_identity_control() {
         }),
     );
     assert_eq!(allowed["ok"], true);
+    assert_eq!(allowed["v"], crate::clawd::wire::PROTOCOL_VERSION);
     assert_eq!(allowed["result"]["decision"], "allow");
 
     let refused = ask("app_session.register", serde_json::json!({}));
@@ -227,6 +241,42 @@ fn the_endpoint_answers_a_policy_check_and_refuses_identity_control() {
     assert!(facts["served"].as_u64().unwrap_or(0) >= 1);
     assert!(facts["denied"].as_u64().unwrap_or(0) >= 2);
     assert!(!facts.to_string().contains("relay-handle"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn the_standard_broker_client_accepts_worker_responses() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let socket = dir.path().join("broker.sock");
+    let uid = unsafe { libc::geteuid() };
+    let endpoint =
+        BrokerEndpoint::start(socket, authority(Vec::new()), uid).expect("start endpoint");
+    let response = crate::clawd::client::request_blocking(
+        endpoint.socket_path(),
+        crate::clawd::protocol::Request::build(
+            Command::SystemBrowserControl,
+            serde_json::json!({}),
+        ),
+    )
+    .expect("worker response must use the shared broker protocol");
+
+    assert!(!response.ok);
+    assert_eq!(response.error.expect("denial").code, "not_authorized");
+}
+
+#[test]
+fn relay_error_bodies_keep_their_broker_classification() {
+    let error = broker_error_from_body(crate::clawd::protocol::ErrorBody {
+        code: "indeterminate".to_string(),
+        message: "response lost after dispatch".to_string(),
+        data: None,
+        audit_class: None,
+    });
+    assert_eq!(
+        error.kind,
+        crate::clawd::protocol::BrokerErrorKind::Indeterminate
+    );
+    assert_eq!(error.message, "response lost after dispatch");
 }
 
 #[cfg(unix)]

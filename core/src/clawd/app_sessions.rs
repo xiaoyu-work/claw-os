@@ -755,7 +755,15 @@ pub(crate) async fn prepare_app_service_call(
         .iter()
         .map(|(name, value)| (name.clone(), value.clone()))
         .collect();
-    finalize_prepared_app_service_call(&app, &app_id, &tool, &supplied, &delegation, audit.context, uid)
+    finalize_prepared_app_service_call(
+        &app,
+        &app_id,
+        &tool,
+        &supplied,
+        &delegation,
+        audit.context,
+        uid,
+    )
 }
 
 /// Derive a fully authorized [`PreparedAppServiceCall`] from an
@@ -2111,13 +2119,15 @@ pub async fn relay(
     params: Value,
     client: &ClientIdentity,
     relay_grant: &authority::Decision,
-) -> Result<Value, String> {
+) -> Result<Value, BrokerError> {
     let session_id = required_string(&params, "session_id")?;
     let handle = required_string(&params, "handle")?;
     // The middleware resolved the handle against this process. What is
     // left is the route's own contract: the grant names *this* session.
     if relay_grant.session_id() != Some(session_id.as_str()) {
-        return Err("relay handle does not cover this App session".to_string());
+        return Err(BrokerError::authorization(
+            "relay handle does not cover this App session",
+        ));
     }
     // Before the grant is resolved, before the body is decoded and
     // before any provider spends a capability: is the package behind
@@ -2145,7 +2155,9 @@ pub async fn relay(
         .cloned()
         .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
     let Some(object) = inner_params.as_object_mut() else {
-        return Err("relayed parameters must be an object".to_string());
+        return Err(BrokerError::execution(
+            "relayed parameters must be an object",
+        ));
     };
     object.insert("session".to_string(), Value::String(session_id.clone()));
     let inner_params = (route.decode)(inner_params)
@@ -2160,7 +2172,9 @@ pub async fn relay(
         client,
     )
     .await
-    .map_err(|_| format!("relayed route `{}` was not authorized", route.name))?;
+    .map_err(|_| {
+        BrokerError::authorization(format!("relayed route `{}` was not authorized", route.name))
+    })?;
 
     let call = RouteCall {
         state,
@@ -2177,9 +2191,11 @@ pub async fn relay(
             route = route.name,
             "relayed route answered without exercising its capability requirement"
         );
-        return Err("relayed route did not exercise its authority".to_string());
+        return Err(BrokerError::execution(
+            "relayed route did not exercise its authority",
+        ));
     }
-    let result = outcome.map_err(|error| error.message)?;
+    let result = outcome?;
     Ok(json!({ "command": route.name, "result": result }))
 }
 

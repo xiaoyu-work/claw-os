@@ -158,9 +158,6 @@ EXCEPTIONS: dict[str, set[str]] = {
     # it reports the sandbox restriction rather than a false "host
     # down".
     "apps/netdiag/main.py": {"socket.socket", "socket.getaddrinfo"},
-    # AF_UNIX only: the browser extension's local native-messaging
-    # socket, on a path the policy mounts.
-    "apps/browser-attached/main.py": {"socket.socket"},
     # trusted-native exemption: the native host runs outside the
     # sandbox under the kernel-side allowlist, and its socket is
     # AF_UNIX.

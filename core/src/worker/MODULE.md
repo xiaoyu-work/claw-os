@@ -211,7 +211,8 @@ per-launch broker endpoint bind-mounted at that path, which:
 - refuses every route with no admission rule, and prechecks the rest
   against a verb the launch actually holds;
 - relays what is left through `clawd`'s `app_session.relay` route, one
-  request per connection, with a bounded frame and explicit deadlines.
+  request per connection, with the shared current broker envelope, a bounded
+  frame, explicit deadlines, and the inner route's error classification intact.
 
 **The endpoint's checks authorize nothing.** They are a cheap early
 refusal so an obviously unauthorized call costs no round trip. Every

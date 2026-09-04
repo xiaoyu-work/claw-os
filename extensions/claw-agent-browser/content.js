@@ -15,12 +15,31 @@
     "doc#" + Array.from(refNonce, (byte) => byte.toString(16).padStart(2, "0")).join("") + ":el#";
   // axTree caps — protect callers from pathological pages.
   const AX_MAX_NODES = 10_000;
-  const AX_MAX_BYTES = 16 * 1024 * 1024;
+  const AX_MAX_BYTES = 5 * 1024 * 1024;
   // Periodic prune of dead WeakRefs so long-lived tabs don't leak the
   // `table` Map unbounded.
   const PRUNE_INTERVAL_MS = 30_000;
   let nextRef = 1;
   const table = new Map(); // refId -> WeakRef<Element>
+
+  function originScope() {
+    const parsed = new URL(window.location.href);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new Error("page is not on an HTTP or HTTPS origin");
+    }
+    const port = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
+    return `${parsed.protocol}//${parsed.hostname}:${port}`;
+  }
+
+  function requireExpectedOrigin(expectedOrigin) {
+    if (
+      typeof expectedOrigin !== "string" ||
+      expectedOrigin.length === 0 ||
+      originScope() !== expectedOrigin
+    ) {
+      throw new Error("page origin changed before the authorized browser action");
+    }
+  }
 
   function makeRef(el) {
     const id = REF_PREFIX + nextRef++;
@@ -431,6 +450,7 @@
       return false;
     }
     try {
+      requireExpectedOrigin(msg.expected_origin);
       const result = handler(msg);
       sendResponse({ result });
     } catch (e) {

@@ -1,11 +1,11 @@
 """Atomic file-write helpers for sidecar metadata and small payloads.
 
-The shared contract: a successful write either replaces the
-destination with the new bytes in a single ``os.replace`` call, or
-leaves the destination untouched. We never expose a half-written
-file to a concurrent reader.
+``atomic_write_bytes`` replaces its destination. ``atomic_create_bytes``
+instead links a fully synced temporary inode into a previously unused path and
+fails if that path already exists. Neither exposes a half-written file to a
+concurrent reader.
 
-Sequence:
+Replacement sequence:
 
 1. write to ``<path>.tmp.<pid>.<uuid>``
 2. ``fsync`` the temp fd so the contents hit stable storage
@@ -79,6 +79,29 @@ def atomic_write_bytes(path: str, data: bytes, mode: int = 0o644) -> None:
         except OSError:
             pass
         raise
+    _fsync_dir(parent)
+
+
+def atomic_create_bytes(path: str, data: bytes, mode: int = 0o644) -> None:
+    """Atomically create ``path`` without replacing an existing entry."""
+    if not isinstance(data, (bytes, bytearray, memoryview)):
+        raise TypeError(f"data must be bytes-like, got {type(data).__name__}")
+    parent = os.path.dirname(path) or "."
+    tmp = f"{path}.tmp.{os.getpid()}.{uuid.uuid4().hex[:8]}"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+    try:
+        with os.fdopen(fd, "wb", closefd=True) as file:
+            file.write(bytes(data))
+            file.flush()
+            os.fsync(file.fileno())
+        os.link(tmp, path)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    os.unlink(tmp)
     _fsync_dir(parent)
 
 

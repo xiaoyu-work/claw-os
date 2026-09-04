@@ -2227,7 +2227,7 @@ pub(crate) fn canonicalize_url_scope_args(
     Ok(())
 }
 
-fn canonical_url_and_scope(raw: &str) -> Option<(String, Scope)> {
+pub(crate) fn canonical_url_and_scope(raw: &str) -> Option<(String, Scope)> {
     let normalized;
     let raw = if raw.contains("://") {
         raw

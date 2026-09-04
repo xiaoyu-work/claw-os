@@ -11,6 +11,8 @@ with Claw OS.
 - Provide internal runtime/session helpers consistently across languages.
 - Bind bundled Python App business handlers to manifest-authoritative MCP tools.
 - Own the typed, bounded Ask Claw context and desktop overlay launch contract.
+- Carry bundled attached-browser requests over stdin to the typed daemon
+  provider without exposing the browser socket to App sandboxes.
 - Keep bundled-app conveniences separate from the public SDK.
 
 ## Key Files
@@ -19,6 +21,7 @@ with Claw OS.
 | --- | --- |
 | `python/src/cos_runtime/` | Python policy/runtime helpers |
 | `python/src/cos_runtime/mcp.py` | Strict bundled-App MCP operation binding |
+| `python/src/cos_runtime/browser_bridge.py` | Private bounded stdin bridge to `system.browser.control`; sensitive values never enter argv |
 | `rust/` | Rust internal runtime crate |
 | `rust/src/ask_claw.rs` | Typed context serialization, authenticated/readiness-gated Unix sockets, process isolation, and asynchronous child supervision |
 | `README.md` | Boundary and usage |
@@ -48,6 +51,11 @@ successfully activated UI when it exits.
 The production executable is fixed at `/usr/local/bin/cos-agent-ui` and must
 pass regular-file, root-owner, executable, and non-writable checks. Test
 injection is private to the runtime's `cfg(test)` module.
+
+The attached-browser helper invokes the fixed hidden `cos __browser` bridge
+with only protocol selectors in argv. Its bounded JSON request travels over
+stdin and is accepted only inside an authenticated App session; `clawd`, not
+the helper, derives browser capabilities and browser-socket authority.
 
 ## Tests
 

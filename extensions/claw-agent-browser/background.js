@@ -28,6 +28,22 @@ let stableTimer = null;
 let seenRoundTrip = false;
 let state = "idle"; // idle | acting | waiting-approval | error
 let acting_tab_id = null;
+let browserStateGeneration = 0;
+
+chrome.tabs.onActivated.addListener(() => {
+  browserStateGeneration++;
+});
+chrome.tabs.onUpdated.addListener((_tabId, changeInfo) => {
+  if (changeInfo.url !== undefined || changeInfo.status === "loading") {
+    browserStateGeneration++;
+  }
+});
+chrome.tabs.onRemoved.addListener(() => {
+  browserStateGeneration++;
+});
+chrome.tabs.onReplaced.addListener(() => {
+  browserStateGeneration++;
+});
 
 function setState(s, tabId = null) {
   state = s;
@@ -122,16 +138,44 @@ function reply(id, ok, result, error) {
   }
 }
 
+function originScope(rawUrl) {
+  const parsed = new URL(rawUrl);
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("tab is not on an HTTP or HTTPS origin");
+  }
+  const port = parsed.port || (parsed.protocol === "https:" ? "443" : "80");
+  return `${parsed.protocol}//${parsed.hostname}:${port}`;
+}
+
+async function requireExpectedOrigin(tabId, expectedOrigin) {
+  if (typeof expectedOrigin !== "string" || expectedOrigin.length === 0) {
+    throw new Error("expected_origin is required");
+  }
+  const tab = await chrome.tabs.get(tabId);
+  if (originScope(tab.url || "") !== expectedOrigin) {
+    throw new Error("tab origin changed before the authorized browser action");
+  }
+  return tab;
+}
+
+async function requireActiveExpectedOrigin(windowId, tabId, expectedOrigin) {
+  const [active] = await chrome.tabs.query({ active: true, windowId });
+  if (!active || active.id !== tabId) {
+    throw new Error("target tab is no longer active for capture");
+  }
+  if (originScope(active.url || "") !== expectedOrigin) {
+    throw new Error("active tab origin changed during capture");
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Verb handlers
 // ---------------------------------------------------------------------------
 
 const HANDLERS = {
-  "tabs.list": async ({ include_incognito } = {}) => {
+  "tabs.list": async () => {
     const tabs = await chrome.tabs.query({});
-    const filtered = include_incognito
-      ? tabs
-      : tabs.filter((t) => !t.incognito);
+    const filtered = tabs.filter((t) => !t.incognito);
     return {
       tabs: filtered.map((t) => ({
         id: t.id,
@@ -146,69 +190,76 @@ const HANDLERS = {
     };
   },
 
-  "tabs.info": async ({ id }) => {
-    const tab = await chrome.tabs.get(id);
-    let host = "";
-    try {
-      host = new URL(tab.url || "").hostname;
-    } catch (_) {}
-    return {
-      id: tab.id,
-      title: tab.title || "",
-      url: tab.url || "",
-      host,
-      active: !!tab.active,
-    };
-  },
-
   "tabs.activate": async ({ id }) => {
     const tab = await chrome.tabs.get(id);
     await chrome.windows.update(tab.windowId, { focused: true });
     await chrome.tabs.update(id, { active: true });
-    return { id };
+    return { activated: id };
   },
 
   "nav.go": async ({ id, url }) => {
     await chrome.tabs.update(id, { url });
-    return { id, url };
+    return { navigated: id, url };
   },
 
-  "dom.query": async ({ id, selector }) => {
-    return sendToContent(id, { kind: "query", selector });
+  "dom.query": async ({ id, selector, expected_origin }) => {
+    await requireExpectedOrigin(id, expected_origin);
+    return sendToContent(id, {
+      kind: "query",
+      selector,
+      expected_origin,
+    });
   },
 
-  "dom.click": async ({ id, ref }) => {
-    return sendToContent(id, { kind: "click", ref });
+  "dom.click": async ({ id, ref, expected_origin }) => {
+    await requireExpectedOrigin(id, expected_origin);
+    return sendToContent(id, { kind: "click", ref, expected_origin });
   },
 
-  "dom.fill": async ({ id, ref, value, allow_secret }) => {
+  "dom.fill": async ({ id, ref, value, allow_secret, expected_origin }) => {
+    await requireExpectedOrigin(id, expected_origin);
     return sendToContent(id, {
       kind: "fill",
       ref,
       value,
       allow_secret: !!allow_secret,
+      expected_origin,
     });
   },
 
-  "page.snapshot": async ({ id, kind }) => {
-    return sendToContent(id, { kind: "snapshot", snapshot_kind: kind || "ax" });
+  "page.snapshot": async ({ id, kind, expected_origin }) => {
+    await requireExpectedOrigin(id, expected_origin);
+    return sendToContent(id, {
+      kind: "snapshot",
+      snapshot_kind: kind || "ax",
+      expected_origin,
+    });
   },
 
-  "page.screenshot": async ({ id }) => {
-    const tab = await chrome.tabs.get(id);
-    if (!tab.active) {
-      await chrome.windows.update(tab.windowId, { focused: true });
-      await chrome.tabs.update(id, { active: true });
-      await sleep(150);
-    }
+  "page.screenshot": async ({ id, expected_origin }) => {
+    const tab = await requireExpectedOrigin(id, expected_origin);
+    await chrome.windows.update(tab.windowId, { focused: true });
+    await chrome.tabs.update(id, { active: true });
+    await sleep(150);
+    await requireActiveExpectedOrigin(tab.windowId, id, expected_origin);
+    const captureGeneration = browserStateGeneration;
     const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
       format: "png",
     });
-    const b64 = dataUrl.replace(/^data:image\/png;base64,/, "");
-    return { png_base64: b64 };
+    if (browserStateGeneration !== captureGeneration) {
+      throw new Error("browser state changed during capture");
+    }
+    await requireActiveExpectedOrigin(tab.windowId, id, expected_origin);
+    const prefix = "data:image/png;base64,";
+    if (!dataUrl.startsWith(prefix)) {
+      throw new Error("browser capture did not return PNG data");
+    }
+    const b64 = dataUrl.slice(prefix.length);
+    return { data: b64 };
   },
 
-  "eval": async ({ id, expr, allow_eval }) => {
+  "eval": async ({ id, expr, allow_eval, expected_origin }) => {
+    await requireExpectedOrigin(id, expected_origin);
     // Defense in depth: even if the host is trusted, refuse to evaluate
     // arbitrary JS unless the caller explicitly opts in *and* the code
     // passes a few sanity filters. The actual evaluation still runs in
@@ -238,7 +289,19 @@ const HANDLERS = {
     const [{ result }] = await chrome.scripting.executeScript({
       target: { tabId: id },
       world: "MAIN",
-      func: (code) => {
+      func: (code, expectedOrigin) => {
+        const protocol = window.location.protocol;
+        const hostname = window.location.hostname;
+        const port =
+          window.location.port || (protocol === "https:" ? "443" : "80");
+        if (
+          (protocol !== "http:" && protocol !== "https:") ||
+          `${protocol}//${hostname}:${port}` !== expectedOrigin
+        ) {
+          throw new Error(
+            "page origin changed before the authorized eval action"
+          );
+        }
         try {
           // eslint-disable-next-line no-new-func
           const v = new Function(`return (${code})`)();
@@ -253,8 +316,11 @@ const HANDLERS = {
           try { return JSON.parse(JSON.stringify(v)); } catch (_) { return String(v); }
         }
       },
-      args: [expr],
+      args: [expr, expected_origin],
     });
+    if (!result || result.ok !== true) {
+      throw new Error("eval execution failed");
+    }
     return result;
   },
 };

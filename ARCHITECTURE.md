@@ -791,6 +791,17 @@ to the local CLI audit record. Raw URI, path, and other typed argument contents
 remain out of that record; the daemon's typed route audit applies its own field
 projection independently.
 
+The MCP-only `browser-attached` App never receives the browser socket. Its
+private runtime helper sends a bounded JSON body over stdin to the hidden
+`cos __browser` bridge, which calls typed `system.browser.control`. `clawd`
+requires the authenticated `browser-attached` App identity, spends the exact
+browser capability derived from the canonical URL host, verifies the owner's
+runtime directory/socket, and is the only accepted socket client. It injects
+the full `scheme://host:effective-port` `expected_origin`, `allow_secret`, and
+`allow_eval` only after authorization. The extension and top-frame content
+script re-check the expected origin at the execution point; screenshot capture
+also rejects activation or navigation changes during the capture interval.
+
 Agent-to-App and App-to-App calls use the private App Gateway. The caller must
 hold exact authority for `<app-id>/<tool-name>`, and the target manifest's
 `mcp.access` policy must admit the authenticated principal. `clawd` then

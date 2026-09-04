@@ -3,6 +3,30 @@ use super::*;
 use crate::cli_help::{command_schemas, show_builtin_schema, show_command_schema};
 
 #[test]
+fn browser_bridge_request_is_bounded_and_cannot_assert_a_session() {
+    let parsed = parse_browser_bridge_request(Some(b"{\"action\":\"tabs.list\"}")).unwrap();
+    assert_eq!(parsed["action"], "tabs.list");
+    assert!(parse_browser_bridge_request(Some(
+        b"{\"action\":\"tabs.list\",\"session\":\"forged\"}"
+    ))
+    .unwrap_err()
+    .contains("must not supply session"));
+    assert!(
+        parse_browser_bridge_request(Some(&vec![b'x'; BROWSER_BRIDGE_REQUEST_BYTES + 1]))
+            .unwrap_err()
+            .contains("exceeds")
+    );
+}
+
+#[test]
+fn browser_bridge_preserves_broker_authorization_classification() {
+    let error: serde_json::Value =
+        serde_json::from_str(&browser_wire_failure("not_authorized", "denied")).unwrap();
+    assert_eq!(error["code"], "PERMISSION_DENIED");
+    assert_eq!(error["error"], "denied");
+}
+
+#[test]
 fn app_stdin_opt_in_resolves_only_installed_manifest_operations() {
     let root = tempfile::tempdir().unwrap();
     let app = root.path().join("pipe");
@@ -1855,7 +1879,10 @@ fn credential_dispatch_exposes_a_typed_command_error() {
 #[test]
 fn mcp_stdin_is_only_requested_in_the_option_region() {
     assert!(mcp_stdin_requested(&["--stdin".to_string()]));
-    assert!(mcp_stdin_requested(&["a".to_string(), "--stdin".to_string()]));
+    assert!(mcp_stdin_requested(&[
+        "a".to_string(),
+        "--stdin".to_string()
+    ]));
     // After `--` the token is ordinary App data, not the stdin switch.
     assert!(!mcp_stdin_requested(&[
         "--".to_string(),
@@ -1958,7 +1985,10 @@ fn write_mcp_only_app(apps: &std::path::Path, id: &str) -> std::path::PathBuf {
          Path(os.environ['COS_DATA_DIR'], f\"{os.environ['COS_APP_ID']}.ran\").touch()\n\
          def run(command, args):\n    return {}\n",
     );
-    write_runtime_test_executable(&app_dir.join("server.py"), "def run(c, a):\n    return {}\n");
+    write_runtime_test_executable(
+        &app_dir.join("server.py"),
+        "def run(c, a):\n    return {}\n",
+    );
     reseal_app(&app_dir, id);
     app_dir
 }

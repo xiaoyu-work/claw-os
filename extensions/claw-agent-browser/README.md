@@ -18,6 +18,14 @@ ever injected into a child frame. Element refs therefore cannot collide across
 iframes or authorize actions against a different embedded origin. A random
 per-document ref nonce also makes refs fail closed after navigation.
 
+Every tab-content request carries an `expected_origin` injected by `clawd`
+after exact capability authorization. It includes the scheme, host, and
+effective port. `background.js` checks it against the selected tab and
+`content.js` checks it again in the page immediately before the DOM action.
+Screenshot capture also rejects activation or navigation changes during the
+capture interval. Callers cannot supply `allow_secret` or `allow_eval`; the
+daemon injects those flags only after spending the corresponding capability.
+
 DOM read operations deliberately omit current values from editable controls.
 Responses contain labels, refs, sensitivity classification, and a
 `value_present` boolean, but never password, OTP, payment, hidden-token, or
@@ -48,6 +56,10 @@ request:  { id, verb, args }
 response: { id, ok: true,  result }
 response: { id, ok: false, error }
 ```
+
+The socket lives at `$XDG_RUNTIME_DIR/claw-browser.sock`, has mode `0600`, and
+accepts only a root peer. Sandboxed Apps never receive the socket; they call the
+typed `system.browser.control` provider through the private runtime bridge.
 
 See `docs/browser-attached-design.md` for the full architecture diagram and
 the capability matrix.

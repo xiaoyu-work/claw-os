@@ -57,8 +57,11 @@ use serde_json::Value;
 
 use super::provider::BrokerAuthority;
 use crate::caps::{Cap, CapSet, Scope, Verb};
+use crate::clawd::protocol::{BrokerError, BrokerErrorKind, ErrorBody};
 use crate::clawd::routes::Command;
-use crate::clawd::wire::{Fault, HEADER_BYTES, KIND_REQUEST, KIND_RESPONSE, MAX_REQUEST_BYTES};
+use crate::clawd::wire::{
+    Fault, Response, HEADER_BYTES, KIND_REQUEST, KIND_RESPONSE, MAX_REQUEST_BYTES, PROTOCOL_VERSION,
+};
 
 /// Route name the endpoint answers itself.
 pub const POLICY_CHECK_COMMAND: &str = "worker.policy.check";
@@ -251,6 +254,10 @@ fn serve(
         .and_then(Value::as_str)
         .unwrap_or("unknown")
         .to_string();
+    if envelope.get("v").and_then(Value::as_u64) != Some(u64::from(PROTOCOL_VERSION)) {
+        respond_fault(&mut stream, &id, Fault::UnsupportedVersion);
+        return Outcome::Denied;
+    }
     let Some(name) = envelope.get("command").and_then(Value::as_str) else {
         respond_fault(&mut stream, &id, Fault::InvalidEnvelope);
         return Outcome::Denied;
@@ -305,8 +312,8 @@ fn serve(
             respond_ok(&mut stream, &id, result);
             Outcome::Relayed
         }
-        Err(message) => {
-            respond_denied(&mut stream, &id, &message);
+        Err(error) => {
+            respond_error(&mut stream, &id, &error);
             Outcome::Denied
         }
     }
@@ -403,6 +410,14 @@ fn required_verbs(command: Command) -> &'static [Verb] {
         "system.container.control" => &[Verb::SYS_CONTAINER],
         "system.crash.inspect" => &[Verb::SYS_CRASH],
         "system.desktop.control" => &[Verb::DESKTOP_WINDOW, Verb::DESKTOP_LAUNCH],
+        "system.browser.control" => &[
+            Verb::BROWSER_TABS_READ,
+            Verb::BROWSER_NAV,
+            Verb::BROWSER_DOM_READ,
+            Verb::BROWSER_DOM_WRITE,
+            Verb::BROWSER_INPUT_SECRET,
+            Verb::BROWSER_EVAL,
+        ],
         "system.display.control" => &[Verb::DEVICE_DISPLAY],
         "system.events.control" => &[Verb::SYS_EVENTS],
         "system.hardware.inspect" => &[Verb::SYS_OBSERVE],
@@ -541,10 +556,14 @@ fn memory_call(authority: &BrokerAuthority, params: &Value) -> Result<Value, Str
 /// the inner route's own result, so no relay-layer field can be
 /// mistaken for something the provider returned.
 #[cfg(unix)]
-fn relay(authority: &BrokerAuthority, command: Command, params: Value) -> Result<Value, String> {
+fn relay(
+    authority: &BrokerAuthority,
+    command: Command,
+    params: Value,
+) -> Result<Value, BrokerError> {
     let handle = authority
         .relay_handle()
-        .ok_or_else(|| "this worker holds no relay authority".to_string())?;
+        .ok_or_else(|| BrokerError::authorization("this worker holds no relay authority"))?;
     let request = crate::clawd::protocol::Request::build(
         Command::AppSessionRelay,
         serde_json::json!({
@@ -556,30 +575,67 @@ fn relay(authority: &BrokerAuthority, command: Command, params: Value) -> Result
     );
     let response =
         crate::clawd::client::request_blocking(crate::paths::clawd_socket_path(), request)
-            .map_err(|_| "worker broker could not reach the system broker".to_string())?;
+            .map_err(|error| {
+                if error.may_have_dispatched() {
+                    BrokerError::indeterminate(
+                        "worker broker lost the system broker response after dispatch",
+                    )
+                } else {
+                    BrokerError::unavailable("worker broker could not reach the system broker")
+                }
+            })?;
     if !response.ok {
-        // The daemon's message is built from route names and its own
-        // static text, never from the handle.
         return Err(response
             .error
-            .map(|error| error.message)
-            .unwrap_or_else(|| format!("relayed route `{}` failed", command.as_str())));
+            .map(broker_error_from_body)
+            .unwrap_or_else(|| {
+                BrokerError::indeterminate(format!(
+                    "relayed route `{}` failed without an error",
+                    command.as_str()
+                ))
+            }));
     }
-    Ok(response
+    response
         .result
         .and_then(|value| value.get("result").cloned())
-        .unwrap_or(Value::Null))
+        .ok_or_else(|| {
+            BrokerError::indeterminate(format!(
+                "relayed route `{}` returned no result",
+                command.as_str()
+            ))
+        })
 }
 
 #[cfg(not(unix))]
-fn relay(_authority: &BrokerAuthority, _command: Command, _params: Value) -> Result<Value, String> {
-    Err("worker broker relays require Unix".to_string())
+fn relay(
+    _authority: &BrokerAuthority,
+    _command: Command,
+    _params: Value,
+) -> Result<Value, BrokerError> {
+    Err(BrokerError::unavailable(
+        "worker broker relays require Unix",
+    ))
+}
+
+fn broker_error_from_body(error: ErrorBody) -> BrokerError {
+    let kind = match error.code.as_str() {
+        "not_authorized" => BrokerErrorKind::Unauthorized,
+        "unavailable" => BrokerErrorKind::Unavailable,
+        "indeterminate" => BrokerErrorKind::Indeterminate,
+        _ => BrokerErrorKind::Execution,
+    };
+    BrokerError {
+        kind,
+        message: error.message,
+        data: error.data,
+        audit_class: None,
+    }
 }
 
 #[cfg(unix)]
 fn respond_ok(stream: &mut std::os::unix::net::UnixStream, id: &str, result: Value) {
     let body = serde_json::json!({
-        "v": 1,
+        "v": PROTOCOL_VERSION,
         "id": id,
         "ok": true,
         "result": result,
@@ -590,7 +646,7 @@ fn respond_ok(stream: &mut std::os::unix::net::UnixStream, id: &str, result: Val
 #[cfg(unix)]
 fn respond_denied(stream: &mut std::os::unix::net::UnixStream, id: &str, message: &str) {
     let body = serde_json::json!({
-        "v": 1,
+        "v": PROTOCOL_VERSION,
         "id": id,
         "ok": false,
         "error": { "code": "not_authorized", "message": message },
@@ -599,9 +655,24 @@ fn respond_denied(stream: &mut std::os::unix::net::UnixStream, id: &str, message
 }
 
 #[cfg(unix)]
+fn respond_error(stream: &mut std::os::unix::net::UnixStream, id: &str, error: &BrokerError) {
+    let body = serde_json::json!({
+        "v": PROTOCOL_VERSION,
+        "id": id,
+        "ok": false,
+        "error": {
+            "code": error.kind.code(),
+            "message": error.message,
+            "data": error.data,
+        },
+    });
+    write_response(stream, &body);
+}
+
+#[cfg(unix)]
 fn respond_fault(stream: &mut std::os::unix::net::UnixStream, id: &str, fault: Fault) {
     let body = serde_json::json!({
-        "v": 1,
+        "v": PROTOCOL_VERSION,
         "id": id,
         "ok": false,
         "error": { "code": fault.class(), "message": fault.message() },
@@ -715,9 +786,10 @@ fn sandbox_exchange(command: &str, params: Value) -> Result<Value, String> {
         .map_err(|error| format!("worker sandbox authority is unreachable: {error}"))?;
     let _ = stream.set_read_timeout(Some(IO_DEADLINE));
     let _ = stream.set_write_timeout(Some(IO_DEADLINE));
+    let request_id = uuid::Uuid::new_v4().simple().to_string();
     let body = serde_json::json!({
-        "v": 1,
-        "id": uuid::Uuid::new_v4().simple().to_string(),
+        "v": PROTOCOL_VERSION,
+        "id": request_id,
         "command": command,
         "params": params,
     });
@@ -739,9 +811,19 @@ fn sandbox_exchange(command: &str, params: Value) -> Result<Value, String> {
     stream
         .read_exact(&mut response)
         .map_err(|error| format!("worker sandbox authority truncated: {error}"))?;
-    let value: Value = serde_json::from_slice(&response)
+    let response: Response = serde_json::from_slice(&response)
         .map_err(|_| "worker sandbox authority answered with a malformed body".to_string())?;
-    Ok(value)
+    if response.v != PROTOCOL_VERSION {
+        return Err(format!(
+            "worker sandbox authority answered protocol v{}; expected v{PROTOCOL_VERSION}",
+            response.v
+        ));
+    }
+    if response.id.as_str() != request_id {
+        return Err("worker sandbox authority response did not correlate".to_string());
+    }
+    serde_json::to_value(response)
+        .map_err(|_| "worker sandbox authority response could not be encoded".to_string())
 }
 
 /// The launch's current capability set, read from the routed registry
