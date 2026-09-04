@@ -3,6 +3,8 @@ import os
 import pathlib
 from unittest import mock
 
+import pytest
+
 from test_support import load_local_module
 
 
@@ -22,14 +24,14 @@ def test_summary_uses_hardware_observe_scope():
     with mock.patch.dict(os.environ, {"COS_BIN": "/usr/local/bin/cos"}), mock.patch.object(
         main.policy, "require"
     ) as require, mock.patch.object(main.subprocess, "run", return_value=completed) as run:
-        result = main.run("summary", [])
+        result = main.inspect("summary")
     require.assert_called_once_with("sys.observe", name="hardware")
     assert run.call_args.args[0] == ["/usr/local/bin/cos", "__hardware", "summary"]
     assert result["schema"] == 1
 
 
-def test_hardware_commands_reject_arguments_before_policy():
+def test_unknown_hardware_command_is_rejected_before_policy():
     with mock.patch.object(main.policy, "require") as require:
-        result = main.run("cpu", ["unexpected"])
-    assert "error" in result
+        with pytest.raises(ValueError, match="unknown hardware command"):
+            main.inspect("unexpected")
     require.assert_not_called()
