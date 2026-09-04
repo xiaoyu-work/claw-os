@@ -3,6 +3,8 @@ import os
 import pathlib
 from unittest import mock
 
+import pytest
+
 from test_support import load_local_module
 
 
@@ -22,7 +24,7 @@ def test_summary_uses_sensitive_security_scope():
     with mock.patch.dict(os.environ, {"COS_BIN": "/usr/local/bin/cos"}), mock.patch.object(
         main.policy, "require"
     ) as require, mock.patch.object(main.subprocess, "run", return_value=completed) as run:
-        result = main.run("summary", [])
+        result = main.summary()
     require.assert_called_once_with("sys.security", name="audit")
     assert run.call_args.args[0] == ["/usr/local/bin/cos", "__security", "summary"]
     assert result["status"] == "warning"
@@ -30,6 +32,20 @@ def test_summary_uses_sensitive_security_scope():
 
 def test_security_commands_reject_arguments_before_policy():
     with mock.patch.object(main.policy, "require") as require:
-        result = main.run("ports", ["unexpected"])
-    assert "error" in result
+        with pytest.raises(TypeError):
+            main.ports("unexpected")
     require.assert_not_called()
+
+
+def test_broker_error_raises():
+    completed = mock.Mock(
+        returncode=1,
+        stdout=json.dumps({"error": "security inspection failed"}),
+        stderr="",
+    )
+    with mock.patch.dict(os.environ, {"COS_BIN": "/usr/local/bin/cos"}), mock.patch.object(
+        main.policy, "require"
+    ) as require, mock.patch.object(main.subprocess, "run", return_value=completed):
+        with pytest.raises(RuntimeError, match="security inspection failed"):
+            main.ports()
+    require.assert_called_once_with("sys.security", name="audit")
