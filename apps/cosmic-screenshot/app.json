@@ -1,23 +1,24 @@
 {
   "id": "cosmic-screenshot",
   "version": "0.1.0",
+  "schema_version": 2,
   "name": {
     "en": "Screenshot"
   },
   "summary": {
-    "en": "Capture the screen via xdg-desktop-portal and save a PNG."
+    "en": "Capture the screen through xdg-desktop-portal and save a PNG."
   },
   "icon": "📸",
   "runtime": "binary",
-  "operations": {},
-  "session": {
+  "mcp": {
     "entry": "/usr/bin/cosmic-screenshot",
     "transport": "stdio",
+    "lifecycle": "lazy",
     "tools": [
       {
         "name": "screenshot.capture",
         "summary": {
-          "en": "Take a screenshot through the desktop portal. Saves a PNG to `save_dir` (or ~/Pictures by default) and returns the absolute file path."
+          "en": "Capture the screen through the desktop portal and return the saved path, or a cancellation result."
         },
         "args": [
           {
@@ -26,7 +27,7 @@
             "required": false,
             "default": false,
             "label": {
-              "en": "Let the user choose the capture region via the portal UI."
+              "en": "Let the user choose the capture region through the portal UI."
             }
           },
           {
@@ -44,16 +45,24 @@
             "required": false,
             "default": "~/Pictures",
             "label": {
-              "en": "Directory to save the PNG to. Must already exist."
+              "en": "Existing directory for a non-interactive PNG. Defaults to the owner's Pictures directory."
             }
           }
         ],
         "needs": [
           {
             "verb": "fs.write",
-            "scope": { "kind": "from-arg", "arg": "save_dir" },
+            "scope": {
+              "kind": "from-arg",
+              "arg": "save_dir"
+            },
+            "when": {
+              "kind": "arg-equals",
+              "arg": "interactive",
+              "value": false
+            },
             "why": {
-              "en": "Write the captured PNG into the destination directory."
+              "en": "Save a non-interactive screenshot in exactly the resolved destination directory."
             }
           }
         ]

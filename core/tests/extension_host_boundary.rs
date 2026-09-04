@@ -15,7 +15,6 @@ use cos::extension_host::{broker, client, spawn};
 const HOST_BIN: &str = env!("CARGO_BIN_EXE_claw-extension-host");
 const APP_RUNNER_BIN: &str = env!("CARGO_BIN_EXE_claw-app-runner");
 const LEAK_MARKER: &str = "COS_EXTENSION_TEST_BROKER_SECRET";
-const TEST_CAPABILITY_GENERATION: &str = "aaaaaaaaaaaaaaaa";
 const TEST_MCP_SERVER: &str = r#"import json
 import sys
 
@@ -467,6 +466,7 @@ fn write_echo_app(root: &std::path::Path) {
     std::fs::write(
         app.join("app.json"),
         serde_json::json!({
+            "schema_version": 2,
             "id": "echo-app",
             "version": "0.1.0",
             "name": {"en": "Echo App"},
@@ -478,7 +478,7 @@ fn write_echo_app(root: &std::path::Path) {
                     "needs": []
                 }
             },
-            "session": {
+            "mcp": {
                 "transport": "stdio",
                 "entry": "server.py",
                 "tools": [{
@@ -587,7 +587,7 @@ async fn worker_child() {
             Ok(_) => panic!("old binding installed in a replacement worker"),
             Err(error) => error,
         };
-        assert!(error.contains("different worker"), "{error}");
+        assert!(error.contains("different controller"), "{error}");
         return;
     }
 
@@ -602,33 +602,40 @@ async fn worker_child() {
     assert_eq!(output["command"], "echo");
     assert!(output["env_leak"].is_null(), "{output}");
 
-    assert_eq!(
-        client
-            .open_app("echo-app".to_string())
-            .await
-            .expect("open hosted App session"),
-        1
-    );
-    let app_call = client
+    let call_context = cos::agent::tools::app_gateway::McpCallContext {
+        wire_version: cos::agent::tools::app_gateway::CALL_CONTEXT_WIRE_VERSION,
+        call_id: "call-boundary".to_string(),
+        trace_id: "call-boundary".to_string(),
+        parent_call_id: None,
+        depth: 0,
+        deadline_unix_ms: Some(
+            (std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_millis() as u64
+                + 5_000)
+                .min(binding.expires_at_ms),
+        ),
+        session_id: binding.session_id.clone(),
+        task_id: Some(binding.task_id.clone()),
+        caller: cos::agent::tools::app_gateway::McpPrincipal {
+            kind: cos::agent::tools::app_gateway::McpPrincipalKind::SystemAgent,
+            id: binding.session_id.clone().expect("bound session"),
+            owner_uid: binding.owner_uid,
+            app_id: None,
+        },
+    };
+    let error = client
         .call_app(
             "echo-app".to_string(),
             "ping".to_string(),
             serde_json::json!({}),
+            call_context,
             Duration::from_secs(5),
         )
         .await
-        .expect("call hosted App session");
-    assert!(app_call.content.iter().any(|item| {
-        matches!(
-            item,
-            cos::agent::tools::mcp::protocol::ContentItem::Text { text } if text == "pong"
-        )
-    }));
-    assert!(client
-        .close_app("echo-app".to_string())
-        .await
-        .expect("close hosted App session"));
-
+        .expect_err("a task Host must not execute an App call locally");
+    assert!(error.contains("manager is unavailable"), "{error}");
     let spoof = cos::clawd::client::request(
         &binding.broker_socket,
         cos::clawd::wire::Request::build(
@@ -672,7 +679,7 @@ async fn worker_child() {
         server_identity: mcp_name.to_string(),
         handle_digest: cos::crypto::sha256_hex(b"extension-boundary-handle"),
         descriptor_digest: descriptor_digest.clone(),
-        capability_generation: TEST_CAPABILITY_GENERATION.to_string(),
+        capability_generation: binding.capability_generation.clone(),
         untrusted_remote_name: cos::audit_policy::text_digest("ping"),
     };
     let value = client
@@ -1017,40 +1024,93 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
     let task_session = "task-session";
     let host_session = "extension-session";
     let expires = cos::agentd::grant::now_ms() + 120_000;
+    let caps = CapSet::from_caps([
+        Cap::new(Verb::AGENT_INVOKE, Scope::name("echo-app")),
+        Cap::new(Verb::AGENT_INVOKE, Scope::name("echo-app/ping")),
+    ]);
+    let capability_generation = cos::agent::tools::exposure::capability_generation(&caps);
     cos::storage::install_routed_extension_reader(identity.uid, extension_identity.uid)
         .expect("install routed registry reader");
+    let mut approved_paths = vec![
+        spawn::approve_runtime_path(&identity.home, identity.uid).expect("approve owner home"),
+        spawn::approve_runtime_path(env._apps.path(), identity.uid).expect("approve App root"),
+        spawn::approve_runtime_path(env._runtime.path(), identity.uid)
+            .expect("approve test runtime"),
+    ];
+    if let Some(paths) = std::env::var_os("COS_SDK_PYTHON_DIR") {
+        for sdk_dir in std::env::split_paths(&paths).filter(|path| !path.as_os_str().is_empty()) {
+            approved_paths.push(
+                spawn::approve_runtime_path(&sdk_dir, identity.uid).expect("approve Python SDK"),
+            );
+        }
+    }
+    approved_paths.push(
+        spawn::approve_runtime_path(&env.extensions, identity.uid)
+            .expect("approve installed extension root"),
+    );
+    let launch = spawn::HostLaunchSpec {
+        purpose: cos::extension_host::protocol::HostPurpose::Task,
+        lease_id: task_id.to_string(),
+        authority_session_id: Some(task_session.to_string()),
+        app_id: None,
+        host_session_id: Some(host_session.to_string()),
+        controller_uid: identity.uid,
+        controller_gid: execution_gid,
+        controller_pid: worker_pid,
+        controller_start_time_ticks: Some(worker_start),
+        package: None,
+    };
     let mut host = spawn::spawn_host(
         &identity,
         &extension_identity,
         &isolation,
         &containment,
-        task_id,
-        Some(task_session),
-        Some(host_session),
-        worker_pid,
-        Some(worker_start),
+        &launch,
         "0123456789abcdef0123456789abcdef",
         expires,
-        TEST_CAPABILITY_GENERATION,
-        vec![
-            spawn::approve_runtime_path(&identity.home, identity.uid).expect("approve owner home"),
-            spawn::approve_runtime_path(env._apps.path(), identity.uid).expect("approve App root"),
-            spawn::approve_runtime_path(env._runtime.path(), identity.uid)
-                .expect("approve test runtime"),
-            spawn::approve_runtime_path(&env.extensions, identity.uid)
-                .expect("approve installed extension root"),
-        ],
+        &capability_generation,
+        approved_paths,
         agent_extension_receipts,
         paths,
     )
     .expect("spawn host");
 
-    let caps = CapSet::from_caps([Cap::new(Verb::AGENT_INVOKE, Scope::name("echo-app"))]);
+    cos::proc::register_session_for_owner(
+        cos::proc::SessionInfo {
+            session_id: task_session.to_string(),
+            pid: worker_pid,
+            command: vec!["claw-agentd-worker".to_string()],
+            started_at: chrono::Utc::now().to_rfc3339(),
+            stdout_path: String::new(),
+            stderr_path: String::new(),
+            group: Some("agent".to_string()),
+            parent: None,
+            workdir: Some(identity.home.to_string_lossy().into_owned()),
+            exit_code: None,
+            ended_at: None,
+            tier: None,
+            scope: None,
+            priority: None,
+            caps: Some(caps.clone()),
+            transient_caps: None,
+            role: Some("agent-host".to_string()),
+            app_id: None,
+            pending_bind: false,
+            start_time_ticks: Some(worker_start),
+            client: cos::session::SessionClient::new(
+                cos::session::SessionSource::BrokerTask,
+                false,
+                true,
+            ),
+        },
+        uid,
+    )
+    .expect("register task session");
     cos::proc::register_session_for_owner(
         cos::proc::SessionInfo {
             session_id: host_session.to_string(),
             pid: host.pid,
-            command: vec!["claw-extension-host".to_string()],
+            command: vec!["claw-extension-host".to_string(), task_id.to_string()],
             started_at: chrono::Utc::now().to_rfc3339(),
             stdout_path: String::new(),
             stderr_path: String::new(),
@@ -1078,12 +1138,14 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
     )
     .expect("register host session");
     let lease = Arc::new(broker::ExtensionLease::new(
+        cos::extension_host::protocol::HostPurpose::Task,
         task_id.to_string(),
         Some(task_session.to_string()),
         Some(host_session.to_string()),
         uid,
         extension_identity.uid,
         execution_gid,
+        capability_generation,
         worker_pid,
         Some(worker_start),
         host.pid,
@@ -1142,6 +1204,7 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
     lease.close();
     broker_task.abort();
     cos::proc::deregister_session_for_owner(host_session, uid);
+    cos::proc::deregister_session_for_owner(task_session, uid);
     cos::storage::remove_routed_extension_reader(identity.uid, extension_identity.uid)
         .expect("remove routed registry reader");
     host.cgroup.cleanup().await.expect("clean host containment");

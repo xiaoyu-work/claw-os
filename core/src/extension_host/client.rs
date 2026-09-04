@@ -1,6 +1,7 @@
 //! Worker-side client for one task's extension host.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::Duration;
 
@@ -17,7 +18,7 @@ use super::protocol::{
 };
 
 #[derive(Debug, Clone)]
-struct ClientFault {
+pub(crate) struct ClientFault {
     category: ExtensionErrorCategory,
     message: String,
 }
@@ -32,6 +33,10 @@ impl ClientFault {
 
     fn protocol(message: impl Into<String>) -> Self {
         Self::new(ExtensionErrorCategory::Protocol, message)
+    }
+
+    pub(crate) fn category(&self) -> ExtensionErrorCategory {
+        self.category
     }
 }
 
@@ -67,6 +72,7 @@ pub struct ExtensionHostClient {
     binding: ExtensionBinding,
     binding_digest: String,
     lease_digest: String,
+    lease_deadline_ms: AtomicU64,
     audit: Option<UnboundedSender<crate::agentd::protocol::WorkerFrame>>,
 }
 
@@ -112,6 +118,13 @@ pub fn is_available() -> bool {
     current().is_some()
 }
 
+pub(crate) fn renew_current_task_lease(task_id: &str, expires_at_ms: u64) -> Result<(), String> {
+    let client = current().ok_or_else(|| {
+        "extension-host lease renewed before its client was installed".to_string()
+    })?;
+    client.renew_task_lease(task_id, expires_at_ms)
+}
+
 pub async fn install(binding: ExtensionBinding) -> Result<InstallGuard, String> {
     install_with_audit(binding, None).await
 }
@@ -134,6 +147,7 @@ async fn install_with_audit(
     let binding_digest = binding.digest()?;
     let lease_digest = crate::crypto::sha256_hex(binding.lease_nonce.as_bytes());
     let client = Arc::new(ExtensionHostClient {
+        lease_deadline_ms: AtomicU64::new(binding.expires_at_ms),
         binding,
         binding_digest,
         lease_digest,
@@ -161,8 +175,64 @@ async fn install_with_audit(
 }
 
 impl ExtensionHostClient {
+    pub(crate) async fn connect_controller(binding: ExtensionBinding) -> Result<Arc<Self>, String> {
+        binding.validate_fresh_controller(
+            unsafe { libc::geteuid() as u32 },
+            unsafe { libc::getegid() as u32 },
+            std::process::id(),
+            crate::proc::read_start_time_ticks_pub(std::process::id()),
+        )?;
+        let client = Arc::new(Self {
+            lease_deadline_ms: AtomicU64::new(binding.expires_at_ms),
+            binding_digest: binding.digest()?,
+            lease_digest: crate::crypto::sha256_hex(binding.lease_nonce.as_bytes()),
+            binding,
+            audit: None,
+        });
+        client.wait_ready().await?;
+        Ok(client)
+    }
+
     pub fn binding(&self) -> &ExtensionBinding {
         &self.binding
+    }
+
+    pub(crate) fn lease_deadline_ms(&self) -> u64 {
+        self.lease_deadline_ms.load(Ordering::SeqCst)
+    }
+
+    fn renew_task_lease(&self, task_id: &str, expires_at_ms: u64) -> Result<(), String> {
+        if self.binding.purpose != super::protocol::HostPurpose::Task
+            || self.binding.task_id != task_id
+        {
+            return Err("extension-host lease renewal belongs to a different task".to_string());
+        }
+        let now = crate::agentd::grant::now_ms();
+        if expires_at_ms <= now
+            || expires_at_ms > now.saturating_add(super::protocol::MAX_TASK_LEASE_DURATION_MS)
+        {
+            return Err("extension-host lease renewal deadline is invalid".to_string());
+        }
+        self.lease_deadline_ms
+            .fetch_max(expires_at_ms, Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn validate_live_controller(&self) -> Result<(), String> {
+        let uid = unsafe { libc::geteuid() as u32 };
+        let gid = unsafe { libc::getegid() as u32 };
+        let pid = std::process::id();
+        let start_time = crate::proc::read_start_time_ticks_pub(pid);
+        self.binding
+            .validate_controller(uid, gid, pid, start_time)?;
+        let deadline = match self.binding.purpose {
+            super::protocol::HostPurpose::Task => self.lease_deadline_ms(),
+            super::protocol::HostPurpose::AppService => self.binding.expires_at_ms,
+        };
+        if crate::agentd::grant::now_ms() > deadline {
+            return Err("extension-host binding lease has expired".to_string());
+        }
+        Ok(())
     }
 
     async fn wait_ready(&self) -> Result<(), String> {
@@ -252,56 +322,29 @@ impl ExtensionHostClient {
         result.map_err(|error| error.message)
     }
 
-    pub async fn open_app(&self, app_id: String) -> Result<usize, String> {
-        let started = std::time::Instant::now();
-        let digest = app_manifest_digest(&app_id);
-        let result = self
-            .request(HostAction::AppOpen {
-                app_id: app_id.clone(),
-            })
-            .await
-            .and_then(|result| match result {
-                HostResult::AppOpened { tool_count } => Ok(tool_count),
-                _ => Err(ClientFault::protocol(
-                    "extension host returned the wrong App-open result",
-                )),
-            });
-        self.emit_result(
-            super::protocol::ExtensionKind::App,
-            super::protocol::LifecycleAction::Attach,
-            &app_id,
-            digest.as_deref(),
-            started.elapsed(),
-            &result,
-        );
-        if result.is_ok() {
-            self.emit_result(
-                super::protocol::ExtensionKind::App,
-                super::protocol::LifecycleAction::Ready,
-                &app_id,
-                digest.as_deref(),
-                started.elapsed(),
-                &result,
-            );
-        }
-        result.map_err(|error| error.message)
-    }
-
     pub async fn call_app(
         &self,
         app_id: String,
         tool: String,
         arguments: Value,
+        context: crate::agent::tools::app_gateway::McpCallContext,
         timeout: Duration,
     ) -> Result<crate::agent::tools::mcp::protocol::CallToolResult, String> {
         let started = std::time::Instant::now();
         let digest = app_manifest_digest(&app_id);
+        let audit = super::protocol::AppInvocationAudit::new(
+            app_id.clone(),
+            tool.clone(),
+            self.binding.capability_generation.clone(),
+            context,
+        )?;
         let result = self
             .request_with_timeout(
                 HostAction::AppCall {
                     app_id: app_id.clone(),
                     tool,
                     arguments,
+                    audit: audit.clone(),
                 },
                 timeout.saturating_add(Duration::from_secs(5)),
                 true,
@@ -313,39 +356,63 @@ impl ExtensionHostClient {
                     "extension host returned the wrong App-call result",
                 )),
             });
-        self.emit_result(
-            super::protocol::ExtensionKind::App,
+        self.emit_app_result(
             action_for_result(&result),
             &app_id,
             digest.as_deref(),
+            &audit,
             started.elapsed(),
             &result,
         );
         result.map_err(|error| error.message)
     }
 
-    pub async fn close_app(&self, app_id: String) -> Result<bool, String> {
-        let started = std::time::Instant::now();
+    pub(crate) async fn call_authorized_app(
+        &self,
+        app_id: String,
+        tool: String,
+        arguments: Value,
+        authorized_mounts: Vec<crate::worker::AuthorizedMount>,
+        authorization: String,
+        context: crate::agent::tools::app_gateway::McpCallContext,
+        timeout: Duration,
+    ) -> Result<crate::agent::tools::mcp::protocol::CallToolResult, ClientFault> {
         let result = self
-            .request(HostAction::AppClose {
-                app_id: app_id.clone(),
-            })
-            .await
-            .and_then(|result| match result {
-                HostResult::AppClosed { closed } => Ok(closed),
-                _ => Err(ClientFault::protocol(
-                    "extension host returned the wrong App-close result",
-                )),
-            });
-        self.emit_result(
-            super::protocol::ExtensionKind::App,
-            super::protocol::LifecycleAction::Detach,
-            &app_id,
-            app_manifest_digest(&app_id).as_deref(),
-            started.elapsed(),
-            &result,
-        );
-        result.map_err(|error| error.message)
+            .request_with_timeout(
+                HostAction::AuthorizedAppCall {
+                    app_id,
+                    tool,
+                    arguments,
+                    authorized_mounts,
+                    authorization,
+                    context,
+                },
+                timeout.saturating_add(Duration::from_secs(5)),
+                true,
+            )
+            .await?;
+        match result {
+            HostResult::AppCall { value } => Ok(value),
+            _ => Err(ClientFault::protocol(
+                "extension host returned the wrong authorized App-call result",
+            )),
+        }
+    }
+
+    pub(crate) async fn warm_app(
+        &self,
+        app_id: String,
+        timeout: Duration,
+    ) -> Result<(), ClientFault> {
+        let result = self
+            .request_with_timeout(HostAction::WarmApp { app_id }, timeout, true)
+            .await?;
+        match result {
+            HostResult::AppWarmed => Ok(()),
+            _ => Err(ClientFault::protocol(
+                "extension host returned the wrong App-warm result",
+            )),
+        }
     }
 
     pub async fn attach_mcp(
@@ -578,11 +645,7 @@ impl ExtensionHostClient {
         timeout: Duration,
         cancel_on_timeout: bool,
     ) -> ClientResult<HostResult> {
-        self.binding
-            .validate_worker(
-                std::process::id(),
-                crate::proc::read_start_time_ticks_pub(std::process::id()),
-            )
+        self.validate_live_controller()
             .map_err(ClientFault::protocol)?;
         let host_timeout = if matches!(action, HostAction::AgentExtensionEvent { .. }) {
             timeout
@@ -739,6 +802,7 @@ impl ExtensionHostClient {
                     binding_digest: self.binding_digest.clone(),
                     lease_digest: self.lease_digest.clone(),
                     stage: None,
+                    app: None,
                     mcp: None,
                     abi: None,
                     manifest_digest: manifest_digest.map(str::to_string),
@@ -764,6 +828,65 @@ impl ExtensionHostClient {
             success,
             Duration::ZERO,
             error,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn emit_app(
+        &self,
+        action: super::protocol::LifecycleAction,
+        extension_id: &str,
+        manifest_digest: Option<&str>,
+        app: &super::protocol::AppInvocationAudit,
+        success: bool,
+        latency: Duration,
+        error: Option<&str>,
+    ) {
+        let (Some(audit), Some(session_id)) =
+            (self.audit.as_ref(), self.binding.session_id.as_ref())
+        else {
+            return;
+        };
+        let _ = audit.send(crate::agentd::protocol::WorkerFrame::Audit {
+            task_id: self.binding.task_id.clone(),
+            record: Box::new(
+                crate::agentd::protocol::RuntimeAuditRecord::ExtensionLifecycle {
+                    session_id: session_id.clone(),
+                    kind: super::protocol::ExtensionKind::App,
+                    action,
+                    extension_id: super::protocol::clamp_text(extension_id, 128),
+                    binding_digest: self.binding_digest.clone(),
+                    lease_digest: self.lease_digest.clone(),
+                    stage: Some(super::protocol::AuditStage::Gateway),
+                    app: Some(Box::new(app.clone())),
+                    mcp: None,
+                    abi: None,
+                    manifest_digest: manifest_digest.map(str::to_string),
+                    success,
+                    latency_ms: latency.as_millis().min(u128::from(u64::MAX)) as u64,
+                    error: crate::audit_policy::optional_text_digest(error),
+                },
+            ),
+        });
+    }
+
+    fn emit_app_result<T>(
+        &self,
+        action: super::protocol::LifecycleAction,
+        extension_id: &str,
+        manifest_digest: Option<&str>,
+        app: &super::protocol::AppInvocationAudit,
+        latency: Duration,
+        result: &ClientResult<T>,
+    ) {
+        self.emit_app(
+            action,
+            extension_id,
+            manifest_digest,
+            app,
+            result.is_ok(),
+            latency,
+            result.as_ref().err().map(|error| error.message.as_str()),
         );
     }
 
@@ -794,6 +917,7 @@ impl ExtensionHostClient {
                     binding_digest: self.binding_digest.clone(),
                     lease_digest: self.lease_digest.clone(),
                     stage: Some(stage),
+                    app: None,
                     mcp: Some(mcp.clone()),
                     abi: None,
                     manifest_digest: Some(mcp.descriptor_digest.clone()),
@@ -875,6 +999,7 @@ impl ExtensionHostClient {
                     binding_digest: self.binding_digest.clone(),
                     lease_digest: self.lease_digest.clone(),
                     stage: None,
+                    app: None,
                     mcp: None,
                     abi: Some(Box::new(abi)),
                     manifest_digest: Some(manifest_digest.to_string()),

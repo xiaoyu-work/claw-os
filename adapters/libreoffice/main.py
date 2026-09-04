@@ -20,23 +20,12 @@ import pathlib
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
 
-_HERE = pathlib.Path(__file__).resolve().parent
-_CANDIDATES = [
-    pathlib.Path(os.environ["CLAW_PYTHON_LIB"]) if os.environ.get("CLAW_PYTHON_LIB") else None,
-    _HERE.parent.parent / "claw-os-sdk" / "python" / "src",
-    pathlib.Path("/opt/claw/python"),
-    pathlib.Path("/usr/lib/cos/python"),
-    pathlib.Path("/usr/lib/claw/python"),
-]
-for _cand in _CANDIDATES:
-    if _cand and (_cand / "claw_os_sdk").is_dir():
-        sys.path.insert(0, str(_cand))
-        break
+from claw_os_sdk.mcp import App
 
-from claw_os_sdk.serve import App  # noqa: E402
+
+_HERE = pathlib.Path(__file__).resolve().parent
 
 
 def _soffice_bin() -> str:
@@ -65,7 +54,7 @@ def _validate_format(fmt: str) -> str:
     return fmt
 
 
-app = App()
+app = App.from_manifest(_HERE / "app.json")
 
 
 def _run_convert(input: str, output_dir: str, target_format: str) -> pathlib.Path:
@@ -107,48 +96,13 @@ def _run_convert(input: str, output_dir: str, target_format: str) -> pathlib.Pat
     return dst
 
 
-@app.tool(
-    "office.convert",
-    summary=(
-        "Convert an office document to another format using LibreOffice headless. "
-        "Returns the absolute path of the created file."
-    ),
-    args={
-        "input": {
-            "type": "string",
-            "description": "Absolute path to the source document (docx, xlsx, odt, pptx, csv, …).",
-        },
-        "output_dir": {
-            "type": "string",
-            "description": "Directory to write the converted file into. Created if missing.",
-        },
-        "target_format": {
-            "type": "string",
-            "description": (
-                "soffice format token. Common values: 'pdf', 'docx', 'odt', 'xlsx', "
-                "'csv', 'html', 'png'. Filter form 'pdf:writer_pdf_Export' is also allowed."
-            ),
-        },
-    },
-    required=["input", "output_dir", "target_format"],
-)
+@app.tool("office.convert")
 def office_convert(input: str, output_dir: str, target_format: str) -> str:
     dst = _run_convert(input, output_dir, target_format)
     return str(dst)
 
 
-@app.tool(
-    "office.convert_to_pdf",
-    summary="Convenience wrapper: convert any LibreOffice-supported document to PDF.",
-    args={
-        "input": {"type": "string", "description": "Absolute path to the source document."},
-        "output_dir": {
-            "type": "string",
-            "description": "Directory to write the PDF into. Created if missing.",
-        },
-    },
-    required=["input", "output_dir"],
-)
+@app.tool("office.convert_to_pdf")
 def office_convert_to_pdf(input: str, output_dir: str) -> str:
     return str(_run_convert(input, output_dir, "pdf"))
 

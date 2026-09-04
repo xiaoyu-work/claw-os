@@ -12,22 +12,11 @@ import os
 import pathlib
 import shutil
 import subprocess
-import sys
+
+from claw_os_sdk.mcp import App
+
 
 _HERE = pathlib.Path(__file__).resolve().parent
-_CANDIDATES = [
-    pathlib.Path(os.environ["CLAW_PYTHON_LIB"]) if os.environ.get("CLAW_PYTHON_LIB") else None,
-    _HERE.parent.parent / "claw-os-sdk" / "python" / "src",
-    pathlib.Path("/opt/claw/python"),
-    pathlib.Path("/usr/lib/cos/python"),
-    pathlib.Path("/usr/lib/claw/python"),
-]
-for _cand in _CANDIDATES:
-    if _cand and (_cand / "claw_os_sdk").is_dir():
-        sys.path.insert(0, str(_cand))
-        break
-
-from claw_os_sdk.serve import App  # noqa: E402
 
 
 def _bin(env_name: str, default_name: str) -> str:
@@ -58,20 +47,10 @@ def _run(cmd: list[str]) -> str:
     return proc.stdout
 
 
-app = App()
+app = App.from_manifest(_HERE / "app.json")
 
 
-@app.tool(
-    "media.probe",
-    summary="Inspect a media file with ffprobe. Returns parsed JSON with format + streams.",
-    args={
-        "path": {
-            "type": "string",
-            "description": "Absolute path to the media file.",
-        },
-    },
-    required=["path"],
-)
+@app.tool("media.probe")
 def media_probe(path: str) -> dict:
     src = pathlib.Path(path)
     if not src.is_file():
@@ -94,30 +73,7 @@ def media_probe(path: str) -> dict:
         raise RuntimeError(f"ffprobe produced invalid JSON: {e}")
 
 
-@app.tool(
-    "media.convert",
-    summary=(
-        "Transcode a media file. Caller picks codecs and container by output extension. "
-        "For copy-only repackaging pass video_codec='copy' and audio_codec='copy'."
-    ),
-    args={
-        "input": {"type": "string", "description": "Source media file (absolute path)."},
-        "output": {"type": "string", "description": "Destination file path. Container inferred from extension."},
-        "video_codec": {
-            "type": "string",
-            "description": "Video codec (e.g. 'libx264', 'libvpx-vp9', 'copy'). Default 'copy'.",
-        },
-        "audio_codec": {
-            "type": "string",
-            "description": "Audio codec (e.g. 'aac', 'libopus', 'copy'). Default 'copy'.",
-        },
-        "overwrite": {
-            "type": "boolean",
-            "description": "If true, allow overwriting an existing output file (-y). Default false.",
-        },
-    },
-    required=["input", "output"],
-)
+@app.tool("media.convert")
 def media_convert(
     input: str,
     output: str,
@@ -136,23 +92,7 @@ def media_convert(
     return str(dst)
 
 
-@app.tool(
-    "media.thumbnail",
-    summary="Extract a single still frame from a video at a given timestamp.",
-    args={
-        "input": {"type": "string", "description": "Source video file (absolute path)."},
-        "output": {"type": "string", "description": "Output image path (.png/.jpg)."},
-        "at": {
-            "type": "string",
-            "description": "Timestamp like '00:00:01.500' or '90' (seconds). Default '00:00:01'.",
-        },
-        "overwrite": {
-            "type": "boolean",
-            "description": "Overwrite existing output (-y). Default false.",
-        },
-    },
-    required=["input", "output"],
-)
+@app.tool("media.thumbnail")
 def media_thumbnail(input: str, output: str, at: str = "00:00:01", overwrite: bool = False) -> str:
     src = pathlib.Path(input)
     if not src.is_file():
@@ -177,23 +117,7 @@ def media_thumbnail(input: str, output: str, at: str = "00:00:01", overwrite: bo
     return str(dst)
 
 
-@app.tool(
-    "media.extract_audio",
-    summary="Pull the audio track out of a media file into a standalone audio file.",
-    args={
-        "input": {"type": "string", "description": "Source media file (absolute path)."},
-        "output": {"type": "string", "description": "Destination audio file. Container from extension."},
-        "audio_codec": {
-            "type": "string",
-            "description": "Audio codec to encode with ('aac', 'libmp3lame', 'libopus', 'flac', or 'copy'). Default 'copy'.",
-        },
-        "overwrite": {
-            "type": "boolean",
-            "description": "Overwrite existing output. Default false.",
-        },
-    },
-    required=["input", "output"],
-)
+@app.tool("media.extract_audio")
 def media_extract_audio(input: str, output: str, audio_codec: str = "copy", overwrite: bool = False) -> str:
     src = pathlib.Path(input)
     if not src.is_file():

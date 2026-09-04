@@ -113,7 +113,9 @@
           "kind": "bool",
           "required": true,
           "binding": "flag",
-          "choices": [true]
+          "choices": [
+            true
+          ]
         }
       ],
       "needs": [
@@ -128,5 +130,139 @@
         }
       ]
     }
+  },
+  "schema_version": 2,
+  "mcp": {
+    "entry": "server.py",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "access": {
+      "system_agent": true,
+      "apps": []
+    },
+    "tools": [
+      {
+        "name": "system-snapshot.status",
+        "summary": {
+          "en": "Inspect snapshot support"
+        },
+        "needs": [
+          {
+            "verb": "sys.observe",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "system-snapshots"
+              }
+            },
+            "why": {
+              "en": "Detect the root filesystem and available snapshot backend."
+            }
+          }
+        ]
+      },
+      {
+        "name": "system-snapshot.list",
+        "summary": {
+          "en": "List system recovery points"
+        },
+        "needs": [
+          {
+            "verb": "sys.observe",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "system-snapshots"
+              }
+            },
+            "why": {
+              "en": "Read Claw-managed snapshot metadata."
+            }
+          }
+        ]
+      },
+      {
+        "name": "system-snapshot.create",
+        "summary": {
+          "en": "Create a system recovery point"
+        },
+        "args": [
+          {
+            "name": "description",
+            "kind": "text",
+            "required": false
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.snapshot",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Capture the current root filesystem state."
+            }
+          }
+        ]
+      },
+      {
+        "name": "system-snapshot.delete",
+        "summary": {
+          "en": "Delete a system recovery point"
+        },
+        "args": [
+          {
+            "name": "id",
+            "kind": "name",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.snapshot",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Delete this managed recovery point."
+            }
+          }
+        ]
+      },
+      {
+        "name": "system-snapshot.rollback",
+        "summary": {
+          "en": "Schedule a system rollback"
+        },
+        "args": [
+          {
+            "name": "id",
+            "kind": "name",
+            "required": true
+          },
+          {
+            "name": "confirm",
+            "kind": "bool",
+            "required": true,
+            "choices": [
+              true
+            ]
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.snapshot",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Schedule the root filesystem to return to this recovery point."
+            }
+          }
+        ]
+      }
+    ]
   }
 }

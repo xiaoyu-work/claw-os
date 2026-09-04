@@ -170,5 +170,149 @@
         }
       ]
     }
+  },
+  "schema_version": 2,
+  "mcp": {
+    "entry": "server.py",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "access": {
+      "system_agent": true,
+      "apps": []
+    },
+    "tools": [
+      {
+        "name": "docs.search",
+        "summary": {
+          "en": "Run a full-text query against the user's Recoll index. Returns matching file paths, MIME types, modification times, and snippet abstracts ranked by relevance."
+        },
+        "args": [
+          {
+            "name": "query",
+            "kind": "text",
+            "required": true
+          },
+          {
+            "name": "max-results",
+            "kind": "integer",
+            "required": false,
+            "default": 20
+          }
+        ],
+        "needs": [
+          {
+            "verb": "proc.spawn",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "recollq"
+              }
+            },
+            "why": {
+              "en": "Run recollq to evaluate the query against the Xapian index."
+            }
+          },
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "path",
+                "value": "~/.recoll/**"
+              }
+            },
+            "why": {
+              "en": "Read the local Recoll index files and config to satisfy the query."
+            }
+          }
+        ]
+      },
+      {
+        "name": "docs.index",
+        "summary": {
+          "en": "Run an incremental Recoll indexing pass over the configured top directories. Safe to call repeatedly; only files changed since the last run are re-indexed."
+        },
+        "needs": [
+          {
+            "verb": "proc.spawn",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "recollindex"
+              }
+            },
+            "why": {
+              "en": "Run recollindex to walk the configured topdirs and update the Xapian index."
+            }
+          },
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Read every document under the indexed top directories — Recoll walks $HOME/Documents and similar by default."
+            }
+          },
+          {
+            "verb": "fs.write",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "path",
+                "value": "~/.recoll/**"
+              }
+            },
+            "why": {
+              "en": "Write the updated Xapian index files."
+            }
+          }
+        ]
+      },
+      {
+        "name": "docs.status",
+        "summary": {
+          "en": "Report whether a Recoll index exists, when it was last updated, how many documents it contains, and which top directories are configured."
+        },
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "path",
+                "value": "~/.recoll/**"
+              }
+            },
+            "why": {
+              "en": "Read the Recoll config and index metadata under ~/.recoll."
+            }
+          }
+        ]
+      },
+      {
+        "name": "docs.configure",
+        "summary": {
+          "en": "Create ~/.recoll/recoll.conf with a sensible topdirs default (~/Documents, ~/Desktop, ~/Downloads) if no config exists yet. Idempotent: never overwrites a user-edited config."
+        },
+        "needs": [
+          {
+            "verb": "fs.write",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "path",
+                "value": "~/.recoll/**"
+              }
+            },
+            "why": {
+              "en": "Write the default ~/.recoll/recoll.conf."
+            }
+          }
+        ]
+      }
+    ]
   }
 }

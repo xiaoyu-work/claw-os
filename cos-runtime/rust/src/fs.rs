@@ -131,11 +131,10 @@ pub fn read_bytes(path: impl AsRef<str>) -> Result<Vec<u8>, BridgeError> {
         base64: String,
     }
     let env: ReadBytesEnvelope = call_typed("fs", "read_bytes", [path.as_ref()], None)?;
-    STANDARD.decode(env.base64).map_err(|e| BridgeError::AppError {
+    STANDARD.decode(env.base64).map_err(|e| BridgeError::Decode {
         app: "fs".into(),
         verb: "read_bytes".into(),
         message: format!("bridge: invalid base64 in read_bytes response: {e}"),
-        code: None,
     })
 }
 

@@ -7,7 +7,6 @@ def parse(
     args,
     *,
     positional=(),
-    positional_aliases=(),
     value_flags=(),
     bool_flags=(),
 ):
@@ -50,17 +49,8 @@ def parse(
         positionals.append(token)
         index += 1
 
-    alias_count = min(
-        len(positional_aliases),
-        max(0, len(positionals) - len(positional)),
-    )
-    if len(positionals) > len(positional) + alias_count:
+    if len(positionals) > len(positional):
         return None, f"too many positional arguments: {positionals!r}"
-    for name, value in zip(positional_aliases, positionals[:alias_count]):
-        if values.get(name) not in {None, ""}:
-            return None, f"{name} was supplied by both positional and flag forms"
-        values[name] = value
-    positionals = positionals[alias_count:]
     for name, value in zip(positional, positionals):
         values[name] = value
     return values, None

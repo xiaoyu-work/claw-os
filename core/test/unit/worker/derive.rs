@@ -56,10 +56,9 @@ fn a_segment_glob_skips_symlinks_and_special_files() {
 fn a_segment_glob_over_etc_never_reaches_a_credential_file() {
     // `/etc/*` is the realistic shape of an over-broad grant. Whatever
     // it enumerates, the forbidden roots must not be among it.
-    let Ok(mounts) = granted_path_mounts(&caps(vec![Cap::new(
-        Verb::FS_READ,
-        Scope::path("/etc/*"),
-    )])) else {
+    let Ok(mounts) =
+        granted_path_mounts(&caps(vec![Cap::new(Verb::FS_READ, Scope::path("/etc/*"))]))
+    else {
         // A host with more than the ceiling of entries under /etc
         // refuses the launch, which is also correct.
         return;
@@ -103,11 +102,9 @@ fn a_recursive_scope_over_a_home_with_a_credential_store_is_refused() {
 #[test]
 fn a_recursive_scope_that_would_cover_a_kernel_root_is_refused() {
     // `/**` and `/run/**` both reach kernel-owned trees.
-    assert!(granted_path_mounts(&caps(vec![Cap::new(
-        Verb::FS_READ,
-        Scope::path("/run/**")
-    )]))
-    .is_err());
+    assert!(
+        granted_path_mounts(&caps(vec![Cap::new(Verb::FS_READ, Scope::path("/run/**"))])).is_err()
+    );
 }
 
 #[test]
@@ -201,6 +198,27 @@ fn a_path_granted_both_ways_is_mounted_writable_once() {
     let matching: Vec<_> = mounts.iter().filter(|mount| mount.source == both).collect();
     assert_eq!(matching.len(), 1, "one mount per path");
     assert_eq!(matching[0].mode, MountMode::ReadWrite);
+}
+
+#[cfg(unix)]
+#[test]
+fn an_authorized_mount_rejects_inode_replacement() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("input.txt");
+    std::fs::write(&path, "first").expect("write first");
+    let held = std::fs::File::open(&path).expect("hold original inode");
+    let caps = caps(vec![Cap::new(
+        Verb::FS_READ,
+        Scope::path(path.to_string_lossy()),
+    )]);
+    let authorized = authorize_granted_path_mounts(&caps).expect("authorize mounts");
+
+    std::fs::remove_file(&path).expect("remove first");
+    std::fs::write(&path, "second").expect("write replacement");
+    let error = bind_authorized_path_mounts(&caps, &authorized)
+        .expect_err("replacement must invalidate the mount authorization");
+    assert!(error.contains("changed after authorization"), "{error}");
+    drop(held);
 }
 
 #[test]
@@ -405,6 +423,7 @@ fn app_session_input<'a>(
         program: PathBuf::from("/usr/bin/python3"),
         argv: vec![package.join("server.py").to_string_lossy().into_owned()],
         caps,
+        authorized_mounts: &[],
         session_id: "app-probe",
         data_dir: data,
         apps_dir: apps,
@@ -483,7 +502,10 @@ fn a_standing_resource_grant_refuses_an_app_session_rather_than_widening_it() {
             Scope::path(granted.path().to_string_lossy()),
         )]),
         caps(vec![Cap::new(Verb::FS_WRITE, Scope::Wild)]),
-        caps(vec![Cap::new(Verb::NET_DIAL, Scope::host("example.com:443"))]),
+        caps(vec![Cap::new(
+            Verb::NET_DIAL,
+            Scope::host("example.com:443"),
+        )]),
     ] {
         let refused = app_session(app_session_input(
             package.path(),

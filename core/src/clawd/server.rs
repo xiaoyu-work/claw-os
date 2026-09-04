@@ -159,6 +159,15 @@ pub async fn run(options: ServerOptions) -> Result<(), DaemonError> {
         source: None,
     })?;
     let agentd_shutdown = Arc::new(AtomicBool::new(false));
+    let app_services = super::app_services::AppServiceManager::new(agentd_broker.clone());
+    state
+        .install_app_service_manager(&app_services)
+        .map_err(|message| DaemonError::Startup {
+            operation: "app-services.initialize",
+            message,
+            source: None,
+        })?;
+    let _app_service_sweeper = app_services.spawn_sweeper(agentd_shutdown.clone());
     // Agent work runs in unprivileged `claw-agentd` processes. The
     // supervisor handle is deliberately *not* part of the daemon's
     // fatal path: a worker exiting — normally or not — must never take
@@ -315,7 +324,7 @@ async fn sweep_revoked_instances() {
 /// operation and the names are uids the daemon wrote — not anything a
 /// caller supplied. A name that is not a plain uid is skipped rather
 /// than guessed at.
-fn routed_owner_uids() -> Vec<u32> {
+pub(crate) fn routed_owner_uids() -> Vec<u32> {
     let Ok(entries) = std::fs::read_dir("/run/cos/caps") else {
         return Vec::new();
     };

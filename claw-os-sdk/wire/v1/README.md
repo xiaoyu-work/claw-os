@@ -9,17 +9,16 @@ language-idiomatic wrapper over this protocol.
 
 Wire v1 exposes text chat only: `ai.chat` and the hardened
 `ai.chat.untrusted` variant selected by `origin=external-content`.
-Embed, image, vision, audio, and video selectors are experimental and
-currently unsupported; compatibility helpers fail before invoking `cos`.
+Unsupported modalities are not published as placeholder SDK APIs.
 
 ## Transport
 
-**v1 uses a subprocess transport.** A request is encoded as `cos`
-command-line arguments + (optionally) stdin JSON; the reply is a JSON
-**envelope** on stdout. Exit code 0 means "the request reached the
-gate"; non-zero means "the gate or kernel rejected the call before
-dispatch" — and even then the body on stdout (or stderr) is a JSON
-envelope describing the error.
+**v1 uses a subprocess transport.** A request is encoded as
+`cos --wire=1` plus command-line arguments and, optionally, stdin JSON. The
+reply is exactly one JSON **envelope** on stdout. Exit code 0 accompanies a
+success envelope; non-zero accompanies an error envelope. SDKs reject flat
+command output, JSON on stderr, malformed envelopes, unsupported versions, and
+an exit-status/`ok` mismatch.
 
 Reasoning:
 - Identity and audit-trail come from process ancestry. The `cos`
@@ -58,15 +57,6 @@ Error reply:
 `code` is a stable string drawn from `error_codes.md`. New codes may
 be added in v1; existing codes keep their meaning.
 
-> **Compatibility note.** The current `cos` binary (kernel v0.3.x) does
-> **not** yet wrap its replies in this `{ok, data}` shape — each
-> sub-command returns its own ad-hoc envelope (e.g. policy checks return
-> `{"decision": "allow"|"deny", …}`). The v1 wrapping is the
-> *target* protocol; SDKs read the existing flat shape and normalise
-> it through `envelope.rs` / `envelope.py` etc. so user code already
-> sees the v1 surface. The kernel will be migrated to emit v1 wrappings
-> natively in a follow-up; SDK behaviour will not change.
-
 ## Request families
 
 | Family   | Route                                   | Schema                  |
@@ -81,6 +71,22 @@ The `policy` wire family is consumed only by the OS-internal
 third-party SDK calls are capability-checked by the `cos` kernel.
 
 App manifests (`app.json`) are validated against `manifest.schema.json`.
+
+## Private App MCP calls
+
+MCP-first Apps serve their manifest-declared tools over private stdio owned
+by the Claw App Host. For every `tools/call`, the Gateway replaces any
+caller-supplied Claw metadata and injects a value conforming to
+`mcp_call_context.schema.json` under
+`_meta["claw-os.dev/call-context"]`. It binds the authenticated workload
+principal to the call/trace lineage, nesting depth, owner, task/session, and
+deadline. This context is descriptive, not authority; the App Host retains
+the transient target capability grant.
+
+The Python runtime exposes that value through `claw_os_sdk.mcp.current_context()`
+and supports MCP progress tokens plus cooperative
+`notifications/cancelled`. MCP-first runtimes reject calls without a valid
+Gateway context.
 
 ## Error codes
 
@@ -101,10 +107,9 @@ See `error_codes.md` for the canonical list. The minimum:
 
 The protocol version is announced in three places:
 
-1. `wire_version` field in every reply envelope.
-2. `cos --version --wire` prints the supported wire version(s).
-3. The `claw-os-sdk` library handshakes on startup and refuses to
-   continue against an unsupported kernel.
+1. The SDK requests a version explicitly with `cos --wire=1`.
+2. `wire_version` in every reply must equal the requested version.
+3. `cos --wire=1 --version` provides a transport-level compatibility probe.
 
 Breaking changes bump the wire version. Bug fixes in the kernel that
 don't change the envelope shape do not.

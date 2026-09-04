@@ -58,17 +58,24 @@ fn optional_fields_round_trip_to_the_shape_handlers_read() {
 
 #[test]
 fn an_explicit_null_optional_decodes_to_an_absent_field() {
-    // `app_session.set_transient` sends `"call": null` to clear the
-    // transient capability, and the handler treats absent and null the
-    // same way.
+    // Clearing transient authority carries neither half of the opaque
+    // authorization/action binding.
     let decoded: AppSessionSetTransient = serde_json::from_value(json!({
         "session_id": "app-1",
         "handle": "h1",
-        "call": null,
+        "authorization": null,
+        "action_digest": null,
     }))
     .unwrap();
     let canonical = serde_json::to_value(decoded).unwrap();
-    assert!(canonical.get("call").is_none());
+    assert!(canonical.get("authorization").is_none());
+    assert!(canonical.get("action_digest").is_none());
+    assert!(serde_json::from_value::<AppSessionSetTransient>(json!({
+        "session_id": "app-1",
+        "handle": "h1",
+        "call": {"tool": "legacy", "args": {}},
+    }))
+    .is_err());
 }
 
 #[test]

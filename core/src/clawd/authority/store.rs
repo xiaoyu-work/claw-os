@@ -464,6 +464,26 @@ impl Authority {
         required: &[Cap],
         presentation: &Presentation,
     ) -> Result<GrantView, AuthorityError> {
+        self.consume_inner(id, required, presentation, None)
+    }
+
+    pub(super) fn consume_relayed(
+        &self,
+        id: GrantId,
+        required: &[Cap],
+        presentation: &Presentation,
+        proof: &RelayProof,
+    ) -> Result<GrantView, AuthorityError> {
+        self.consume_inner(id, required, presentation, Some(proof))
+    }
+
+    fn consume_inner(
+        &self,
+        id: GrantId,
+        required: &[Cap],
+        presentation: &Presentation,
+        relay: Option<&RelayProof>,
+    ) -> Result<GrantView, AuthorityError> {
         let now = Instant::now();
         let mut inner = self.lock();
         inner.sweep(now);
@@ -472,7 +492,7 @@ impl Authority {
             .get(&id)
             .ok_or(AuthorityError::UnknownGrant)?;
         let grant = inner.grants.get(&key).ok_or(AuthorityError::UnknownGrant)?;
-        check_presentation(grant, presentation, now)?;
+        check_presentation_with(grant, presentation, now, relay)?;
         for cap in required {
             if !grant.caps.covers(cap) {
                 return Err(AuthorityError::Capability {
@@ -524,10 +544,7 @@ impl Authority {
             .filter(|grant| grant.subject.session_id.as_deref() == Some(session_id))
             .map(|grant| grant.id)
             .collect();
-        roots
-            .into_iter()
-            .map(|id| inner.revoke_lineage(id))
-            .sum()
+        roots.into_iter().map(|id| inner.revoke_lineage(id)).sum()
     }
 
     /// Revoke only the grant that owns the session index and its descendants.
@@ -560,10 +577,7 @@ impl Authority {
             })
             .map(|grant| grant.id)
             .collect();
-        grants
-            .into_iter()
-            .map(|id| inner.revoke_lineage(id))
-            .sum()
+        grants.into_iter().map(|id| inner.revoke_lineage(id)).sum()
     }
 
     /// Revoke everything one owner holds. Used when a worker lease
@@ -588,10 +602,7 @@ impl Authority {
             .filter(|grant| grant.issuer == Issuer::Approval && grant.principal.uid == uid)
             .map(|grant| grant.id)
             .collect();
-        grants
-            .into_iter()
-            .map(|id| inner.revoke_lineage(id))
-            .sum()
+        grants.into_iter().map(|id| inner.revoke_lineage(id)).sum()
     }
 
     /// Drop expired, exhausted, revoked and orphaned grants. Safe to

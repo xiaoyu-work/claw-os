@@ -23,8 +23,9 @@ impl Tool for CosHelp {
         "Progressively explore the machine-readable `cos` CLI command tree \
          without running commands. Start with path=[]; follow a returned \
          namespace with path=[\"agent\"], then inspect a command with \
-         path=[\"agent\",\"usage\"]. For installed Apps use path=[\"app\"] \
-         or `cos_app_catalog`. Before claiming Claw OS lacks a capability, \
+         path=[\"agent\",\"usage\"]. Path `[\"app\"]` describes the human CLI; \
+         use `cos_tool_search` for permitted MCP App services. Before claiming \
+         Claw OS lacks a capability, \
          inspect the relevant path here. Operational work must use the \
          returned model_tool or another named, capability-gated tool."
     }
@@ -213,8 +214,8 @@ fn discover_apps() -> Value {
             "consent": "Inspect and manage App AI consent",
         },
         "apps": entries,
-        "model_tool": "cos_app_catalog",
-        "next": "Inspect one App with path=[\"app\",\"<id>\"] or cos_app_catalog show.",
+        "model_tool": "cos_tool_search",
+        "next": "Search permitted MCP App tools with cos_tool_search.",
     })
 }
 
@@ -255,9 +256,11 @@ fn discover_app(app_id: &str) -> Value {
         "path": ["app", app_id],
         "kind": "app",
         "description": app.manifest.summary.current(),
-        "operations": operations,
-        "model_tool": "cos_app_run",
-        "next": "Inspect one operation with path=[\"app\",\"<id>\",\"<operation>\"].",
+        "cli_operations": operations,
+        "model_callable": false,
+        "model_tool": "cos_tool_search",
+        "model_server": app_id,
+        "next": "Use cos_tool_search with the model_server filter for permitted MCP tools.",
     })
 }
 
@@ -304,8 +307,8 @@ fn discover_app_command(app_id: &str, command: &str) -> Value {
         "description": operation.summary.current(),
         "parameters": schema["parameters"],
         "stdin": schema["stdin"],
-        "model_callable": true,
-        "model_tool": "cos_app_run",
+        "model_callable": false,
+        "model_tool": Value::Null,
     })
 }
 

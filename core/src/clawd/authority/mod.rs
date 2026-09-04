@@ -368,6 +368,7 @@ pub async fn authorize(
         requirement,
         view,
         presentation,
+        None,
         uid,
         client,
     )
@@ -383,6 +384,7 @@ async fn finish(
     requirement: Requirement,
     view: GrantView,
     presentation: Presentation,
+    relay: Option<RelayProof>,
     uid: u32,
     client: &ClientIdentity,
 ) -> Result<Option<Decision>, Fault> {
@@ -403,6 +405,7 @@ async fn finish(
         route_name,
         descriptor.audience,
         presentation,
+        relay,
         session,
         &requirement,
     );
@@ -509,6 +512,7 @@ pub async fn authorize_relayed(
         requirement,
         view,
         presentation,
+        Some(proof),
         uid,
         client,
     )
@@ -647,6 +651,7 @@ pub(crate) fn authorize_worker_approval(
             route: "agentd.approval.execute",
             session_id: Some(session_id.to_string()),
         },
+        None,
         None,
         &requirement,
     );

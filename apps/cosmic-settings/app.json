@@ -1,0 +1,84 @@
+{
+  "id": "cosmic-settings",
+  "version": "0.1.0",
+  "schema_version": 2,
+  "name": {
+    "en": "Settings"
+  },
+  "summary": {
+    "en": "Discover and open pages in the native system settings application."
+  },
+  "runtime": "binary",
+  "mcp": {
+    "entry": "/usr/bin/cosmic-settings",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "tools": [
+      {
+        "name": "settings.list_pages",
+        "summary": {
+          "en": "List every settings page this build exposes, including its id, label, and hint."
+        },
+        "args": [],
+        "needs": []
+      },
+      {
+        "name": "settings.search",
+        "summary": {
+          "en": "Case-insensitively search settings page ids, labels, and hints."
+        },
+        "args": [
+          {
+            "name": "query",
+            "kind": "text",
+            "required": true,
+            "label": {
+              "en": "Natural-language fragment to find."
+            }
+          },
+          {
+            "name": "limit",
+            "kind": "integer",
+            "required": false,
+            "default": 5,
+            "label": {
+              "en": "Maximum matches; values are clamped to 1 through 20."
+            }
+          }
+        ],
+        "needs": []
+      },
+      {
+        "name": "settings.open",
+        "summary": {
+          "en": "Open Settings, optionally jumping directly to a page."
+        },
+        "args": [
+          {
+            "name": "page",
+            "kind": "name",
+            "required": false,
+            "label": {
+              "en": "Page id such as wireless or appearance."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "proc.spawn",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "cosmic-settings"
+              }
+            },
+            "why": {
+              "en": "Open the native Settings application for the user."
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

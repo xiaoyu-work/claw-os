@@ -5,8 +5,8 @@ use super::*;
 struct DenyAll;
 
 impl MemoryAuthority for DenyAll {
-    fn allow(&self, _verb: Verb, _scope: Scope) -> Result<(), String> {
-        Err("denied".to_string())
+    fn allow(&self, _verb: Verb, _scope: Scope) -> Result<(), Value> {
+        Err(json!({"decision": "deny", "summary": "denied"}))
     }
 }
 
@@ -49,6 +49,21 @@ fn forget_requires_exactly_one_target() {
 fn run_unknown_command() {
     let err = run("nope", &[]).unwrap_err();
     assert!(err.contains("unknown internal memory command"));
+}
+
+#[test]
+fn capability_denial_has_a_typed_wire_error() {
+    let error = remember(
+        &DenyAll,
+        &[
+            "--json".into(),
+            r#"{"source":"notes","text":"hello"}"#.into(),
+        ],
+    )
+    .unwrap_err();
+    let payload: Value = serde_json::from_str(&error).unwrap();
+    assert_eq!(payload["code"], "PERMISSION_DENIED");
+    assert_eq!(payload["detail"]["decision"], "deny");
 }
 
 #[test]
@@ -139,8 +154,8 @@ fn a_foreign_row_reads_exactly_like_a_missing_one() {
     assert_eq!(foreign, absent, "the row id space is an existence oracle");
     assert_eq!(foreign["row"], Value::Null);
 
-    let forgot_foreign = forget(&authority, &["--row".into(), row_id.to_string()])
-        .expect("forget foreign");
+    let forgot_foreign =
+        forget(&authority, &["--row".into(), row_id.to_string()]).expect("forget foreign");
     let forgot_absent = forget(
         &authority,
         &["--row".into(), (row_id + 100_000).to_string()],

@@ -5,9 +5,14 @@ import { readFileSync } from "node:fs";
 import * as ai from "./ai";
 import * as tools from "./tools";
 import { WireDecimal, stringifyWireJson } from "./generated";
-import { installFakeCos, withCos } from "./testutil";
+import {
+  installFakeCos,
+  wireError,
+  wireSuccessJson,
+  withCos,
+} from "./testutil";
 
-const OK_CHAT = JSON.stringify({
+const OK_CHAT_DATA = JSON.stringify({
   verb: "ai.chat",
   text: "hello there",
   model: "m",
@@ -17,6 +22,7 @@ const OK_CHAT = JSON.stringify({
   review: { safety: "strict", prompt_redacted: false },
   tool_calls: [{ id: "c1", name: "fs.read_text", input: { path: "/x" } }],
 });
+const OK_CHAT = wireSuccessJson(OK_CHAT_DATA);
 
 test("chat builds the right argv and parses the envelope", () => {
   const fake = installFakeCos(OK_CHAT);
@@ -30,7 +36,8 @@ test("chat builds the right argv and parses the envelope", () => {
   assert.equal(res.toolCalls[0].name, "fs.read_text");
 
   const argv = readFileSync(fake.argvOut, "utf8").split("\n");
-  assert.deepEqual(argv.slice(0, 6), [
+  assert.deepEqual(argv.slice(0, 7), [
+    "--wire=1",
     "ai",
     "chat",
     "--app",
@@ -55,16 +62,16 @@ test("chat requires an app id", () => {
   );
 });
 
-test("budget-exceeded envelope maps to AiBudgetExceeded", () => {
-  const fake = installFakeCos(JSON.stringify({ error: "monthly budget exceeded" }), 1);
+test("budget-exceeded code maps to AiBudgetExceeded", () => {
+  const fake = installFakeCos(wireError("opaque", "BUDGET_EXCEEDED"), 1);
   assert.throws(
     () => withCos(fake, { COS_APP_ID: "notes" }, () => ai.chat("hi")),
     ai.AiBudgetExceeded,
   );
 });
 
-test("safety envelope maps to AiSafetyViolation", () => {
-  const fake = installFakeCos(JSON.stringify({ error: "prompt injection detected" }), 1);
+test("safety code maps to AiSafetyViolation", () => {
+  const fake = installFakeCos(wireError("opaque", "SAFETY_VIOLATION"), 1);
   assert.throws(
     () => withCos(fake, { COS_APP_ID: "notes" }, () => ai.chat("hi")),
     ai.AiSafetyViolation,
@@ -72,27 +79,21 @@ test("safety envelope maps to AiSafetyViolation", () => {
 });
 
 test("generic error envelope maps to AiDenied", () => {
-  const fake = installFakeCos(JSON.stringify({ error: "capability denied" }), 1);
+  const fake = installFakeCos(wireError("capability denied", "PERMISSION_DENIED"), 1);
   assert.throws(
     () => withCos(fake, { COS_APP_ID: "notes" }, () => ai.chat("hi")),
     ai.AiDenied,
   );
 });
 
-test("stable error code precedes opaque legacy message", () => {
-  const budget = installFakeCos(
-    JSON.stringify({ error: "opaque", code: "budget_exceeded" }),
-    1,
-  );
+test("stable error code determines the typed error", () => {
+  const budget = installFakeCos(wireError("safety words", "BUDGET_EXCEEDED"), 1);
   assert.throws(
     () => withCos(budget, { COS_APP_ID: "notes" }, () => ai.chat("hi")),
     ai.AiBudgetExceeded,
   );
 
-  const safety = installFakeCos(
-    JSON.stringify({ error: "opaque", code: "SaFeTy_ViOlAtIoN" }),
-    1,
-  );
+  const safety = installFakeCos(wireError("budget words", "SAFETY_VIOLATION"), 1);
   assert.throws(
     () => withCos(safety, { COS_APP_ID: "notes" }, () => ai.chat("hi")),
     ai.AiSafetyViolation,
@@ -100,9 +101,9 @@ test("stable error code precedes opaque legacy message", () => {
 });
 
 test("malformed tool call rejects the entire response", () => {
-  const payload = JSON.parse(OK_CHAT) as Record<string, unknown>;
+  const payload = JSON.parse(OK_CHAT_DATA) as Record<string, unknown>;
   payload.tool_calls = [{ id: "c1", input: {} }];
-  const fake = installFakeCos(JSON.stringify(payload));
+  const fake = installFakeCos(wireSuccessJson(JSON.stringify(payload)));
   assert.throws(
     () => withCos(fake, { COS_APP_ID: "notes" }, () => ai.chat("hi")),
     (error: unknown) =>
@@ -113,11 +114,11 @@ test("malformed tool call rejects the entire response", () => {
 });
 
 test("chat preserves unrestricted tool input and mathematical integers", () => {
-  const payload = OK_CHAT
+  const payload = wireSuccessJson(OK_CHAT_DATA
     .replace('"input_tokens":3', '"input_tokens":1.0')
     .replace('"output_tokens":5', '"output_tokens":1e0')
     .replace('"units":8', '"units":18446744073709551615')
-    .replace('"input":{"path":"/x"}', '"input":["a",1]');
+    .replace('"input":{"path":"/x"}', '"input":["a",1]'));
   const fake = installFakeCos(payload);
   const response = withCos(fake, { COS_APP_ID: "notes" }, () => ai.chat("hi"));
   assert.equal(response.usage.inputTokens, 1);
@@ -132,14 +133,14 @@ test("chat rejects scalar root with stable wire error", () => {
     () => withCos(fake, { COS_APP_ID: "notes" }, () => ai.chat("hi")),
     (error: unknown) =>
       error instanceof ai.AiUnavailable &&
-      error.message.includes("WIRE_TYPE") &&
+      error.message.includes("WIRE_ONE_OF") &&
       error.message.includes(" at $:"),
   );
 });
 
 test("budget accepts the producer budget-show shape", () => {
   const fake = installFakeCos(
-    JSON.stringify({ app: "notes", period: "2026-08", units_used: 7 }),
+    wireSuccessJson(JSON.stringify({ app: "notes", period: "2026-08", units_used: 7 })),
   );
   const result = withCos(fake, {}, () => ai.budget("notes"));
   assert.deepEqual(result, { period: "2026-08", unitsUsed: 7, unitsCap: 0 });
@@ -148,28 +149,20 @@ test("budget accepts the producer budget-show shape", () => {
 test("proposed lossless input round-trips directly through tools.call", () => {
   const lexeme = "0.12345678901234567890";
   const chatFake = installFakeCos(
-    OK_CHAT.replace('"input":{"path":"/x"}', `"input":${lexeme}`),
+    wireSuccessJson(OK_CHAT_DATA.replace('"input":{"path":"/x"}', `"input":${lexeme}`)),
   );
   const response = withCos(chatFake, { COS_APP_ID: "notes" }, () => ai.chat("hi"));
   assert.ok(response.toolCalls[0].input instanceof WireDecimal);
   assert.equal(stringifyWireJson(response.toolCalls[0].input), lexeme);
 
   const toolFake = installFakeCos(
-    JSON.stringify({ tool: "echo", app_id: "notes", status: "ok", result: null }),
+    wireSuccessJson(
+      JSON.stringify({ tool: "echo", app_id: "notes", status: "ok", result: null }),
+    ),
   );
   withCos(toolFake, {}, () =>
     tools.call("echo", response.toolCalls[0].input, { appId: "notes" }),
   );
   const argv = readFileSync(toolFake.argvOut, "utf8").split("\n");
   assert.equal(argv[argv.indexOf("--args") + 1], lexeme);
-});
-
-test("embed is an unsupported compatibility shim", () => {
-  assert.throws(
-    () => ai.embed(""),
-    (err: unknown) =>
-      err instanceof ai.AiUnsupported &&
-      err.modality === "embed" &&
-      err.message.includes("only chat/chat-untrusted are stable"),
-  );
 });

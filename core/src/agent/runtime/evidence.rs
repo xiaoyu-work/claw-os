@@ -451,6 +451,15 @@ fn tool_requires_binding(name: &str, input: &serde_json::Value) -> bool {
     ) {
         return true;
     }
+    if name.starts_with("app_")
+        || (name == "cos_tool_call"
+            && input
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|target| target.starts_with("app_")))
+    {
+        return true;
+    }
     let command = input
         .get("command")
         .and_then(serde_json::Value::as_str)
@@ -472,19 +481,7 @@ fn tool_requires_binding(name: &str, input: &serde_json::Value) -> bool {
     if read_commands.contains(&command) {
         return true;
     }
-    name.starts_with("cos_app_")
-        && matches!(
-            command,
-            "status"
-                | "list"
-                | "show"
-                | "inspect"
-                | "health"
-                | "diagnose"
-                | "query"
-                | "get"
-                | "devices"
-        )
+    false
 }
 
 fn round2(value: f64) -> f64 {

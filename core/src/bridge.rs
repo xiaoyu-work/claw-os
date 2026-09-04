@@ -20,6 +20,14 @@ pub(crate) fn app_runner_path() -> std::path::PathBuf {
             if sibling.is_file() {
                 return sibling;
             }
+            if parent.file_name() == Some(std::ffi::OsStr::new("deps")) {
+                if let Some(profile_dir) = parent.parent() {
+                    let profile_runner = profile_dir.join("claw-app-runner");
+                    if profile_runner.is_file() {
+                        return profile_runner;
+                    }
+                }
+            }
         }
     }
     "/usr/local/bin/claw-app-runner".into()
@@ -78,6 +86,10 @@ impl AppLaunch {
 
     pub fn ceiling(&self) -> crate::provenance::Ceiling {
         self.package.ceiling()
+    }
+
+    pub fn package_ref(&self) -> crate::provenance::runtime::PackageRef {
+        crate::provenance::runtime::PackageRef::of(&self.package)
     }
 
     /// Re-assert the snapshot against the current trust store, then
@@ -213,6 +225,7 @@ pub(crate) struct AppIdentitySession {
     session_id: String,
     backend: AppSessionBackend,
     parent_caps: Option<CapSet>,
+    package: crate::provenance::runtime::PackageRef,
     /// The launcher's right to relay one App-session system-service
     /// call for this worker. Issued by `clawd` at bind time, bound to
     /// this launcher process, and deliberately never exported into the
@@ -252,7 +265,9 @@ enum LaunchRequest<'a> {
     Gui {
         exec: &'a str,
     },
-    Mcp,
+    Mcp {
+        tool: &'a str,
+    },
 }
 
 impl LaunchRequest<'_> {
@@ -260,7 +275,7 @@ impl LaunchRequest<'_> {
         match self {
             LaunchRequest::Operation { .. } => "operation",
             LaunchRequest::Gui { .. } => "gui",
-            LaunchRequest::Mcp => "mcp",
+            LaunchRequest::Mcp { .. } => "mcp",
         }
     }
 
@@ -268,19 +283,33 @@ impl LaunchRequest<'_> {
         match self {
             LaunchRequest::Operation { operation, .. } => format!("cos app {app_id} {operation}"),
             LaunchRequest::Gui { exec } => format!("cos app {app_id} {exec}"),
-            LaunchRequest::Mcp => format!("cos app {app_id} session"),
+            LaunchRequest::Mcp { tool } => format!("cos app {app_id} mcp {tool}"),
+        }
+    }
+
+    fn session_group(&self) -> &'static str {
+        match self {
+            LaunchRequest::Mcp { .. } => "app-mcp",
+            LaunchRequest::Operation { .. } | LaunchRequest::Gui { .. } => "app",
+        }
+    }
+
+    fn invoke_cap(&self, app_id: &str) -> Result<Cap, String> {
+        match self {
+            LaunchRequest::Mcp { tool } => {
+                crate::agent::tools::app_gateway::invoke_cap(app_id, tool)
+            }
+            LaunchRequest::Operation { .. } | LaunchRequest::Gui { .. } => {
+                Ok(Cap::new(Verb::AGENT_INVOKE, Scope::name(app_id)))
+            }
         }
     }
 }
 
-/// One serialized App MCP call and the capabilities it needs.
-///
-/// `tool`/`args` are what the daemon re-derives the call capabilities
-/// from; `caps` is the locally resolved set used by the in-process
-/// backend, where the resolver already runs inside trusted code.
+/// One daemon-issued authorization for an App MCP call.
 pub(crate) struct TransientCall<'a> {
-    pub tool: &'a str,
-    pub args: &'a BTreeMap<String, serde_json::Value>,
+    pub authorization: &'a str,
+    pub action_digest: &'a str,
     pub caps: CapSet,
 }
 
@@ -288,7 +317,6 @@ pub(crate) struct TransientCall<'a> {
 pub(crate) struct AppSessionControl {
     session_id: String,
     backend: AppSessionBackend,
-    parent_caps: Option<CapSet>,
 }
 
 pub(crate) struct McpProcSession {
@@ -406,13 +434,12 @@ impl Drop for McpProcSession {
 }
 
 impl AppSessionControl {
+    pub fn uses_local_backend(&self) -> bool {
+        matches!(self.backend, AppSessionBackend::Local { .. })
+    }
+
     pub fn set_transient_call(&self, call: Option<TransientCall<'_>>) -> Result<(), String> {
-        set_app_session_transient_call(
-            &self.session_id,
-            &self.backend,
-            self.parent_caps.as_ref(),
-            call,
-        )
+        set_app_session_transient_call(&self.session_id, &self.backend, call)
     }
 }
 
@@ -437,6 +464,14 @@ impl AppIdentitySession {
             .and_then(serde_json::Value::as_str)
             .map(ToOwned::to_owned)
             .ok_or_else(|| "clawd native App session response omitted handle".to_string())?;
+        let package = result
+            .get("package")
+            .cloned()
+            .ok_or_else(|| "clawd native App session response omitted package identity".to_string())
+            .and_then(|value| {
+                serde_json::from_value(value)
+                    .map_err(|error| format!("invalid native App package identity: {error}"))
+            })?;
         Ok(Self {
             session_id,
             backend: AppSessionBackend::Clawd {
@@ -444,6 +479,7 @@ impl AppIdentitySession {
                 handle,
             },
             parent_caps: None,
+            package,
             granted_caps: CapSet::new(),
             relay: crate::worker::relay_slot(),
         })
@@ -478,10 +514,7 @@ impl AppIdentitySession {
         };
         let ceiling = launch.ceiling();
         let bound = match declared {
-            Some(declared) => {
-                let trusted_args = trusted_pre_dispatch_args(app_id, declared, args)?;
-                bind_operation_args(declared, &trusted_args)?
-            }
+            Some(declared) => bind_operation_args(declared, args)?,
             None => BoundOperationArgs {
                 values: BTreeMap::new(),
                 argv: args.to_vec(),
@@ -494,6 +527,7 @@ impl AppIdentitySession {
             .transpose()
             .map_err(|error| format!("resolve `{operation}` capabilities: {error}"))?;
         let local_ceiling = ceiling.clone();
+        let package = launch.package_ref();
         let session = Self::start(
             app_id,
             LaunchRequest::Operation {
@@ -501,6 +535,7 @@ impl AppIdentitySession {
                 args: &effective_args,
             },
             Some(ceiling),
+            package,
             |parent_caps| match declared {
                 Some(declared) => {
                     let caps = constrained_operation_caps(
@@ -522,10 +557,12 @@ impl AppIdentitySession {
         let ceiling = launch.ceiling();
         let local_ceiling = ceiling.clone();
         let manifest = launch.manifest().clone();
+        let package = launch.package_ref();
         Self::start(
             app_id,
             LaunchRequest::Gui { exec },
             Some(ceiling),
+            package,
             move |parent_caps| {
                 let needs = manifest
                     .operations
@@ -540,9 +577,14 @@ impl AppIdentitySession {
 
     /// Register an MCP identity. Session tools receive their authority
     /// per call through [`AppSessionControl::set_transient_call`].
-    pub fn for_mcp(app_id: &str, manifest: &Manifest) -> Result<Self, String> {
-        let _ = manifest;
-        Self::start(app_id, LaunchRequest::Mcp, None, |_| Ok(CapSet::new()))
+    pub fn for_mcp(launch: &AppLaunch, tool: &str) -> Result<Self, String> {
+        Self::start(
+            launch.app_id(),
+            LaunchRequest::Mcp { tool },
+            Some(launch.ceiling()),
+            launch.package_ref(),
+            |_| Ok(CapSet::new()),
+        )
     }
 
     /// Shared launch path.
@@ -557,6 +599,7 @@ impl AppIdentitySession {
         app_id: &str,
         request: LaunchRequest<'_>,
         ceiling: Option<crate::provenance::Ceiling>,
+        package: crate::provenance::runtime::PackageRef,
         local_caps: F,
     ) -> Result<Self, String>
     where
@@ -570,16 +613,15 @@ impl AppIdentitySession {
         }
         crate::caps::enforcement::require_current_session_identity(&parent.session_id, parent.pid)
             .map_err(|err| format!("App parent session identity check failed: {err}"))?;
-        let invoke = Cap::new(Verb::AGENT_INVOKE, Scope::name(app_id));
+        let invoke = request.invoke_cap(app_id)?;
         if !parent_caps.covers(&invoke) {
-            return Err(format!("parent session cannot invoke App `{app_id}`"));
+            return Err(format!("parent session cannot invoke `{}`", invoke.scope));
         }
 
         // Derived on both paths: the daemon mints the session, and the
         // launcher still needs the same set to build the sandbox that
         // session will run inside.
-        let mut caps = local_caps(&parent_caps)?;
-        caps.insert(invoke);
+        let caps = local_caps(&parent_caps)?;
 
         if use_clawd_app_session_backend() {
             return Self::register_with_clawd(
@@ -588,9 +630,18 @@ impl AppIdentitySession {
                 parent_caps,
                 caps,
                 ceiling.as_ref(),
+                &package,
             );
         }
-        Self::register_local(&parent, app_id, &request.command(app_id), caps, parent_caps)
+        Self::register_local(
+            &parent,
+            app_id,
+            &request.command(app_id),
+            request.session_group(),
+            caps,
+            parent_caps,
+            package,
+        )
     }
 
     fn register_with_clawd(
@@ -599,6 +650,7 @@ impl AppIdentitySession {
         parent_caps: CapSet,
         granted_caps: CapSet,
         ceiling: Option<&crate::provenance::Ceiling>,
+        package: &crate::provenance::runtime::PackageRef,
     ) -> Result<Self, String> {
         // Only `parent_caps` crosses the wire, and only ever to narrow
         // what the daemon already resolved. The launcher's identity —
@@ -608,6 +660,7 @@ impl AppIdentitySession {
             "app_id": app_id,
             "kind": request.kind(),
             "parent_caps": parent_caps,
+            "package": package,
         });
         match request {
             LaunchRequest::Operation { operation, args } => {
@@ -618,7 +671,9 @@ impl AppIdentitySession {
             LaunchRequest::Gui { exec } => {
                 params["operation"] = serde_json::Value::String((*exec).to_string());
             }
-            LaunchRequest::Mcp => {}
+            LaunchRequest::Mcp { tool } => {
+                params["tool"] = serde_json::Value::String((*tool).to_string());
+            }
         }
 
         // A launch that needs consent is answered with the ids of the
@@ -688,6 +743,7 @@ impl AppIdentitySession {
                 handle,
             },
             parent_caps: Some(parent_caps),
+            package: package.clone(),
             granted_caps,
             relay: crate::worker::relay_slot(),
         })
@@ -697,8 +753,10 @@ impl AppIdentitySession {
         parent: &SessionInfo,
         app_id: &str,
         command: &str,
+        group: &str,
         caps: CapSet,
         parent_caps: CapSet,
+        package: crate::provenance::runtime::PackageRef,
     ) -> Result<Self, String> {
         let session_id = format!("app-{}", uuid::Uuid::new_v4().simple());
         let info = SessionInfo {
@@ -710,7 +768,7 @@ impl AppIdentitySession {
             started_at: chrono::Utc::now().to_rfc3339(),
             stdout_path: String::new(),
             stderr_path: String::new(),
-            group: Some("app".to_string()),
+            group: Some(group.to_string()),
             parent: Some(parent.session_id.clone()),
             workdir: std::env::current_dir()
                 .ok()
@@ -741,6 +799,7 @@ impl AppIdentitySession {
                 proc_data_dir: crate::paths::proc_data_dir(),
             },
             parent_caps: Some(parent_caps),
+            package,
             granted_caps: caps,
             relay: crate::worker::relay_slot(),
         })
@@ -791,12 +850,7 @@ impl AppIdentitySession {
     }
 
     pub fn set_transient_call(&self, call: Option<TransientCall<'_>>) -> Result<(), String> {
-        set_app_session_transient_call(
-            &self.session_id,
-            &self.backend,
-            self.parent_caps.as_ref(),
-            call,
-        )
+        set_app_session_transient_call(&self.session_id, &self.backend, call)
     }
 
     pub fn proc_data_dir(&self) -> &Path {
@@ -820,11 +874,14 @@ impl AppIdentitySession {
         &self.granted_caps
     }
 
+    pub fn uses_local_backend(&self) -> bool {
+        matches!(self.backend, AppSessionBackend::Local { .. })
+    }
+
     pub fn control(&self) -> AppSessionControl {
         AppSessionControl {
             session_id: self.session_id.clone(),
             backend: self.backend.clone(),
-            parent_caps: self.parent_caps.clone(),
         }
     }
 }
@@ -951,6 +1008,7 @@ pub(crate) fn prepare_app_session_worker(
     lifetime: crate::worker::derive::SessionLifetime,
     transports: &[crate::worker::trusted_desktop::Transport],
     call_caps: Option<&CapSet>,
+    authorized_mounts: &[crate::worker::AuthorizedMount],
 ) -> Result<crate::worker::PreparedLaunch, String> {
     let label = format!("app-session:{app_id}");
     let tier = if transports.is_empty() {
@@ -968,6 +1026,7 @@ pub(crate) fn prepare_app_session_worker(
         program,
         argv,
         caps,
+        authorized_mounts,
         lifetime,
         session_id: session.id(),
         data_dir,
@@ -1059,7 +1118,7 @@ pub fn run_native_app_host(
     command
         .args(args)
         .env("PATH", "/usr/local/bin:/usr/bin:/bin")
-        .env("COS_BIN", "/usr/local/bin/cos")
+        .env("CLAW_COS_BIN", "/usr/local/bin/cos")
         .env("COS_APPS_DIR", "/usr/lib/cos/apps")
         .env("COS_SDK_PYTHON_DIR", "/usr/lib/cos/python")
         .env("PYTHONNOUSERSITE", "1")
@@ -1109,7 +1168,6 @@ fn validate_root_owned_executable(_path: &Path) -> Result<(), String> {
 fn set_app_session_transient_call(
     session_id: &str,
     backend: &AppSessionBackend,
-    parent_caps: Option<&CapSet>,
     call: Option<TransientCall<'_>>,
 ) -> Result<(), String> {
     match backend {
@@ -1117,22 +1175,15 @@ fn set_app_session_transient_call(
             crate::proc::set_app_session_transient_caps(session_id, call.map(|call| call.caps))
         }
         AppSessionBackend::Clawd { handle, .. } => {
-            let call = match call {
-                Some(call) => serde_json::json!({
-                    "tool": call.tool,
-                    "args": call.args,
-                }),
-                None => serde_json::Value::Null,
-            };
-            let mut params = serde_json::json!({
+            let (authorization, action_digest) = call
+                .map(|call| (Some(call.authorization), Some(call.action_digest)))
+                .unwrap_or((None, None));
+            let params = serde_json::json!({
                 "session_id": session_id,
                 "handle": handle,
-                "call": call,
+                "authorization": authorization,
+                "action_digest": action_digest,
             });
-            if let Some(parent_caps) = parent_caps {
-                params["parent_caps"] = serde_json::to_value(parent_caps)
-                    .map_err(|error| format!("failed to serialize parent capabilities: {error}"))?;
-            }
             clawd_request(ClawdCommand::AppSessionSetTransient, params)
                 .map(|_| ())
                 .map_err(String::from)
@@ -1427,150 +1478,6 @@ fn bind_operation_args(
     Ok(BoundOperationArgs { values, argv })
 }
 
-fn trusted_pre_dispatch_args(
-    app_id: &str,
-    operation: &Operation,
-    args: &[String],
-) -> Result<Vec<String>, String> {
-    let mut resolved = args.to_vec();
-    for selector in operation
-        .args
-        .iter()
-        .filter(|arg| arg.trusted_resolver.is_some())
-    {
-        let resolver = selector
-            .trusted_resolver
-            .ok_or_else(|| "trusted resolver disappeared during dispatch".to_string())?;
-        let flag = crate::caps::args::flag_name(selector);
-        let supplied = resolved
-            .iter()
-            .take_while(|arg| arg.as_str() != "--")
-            .any(|arg| arg == &format!("--{flag}") || arg.starts_with(&format!("--{flag}=")));
-        if supplied && resolver == crate::caps::manifest::TrustedArgResolver::EmailHost {
-            return Err("`--host` is reserved for trusted email resolution".to_string());
-        }
-        if supplied {
-            continue;
-        }
-        let value = match resolver {
-            crate::caps::manifest::TrustedArgResolver::EmailProvider => {
-                resolve_email_provider(operation, selector)?.to_string()
-            }
-            crate::caps::manifest::TrustedArgResolver::EmailHost => {
-                let bound = crate::caps::args::bind_supplied_cli_args(&operation.args, &resolved)?;
-                let provider = bound
-                    .get("provider")
-                    .and_then(serde_json::Value::as_str)
-                    .ok_or_else(|| {
-                        "email host resolver requires provider resolution".to_string()
-                    })?;
-                resolve_email_host(provider)?
-            }
-            crate::caps::manifest::TrustedArgResolver::CalendarProvider => {
-                if app_id != "calendar" {
-                    return Err(format!(
-                        "App `{app_id}` is not allowed to use the calendar provider resolver"
-                    ));
-                }
-                resolve_calendar_provider()?.to_string()
-            }
-            crate::caps::manifest::TrustedArgResolver::NtfyServer => resolve_ntfy_server()?,
-        };
-        let delimiter = resolved
-            .iter()
-            .position(|arg| arg == "--")
-            .unwrap_or(resolved.len());
-        resolved.splice(delimiter..delimiter, [format!("--{flag}"), value]);
-    }
-    Ok(resolved)
-}
-
-fn resolve_ntfy_server() -> Result<String, String> {
-    let normalize = |value: String| value.trim().trim_end_matches('/').to_string();
-    if let Some(configured) = std::env::var("COS_NTFY_SERVER")
-        .ok()
-        .map(&normalize)
-        .filter(|value| !value.is_empty())
-    {
-        return Ok(configured);
-    }
-    Ok(crate::credential::try_load("ntfy_server", "default")
-        .map_err(|error| format!("resolve ntfy server: {error}"))?
-        .map(normalize)
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "https://ntfy.sh".to_string()))
-}
-
-fn resolve_email_provider<'a>(
-    operation: &'a Operation,
-    selector: &crate::caps::manifest::Arg,
-) -> Result<&'a str, String> {
-    let mappings = operation
-        .needs
-        .iter()
-        .find_map(|need| match &need.scope {
-            ScopeBinding::FromArgMap { arg, values } if arg == &selector.name => Some(values),
-            _ => None,
-        })
-        .ok_or_else(|| {
-            format!(
-                "trusted resolver `{}` requires a from-arg-map capability",
-                selector.name
-            )
-        })?;
-    let mut provider = None;
-    for candidate in ["gmail", "outlook", "smtp"] {
-        let Some(scope) = mappings.get(candidate) else {
-            continue;
-        };
-        let configured = match scope {
-            Scope::Name(name) => {
-                let (namespace, credential) = name.split_once('/').ok_or_else(|| {
-                    format!("email provider `{candidate}` has an invalid credential scope")
-                })?;
-                crate::credential::is_configured(credential, namespace)
-                    .map_err(|error| format!("resolve email provider: {error}"))?
-                    || (candidate == "smtp" && std::env::var_os("SMTP_HOST").is_some())
-            }
-            _ => {
-                return Err(format!(
-                    "email provider `{candidate}` must map to a credential name scope"
-                ));
-            }
-        };
-        if configured {
-            provider = Some(candidate);
-            break;
-        }
-    }
-    provider.ok_or_else(|| {
-        "no email provider configured; pass --provider or configure credentials".to_string()
-    })
-}
-
-fn resolve_calendar_provider() -> Result<&'static str, String> {
-    for (provider, credential) in [
-        ("google", "GOOGLE_ACCESS_TOKEN"),
-        ("outlook", "MICROSOFT_ACCESS_TOKEN"),
-    ] {
-        if crate::credential::is_configured(credential, "default")
-            .map_err(|error| format!("resolve calendar provider: {error}"))?
-        {
-            return Ok(provider);
-        }
-    }
-    Ok("local")
-}
-
-fn resolve_email_host(provider: &str) -> Result<String, String> {
-    match provider {
-        "gmail" => Ok("gmail.googleapis.com".to_string()),
-        "outlook" => Ok("graph.microsoft.com".to_string()),
-        "smtp" => Ok(std::env::var("SMTP_HOST").unwrap_or_else(|_| "localhost".to_string())),
-        other => Err(format!("unsupported email provider `{other}`")),
-    }
-}
-
 fn canonical_operation_argv(
     operation: &Operation,
     raw: &[String],
@@ -1585,20 +1492,6 @@ fn canonical_operation_argv(
         .args
         .iter()
         .filter(|declaration| declaration.effective_binding() == ArgBinding::Positional)
-        .collect::<Vec<_>>();
-    let alias_count = supplied_positionals
-        .len()
-        .saturating_sub(positional_declarations.len())
-        .min(
-            operation
-                .args
-                .iter()
-                .filter(|declaration| declaration.positional_alias)
-                .count(),
-        );
-    let supplied_positionals = supplied_positionals
-        .into_iter()
-        .skip(alias_count)
         .collect::<Vec<_>>();
     let mut positionals = Vec::new();
     let mut supplied_count = 0;
@@ -1677,9 +1570,8 @@ fn raw_operation_positionals(operation: &Operation, raw: &[String]) -> Vec<Strin
                 .split_once('=')
                 .map_or(token.as_str(), |(name, _)| name);
             if let Some(declaration) = operation.args.iter().find(|declaration| {
-                (declaration.effective_binding() == crate::caps::manifest::ArgBinding::Flag
-                    && option == format!("--{}", crate::caps::args::flag_name(declaration)))
-                    || declaration.aliases.iter().any(|alias| alias == option)
+                declaration.effective_binding() == crate::caps::manifest::ArgBinding::Flag
+                    && option == format!("--{}", crate::caps::args::flag_name(declaration))
             }) {
                 if declaration.kind != ArgKind::Bool && !token.contains('=') {
                     index += 1;
@@ -1985,7 +1877,7 @@ os.environ.setdefault("COS_APPS_DIR", {apps_dir})
 _sdk_override = os.environ.get("COS_SDK_PYTHON_DIR")
 _sdk_candidates = []
 if _sdk_override:
-    _sdk_candidates.append(_sdk_override)
+    _sdk_candidates.extend(_sdk_override.split(os.pathsep))
 _sdk_candidates.append("/usr/lib/cos/python")
 _apps_root = os.environ.get("COS_APPS_DIR") or ""
 if _apps_root:

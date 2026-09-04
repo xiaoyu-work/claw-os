@@ -499,7 +499,7 @@ pub(crate) fn deregister_child_sessions_for_owner(parent: &str, uid: u32) -> Vec
     let _ = update_owner_registry(uid, |mut registry| {
         registry.sessions.retain(|session| {
             let matches = session.parent.as_deref() == Some(parent)
-                && matches!(session.group.as_deref(), Some("app" | "mcp"));
+                && matches!(session.group.as_deref(), Some("app" | "app-mcp" | "mcp"));
             if matches {
                 removed.push(session.session_id.clone());
             }
@@ -752,7 +752,10 @@ fn is_alive_for_info(info: &SessionInfo) -> bool {
 fn pending_bind_is_fresh(info: &SessionInfo) -> bool {
     if !info.pending_bind
         || info.pid != 0
-        || !matches!(info.group.as_deref(), Some("app" | "mcp" | "cron"))
+        || !matches!(
+            info.group.as_deref(),
+            Some("app" | "app-mcp" | "mcp" | "cron")
+        )
     {
         return false;
     }

@@ -39,15 +39,15 @@ use crate::caps::{require, Cap, CapSet, Denial, Scope, Verb};
 /// verb and `self:<source>` scope from the same parsed arguments — only
 /// the authority that answers differs.
 pub(crate) trait MemoryAuthority {
-    fn allow(&self, verb: Verb, scope: Scope) -> Result<(), String>;
+    fn allow(&self, verb: Verb, scope: Scope) -> Result<(), Value>;
 }
 
 /// The default: the kernel's own capability check for this session.
 pub(crate) struct SessionAuthority;
 
 impl MemoryAuthority for SessionAuthority {
-    fn allow(&self, verb: Verb, scope: Scope) -> Result<(), String> {
-        require(verb, scope).map_err(|denial| denial.to_json().to_string())
+    fn allow(&self, verb: Verb, scope: Scope) -> Result<(), Value> {
+        require(verb, scope).map_err(|denial| denial.to_json())
     }
 }
 
@@ -64,14 +64,21 @@ impl LaunchAuthority {
 }
 
 impl MemoryAuthority for LaunchAuthority {
-    fn allow(&self, verb: Verb, scope: Scope) -> Result<(), String> {
+    fn allow(&self, verb: Verb, scope: Scope) -> Result<(), Value> {
         if self.caps.covers(&Cap::new(verb, scope.clone())) {
             return Ok(());
         }
-        Err(Denial::scope_out_of_range(verb, scope, &self.caps)
-            .to_json()
-            .to_string())
+        Err(Denial::scope_out_of_range(verb, scope, &self.caps).to_json())
     }
+}
+
+fn permission_denied(action: &str, denial: Value) -> String {
+    json!({
+        "error": format!("memory {action} denied"),
+        "code": "PERMISSION_DENIED",
+        "detail": denial,
+    })
+    .to_string()
 }
 
 /// Entry point for the hidden `cos __memory` bridge. The first
@@ -143,7 +150,7 @@ fn remember(auth: &dyn MemoryAuthority, args: &[String]) -> Result<Value, String
     // so an app whose `memory.write` is bound to `self:expense-tracker`
     // cannot pass `source = "calendar"`.
     auth.allow(Verb::MEMORY_WRITE, Scope::self_ref(&payload.source))
-        .map_err(|denial| format!("memory remember denied: {}", denial))?;
+        .map_err(|denial| permission_denied("remember", denial))?;
 
     let entry = AppMemoryEntry {
         source: payload.source.clone(),
@@ -158,7 +165,12 @@ fn remember(auth: &dyn MemoryAuthority, args: &[String]) -> Result<Value, String
     let store = app_memory::open_default_store();
 
     let outcome: RememberOutcome = runtime()
-        .block_on(app_memory::remember(&db, store.as_ref(), entry, payload.indexable))
+        .block_on(app_memory::remember(
+            &db,
+            store.as_ref(),
+            entry,
+            payload.indexable,
+        ))
         .map_err(remember_error_to_string)?;
 
     Ok(json!({
@@ -205,7 +217,7 @@ fn list(auth: &dyn MemoryAuthority, args: &[String]) -> Result<Value, String> {
     // reads in-process and never goes through this bridge.
     let source = source.ok_or_else(|| "memory list: --source is required".to_string())?;
     auth.allow(Verb::MEMORY_READ, Scope::self_ref(&source))
-        .map_err(|denial| format!("memory list denied: {}", denial))?;
+        .map_err(|denial| permission_denied("list", denial))?;
     let db = open_db()?;
     let rows = app_memory::list(&db, Some(source.as_str()), limit)
         .map_err(|e| format!("memory list: {e}"))?;
@@ -267,7 +279,7 @@ fn search(auth: &dyn MemoryAuthority, args: &[String]) -> Result<Value, String> 
     }
     let source = source.ok_or_else(|| "memory search: --source is required".to_string())?;
     auth.allow(Verb::MEMORY_READ, Scope::self_ref(&source))
-        .map_err(|denial| format!("memory search denied: {}", denial))?;
+        .map_err(|denial| permission_denied("search", denial))?;
     let db = open_db()?;
     let rows = app_memory::search(&db, &query, Some(source.as_str()), limit)
         .map_err(|e| format!("memory search: {e}"))?;
@@ -307,7 +319,7 @@ fn forget(auth: &dyn MemoryAuthority, args: &[String]) -> Result<Value, String> 
     if let Some(s) = source {
         // Deleting every row for a source is a write — gate it.
         auth.allow(Verb::MEMORY_WRITE, Scope::self_ref(&s))
-            .map_err(|denial| format!("memory forget denied: {}", denial))?;
+            .map_err(|denial| permission_denied("forget", denial))?;
         let n = app_memory::forget_source(&db, store.as_ref(), &s)
             .map_err(|e| format!("memory forget: {e}"))?;
         return Ok(json!({ "removed": n, "source": s }));

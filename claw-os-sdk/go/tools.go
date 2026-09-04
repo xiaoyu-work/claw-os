@@ -75,19 +75,18 @@ func CallTool(name string, args any, appID string) (*ToolResult, error) {
 
 	out, err := cosCallJSON("cos ai tool "+name, []string{"ai", "tool", name, "--app", app, "--args", string(payload)})
 	if err != nil {
+		if denied, ok := err.(*DeniedError); ok {
+			return nil, &ToolDeniedError{Payload: denied.Payload}
+		}
 		if ue, ok := err.(*UnavailableError); ok {
 			return nil, &ToolUnavailableError{Msg: ue.Msg}
 		}
 		return nil, err
 	}
-	if out.Status != 0 || out.hasError() {
-		return nil, &ToolDeniedError{Payload: asMap(out.Envelope)}
-	}
-
-	if err := ValidateTool(out.Envelope); err != nil {
+	if err := ValidateTool(out.Data); err != nil {
 		return nil, &ToolUnavailableError{Msg: "tool result decode failed: " + err.Error()}
 	}
-	env := asMap(out.Envelope)
+	env := asMap(out.Data)
 	return &ToolResult{
 		Name:   asString(env["tool"]),
 		AppID:  asString(env["app_id"]),
@@ -103,18 +102,18 @@ func CallTool(name string, args any, appID string) (*ToolResult, error) {
 func Catalog() ([]CatalogEntry, error) {
 	out, err := cosCallJSON("cos ai tools", []string{"ai", "tools"})
 	if err != nil {
+		if denied, ok := err.(*DeniedError); ok {
+			return nil, &ToolDeniedError{Payload: denied.Payload}
+		}
 		if ue, ok := err.(*UnavailableError); ok {
 			return nil, &ToolUnavailableError{Msg: ue.Msg}
 		}
 		return nil, err
 	}
-	if out.Status != 0 || out.hasError() {
-		return nil, &ToolDeniedError{Payload: asMap(out.Envelope)}
-	}
-	if err := ValidateToolCatalog(out.Envelope); err != nil {
+	if err := ValidateToolCatalog(out.Data); err != nil {
 		return nil, &ToolUnavailableError{Msg: "catalog decode failed: " + err.Error()}
 	}
-	env := asMap(out.Envelope)
+	env := asMap(out.Data)
 	rawRows := env["tools"].([]any)
 	entries := make([]CatalogEntry, 0, len(rawRows))
 	for _, r := range rawRows {

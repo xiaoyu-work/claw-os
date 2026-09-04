@@ -1,7 +1,7 @@
 {
   "name": "@claw-os/sdk",
   "version": "0.1.0",
-  "description": "Official Node.js SDK for Claw OS — typed, gated access to the kernel's AI and tool surfaces, plus the desktop GUI bootstrap.",
+  "description": "Official Node.js SDK for Claw OS Apps — manifest-bound MCP services, gated AI and tools, and desktop GUI bootstrap.",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -17,7 +17,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "tsc -p tsconfig.test.json && node --test dist-test/"
+    "test": "tsc -p tsconfig.test.json && node --test"
   },
   "engines": {
     "node": ">=18"

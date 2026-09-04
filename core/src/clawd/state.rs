@@ -1,7 +1,7 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Instant;
 
 use chrono::{DateTime, Utc};
@@ -172,6 +172,8 @@ struct DaemonStateInner {
     started_instant: Instant,
     context: Mutex<BTreeMap<String, ContextEntry>>,
     transactions: Mutex<BTreeMap<String, TransactionHandle>>,
+    app_authorizations: Mutex<HashMap<String, super::app_services::AppCallAuthorization>>,
+    app_service_manager: OnceLock<Weak<super::app_services::AppServiceManager>>,
 }
 
 #[derive(Debug, Clone)]
@@ -211,6 +213,8 @@ impl DaemonState {
                 started_instant: Instant::now(),
                 context: Mutex::new(BTreeMap::new()),
                 transactions: Mutex::new(transactions),
+                app_authorizations: Mutex::new(HashMap::new()),
+                app_service_manager: OnceLock::new(),
             }),
         })
     }
@@ -221,6 +225,75 @@ impl DaemonState {
 
     pub fn uptime_millis(&self) -> u128 {
         self.inner.started_instant.elapsed().as_millis()
+    }
+
+    pub(crate) fn install_app_service_manager(
+        &self,
+        manager: &Arc<super::app_services::AppServiceManager>,
+    ) -> Result<(), String> {
+        self.inner
+            .app_service_manager
+            .set(Arc::downgrade(manager))
+            .map_err(|_| "App service manager is already installed".to_string())
+    }
+
+    pub(crate) fn app_service_manager(
+        &self,
+    ) -> Option<Arc<super::app_services::AppServiceManager>> {
+        self.inner.app_service_manager.get()?.upgrade()
+    }
+
+    pub(crate) fn issue_app_authorization(
+        &self,
+        authorization: super::app_services::AppCallAuthorization,
+    ) -> Result<String, String> {
+        let now = crate::agentd::grant::now_ms();
+        let mut authorizations = self
+            .inner
+            .app_authorizations
+            .lock()
+            .map_err(|_| "App call authorization store is unavailable".to_string())?;
+        authorizations.retain(|_, pending| pending.expires_at_ms > now);
+        if authorizations.len() >= 1024 {
+            return Err("App call authorization capacity is exhausted".to_string());
+        }
+        let token = uuid::Uuid::new_v4().simple().to_string();
+        authorizations.insert(token.clone(), authorization);
+        Ok(token)
+    }
+
+    pub(crate) fn consume_app_authorization(
+        &self,
+        token: &str,
+        action_digest: &str,
+    ) -> Result<super::app_services::AppCallAuthorization, String> {
+        if token.len() != 32
+            || !token
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err("App call authorization is invalid".to_string());
+        }
+        let authorization = self
+            .inner
+            .app_authorizations
+            .lock()
+            .map_err(|_| "App call authorization store is unavailable".to_string())?
+            .remove(token)
+            .ok_or_else(|| "App call authorization is unknown or already consumed".to_string())?;
+        if authorization.expires_at_ms <= crate::agentd::grant::now_ms() {
+            return Err("App call authorization expired".to_string());
+        }
+        if authorization.action_digest != action_digest {
+            return Err("App call authorization does not match the requested action".to_string());
+        }
+        Ok(authorization)
+    }
+
+    pub(crate) fn revoke_app_authorization(&self, token: &str) {
+        if let Ok(mut authorizations) = self.inner.app_authorizations.lock() {
+            authorizations.remove(token);
+        }
     }
 
     pub fn update_context(
@@ -344,10 +417,10 @@ impl DaemonState {
     #[cfg(test)]
     pub(super) fn poison_context_for_test(&self) {
         let state = self.clone();
-        let _ = std::panic::catch_unwind(move || {
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
             let _guard = state.inner.context.lock().unwrap();
             panic!("poison context lock");
-        });
+        }));
     }
 }
 

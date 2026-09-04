@@ -10,7 +10,7 @@ fn minimal_manifest_parses() {
         r#"{
               "id": "fs",
               "version": "0.2.0",
-              "name": "Files"
+              "name": {"en": "Files"}
             }"#,
     );
     assert_eq!(m.id, "fs");
@@ -19,8 +19,14 @@ fn minimal_manifest_parses() {
 }
 
 #[test]
+fn localized_manifest_text_requires_an_explicit_locale_map() {
+    let error = Manifest::from_json(r#"{"id":"fs","version":"0.2.0","name":"Files"}"#).unwrap_err();
+    assert!(matches!(error, ManifestError::Json(_)));
+}
+
+#[test]
 fn invalid_id_rejected() {
-    let err = Manifest::from_json(r#"{"id":"FS!","version":"0","name":"X"}"#).unwrap_err();
+    let err = Manifest::from_json(r#"{"id":"FS!","version":"0","name": {"en": "X"}}"#).unwrap_err();
     assert!(matches!(err, ManifestError::InvalidId(_)));
 }
 
@@ -30,13 +36,13 @@ fn unknown_verb_rejected_at_parse_time() {
         r#"{
               "id": "fs",
               "version": "0.1",
-              "name": "Files",
+              "name": {"en": "Files"},
               "operations": {
                 "x": {
-                  "label": "X",
+                  "label": {"en": "X"},
                   "args": [],
                   "needs": [
-                    {"verb": "fs.nonsense", "scope": {"kind":"wild"}, "why": "..."}
+                    {"verb": "fs.nonsense", "scope": {"kind":"wild"}, "why": {"en": "..."}}
                   ]
                 }
               }
@@ -54,13 +60,13 @@ fn need_referencing_undeclared_arg_rejected() {
         r#"{
               "id": "fs",
               "version": "0.1",
-              "name": "Files",
+              "name": {"en": "Files"},
               "operations": {
                 "rm": {
-                  "label": "Delete",
+                  "label": {"en": "Delete"},
                   "args": [],
                   "needs": [
-                    {"verb": "fs.delete", "scope": {"kind":"from-arg","arg":"path"}, "why": "y"}
+                    {"verb": "fs.delete", "scope": {"kind":"from-arg","arg":"path"}, "why": {"en": "y"}}
                   ]
                 }
               }
@@ -83,13 +89,13 @@ fn need_binding_to_text_arg_rejected() {
         r#"{
               "id": "fs",
               "version": "0.1",
-              "name": "Files",
+              "name": {"en": "Files"},
               "operations": {
                 "rm": {
-                  "label": "Delete",
+                  "label": {"en": "Delete"},
                   "args": [{"name": "path", "kind": "text"}],
                   "needs": [
-                    {"verb": "fs.delete", "scope": {"kind":"from-arg","arg":"path"}, "why": "y"}
+                    {"verb": "fs.delete", "scope": {"kind":"from-arg","arg":"path"}, "why": {"en": "y"}}
                   ]
                 }
               }
@@ -105,10 +111,10 @@ fn duplicate_arg_rejected() {
         r#"{
               "id": "fs",
               "version": "0.1",
-              "name": "Files",
+              "name": {"en": "Files"},
               "operations": {
                 "x": {
-                  "label": "X",
+                  "label": {"en": "X"},
                   "args": [
                     {"name": "p", "kind": "path"},
                     {"name": "p", "kind": "path"}
@@ -143,7 +149,7 @@ fn missing_english_in_op_label_rejected() {
         r#"{
               "id": "fs",
               "version": "0.1",
-              "name": "Files",
+              "name": {"en": "Files"},
               "operations": {
                 "ls": {
                   "label": {"zh-CN": "列表"}
@@ -164,15 +170,15 @@ fn resolve_needs_substitutes_runtime_arg_value() {
         r#"{
               "id": "fs",
               "version": "0.1",
-              "name": "Files",
+              "name": {"en": "Files"},
               "operations": {
                 "rm": {
-                  "label": "Delete",
+                  "label": {"en": "Delete"},
                   "args": [{"name": "path", "kind": "path", "required": true}],
                   "needs": [
                     {"verb": "fs.delete",
                      "scope": {"kind":"from-arg","arg":"path"},
-                     "why": "Remove the file you specified."}
+                     "why": {"en": "Remove the file you specified."}}
                   ]
                 }
               }
@@ -183,10 +189,7 @@ fn resolve_needs_substitutes_runtime_arg_value() {
     let caps = m.resolve_needs("rm", &args).unwrap();
     assert_eq!(caps.len(), 1);
     assert_eq!(caps[0][0].verb, Verb::FS_DELETE);
-    assert_eq!(
-        caps[0][0].scope,
-        Scope::path("/home/jay/x.md")
-    );
+    assert_eq!(caps[0][0].scope, Scope::path("/home/jay/x.md"));
 }
 
 #[test]
@@ -195,10 +198,10 @@ fn resolve_needs_uses_literal_arg_default() {
         r#"{
               "id": "fs",
               "version": "0.1",
-              "name": "Files",
+              "name": {"en": "Files"},
               "operations": {
                 "search": {
-                  "label": "Search",
+                  "label": {"en": "Search"},
                   "args": [
                     {"name": "query", "kind": "text", "required": true},
                     {"name": "path", "kind": "path", "default": "/workspace"}
@@ -206,7 +209,7 @@ fn resolve_needs_uses_literal_arg_default() {
                   "needs": [
                     {"verb": "fs.read",
                      "scope": {"kind":"from-arg","arg":"path"},
-                     "why": "Search the default workspace."}
+                     "why": {"en": "Search the default workspace."}}
                   ]
                 }
               }
@@ -219,63 +222,30 @@ fn resolve_needs_uses_literal_arg_default() {
 
     assert_eq!(caps.len(), 1);
     assert_eq!(caps[0][0].verb, Verb::FS_READ);
-    assert_eq!(
-        caps[0][0].scope,
-        Scope::path("/workspace")
-    );
+    assert_eq!(caps[0][0].scope, Scope::path("/workspace"));
 }
 
 #[test]
-fn resolve_needs_uses_validated_default_binding() {
-    let manifest = parse(
+fn removed_derived_defaults_are_rejected() {
+    let error = Manifest::from_json(
         r#"{
               "id": "net",
               "version": "0.1",
-              "name": "Network",
+              "name": {"en": "Network"},
               "operations": {
                 "download": {
-                  "label": "Download",
+                  "label": {"en": "Download"},
                   "args": [
                     {"name": "url", "kind": "text", "required": true},
                     {"name": "output", "kind": "path",
-                     "default_from": {
-                       "arg": "url",
-                       "transform": "url-path-basename",
-                       "prefix": "~/",
-                       "fallback": "download"
-                     }}
-                  ],
-                  "needs": [
-                    {"verb": "fs.write",
-                     "scope": {"kind":"from-arg","arg":"output"},
-                     "why": "Write the downloaded file."}
+                     "default_from": {"arg": "url"}}
                   ]
                 }
               }
             }"#,
-    );
-    let mut args = BTreeMap::new();
-    args.insert(
-        "url".to_string(),
-        serde_json::json!("https://example.com/releases/archive.tar?download=1"),
-    );
-
-    let caps = manifest.resolve_needs("download", &args).unwrap();
-
-    assert_eq!(
-        caps[0][0].scope,
-        Scope::path("~/archive.tar")
-    );
-
-    args.insert(
-        "url".to_string(),
-        serde_json::json!("https://example.com/releases/"),
-    );
-    let fallback = manifest.resolve_needs("download", &args).unwrap();
-    assert_eq!(
-        fallback[0][0].scope,
-        Scope::path("~/download")
-    );
+    )
+    .unwrap_err();
+    assert!(matches!(error, ManifestError::Json(_)));
 }
 
 #[test]
@@ -284,10 +254,10 @@ fn invalid_arg_defaults_are_rejected() {
         r#"{
               "id": "fs",
               "version": "0.1",
-              "name": "Files",
+              "name": {"en": "Files"},
               "operations": {
                 "ls": {
-                  "label": "List",
+                  "label": {"en": "List"},
                   "args": [{"name": "path", "kind": "path", "default": 42}]
                 }
               }
@@ -299,18 +269,17 @@ fn invalid_arg_defaults_are_rejected() {
         ManifestError::ArgDefaultInvalid { .. }
     ));
 
-    let forward_reference = Manifest::from_json(
+    let required_default = Manifest::from_json(
         r#"{
               "id": "net",
               "version": "0.1",
-              "name": "Network",
+              "name": {"en": "Network"},
               "operations": {
                 "download": {
-                  "label": "Download",
+                  "label": {"en": "Download"},
                   "args": [
                     {"name": "output", "kind": "path",
-                     "default_from": {"arg": "url"}},
-                    {"name": "url", "kind": "text", "required": true}
+                     "required": true, "default": "/tmp/output"}
                   ]
                 }
               }
@@ -318,21 +287,18 @@ fn invalid_arg_defaults_are_rejected() {
     )
     .unwrap_err();
     assert!(matches!(
-        forward_reference,
+        required_default,
         ManifestError::ArgDefaultInvalid { .. }
     ));
 }
 
 #[test]
 fn null_defaults_and_ambiguous_positionals_are_rejected() {
-    for arg in [
-        r#"{"name":"value","kind":"text","default":null}"#,
-        r#"{"name":"value","kind":"text","default_from":null}"#,
-    ] {
+    for arg in [r#"{"name":"value","kind":"text","default":null}"#] {
         let body = format!(
             r#"{{
-                "id":"defaults","version":"0.1","name":"Defaults",
-                "operations":{{"run":{{"label":"Run","args":[{arg}]}}}}
+                "id":"defaults","version":"0.1","name": {{"en": "Defaults"}},
+                "operations":{{"run":{{"label": {{"en": "Run"}},"args":[{arg}]}}}}
             }}"#
         );
         assert!(Manifest::from_json(&body).is_err());
@@ -340,43 +306,41 @@ fn null_defaults_and_ambiguous_positionals_are_rejected() {
 
     let ambiguous = Manifest::from_json(
         r#"{
-            "id":"ambiguous","version":"0.1","name":"Ambiguous",
-            "operations":{"run":{"label":"Run","args":[
+            "id":"ambiguous","version":"0.1","name": {"en": "Ambiguous"},
+            "operations":{"run":{"label": {"en": "Run"},"args":[
                 {"name":"destination","kind":"name"},
                 {"name":"text","kind":"text","required":true}
             ]}}
         }"#,
     )
     .unwrap_err();
-    assert!(matches!(
-        ambiguous,
-        ManifestError::ArgDefaultInvalid { .. }
-    ));
+    assert!(matches!(ambiguous, ManifestError::ArgDefaultInvalid { .. }));
 }
 
 #[test]
-fn session_tool_defaults_feed_arguments_and_capabilities() {
+fn mcp_tool_defaults_feed_arguments_and_capabilities() {
     let manifest = Manifest::from_json(
         r#"{
-            "id":"session-defaults","version":"0.1","name":"Session defaults",
-            "session":{"tools":[{
-                "name":"session-defaults.read","summary":"Read",
+              "schema_version": 2,
+            "id":"session-defaults","version":"0.1","name": {"en": "Session defaults"},
+            "mcp":{"tools":[{
+                "name":"session-defaults.read","summary": {"en": "Read"},
                 "args":[
                     {"name":"key","kind":"name","default":"primary"},
                     {"name":"limit","kind":"integer","default":10}
                 ],
-                "needs":[{"verb":"data.kv.read","scope":{"kind":"from-arg","arg":"key"},"why":"Read"}]
+                "needs":[{"verb":"data.kv.read","scope":{"kind":"from-arg","arg":"key"},"why": {"en": "Read"}}]
             }]}
         }"#,
     )
     .unwrap();
     let resolved = manifest
-        .resolve_session_tool_args("session-defaults.read", &BTreeMap::new())
+        .resolve_mcp_tool_args("session-defaults.read", &BTreeMap::new())
         .unwrap();
     assert_eq!(resolved["key"], serde_json::json!("primary"));
     assert_eq!(resolved["limit"], serde_json::json!(10));
     let caps = manifest
-        .resolve_session_tool_needs("session-defaults.read", &BTreeMap::new())
+        .resolve_mcp_tool_needs("session-defaults.read", &BTreeMap::new())
         .unwrap();
     assert_eq!(caps[0][0].scope, Scope::name("primary"));
 }
@@ -385,11 +349,11 @@ fn session_tool_defaults_feed_arguments_and_capabilities() {
 fn fixed_path_scopes_reject_environment_placeholders() {
     let error = Manifest::from_json(
         r#"{
-            "id":"placeholder","version":"0.1","name":"Placeholder",
-            "operations":{"read":{"label":"Read","needs":[{
+            "id":"placeholder","version":"0.1","name": {"en": "Placeholder"},
+            "operations":{"read":{"label": {"en": "Read"},"needs":[{
                 "verb":"fs.read",
                 "scope":{"kind":"fixed","scope":{"kind":"path","value":"$HOME/data/**"}},
-                "why":"Read"
+                "why": {"en": "Read"}
             }]}}
         }"#,
     )
@@ -401,48 +365,40 @@ fn fixed_path_scopes_reject_environment_placeholders() {
 fn conditional_needs_skip_only_explicit_inactive_cases() {
     let manifest = Manifest::from_json(
         r#"{
-            "id":"conditional","version":"0.1","name":"Conditional",
-            "operations":{"explain":{"label":"Explain","args":[
+            "id":"conditional","version":"0.1","name": {"en": "Conditional"},
+            "operations":{"explain":{"label": {"en": "Explain"},"args":[
                 {"name":"file","kind":"path","binding":"flag"},
                 {"name":"provider","kind":"name","binding":"flag","default":"local"}
             ],"needs":[
                 {"verb":"fs.read","scope":{"kind":"from-arg","arg":"file"},
-                 "when":{"kind":"arg-present","arg":"file"},"why":"Read file"},
+                 "when":{"kind":"arg-present","arg":"file"},"why": {"en": "Read file"}},
                 {"verb":"secret.read","scope":{"kind":"fixed","scope":{"kind":"name","value":"default/TOKEN"}},
-                 "when":{"kind":"arg-equals","arg":"provider","value":"cloud"},"why":"Read token"}
+                 "when":{"kind":"arg-equals","arg":"provider","value":"cloud"},"why": {"en": "Read token"}}
             ]}}
         }"#,
     )
     .unwrap();
 
-    let local = manifest
-        .resolve_needs("explain", &BTreeMap::new())
-        .unwrap();
+    let local = manifest.resolve_needs("explain", &BTreeMap::new()).unwrap();
     assert_eq!(local, [Vec::new(), Vec::new()]);
 
     let mut cloud_file = BTreeMap::new();
     cloud_file.insert("file".to_string(), serde_json::json!("/workspace/a.txt"));
     cloud_file.insert("provider".to_string(), serde_json::json!("cloud"));
     let active = manifest.resolve_needs("explain", &cloud_file).unwrap();
-    assert_eq!(
-        active[0][0].scope,
-        Scope::path("/workspace/a.txt")
-    );
-    assert_eq!(
-        active[1][0].scope,
-        Scope::name("default/TOKEN")
-    );
+    assert_eq!(active[0][0].scope, Scope::path("/workspace/a.txt"));
+    assert_eq!(active[1][0].scope, Scope::name("default/TOKEN"));
 }
 
 #[test]
 fn optional_capability_bindings_require_conditions() {
     let error = Manifest::from_json(
         r#"{
-            "id":"unsafe","version":"0.1","name":"Unsafe",
-            "operations":{"read":{"label":"Read","args":[
+            "id":"unsafe","version":"0.1","name": {"en": "Unsafe"},
+            "operations":{"read":{"label": {"en": "Read"},"args":[
                 {"name":"file","kind":"path","binding":"flag"}
             ],"needs":[
-                {"verb":"fs.read","scope":{"kind":"from-arg","arg":"file"},"why":"Read"}
+                {"verb":"fs.read","scope":{"kind":"from-arg","arg":"file"},"why": {"en": "Read"}}
             ]}}
         }"#,
     )
@@ -454,12 +410,12 @@ fn optional_capability_bindings_require_conditions() {
 fn repeatable_scope_arguments_resolve_one_capability_per_value() {
     let manifest = Manifest::from_json(
         r#"{
-            "id":"repeat","version":"0.1","name":"Repeat",
-            "operations":{"read":{"label":"Read","args":[
+            "id":"repeat","version":"0.1","name": {"en": "Repeat"},
+            "operations":{"read":{"label": {"en": "Read"},"args":[
                 {"name":"path","kind":"path","binding":"flag","repeatable":true}
             ],"needs":[
                 {"verb":"fs.read","scope":{"kind":"from-arg","arg":"path"},
-                 "when":{"kind":"arg-present","arg":"path"},"why":"Read paths"}
+                 "when":{"kind":"arg-present","arg":"path"},"why": {"en": "Read paths"}}
             ]}}
         }"#,
     )
@@ -475,10 +431,7 @@ fn repeatable_scope_arguments_resolve_one_capability_per_value() {
             .iter()
             .map(|cap| cap.scope.clone())
             .collect::<Vec<_>>(),
-        [
-            Scope::path("/workspace/a"),
-            Scope::path("/workspace/b")
-        ]
+        [Scope::path("/workspace/a"), Scope::path("/workspace/b")]
     );
 }
 
@@ -486,19 +439,19 @@ fn repeatable_scope_arguments_resolve_one_capability_per_value() {
 fn scope_transforms_derive_exact_parent_and_url_host_resources() {
     let manifest = Manifest::from_json(
         r#"{
-            "id":"transforms","version":"0.1","name":"Transforms",
+            "id":"transforms","version":"0.1","name": {"en": "Transforms"},
             "operations":{
-                "tag":{"label":"Tag","args":[
+                "tag":{"label": {"en": "Tag"},"args":[
                     {"name":"path","kind":"path","required":true}
                 ],"needs":[
                     {"verb":"fs.write","scope":{"kind":"from-arg","arg":"path",
-                     "transform":"parent"},"why":"Write sidecar"}
+                     "transform":"parent"},"why": {"en": "Write sidecar"}}
                 ]},
-                "fetch":{"label":"Fetch","args":[
+                "fetch":{"label": {"en": "Fetch"},"args":[
                     {"name":"url","kind":"text","required":true}
                 ],"needs":[
                     {"verb":"net.dial","scope":{"kind":"from-arg","arg":"url",
-                     "transform":"url-host"},"why":"Fetch host"}
+                     "transform":"url-host"},"why": {"en": "Fetch host"}}
                 ]}
             }
         }"#,
@@ -507,10 +460,7 @@ fn scope_transforms_derive_exact_parent_and_url_host_resources() {
     let tag = manifest
         .resolve_needs(
             "tag",
-            &BTreeMap::from([(
-                "path".to_string(),
-                serde_json::json!("/workspace/note.txt"),
-            )]),
+            &BTreeMap::from([("path".to_string(), serde_json::json!("/workspace/note.txt"))]),
         )
         .unwrap();
     assert_eq!(tag[0][0].scope, Scope::path("/workspace"));
@@ -561,12 +511,12 @@ fn python_and_rust_share_url_host_scope_vectors() {
     .unwrap();
     let manifest = Manifest::from_json(
         r#"{
-            "id":"url-vectors","version":"1","name":"URL vectors",
-            "operations":{"fetch":{"label":"Fetch","args":[
+            "id":"url-vectors","version":"1","name": {"en": "URL vectors"},
+            "operations":{"fetch":{"label": {"en": "Fetch"},"args":[
                 {"name":"url","kind":"text","required":true}
             ],"needs":[{"verb":"net.dial","scope":{
                 "kind":"from-arg","arg":"url","transform":"url-host"
-            },"why":"Fetch URL"}]}}
+            },"why": {"en": "Fetch URL"}}]}}
         }"#,
     )
     .unwrap();
@@ -588,11 +538,7 @@ fn python_and_rust_share_url_host_scope_vectors() {
             let expected = vector["scope"].as_str().unwrap();
             let resolved = resolved.unwrap();
             assert_eq!(resolved.values["url"], canonical_url, "{url}");
-            assert_eq!(
-                resolved.needs[0][0].scope,
-                Scope::host(expected),
-                "{url}"
-            );
+            assert_eq!(resolved.needs[0][0].scope, Scope::host(expected), "{url}");
         }
     }
 }
@@ -702,8 +648,8 @@ fn invalid_conditional_requiredness_is_rejected() {
     ] {
         let body = format!(
             r#"{{
-              "id":"bad-condition","version":"1","name":"Bad",
-              "operations":{{"run":{{"label":"Run","args":{args}}}}}
+              "id":"bad-condition","version":"1","name": {{"en": "Bad"}},
+              "operations":{{"run":{{"label": {{"en": "Run"}},"args":{args}}}}}
             }}"#
         );
         assert!(Manifest::from_json(&body).is_err(), "accepted {args}");
@@ -716,13 +662,11 @@ fn ambiguous_repeatable_declarations_are_rejected() {
         r#"{"name":"toggle","kind":"bool","repeatable":true}"#,
         r#"{"name":"first","kind":"text","repeatable":true},
             {"name":"later","kind":"text"}"#,
-        r#"{"name":"path","kind":"path","repeatable":true,
-            "default_from":{"arg":"source"}}"#,
     ] {
         let body = format!(
             r#"{{
-                "id":"bad-repeat","version":"0.1","name":"Bad repeat",
-                "operations":{{"run":{{"label":"Run","args":[{arg}]}}}}
+                "id":"bad-repeat","version":"0.1","name": {{"en": "Bad repeat"}},
+                "operations":{{"run":{{"label": {{"en": "Run"}},"args":[{arg}]}}}}
             }}"#
         );
         assert!(Manifest::from_json(&body).is_err(), "accepted {arg}");
@@ -730,7 +674,7 @@ fn ambiguous_repeatable_declarations_are_rejected() {
 }
 
 #[test]
-fn positional_default_gaps_and_alias_conflicts_are_rejected() {
+fn positional_default_gaps_and_removed_aliases_are_rejected() {
     for args in [
         r#"[
           {"name":"optional","kind":"text"},
@@ -751,8 +695,8 @@ fn positional_default_gaps_and_alias_conflicts_are_rejected() {
     ] {
         let body = format!(
             r#"{{
-              "id":"bad-layout","version":"1","name":"Bad",
-              "operations":{{"run":{{"label":"Run","args":{args}}}}}
+              "id":"bad-layout","version":"1","name": {{"en": "Bad"}},
+              "operations":{{"run":{{"label": {{"en": "Run"}},"args":{args}}}}}
             }}"#
         );
         assert!(Manifest::from_json(&body).is_err(), "accepted {args}");
@@ -768,21 +712,21 @@ fn scope_binding_discriminators_reject_missing_and_unknown_payloads() {
     ] {
         let body = format!(
             r#"{{
-                "id":"scope-shape","version":"0.1","name":"Scope shape",
-                "operations":{{"read":{{"label":"Read","args":[
+                "id":"scope-shape","version":"0.1","name": {{"en": "Scope shape"}},
+                "operations":{{"read":{{"label": {{"en": "Read"}},"args":[
                     {{"name":"path","kind":"path","required":true}}
-                ],"needs":[{{"verb":"fs.read","scope":{scope},"why":"Read"}}]}}}}
+                ],"needs":[{{"verb":"fs.read","scope":{scope},"why": {{"en": "Read"}}}}]}}}}
             }}"#
         );
         assert!(Manifest::from_json(&body).is_err(), "accepted {scope}");
     }
 
     let condition_with_wrong_payload = r#"{
-        "id":"condition-shape","version":"0.1","name":"Condition shape",
-        "operations":{"read":{"label":"Read","args":[
+        "id":"condition-shape","version":"0.1","name": {"en": "Condition shape"},
+        "operations":{"read":{"label": {"en": "Read"},"args":[
             {"name":"path","kind":"path","binding":"flag"}
         ],"needs":[{"verb":"fs.read","scope":{"kind":"from-arg","arg":"path"},
-            "when":{"kind":"arg-present","arg":"path","value":"/tmp"},"why":"Read"}]}}
+            "when":{"kind":"arg-present","arg":"path","value":"/tmp"},"why": {"en": "Read"}}]}}
     }"#;
     assert!(Manifest::from_json(condition_with_wrong_payload).is_err());
 }
@@ -793,14 +737,14 @@ fn resolve_needs_with_fixed_scope() {
         r#"{
               "id": "log",
               "version": "0.1",
-              "name": "Log",
+              "name": {"en": "Log"},
               "operations": {
                 "tail": {
-                  "label": "Tail logs",
+                  "label": {"en": "Tail logs"},
                   "needs": [
                     {"verb": "data.log.read",
                      "scope": {"kind":"fixed","scope":{"kind":"name","value":"system/*"}},
-                     "why": "Read recent log lines."}
+                     "why": {"en": "Read recent log lines."}}
                   ]
                 }
               }
@@ -808,10 +752,7 @@ fn resolve_needs_with_fixed_scope() {
     );
     let caps = m.resolve_needs("tail", &BTreeMap::new()).unwrap();
     assert_eq!(caps[0][0].verb, Verb::DATA_LOG_READ);
-    assert_eq!(
-        caps[0][0].scope,
-        Scope::name("system/*")
-    );
+    assert_eq!(caps[0][0].scope, Scope::name("system/*"));
 }
 
 #[test]
@@ -820,15 +761,15 @@ fn resolve_needs_missing_arg_at_runtime_is_error() {
         r#"{
               "id": "fs",
               "version": "0.1",
-              "name": "Files",
+              "name": {"en": "Files"},
               "operations": {
                 "rm": {
-                  "label": "Delete",
+                  "label": {"en": "Delete"},
                   "args": [{"name": "path", "kind": "path", "required": true}],
                   "needs": [
                     {"verb": "fs.delete",
                      "scope": {"kind":"from-arg","arg":"path"},
-                     "why": "Remove the file you specified."}
+                     "why": {"en": "Remove the file you specified."}}
                   ]
                 }
               }
@@ -846,7 +787,7 @@ fn resolve_needs_missing_arg_at_runtime_is_error() {
 
 #[test]
 fn runtime_default_is_python() {
-    let m = parse(r#"{"id":"x","version":"0","name":"X"}"#);
+    let m = parse(r#"{"id":"x","version":"0","name": {"en": "X"}}"#);
     assert_eq!(m.runtime, Runtime::Python);
     assert_eq!(m.runtime.default_entry(), "main.py");
 }
@@ -856,32 +797,32 @@ fn full_example_round_trips() {
     let src = r#"{
           "id": "fs",
           "version": "0.2.0",
-          "name": "Files",
-          "summary": "Browse, read, write, and search files.",
+          "name": {"en": "Files"},
+          "summary": {"en": "Browse, read, write, and search files."},
           "icon": "📁",
           "runtime": "python",
           "entry": "main.py",
           "operations": {
             "ls": {
-              "label": "List files",
-              "summary": "Show the names of files inside a folder.",
+              "label": {"en": "List files"},
+              "summary": {"en": "Show the names of files inside a folder."},
               "args": [{"name":"path","kind":"path","required":true}],
               "needs": [
                 {"verb":"fs.meta",
                  "scope":{"kind":"from-arg","arg":"path"},
-                 "why":"Read directory entries to list files."}
+                 "why": {"en": "Read directory entries to list files."}}
               ]
             },
             "mv": {
-              "label": "Move a file",
+              "label": {"en": "Move a file"},
               "args": [
                 {"name":"src","kind":"path","required":true},
                 {"name":"dst","kind":"path","required":true}
               ],
               "needs": [
-                {"verb":"fs.read",   "scope":{"kind":"from-arg","arg":"src"}, "why":"Read the source file."},
-                {"verb":"fs.write",  "scope":{"kind":"from-arg","arg":"dst"}, "why":"Write to the destination."},
-                {"verb":"fs.delete", "scope":{"kind":"from-arg","arg":"src"}, "why":"Remove the source after copying."}
+                {"verb":"fs.read",   "scope":{"kind":"from-arg","arg":"src"}, "why": {"en": "Read the source file."}},
+                {"verb":"fs.write",  "scope":{"kind":"from-arg","arg":"dst"}, "why": {"en": "Write to the destination."}},
+                {"verb":"fs.delete", "scope":{"kind":"from-arg","arg":"src"}, "why": {"en": "Remove the source after copying."}}
               ]
             }
           }
@@ -904,7 +845,7 @@ fn ai_block_with_valid_policy_parses() {
         r#"{
               "id": "summarize",
               "version": "0.1",
-              "name": "Summarize",
+              "name": {"en": "Summarize"},
               "ai": {
                 "budget": {"monthly_units": 100000},
                 "safety": "strict",
@@ -912,11 +853,11 @@ fn ai_block_with_valid_policy_parses() {
               },
               "operations": {
                 "run": {
-                  "label": "Summarize text",
+                  "label": {"en": "Summarize text"},
                   "needs": [
                     {"verb": "ai.chat.untrusted",
                      "scope": {"kind":"fixed","scope":{"kind":"name","value":"*"}},
-                     "why": "Summarize the input text."}
+                     "why": {"en": "Summarize the input text."}}
                   ]
                 }
               }
@@ -935,14 +876,14 @@ fn ai_need_without_ai_block_rejected() {
         r#"{
               "id": "rogue",
               "version": "0.1",
-              "name": "Rogue",
+              "name": {"en": "Rogue"},
               "operations": {
                 "run": {
-                  "label": "Run",
+                  "label": {"en": "Run"},
                   "needs": [
                     {"verb": "ai.chat",
                      "scope": {"kind":"fixed","scope":{"kind":"name","value":"*"}},
-                     "why": "Talk to a model without declaring a policy."}
+                     "why": {"en": "Talk to a model without declaring a policy."}}
                   ]
                 }
               }
@@ -964,7 +905,7 @@ fn ai_bypass_rejected_for_apps() {
         r#"{
               "id": "rogue",
               "version": "0.1",
-              "name": "Rogue",
+              "name": {"en": "Rogue"},
               "ai": {
                 "budget": {"monthly_units": 1},
                 "safety": "minimal",
@@ -972,11 +913,11 @@ fn ai_bypass_rejected_for_apps() {
               },
               "operations": {
                 "run": {
-                  "label": "Run",
+                  "label": {"en": "Run"},
                   "needs": [
                     {"verb": "ai.bypass",
                      "scope": {"kind":"fixed","scope":{"kind":"name","value":"*"}},
-                     "why": "Skip safety pipeline."}
+                     "why": {"en": "Skip safety pipeline."}}
                   ]
                 }
               }
@@ -995,7 +936,7 @@ fn ai_block_with_empty_origins_rejected() {
         r#"{
               "id": "summarize",
               "version": "0.1",
-              "name": "Summarize",
+              "name": {"en": "Summarize"},
               "ai": {
                 "budget": {"monthly_units": 1},
                 "safety": "strict",
@@ -1013,7 +954,7 @@ fn ai_origins_default_to_trusted() {
         r#"{
               "id": "summarize",
               "version": "0.1",
-              "name": "Summarize",
+              "name": {"en": "Summarize"},
               "ai": {
                 "budget": {"monthly_units": 1},
                 "safety": "strict"
@@ -1031,7 +972,7 @@ fn ai_tools_default_to_empty_list() {
         r#"{
               "id": "summarize",
               "version": "0.1",
-              "name": "Summarize",
+              "name": {"en": "Summarize"},
               "ai": {
                 "budget": {"monthly_units": 1},
                 "safety": "strict",
@@ -1050,7 +991,7 @@ fn ai_tools_duplicate_entry_rejected() {
         r#"{
               "id": "summarize",
               "version": "0.1",
-              "name": "Summarize",
+              "name": {"en": "Summarize"},
               "ai": {
                 "budget": {"monthly_units": 1},
                 "safety": "strict",
@@ -1069,7 +1010,7 @@ fn ai_tools_unknown_name_rejected_against_catalog() {
         r#"{
               "id": "summarize",
               "version": "0.1",
-              "name": "Summarize",
+              "name": {"en": "Summarize"},
               "ai": {
                 "budget": {"monthly_units": 1},
                 "safety": "strict",
@@ -1091,7 +1032,7 @@ fn ai_tools_known_names_pass_catalog_check() {
         r#"{
               "id": "summarize",
               "version": "0.1",
-              "name": "Summarize",
+              "name": {"en": "Summarize"},
               "ai": {
                 "budget": {"monthly_units": 1},
                 "safety": "strict",
@@ -1112,7 +1053,7 @@ fn manifest_without_ai_block_skips_tool_catalog_check() {
         r#"{
               "id": "calc",
               "version": "0.1",
-              "name": "Calc"
+              "name": {"en": "Calc"}
             }"#,
     )
     .unwrap();
@@ -1120,62 +1061,252 @@ fn manifest_without_ai_block_skips_tool_catalog_check() {
 }
 
 // -----------------------------------------------------------------
-// Session block tests (Phase 11)
+// MCP service block tests
 // -----------------------------------------------------------------
 
 #[test]
-fn session_block_parses_with_minimal_tool() {
+fn mcp_block_parses_with_minimal_tool() {
     let m = parse(
         r#"{
+              "schema_version": 2,
               "id": "kv",
               "version": "0.1",
-              "name": "KV",
-              "session": {
+              "name": {"en": "KV"},
+              "mcp": {
                 "entry": "server.py",
                 "tools": [
                   {
                     "name": "kv.list",
-                    "summary": "List keys.",
+                    "summary": {"en": "List keys."},
                     "needs": [
                       {"verb": "data.kv.read",
                        "scope": {"kind":"wild"},
-                       "why": "Scan every key."}
+                       "why": {"en": "Scan every key."}}
                     ]
                   }
                 ]
               }
             }"#,
     );
-    let session = m.session.expect("session block parsed");
-    assert_eq!(session.entry.as_deref(), Some("server.py"));
-    assert_eq!(session.transport, SessionTransport::Stdio);
-    assert_eq!(session.tools.len(), 1);
-    assert_eq!(session.tools[0].name, "kv.list");
+    let service = m.mcp.expect("mcp block parsed");
+    assert_eq!(service.entry.as_deref(), Some("server.py"));
+    assert_eq!(service.transport, McpTransport::Stdio);
+    assert_eq!(service.tools.len(), 1);
+    assert_eq!(service.tools[0].name, "kv.list");
 }
 
 #[test]
-fn session_tool_default_entry_per_runtime() {
-    assert_eq!(Runtime::Python.default_session_entry(), "server.py");
-    assert_eq!(Runtime::Node.default_session_entry(), "server.js");
+fn mcp_first_service_parses_lifecycle_access_and_tools() {
+    let manifest = parse(
+        r#"{
+              "schema_version": 2,
+              "id": "email",
+              "version": "1.0.0",
+              "name": {"en": "Email"},
+              "mcp": {
+                "entry": "server.py",
+                "lifecycle": "always-on",
+                "access": {
+                  "system_agent": true,
+                  "apps": ["crm"],
+                  "external_agents": false
+                },
+                "tools": [
+                  {
+                    "name": "email.search",
+                    "summary": {"en": "Search mail."},
+                    "args": [{"name":"query","kind":"text","required":true}]
+                  }
+                ]
+              }
+            }"#,
+    );
+    assert_eq!(manifest.schema_version, Some(2));
+    let service = manifest.mcp.as_ref().expect("MCP service");
+    assert_eq!(service.entry.as_deref(), Some("server.py"));
+    assert_eq!(service.lifecycle, McpLifecycle::AlwaysOn);
+    assert!(service.access.system_agent);
+    assert_eq!(service.access.apps, vec!["crm"]);
+    assert!(!service.access.external_agents);
+    assert_eq!(service.tools[0].name, "email.search");
 }
 
 #[test]
-fn session_tool_resolve_needs_from_arg() {
-    let m = parse(
+fn mcp_first_service_uses_restrictive_caller_defaults() {
+    let manifest = parse(
+        r#"{
+              "schema_version": 2,
+              "id": "email",
+              "version": "1.0.0",
+              "name": {"en": "Email"},
+              "mcp": {"tools":[{"name":"email.status","summary": {"en": "Status"}}]}
+            }"#,
+    );
+    let service = manifest.mcp.as_ref().expect("MCP service");
+    assert_eq!(service.lifecycle, McpLifecycle::Lazy);
+    assert!(service.access.system_agent);
+    assert!(service.access.apps.is_empty());
+    assert!(!service.access.external_agents);
+}
+
+#[test]
+fn mcp_first_service_requires_at_least_one_tool() {
+    let error = Manifest::from_json(
+        r#"{
+              "schema_version": 2,
+              "id": "email",
+              "version": "1.0.0",
+              "name": {"en": "Email"},
+              "mcp": {"tools":[]}
+            }"#,
+    )
+    .unwrap_err();
+    assert!(matches!(error, ManifestError::McpNoTools));
+}
+
+#[test]
+fn manifest_and_mcp_objects_reject_unknown_fields() {
+    for body in [
+        r#"{"id":"closed","version":"1","name": {"en": "Closed"},"unknown":true}"#,
+        r#"{"id":"closed","version":"1","name": {"en": "Closed"},"operations":{"run":{"label": {"en": "Run"},"unknown":true}}}"#,
+        r#"{"schema_version":2,"id":"closed","version":"1","name": {"en": "Closed"},"mcp":{"unknown":true,"tools":[{"name":"closed.run","summary": {"en": "Run"}}]}}"#,
+        r#"{"schema_version":2,"id":"closed","version":"1","name": {"en": "Closed"},"mcp":{"tools":[{"name":"closed.run","summary": {"en": "Run"},"unknown":true}]}}"#,
+    ] {
+        assert!(matches!(
+            Manifest::from_json(body),
+            Err(ManifestError::Json(_))
+        ));
+    }
+}
+
+#[test]
+fn mcp_tool_args_reject_cli_bindings() {
+    let error = Manifest::from_json(
+        r#"{
+              "schema_version": 2,
+              "id": "closed",
+              "version": "1",
+              "name": {"en": "Closed"},
+              "mcp": {"tools":[{
+                "name":"closed.run",
+                "summary": {"en": "Run"},
+                "args":[{"name":"value","kind":"text","binding":"flag"}]
+              }]}
+            }"#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error,
+        ManifestError::McpArgBindingNotAllowed { .. }
+    ));
+}
+
+#[test]
+fn mcp_first_service_requires_schema_version_two() {
+    let error = Manifest::from_json(
+        r#"{
+              "id": "email",
+              "version": "1.0.0",
+              "name": {"en": "Email"},
+              "mcp": {"tools":[]}
+            }"#,
+    )
+    .unwrap_err();
+    assert!(matches!(error, ManifestError::McpSchemaVersion));
+}
+
+#[test]
+fn a_removed_session_block_is_rejected() {
+    let error = Manifest::from_json(
         r#"{
               "id": "kv",
               "version": "0.1",
-              "name": "KV",
+              "name": {"en": "KV"},
               "session": {
+                "entry": "server.py",
+                "tools": [{"name": "kv.list", "summary": {"en": "List keys."}}]
+              }
+            }"#,
+    )
+    .unwrap_err();
+    assert!(matches!(error, ManifestError::RemovedSessionField));
+}
+
+#[test]
+fn mcp_first_service_rejects_invalid_callers() {
+    let invalid = Manifest::from_json(
+        r#"{
+              "schema_version": 2,
+              "id": "email",
+              "version": "1.0.0",
+              "name": {"en": "Email"},
+              "mcp": {
+                "access": {"apps":["Bad/App"]},
+                "tools":[{"name":"email.status","summary": {"en": "Status"}}]
+              }
+            }"#,
+    )
+    .unwrap_err();
+    assert!(matches!(invalid, ManifestError::McpAccessInvalidApp { .. }));
+
+    let duplicate = Manifest::from_json(
+        r#"{
+              "schema_version": 2,
+              "id": "email",
+              "version": "1.0.0",
+              "name": {"en": "Email"},
+              "mcp": {
+                "access": {"apps":["crm", "crm"]},
+                "tools":[{"name":"email.status","summary": {"en": "Status"}}]
+              }
+            }"#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        duplicate,
+        ManifestError::McpAccessDuplicateApp { .. }
+    ));
+
+    let unknown_field = Manifest::from_json(
+        r#"{
+              "schema_version": 2,
+              "id": "email",
+              "version": "1.0.0",
+              "name": {"en": "Email"},
+              "mcp": {
+                "access": {"systemAgent":false},
+                "tools":[{"name":"email.status","summary": {"en": "Status"}}]
+              }
+            }"#,
+    )
+    .unwrap_err();
+    assert!(matches!(unknown_field, ManifestError::Json(_)));
+}
+
+#[test]
+fn mcp_tool_default_entry_per_runtime() {
+    assert_eq!(Runtime::Python.default_mcp_entry(), "server.py");
+    assert_eq!(Runtime::Node.default_mcp_entry(), "server.js");
+}
+
+#[test]
+fn mcp_tool_resolve_needs_from_arg() {
+    let m = parse(
+        r#"{
+              "schema_version": 2,
+              "id": "kv",
+              "version": "0.1",
+              "name": {"en": "KV"},
+              "mcp": {
                 "tools": [
                   {
                     "name": "kv.get",
-                    "summary": "Get a value.",
+                    "summary": {"en": "Get a value."},
                     "args": [{"name":"key","kind":"name","required":true}],
                     "needs": [
                       {"verb": "data.kv.read",
                        "scope": {"kind":"from-arg","arg":"key"},
-                       "why": "Read the value at the named key."}
+                       "why": {"en": "Read the value at the named key."}}
                     ]
                   }
                 ]
@@ -1184,25 +1315,23 @@ fn session_tool_resolve_needs_from_arg() {
     );
     let mut args = BTreeMap::new();
     args.insert("key".to_string(), serde_json::json!("user/jay"));
-    let caps = m.resolve_session_tool_needs("kv.get", &args).unwrap();
+    let caps = m.resolve_mcp_tool_needs("kv.get", &args).unwrap();
     assert_eq!(caps.len(), 1);
     assert_eq!(caps[0][0].verb, Verb::DATA_KV_READ);
-    assert_eq!(
-        caps[0][0].scope,
-        Scope::name("user/jay")
-    );
+    assert_eq!(caps[0][0].scope, Scope::name("user/jay"));
 }
 
 #[test]
-fn session_repeatable_scope_arg_resolves_every_capability() {
+fn mcp_repeatable_scope_arg_resolves_every_capability() {
     let manifest = parse(
         r#"{
-          "id":"files","version":"0.1","name":"Files",
-          "session":{"tools":[{
-            "name":"files.read","summary":"Read files",
+              "schema_version": 2,
+          "id":"files","version":"0.1","name": {"en": "Files"},
+          "mcp":{"tools":[{
+            "name":"files.read","summary": {"en": "Read files"},
             "args":[{"name":"path","kind":"path","repeatable":true}],
             "needs":[{"verb":"fs.read","scope":{"kind":"from-arg","arg":"path"},
-                      "when":{"kind":"arg-present","arg":"path"},"why":"Read files"}]
+                      "when":{"kind":"arg-present","arg":"path"},"why": {"en": "Read files"}}]
           }]}
         }"#,
     );
@@ -1211,7 +1340,7 @@ fn session_repeatable_scope_arg_resolves_every_capability() {
         serde_json::json!(["/workspace/a", "/workspace/b"]),
     )]);
     let resolved = manifest
-        .resolve_session_tool_needs("files.read", &args)
+        .resolve_mcp_tool_needs("files.read", &args)
         .unwrap();
     assert_eq!(resolved[0].len(), 2);
     assert_eq!(resolved[0][0].scope, Scope::path("/workspace/a"));
@@ -1219,25 +1348,26 @@ fn session_repeatable_scope_arg_resolves_every_capability() {
 }
 
 #[test]
-fn session_effective_call_matches_one_shot_argument_semantics() {
+fn mcp_effective_call_matches_one_shot_argument_semantics() {
     let manifest = parse(
         r#"{
-          "id":"session-parity","version":"0.1","name":"Session parity",
-          "session":{"tools":[{
-            "name":"files.read","summary":"Read files",
+              "schema_version": 2,
+          "id":"session-parity","version":"0.1","name": {"en": "Session parity"},
+          "mcp":{"tools":[{
+            "name":"files.read","summary": {"en": "Read files"},
             "args":[
               {"name":"path","kind":"path","repeatable":true},
-              {"name":"mode","kind":"name","binding":"flag",
+              {"name":"mode","kind":"name",
                "choices":["safe","fast"],"default":"safe"},
               {"name":"enabled","kind":"bool"}
             ],
             "needs":[
               {"verb":"fs.read","scope":{"kind":"from-arg","arg":"path"},
-               "when":{"kind":"arg-present","arg":"path"},"why":"Read files"},
+               "when":{"kind":"arg-present","arg":"path"},"why": {"en": "Read files"}},
               {"verb":"data.kv.read","scope":{"kind":"fixed",
                "scope":{"kind":"name","value":"enabled"}},
                "when":{"kind":"arg-equals","arg":"enabled","value":true},
-               "why":"Read enabled state"}
+               "why": {"en": "Read enabled state"}}
             ]
           }]}
         }"#,
@@ -1246,12 +1376,9 @@ fn session_effective_call_matches_one_shot_argument_semantics() {
         home: "/home/test".into(),
         cwd: Some("/workspace".into()),
     };
-    let supplied = BTreeMap::from([(
-        "path".to_string(),
-        serde_json::json!(["a.txt", "b.txt"]),
-    )]);
+    let supplied = BTreeMap::from([("path".to_string(), serde_json::json!(["a.txt", "b.txt"]))]);
     let effective = manifest
-        .resolve_session_tool_call("files.read", &supplied, &paths)
+        .resolve_mcp_tool_call("files.read", &supplied, &paths)
         .unwrap();
     assert_eq!(
         effective.values["path"],
@@ -1264,102 +1391,113 @@ fn session_effective_call_matches_one_shot_argument_semantics() {
 
     let invalid = BTreeMap::from([("mode".to_string(), serde_json::json!("unsafe"))]);
     assert!(manifest
-        .resolve_session_tool_call("files.read", &invalid, &paths)
+        .resolve_mcp_tool_call("files.read", &invalid, &paths)
         .is_err());
     let undeclared = BTreeMap::from([
         ("path".to_string(), serde_json::json!(["a.txt"])),
-        ("protocol_metadata".to_string(), serde_json::json!("not-an-argument")),
+        (
+            "protocol_metadata".to_string(),
+            serde_json::json!("not-an-argument"),
+        ),
     ]);
     let error = manifest
-        .resolve_session_tool_call("files.read", &undeclared, &paths)
+        .resolve_mcp_tool_call("files.read", &undeclared, &paths)
         .unwrap_err();
-    assert!(error.to_string().contains("unknown argument `protocol_metadata`"));
+    assert!(error
+        .to_string()
+        .contains("unknown argument `protocol_metadata`"));
 }
 
 #[test]
-fn session_tool_resolve_needs_unknown_tool_errors() {
+fn mcp_tool_resolve_needs_unknown_tool_errors() {
     let m = parse(
         r#"{
+              "schema_version": 2,
               "id": "kv",
               "version": "0.1",
-              "name": "KV",
-              "session": { "tools": [] }
+              "name": {"en": "KV"},
+              "mcp": {
+                "tools": [{"name":"kv.get","summary": {"en": "Get a value"}}]
+              }
             }"#,
     );
     let err = m
-        .resolve_session_tool_needs("kv.ghost", &BTreeMap::new())
+        .resolve_mcp_tool_needs("kv.ghost", &BTreeMap::new())
         .unwrap_err();
-    assert!(matches!(err, ManifestError::SessionNeedInvalid { .. }));
+    assert!(matches!(err, ManifestError::McpNeedInvalid { .. }));
 }
 
 #[test]
-fn session_tool_resolve_needs_no_session_errors() {
-    let m = parse(r#"{"id":"kv","version":"0","name":"KV"}"#);
+fn mcp_tool_resolve_needs_without_mcp_block_errors() {
+    let m = parse(r#"{"id":"kv","version":"0","name": {"en": "KV"}}"#);
     let err = m
-        .resolve_session_tool_needs("kv.get", &BTreeMap::new())
+        .resolve_mcp_tool_needs("kv.get", &BTreeMap::new())
         .unwrap_err();
     match err {
-        ManifestError::SessionNeedInvalid { detail, .. } => {
-            assert!(detail.contains("no `session` block"));
+        ManifestError::McpNeedInvalid { detail, .. } => {
+            assert!(detail.contains("no `mcp` block"));
         }
-        other => panic!("expected SessionNeedInvalid, got {other:?}"),
+        other => panic!("expected McpNeedInvalid, got {other:?}"),
     }
 }
 
 #[test]
-fn session_tool_invalid_name_rejected() {
+fn mcp_tool_invalid_name_rejected() {
     let err = Manifest::from_json(
         r#"{
+              "schema_version": 2,
               "id": "kv",
               "version": "0.1",
-              "name": "KV",
-              "session": {
+              "name": {"en": "KV"},
+              "mcp": {
                 "tools": [
-                  {"name": "KV.Get", "summary": "Get"}
+                  {"name": "KV.Get", "summary": {"en": "Get"}}
                 ]
               }
             }"#,
     )
     .unwrap_err();
-    assert!(matches!(err, ManifestError::SessionToolInvalidName { .. }));
+    assert!(matches!(err, ManifestError::McpToolInvalidName { .. }));
 }
 
 #[test]
-fn session_duplicate_tool_name_rejected() {
+fn mcp_duplicate_tool_name_rejected() {
     let err = Manifest::from_json(
         r#"{
+              "schema_version": 2,
               "id": "kv",
               "version": "0.1",
-              "name": "KV",
-              "session": {
+              "name": {"en": "KV"},
+              "mcp": {
                 "tools": [
-                  {"name": "kv.get", "summary": "Get"},
-                  {"name": "kv.get", "summary": "Get again"}
+                  {"name": "kv.get", "summary": {"en": "Get"}},
+                  {"name": "kv.get", "summary": {"en": "Get again"}}
                 ]
               }
             }"#,
     )
     .unwrap_err();
-    assert!(matches!(err, ManifestError::SessionDuplicateTool { .. }));
+    assert!(matches!(err, ManifestError::McpDuplicateTool { .. }));
 }
 
 #[test]
-fn session_need_refs_undeclared_arg_rejected() {
+fn mcp_need_refs_undeclared_arg_rejected() {
     let err = Manifest::from_json(
         r#"{
+              "schema_version": 2,
               "id": "kv",
               "version": "0.1",
-              "name": "KV",
-              "session": {
+              "name": {"en": "KV"},
+              "mcp": {
                 "tools": [
                   {
                     "name": "kv.get",
-                    "summary": "Get",
+                    "summary": {"en": "Get"},
                     "args": [],
                     "needs": [
                       {"verb": "data.kv.read",
                        "scope": {"kind":"from-arg","arg":"key"},
-                       "why": "Read."}
+                       "why": {"en": "Read."}}
                     ]
                   }
                 ]
@@ -1369,27 +1507,28 @@ fn session_need_refs_undeclared_arg_rejected() {
     .unwrap_err();
     assert!(matches!(
         err,
-        ManifestError::SessionNeedRefsUndeclaredArg { .. }
+        ManifestError::McpNeedRefsUndeclaredArg { .. }
     ));
 }
 
 #[test]
-fn session_need_binding_to_text_arg_rejected() {
+fn mcp_need_binding_to_text_arg_rejected() {
     let err = Manifest::from_json(
         r#"{
+              "schema_version": 2,
               "id": "kv",
               "version": "0.1",
-              "name": "KV",
-              "session": {
+              "name": {"en": "KV"},
+              "mcp": {
                 "tools": [
                   {
                     "name": "kv.get",
-                    "summary": "Get",
+                    "summary": {"en": "Get"},
                     "args": [{"name":"key","kind":"text"}],
                     "needs": [
                       {"verb": "data.kv.read",
                        "scope": {"kind":"from-arg","arg":"key"},
-                       "why": "Read."}
+                       "why": {"en": "Read."}}
                     ]
                   }
                 ]
@@ -1397,28 +1536,26 @@ fn session_need_binding_to_text_arg_rejected() {
             }"#,
     )
     .unwrap_err();
-    assert!(matches!(
-        err,
-        ManifestError::SessionNeedArgKindMismatch { .. }
-    ));
+    assert!(matches!(err, ManifestError::McpNeedArgKindMismatch { .. }));
 }
 
 #[test]
-fn session_ai_verb_without_policy_rejected() {
+fn mcp_ai_verb_without_policy_rejected() {
     let err = Manifest::from_json(
         r#"{
+              "schema_version": 2,
               "id": "summarize",
               "version": "0.1",
-              "name": "Summarize",
-              "session": {
+              "name": {"en": "Summarize"},
+              "mcp": {
                 "tools": [
                   {
                     "name": "summarize.run",
-                    "summary": "Summarize text.",
+                    "summary": {"en": "Summarize text."},
                     "needs": [
                       {"verb": "ai.chat",
                        "scope": {"kind":"wild"},
-                       "why": "Call the model."}
+                       "why": {"en": "Call the model."}}
                     ]
                   }
                 ]
@@ -1426,10 +1563,7 @@ fn session_ai_verb_without_policy_rejected() {
             }"#,
     )
     .unwrap_err();
-    assert!(matches!(
-        err,
-        ManifestError::SessionAiNeedMissingPolicy { .. }
-    ));
+    assert!(matches!(err, ManifestError::McpAiNeedMissingPolicy { .. }));
 }
 
 #[test]
@@ -1438,7 +1572,7 @@ fn desktop_block_parses_with_defaults() {
         r#"{
               "id": "notes",
               "version": "0.1",
-              "name": "Notes",
+              "name": {"en": "Notes"},
               "desktop": {}
             }"#,
     );
@@ -1455,7 +1589,7 @@ fn desktop_panel_applet_round_trips() {
         r#"{
               "id": "widget",
               "version": "0.1",
-              "name": "Widget",
+              "name": {"en": "Widget"},
               "desktop": {
                 "panel_applet": true
               }
@@ -1484,10 +1618,10 @@ fn desktop_block_full_parses() {
         r#"{
               "id": "notes",
               "version": "0.1",
-              "name": "Notes",
+              "name": {"en": "Notes"},
               "desktop": {
                 "exec": "--ui",
-                "name": "My Notes",
+                "name": {"en": "My Notes"},
                 "icon": "notes",
                 "categories": ["Utility", "TextEditor"],
                 "mime_types": ["text/markdown"],
@@ -1509,7 +1643,7 @@ fn desktop_rejects_category_with_separator() {
         r#"{
               "id": "notes",
               "version": "0.1",
-              "name": "Notes",
+              "name": {"en": "Notes"},
               "desktop": { "categories": ["Utility;Evil"] }
             }"#,
     )
@@ -1526,7 +1660,7 @@ fn desktop_rejects_category_with_separator() {
 #[test]
 fn desktop_rejects_control_char_in_exec() {
     let err = Manifest::from_json(
-        "{\"id\":\"notes\",\"version\":\"0.1\",\"name\":\"Notes\",\
+        "{\"id\":\"notes\",\"version\":\"0.1\",\"name\":{\"en\":\"Notes\"},\
              \"desktop\":{\"exec\":\"--gui\\nExec=evil\"}}",
     )
     .unwrap_err();

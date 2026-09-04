@@ -21,7 +21,6 @@ fn assert_clean(rendered: &str) {
             "broker audit record leaked {secret}: {rendered}"
         );
     }
-
 }
 
 #[test]
@@ -53,6 +52,16 @@ fn mcp_lifecycle_audit_is_exact_without_remote_text_or_arguments() {
         tool: None,
         capability_ref: None,
         queue_depth: None,
+        app_tool: None,
+        invoke_target: None,
+        call_id: None,
+        trace_id: None,
+        parent_call_id: None,
+        call_depth: None,
+        deadline_unix_ms: None,
+        caller_kind: None,
+        caller_id: None,
+        caller_app_id: None,
         manifest_digest: Some("manifest-ref".to_string()),
         success: false,
         latency_ms: 2,
@@ -97,6 +106,16 @@ fn agent_extension_output_and_capability_references_are_digest_only() {
         tool: Some("cos_notify".to_string()),
         capability_ref: Some(audit_policy::text_digest(capability_ref)),
         queue_depth: None,
+        app_tool: None,
+        invoke_target: None,
+        call_id: None,
+        trace_id: None,
+        parent_call_id: None,
+        call_depth: None,
+        deadline_unix_ms: None,
+        caller_kind: None,
+        caller_id: None,
+        caller_app_id: None,
         manifest_digest: Some("manifest-ref".to_string()),
         success: true,
         latency_ms: 3,
@@ -127,7 +146,10 @@ fn launch_handles_are_never_written_to_the_audit_trail() {
     let rendered = request_audit(
         "app_session.bind",
         json!({"session_id": "app-1", "handle": "d34db33f-launch-handle", "pid": 4242}),
-        &Response::ok(crate::clawd::protocol::RequestId::unknown(), json!({"bound": true})),
+        &Response::ok(
+            crate::clawd::protocol::RequestId::unknown(),
+            json!({"bound": true}),
+        ),
     );
     assert_clean(&rendered);
     let record: Value = serde_json::from_str(&rendered).expect("parse");
@@ -151,7 +173,11 @@ fn credential_material_never_reaches_the_audit_trail() {
             "credential": "ya29.oauth-access-token",
             "refresh_token": "hunter2-password",
         }),
-        &Response::error(crate::clawd::protocol::RequestId::unknown(), "request_failed", "credential is not eligible"),
+        &Response::error(
+            crate::clawd::protocol::RequestId::unknown(),
+            "request_failed",
+            "credential is not eligible",
+        ),
     );
     assert_clean(&rendered);
     let record: Value = serde_json::from_str(&rendered).expect("parse");
@@ -166,7 +192,11 @@ fn handler_errors_that_echo_input_are_stored_as_class_and_digest() {
     let rendered = request_audit(
         "system.users.control",
         json!({"session": "app-1", "action": "create"}),
-        &Response::error(crate::clawd::protocol::RequestId::unknown(), "request_failed", message),
+        &Response::error(
+            crate::clawd::protocol::RequestId::unknown(),
+            "request_failed",
+            message,
+        ),
     );
     assert_clean(&rendered);
     let record: Value = serde_json::from_str(&rendered).expect("parse");
@@ -253,11 +283,10 @@ fn refused_frames_are_audited_as_bounded_metadata() {
 #[test]
 fn tool_mutation_wrappers_carry_no_model_input() {
     let facts = audit_policy::tool_facts(
-        "cos_app_run",
+        "app_email__email_send",
         &json!({
-            "app": "email",
-            "command": "send",
-            "args": ["--password", "hunter2-password"],
+            "to": "recipient@example.com",
+            "body": "hunter2-password",
         }),
     );
     let forward = json!({
@@ -270,9 +299,10 @@ fn tool_mutation_wrappers_carry_no_model_input() {
     });
     let rendered = serde_json::to_string(&forward).expect("serialize");
     assert_clean(&rendered);
-    assert_eq!(forward["tool"], json!("cos_app_run"));
-    assert_eq!(forward["input"]["app"], json!("email"));
-    assert_eq!(forward["input"]["args"], json!({"type": "array", "len": 2}));
+    assert_eq!(forward["tool"], json!("app_email__email_send"));
+    assert_eq!(forward["tool_known"], json!(false));
+    assert_eq!(forward["input"], json!({}));
+    assert_eq!(forward["input_omitted"], json!(2));
 }
 
 #[test]

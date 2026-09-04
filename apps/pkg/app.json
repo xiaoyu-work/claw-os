@@ -93,8 +93,7 @@
           "name": "limit",
           "kind": "integer",
           "required": false,
-          "binding": "flag",
-          "aliases": ["-n"]
+          "binding": "flag"
         }
       ],
       "needs": [
@@ -316,5 +315,328 @@
       ],
       "args": []
     }
+  },
+  "schema_version": 2,
+  "mcp": {
+    "entry": "server.py",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "access": {
+      "system_agent": true,
+      "apps": []
+    },
+    "tools": [
+      {
+        "name": "pkg.need",
+        "summary": {
+          "en": "Install packages that aren't already present."
+        },
+        "args": [
+          {
+            "name": "packages",
+            "kind": "text",
+            "required": true,
+            "repeatable": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.package",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Install or upgrade system packages on this machine."
+            }
+          }
+        ]
+      },
+      {
+        "name": "pkg.has",
+        "summary": {
+          "en": "Check if a capability is available"
+        },
+        "args": [
+          {
+            "name": "name",
+            "kind": "name",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.observe",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "name"
+            },
+            "why": {
+              "en": "Look up whether the named package or command is installed."
+            }
+          }
+        ]
+      },
+      {
+        "name": "pkg.list",
+        "summary": {
+          "en": "List installed packages"
+        },
+        "needs": [
+          {
+            "verb": "sys.observe",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Enumerate every system package currently installed."
+            }
+          }
+        ]
+      },
+      {
+        "name": "pkg.search",
+        "summary": {
+          "en": "Search the apt catalog for installable packages"
+        },
+        "args": [
+          {
+            "name": "query",
+            "kind": "text",
+            "required": true,
+            "repeatable": true
+          },
+          {
+            "name": "limit",
+            "kind": "integer",
+            "required": false
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.observe",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Browse the local apt package catalog to find software that matches the user's intent."
+            }
+          }
+        ]
+      },
+      {
+        "name": "pkg.show",
+        "summary": {
+          "en": "Show metadata for a specific apt package"
+        },
+        "args": [
+          {
+            "name": "name",
+            "kind": "name",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.observe",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "name"
+            },
+            "why": {
+              "en": "Read catalog metadata (description, homepage, dependencies, size) for the named package."
+            }
+          }
+        ]
+      },
+      {
+        "name": "pkg.remove",
+        "summary": {
+          "en": "Remove a package"
+        },
+        "args": [
+          {
+            "name": "package",
+            "kind": "name",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.package",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "package"
+            },
+            "why": {
+              "en": "Remove this package while retaining configuration."
+            }
+          }
+        ]
+      },
+      {
+        "name": "pkg.purge",
+        "summary": {
+          "en": "Purge a package"
+        },
+        "args": [
+          {
+            "name": "package",
+            "kind": "name",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.package",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "package"
+            },
+            "why": {
+              "en": "Remove this package and its system configuration."
+            }
+          }
+        ]
+      },
+      {
+        "name": "pkg.upgrade",
+        "summary": {
+          "en": "Upgrade a package"
+        },
+        "args": [
+          {
+            "name": "package",
+            "kind": "name",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.package",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "package"
+            },
+            "why": {
+              "en": "Upgrade this package to the candidate version."
+            }
+          }
+        ]
+      },
+      {
+        "name": "pkg.install-version",
+        "summary": {
+          "en": "Install an exact package version"
+        },
+        "args": [
+          {
+            "name": "package",
+            "kind": "name",
+            "required": true
+          },
+          {
+            "name": "version",
+            "kind": "text",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.package",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "package"
+            },
+            "why": {
+              "en": "Install or downgrade this package to the requested version."
+            }
+          }
+        ]
+      },
+      {
+        "name": "pkg.hold",
+        "summary": {
+          "en": "Hold a package version"
+        },
+        "args": [
+          {
+            "name": "package",
+            "kind": "name",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.package",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "package"
+            },
+            "why": {
+              "en": "Prevent automatic upgrades of this package."
+            }
+          }
+        ]
+      },
+      {
+        "name": "pkg.unhold",
+        "summary": {
+          "en": "Release a package hold"
+        },
+        "args": [
+          {
+            "name": "package",
+            "kind": "name",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.package",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "package"
+            },
+            "why": {
+              "en": "Allow this package to be upgraded again."
+            }
+          }
+        ]
+      },
+      {
+        "name": "pkg.update",
+        "summary": {
+          "en": "Refresh package indexes"
+        },
+        "needs": [
+          {
+            "verb": "sys.package",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Refresh package metadata from all configured repositories."
+            }
+          }
+        ]
+      },
+      {
+        "name": "pkg.upgrade-all",
+        "summary": {
+          "en": "Upgrade all packages"
+        },
+        "needs": [
+          {
+            "verb": "sys.package",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Upgrade every package with an available candidate."
+            }
+          }
+        ]
+      }
+    ]
   }
 }

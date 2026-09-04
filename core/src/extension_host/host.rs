@@ -43,10 +43,10 @@ struct HostState {
     isolation: super::child_isolation::IsolationAuthority,
     task_id: String,
     session_id: Option<String>,
-    worker_uid: u32,
-    owner_gid: u32,
-    worker_pid: u32,
-    worker_start_time_ticks: Option<u64>,
+    controller_uid: u32,
+    controller_gid: u32,
+    controller_pid: u32,
+    controller_start_time_ticks: Option<u64>,
     lease_nonce: String,
     recent: Mutex<VecDeque<String>>,
     active: Mutex<HashMap<String, tokio::task::AbortHandle>>,
@@ -59,6 +59,48 @@ struct HostState {
     shutting_down: AtomicBool,
     fatal_shutdown: AtomicBool,
     shutdown: Notify,
+}
+
+#[derive(Debug)]
+struct HostDispatchError {
+    category: ExtensionErrorCategory,
+    message: String,
+}
+
+impl HostDispatchError {
+    fn new(category: ExtensionErrorCategory, message: impl Into<String>) -> Self {
+        Self {
+            category,
+            message: message.into(),
+        }
+    }
+
+    fn busy(message: impl Into<String>) -> Self {
+        Self::new(ExtensionErrorCategory::Busy, message)
+    }
+
+    #[cfg(test)]
+    fn contains(&self, pattern: &str) -> bool {
+        self.message.contains(pattern)
+    }
+}
+
+impl std::fmt::Display for HostDispatchError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl From<String> for HostDispatchError {
+    fn from(message: String) -> Self {
+        Self::new(ExtensionErrorCategory::RemoteCallFailure, message)
+    }
+}
+
+impl From<crate::agent::tools::cos_apps_session::HostedAppError> for HostDispatchError {
+    fn from(error: crate::agent::tools::cos_apps_session::HostedAppError) -> Self {
+        Self::new(error.category(), error.to_string())
+    }
 }
 
 pub fn main() -> ! {
@@ -112,17 +154,21 @@ fn run() -> Result<(), String> {
         ));
         let _ = std::fs::remove_file(&event_socket);
         let _ = std::fs::remove_file(&priority_socket);
-        let canonical_listener = bind_control_listener(&control_socket)?;
-        let event_listener = bind_control_listener(&event_socket)?;
-        let priority_listener = bind_control_listener(&priority_socket)?;
+        let control_mode = match binding.purpose {
+            super::protocol::HostPurpose::Task => 0o660,
+            super::protocol::HostPurpose::AppService => 0o600,
+        };
+        let canonical_listener = bind_control_listener(&control_socket, control_mode)?;
+        let event_listener = bind_control_listener(&event_socket, control_mode)?;
+        let priority_listener = bind_control_listener(&priority_socket, control_mode)?;
 
         let state = Arc::new(HostState {
             task_id: binding.task_id.clone(),
             session_id: binding.session_id.clone(),
-            worker_uid: binding.owner_uid,
-            owner_gid: binding.owner_gid,
-            worker_pid: binding.worker_pid,
-            worker_start_time_ticks: binding.worker_start_time_ticks,
+            controller_uid: binding.controller_uid,
+            controller_gid: binding.controller_gid,
+            controller_pid: binding.controller_pid,
+            controller_start_time_ticks: binding.controller_start_time_ticks,
             lease_nonce: binding.lease_nonce.clone(),
             binding,
             isolation,
@@ -221,12 +267,12 @@ fn run() -> Result<(), String> {
     })
 }
 
-fn bind_control_listener(path: &Path) -> Result<UnixListener, String> {
+fn bind_control_listener(path: &Path, mode: u32) -> Result<UnixListener, String> {
     let listener = UnixListener::bind(path)
         .map_err(|error| format!("bind extension control socket {}: {error}", path.display()))?;
     peer::enable_credential_passing(listener.as_raw_fd())
         .map_err(|error| format!("enable extension peer credentials: {error}"))?;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o660)).map_err(|error| {
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).map_err(|error| {
         format!(
             "protect extension control socket {}: {error}",
             path.display()
@@ -281,10 +327,10 @@ fn preauthenticate_peer(stream: &UnixStream, state: &HostState) -> bool {
     let Some(pid) = credentials.pid().and_then(|pid| u32::try_from(pid).ok()) else {
         return false;
     };
-    credentials.uid() == state.worker_uid
-        && credentials.gid() == state.owner_gid
-        && pid == state.worker_pid
-        && crate::proc::read_start_time_ticks_pub(pid) == state.worker_start_time_ticks
+    credentials.uid() == state.controller_uid
+        && credentials.gid() == state.controller_gid
+        && pid == state.controller_pid
+        && crate::proc::read_start_time_ticks_pub(pid) == state.controller_start_time_ticks
 }
 
 async fn serve_control(
@@ -546,19 +592,19 @@ fn validate_request(
             request.protocol, PROTOCOL_VERSION
         ));
     }
-    if process.uid != state.worker_uid
-        || process.gid != state.owner_gid
-        || process.pid != state.worker_pid
-        || Some(process.start_time_ticks) != state.worker_start_time_ticks
+    if process.uid != state.controller_uid
+        || process.gid != state.controller_gid
+        || process.pid != state.controller_pid
+        || Some(process.start_time_ticks) != state.controller_start_time_ticks
     {
-        return Err("extension-host request came from a different worker".to_string());
+        return Err("extension-host request came from a different controller".to_string());
     }
     if request.task_id != state.task_id
         || request.session_id != state.session_id
         || request.lease_nonce != state.lease_nonce
         || request.binding_digest != state.binding.digest()?
     {
-        return Err("extension-host request does not match this task lease".to_string());
+        return Err("extension-host request does not match this host lease".to_string());
     }
     if request.timeout_ms == 0 || request.timeout_ms > MAX_REQUEST_TIMEOUT_MS {
         return Err("extension-host request timeout is outside the allowed range".to_string());
@@ -603,30 +649,10 @@ async fn write_response_with_timeout(
     let _ = tokio::time::timeout(timeout, stream.write_response(&body)).await;
 }
 
-struct DispatchError {
-    category: ExtensionErrorCategory,
-    message: String,
-}
-
-impl DispatchError {
-    fn busy(message: impl Into<String>) -> Self {
-        Self {
-            category: ExtensionErrorCategory::Busy,
-            message: message.into(),
-        }
-    }
-}
-
-impl From<String> for DispatchError {
-    fn from(message: String) -> Self {
-        Self {
-            category: ExtensionErrorCategory::RemoteCallFailure,
-            message,
-        }
-    }
-}
-
-async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResult, DispatchError> {
+async fn dispatch(
+    action: HostAction,
+    state: Arc<HostState>,
+) -> Result<HostResult, HostDispatchError> {
     match action {
         HostAction::Ping => Ok(HostResult::Ready {
             pid: std::process::id(),
@@ -641,6 +667,7 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
             command,
             args,
         } => {
+            require_purpose(&state, super::protocol::HostPurpose::Task, "run App")?;
             validate_name(&app_id, "App id")?;
             validate_text(&command, "App command", 256)?;
             validate_args(&args)?;
@@ -664,53 +691,133 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
             }
             Ok(HostResult::AppOutput { output })
         }
-        HostAction::AppOpen { app_id } => {
-            validate_name(&app_id, "App id")?;
-            let tool_count =
-                crate::agent::tools::cos_apps_session::host_open_session(&app_id).await?;
-            Ok(HostResult::AppOpened { tool_count })
-        }
         HostAction::AppCall {
             app_id,
             tool,
             arguments,
+            audit,
         } => {
+            require_purpose(&state, super::protocol::HostPurpose::Task, "relay App call")?;
             validate_name(&app_id, "App id")?;
             validate_text(&tool, "App tool", 256)?;
             if !arguments.is_object() && !arguments.is_null() {
+                return Err("App tool arguments must be an object".to_string().into());
+            }
+            if audit.app_id != app_id || audit.tool != tool {
+                return Err("App invocation audit does not match its target"
+                    .to_string()
+                    .into());
+            }
+            audit.validate_live_binding(&state.binding)?;
+            let value = relay_app_call(
+                &state.binding,
+                &app_id,
+                &tool,
+                arguments,
+                audit,
+                Duration::from_millis(MAX_REQUEST_TIMEOUT_MS),
+            )
+            .await?;
+            Ok(HostResult::AppCall { value })
+        }
+        HostAction::AuthorizedAppCall {
+            app_id,
+            tool,
+            arguments,
+            authorized_mounts,
+            authorization,
+            context,
+        } => {
+            require_purpose(
+                &state,
+                super::protocol::HostPurpose::AppService,
+                "execute authorized App call",
+            )?;
+            validate_name(&app_id, "App id")?;
+            validate_text(&tool, "App tool", 256)?;
+            validate_text(&authorization, "App authorization", 64)?;
+            if state.binding.app_id.as_deref() != Some(app_id.as_str()) {
+                return Err("App service host is bound to a different App"
+                    .to_string()
+                    .into());
+            }
+            let package = state
+                .binding
+                .package
+                .as_ref()
+                .ok_or_else(|| "App service host omitted its package binding".to_string())?;
+            let current = crate::apps::find_verified_fresh(&apps_root(), &app_id)?;
+            if crate::provenance::runtime::PackageRef::of(current.require_verified()?) != *package {
+                return Err("App service package changed after host startup"
+                    .to_string()
+                    .into());
+            }
+            if !arguments.is_object() {
                 return Err("App tool arguments must be an object".to_string().into());
             }
             let value = crate::agent::tools::cos_apps_session::host_call_session(
                 &app_id,
                 &tool,
                 arguments,
+                authorized_mounts,
+                context,
+                authorization,
                 Duration::from_millis(MAX_REQUEST_TIMEOUT_MS),
             )
             .await?;
             Ok(HostResult::AppCall { value })
         }
-        HostAction::AppClose { app_id } => {
+        HostAction::WarmApp { app_id } => {
+            require_purpose(
+                &state,
+                super::protocol::HostPurpose::AppService,
+                "warm App service",
+            )?;
             validate_name(&app_id, "App id")?;
-            let closed = crate::agent::tools::cos_apps_session::host_close_session(&app_id).await;
-            Ok(HostResult::AppClosed { closed })
+            if state.binding.app_id.as_deref() != Some(app_id.as_str()) {
+                return Err("App service host is bound to a different App"
+                    .to_string()
+                    .into());
+            }
+            let package = state
+                .binding
+                .package
+                .as_ref()
+                .ok_or_else(|| "App service host omitted its package binding".to_string())?;
+            let current = crate::apps::find_verified_fresh(&apps_root(), &app_id)?;
+            if crate::provenance::runtime::PackageRef::of(current.require_verified()?) != *package {
+                return Err("App service package changed after host startup"
+                    .to_string()
+                    .into());
+            }
+            crate::agent::tools::cos_apps_session::host_warm_session(&app_id).await?;
+            Ok(HostResult::AppWarmed)
         }
-        HostAction::McpAttach { spec } => Ok(attach_mcp(spec, &state).await?),
+        HostAction::McpAttach { spec } => {
+            require_purpose(&state, super::protocol::HostPurpose::Task, "attach MCP")?;
+            attach_mcp(spec, &state).await.map_err(Into::into)
+        }
         HostAction::McpCall {
             server,
             tool,
             descriptor_digest,
             audit,
             arguments,
-        } => Ok(call_mcp(
-            &server,
-            &tool,
-            &descriptor_digest,
-            &audit,
-            arguments,
-            &state,
-        )
-        .await?),
+        } => {
+            require_purpose(&state, super::protocol::HostPurpose::Task, "call MCP")?;
+            call_mcp(
+                &server,
+                &tool,
+                &descriptor_digest,
+                &audit,
+                arguments,
+                &state,
+            )
+            .await
+            .map_err(Into::into)
+        }
         HostAction::McpDetach { server } => {
+            require_purpose(&state, super::protocol::HostPurpose::Task, "detach MCP")?;
             validate_name(&server, "MCP server")?;
             let detached = state.mcp.lock().await.remove(&server).is_some();
             Ok(HostResult::McpDetached { detached })
@@ -736,7 +843,7 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
                 .ok_or_else(|| format!("Agent extension `{extension_id}` is not attached"))?;
             let extension_handle = extension.clone();
             let mut extension = extension.try_lock_owned().map_err(|_| {
-                DispatchError::busy(format!(
+                HostDispatchError::busy(format!(
                     "Agent extension `{extension_id}` already has an event in flight"
                 ))
             })?;
@@ -808,7 +915,7 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
     }
 }
 
-fn detached_after_cleanup(cleanup: Result<(), String>) -> Result<HostResult, DispatchError> {
+fn detached_after_cleanup(cleanup: Result<(), String>) -> Result<HostResult, HostDispatchError> {
     cleanup?;
     Ok(HostResult::AgentExtensionDetached { detached: true })
 }
@@ -992,6 +1099,60 @@ async fn call_mcp(
         })?
         .map_err(|error| format!("MCP server `{server}` failed: {error}"))?;
     Ok(HostResult::McpCall { value })
+}
+
+fn require_purpose(
+    state: &HostState,
+    purpose: super::protocol::HostPurpose,
+    action: &str,
+) -> Result<(), String> {
+    if state.binding.purpose != purpose {
+        return Err(format!(
+            "{} extension host cannot {action}",
+            match state.binding.purpose {
+                super::protocol::HostPurpose::Task => "task",
+                super::protocol::HostPurpose::AppService => "App service",
+            }
+        ));
+    }
+    Ok(())
+}
+
+async fn relay_app_call(
+    binding: &super::protocol::ExtensionBinding,
+    app_id: &str,
+    tool: &str,
+    arguments: Value,
+    audit: super::protocol::AppInvocationAudit,
+    timeout: Duration,
+) -> Result<crate::agent::tools::mcp::protocol::CallToolResult, String> {
+    let request = crate::clawd::wire::Request::new(
+        crate::clawd::routes::Command::AppServiceCall,
+        serde_json::json!({
+            "app_id": app_id,
+            "tool": tool,
+            "arguments": arguments,
+            "audit": audit,
+        }),
+    );
+    let response = tokio::time::timeout(
+        timeout,
+        crate::clawd::client::request(&binding.broker_socket, request),
+    )
+    .await
+    .map_err(|_| "App service relay timed out".to_string())??;
+    if !response.ok {
+        return Err(response
+            .error
+            .map(|error| error.message)
+            .unwrap_or_else(|| "App service relay was refused".to_string()));
+    }
+    serde_json::from_value(
+        response
+            .result
+            .ok_or_else(|| "App service relay omitted its result".to_string())?,
+    )
+    .map_err(|_| "App service relay returned an invalid result".to_string())
 }
 
 fn apps_root() -> PathBuf {

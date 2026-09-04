@@ -26,7 +26,12 @@
           "required": false,
           "binding": "flag",
           "default": "GET",
-          "choices": ["GET", "POST", "PUT", "DELETE"]
+          "choices": [
+            "GET",
+            "POST",
+            "PUT",
+            "DELETE"
+          ]
         },
         {
           "name": "data",
@@ -76,14 +81,7 @@
         {
           "name": "output",
           "kind": "path",
-          "required": false,
-          "default_from": {
-            "arg": "url",
-            "transform": "url-path-basename",
-            "prefix": "~/",
-            "fallback": "download"
-          },
-          "aliases": ["--output"]
+          "required": true
         }
       ],
       "needs": [
@@ -115,6 +113,114 @@
     "system": [
       "curl",
       "ca-certificates"
+    ]
+  },
+  "schema_version": 2,
+  "mcp": {
+    "entry": "server.py",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "access": {
+      "system_agent": true,
+      "apps": []
+    },
+    "tools": [
+      {
+        "name": "net.fetch",
+        "summary": {
+          "en": "Make HTTP request (GET/POST/PUT/DELETE)"
+        },
+        "args": [
+          {
+            "name": "url",
+            "kind": "text",
+            "required": true
+          },
+          {
+            "name": "method",
+            "kind": "text",
+            "required": false,
+            "default": "GET",
+            "choices": [
+              "GET",
+              "POST",
+              "PUT",
+              "DELETE"
+            ]
+          },
+          {
+            "name": "data",
+            "kind": "text",
+            "required": false
+          },
+          {
+            "name": "header",
+            "kind": "text",
+            "required": false,
+            "repeatable": true
+          },
+          {
+            "name": "timeout",
+            "kind": "integer",
+            "required": false,
+            "default": 30
+          }
+        ],
+        "needs": [
+          {
+            "verb": "net.dial",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "url",
+              "transform": "url-host"
+            },
+            "why": {
+              "en": "Open a network connection to the URL you asked to fetch."
+            }
+          }
+        ]
+      },
+      {
+        "name": "net.download",
+        "summary": {
+          "en": "Download file from URL"
+        },
+        "args": [
+          {
+            "name": "url",
+            "kind": "text",
+            "required": true
+          },
+          {
+            "name": "output",
+            "kind": "path",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "net.dial",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "url",
+              "transform": "url-host"
+            },
+            "why": {
+              "en": "Open a network connection to the URL you asked to download from."
+            }
+          },
+          {
+            "verb": "fs.write",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "output"
+            },
+            "why": {
+              "en": "Save the downloaded file to the path you specified."
+            }
+          }
+        ]
+      }
     ]
   }
 }

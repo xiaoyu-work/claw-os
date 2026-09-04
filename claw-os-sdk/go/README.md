@@ -24,8 +24,9 @@ import clawossdk "github.com/xiaoyu-work/claw-os/claw-os-sdk/go"
 
 | Area          | Functions                                                          | Equivalent CLI                    |
 |---------------|--------------------------------------------------------------------|-----------------------------------|
-| AI            | Stable `Chat` / chat-untrusted access; multimodal compatibility shims; `Budget` | `cos ai chat --app <id>`          |
+| AI            | `Chat` / chat-untrusted access; `Budget`                         | `cos ai chat --app <id>`          |
 | Tools         | `CallTool`, `Catalog`, `ForChat`                                   | `cos ai tool <name> --app <id>`   |
+| MCP service   | `LoadMCPApp`, `(*MCPApp).Bind`, `Serve`, `ServeStdio`               | App Host private stdio transport  |
 | GUI           | `IsGUILaunch`, `Context`, `(*GuiContext).OpenAgentOverlay`         | launched via `cos app <id> --gui` |
 | Transport     | `CosBinary`, error types (advanced)                                | —                                 |
 | (generated)   | Typed structs from `wire/v1/*.schema.json` (`generated.go`)        | —                                 |
@@ -39,8 +40,11 @@ import clawossdk "github.com/xiaoyu-work/claw-os/claw-os-sdk/go"
 
 // A single entry serves both the one-shot operation and the GUI window.
 func run(command string, args map[string]any) (any, error) {
-	if clawossdk.IsGUILaunch(command) {
-		ctx := clawossdk.Context(nil) // ctx.AppID, ctx.Files
+	if clawossdk.IsGUILaunch() {
+		ctx, err := clawossdk.Context(nil)
+		if err != nil {
+			return nil, err
+		}
 		startMyWindow(ctx)            // your toolkit, your event loop
 		return nil, nil
 	}
@@ -67,13 +71,68 @@ func run(command string, args map[string]any) (any, error) {
 }
 ```
 
+## MCP App service
+
+Go Apps expose Agent-facing tools only through the authoritative
+`app.json.mcp.tools` declaration. `LoadMCPApp("")` loads
+`$COS_APP_MANIFEST`, or `./app.json` during direct development.
+`Bind` only accepts declared names, and `Serve` refuses to start until every
+declared tool has exactly one handler.
+
+```go
+app, err := clawossdk.LoadMCPApp("")
+if err != nil {
+	return err
+}
+
+err = app.Bind("notes.get", func(
+	args map[string]any,
+	call *clawossdk.MCPCall,
+) (any, error) {
+	authenticated := call.Authenticated()
+	if err := call.CheckCancelled(); err != nil {
+		return nil, err
+	}
+
+	if call.ProgressRequested() {
+		if err := call.ReportProgress(1, clawossdk.MCPProgress{
+			Message: "Loading note",
+		}); err != nil {
+			return nil, err
+		}
+	}
+
+	return clawossdk.StructuredMCPResult(map[string]any{
+		"id":     args["id"],
+		"caller": authenticated.Caller.Id,
+	}, "Note loaded")
+})
+if err != nil {
+	return err
+}
+return app.ServeStdio()
+```
+
+`MCPCall` implements `context.Context`, so handlers can select on
+`call.Done()`, inspect deadlines, and pass the call to context-aware APIs.
+Authenticated caller and lineage data comes only from the Gateway-injected
+`McpCallContext`; never derive identity from tool arguments.
+
+Handlers may return ordinary values or explicit results:
+
+- `TextMCPResult(text)` for successful text.
+- `ErrorMCPResult(message)` for an MCP tool error.
+- `StructuredMCPResult(object, text)` for `structuredContent` plus text.
+
+`Serve(reader, writer)` is available for embedding and tests. It speaks
+newline-delimited MCP JSON-RPC 2.0, serializes writes, supports progress,
+cancellation, and authenticated deadlines, and returns fatal transport errors.
+
 ## AI support
 
-- **Stable:** `Chat`. Setting `Origin: "external-content"`
-  automatically selects `ai.chat.untrusted`.
-- **Compatibility only:** embed, image, vision, audio, and video helpers
-  retain their signatures but are deprecated, experimental, and currently
-  unsupported. They return `*AiUnsupportedError` before invoking `cos`.
+`Chat` is the public model API. Setting `Origin: "external-content"`
+automatically selects `ai.chat.untrusted`. Unsupported modalities are not
+published as placeholder APIs.
 
 ### What you never do
 
@@ -95,13 +154,12 @@ Each domain returns typed errors you can switch on:
   envelope.
 - `*AiUnavailableError` / `*ToolUnavailableError` — transport failure
   (binary missing, timeout, non-JSON output).
-- `*AiUnsupportedError` — a multimodal compatibility shim was called.
 - `*ToolDeniedError` — capability / unknown-tool / arg-shape refusal.
 
 ## Binary resolution
 
-The SDK runs `cos` from `$PATH`. Override with `CLAW_COS_BIN` (or
-`COS_BIN`) — used by tests and dev setups.
+The SDK runs `cos` from `$PATH`. Override with `CLAW_COS_BIN` for
+tests and dev setups.
 
 ## Develop
 

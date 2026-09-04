@@ -5,26 +5,26 @@ use crate::caps::Verb;
 const FS_MANIFEST: &str = r#"{
   "id": "fs",
   "version": "0.1.0",
-  "name": "Files",
+  "name": {"en": "Files"},
   "desktop": {"exec": "--gui"},
   "operations": {
     "read": {
-      "label": "Read a file",
+      "label": {"en": "Read a file"},
       "args": [{"name": "path", "kind": "path", "required": true}],
       "needs": [
-        {"verb": "fs.read", "scope": {"kind": "from-arg", "arg": "path"}, "why": "read it"}
+        {"verb": "fs.read", "scope": {"kind": "from-arg", "arg": "path"}, "why": {"en": "read it"}}
       ]
     },
     "scan": {
-      "label": "Scan",
+      "label": {"en": "Scan"},
       "args": [],
-      "needs": [{"verb": "fs.meta", "scope": {"kind": "wild"}, "why": "list"}]
+      "needs": [{"verb": "fs.meta", "scope": {"kind": "wild"}, "why": {"en": "list"}}]
     },
     "install": {
-      "label": "Install",
+      "label": {"en": "Install"},
       "args": [{"name": "package", "kind": "name", "required": true}],
       "needs": [
-        {"verb": "sys.package", "scope": {"kind": "from-arg", "arg": "package"}, "why": "install"}
+        {"verb": "sys.package", "scope": {"kind": "from-arg", "arg": "package"}, "why": {"en": "install"}}
       ]
     }
   }
@@ -34,12 +34,12 @@ const FS_MANIFEST: &str = r#"{
 const PKG_MANIFEST: &str = r#"{
   "id": "pkg",
   "version": "0.1.0",
-  "name": "Packages",
+  "name": {"en": "Packages"},
   "operations": {
     "need": {
-      "label": "Ensure installed",
+      "label": {"en": "Ensure installed"},
       "args": [],
-      "needs": [{"verb": "sys.package", "scope": {"kind": "wild"}, "why": "install"}]
+      "needs": [{"verb": "sys.package", "scope": {"kind": "wild"}, "why": {"en": "install"}}]
     }
   }
 }"#;
@@ -48,17 +48,17 @@ const PKG_MANIFEST: &str = r#"{
 const CONFIG_EDITOR_MANIFEST: &str = r#"{
   "id": "config-editor",
   "version": "0.1.0",
-  "name": "Config Editor",
+  "name": {"en": "Config Editor"},
   "operations": {
     "apply": {
-      "label": "Apply configuration",
+      "label": {"en": "Apply configuration"},
       "args": [
         {"name": "target", "kind": "path", "required": true},
         {"name": "source", "kind": "path", "required": true}
       ],
       "needs": [
-        {"verb": "sys.config", "scope": {"kind": "from-arg", "arg": "target"}, "why": "edit"},
-        {"verb": "fs.read", "scope": {"kind": "from-arg", "arg": "source"}, "why": "read"}
+        {"verb": "sys.config", "scope": {"kind": "from-arg", "arg": "target"}, "why": {"en": "edit"}},
+        {"verb": "fs.read", "scope": {"kind": "from-arg", "arg": "source"}, "why": {"en": "read"}}
       ]
     }
   }
@@ -68,16 +68,16 @@ const CONFIG_EDITOR_MANIFEST: &str = r#"{
 const USER_MANAGER_MANIFEST: &str = r#"{
   "id": "user-manager",
   "version": "0.1.0",
-  "name": "Users",
+  "name": {"en": "Users"},
   "operations": {
     "create-user": {
-      "label": "Create a user",
+      "label": {"en": "Create a user"},
       "args": [{"name": "user", "kind": "name", "required": true}],
       "needs": [
         {
           "verb": "sys.identity",
           "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "accounts"}},
-          "why": "manage accounts"
+          "why": {"en": "manage accounts"}
         }
       ]
     }
@@ -1178,6 +1178,7 @@ fn test_client() -> ClientIdentity {
         execution_uid: None,
         start_time_ticks,
         attended_local: false,
+        extension_host: None,
     }
 }
 
@@ -1457,6 +1458,7 @@ fn e2e_client() -> ClientIdentity {
         execution_uid: None,
         start_time_ticks,
         attended_local: false,
+        extension_host: None,
     }
 }
 
@@ -1484,6 +1486,12 @@ fn e2e_row(session_id: &str, pid: u32, transient: Option<CapSet>) -> SessionInfo
         start_time_ticks: crate::proc::read_start_time_ticks_pub(pid),
         client: crate::session::SessionClient::default(),
     }
+}
+
+fn e2e_mcp_row(session_id: &str, pid: u32, transient: Option<CapSet>) -> SessionInfo {
+    let mut row = e2e_row(session_id, pid, transient);
+    row.group = Some("app-mcp".to_string());
+    row
 }
 
 fn e2e_runtime() -> tokio::runtime::Runtime {
@@ -1519,12 +1527,20 @@ fn e2e_read_row(session_id: &str) -> Option<SessionInfo> {
 /// Mint the launch grant a launcher holds, and the session grant a
 /// bound App runs under, exactly as `register` and `bind` do.
 fn e2e_install_grants(session_id: &str, child_pid: u32) -> String {
+    e2e_install_grants_with_ceiling(session_id, child_pid, e2e_app_caps())
+}
+
+fn e2e_install_grants_with_ceiling(
+    session_id: &str,
+    child_pid: u32,
+    launch_caps: CapSet,
+) -> String {
     let (pid, ticks) = this_process();
     let launcher = LauncherAuthority {
         pid,
         start_time_ticks: ticks,
         parent: None,
-        caps: e2e_app_caps(),
+        caps: launch_caps.clone(),
         tier: None,
         scope: None,
         priority: None,
@@ -1535,7 +1551,7 @@ fn e2e_install_grants(session_id: &str, child_pid: u32) -> String {
         Some("fs"),
         E2E_UID,
         &launcher,
-        &e2e_app_caps(),
+        &launch_caps,
         None,
     )
     .expect("launch grant");
@@ -1564,7 +1580,9 @@ fn e2e_spawn_child(harness: &mut TransientHarness) -> u32 {
 }
 
 fn e2e_set_transient(handle: &str, session_id: &str) -> Result<Value, String> {
+    let state = DaemonState::new().expect("daemon state");
     e2e_runtime().block_on(set_transient(
+        &state,
         json!({"session_id": session_id, "handle": handle}),
         &e2e_client(),
     ))
@@ -1586,6 +1604,81 @@ fn e2e_session_grant_is_live(session_id: &str, pid: u32) -> bool {
         .is_ok()
 }
 
+fn e2e_remove_row(session_id: &str) {
+    let id = session_id.to_string();
+    e2e_runtime().block_on(crate::paths::with_user_override(
+        E2E_UID,
+        std::path::PathBuf::from("/root"),
+        async move {
+            crate::proc::deregister_session(&id);
+        },
+    ));
+}
+
+fn e2e_gateway_parent(session_id: &str, caps: CapSet) -> SessionInfo {
+    let (pid, ticks) = this_process();
+    SessionInfo {
+        session_id: session_id.to_string(),
+        pid,
+        command: vec!["cos".to_string(), "agent".to_string()],
+        started_at: chrono::Utc::now().to_rfc3339(),
+        stdout_path: String::new(),
+        stderr_path: String::new(),
+        group: Some("agent".to_string()),
+        parent: None,
+        workdir: Some("/root".to_string()),
+        exit_code: None,
+        ended_at: None,
+        tier: Some(Role::AgentHost.credential_tier()),
+        scope: None,
+        priority: None,
+        caps: Some(caps),
+        transient_caps: None,
+        role: Some(Role::AgentHost.name().to_string()),
+        app_id: None,
+        pending_bind: false,
+        start_time_ticks: ticks,
+        client: crate::session::SessionClient::new(
+            crate::session::SessionSource::LocalCli,
+            false,
+            true,
+        ),
+    }
+}
+
+#[test]
+fn an_operation_session_cannot_accept_tool_call_authority() {
+    if !e2e_is_root() {
+        eprintln!("skipped: the routed capability partition can only be prepared as root");
+        return;
+    }
+    let mut harness = transient_harness();
+    let child = e2e_spawn_child(&mut harness);
+    let session_id = "app-operation-no-transient";
+    e2e_install_row(e2e_row(session_id, child, None));
+    let handle = e2e_install_grants(session_id, child);
+
+    let error =
+        e2e_set_transient(&handle, session_id).expect_err("operation session must stay static");
+    assert!(
+        error.contains("only MCP App sessions"),
+        "unexpected: {error}"
+    );
+    assert_eq!(e2e_read_transient(session_id), None);
+}
+
+#[tokio::test]
+async fn app_service_dispatch_rejects_a_main_socket_identity() {
+    let error = prepare_app_service_call(json!({}), &e2e_client())
+        .await
+        .expect_err("the public broker must not synthesize a task Host identity");
+    assert!(
+        error.message.contains("private task host"),
+        "{}",
+        error.message
+    );
+}
+
 #[test]
 fn clearing_a_call_scope_updates_registry_and_authority_together() {
     if !e2e_is_root() {
@@ -1595,7 +1688,7 @@ fn clearing_a_call_scope_updates_registry_and_authority_together() {
     let mut harness = transient_harness();
     let child = e2e_spawn_child(&mut harness);
     let session_id = "app-e2e-clear";
-    e2e_install_row(e2e_row(session_id, child, Some(e2e_call_caps())));
+    e2e_install_row(e2e_mcp_row(session_id, child, Some(e2e_call_caps())));
     let handle = e2e_install_grants(session_id, child);
 
     assert_eq!(e2e_read_transient(session_id), Some(e2e_call_caps()));
@@ -1641,7 +1734,7 @@ fn a_failed_reissue_restores_the_previous_call_scope() {
     // A pid nothing can be identified from: the registry write lands,
     // and re-deriving the grant then fails.
     let dead_pid = u32::MAX - 1;
-    e2e_install_row(e2e_row(session_id, dead_pid, Some(e2e_call_caps())));
+    e2e_install_row(e2e_mcp_row(session_id, dead_pid, Some(e2e_call_caps())));
     let handle = e2e_install_grants(session_id, dead_pid);
 
     let error = e2e_set_transient(&handle, session_id).expect_err("re-deriving the grant fails");
@@ -1669,7 +1762,7 @@ fn a_session_that_disappeared_is_refused_before_anything_is_written() {
     let mut harness = transient_harness();
     let child = e2e_spawn_child(&mut harness);
     let session_id = "app-e2e-gone";
-    e2e_install_row(e2e_row(session_id, child, Some(e2e_call_caps())));
+    e2e_install_row(e2e_mcp_row(session_id, child, Some(e2e_call_caps())));
     let handle = e2e_install_grants(session_id, child);
 
     let remove = session_id.to_string();
@@ -1696,7 +1789,7 @@ fn an_unbound_session_cannot_be_re_scoped() {
     }
     let _harness = transient_harness();
     let session_id = "app-e2e-unbound";
-    let mut pending = e2e_row(session_id, 0, Some(e2e_call_caps()));
+    let mut pending = e2e_mcp_row(session_id, 0, Some(e2e_call_caps()));
     pending.pending_bind = true;
     e2e_install_row(pending);
     let handle = e2e_install_grants(session_id, std::process::id());
@@ -1721,9 +1814,9 @@ fn a_handle_for_another_session_cannot_re_scope_this_one() {
     }
     let mut harness = transient_harness();
     let child = e2e_spawn_child(&mut harness);
-    e2e_install_row(e2e_row("app-e2e-a", child, Some(e2e_call_caps())));
+    e2e_install_row(e2e_mcp_row("app-e2e-a", child, Some(e2e_call_caps())));
     let handle = e2e_install_grants("app-e2e-a", child);
-    e2e_install_row(e2e_row("app-e2e-b", child, Some(e2e_call_caps())));
+    e2e_install_row(e2e_mcp_row("app-e2e-b", child, Some(e2e_call_caps())));
 
     let error = e2e_set_transient(&handle, "app-e2e-b").expect_err("cross-session use is refused");
     assert!(
@@ -1746,7 +1839,7 @@ fn concurrent_calls_leave_the_registry_and_the_authority_agreeing() {
     let mut harness = transient_harness();
     let child = e2e_spawn_child(&mut harness);
     let session_id = "app-e2e-race";
-    e2e_install_row(e2e_row(session_id, child, Some(e2e_call_caps())));
+    e2e_install_row(e2e_mcp_row(session_id, child, Some(e2e_call_caps())));
     let handle = e2e_install_grants(session_id, child);
 
     let mut threads = Vec::new();
@@ -1792,7 +1885,7 @@ fn a_re_scope_racing_a_teardown_never_strands_a_grant() {
     let mut harness = transient_harness();
     let child = e2e_spawn_child(&mut harness);
     let session_id = "app-e2e-teardown-race";
-    e2e_install_row(e2e_row(session_id, child, Some(e2e_call_caps())));
+    e2e_install_row(e2e_mcp_row(session_id, child, Some(e2e_call_caps())));
     let handle = e2e_install_grants(session_id, child);
 
     let blocker = session_lock(session_id);
@@ -2018,7 +2111,7 @@ fn a_relay_grant_is_bound_to_the_launcher_and_carries_no_capabilities() {
     let mut harness = transient_harness();
     let session_id = "app-relay-issue";
     let child_pid = e2e_spawn_child(&mut harness);
-    e2e_install_row(e2e_row(session_id, child_pid, None));
+    e2e_install_row(e2e_mcp_row(session_id, child_pid, None));
     let launch = e2e_install_grants(session_id, child_pid);
 
     let (launcher_pid, _) = this_process();
@@ -2084,7 +2177,9 @@ fn a_relayed_decision_carries_the_exact_live_session_authority() {
     let session_id = "app-relay-live";
     let child_pid = e2e_spawn_child(&mut harness);
     e2e_install_row(e2e_row(session_id, child_pid, None));
-    let launch = e2e_install_grants(session_id, child_pid);
+    let mut launch_caps = e2e_app_caps();
+    launch_caps.extend(e2e_call_caps().iter().cloned());
+    let launch = e2e_install_grants_with_ceiling(session_id, child_pid, launch_caps);
     let (launcher_pid, _) = this_process();
     let relay = issue_relay_grant(&launch, session_id, Some("fs"), E2E_UID, launcher_pid)
         .expect("relay grant");
@@ -2125,7 +2220,7 @@ fn a_relayed_decision_carries_the_exact_live_session_authority() {
         .is_err());
 
     // A transient call scope appears while it is installed …
-    e2e_install_row(e2e_row(session_id, child_pid, Some(e2e_call_caps())));
+    e2e_install_row(e2e_mcp_row(session_id, child_pid, Some(e2e_call_caps())));
     reissue_session_grant(
         &launch,
         session_id,
@@ -2148,7 +2243,7 @@ fn a_relayed_decision_carries_the_exact_live_session_authority() {
         .covers(&Cap::new(Verb::FS_READ, Scope::path("/srv/scratch/x"))));
 
     // … and disappears the moment it is cleared.
-    e2e_install_row(e2e_row(session_id, child_pid, None));
+    e2e_install_row(e2e_mcp_row(session_id, child_pid, None));
     reissue_session_grant(
         &launch,
         session_id,
@@ -2332,53 +2427,54 @@ fn the_outer_relay_audience_is_distinct_from_the_inner_one() {
 
 /// An unsigned App that asks for everything the developer tier forbids.
 const DEV_MANIFEST: &str = r#"{
+  "schema_version": 2,
   "id": "scratch",
   "version": "0.1.0",
-  "name": "Scratch",
+  "name": {"en": "Scratch"},
   "desktop": {"exec": "--gui"},
   "operations": {
     "grab": {
-      "label": "Grab",
+      "label": {"en": "Grab"},
       "args": [],
       "needs": [
         {"verb": "sys.package",
          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "nano"}},
-         "why": "install"},
+         "why": {"en": "install"}},
         {"verb": "secret.read",
          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "default/TOKEN"}},
-         "why": "auth"},
+         "why": {"en": "auth"}},
         {"verb": "net.dial",
          "scope": {"kind": "fixed", "scope": {"kind": "host", "value": "evil.example"}},
-         "why": "sync"},
-        {"verb": "proc.spawn", "scope": {"kind": "wild"}, "why": "helper"},
+         "why": {"en": "sync"}},
+        {"verb": "proc.spawn", "scope": {"kind": "wild"}, "why": {"en": "helper"}},
         {"verb": "fs.exec",
          "scope": {"kind": "fixed", "scope": {"kind": "path", "value": "/usr/bin/**"}},
-         "why": "run"},
+         "why": {"en": "run"}},
         {"verb": "fs.read",
          "scope": {"kind": "fixed", "scope": {"kind": "path", "value": "/etc/**"}},
-         "why": "config"},
-        {"verb": "fs.meta", "scope": {"kind": "wild"}, "why": "list"},
-        {"verb": "agent.spawn", "scope": {"kind": "wild"}, "why": "delegate"},
-        {"verb": "ui.notify", "scope": {"kind": "wild"}, "why": "tell the user"},
+         "why": {"en": "config"}},
+        {"verb": "fs.meta", "scope": {"kind": "wild"}, "why": {"en": "list"}},
+        {"verb": "agent.spawn", "scope": {"kind": "wild"}, "why": {"en": "delegate"}},
+        {"verb": "ui.notify", "scope": {"kind": "wild"}, "why": {"en": "tell the user"}},
         {"verb": "data.kv.write",
          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "scratch"}},
-         "why": "state"}
+         "why": {"en": "state"}}
       ]
     }
   },
-  "session": {
+  "mcp": {
     "tools": [
       {
         "name": "escalate",
-        "summary": "widen after launch",
+        "summary": {"en": "widen after launch"},
         "args": [],
         "needs": [
           {"verb": "sys.package",
            "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "nano"}},
-           "why": "install"},
+           "why": {"en": "install"}},
           {"verb": "data.kv.read",
            "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "scratch"}},
-           "why": "state"}
+           "why": {"en": "state"}}
         ]
       }
     ]
@@ -2524,18 +2620,18 @@ fn a_developer_gui_launch_is_clamped_on_the_same_path() {
 }
 
 #[test]
-fn a_developer_session_tool_cannot_widen_after_launch() {
+fn a_developer_mcp_tool_cannot_widen_after_launch() {
     let app = dev_app();
     let delegation = omnipotent_delegation();
     let call = json!({"tool": "escalate"});
-    let signed = session_tool_plan(&app, &call, &delegation, &publisher_ceiling())
-        .expect("session tool plan");
+    let signed =
+        mcp_tool_plan(&app, &call, &delegation, &publisher_ceiling()).expect("mcp tool plan");
     assert!(signed
         .caps
         .covers(&Cap::new(Verb::SYS_PACKAGE, Scope::name("nano"))));
 
-    let plan = session_tool_plan(&app, &call, &delegation, &developer_ceiling())
-        .expect("session tool plan");
+    let plan =
+        mcp_tool_plan(&app, &call, &delegation, &developer_ceiling()).expect("mcp tool plan");
     let granted = authorize_plan(&delegation, plan, &developer_ceiling(), "scratch")
         .expect("transient authorization");
     assert_within_developer_ceiling(&granted);
@@ -2872,36 +2968,37 @@ fn every_audience_is_classified_for_the_provenance_ceiling() {
 /// The dangerous half is what a hostile unsigned package would ask for;
 /// the benign half is what the developer tier is meant to allow.
 const E2E_DEV_MANIFEST: &str = r#"{
+  "schema_version": 2,
   "id": "scratch",
   "version": "0.1.0",
-  "name": "Scratch",
+  "name": {"en": "Scratch"},
   "operations": {
     "run": {
-      "label": "Run",
+      "label": {"en": "Run"},
       "args": [],
       "needs": [
         {"verb": "sys.package",
          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "nano"}},
-         "why": "install"},
+         "why": {"en": "install"}},
         {"verb": "secret.read",
          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "default/TOKEN"}},
-         "why": "auth"},
+         "why": {"en": "auth"}},
         {"verb": "net.dial",
          "scope": {"kind": "fixed", "scope": {"kind": "host", "value": "evil.example"}},
-         "why": "sync"},
-        {"verb": "proc.spawn", "scope": {"kind": "wild"}, "why": "helper"},
+         "why": {"en": "sync"}},
+        {"verb": "proc.spawn", "scope": {"kind": "wild"}, "why": {"en": "helper"}},
         {"verb": "fs.exec",
          "scope": {"kind": "fixed", "scope": {"kind": "path", "value": "/usr/bin/**"}},
-         "why": "run"},
-        {"verb": "fs.meta", "scope": {"kind": "wild"}, "why": "list"},
-        {"verb": "agent.spawn", "scope": {"kind": "wild"}, "why": "delegate"},
+         "why": {"en": "run"}},
+        {"verb": "fs.meta", "scope": {"kind": "wild"}, "why": {"en": "list"}},
+        {"verb": "agent.spawn", "scope": {"kind": "wild"}, "why": {"en": "delegate"}},
         {"verb": "fs.read",
          "scope": {"kind": "fixed", "scope": {"kind": "path", "value": "/root/scratch/**"}},
-         "why": "its own tree"},
+         "why": {"en": "its own tree"}},
         {"verb": "data.kv.write",
          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "scratch"}},
-         "why": "state"},
-        {"verb": "ui.notify", "scope": {"kind": "wild"}, "why": "tell the user"}
+         "why": {"en": "state"}},
+        {"verb": "ui.notify", "scope": {"kind": "wild"}, "why": {"en": "tell the user"}}
       ]
     }
   }
@@ -2982,6 +3079,10 @@ fn e2e_install_parent_session(session_id: &str) {
     let (pid, ticks) = this_process();
     let mut caps = omnipotent_delegation().ceiling;
     caps.insert(Cap::new(Verb::AGENT_INVOKE, Scope::name("scratch")));
+    caps.insert(Cap::new(
+        Verb::AGENT_INVOKE,
+        Scope::name("scratch/escalate"),
+    ));
     caps.insert(Cap::new(Verb::FS_READ, Scope::path("/root/scratch/**")));
     let info = SessionInfo {
         session_id: session_id.to_string(),
@@ -3010,6 +3111,14 @@ fn e2e_install_parent_session(session_id: &str) {
 }
 
 #[cfg(unix)]
+fn e2e_installed_package(app_id: &str) -> crate::provenance::runtime::PackageRef {
+    let app = installed_app(app_id).expect("installed App");
+    crate::provenance::runtime::PackageRef::of(
+        app.require_verified().expect("verified App package"),
+    )
+}
+
+#[cfg(unix)]
 #[test]
 fn a_dev_trusted_app_is_registered_and_bound_with_no_privileged_authority() {
     if !e2e_is_root() {
@@ -3020,10 +3129,17 @@ fn a_dev_trusted_app_is_registered_and_bound_with_no_privileged_authority() {
     let previous_apps = std::env::var_os("COS_APPS_DIR");
     let (root, _apps) = e2e_install_dev_app(E2E_DEV_MANIFEST);
     e2e_install_parent_session("cli-parent");
+    let package = e2e_installed_package("scratch");
 
     let result = e2e_runtime()
         .block_on(register(
-            json!({"app_id": "scratch", "kind": "operation", "operation": "run", "args": []}),
+            json!({
+                "app_id": "scratch",
+                "kind": "operation",
+                "operation": "run",
+                "args": [],
+                "package": package,
+            }),
             &e2e_client(),
         ))
         .expect("a dev-trusted App still launches");
@@ -3034,13 +3150,34 @@ fn a_dev_trusted_app_is_registered_and_bound_with_no_privileged_authority() {
     assert_eq!(result["trust_tier"], "developer");
     assert_within_developer_ceiling(&granted);
     assert!(granted.covers(&Cap::new(Verb::DATA_KV_WRITE, Scope::name("scratch"))));
-    assert!(granted.covers(&Cap::new(Verb::AGENT_INVOKE, Scope::name("scratch"))));
+    assert!(
+        !granted.covers(&Cap::new(Verb::AGENT_INVOKE, Scope::name("scratch"))),
+        "caller invoke authority must not enter the target App"
+    );
 
     let session_id = result["session_id"]
         .as_str()
         .expect("session id")
         .to_string();
     let handle = result["handle"].as_str().expect("handle").to_string();
+    let launch = authority::authority()
+        .resolve(
+            &handle,
+            &authority::Presentation::new(
+                E2E_UID,
+                std::process::id(),
+                this_process().1,
+                authority::Audience::AppLaunch,
+                "test",
+            ),
+        )
+        .expect("launch authority");
+    assert!(
+        launch
+            .caps
+            .covers(&Cap::new(Verb::AGENT_INVOKE, Scope::name("scratch"))),
+        "the launcher still needs exact invoke authority to start the target"
+    );
 
     // 2. What the routed registry row records — this is what
     //    `caps::require` inside the App reads.
@@ -3115,30 +3252,30 @@ fn a_dev_trusted_app_is_registered_and_bound_with_no_privileged_authority() {
 
 #[cfg(unix)]
 #[test]
-fn a_dev_trusted_app_cannot_widen_itself_through_a_session_tool() {
+fn a_dev_trusted_app_cannot_widen_itself_through_an_mcp_tool() {
     if !e2e_is_root() {
         eprintln!("skipped: the routed capability partition can only be prepared as root");
         return;
     }
-    let mut harness = transient_harness();
+    let _harness = transient_harness();
     let previous_apps = std::env::var_os("COS_APPS_DIR");
-    // Same package, plus a session tool that asks for the world.
+    // Same package, plus an MCP tool that asks for the world.
     let manifest = E2E_DEV_MANIFEST.replace(
         "  }\n}",
         r#"  },
-  "session": {
+  "mcp": {
     "tools": [
       {
         "name": "escalate",
-        "summary": "widen after launch",
+        "summary": {"en": "widen after launch"},
         "args": [],
         "needs": [
           {"verb": "sys.package",
            "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "nano"}},
-           "why": "install"},
+           "why": {"en": "install"}},
           {"verb": "data.kv.read",
            "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "scratch"}},
-           "why": "state"}
+           "why": {"en": "state"}}
         ]
       }
     ]
@@ -3147,43 +3284,24 @@ fn a_dev_trusted_app_cannot_widen_itself_through_a_session_tool() {
     );
     let (root, _apps) = e2e_install_dev_app(&manifest);
     e2e_install_parent_session("cli-parent-tool");
+    let package = e2e_installed_package("scratch");
 
-    let result = e2e_runtime()
+    let error = e2e_runtime()
         .block_on(register(
-            json!({"app_id": "scratch", "kind": "operation", "operation": "run", "args": []}),
-            &e2e_client(),
-        ))
-        .expect("register");
-    let session_id = result["session_id"].as_str().unwrap().to_string();
-    let handle = result["handle"].as_str().unwrap().to_string();
-    let child = e2e_spawn_child(&mut harness);
-    e2e_runtime()
-        .block_on(bind(
-            json!({"session_id": session_id, "handle": handle, "pid": child}),
-            &e2e_client(),
-        ))
-        .expect("bind");
-
-    e2e_runtime()
-        .block_on(set_transient(
             json!({
-                "session_id": session_id,
-                "handle": handle,
-                "call": {"tool": "escalate"},
+                "app_id": "scratch",
+                "kind": "mcp",
+                "tool": "escalate",
+                "package": package,
             }),
             &e2e_client(),
         ))
-        .expect("a benign half of the call is still granted");
-
-    let transient = e2e_read_transient(&session_id).expect("transient set");
-    assert_within_developer_ceiling(&transient);
+        .expect_err("developer-trusted code must not attach an MCP service");
     assert!(
-        transient.covers(&Cap::new(Verb::DATA_KV_READ, Scope::name("scratch"))),
-        "the allowed half of the tool call must survive"
-    );
-    assert!(
-        !transient.iter().any(|cap| cap.verb == Verb::SYS_PACKAGE),
-        "a session tool must not lift a developer package"
+        error.message.contains("developer-trusted")
+            && error.message.contains("may not run as an MCP server"),
+        "unexpected: {}",
+        error.message
     );
 
     crate::provenance::reload_trust();
@@ -3311,6 +3429,7 @@ fn a_relay_refuses_a_session_whose_package_was_revoked() {
         execution_uid: None,
         start_time_ticks: ticks,
         attended_local: false,
+        extension_host: None,
     };
 
     // A relay grant names an App session, so the record *should* exist.

@@ -13,6 +13,18 @@ export interface FakeCos {
   argvOut: string;
 }
 
+export function wireSuccess(data: unknown): string {
+  return JSON.stringify({ ok: true, wire_version: 1, data });
+}
+
+export function wireSuccessJson(dataJson: string): string {
+  return `{"ok":true,"wire_version":1,"data":${dataJson}}`;
+}
+
+export function wireError(error: string, code: string): string {
+  return JSON.stringify({ ok: false, wire_version: 1, error, code });
+}
+
 /**
  * Write a fake `cos` executable that prints `stdout` and exits with
  * `exitCode`, recording the argv it received to a sidecar file. The
@@ -43,11 +55,9 @@ export function withCos<T>(
 ): T {
   const saved: Record<string, string | undefined> = {
     CLAW_COS_BIN: process.env.CLAW_COS_BIN,
-    COS_BIN: process.env.COS_BIN,
     COS_APP_ID: process.env.COS_APP_ID,
   };
   process.env.CLAW_COS_BIN = fake.bin;
-  delete process.env.COS_BIN;
   for (const [k, v] of Object.entries(env)) {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;

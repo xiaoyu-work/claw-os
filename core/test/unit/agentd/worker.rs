@@ -17,12 +17,15 @@ fn identity(uid: u32, gid: u32) -> LocalIdentity {
 fn extension_binding() -> crate::extension_host::protocol::ExtensionBinding {
     crate::extension_host::protocol::ExtensionBinding {
         protocol: crate::extension_host::protocol::PROTOCOL_VERSION,
+        purpose: crate::extension_host::protocol::HostPurpose::Task,
         task_id: "task-a".to_string(),
         session_id: None,
+        app_id: None,
         owner_uid: 1000,
         extension_uid: 61_000,
         owner_gid: 1000,
         capability_generation: "a".repeat(16),
+        package: None,
         approved_paths: vec![crate::extension_host::protocol::ApprovedPath {
             path: "/home/test".to_string(),
             device: 1,
@@ -31,8 +34,10 @@ fn extension_binding() -> crate::extension_host::protocol::ExtensionBinding {
             mode: 0o40755,
         }],
         agent_extensions: Vec::new(),
-        worker_pid: 4242,
-        worker_start_time_ticks: Some(1),
+        controller_uid: 1000,
+        controller_gid: 1000,
+        controller_pid: 4242,
+        controller_start_time_ticks: Some(1),
         host_pid: 4243,
         host_start_time_ticks: Some(2),
         lease_nonce: "0123456789abcdef0123456789abcdef".to_string(),
@@ -165,12 +170,11 @@ fn the_worker_requires_the_dedicated_gid_and_no_supplementary_groups() {
 }
 
 #[test]
-fn adopted_channel_is_cloexec_and_bootstrap_hints_are_removed() {
+fn adopted_channel_is_cloexec_and_its_bootstrap_hint_is_removed() {
     use std::os::fd::AsRawFd;
 
     let _lock = crate::test_env::lock_env();
     let _channel_hint = crate::test_env::TestEnvVarGuard::set(protocol::CHANNEL_FD_ENV, "3");
-    let _task_hint = crate::test_env::TestEnvVarGuard::set(protocol::TASK_HINT_ENV, "task-secret");
     let (channel, _peer) = std::os::unix::net::UnixStream::pair().unwrap();
     let fd = channel.as_raw_fd();
     harden_adopted_channel(fd).unwrap();
@@ -178,7 +182,6 @@ fn adopted_channel_is_cloexec_and_bootstrap_hints_are_removed() {
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
     assert_ne!(flags & libc::FD_CLOEXEC, 0);
     assert!(std::env::var_os(protocol::CHANNEL_FD_ENV).is_none());
-    assert!(std::env::var_os(protocol::TASK_HINT_ENV).is_none());
 }
 
 #[tokio::test]

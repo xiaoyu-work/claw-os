@@ -24,3 +24,9 @@ consider joining the [Pop!_OS Chat](https://chat.pop-os.org/). More information 
 ## License
 
 This project is licensed under [GPLv3](LICENSE)
+
+## Claw OS MCP service
+
+The App Host starts `/usr/bin/cosmic-files` with `COS_MCP_SERVER=1`.
+Tool descriptions, arguments, defaults, and capability needs are authoritative
+in `apps/cosmic-files/app.json`; the Rust binary only binds implementations.

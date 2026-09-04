@@ -2,14 +2,15 @@
 
 ## Purpose
 
-`apps/` contains bundled Python operations exposed through `cos app`. Each app
-is declarative at discovery time and executable only when an operation is
-invoked.
+`apps/` contains bundled Apps. Agent/App callers use their authenticated MCP
+tools; optional operations remain the human `cos app` CLI surface.
 
 ## Responsibilities
 
 - Own every operation, argument, dependency, AI use, and capability need in
   `app.json`; entrypoints must not implement `_schema()` or `__schema__`.
+- Give every Agent-callable App a schema-v2 `mcp` service. Only explicitly
+  human-only panel applets may omit it.
 - Declare each argument's positional/flag binding, exact numeric kind, and
   runtime default so validated argv and capability derivation cannot diverge.
 - Keep optional gateway destinations as flags after required message text;
@@ -90,9 +91,9 @@ exact.
 List-based Python handlers consume bridge-canonical argv through
 `apps/canonical_argv.py`. Do not add another local flag grammar: declare closed
 choices, repeatability, defaults, stdin forwarding, and capability conditions
-in `app.json`, then reuse the shared parser compatibility helpers. Historical
-short/long flags and destination positionals must use manifest `aliases` or
-`positional_alias`, never parser-only exceptions.
+in `app.json`, then reuse the shared canonical parser. Every argument has one
+spelling and one binding; aliases, positional aliases, derived defaults, and
+trusted resolvers are rejected.
 The parser preserves post-`--` positional classification; never strip the
 delimiter and re-run local flag detection. Stdin is closed unless the
 top-level CLI explicitly supplies `--stdin` and the operation opts in.

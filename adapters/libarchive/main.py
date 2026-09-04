@@ -15,22 +15,11 @@ import os
 import pathlib
 import shutil
 import subprocess
-import sys
+
+from claw_os_sdk.mcp import App
+
 
 _HERE = pathlib.Path(__file__).resolve().parent
-_CANDIDATES = [
-    pathlib.Path(os.environ["CLAW_PYTHON_LIB"]) if os.environ.get("CLAW_PYTHON_LIB") else None,
-    _HERE.parent.parent / "claw-os-sdk" / "python" / "src",
-    pathlib.Path("/opt/claw/python"),
-    pathlib.Path("/usr/lib/cos/python"),
-    pathlib.Path("/usr/lib/claw/python"),
-]
-for _cand in _CANDIDATES:
-    if _cand and (_cand / "claw_os_sdk").is_dir():
-        sys.path.insert(0, str(_cand))
-        break
-
-from claw_os_sdk.serve import App  # noqa: E402
 
 
 def _bsdtar_bin() -> str:
@@ -54,20 +43,10 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess:
     return proc
 
 
-app = App()
+app = App.from_manifest(_HERE / "app.json")
 
 
-@app.tool(
-    "archive.list",
-    summary="List the entries inside an archive (tar/zip/7z/cpio/etc.).",
-    args={
-        "path": {
-            "type": "string",
-            "description": "Absolute path to the archive file.",
-        },
-    },
-    required=["path"],
-)
+@app.tool("archive.list")
 def archive_list(path: str) -> list:
     src = pathlib.Path(path)
     if not src.is_file():
@@ -76,32 +55,7 @@ def archive_list(path: str) -> list:
     return [ln for ln in proc.stdout.splitlines() if ln.strip()]
 
 
-@app.tool(
-    "archive.extract",
-    summary=(
-        "Extract an archive into a destination directory. Leading slashes and "
-        "'..' path components in archive entries are stripped (bsdtar default) "
-        "to prevent path traversal."
-    ),
-    args={
-        "path": {
-            "type": "string",
-            "description": "Absolute path to the archive file.",
-        },
-        "destination": {
-            "type": "string",
-            "description": "Directory to extract into. Created if missing.",
-        },
-        "strip_components": {
-            "type": "integer",
-            "description": (
-                "Strip this many leading path components from each archive "
-                "entry (like tar's --strip-components). Default 0."
-            ),
-        },
-    },
-    required=["path", "destination"],
-)
+@app.tool("archive.extract")
 def archive_extract(path: str, destination: str, strip_components: int = 0) -> dict:
     src = pathlib.Path(path)
     if not src.is_file():
@@ -125,30 +79,7 @@ def archive_extract(path: str, destination: str, strip_components: int = 0) -> d
     return {"destination": str(dst.resolve())}
 
 
-@app.tool(
-    "archive.create",
-    summary=(
-        "Create a new archive containing the listed source paths. Compression "
-        "format is auto-detected from the output extension (.tar, .tar.gz, "
-        ".tar.bz2, .tar.xz, .tar.zst, .zip, .7z)."
-    ),
-    args={
-        "output": {
-            "type": "string",
-            "description": "Destination archive path. Extension drives compression choice.",
-        },
-        "sources": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "Absolute paths to files / directories to include.",
-        },
-        "overwrite": {
-            "type": "boolean",
-            "description": "Allow overwriting an existing archive at `output`. Default false.",
-        },
-    },
-    required=["output", "sources"],
-)
+@app.tool("archive.create")
 def archive_create(output: str, sources: list, overwrite: bool = False) -> str:
     if not isinstance(sources, list) or not sources:
         raise ValueError("sources must be a non-empty list of paths")

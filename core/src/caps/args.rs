@@ -45,7 +45,7 @@ pub fn bind_supplied_cli_args(
             options = false;
         } else if options {
             let Some((decl, inline)) = match_option_decl(decls, token) else {
-                if token.starts_with("--") {
+                if token.starts_with('-') && token != "-" {
                     return Err(format!("unknown operation flag `{token}`"));
                 }
                 positionals.push(token.clone());
@@ -81,32 +81,9 @@ pub fn bind_supplied_cli_args(
         .iter()
         .filter(|decl| decl.effective_binding() == ArgBinding::Positional)
         .collect::<Vec<_>>();
-    let positional_aliases = decls
-        .iter()
-        .filter(|decl| decl.positional_alias)
-        .collect::<Vec<_>>();
-    let alias_count = positionals
-        .len()
-        .saturating_sub(positional_decls.len())
-        .min(positional_aliases.len());
     let mut positional = positionals.into_iter();
-    for decl in positional_aliases.into_iter().take(alias_count) {
-        if values.contains_key(&decl.name) {
-            return Err(format!(
-                "argument `{}` was supplied by both positional and option forms",
-                decl.name
-            ));
-        }
-        let raw = positional
-            .next()
-            .expect("alias_count never exceeds positional input");
-        let parsed = parse_declared_value(decl, Some(&raw))?;
-        values.insert(decl.name.clone(), parsed);
-    }
     for decl in positional_decls {
-        if values.contains_key(&decl.name)
-            || decl.effective_binding() != ArgBinding::Positional
-        {
+        if values.contains_key(&decl.name) || decl.effective_binding() != ArgBinding::Positional {
             continue;
         }
         if decl.repeatable {
@@ -123,7 +100,9 @@ pub fn bind_supplied_cli_args(
         }
     }
     if let Some(extra) = positional.next() {
-        return Err(format!("unexpected positional operation argument `{extra}`"));
+        return Err(format!(
+            "unexpected positional operation argument `{extra}`"
+        ));
     }
     Ok(values)
 }
@@ -134,10 +113,7 @@ pub fn bind_supplied_cli_args(
 /// — defaults it resolved are already present as tokens there, so this
 /// pass only backfills anything still unbound and gives booleans their
 /// declared value.
-pub fn bind_cli_args(
-    decls: &[Arg],
-    raw: &[String],
-) -> Result<BTreeMap<String, Value>, String> {
+pub fn bind_cli_args(decls: &[Arg], raw: &[String]) -> Result<BTreeMap<String, Value>, String> {
     let mut values = bind_supplied_cli_args(decls, raw)?;
     for decl in decls {
         if values.contains_key(&decl.name) {
@@ -159,10 +135,8 @@ pub fn bind_cli_args(
         ));
     }
     if let Some(required) = decls.iter().find(|decl| {
-        super::manifest::argument_is_required(decl, &values)
-            && !values.contains_key(&decl.name)
-    })
-    {
+        super::manifest::argument_is_required(decl, &values) && !values.contains_key(&decl.name)
+    }) {
         return Err(format!("argument `{}` is required", required.name));
     }
     validate_bound_args(decls, &values)?;
@@ -327,9 +301,8 @@ fn match_option_decl<'a>(decls: &'a [Arg], token: &'a str) -> Option<(&'a Arg, O
     decls
         .iter()
         .find(|decl| {
-            (decl.effective_binding() == ArgBinding::Flag
-                && option == format!("--{}", flag_name(decl)))
-                || decl.aliases.iter().any(|alias| alias == option)
+            decl.effective_binding() == ArgBinding::Flag
+                && option == format!("--{}", flag_name(decl))
         })
         .map(|decl| (decl, inline))
 }
@@ -420,5 +393,8 @@ fn insert_supplied_value(
 
 #[cfg(test)]
 mod tests {
-    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/caps/args.rs"));
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/caps/args.rs"
+    ));
 }

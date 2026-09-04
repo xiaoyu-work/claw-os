@@ -140,5 +140,149 @@
         }
       ]
     }
+  },
+  "schema_version": 2,
+  "mcp": {
+    "entry": "server.py",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "access": {
+      "system_agent": true,
+      "apps": []
+    },
+    "tools": [
+      {
+        "name": "gateway-sms.send",
+        "summary": {
+          "en": "Send a message through this gateway"
+        },
+        "args": [
+          {
+            "name": "to",
+            "kind": "name",
+            "required": true
+          },
+          {
+            "name": "text",
+            "kind": "text",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "net.dial",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "host",
+                "value": "api.twilio.com"
+              }
+            },
+            "why": {
+              "en": "Connect to the remote gateway service to perform the send operation."
+            }
+          },
+          {
+            "verb": "secret.read",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "default/twilio_account_sid"
+              }
+            },
+            "why": {
+              "en": "Read the configured twilio_account_sid secret required by this gateway."
+            }
+          },
+          {
+            "verb": "secret.read",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "default/twilio_auth_token"
+              }
+            },
+            "why": {
+              "en": "Read the configured twilio_auth_token secret required by this gateway."
+            }
+          },
+          {
+            "verb": "secret.read",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "default/twilio_from"
+              }
+            },
+            "why": {
+              "en": "Read the configured twilio_from secret required by this gateway."
+            }
+          },
+          {
+            "verb": "memory.write",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "self-ref",
+                "value": "gateway-sms"
+              }
+            },
+            "why": {
+              "en": "Remember the successful send so the agent can recall it later."
+            }
+          }
+        ]
+      },
+      {
+        "name": "gateway-sms.status",
+        "summary": {
+          "en": "Show gateway configuration and status"
+        },
+        "needs": [
+          {
+            "verb": "secret.read",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "default/twilio_account_sid"
+              }
+            },
+            "why": {
+              "en": "Read the configured twilio_account_sid secret required by this gateway."
+            }
+          },
+          {
+            "verb": "secret.read",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "default/twilio_auth_token"
+              }
+            },
+            "why": {
+              "en": "Read the configured twilio_auth_token secret required by this gateway."
+            }
+          },
+          {
+            "verb": "secret.read",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "default/twilio_from"
+              }
+            },
+            "why": {
+              "en": "Read the configured twilio_from secret required by this gateway."
+            }
+          }
+        ]
+      }
+    ]
   }
 }

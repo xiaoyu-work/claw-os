@@ -7,7 +7,8 @@ which tool calls are exposed and executed.
 
 ## Responsibilities
 
-- Register built-in, `cos` proxy, progressive App, memory, browser, and MCP tools.
+- Register built-in, `cos` proxy, authenticated MCP App, memory, browser, and
+  external MCP tools.
 - Use host-backed proxy tools in supervised tasks so dynamic App/MCP code
   never executes in the worker process.
 - Cache immutable name/description/schema descriptors separately from
@@ -22,8 +23,8 @@ which tool calls are exposed and executed.
 - Let an attended local system Agent initiate trusted account authorization
   without exposing OAuth tokens or client secrets to the model.
 - Convert tool schemas into LLM-facing definitions.
-- Keep core schemas direct while progressively disclosing App tools through a
-  fixed search/describe/call bridge; MCP uses a separate fixed
+- Keep core schemas direct while progressively disclosing authenticated MCP
+  App tools through a fixed search/describe/call bridge; external MCP uses a separate fixed
   catalog/invoke gateway.
 - Apply guardrails and session/capability context.
 - Require `memory.read:self:agent` versus `memory.write:self:agent` after
@@ -51,7 +52,7 @@ which tool calls are exposed and executed.
 | `cos_help.rs` | Read-only progressive discovery over the shared public `cos` command tree |
 | `cos_proxy/` | Structured `cos` primitive tools |
 | `cos_proxy/oauth_login.rs` | Agent-initiated trusted OAuth browser flow |
-| `cos_apps.rs`, `cos_apps_session.rs` | Compact app catalog/run gateways and active session calls |
+| `cos_apps_session.rs` | Authenticated MCP App tool registration, task-Host relay, reusable/single-call placement, and calls through the daemon service Host |
 | `mcp/` | MCP attachment and proxy tools |
 | `memory.rs`, `recall.rs` | Agent memory tools |
 
@@ -63,7 +64,7 @@ Runtime dispatch depends on the registry plus one trusted
 immutable configuration into `RegistryDeps`; assembling
 `default_registry_with_deps(&deps)` performs no environment reads or store
 opens. Registry paths also preserve the system Skill trust origin, exact App
-root, generic App catalog/run root, and one notes store shared by prompt reads,
+root, and one notes store shared by prompt reads,
 `cos_memory`, and curation. Deprecated no-argument registry/media constructors
 remain only as compatibility composition wrappers. Projection is rebuilt per
 request and repeated at dispatch; only immutable descriptors may be cached.

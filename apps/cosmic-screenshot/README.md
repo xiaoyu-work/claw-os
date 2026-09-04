@@ -1,4 +1,4 @@
-# cosmic-screenshot — agent session bindings
+# cosmic-screenshot — native MCP App
 
 This directory only contains the **manifest** (`app.json`) that
 declares `cosmic-screenshot` as an MCP-server App for the kernel
@@ -10,14 +10,14 @@ agent. The actual server lives in the desktop binary at
 The desktop binary supports two run modes in the same executable:
 
 1. **Default** — parses `Args` via clap, asks `xdg-desktop-portal`
-   for a screenshot, writes the PNG under `~/Pictures` (or the
+   for a screenshot, writes the PNG under the XDG Pictures directory (or the
    `--save-dir`), and optionally posts a freedesktop notification.
 2. **MCP server** — entered when `COS_MCP_SERVER=1` is set in the
    environment (the kernel always sets it via
    `core/src/agent/tools/cos_apps_session.rs::bring_up_app`). In
    this mode the binary speaks JSON-RPC MCP over stdio using the
-   `cos-mcp-serve` crate and exposes one tool —
-   `screenshot.capture` — backed by the same capture flow.
+   `claw_os_sdk::mcp` module. The verified `app.json.mcp.tools`
+   declaration supplies the tool description and input schema.
 
 ## Why the manifest's `entry` is absolute
 
@@ -25,12 +25,11 @@ The desktop binary supports two run modes in the same executable:
 path `/usr/bin/cosmic-screenshot` is where `just install` in
 `desktop/screenshot/` drops the binary on a real Claw OS rootfs.
 
-An absolute `session.entry` is not something any App may declare. The
+An absolute `mcp.entry` is not something any App may declare. The
 kernel keeps a fixed table in `core/src/worker/trusted_desktop.rs`
-naming three vendor App ids and the exact system programs they may
-point at; every other App is refused, and the entry must still be a
-declared, signed, package-relative entrypoint. Even for the three rows,
-the path is honoured only when the package verified through vendor
+that names trusted vendor App ids and the exact system programs they may
+point at; every other App is refused. An allowlisted path is honoured only
+when the package verified through vendor
 provenance and both the package tree and the binary are root-owned and
 not group/world-writable.
 
@@ -53,12 +52,11 @@ never initialises libcosmic.
 
 | Tool                 | Verb        | Notes                                                          |
 | -------------------- | ----------- | -------------------------------------------------------------- |
-| `screenshot.capture` | `fs.write`  | Args: `interactive`, `modal`, `save_dir` (default `~/Pictures`). |
+| `screenshot.capture` | `fs.write`  | Args: `interactive`, `modal`, optional `save_dir`. |
 
-The write grant is bound to `save_dir`, so it covers the one directory
-the call named and nothing else. Because it is a filesystem grant, the
-call runs in a **single-call worker** — a fresh sandbox derived from
-exactly that capability and destroyed with the response — rather than
-in the reusable session server.
+When `save_dir` is omitted or unusable, the handler resolves the XDG Pictures
+directory at runtime; the manifest deliberately does not substitute a literal
+`~/Pictures` argument default. An explicit destination receives a separate
+argument-bound write grant.
 
 Returns a JSON object with `cancelled` and `path` fields.

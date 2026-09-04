@@ -117,8 +117,12 @@ pub fn discover_verified(apps_dir: &Path) -> BTreeMap<String, App> {
 }
 
 pub fn discover_all(apps_dir: &Path) -> Discovery {
+    discover_all_with_cache(apps_dir, true)
+}
+
+fn discover_all_with_cache(apps_dir: &Path, use_cache: bool) -> Discovery {
     let mut apps = BTreeMap::new();
-    discover_dir(apps_dir, apps_dir, 0, &mut apps);
+    discover_dir(apps_dir, apps_dir, 0, use_cache, &mut apps);
     let mut out = Discovery::default();
     for (id, app) in apps {
         if app.is_verified() {
@@ -145,14 +149,43 @@ pub fn find_verified(apps_dir: &Path, app_id: &str) -> Result<App, String> {
     }
 }
 
-fn verify_app_dir(dir: &Path, id: &str) -> Result<Arc<VerifiedPackage>, String> {
-    let trust = provenance::trust_store();
-    let options = VerifyOptions::new(PackageKind::App).expect_id(id);
-    provenance::verify::verify_package_cached(dir, &options, &trust)
-        .map_err(|e| provenance::quarantine_reason(PackageKind::App, id, &e))
+/// Resolve one App from a new filesystem verification.
+///
+/// Authority that outlives discovery uses this path before every
+/// re-authorization. A cached snapshot can prove its package directory and
+/// trust generation are unchanged, but not that an owner-writable child file
+/// still has the signed content.
+pub fn find_verified_fresh(apps_dir: &Path, app_id: &str) -> Result<App, String> {
+    match discover_all_with_cache(apps_dir, false)
+        .all()
+        .remove(app_id)
+    {
+        Some(app) => match &app.provenance {
+            Ok(_) => Ok(app),
+            Err(reason) => Err(reason.clone()),
+        },
+        None => Err(format!("app `{app_id}` is not installed")),
+    }
 }
 
-fn discover_dir(root: &Path, dir: &Path, depth: usize, apps: &mut BTreeMap<String, App>) {
+fn verify_app_dir(dir: &Path, id: &str, use_cache: bool) -> Result<Arc<VerifiedPackage>, String> {
+    let trust = provenance::trust_store();
+    let options = VerifyOptions::new(PackageKind::App).expect_id(id);
+    let verified = if use_cache {
+        provenance::verify::verify_package_cached(dir, &options, &trust)
+    } else {
+        provenance::verify::verify_package(dir, &options, &trust).map(Arc::new)
+    };
+    verified.map_err(|e| provenance::quarantine_reason(PackageKind::App, id, &e))
+}
+
+fn discover_dir(
+    root: &Path,
+    dir: &Path,
+    depth: usize,
+    use_cache: bool,
+    apps: &mut BTreeMap<String, App>,
+) {
     if depth > 8 {
         return;
     }
@@ -172,7 +205,7 @@ fn discover_dir(root: &Path, dir: &Path, depth: usize, apps: &mut BTreeMap<Strin
         }
         let manifest_path = path.join("app.json");
         if !manifest_path.is_file() {
-            discover_dir(root, &path, depth + 1, apps);
+            discover_dir(root, &path, depth + 1, use_cache, apps);
             continue;
         }
         let data = match fs::read_to_string(&manifest_path) {
@@ -194,7 +227,7 @@ fn discover_dir(root: &Path, dir: &Path, depth: usize, apps: &mut BTreeMap<Strin
         // verified App re-parses its manifest out of the verified
         // snapshot so the bytes used for capability derivation are the
         // bytes that were signed, not whatever the path holds now.
-        let provenance = verify_app_dir(&path, &structural.id);
+        let provenance = verify_app_dir(&path, &structural.id, use_cache);
         let manifest = match &provenance {
             Ok(pkg) => match pkg
                 .manifest_text()
@@ -239,11 +272,11 @@ fn normalized_relative_id(root: &Path, path: &Path) -> Option<String> {
     if parts.is_empty()
         || parts.iter().any(|part| {
             part.is_empty()
-                || !part
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase()
+                || !part.bytes().all(|byte| {
+                    byte.is_ascii_lowercase()
                         || byte.is_ascii_digit()
-                        || matches!(byte, b'-' | b'_'))
+                        || matches!(byte, b'-' | b'_')
+                })
         })
     {
         return None;
@@ -263,11 +296,7 @@ pub fn manifest_schema(manifest: &Manifest) -> Value {
 }
 
 pub fn operation_schema(operation: &Operation) -> Value {
-    let parameters = operation
-        .args
-        .iter()
-        .map(arg_schema)
-        .collect::<Vec<_>>();
+    let parameters = operation.args.iter().map(arg_schema).collect::<Vec<_>>();
     json!({
         "description": operation.summary.current(),
         "parameters": parameters,
@@ -298,12 +327,6 @@ fn arg_schema(arg: &Arg) -> Value {
     if arg.repeatable {
         schema["items"] = json!({"type": value_type});
     }
-    if !arg.aliases.is_empty() {
-        schema["aliases"] = serde_json::json!(arg.aliases);
-    }
-    if arg.positional_alias {
-        schema["positional_alias"] = serde_json::Value::Bool(true);
-    }
     if !arg.choices.is_empty() {
         if arg.repeatable {
             schema["items"]["enum"] = serde_json::Value::Array(arg.choices.clone());
@@ -313,9 +336,6 @@ fn arg_schema(arg: &Arg) -> Value {
     }
     if let Some(default) = &arg.default {
         schema["default"] = default.clone();
-    }
-    if let Some(default_from) = &arg.default_from {
-        schema["default_from"] = json!(default_from);
     }
     schema
 }

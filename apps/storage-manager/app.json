@@ -1,75 +1,324 @@
 {
   "id": "storage-manager",
   "version": "0.1.0",
-  "name": {"en": "Storage Manager"},
-  "summary": {"en": "Inspect disks, diagnose SMART/filesystem health, and control removable media through UDisks2"},
+  "name": {
+    "en": "Storage Manager"
+  },
+  "summary": {
+    "en": "Inspect disks, diagnose SMART/filesystem health, and control removable media through UDisks2"
+  },
   "icon": "💽",
   "runtime": "python",
   "operations": {
     "status": {
-      "label": {"en": "List block devices and mounts"},
+      "label": {
+        "en": "List block devices and mounts"
+      },
       "needs": [
         {
           "verb": "sys.observe",
-          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "storage"}},
-          "why": {"en": "Read block-device, filesystem, and mount metadata."}
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "storage"
+            }
+          },
+          "why": {
+            "en": "Read block-device, filesystem, and mount metadata."
+          }
         }
       ]
     },
     "health": {
-      "label": {"en": "Inspect SMART and filesystem health"},
-      "args": [{"name": "device", "kind": "path", "required": true}],
+      "label": {
+        "en": "Inspect SMART and filesystem health"
+      },
+      "args": [
+        {
+          "name": "device",
+          "kind": "path",
+          "required": true
+        }
+      ],
       "needs": [
         {
           "verb": "sys.storage",
-          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "diagnose"}},
-          "why": {"en": "Read SMART, filesystem metadata, and matching kernel storage errors."}
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "diagnose"
+            }
+          },
+          "why": {
+            "en": "Read SMART, filesystem metadata, and matching kernel storage errors."
+          }
         }
       ]
     },
     "check": {
-      "label": {"en": "Run an offline read-only filesystem check"},
-      "args": [{"name": "device", "kind": "path", "required": true}],
+      "label": {
+        "en": "Run an offline read-only filesystem check"
+      },
+      "args": [
+        {
+          "name": "device",
+          "kind": "path",
+          "required": true
+        }
+      ],
       "needs": [
         {
           "verb": "sys.storage",
-          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "diagnose"}},
-          "why": {"en": "Read the entire unmounted filesystem with a no-repair checker."}
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "diagnose"
+            }
+          },
+          "why": {
+            "en": "Read the entire unmounted filesystem with a no-repair checker."
+          }
         }
       ]
     },
     "mount": {
-      "label": {"en": "Mount a filesystem through UDisks2"},
-      "args": [{"name": "device", "kind": "path", "required": true}],
+      "label": {
+        "en": "Mount a filesystem through UDisks2"
+      },
+      "args": [
+        {
+          "name": "device",
+          "kind": "path",
+          "required": true
+        }
+      ],
       "needs": [
         {
           "verb": "sys.mount",
-          "scope": {"kind": "from-arg", "arg": "device"},
-          "why": {"en": "Mount this exact canonical block device."}
+          "scope": {
+            "kind": "from-arg",
+            "arg": "device"
+          },
+          "why": {
+            "en": "Mount this exact canonical block device."
+          }
         }
       ]
     },
     "unmount": {
-      "label": {"en": "Unmount a filesystem through UDisks2"},
-      "args": [{"name": "device", "kind": "path", "required": true}],
+      "label": {
+        "en": "Unmount a filesystem through UDisks2"
+      },
+      "args": [
+        {
+          "name": "device",
+          "kind": "path",
+          "required": true
+        }
+      ],
       "needs": [
         {
           "verb": "sys.mount",
-          "scope": {"kind": "from-arg", "arg": "device"},
-          "why": {"en": "Unmount this exact canonical block device."}
+          "scope": {
+            "kind": "from-arg",
+            "arg": "device"
+          },
+          "why": {
+            "en": "Unmount this exact canonical block device."
+          }
         }
       ]
     },
     "eject": {
-      "label": {"en": "Safely eject or power off removable media"},
-      "args": [{"name": "device", "kind": "path", "required": true}],
+      "label": {
+        "en": "Safely eject or power off removable media"
+      },
+      "args": [
+        {
+          "name": "device",
+          "kind": "path",
+          "required": true
+        }
+      ],
       "needs": [
         {
           "verb": "sys.mount",
-          "scope": {"kind": "from-arg", "arg": "device"},
-          "why": {"en": "Eject or safely power off this exact removable drive."}
+          "scope": {
+            "kind": "from-arg",
+            "arg": "device"
+          },
+          "why": {
+            "en": "Eject or safely power off this exact removable drive."
+          }
         }
       ]
     }
+  },
+  "schema_version": 2,
+  "mcp": {
+    "entry": "server.py",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "access": {
+      "system_agent": true,
+      "apps": []
+    },
+    "tools": [
+      {
+        "name": "storage-manager.status",
+        "summary": {
+          "en": "List block devices and mounts"
+        },
+        "needs": [
+          {
+            "verb": "sys.observe",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "storage"
+              }
+            },
+            "why": {
+              "en": "Read block-device, filesystem, and mount metadata."
+            }
+          }
+        ]
+      },
+      {
+        "name": "storage-manager.health",
+        "summary": {
+          "en": "Inspect SMART and filesystem health"
+        },
+        "args": [
+          {
+            "name": "device",
+            "kind": "path",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.storage",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "diagnose"
+              }
+            },
+            "why": {
+              "en": "Read SMART, filesystem metadata, and matching kernel storage errors."
+            }
+          }
+        ]
+      },
+      {
+        "name": "storage-manager.check",
+        "summary": {
+          "en": "Run an offline read-only filesystem check"
+        },
+        "args": [
+          {
+            "name": "device",
+            "kind": "path",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.storage",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "diagnose"
+              }
+            },
+            "why": {
+              "en": "Read the entire unmounted filesystem with a no-repair checker."
+            }
+          }
+        ]
+      },
+      {
+        "name": "storage-manager.mount",
+        "summary": {
+          "en": "Mount a filesystem through UDisks2"
+        },
+        "args": [
+          {
+            "name": "device",
+            "kind": "path",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.mount",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "device"
+            },
+            "why": {
+              "en": "Mount this exact canonical block device."
+            }
+          }
+        ]
+      },
+      {
+        "name": "storage-manager.unmount",
+        "summary": {
+          "en": "Unmount a filesystem through UDisks2"
+        },
+        "args": [
+          {
+            "name": "device",
+            "kind": "path",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.mount",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "device"
+            },
+            "why": {
+              "en": "Unmount this exact canonical block device."
+            }
+          }
+        ]
+      },
+      {
+        "name": "storage-manager.eject",
+        "summary": {
+          "en": "Safely eject or power off removable media"
+        },
+        "args": [
+          {
+            "name": "device",
+            "kind": "path",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.mount",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "device"
+            },
+            "why": {
+              "en": "Eject or safely power off this exact removable drive."
+            }
+          }
+        ]
+      }
+    ]
   }
 }

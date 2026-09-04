@@ -37,11 +37,11 @@ use super::wire::bounded::MAX_WAIT_MS;
 use super::wire::requests as body;
 use super::wire::{Fault, RequestId};
 use super::{
-    accessibility, app_sessions, audio, backup, bluetooth, camera, clipboard, config_editor,
-    containers, context, context_events, crash, credentials, desktop, display, event_center,
-    firewall, hardware, journal as journal_ops, location, memory, network, notifications, packages,
-    permissions, power, printer, scheduler, security, snapshots, storage, system_journal, systemd,
-    tasks, transactions, usage, usb_guard, users,
+    accessibility, app_services, app_sessions, audio, backup, bluetooth, camera, clipboard,
+    config_editor, containers, context, context_events, crash, credentials, desktop, display,
+    event_center, firewall, hardware, journal as journal_ops, location, memory, network,
+    notifications, packages, permissions, power, printer, scheduler, security, snapshots, storage,
+    system_journal, systemd, tasks, transactions, usage, usb_guard, users,
 };
 
 /// Who may reach a route at all.
@@ -51,6 +51,8 @@ pub enum Access {
     User,
     /// Root only.
     Root,
+    /// A task Host identity injected only by its verified private broker.
+    PrivateTaskHost,
 }
 
 /// Whether a route changes privileged state.
@@ -304,6 +306,14 @@ impl Route {
             Access::User => Ok(()),
             Access::Root if uid == 0 => Ok(()),
             Access::Root => Err(Fault::NotAuthorized),
+            Access::PrivateTaskHost
+                if client.extension_host.as_ref().is_some_and(|host| {
+                    host.purpose == crate::extension_host::protocol::HostPurpose::Task
+                }) =>
+            {
+                Ok(())
+            }
+            Access::PrivateTaskHost => Err(Fault::NotAuthorized),
         }
     }
 }
@@ -959,6 +969,19 @@ routes! {
     // -----------------------------------------------------------------
     // App / MCP session authority
     // -----------------------------------------------------------------
+    AppServiceCall {
+        name: "app_service.call",
+        access: Access::PrivateTaskHost,
+        kind: Kind::Mutation,
+        budget: Budget::launch(),
+        authority: peer(Audience::AppLaunch),
+        body: body::AppServiceCall,
+        audit: &[
+            ("app_id", FieldRule::Token),
+            ("tool", FieldRule::Token),
+        ],
+        run: |c| app_services::call(c.state, c.params, c.client).await,
+    }
     AppSessionRegister {
         name: "app_session.register",
         access: Access::User,
@@ -970,7 +993,9 @@ routes! {
             ("app_id", FieldRule::Token),
             ("kind", FieldRule::Token),
             ("operation", FieldRule::Token),
+            ("tool", FieldRule::Token),
             ("args", FieldRule::Size),
+            ("package", FieldRule::Size),
         ],
         run: |c| app_sessions::register(c.params, c.client).await,
     }
@@ -1028,10 +1053,11 @@ routes! {
         body: body::AppSessionSetTransient,
         audit: &[
             ("session_id", FieldRule::Token),
-            ("call", FieldRule::Size),
+            ("authorization", FieldRule::Size),
+            ("action_digest", FieldRule::Token),
         ],
         run: |c| {
-            app_sessions::set_transient(c.params, c.client)
+            app_sessions::set_transient(c.state, c.params, c.client)
                 .await
                 .map_err(BrokerError::from)
         },
@@ -1659,6 +1685,14 @@ pub fn root_commands() -> impl Iterator<Item = &'static str> {
     ROUTES
         .iter()
         .filter(|route| route.access == Access::Root)
+        .map(|route| route.name)
+}
+
+/// Route names reachable only through an authenticated private Host broker.
+pub fn private_task_host_commands() -> impl Iterator<Item = &'static str> {
+    ROUTES
+        .iter()
+        .filter(|route| route.access == Access::PrivateTaskHost)
         .map(|route| route.name)
 }
 

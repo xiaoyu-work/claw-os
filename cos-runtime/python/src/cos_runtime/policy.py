@@ -32,24 +32,23 @@ Python, and gives audit / logging a single chokepoint.
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import subprocess
 from typing import Any, Mapping, Optional
+
+from claw_os_sdk._transport import (
+    WIRE_ARG,
+    WireDenied,
+    WireUnavailable,
+    decode_response,
+)
 
 
 # Subprocess timeout for every shell-out to the hidden policy bridge. A hung
 # child translates to PolicyUnavailable, which the caller can decide
 # to treat as deny or warn-and-continue.
 _DEFAULT_TIMEOUT_S = 60
-
-
-def _truncate(value: Any, limit: int = 200) -> str:
-    s = repr(value) if not isinstance(value, str) else value
-    if len(s) <= limit:
-        return s
-    return s[:limit] + f"... [{len(s) - limit} more bytes elided]"
 
 
 # ---------------------------------------------------------------------------
@@ -132,7 +131,7 @@ def check(
     raising. Useful when an app wants to surface a "would-be-denied"
     notice without aborting.
     """
-    cmd = [_cos_binary(), "__policy", "check", verb]
+    cmd = [_cos_binary(), WIRE_ARG, "__policy", "check", verb]
     cmd.extend(_scope_flag(path=path, host=host, name=name, self_ref=self_ref, wild=wild))
 
     try:
@@ -148,33 +147,17 @@ def check(
             f"policy check timed out after {_DEFAULT_TIMEOUT_S}s"
         ) from exc
 
-    # The router prints JSON to stdout on success and to stderr on
-    # CLI-level errors. We treat both as candidate JSON.
-    payload = (proc.stdout or "").strip() or (proc.stderr or "").strip()
-    if not payload:
-        raise PolicyUnavailable(
-            f"policy check returned no output (exit {proc.returncode})"
-        )
     try:
-        decision = json.loads(payload)
-    except json.JSONDecodeError as exc:
-        raise PolicyUnavailable(
-            f"policy check returned non-JSON output: {_truncate(payload)}"
-        ) from exc
-
-    # A non-zero exit code is always a transport failure even when
-    # stdout happens to be JSON-shaped — the body might be a partial
-    # response, and silently accepting "decision: allow" from a
-    # crashing kernel is the textbook fail-open vulnerability.
-    if proc.returncode != 0:
-        raise PolicyUnavailable(
-            f"policy check exited {proc.returncode}: {_truncate(payload)}"
+        decision = decode_response(
+            (proc.stdout or "").strip(),
+            proc.returncode,
+            "policy check",
         )
+    except (WireDenied, WireUnavailable) as error:
+        raise PolicyUnavailable(str(error)) from error
 
     if "decision" not in decision:
-        raise PolicyUnavailable(
-            f"policy check returned an unrecognised envelope: {_truncate(decision)}"
-        )
+        raise PolicyUnavailable("policy check response omitted `decision`")
     return decision
 
 
@@ -211,8 +194,8 @@ def _scope_flag(
 
 
 def _cos_binary() -> str:
-    """Locate the ``cos`` binary. Honours ``COS_BIN`` for tests."""
-    override = os.environ.get("COS_BIN")
+    """Locate the ``cos`` binary. Honours ``CLAW_COS_BIN`` for tests."""
+    override = os.environ.get("CLAW_COS_BIN")
     if override:
         return override
     found = shutil.which("cos")

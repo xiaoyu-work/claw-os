@@ -73,9 +73,9 @@ async fn discovers_namespaced_app_operation() {
         r#"{
             "id":"notes",
             "version":"0.1",
-            "name":"Notes",
+            "name": {"en": "Notes"},
             "operations":{
-                "notes.create":{"label":"Create note"}
+                "notes.create":{"label": {"en": "Create note"}}
             }
         }"#,
     )
@@ -92,7 +92,8 @@ async fn discovers_namespaced_app_operation() {
     );
     assert_eq!(result["found"], true);
     assert_eq!(result["command"], "cos app notes notes.create");
-    assert_eq!(result["model_tool"], "cos_app_run");
+    assert_eq!(result["model_callable"], false);
+    assert!(result["model_tool"].is_null());
 }
 
 #[tokio::test]

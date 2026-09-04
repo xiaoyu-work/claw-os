@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use crate::agentd::spawn::{ExecutionIsolation, WorkerIdentity};
 use crate::extension_host::identity::ExtensionIdentity;
+use crate::provenance::runtime::PackageRef;
 
 use super::protocol::{self, ApprovedPath, ExtensionBinding, HostBootstrap};
 
@@ -649,17 +650,27 @@ fn place_bootstrap_fd(source: RawFd) -> std::io::Result<()> {
     Ok(())
 }
 
+#[derive(Clone, Debug)]
+pub struct HostLaunchSpec {
+    pub purpose: protocol::HostPurpose,
+    pub lease_id: String,
+    pub authority_session_id: Option<String>,
+    pub app_id: Option<String>,
+    pub host_session_id: Option<String>,
+    pub controller_uid: u32,
+    pub controller_gid: u32,
+    pub controller_pid: u32,
+    pub controller_start_time_ticks: Option<u64>,
+    pub package: Option<PackageRef>,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_host(
     owner: &WorkerIdentity,
     extension: &ExtensionIdentity,
     isolation: &ExecutionIsolation,
     containment: &ContainmentRoot,
-    task_id: &str,
-    task_session_id: Option<&str>,
-    host_session_id: Option<&str>,
-    worker_pid: u32,
-    worker_start_time_ticks: Option<u64>,
+    launch: &HostLaunchSpec,
     lease_nonce: &str,
     expires_at_ms: u64,
     capability_generation: &str,
@@ -684,7 +695,7 @@ pub fn spawn_host(
             return Err(combine_cleanup_error(error, Ok(()), paths.cleanup()));
         }
     };
-    let mut cgroup = match ResourceGroup::create(containment, task_id) {
+    let mut cgroup = match ResourceGroup::create(containment, &launch.lease_id) {
         Ok(cgroup) => cgroup,
         Err(error) => {
             return Err(combine_cleanup_error(error, Ok(()), paths.cleanup()));
@@ -721,17 +732,22 @@ pub fn spawn_host(
     let enforce_groups = crate::agentd::spawn::broker_is_root();
     let bootstrap = HostBootstrap {
         protocol: protocol::PROTOCOL_VERSION,
-        task_id: task_id.to_string(),
-        session_id: task_session_id.map(ToOwned::to_owned),
+        purpose: launch.purpose,
+        task_id: launch.lease_id.clone(),
+        session_id: launch.authority_session_id.clone(),
+        app_id: launch.app_id.clone(),
         owner_uid: owner.uid,
         extension_uid: extension.uid,
         execution_gid: isolation.execution_gid(),
         enforce_groups,
-        worker_pid,
-        worker_start_time_ticks,
+        controller_uid: launch.controller_uid,
+        controller_gid: launch.controller_gid,
+        controller_pid: launch.controller_pid,
+        controller_start_time_ticks: launch.controller_start_time_ticks,
         lease_nonce: lease_nonce.to_string(),
         expires_at_ms,
         capability_generation: capability_generation.to_string(),
+        package: launch.package.clone(),
         control_socket: paths.control_socket.to_string_lossy().into_owned(),
         broker_socket: paths.broker_socket.to_string_lossy().into_owned(),
         approved_paths,
@@ -773,10 +789,10 @@ pub fn spawn_host(
     command.env("COS_LOG_DIR", paths.control_dir.join("log"));
     // Diagnostics only. Host authority comes exclusively from the private
     // bootstrap descriptor and never reads these values.
-    command.env(TASK_DIAGNOSTIC_ENV, task_id);
+    command.env(TASK_DIAGNOSTIC_ENV, &launch.lease_id);
     command.env(CONTROL_SOCKET_DIAGNOSTIC_ENV, &paths.control_socket);
     command.env(protocol::BROKER_SOCKET_ENV, &paths.broker_socket);
-    if let Some(host_session_id) = host_session_id {
+    if let Some(host_session_id) = launch.host_session_id.as_deref() {
         command.env(HOST_SESSION_ENV, host_session_id);
         command.env("COS_SESSION", host_session_id);
     }
@@ -868,16 +884,21 @@ pub fn spawn_host(
     let start_time_ticks = crate::proc::read_start_time_ticks_pub(pid);
     let binding = ExtensionBinding {
         protocol: protocol::PROTOCOL_VERSION,
-        task_id: task_id.to_string(),
-        session_id: task_session_id.map(ToOwned::to_owned),
+        purpose: launch.purpose,
+        task_id: launch.lease_id.clone(),
+        session_id: launch.authority_session_id.clone(),
+        app_id: launch.app_id.clone(),
         owner_uid: owner.uid,
         extension_uid: extension.uid,
         owner_gid: gid,
         capability_generation: capability_generation.to_string(),
+        package: launch.package.clone(),
         approved_paths: bootstrap.approved_paths,
         agent_extensions: bootstrap.agent_extensions,
-        worker_pid,
-        worker_start_time_ticks,
+        controller_uid: launch.controller_uid,
+        controller_gid: launch.controller_gid,
+        controller_pid: launch.controller_pid,
+        controller_start_time_ticks: launch.controller_start_time_ticks,
         host_pid: pid,
         host_start_time_ticks: start_time_ticks,
         lease_nonce: lease_nonce.to_string(),

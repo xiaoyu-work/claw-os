@@ -14,13 +14,15 @@ claw-os repo (under ``apps/*``) can:
 * :mod:`cos_runtime.memory`   — voluntarily push searchable summaries
   into the agent's memory so the agent can recall app activity later
   (gated by the ``memory.write`` capability bound to the app's id).
+* :mod:`cos_runtime.mcp`      — bind bundled App operations to their
+  exact manifest-declared MCP tools.
 
 All three shell out to the ``cos`` binary and assume the process was
 spawned by the kernel with a valid ``COS_SESSION`` env var. They
 will fail loudly outside that context, which is intentional.
 """
 
-from . import memory, policy, snapshot
+from . import mcp, memory, policy, snapshot
 
-__all__ = ["memory", "policy", "snapshot"]
+__all__ = ["mcp", "memory", "policy", "snapshot"]
 __version__ = "0.1.0"

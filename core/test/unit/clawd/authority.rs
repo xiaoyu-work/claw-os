@@ -22,6 +22,7 @@ fn client() -> crate::clawd::client_identity::ClientIdentity {
         execution_uid: None,
         start_time_ticks: crate::proc::read_start_time_ticks_pub(pid),
         attended_local: false,
+        extension_host: None,
     }
 }
 
@@ -93,7 +94,10 @@ fn route_audiences_match_their_families() {
             name if name.starts_with("notification.") => Audience::Notification,
             name if name.starts_with("permission.") => Audience::Permission,
             name if name.starts_with("transaction.") => Audience::Transaction,
-            name if name.starts_with("app_session.") || name.starts_with("mcp_session.") => {
+            name if name == "app_service.call"
+                || name.starts_with("app_session.")
+                || name.starts_with("mcp_session.") =>
+            {
                 // The relay is the one exception: it is addressed by a
                 // launcher-held grant that authorizes *presenting* an
                 // App session, not launching one, so it has its own

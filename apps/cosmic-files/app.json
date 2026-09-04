@@ -1,0 +1,319 @@
+{
+  "id": "cosmic-files",
+  "version": "0.1.0",
+  "schema_version": 2,
+  "name": {
+    "en": "Files"
+  },
+  "summary": {
+    "en": "Inspect, search, reveal, and understand files through the native file manager."
+  },
+  "runtime": "binary",
+  "ai": {
+    "budget": {
+      "monthly_units": 200000
+    },
+    "safety": "strict",
+    "origins": [
+      "external-content"
+    ]
+  },
+  "mcp": {
+    "entry": "/usr/bin/cosmic-files",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "tools": [
+      {
+        "name": "files.list",
+        "summary": {
+          "en": "List entries under a directory through the capability-gated Files path."
+        },
+        "args": [
+          {
+            "name": "path",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "Absolute directory path."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "path"
+            },
+            "why": {
+              "en": "Read the contents of the directory you asked to list."
+            }
+          }
+        ]
+      },
+      {
+        "name": "files.metadata",
+        "summary": {
+          "en": "Get size, type, modification time, and tags for a path."
+        },
+        "args": [
+          {
+            "name": "path",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "File or directory to inspect."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.meta",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "path"
+            },
+            "why": {
+              "en": "Read metadata for the path you asked about."
+            }
+          }
+        ]
+      },
+      {
+        "name": "files.search",
+        "summary": {
+          "en": "Recursively find names containing a case-insensitive substring, up to 500 matches."
+        },
+        "args": [
+          {
+            "name": "root",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "Absolute directory to walk."
+            }
+          },
+          {
+            "name": "query",
+            "kind": "text",
+            "required": true,
+            "label": {
+              "en": "Case-insensitive substring to match."
+            }
+          },
+          {
+            "name": "limit",
+            "kind": "integer",
+            "required": false,
+            "default": 50,
+            "label": {
+              "en": "Maximum matches to return; values are clamped to 1 through 500."
+            }
+          },
+          {
+            "name": "include_hidden",
+            "kind": "bool",
+            "required": false,
+            "default": false,
+            "label": {
+              "en": "Include entries whose names begin with a dot."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "root"
+            },
+            "why": {
+              "en": "Walk the directory tree you asked to search."
+            }
+          }
+        ]
+      },
+      {
+        "name": "files.reveal",
+        "summary": {
+          "en": "Open Files at a directory or at the directory containing a file."
+        },
+        "args": [
+          {
+            "name": "path",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "Path to reveal in the file manager."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.meta",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "path"
+            },
+            "why": {
+              "en": "Determine whether the requested path is a directory."
+            }
+          },
+          {
+            "verb": "proc.spawn",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "cosmic-files"
+              }
+            },
+            "why": {
+              "en": "Open the native file manager at the requested location."
+            }
+          }
+        ]
+      },
+      {
+        "name": "files.summarize",
+        "summary": {
+          "en": "Summarize one document through the same AI pipeline used by the Files context menu."
+        },
+        "args": [
+          {
+            "name": "path",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "Document to summarize."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "path"
+            },
+            "why": {
+              "en": "Read the document so its contents can be summarized."
+            }
+          },
+          {
+            "verb": "ai.chat.untrusted",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Send the document text through the OS AI gate for summarization."
+            }
+          },
+          {
+            "verb": "memory.write",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "self-ref",
+                "value": "doc"
+              }
+            },
+            "why": {
+              "en": "Remember the document summary using the document App's existing scope."
+            }
+          }
+        ]
+      },
+      {
+        "name": "files.explain",
+        "summary": {
+          "en": "Explain one document in plain language through the OS AI gate."
+        },
+        "args": [
+          {
+            "name": "path",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "Document to explain."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "path"
+            },
+            "why": {
+              "en": "Read the document so it can be explained."
+            }
+          },
+          {
+            "verb": "ai.chat.untrusted",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Send the document text through the OS AI gate for explanation."
+            }
+          }
+        ]
+      },
+      {
+        "name": "files.find_similar",
+        "summary": {
+          "en": "Find documents with similar names or topics through the local Recoll index."
+        },
+        "args": [
+          {
+            "name": "path",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "Document whose filename supplies the search query."
+            }
+          },
+          {
+            "name": "limit",
+            "kind": "integer",
+            "required": false,
+            "default": 20,
+            "label": {
+              "en": "Maximum matches to return; values are clamped to 1 through 200."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "proc.spawn",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "recollq"
+              }
+            },
+            "why": {
+              "en": "Run Recoll's query tool against the local document index."
+            }
+          },
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "path",
+                "value": "~/.recoll/**"
+              }
+            },
+            "why": {
+              "en": "Read the local Recoll index and configuration."
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

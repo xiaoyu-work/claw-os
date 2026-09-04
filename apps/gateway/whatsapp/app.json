@@ -87,5 +87,95 @@
       "args": [],
       "needs": []
     }
+  },
+  "schema_version": 2,
+  "mcp": {
+    "entry": "server.py",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "access": {
+      "system_agent": true,
+      "apps": []
+    },
+    "tools": [
+      {
+        "name": "gateway-whatsapp.send",
+        "summary": {
+          "en": "Send a message through this gateway"
+        },
+        "args": [
+          {
+            "name": "recipient_phone",
+            "kind": "name",
+            "required": true
+          },
+          {
+            "name": "text",
+            "kind": "text",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "net.dial",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "host",
+                "value": "graph.facebook.com"
+              }
+            },
+            "why": {
+              "en": "Connect to the remote gateway service to perform the send operation."
+            }
+          },
+          {
+            "verb": "secret.read",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "default/whatsapp_access_token"
+              }
+            },
+            "why": {
+              "en": "Read the configured whatsapp_access_token secret required by this gateway."
+            }
+          },
+          {
+            "verb": "secret.read",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "default/whatsapp_phone_number_id"
+              }
+            },
+            "why": {
+              "en": "Read the configured whatsapp_phone_number_id secret required by this gateway."
+            }
+          },
+          {
+            "verb": "memory.write",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "self-ref",
+                "value": "gateway-whatsapp"
+              }
+            },
+            "why": {
+              "en": "Remember the successful send so the agent can recall it later."
+            }
+          }
+        ]
+      },
+      {
+        "name": "gateway-whatsapp.status",
+        "summary": {
+          "en": "Show gateway configuration and status"
+        }
+      }
+    ]
   }
 }

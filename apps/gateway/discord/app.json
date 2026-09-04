@@ -216,5 +216,225 @@
         }
       ]
     }
+  },
+  "schema_version": 2,
+  "mcp": {
+    "entry": "server.py",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "access": {
+      "system_agent": true,
+      "apps": []
+    },
+    "tools": [
+      {
+        "name": "gateway-discord.configure",
+        "summary": {
+          "en": "Configure Discord inbound access"
+        },
+        "args": [
+          {
+            "name": "settings",
+            "kind": "text",
+            "required": true,
+            "repeatable": true
+          }
+        ]
+      },
+      {
+        "name": "gateway-discord.send",
+        "summary": {
+          "en": "Send a message through Discord"
+        },
+        "args": [
+          {
+            "name": "channel_id",
+            "kind": "name",
+            "required": true
+          },
+          {
+            "name": "text",
+            "kind": "text",
+            "required": true,
+            "repeatable": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "net.dial",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "host",
+                "value": "discord.com"
+              }
+            },
+            "why": {
+              "en": "Call the Discord REST API to post the message."
+            }
+          },
+          {
+            "verb": "secret.read",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "default/discord_bot_token"
+              }
+            },
+            "why": {
+              "en": "Load the configured Discord bot token."
+            }
+          },
+          {
+            "verb": "memory.write",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "self-ref",
+                "value": "gateway-discord"
+              }
+            },
+            "why": {
+              "en": "Remember successful outbound Discord messages."
+            }
+          }
+        ]
+      },
+      {
+        "name": "gateway-discord.status",
+        "summary": {
+          "en": "Show Discord gateway status"
+        },
+        "needs": [
+          {
+            "verb": "proc.observe",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Check whether the Discord gateway process is running."
+            }
+          }
+        ]
+      },
+      {
+        "name": "gateway-discord.start",
+        "summary": {
+          "en": "Start the Discord agent gateway"
+        },
+        "needs": [
+          {
+            "verb": "net.dial",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "host",
+                "value": "gateway.discord.gg"
+              }
+            },
+            "why": {
+              "en": "Maintain the Discord Gateway WebSocket connection."
+            }
+          },
+          {
+            "verb": "net.dial",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "host",
+                "value": "*.discord.gg"
+              }
+            },
+            "why": {
+              "en": "Reconnect to the Discord-provided regional resume gateway."
+            }
+          },
+          {
+            "verb": "net.dial",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "host",
+                "value": "discord.com"
+              }
+            },
+            "why": {
+              "en": "Validate the bot identity and post replies through the Discord REST API."
+            }
+          },
+          {
+            "verb": "secret.read",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "default/discord_bot_token"
+              }
+            },
+            "why": {
+              "en": "Load the configured Discord bot token."
+            }
+          },
+          {
+            "verb": "data.inbox.write",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Authorize allowlisted inbound Discord messages."
+            }
+          },
+          {
+            "verb": "agent.spawn",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Ask the system agent to answer inbound Discord messages."
+            }
+          },
+          {
+            "verb": "proc.observe",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Check for an existing Discord gateway process."
+            }
+          },
+          {
+            "verb": "memory.write",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "self-ref",
+                "value": "gateway-discord"
+              }
+            },
+            "why": {
+              "en": "Remember replies sent by the Discord gateway."
+            }
+          }
+        ]
+      },
+      {
+        "name": "gateway-discord.stop",
+        "summary": {
+          "en": "Stop the Discord agent gateway"
+        },
+        "needs": [
+          {
+            "verb": "proc.observe",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Check whether the Discord gateway process is still running."
+            }
+          }
+        ]
+      }
+    ]
   }
 }

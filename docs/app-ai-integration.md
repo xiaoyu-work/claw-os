@@ -1,501 +1,63 @@
-# App ↔ AI Integration
+# App, Agent, and AI Integration
 
-> **Scope** — This document covers **only** how third-party Apps integrate
-> Large-Language-Model capabilities with Claw OS. It does **not** cover how
-> Apps acquire ordinary OS permissions (filesystem, network, exec, …) for
-> their own non-AI code. Those are the App's own concern, exactly as they
-> are on Linux, macOS, or Windows.
+Claw OS has one public, multi-language developer surface:
+[`claw-os-sdk`](../claw-os-sdk/). Python, Rust, Node, and Go consume the
+same versioned wire schemas. MCP is an SDK module and the only typed service
+contract for Agent-to-App and App-to-App calls; it is not a separate SDK or a
+second registration format.
 
-## 1. The Two Worlds
+This document explains the architecture. For app authoring steps, see
+[`app-development.md`](app-development.md). For package authentication, see
+[`extension-provenance.md`](extension-provenance.md).
 
-A third-party App on Claw OS lives in **two completely separate worlds**.
-Mixing them up is the most common design mistake — keep them apart.
+## 1. One App contract
 
-### 1.1 World A — Normal App behavior
-
-The App runs as a regular OS process. It calls `open()`, `socket()`,
-`execve()`, spawns helpers, parses files, talks to its own database, draws
-a UI. **Claw OS does not interpose, gate, audit, or care** about any of
-this.
-
-Whether the App asks the user for filesystem access via its own dialog,
-or assumes the user installed it knowing what it does, or ships with a
-hard-coded path — **the App author decides**, exactly as on any other OS.
-
-Claw OS contributes nothing to this world beyond a regular Unix kernel.
-Nothing in this document applies here.
-
-### 1.2 World B — App using AI
-
-The moment the App wants to:
-- call the stable text-chat model surface, **or**
-- let a model decide what to do on the computer next,
-
-it must go through Claw OS's **AI subsystem**. The AI subsystem has
-exactly two entry points:
-
-| Entry point | Purpose |
-|---|---|
-| `cos ai chat`  | A single model invocation. Optionally injects a list of Tool schemas so the model can emit `tool_calls`. **Never executes them.** |
-| `cos ai tool`  | Execute one Tool by name with explicit JSON arguments. Capability-checked, App-scoped, fully audited. |
-
-Both are audited. Every invocation and policy decision inside the AI subsystem
-emits operational audit metadata.
-
-> **Current stable scope:** `ai.chat` and `ai.chat.untrusted` only.
-> Embed, image, vision, audio, and video selectors are experimental and
-> currently return a language-specific typed unsupported error before
-> invoking `cos` or a provider.
-
-## 2. Why The Split
-
-Claw OS exists to give the user a single, complete account of **what
-their AI did on their computer**:
-
-- Which models were called, by which App, with what usage and policy result.
-- Which kernel Tools were invoked because a model asked for them, under which
-  capability decision, and whether they succeeded.
-- Which App initiated each of the above.
-
-To deliver that guarantee, the OS only needs to interpose on **AI** —
-not on every App syscall. Normal App behavior is the App's
-responsibility, and the OS treats it like any other Unix process.
-
-The boundary is precisely the two CLI entry points above. Inside them =
-audited AI activity. Outside them = ordinary program behavior.
-
-## 3. App Lifecycle & Identity
-
-Before any of the AI machinery is meaningful, the OS must answer one
-question with certainty: **"which App is calling me right now?"** The
-answer determines which Tools are unlocked, which scope is enforced,
-and which row is written to the audit log.
-
-Claw OS answers this through a deliberate restriction:
-
-> **An App's identity is established only when the kernel itself spawns
-> the App process.** A random Linux program cannot become "App X" by
-> passing a flag.
-
-This restriction is foundational to the audit guarantee in §2. The
-sections that follow (Tool catalog, manifest, CLI, audit) all assume
-it.
-
-### 3.1 Lifecycle in one picture
-
-```
-   ┌──────────────────────────────────────────────────────┐
-   │  Author packages an App directory (manifest + code)  │
-   └──────────────────────────────────┬───────────────────┘
-                                      │  cos app install <dir>
-                                      ▼
-   ┌──────────────────────────────────────────────────────┐
-   │  Registered under /usr/lib/cos/apps/<id>/            │
-   │  Consent UI runs for ai.tools[] entries              │
-   └──────────────────────────────────┬───────────────────┘
-                                      │  cos app <id> <op>
-                                      ▼
-   ┌──────────────────────────────────────────────────────┐
-   │  Kernel forks the App process                        │
-   │  Sets COS_APP_ID=<id> in the child's env             │
-   └──────────────────────────────────┬───────────────────┘
-                                      │  App code may shell out:
-                                      ▼
-   ┌──────────────────────────────────────────────────────┐
-   │  cos ai chat / cos ai tool                           │
-   │  Inherits COS_APP_ID from parent → identity is fixed │
-   └──────────────────────────────────────────────────────┘
-```
-
-### 3.2 Three invariants
-
-1. **Discovery is mandatory.** The App must live below the active
-   `$COS_APPS_DIR` and have a valid manifest. `cos app install <dir>` is the
-   normal system-install path; development trees can instead point
-   `COS_APPS_DIR` at a user-owned directory.
-2. **Kernel-spawn is mandatory.** An App process can only be started by
-   `cos app <id> <op>`. The kernel sets `COS_APP_ID` on the child
-   (`core/src/bridge.rs`); any `cos ai chat` / `cos ai tool` call inside
-   that process tree inherits the env var.
-3. **Identity flags are not trusted.** `cos ai chat --app foo.bar` is
-   rejected when the caller's `COS_APP_ID` is unset or does not match.
-   There is no token, no signed payload, nothing the caller can present
-   to claim a different identity.
-
-### 3.3 Runtimes
-
-The kernel launches Apps through `core/src/bridge.rs` according to the
-manifest's `runtime` field:
-
-| `runtime`          | How the kernel starts it                     |
-|--------------------|----------------------------------------------|
-| `python` (default) | Python wrapper + the configured entry file   |
-| `node`             | `node <wrapper.js>`                          |
-| `shell`            | Shell + the configured entry script         |
-| `binary`           | Execute the configured binary entry directly |
-
-In every case, `COS_APP_ID` is set before `exec`. The choice of runtime
-is purely about *how* the kernel spawns the App; it has no effect on
-identity or on which Tools are reachable.
-
-### 3.4 What this rules out (and why)
-
-| Rejected pattern | Why we rejected it |
-|---|---|
-| Per-App token in `$COS_APP_TOKEN`; any process can claim identity by presenting a valid token. | Token leakage = silent identity theft. The audit log loses its single most important guarantee. |
-| Verify caller via executable path / PID ancestry. | Linux-specific, brittle under containers / namespaces / re-exec, and still weaker than a kernel-set env var. |
-| Trust `--app <id>` on faith and audit everything anyway. | Audit becomes "this string showed up", not "this App did X". Defeats the point of having an audit log at all. |
-
-The flexibility cost — "third-party Apps cannot be arbitrary Linux
-daemons that wake themselves up at boot" — is acceptable. AI-using Apps
-are user-launched assistants, not background services. Apps that *are*
-background services do not belong in World B and have no business
-talking to `cos ai`.
-
-### 3.5 What "SDK" means under this model
-
-Because identity flows from kernel-spawn, **the SDK is never a system
-boundary**. It is a convenience library that runs *inside* an
-already-spawned App process and shells out to `cos ai chat` /
-`cos ai tool`. A developer can equivalently:
-
-- Use the bundled `claw_os_sdk` Python package (`from claw_os_sdk
-  import ai, tools`).
-- Write a Node / Go / Rust equivalent — roughly 100 lines each.
-- Skip the library and `subprocess.run(["cos", "ai", "chat", …])` by
-  hand.
-
-All three are equivalent. The stable contract is the **CLI plus JSON
-envelope**, not any particular library.
-
-## 4. The Tool Catalog
-
-A **Tool** is "an operation a model is allowed to invoke on this
-computer". The catalog (`core/src/ai/tools.rs::CATALOG`) is the
-authoritative list. Each Tool has:
-
-- A stable, dotted name
-- A JSON Schema for arguments
-- A required capability verb + scope policy
-- A localized `why` template used in user-consent UI
-- A stability tier (`stable` / `experimental`)
-
-Current catalog:
-
-| Tool | Purpose |
-|---|---|
-| `fs.read_text` | Read a bounded UTF-8 text file |
-| `fs.list` | List one directory level |
-| `kv.get` | Read from the calling App's key-value namespace |
-
-What is **not** in the Tool catalog — by design:
-
-- `cos_proc` `cos_ipc` `cos_watch` `cos_trace` `cos_netfilter` `cos_service`
-  `cos_cron` `cos_checkpoint` `cos_model` — these are internal kernel
-  infrastructure used by Claw OS's own Agent. Third-party App AIs do
-  not see them.
-
-## 5. Manifest
-
-An App that uses AI declares it in its `app.json`. The `ai` section is
-the **only** part of the manifest this document specifies; the rest of
-the manifest (`operations`, `dependencies`, etc.) is unchanged and out of
-scope.
+An App package has one signed `app.json`. `schema_version: 2` and the `mcp`
+block define the App Mesh surface:
 
 ```json
 {
-  "id": "research-assistant",
-  "ai": {
-    "budget": { "monthly_units": 200000 },
-    "safety": "strict",
-    "origins": ["trusted", "user-input", "external-content"],
-    "tools": ["fs.read_text", "kv.get"]
-  }
-}
-```
-
-`ai.tools[]` lists stable catalog tool names the App may expose to the
-model. Names not present in this allowlist are rejected before reaching
-the provider.
-
-`ai.budget` caps unit spend per month. Apps never select a model; the
-machine owner configures the provider and model.
-
-An App that does **not** use AI omits the `ai` section entirely.
-
-## 6. CLI
-
-### 6.1 `cos ai chat`
-
-Single inference. Returns the model's message plus any `tool_calls` it
-emitted. Does **not** execute the tool calls.
-
-```
-cos ai chat --app <id>
-            [--prompt <text> | --prompt-file <path>]
-            [--system <text>]
-            [--tools <name>,<name>,…]
-            [--origin trusted|user-input|external-content]
-            [--max-units <N>]
-```
-
-The returned envelope:
-
-```json
-{
-  "text": "...",
-  "model": "configured-model",
-  "provider": "configured-provider",
-  "verb": "ai.chat",
-  "tool_calls": [
-    { "id": "call_1", "name": "fs.read_text",
-      "input": { "path": "/home/user/notes.txt" } }
-  ],
-  "usage": { "input_tokens": 1234, "output_tokens": 567, "units": 1801 },
-  "budget": { "period": "2026-05", "units_used": 1801, "units_cap": 200000 },
-  "review": { "safety": "strict", "prompt_redacted": false }
-}
-```
-
-`--tools` accepts only names already listed in the App's manifest. Any
-name outside the manifest is rejected before reaching the model.
-
-### 6.2 `cos ai tool`
-
-Execute one Tool. The kernel validates capability, narrows scope to the
-App's namespace, runs the operation, and emits an audit row.
-
-```
-cos ai tool <name> --app <id> --args <json>
-```
-
-On success:
-
-```json
-{ "tool": "fs.read_text", "app_id": "research-assistant",
-  "status": "ok", "result": { "text": "..." } }
-```
-
-On failure, the command exits non-zero through the normal `cos` CLI error
-path; SDK callers receive the corresponding exception/error payload. A failed
-call does not return the success envelope above.
-
-## 7. In-Process SDK
-
-This SDK runs *inside* an App process the kernel has already spawned
-(see §3). It is **not** a way for an arbitrary Linux program to obtain
-App identity — that path does not exist by design.
-
-App code uses two helpers, both shipped with Claw OS as the
-`claw_os_sdk` Python package (lives at
-`claw-os-sdk/python/src/claw_os_sdk/` in-repo, installed to
-`/usr/lib/cos/python/claw_os_sdk/`). Capability gating and the COW
-snapshot helper live in the sibling **`cos_runtime`** package — see
-[`cos-runtime/README.md`](../cos-runtime/README.md). Third-party apps
-that don't gate themselves (i.e. don't touch fs/exec/pkg/net) need
-only `claw_os_sdk`.
-
-```python
-from claw_os_sdk import ai, tools
-
-resp = ai.chat(
-    prompt="Summarise the latest notes.",
-    tools=["fs.read_text"],
-    origin="user-input",
-)
-
-for call in resp.tool_calls:
-    result = tools.call(call.name, call.input)
-    # The App decides how to use the explicit tool result in a later
-    # prompt; the kernel never executes or loops tool calls inline.
-    print(result.value)
-
-print(resp.text)
-```
-
-`ai.chat()` and `tools.call()` shell out to `cos ai chat` and `cos ai
-tool` respectively. **The App writes its own agent loop** — the OS never
-loops on its behalf. This is the deliberate dividing line between the
-*kernel Agent* (`cos agent`, which does loop, hold memory, and run
-skills) and third-party App AIs (which get only the two primitives and
-build whatever they want on top).
-
-Equivalent SDKs in Node, Go and Rust are straightforward thin wrappers
-around the same two CLI calls; `cos ai tools` dumps the live catalog.
-
-## 8. Audit Surface
-
-`cos ai chat` and `cos ai tool` append `LlmRunRecord` rows to the same
-`ai.jsonl` stream. The current schema records operational metadata such as:
-
-- timestamp plus trace/span/session identifiers,
-- provider, model, and local engine identity,
-- duration, input/output token usage, cache usage, and finish reason,
-- status/error plus allow/deny decision and denial reason,
-- calling App id and the derived capability verb.
-
-Tool executions use `provider="kernel"` and `model="tool:<name>"`, so they
-remain distinguishable from model calls while sharing one query surface.
-
-The run log intentionally does **not** currently include prompt/response text,
-prompt/response hashes, origin, or the complete offered-tool list. It records
-AI-gate activity and kernel Tool execution, not every action performed by
-ordinary App code.
-
-## 9. What This Design Does **Not** Audit
-
-By stated design:
-
-- **App's non-AI code paths.** An App can `open("/tmp/x")` from its own
-  Python without any audit row. That is intentional: this is not a
-  syscall-level sandbox; it is an AI-accountability layer.
-
-- **Prompt and response content.** The `ai.jsonl` run log stores neither the
-  literal content nor content hashes. Other session or App-owned stores may
-  persist conversation data independently.
-
-- **Down-stream effects of AI output.** If a model says "you should
-  write file X" and the App's normal code obeys via `open()`, that
-  write is App behavior, not AI behavior — and so is not in the AI
-  audit log. The model invocation has an operational run-log row, but
-  the output text that suggested the write is not stored there.
-
-If a deployment wants stricter coverage — e.g. "the App must not be
-able to do anything we cannot audit" — that is a separate isolation
-problem (process sandboxing, mandatory access control) and is **not**
-addressed by this document.
-
-## 10. Relationship to the Kernel Agent
-
-Claw OS ships with its own Agent (`cos agent`, see `core/src/agent/`).
-That Agent:
-
-- Has its own internal tool catalog (`core/src/agent/tools/cos_proxy/
-  PRIMITIVES`) that includes low-level kernel infrastructure
-  third-party App AIs do not see.
-- Runs full loops with memory, skills, hooks, todos, recall, etc.
-- Is the user's "default AI" — the assistant the desktop chrome talks
-  to.
-
-The kernel Agent and third-party App AIs share the same capability model but
-use **separate registries**:
-
-- the kernel Agent uses `core/src/agent/tools/registry.rs`,
-- App-facing AI uses the bounded catalog in `core/src/ai/tools.rs`.
-
-An App AI sees only names declared in its manifest and allowed by the
-App-facing catalog; the kernel Agent has its own broader tool surface.
-
-A third-party App does not, and cannot, invoke `cos agent chat`. That
-namespace is for the system's own Agent. Apps speak only to `cos ai
-chat` and `cos ai tool`.
-
-## 11. Implementation Phases
-
-This document is the contract. Concrete work falls into roughly:
-
-1. **App registry & installer.** ✅ Done. `cos app install <source>`
-   validates the manifest (including `ai.tools[]` against the live
-   catalog), copies the App tree under `apps_dir()/<id>/`, and runs
-   the AI consent prompt. Flags: `--yes` auto-grants consent,
-   `--no-consent` defers it, `--force` overwrites an existing install.
-2. **Multi-runtime bridge.** ✅ Done. `core/src/bridge.rs` dispatches
-   on the manifest `runtime` field (`python` / `node` / `shell` / `binary`) and
-   sets `COS_APP_ID` before `exec`.
-3. **Identity enforcement.** ✅ Done for `cos ai chat`. The CLI rejects any
-   call where `COS_APP_ID` is unset (caller not kernel-spawned) or where
-   `--app <id>` disagrees with the env value (cross-App impersonation
-   attempt). Lives in `core/src/ai/chat.rs::enforce_identity`.
-   `cos ai tool` shares the same helper via `enforce_identity_for`.
-4. **Tool registry.** ✅ Done. `core/src/ai/tools.rs::CATALOG` —
-   shared Tool definitions, capability verbs, scope policies,
-   stability tiers. Starter set: `fs.read_text`, `fs.list`, `kv.get`.
-5. **`cos ai tool` command.** ✅ Done. Single-tool executor; routes
-   through the capability layer; emits one audit row per call. Plus
-   `cos ai tools` to print the catalog.
-6. **`cos ai chat` command.** ✅ Done. Namespace migration plus
-   `--tools <comma-list>` flag: each name is resolved against the
-   kernel catalog and exposed to the model as a callable. The gate
-   **never** executes the proposed calls — it surfaces them in
-   `tool_calls[]` and lets the App fulfil whichever it chooses via
-   `cos ai tool <name>`.
-7. **In-process SDK.** ✅ Done for Python. `claw_os_sdk.ai` exposes
-   `ai.chat(..., tools=[...])` and an `AiResponse.tool_calls` field;
-   `claw_os_sdk.tools` exposes `tools.call`, `tools.catalog`, and
-   `tools.for_chat`. Node / Rust / Go shapes are described in §7
-   above.
-8. **Manifest validator.** ✅ Done. `app.json` schema accepts an
-   `ai.tools[]` allowlist; duplicate entries are rejected by the
-   shape-only `validate()` and unknown names are rejected by
-   `validate_tools_against_catalog(&[&str])`. `bridge.rs` runs the
-   catalog check at App launch so a typo'd allowlist fails fast.
-9. **Audit rows.** ✅ Done. Both `cos ai chat` and `cos ai tool`
-   write to the same `<log_dir>/ai.jsonl` stream via
-   `LlmRunRecord`. Tool rows use `provider="kernel"`,
-   `model="tool:<name>"`, and the derived caps verb so dashboards
-   that group by `verb` continue to work. See `core/src/agent/llm/run_log.rs`
-   for the row shape.
-10. **Tool reference doc.** ✅ Done. See
-    [`docs/app-ai-tool-catalog.md`](./app-ai-tool-catalog.md) for the
-    per-Tool reference and the "How to add a new Tool" appendix.
-
-Each phase is independently shippable.
-
-## 12. App Session Tools (Apps as MCP Servers)
-
-§§1–11 describe how an App **consumes** AI. This section describes the
-inverse: how an App **exposes** AI-callable Tools that the kernel agent
-can hold a stateful Session with, alongside its built-in tools.
-
-### 12.1 Why a second surface
-
-`cos_app_run` gives the kernel agent a one-shot gateway into an App's CLI
-verbs. The model discovers app ids and operations through `cos_app_catalog`,
-then dispatches through the generic runner so installing more Apps does not
-add one schema per App to every model request. Every call is a fresh
-`bridge::run_python_app` spawn; the App has no way to keep state between calls
-or to run a background task while the agent does something else.
-
-For a real multi-step task — "scan the calendar, then for every busy
-day pull the doc, then summarise" — the agent needs:
-
-1. tools with **strict input schemas** the model can introspect,
-2. **session state** across calls (cached parses, in-flight tasks,
-   prefetched data),
-3. the ability to **span multiple Apps in one conversation**, with each
-   App contributing tools the kernel can interleave freely.
-
-We get all three by wrapping every App as an [MCP][mcp] server. The
-kernel already speaks MCP (`core/src/agent/tools/mcp/`); the App side
-needs only a thin SDK.
-
-[mcp]: https://modelcontextprotocol.io/
-
-### 12.2 Manifest: the `session` block
-
-App authors declare their session surface in `app.json` next to
-`operations`:
-
-```jsonc
-{
-  "id": "kv",
-  "version": "0.1.0",
-  // ...existing operations...
-  "session": {
-    "transport": "stdio",                       // default
-    "entry": "server.py",                       // default per runtime
+  "id": "notes",
+  "version": "1.0.0",
+  "schema_version": 2,
+  "name": {
+    "en": "Notes"
+  },
+  "runtime": "python",
+  "mcp": {
+    "entry": "server.py",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "access": {
+      "system_agent": true,
+      "apps": [
+        "calendar"
+      ],
+      "external_agents": false
+    },
     "tools": [
       {
-        "name": "kv.get",
-        "summary": {"en": "Read a value."},
+        "name": "notes.get",
+        "summary": {
+          "en": "Read one note."
+        },
         "args": [
-          {"name": "key", "kind": "name", "required": true}
+          {
+            "name": "id",
+            "kind": "name",
+            "required": true
+          }
         ],
         "needs": [
           {
-            "verb": "data.kv.read",
-            "scope": {"kind": "from-arg", "arg": "key"},
-            "why": {"en": "Read by key."}
+            "verb": "data.db.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "id"
+            },
+            "why": {
+              "en": "Read the requested note."
+            }
           }
         ]
       }
@@ -504,172 +66,234 @@ App authors declare their session surface in `app.json` next to
 }
 ```
 
-The same `needs[]` grammar from §5 applies. Every `from-arg` scope must
-reference a declared `arg`; the manifest parser rejects mismatches at
-install time.
+The signed manifest is authoritative for:
 
-### 12.3 Python SDK: `claw_os_sdk.serve`
+- App and package identity;
+- tool names and model-visible summaries;
+- argument schemas, defaults, choices, and conditions;
+- caller restrictions;
+- target capabilities; and
+- service entrypoint and lifecycle.
 
-App authors write:
+Runtime code binds implementation functions by tool name only. A server cannot
+add a tool, change a schema, widen a capability, or choose its caller identity.
+The removed top-level `session` field is rejected rather than translated.
+
+`operations` may still be declared for direct human CLI commands such as
+`cos app notes export`. They receive validated argv and are not another typed
+App Mesh protocol. Desktop metadata remains in the same manifest and uses the
+same App identity.
+
+## 2. Authentication is workload identity
+
+Claw OS does not give Apps API keys and does not trust identity fields supplied
+in MCP arguments or environment variables.
+
+`clawd` derives the caller from registered workload state:
+
+- owner UID;
+- session id;
+- process id and process start time;
+- task id and Extension Host ancestry;
+- System Agent or App Agent principal kind; and
+- the verified App id for an App or App Agent.
+
+For a task-owned Extension Host, the broker signs the binding between the
+task, capability generation, caller session, and optional App Agent id. The
+host may relay one call from that exact parent, but descendants cannot reuse
+the context or downgrade an App Agent to the System Agent.
+
+The Gateway serializes this identity under the reserved MCP metadata key:
+
+```text
+_meta["claw-os.dev/call-context"]
+```
+
+The versioned context contains `call_id`, `trace_id`, `parent_call_id`,
+`depth`, `deadline_unix_ms`, `session_id`, `task_id`, and `caller`. It is
+separate from business arguments and is not a bearer capability. The target
+App may use it for ownership, partitioning, diagnostics, cancellation, and
+progress, but privileged work still requires live daemon authority.
+
+## 3. Authorization has two independent sides
+
+Every App Mesh call checks both the caller and the target:
+
+| Check | Meaning |
+| --- | --- |
+| Caller invoke authority | May this workload address this exact App tool? |
+| Target capability needs | What may the target App do while handling this call? |
+
+The caller needs exact `agent.invoke:<app-id>/<tool-name>` authority. An
+App-level name does not cover a tool:
+
+```text
+agent.invoke:notes              does not cover notes/notes.get
+agent.invoke:notes/notes.get    covers only notes.get
+agent.invoke:notes/*            covers the declared tools under notes
+```
+
+`mcp.access` only narrows the accepted principal classes. It never grants
+invoke authority.
+
+Caller invoke authority is not copied into the target process. After the
+caller is authorized, `clawd` derives the target's capabilities from that
+tool's signed `needs[]` and effective validated arguments. The resulting
+`AppGateway` grant is:
+
+- bound to the target `app-mcp` session and call task;
+- limited to the required provider audiences;
+- bounded by package provenance;
+- capped by the authenticated deadline; and
+- revoked when the call completes, fails, times out, is cancelled, or the
+  session is torn down.
+
+The reusable App process holds only its at-rest base grant between calls.
+Authority from call A cannot be spent by call B.
+
+## 4. End-to-end call flow
+
+```text
+System Agent, App Agent, or App
+  -> trusted ToolExposureContext
+  -> exact agent.invoke:<app>/<tool> authorization
+  -> task-owned Extension Host control channel
+  -> fresh verification of the installed signed App package
+  -> app-mcp session registration and exact process binding
+  -> manifest argument validation and default materialization
+  -> manifest access policy and capability-generation checks
+  -> deadline-bound AppGateway target grant
+  -> MCP tools/call with authenticated _meta call context
+  -> App handler
+  -> structured result and audit projection
+  -> transient grant clear/revocation
+```
+
+Important properties:
+
+1. The Extension Host accepts only typed App id, tool name, and arguments from
+   the worker. It does not expose the real `/run/cos/clawd.sock`.
+2. `clawd` independently verifies the package reference, signed manifest,
+   exact declared tool, caller principal, capability generation, and deadline.
+3. Authority-time package lookup bypasses the discovery cache. Replacing a
+   signed child file after registration invalidates the next call.
+4. Ordinary operation or GUI sessions use group `app`; MCP services use
+   `app-mcp`. Only `app-mcp` sessions may receive per-call authority.
+5. The model cannot open or close App services. First authenticated use starts
+   a lazy service, and task or host teardown owns cleanup.
+6. There is no unsandboxed fallback. Failure to prove identity, provenance,
+   process binding, or sandbox enforcement refuses the call.
+
+## 5. SDK runtime
+
+### Python
 
 ```python
-from claw_os_sdk.serve import App
+from claw_os_sdk.mcp import App, current_context
 
-app = App()
+app = App.from_manifest()
 
-@app.tool("kv.get", args={"key": "string"}, required=["key"])
-def kv_get(key: str) -> str:
-    return _load().get(key, "")
+@app.tool("notes.get")
+def get_note(id: str) -> dict:
+    call = current_context()
+    call.raise_if_cancelled()
+    return {
+        "id": id,
+        "caller": call.caller.id,
+    }
 
-app.serve()  # blocking; reads MCP frames on stdin, writes on stdout
+app.serve()
 ```
 
-The SDK is stdlib-only. It speaks the MCP `initialize` / `tools/list`
-/ `tools/call` triplet and handles `notifications/initialized` plus
-`ping`. Return values are stringified (`str` / `dict` / `list` →
-`text` content); raised exceptions become `isError: true` responses
-the model can react to.
+Direct `App(...)` construction is rejected. `@app.tool` accepts only a
+manifest-declared name. Every `tools/call` requires authenticated Gateway
+context.
 
-### 12.4 Kernel bring-up: `core/src/agent/tools/cos_apps_session.rs`
+### Rust
 
-At agent boot the kernel walks `$COS_APPS_DIR`, reads every
-`app.json`, and for each `session.tools[]` registers one
-[`AppSessionTool`](../core/src/agent/tools/cos_apps_session.rs) in the
-agent's `ToolRegistry`. Registry names are
-`app_<id>__<tool_with_dots_to_underscores>` (e.g.
-`app_kv__kv_get`).
-
-The MCP server itself is **not** started here. The first time any of
-its tools is called — or the agent explicitly invokes
-`cos_app_session_open` — `bring_up_app` launches the server, runs the
-MCP handshake, and stores the live handle in a process-wide
-`SessionManager`. Subsequent calls reuse it; `cos_app_session_close`
-drops the handle, which kills the worker's process group and cgroup.
-**Hybrid attach.**
-
-The server runs inside the hostile-worker sandbox
-(`core/src/worker/`), launched through
-`bridge::prepare_app_session_worker` with `StdioPlan::Streamed` — its
-stdin/stdout are the JSON-RPC transport rather than something to
-capture. It sees its own package read-only and pinned by inode, its own
-partition of the data root, and a per-launch broker endpoint that
-shadows the real `clawd` socket; it has no egress and no host paths.
-There is no unsandboxed fallback: a host that cannot enforce the policy
-refuses to open the session.
-
-A session server is headless by construction. It gets no compositor
-socket, no X authority and no GPU node. Three bundled vendor Apps —
-`cosmic-player`, `cosmic-screenshot` and `cosmic-notifications` —
-additionally hold the owner's **session bus**, because MPRIS, the
-screenshot portal and `org.freedesktop.Notifications` are the tools.
-That is granted by a kernel-side classification checked against vendor
-provenance and root ownership, never by anything in a manifest; see
-[extension-provenance.md](./extension-provenance.md#app-session-servers).
-An App whose tool needs a display transport must expose it as a
-desktop surface, not as a session tool.
-
-Per-call flow inside `AppSessionTool::exec`:
-
-1. `Manifest::resolve_session_tool_needs(tool_name, args)` turns
-   manifest `needs[]` into concrete `Cap`s using the call's actual
-   arguments.
-2. `crate::caps::require(verb, scope)` checks each. A denial
-   short-circuits the call — the App's server never sees the request.
-3. The launcher classifies where that authority can be exercised.
-   Capabilities the broker answers stay on the reusable server.
-   A filesystem or network capability naming one exact resource gets a
-   **single-call worker**: a fresh sandbox derived from exactly that
-   set, destroyed with the response. A resource capability naming no
-   resolvable resource is refused here, with the reason, rather than
-   granted and discovered as `EPERM` inside the App.
-4. The resolved set is installed as the *transient* capabilities of
-   whichever session serves the call, read live by that worker's broker
-   endpoint, and cleared when the call ends — on success, error,
-   timeout and cancellation alike. A session holds nothing at rest, so
-   a reused server cannot act on a previous call's grant.
-5. `client.call_tool(name, args)` forwards over MCP stdio.
-6. One `LlmRunRecord` row is appended to `ai.jsonl` with
-   `provider="app:<id>"` and `model="tool:<name>"`, distinguishing
-   App-session calls from kernel-catalog calls.
-
-The App MCP server, therefore, can trust every call its `tool_call`
-handler receives — the kernel has already authorised it. Defensive
-re-checks inside the App are still allowed but never required.
-
-### 12.5 Meta-tools the model sees
-
-Two extra tools live alongside every registered App tool:
-
-| Name | Purpose |
-| --- | --- |
-| `cos_app_session_open` | Bring an App's session server up. Idempotent. Returns the list of registered tools so the model knows which names to use next. |
-| `cos_app_session_close` | Terminate an App's session server. In-memory state is lost; persistent state on disk is preserved. The next call to any of its tools transparently re-opens the server. |
-
-Combined with `cos_app_catalog` (the existing one-shot discovery
-surface), the model can: discover what's installed → open the ones it
-needs → call interleaved tools across multiple Apps → close.
-
-### 12.6 CLI surface
-
-- `cos app tool list` — print every session tool every installed App
-  declares. Useful for sanity-checking what the agent will see.
-- `cos app tool list <app>` — same, scoped to one App.
-- `cos app lint [<app>]` — now also reports
-  `session.entry-missing` if the manifest declares a `session` block
-  whose entry script isn't on disk.
-
-### 12.7 Relationship to existing surfaces
-
-| Surface | Stateful? | Strict schema? | Authored in |
-| --- | --- | --- | --- |
-| `cos_app_catalog` + `cos_app_run` | No — fresh spawn per call | No — CLI string args, manifest discovered on demand | App `main.py` `operations[]` |
-| Typed `cos_app_<id>` compatibility proxy | No | Command enum only; not in the default registry | App manifest, explicit internal registration |
-| `app_<id>__<tool>` (§12) | Yes — long-lived server | Yes — JSON Schema | App `server.py` (Python) or the App's own binary (Rust) + manifest `session.tools[]` |
-
-The default registry keeps App count out of the provider schema through the
-catalog/run pair. Typed compatibility proxies remain constructible for
-specialized callers and tests. Session tools are additive and appear only for
-Apps that declare a stateful session surface.
-
-### 12.8 Rust SDK: `crates/cos-mcp-serve`
-
-Desktop Apps that ship as native `libcosmic` GUI binaries (under
-`desktop/*`) cannot exec a Python `server.py` — they already own a
-running event loop. Instead, the **same binary** flips into MCP
-server mode when launched with `COS_MCP_SERVER=1` in the environment
-(the kernel agent sets it automatically; see `bring_up_app`).
-
-`crates/cos-mcp-serve` is the Rust counterpart to `claw_os_sdk.serve`
-(`claw-os-sdk/python/src/claw_os_sdk/serve.py`). It exposes a tiny
-builder API:
-
-```rust
-use cos_mcp_serve::{Server, Tool, ToolResult};
+```rust,no_run
 use std::sync::Arc;
 
-if std::env::var("COS_MCP_SERVER").as_deref() == Ok("1") {
-    Server::new("my-app", env!("CARGO_PKG_VERSION"))
-        .tool(Arc::new(MyTool))
-        .serve_stdio().await?;
-    return;
+use async_trait::async_trait;
+use claw_os_sdk::mcp::{App, CallContext, Tool, ToolResult};
+use serde_json::Value;
+
+struct GetNote;
+
+#[async_trait]
+impl Tool for GetNote {
+    fn name(&self) -> &str {
+        "notes.get"
+    }
+
+    async fn handle(&self, args: Value, call: CallContext) -> ToolResult {
+        if let Err(error) = call.check_cancelled() {
+            return ToolResult::error(error.to_string());
+        }
+        ToolResult::structured(args)
+    }
 }
-// ... normal GUI main() below ...
+
+# async fn serve() -> Result<(), Box<dyn std::error::Error>> {
+let mut app = App::from_environment()?;
+app.bind(Arc::new(GetNote))?;
+app.serve_stdio().await?;
+# Ok(())
+# }
 ```
 
-The wire format and method surface are identical to the Python SDK
-(`initialize` / `tools/list` / `tools/call` / `ping`); the kernel's
-MCP client cannot tell which one is on the other end.
+Node uses `mcp.App.fromManifest()` plus `app.tool(name, handler)`. Go uses
+`LoadMCPApp`, `Bind`, and `ServeStdio`. All four runtimes:
 
-The manifest for a binary-runtime App sets `runtime: "binary"` and
-points `session.entry` at the **installed** absolute path of the
-binary (e.g. `/usr/bin/cosmic-screenshot`), since `Command::new`
-runs it directly with no interpreter. See
-`apps/cosmic-screenshot/app.json` for the canonical example.
+- derive descriptors from `app.json.mcp.tools[]`;
+- reject undeclared or duplicate handlers;
+- require authenticated call context;
+- validate effective arguments;
+- support structured tool results;
+- support progress and cooperative cancellation; and
+- reserve stdout for newline-delimited MCP JSON-RPC.
 
-### 12.9 Out of scope (this iteration)
+## 6. App-to-App and App-to-Agent
 
-- MCP progress notifications for long-running tools. Apps that need
-  background work should use the `start_task` / `poll` pattern (one
-  tool kicks off work and returns a handle; another polls).
-- Confidentiality between Apps in a shared agent session. The agent is
-  the orchestrator and sees every value crossing the boundary.
+App-to-App and Agent-to-App use the same Gateway. The only differences are the
+authenticated caller principal and the target manifest's `mcp.access` rule.
+Developers do not implement service credentials, token rotation, signature
+checking, or policy middleware.
+
+An App that needs to call another App declares the exact target
+`agent.invoke` need in its own signed manifest. `clawd` checks that declaration
+against the App's live authority, creates the child call context with increased
+depth and linked trace ids, and applies the target App's independent access and
+capability policy.
+
+An App can invoke the OS Agent through the public SDK's AI/Agent gates when its
+manifest declares the corresponding AI capability. Provider credentials,
+model selection, budgets, prompt-origin policy, and model-visible logging stay
+inside the core Agent.
+
+## 7. Audit and failure semantics
+
+The audit trail binds:
+
+- caller principal, owner, session, and task;
+- target App, package id, content digest, and tool;
+- capability generation and exact derived needs;
+- call/trace lineage and deadline;
+- Gateway grant issue, spend, clear, and revocation; and
+- bounded result or structured refusal.
+
+Missing context, expired deadlines, package substitution, file replacement,
+principal substitution, stale capability generations, undeclared tools, and
+ordinary App sessions all fail closed before the handler receives the call.
+
+After a mutating handler reports success, late cancellation must not rewrite
+that success into a retryable cancellation. Read-only handlers may use
+cooperative cancellation throughout their work.
+
+## 8. External MCP servers
+
+Configured third-party MCP servers remain a separate attachment boundary.
+Their untrusted descriptors stay behind `mcp_catalog` and `mcp_invoke`, opaque
+session/task/generation-bound handles, structural sanitization, and explicit
+approval. They do not become Apps, receive App identity, or bypass the signed
+`app.json` App Mesh contract.

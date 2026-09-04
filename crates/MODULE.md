@@ -18,7 +18,7 @@ CLI, semantic, and embedding surfaces.
 | `claw-embed/` | Reusable embedding, extraction, chunking, walking, and storage contracts |
 | `claw-semantic/` | Filesystem semantic daemon, config, service orchestration, and CLI |
 | `clawd-client/` | Unprivileged typed broker discovery, framing, envelopes, deadlines, and errors |
-| `cos-browser/`, `cos-mcp-serve/`, `cos-cli/` | First-party binaries/tools |
+| `cos-browser/`, `cos-cli/` | First-party binaries/tools |
 | `obscura-*/` | Vendored browser-engine internals |
 | `../Cargo.toml` | Workspace membership and shared dependencies |
 

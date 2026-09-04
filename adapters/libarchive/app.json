@@ -1,0 +1,202 @@
+{
+  "id": "libarchive",
+  "version": "0.1.0",
+  "schema_version": 2,
+  "name": {
+    "en": "libarchive toolkit"
+  },
+  "summary": {
+    "en": "List, extract, and create archives with bsdtar."
+  },
+  "runtime": "python",
+  "dependencies": {
+    "binaries": [
+      "bsdtar"
+    ]
+  },
+  "mcp": {
+    "entry": "main.py",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "tools": [
+      {
+        "name": "archive.list",
+        "summary": {
+          "en": "List entries in an archive."
+        },
+        "args": [
+          {
+            "name": "path",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "Absolute path to the archive."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "path"
+            },
+            "why": {
+              "en": "Read the requested archive."
+            }
+          },
+          {
+            "verb": "proc.spawn",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "bsdtar"
+              }
+            },
+            "why": {
+              "en": "Run bsdtar to list archive entries."
+            }
+          }
+        ]
+      },
+      {
+        "name": "archive.extract",
+        "summary": {
+          "en": "Extract an archive into a destination directory."
+        },
+        "args": [
+          {
+            "name": "path",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "Absolute path to the archive."
+            }
+          },
+          {
+            "name": "destination",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "Absolute destination directory."
+            }
+          },
+          {
+            "name": "strip_components",
+            "kind": "integer",
+            "required": false,
+            "default": 0,
+            "label": {
+              "en": "Number of leading archive path components to strip."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "path"
+            },
+            "why": {
+              "en": "Read the requested archive."
+            }
+          },
+          {
+            "verb": "fs.write",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "destination"
+            },
+            "why": {
+              "en": "Write extracted files into the destination directory."
+            }
+          },
+          {
+            "verb": "proc.spawn",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "bsdtar"
+              }
+            },
+            "why": {
+              "en": "Run bsdtar to extract the archive."
+            }
+          }
+        ]
+      },
+      {
+        "name": "archive.create",
+        "summary": {
+          "en": "Create an archive from one or more source paths."
+        },
+        "args": [
+          {
+            "name": "output",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "Absolute destination archive path."
+            }
+          },
+          {
+            "name": "sources",
+            "kind": "path",
+            "required": true,
+            "repeatable": true,
+            "label": {
+              "en": "Absolute source paths to include."
+            }
+          },
+          {
+            "name": "overwrite",
+            "kind": "bool",
+            "required": false,
+            "default": false,
+            "label": {
+              "en": "Allow replacing an existing archive."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "sources"
+            },
+            "why": {
+              "en": "Read each source added to the archive."
+            }
+          },
+          {
+            "verb": "fs.write",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "output"
+            },
+            "why": {
+              "en": "Write the new archive."
+            }
+          },
+          {
+            "verb": "proc.spawn",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "bsdtar"
+              }
+            },
+            "why": {
+              "en": "Run bsdtar to create the archive."
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

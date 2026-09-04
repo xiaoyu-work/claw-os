@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://claw-os.dev/wire/v1/mcp_call_context.schema.json",
+  "title": "MCP call context",
+  "description": "Authenticated call identity and lineage injected by the Claw MCP Gateway over the private App-host transport. Caller-supplied MCP arguments must never populate this object.",
+  "type": "object",
+  "required": ["wire_version", "call_id", "trace_id", "depth", "caller"],
+  "additionalProperties": false,
+  "properties": {
+    "wire_version": {
+      "type": "integer",
+      "const": 1,
+      "minimum": 1,
+      "maximum": 1
+    },
+    "call_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+      "x-full-match": true
+    },
+    "trace_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+      "x-full-match": true
+    },
+    "parent_call_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+      "x-full-match": true
+    },
+    "depth": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 16
+    },
+    "deadline_unix_ms": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$",
+      "x-full-match": true
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$",
+      "x-full-match": true
+    },
+    "caller": {
+      "$ref": "#/$defs/McpPrincipal"
+    }
+  },
+  "$defs": {
+    "McpPrincipal": {
+      "type": "object",
+      "required": ["kind", "id", "owner_uid"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["system-agent", "app", "app-agent", "external-agent", "cli"]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$",
+          "x-full-match": true
+        },
+        "owner_uid": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "app_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]*$",
+          "x-full-match": true
+        }
+      }
+    }
+  }
+}

@@ -3,15 +3,18 @@ use super::*;
 fn binding() -> ExtensionBinding {
     let pid = std::process::id();
     let owner_uid = (unsafe { libc::geteuid() }).max(1000);
-    let owner_gid = (unsafe { libc::getegid() }).max(60_999);
+    let owner_gid = (unsafe { libc::getegid() }).max(1);
     ExtensionBinding {
         protocol: PROTOCOL_VERSION,
+        purpose: super::super::protocol::HostPurpose::Task,
         task_id: "task-a".to_string(),
         session_id: Some("session-a".to_string()),
+        app_id: None,
         owner_uid,
         extension_uid: 61_000,
         owner_gid,
         capability_generation: "a".repeat(16),
+        package: None,
         approved_paths: vec![super::super::protocol::ApprovedPath {
             path: "/home/test".to_string(),
             device: 1,
@@ -20,8 +23,10 @@ fn binding() -> ExtensionBinding {
             mode: 0o40755,
         }],
         agent_extensions: Vec::new(),
-        worker_pid: pid,
-        worker_start_time_ticks: crate::proc::read_start_time_ticks_pub(pid),
+        controller_uid: owner_uid,
+        controller_gid: owner_gid,
+        controller_pid: pid,
+        controller_start_time_ticks: crate::proc::read_start_time_ticks_pub(pid),
         host_pid: pid.saturating_add(1),
         host_start_time_ticks: Some(42),
         lease_nonce: "0123456789abcdef0123456789abcdef".to_string(),
@@ -47,15 +52,15 @@ fn a_missing_receipt_collection_defaults_to_no_extension_authority() {
 fn binding_rejects_replay_against_another_worker() {
     let binding = binding();
     assert!(binding
-        .validate_worker(binding.worker_pid, binding.worker_start_time_ticks,)
+        .validate_worker(binding.controller_pid, binding.controller_start_time_ticks,)
         .is_ok());
     let error = binding
         .validate_worker(
-            binding.worker_pid.saturating_add(1),
-            binding.worker_start_time_ticks,
+            binding.controller_pid.saturating_add(1),
+            binding.controller_start_time_ticks,
         )
         .expect_err("another worker must not reuse the binding");
-    assert!(error.contains("different worker"), "{error}");
+    assert!(error.contains("different controller"), "{error}");
 }
 
 #[test]
@@ -74,6 +79,7 @@ fn lifecycle_events_are_forwarded_as_typed_worker_audit() {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let binding = binding();
     let client = ExtensionHostClient {
+        lease_deadline_ms: AtomicU64::new(binding.expires_at_ms),
         binding_digest: binding.digest().unwrap(),
         lease_digest: crate::crypto::sha256_hex(binding.lease_nonce.as_bytes()),
         binding,
@@ -123,6 +129,7 @@ fn mcp_gateway_and_host_audit_share_exact_opaque_identity() {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let binding = binding();
     let client = ExtensionHostClient {
+        lease_deadline_ms: AtomicU64::new(binding.expires_at_ms),
         binding_digest: binding.digest().unwrap(),
         lease_digest: crate::crypto::sha256_hex(binding.lease_nonce.as_bytes()),
         binding,
@@ -267,17 +274,22 @@ fn a_v8_launcher_gets_an_explicit_bootstrap_protocol_rejection() {
     let binding = binding();
     let bootstrap = super::super::protocol::HostBootstrap {
         protocol: PROTOCOL_VERSION - 1,
+        purpose: binding.purpose,
         task_id: binding.task_id,
         session_id: binding.session_id,
+        app_id: binding.app_id,
         owner_uid: binding.owner_uid,
         extension_uid: binding.extension_uid,
         execution_gid: binding.owner_gid,
         enforce_groups: false,
-        worker_pid: binding.worker_pid,
-        worker_start_time_ticks: binding.worker_start_time_ticks,
+        controller_uid: binding.controller_uid,
+        controller_gid: binding.controller_gid,
+        controller_pid: binding.controller_pid,
+        controller_start_time_ticks: binding.controller_start_time_ticks,
         lease_nonce: binding.lease_nonce,
         expires_at_ms: binding.expires_at_ms,
         capability_generation: binding.capability_generation,
+        package: binding.package,
         control_socket: binding.control_socket,
         broker_socket: binding.broker_socket,
         approved_paths: binding.approved_paths,
@@ -295,11 +307,51 @@ fn transport_test_client(path: &std::path::Path) -> ExtensionHostClient {
     binding.host_pid = std::process::id();
     binding.host_start_time_ticks = crate::proc::read_start_time_ticks_pub(std::process::id());
     ExtensionHostClient {
+        lease_deadline_ms: AtomicU64::new(binding.expires_at_ms),
         binding_digest: binding.digest().unwrap(),
         lease_digest: crate::crypto::sha256_hex(binding.lease_nonce.as_bytes()),
         binding,
         audit: None,
     }
+}
+
+#[test]
+fn authenticated_heartbeat_renews_only_the_matching_task_client() {
+    let mut binding = binding();
+    binding.expires_at_ms = crate::agentd::grant::now_ms() + 1_000;
+    let original_deadline = binding.expires_at_ms;
+    let client = ExtensionHostClient {
+        lease_deadline_ms: AtomicU64::new(original_deadline),
+        binding_digest: binding.digest().unwrap(),
+        lease_digest: crate::crypto::sha256_hex(binding.lease_nonce.as_bytes()),
+        binding,
+        audit: None,
+    };
+    let renewed = crate::agentd::grant::now_ms() + 60_000;
+    client.renew_task_lease("task-a", renewed).unwrap();
+    assert_eq!(client.lease_deadline_ms(), renewed);
+    assert_eq!(client.binding.expires_at_ms, original_deadline);
+
+    let error = client
+        .renew_task_lease("task-b", renewed + 1)
+        .expect_err("another task must not renew this client");
+    assert!(error.contains("different task"), "{error}");
+    assert_eq!(client.lease_deadline_ms(), renewed);
+}
+
+#[test]
+fn task_lease_renewal_rejects_unbounded_deadlines() {
+    let binding = binding();
+    let client = ExtensionHostClient {
+        lease_deadline_ms: AtomicU64::new(binding.expires_at_ms),
+        binding_digest: binding.digest().unwrap(),
+        lease_digest: crate::crypto::sha256_hex(binding.lease_nonce.as_bytes()),
+        binding,
+        audit: None,
+    };
+    let too_far =
+        crate::agentd::grant::now_ms() + super::super::protocol::MAX_TASK_LEASE_DURATION_MS + 1_000;
+    assert!(client.renew_task_lease("task-a", too_far).is_err());
 }
 
 #[tokio::test]

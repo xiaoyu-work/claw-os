@@ -1,0 +1,132 @@
+{
+  "id": "cosmic-store",
+  "version": "0.1.0",
+  "schema_version": 2,
+  "name": {
+    "en": "App Store"
+  },
+  "summary": {
+    "en": "Search installed and available packages and open the native App Store."
+  },
+  "runtime": "binary",
+  "mcp": {
+    "entry": "/usr/bin/cosmic-store",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "tools": [
+      {
+        "name": "store.search",
+        "summary": {
+          "en": "Search the local apt package catalog for installable packages."
+        },
+        "args": [
+          {
+            "name": "query",
+            "kind": "text",
+            "required": true,
+            "label": {
+              "en": "Package search query."
+            }
+          },
+          {
+            "name": "limit",
+            "kind": "integer",
+            "required": false,
+            "default": 25,
+            "label": {
+              "en": "Maximum results; values are clamped to 1 through 100."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.observe",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Browse the local apt package catalog."
+            }
+          }
+        ]
+      },
+      {
+        "name": "store.installed",
+        "summary": {
+          "en": "List packages that dpkg considers installed."
+        },
+        "args": [],
+        "needs": [
+          {
+            "verb": "sys.observe",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Enumerate installed system packages."
+            }
+          }
+        ]
+      },
+      {
+        "name": "store.show",
+        "summary": {
+          "en": "Show version, description, dependencies, and other metadata for one package."
+        },
+        "args": [
+          {
+            "name": "name",
+            "kind": "name",
+            "required": true,
+            "label": {
+              "en": "Package name."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.observe",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "name"
+            },
+            "why": {
+              "en": "Read catalog metadata for the named package."
+            }
+          }
+        ]
+      },
+      {
+        "name": "store.open",
+        "summary": {
+          "en": "Open the App Store, optionally focused on one package."
+        },
+        "args": [
+          {
+            "name": "name",
+            "kind": "name",
+            "required": false,
+            "label": {
+              "en": "Optional package name to focus."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "proc.spawn",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "cosmic-store"
+              }
+            },
+            "why": {
+              "en": "Open the native App Store for the user."
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

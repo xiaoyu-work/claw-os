@@ -1,11 +1,24 @@
 package clawossdk
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func wireSuccess(data string) string {
+	return `{"ok":true,"wire_version":1,"data":` + data + `}`
+}
+
+func wireErrorEnvelope(message, code string) string {
+	return fmt.Sprintf(
+		`{"ok":false,"wire_version":1,"error":%q,"code":%q}`,
+		message,
+		code,
+	)
+}
 
 // fakeCos writes an executable that prints stdout and exits with
 // exitCode, recording the argv it received (one per line) to a sidecar
@@ -52,7 +65,6 @@ func itoa(i int) string {
 func withCos(t *testing.T, bin string, env map[string]string, fn func()) {
 	t.Helper()
 	t.Setenv("CLAW_COS_BIN", bin)
-	os.Unsetenv("COS_BIN")
 	for k, v := range env {
 		if v == "" {
 			os.Unsetenv(k)
@@ -83,8 +95,8 @@ func TestCosBinaryResolution(t *testing.T) {
 	}
 	os.Unsetenv("CLAW_COS_BIN")
 	t.Setenv("COS_BIN", "/x/cosbin")
-	if got := CosBinary(); got != "/x/cosbin" {
-		t.Fatalf("COS_BIN fallback failed, got %q", got)
+	if got := CosBinary(); got != "cos" {
+		t.Fatalf("COS_BIN must not affect SDK transport, got %q", got)
 	}
 	os.Unsetenv("COS_BIN")
 	if got := CosBinary(); got != "cos" {
@@ -117,15 +129,59 @@ func TestCosCallJSONRejectsTrailingData(t *testing.T) {
 	}
 }
 
-func TestCosCallJSONPreservesScalarRootForWireValidation(t *testing.T) {
-	bin, _ := fakeCos(t, "null", 0)
+func TestCosCallJSONRejectsFlatAndScalarResponses(t *testing.T) {
+	for _, body := range []string{`{"value":1}`, "null"} {
+		bin, _ := fakeCos(t, body, 0)
+		withCos(t, bin, nil, func() {
+			_, err := cosCallJSON("test", []string{"x"})
+			if _, ok := err.(*UnavailableError); !ok {
+				t.Fatalf("body %q: expected UnavailableError, got %T %v", body, err, err)
+			}
+		})
+	}
+}
+
+func TestCosCallJSONExtractsDataAndPrependsWireFlag(t *testing.T) {
+	bin, argvOut := fakeCos(t, wireSuccess(`{"value":1}`), 0)
 	withCos(t, bin, nil, func() {
 		out, err := cosCallJSON("test", []string{"x"})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if out.Envelope != nil {
-			t.Fatalf("envelope = %#v, want nil JSON root", out.Envelope)
+		if asUint64(asMap(out.Data)["value"]) != 1 {
+			t.Fatalf("data = %#v", out.Data)
+		}
+	})
+	if argv := readArgv(t, argvOut); len(argv) != 2 || argv[0] != "--wire=1" || argv[1] != "x" {
+		t.Fatalf("argv = %v", argv)
+	}
+}
+
+func TestCosCallJSONEnforcesStatusConsistency(t *testing.T) {
+	for _, test := range []struct {
+		body   string
+		status int
+	}{
+		{wireSuccess(`{"value":1}`), 1},
+		{wireErrorEnvelope("denied", "PERMISSION_DENIED"), 0},
+	} {
+		bin, _ := fakeCos(t, test.body, test.status)
+		withCos(t, bin, nil, func() {
+			_, err := cosCallJSON("test", []string{"x"})
+			if _, ok := err.(*UnavailableError); !ok {
+				t.Fatalf("expected UnavailableError, got %T %v", err, err)
+			}
+		})
+	}
+}
+
+func TestCosCallJSONReturnsTypedDenied(t *testing.T) {
+	bin, _ := fakeCos(t, wireErrorEnvelope("denied", "PERMISSION_DENIED"), 1)
+	withCos(t, bin, nil, func() {
+		_, err := cosCallJSON("test", []string{"x"})
+		if denied, ok := err.(*DeniedError); !ok ||
+			asString(denied.Payload["code"]) != "PERMISSION_DENIED" {
+			t.Fatalf("expected DeniedError, got %T %v", err, err)
 		}
 	})
 }

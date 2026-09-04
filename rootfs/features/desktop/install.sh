@@ -179,8 +179,8 @@ fi
 #    glibc, not the host's.
 #
 #    Several desktop/* crates have `path = "../../crates/<x>"` dependencies
-#    pointing at the top-level repo `crates/` directory (claw-bridge,
-#    cos-mcp-serve, …). Bind-mount that too so the relative path resolves
+#    pointing at the top-level repo `crates/` directory (for example,
+#    claw-bridge). Bind-mount that too so the relative path resolves
 #    inside the chroot (../../crates from /build/desktop-src/<x> →
 #    /build/crates).
 #

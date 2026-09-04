@@ -227,6 +227,7 @@ pub fn record_extension_host_event(
             None,
             None,
             None,
+            None,
             success,
         );
     }
@@ -341,6 +342,7 @@ pub fn record_worker_runtime(
             binding_digest,
             lease_digest,
             stage,
+            app,
             mcp,
             abi,
             manifest_digest,
@@ -375,9 +377,10 @@ pub fn record_worker_runtime(
                 capability_generation: mcp
                     .as_ref()
                     .map(|mcp| audit_policy::safe_reference(&mcp.capability_generation)),
-                untrusted_remote_name: mcp
+                untrusted_remote_name: mcp.as_ref().map(|mcp| mcp.untrusted_remote_name.clone()),
+                app_tool: app
                     .as_ref()
-                    .map(|mcp| mcp.untrusted_remote_name.clone()),
+                    .map(|app| audit_policy::safe_identity(&app.tool)),
                 package_digest: abi
                     .as_ref()
                     .map(|abi| audit_policy::safe_reference(&abi.package_digest)),
@@ -392,6 +395,29 @@ pub fn record_worker_runtime(
                     .and_then(|abi| abi.tool.as_deref().map(audit_policy::safe_identity)),
                 capability_ref: abi.as_ref().and_then(|abi| abi.capability_ref.clone()),
                 queue_depth: abi.as_ref().and_then(|abi| abi.queue_depth),
+                invoke_target: app
+                    .as_ref()
+                    .map(|app| audit_policy::safe_identity(&app.invoke_target)),
+                call_id: app
+                    .as_ref()
+                    .map(|app| audit_policy::safe_identity(&app.context.call_id)),
+                trace_id: app
+                    .as_ref()
+                    .map(|app| audit_policy::safe_identity(&app.context.trace_id)),
+                parent_call_id: app
+                    .as_ref()
+                    .and_then(|app| app.context.parent_call_id.as_deref())
+                    .map(audit_policy::safe_identity),
+                call_depth: app.as_ref().map(|app| app.context.depth),
+                deadline_unix_ms: app.as_ref().and_then(|app| app.context.deadline_unix_ms),
+                caller_kind: app.as_ref().map(|app| app.context.caller.kind.as_str()),
+                caller_id: app
+                    .as_ref()
+                    .map(|app| audit_policy::safe_identity(&app.context.caller.id)),
+                caller_app_id: app
+                    .as_ref()
+                    .and_then(|app| app.context.caller.app_id.as_deref())
+                    .map(audit_policy::safe_identity),
                 manifest_digest: manifest_digest.as_deref().map(audit_policy::safe_reference),
                 success: *success,
                 latency_ms: *latency_ms,
@@ -406,6 +432,7 @@ pub fn record_worker_runtime(
                 Some(binding_digest),
                 Some(lease_digest),
                 *stage,
+                app.as_deref(),
                 mcp.as_ref(),
                 abi.as_deref(),
                 manifest_digest.as_deref(),
@@ -616,6 +643,26 @@ struct WorkerExtensionAudit<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     queue_depth: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    app_tool: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    invoke_target: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    trace_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent_call_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    call_depth: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    deadline_unix_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    caller_kind: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    caller_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    caller_app_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     manifest_digest: Option<String>,
     success: bool,
     latency_ms: u64,
@@ -631,6 +678,7 @@ fn record_extension_mutation(
     binding_digest: Option<&str>,
     lease_digest: Option<&str>,
     stage: Option<crate::extension_host::protocol::AuditStage>,
+    app: Option<&crate::extension_host::protocol::AppInvocationAudit>,
     mcp: Option<&crate::extension_host::protocol::McpInvocationAudit>,
     abi: Option<&crate::extension_host::protocol::AgentExtensionAudit>,
     manifest_digest: Option<&str>,
@@ -664,6 +712,20 @@ fn record_extension_mutation(
             "tool": abi.and_then(|abi| abi.tool.as_deref().map(audit_policy::safe_identity)),
             "capability_ref": abi.and_then(|abi| abi.capability_ref.clone()),
             "queue_depth": abi.and_then(|abi| abi.queue_depth),
+            "app_tool": app.map(|app| audit_policy::safe_identity(&app.tool)),
+            "invoke_target": app.map(|app| audit_policy::safe_identity(&app.invoke_target)),
+            "call_id": app.map(|app| audit_policy::safe_identity(&app.context.call_id)),
+            "trace_id": app.map(|app| audit_policy::safe_identity(&app.context.trace_id)),
+            "parent_call_id": app
+                .and_then(|app| app.context.parent_call_id.as_deref())
+                .map(audit_policy::safe_identity),
+            "call_depth": app.map(|app| app.context.depth),
+            "deadline_unix_ms": app.and_then(|app| app.context.deadline_unix_ms),
+            "caller_kind": app.map(|app| app.context.caller.kind.as_str()),
+            "caller_id": app.map(|app| audit_policy::safe_identity(&app.context.caller.id)),
+            "caller_app_id": app
+                .and_then(|app| app.context.caller.app_id.as_deref())
+                .map(audit_policy::safe_identity),
             "manifest_digest": manifest_digest.map(audit_policy::safe_reference),
             "success": success,
         }),

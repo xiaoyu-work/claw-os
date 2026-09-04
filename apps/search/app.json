@@ -20,7 +20,10 @@
           "kind": "name",
           "required": true,
           "binding": "flag",
-          "choices": ["google", "brave"]
+          "choices": [
+            "google",
+            "brave"
+          ]
         },
         {
           "name": "query",
@@ -123,7 +126,10 @@
           "kind": "name",
           "required": true,
           "binding": "flag",
-          "choices": ["google", "brave"]
+          "choices": [
+            "google",
+            "brave"
+          ]
         },
         {
           "name": "query",
@@ -216,5 +222,227 @@
         }
       ]
     }
+  },
+  "schema_version": 2,
+  "mcp": {
+    "entry": "server.py",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "access": {
+      "system_agent": true,
+      "apps": []
+    },
+    "tools": [
+      {
+        "name": "search.web",
+        "summary": {
+          "en": "Search the web for information (returns titles, URLs, snippets)"
+        },
+        "args": [
+          {
+            "name": "provider",
+            "kind": "name",
+            "required": true,
+            "choices": [
+              "google",
+              "brave"
+            ]
+          },
+          {
+            "name": "query",
+            "kind": "text",
+            "required": true,
+            "repeatable": true
+          },
+          {
+            "name": "max-results",
+            "kind": "integer",
+            "required": false,
+            "default": 5
+          }
+        ],
+        "needs": [
+          {
+            "verb": "net.dial",
+            "scope": {
+              "kind": "from-arg-map",
+              "arg": "provider",
+              "values": {
+                "google": {
+                  "kind": "host",
+                  "value": "www.googleapis.com"
+                },
+                "brave": {
+                  "kind": "host",
+                  "value": "api.search.brave.com"
+                }
+              }
+            },
+            "why": {
+              "en": "Call the search provider's API (Google or Brave) to fetch results."
+            }
+          },
+          {
+            "verb": "memory.write",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "self-ref",
+                "value": "search"
+              }
+            },
+            "why": {
+              "en": "Remember the search so the agent can recall what was looked up."
+            }
+          },
+          {
+            "verb": "secret.read",
+            "scope": {
+              "kind": "from-arg-map",
+              "arg": "provider",
+              "values": {
+                "google": {
+                  "kind": "name",
+                  "value": "default/GOOGLE_SEARCH_API_KEY"
+                },
+                "brave": {
+                  "kind": "name",
+                  "value": "default/BRAVE_SEARCH_API_KEY"
+                }
+              }
+            },
+            "why": {
+              "en": "Load only the selected search provider's API key."
+            }
+          },
+          {
+            "verb": "secret.read",
+            "scope": {
+              "kind": "from-arg-map",
+              "arg": "provider",
+              "values": {
+                "google": {
+                  "kind": "name",
+                  "value": "default/GOOGLE_SEARCH_ENGINE_ID"
+                }
+              }
+            },
+            "why": {
+              "en": "Load the Google Custom Search engine id when Google is selected."
+            },
+            "when": {
+              "kind": "arg-equals",
+              "arg": "provider",
+              "value": "google"
+            }
+          }
+        ]
+      },
+      {
+        "name": "search.image",
+        "summary": {
+          "en": "Search for images (returns titles, URLs, thumbnails)"
+        },
+        "args": [
+          {
+            "name": "provider",
+            "kind": "name",
+            "required": true,
+            "choices": [
+              "google",
+              "brave"
+            ]
+          },
+          {
+            "name": "query",
+            "kind": "text",
+            "required": true,
+            "repeatable": true
+          },
+          {
+            "name": "max-results",
+            "kind": "integer",
+            "required": false,
+            "default": 5
+          }
+        ],
+        "needs": [
+          {
+            "verb": "net.dial",
+            "scope": {
+              "kind": "from-arg-map",
+              "arg": "provider",
+              "values": {
+                "google": {
+                  "kind": "host",
+                  "value": "www.googleapis.com"
+                },
+                "brave": {
+                  "kind": "host",
+                  "value": "api.search.brave.com"
+                }
+              }
+            },
+            "why": {
+              "en": "Call the image search provider's API to fetch results."
+            }
+          },
+          {
+            "verb": "memory.write",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "self-ref",
+                "value": "search"
+              }
+            },
+            "why": {
+              "en": "Remember the image search so the agent can recall what was looked up."
+            }
+          },
+          {
+            "verb": "secret.read",
+            "scope": {
+              "kind": "from-arg-map",
+              "arg": "provider",
+              "values": {
+                "google": {
+                  "kind": "name",
+                  "value": "default/GOOGLE_SEARCH_API_KEY"
+                },
+                "brave": {
+                  "kind": "name",
+                  "value": "default/BRAVE_SEARCH_API_KEY"
+                }
+              }
+            },
+            "why": {
+              "en": "Load only the selected search provider's API key."
+            }
+          },
+          {
+            "verb": "secret.read",
+            "scope": {
+              "kind": "from-arg-map",
+              "arg": "provider",
+              "values": {
+                "google": {
+                  "kind": "name",
+                  "value": "default/GOOGLE_SEARCH_ENGINE_ID"
+                }
+              }
+            },
+            "why": {
+              "en": "Load the Google Custom Search engine id when Google is selected."
+            },
+            "when": {
+              "kind": "arg-equals",
+              "arg": "provider",
+              "value": "google"
+            }
+          }
+        ]
+      }
+    ]
   }
 }

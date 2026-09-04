@@ -41,7 +41,9 @@
           "kind": "bool",
           "required": true,
           "binding": "flag",
-          "choices": [true]
+          "choices": [
+            true
+          ]
         }
       ],
       "needs": [
@@ -66,7 +68,9 @@
           "kind": "bool",
           "required": true,
           "binding": "flag",
-          "choices": [true]
+          "choices": [
+            true
+          ]
         }
       ],
       "needs": [
@@ -91,7 +95,9 @@
           "kind": "bool",
           "required": true,
           "binding": "flag",
-          "choices": [true]
+          "choices": [
+            true
+          ]
         }
       ],
       "needs": [
@@ -116,7 +122,9 @@
           "kind": "bool",
           "required": true,
           "binding": "flag",
-          "choices": [true]
+          "choices": [
+            true
+          ]
         }
       ],
       "needs": [
@@ -141,7 +149,9 @@
           "kind": "bool",
           "required": true,
           "binding": "flag",
-          "choices": [true]
+          "choices": [
+            true
+          ]
         }
       ],
       "needs": [
@@ -166,7 +176,9 @@
           "kind": "bool",
           "required": true,
           "binding": "flag",
-          "choices": [true]
+          "choices": [
+            true
+          ]
         }
       ],
       "needs": [
@@ -181,5 +193,200 @@
         }
       ]
     }
+  },
+  "schema_version": 2,
+  "mcp": {
+    "entry": "server.py",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "access": {
+      "system_agent": true,
+      "apps": []
+    },
+    "tools": [
+      {
+        "name": "power-manager.status",
+        "summary": {
+          "en": "Inspect batteries and power capabilities"
+        },
+        "needs": [
+          {
+            "verb": "sys.observe",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "power"
+              }
+            },
+            "why": {
+              "en": "Read UPower device state and logind power capabilities."
+            }
+          }
+        ]
+      },
+      {
+        "name": "power-manager.suspend",
+        "summary": {
+          "en": "Suspend the computer"
+        },
+        "args": [
+          {
+            "name": "confirm",
+            "kind": "bool",
+            "required": true,
+            "choices": [
+              true
+            ]
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.power",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Suspend the whole computer immediately."
+            }
+          }
+        ]
+      },
+      {
+        "name": "power-manager.hibernate",
+        "summary": {
+          "en": "Hibernate the computer"
+        },
+        "args": [
+          {
+            "name": "confirm",
+            "kind": "bool",
+            "required": true,
+            "choices": [
+              true
+            ]
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.power",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Write memory to disk and power off the whole computer."
+            }
+          }
+        ]
+      },
+      {
+        "name": "power-manager.hybrid-sleep",
+        "summary": {
+          "en": "Enter hybrid sleep"
+        },
+        "args": [
+          {
+            "name": "confirm",
+            "kind": "bool",
+            "required": true,
+            "choices": [
+              true
+            ]
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.power",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Suspend while preserving a hibernation image."
+            }
+          }
+        ]
+      },
+      {
+        "name": "power-manager.suspend-then-hibernate",
+        "summary": {
+          "en": "Suspend then hibernate"
+        },
+        "args": [
+          {
+            "name": "confirm",
+            "kind": "bool",
+            "required": true,
+            "choices": [
+              true
+            ]
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.power",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Suspend now and hibernate later according to logind policy."
+            }
+          }
+        ]
+      },
+      {
+        "name": "power-manager.reboot",
+        "summary": {
+          "en": "Reboot the computer"
+        },
+        "args": [
+          {
+            "name": "confirm",
+            "kind": "bool",
+            "required": true,
+            "choices": [
+              true
+            ]
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.power",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Restart the whole computer immediately."
+            }
+          }
+        ]
+      },
+      {
+        "name": "power-manager.poweroff",
+        "summary": {
+          "en": "Power off the computer"
+        },
+        "args": [
+          {
+            "name": "confirm",
+            "kind": "bool",
+            "required": true,
+            "choices": [
+              true
+            ]
+          }
+        ],
+        "needs": [
+          {
+            "verb": "sys.power",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Shut down and power off the whole computer immediately."
+            }
+          }
+        ]
+      }
+    ]
   }
 }

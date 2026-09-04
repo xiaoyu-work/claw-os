@@ -207,10 +207,10 @@ fn lint_apps(
             "ok": !any_violation,
             "hint": if any_violation {
                 "Lint failed. Apps must (a) route AI calls through `claw_os_sdk.ai` (not direct provider SDKs) \
-                 and (b) ship every file referenced by their `session.entry` so the kernel agent can spawn \
+                 and (b) ship every package-relative file referenced by their `mcp.entry` so the kernel agent can spawn \
                  the MCP server. Run `cos app tool list <app>` to inspect the declared tool surface."
             } else {
-                "All apps route their AI calls through the kernel gate and ship every declared session entry."
+                "All apps route their AI calls through the kernel gate and ship every declared MCP entry."
             },
         })
         .to_string(),
@@ -219,37 +219,58 @@ fn lint_apps(
 
 fn app_lint_violations(app: &apps::App) -> Vec<Value> {
     let mut violations = scan_app_for_ai_imports(&app.dir);
-    violations.extend(scan_session_block(app));
+    violations.extend(scan_mcp_block(app));
     violations
 }
 
-/// On-disk lint checks for an app's `session` block. The manifest
-/// parser already enforces structural validity (duplicate tool
-/// names, undeclared scope args, missing English text, etc.) and
+/// On-disk lint checks for an app's `mcp` block. The manifest parser
+/// already enforces structural validity (duplicate tool names,
+/// undeclared scope args, missing English text, etc.) and
 /// `apps::discover` would have skipped the app otherwise. What we
 /// still need to verify here is that the artefacts referenced by the
-/// manifest exist on disk — most importantly the `session.entry`
-/// script, since a missing entry breaks the agent at first call
-/// rather than at install time.
-fn scan_session_block(app: &apps::App) -> Vec<Value> {
-    let Some(session) = app.manifest.session.as_ref() else {
+/// manifest exist on disk — most importantly the `mcp.entry` program,
+/// since a missing entry breaks the agent at first call rather than at
+/// install time.
+fn scan_mcp_block(app: &apps::App) -> Vec<Value> {
+    let Some(service) = app.manifest.mcp.as_ref() else {
         return Vec::new();
     };
-    let entry_rel = session
+    let entry_rel = service
         .entry
         .clone()
-        .unwrap_or_else(|| app.manifest.runtime.default_session_entry().to_string());
-    let entry_abs = app.dir.join(&entry_rel);
+        .unwrap_or_else(|| app.manifest.runtime.default_mcp_entry().to_string());
     let mut hits = Vec::new();
+    if entry_rel.starts_with('/') {
+        // An absolute entry is a claim on a system program, and only
+        // the kernel's fixed native-desktop table may make it. Saying
+        // so at lint time is the same answer the launcher gives, just
+        // earlier.
+        if crate::worker::trusted_desktop::allowlisted_system_program(&app.manifest.id)
+            != Some(entry_rel.as_str())
+        {
+            hits.push(json!({
+                "kind": "mcp.entry-not-allowlisted",
+                "file": entry_rel,
+                "hint": format!(
+                    "Manifest names `{entry_rel}` outside its package. Only the kernel's \
+                     fixed native-desktop table may name a system program, and it does not \
+                     name this one for `{}`.",
+                    app.manifest.id,
+                ),
+            }));
+        }
+        return hits;
+    }
+    let entry_abs = app.dir.join(&entry_rel);
     if !entry_abs.is_file() {
         hits.push(json!({
-            "kind": "session.entry-missing",
+            "kind": "mcp.entry-missing",
             "file": entry_abs.display().to_string(),
             "hint": format!(
-                "Manifest declares a `session` block with {} tool(s) but the entry script \
+                "Manifest declares an `mcp` block with {} tool(s) but the entry script \
                  `{}` is not present on disk. The kernel agent will fail to bring up the MCP \
                  server on the first call.",
-                session.tools.len(),
+                service.tools.len(),
                 entry_rel,
             ),
         }));
@@ -257,12 +278,12 @@ fn scan_session_block(app: &apps::App) -> Vec<Value> {
     hits
 }
 
-/// `cos app tool <sub>` — discovery surface for App-defined session
+/// `cos app tool <sub>` — discovery surface for App-defined MCP
 /// tools (the strict-schema, agent-callable surface declared in each
-/// manifest's `session` block).
+/// manifest's `mcp` block).
 ///
 /// Currently supports:
-/// * `cos app tool list` — every session tool across every installed app.
+/// * `cos app tool list` — every MCP tool across every installed app.
 /// * `cos app tool list <app>` — the tools one app exposes.
 ///
 /// The CLI just prints what the manifest claims; it does *not* spawn
@@ -290,7 +311,7 @@ fn tool_cmd(
             for app in apps_to_show {
                 let tools_json: Vec<Value> = app
                     .manifest
-                    .session
+                    .mcp
                     .as_ref()
                     .map(|s| {
                         s.tools
@@ -314,14 +335,14 @@ fn tool_cmd(
                     .unwrap_or_default();
                 apps_json.push(json!({
                     "app": app.manifest.id,
-                    "has_session": app.manifest.session.is_some(),
+                    "has_mcp": app.manifest.mcp.is_some(),
                     "tools": tools_json,
                 }));
             }
             Ok(Some(json!({"apps": apps_json}).to_string()))
         }
         "--help" | "-h" | "help" => Ok(Some(
-            "cos app tool list [<app>]  list session-exposed tools".to_string(),
+            "cos app tool list [<app>]  list mcp-exposed tools".to_string(),
         )),
         other => Err(format!(
             "unknown subcommand: cos app tool {other}. try: cos app tool list [<app>]"
@@ -778,7 +799,7 @@ fn scaffold_main_py(id: &str, want_ops: bool, want_desktop: bool) -> String {
     out.push_str("def run(command, args):\n");
     out.push_str("    \"\"\"Entry point called by cos.\"\"\"\n");
     if want_desktop {
-        out.push_str("    if gui.is_gui_launch(command):\n");
+        out.push_str("    if gui.is_gui_launch():\n");
         out.push_str("        return run_gui(gui.context())\n");
     }
     if want_ops {
@@ -954,8 +975,11 @@ fn validate_install_tree(
     // Structural bounds run before anything is trusted: an untrusted
     // bundle must not be able to smuggle symlinks, hardlinks, special
     // files, traversal or case-colliding names into a live install.
-    crate::provenance::install::assert_safe_tree(dir, &crate::provenance::install::Limits::default())
-        .map_err(|e| format!("{description} bundle rejected: {e}"))?;
+    crate::provenance::install::assert_safe_tree(
+        dir,
+        &crate::provenance::install::Limits::default(),
+    )
+    .map_err(|e| format!("{description} bundle rejected: {e}"))?;
 
     let provenance = match verify_app_tree(dir, expected_id, trust_mode) {
         Ok(pkg) => Ok(pkg),
@@ -966,9 +990,9 @@ fn validate_install_tree(
     // Capability-bearing manifest bytes come from the verified
     // snapshot whenever one exists.
     let body = match &provenance {
-        Ok(pkg) => pkg.manifest_text().map_err(|e| {
-            format!("read {description} manifest from verified snapshot: {e}")
-        })?,
+        Ok(pkg) => pkg
+            .manifest_text()
+            .map_err(|e| format!("read {description} manifest from verified snapshot: {e}"))?,
         Err(_) => {
             let manifest_path = dir.join("app.json");
             fs::read_to_string(&manifest_path).map_err(|e| {

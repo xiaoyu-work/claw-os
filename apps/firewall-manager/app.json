@@ -122,7 +122,9 @@
           "kind": "bool",
           "required": true,
           "binding": "flag",
-          "choices": [true]
+          "choices": [
+            true
+          ]
         }
       ],
       "needs": [
@@ -156,7 +158,9 @@
           "kind": "bool",
           "required": true,
           "binding": "flag",
-          "choices": [true]
+          "choices": [
+            true
+          ]
         }
       ],
       "needs": [
@@ -175,5 +179,186 @@
         }
       ]
     }
+  },
+  "schema_version": 2,
+  "mcp": {
+    "entry": "server.py",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "access": {
+      "system_agent": true,
+      "apps": []
+    },
+    "tools": [
+      {
+        "name": "firewall-manager.status",
+        "summary": {
+          "en": "Inspect managed firewall state"
+        },
+        "needs": [
+          {
+            "verb": "sys.observe",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "firewall"
+              }
+            },
+            "why": {
+              "en": "Read Claw's dedicated nftables table and detect drift."
+            }
+          }
+        ]
+      },
+      {
+        "name": "firewall-manager.add",
+        "summary": {
+          "en": "Add a scoped firewall rule"
+        },
+        "args": [
+          {
+            "name": "action",
+            "kind": "name",
+            "required": true
+          },
+          {
+            "name": "direction",
+            "kind": "name",
+            "required": true
+          },
+          {
+            "name": "protocol",
+            "kind": "name",
+            "required": true
+          },
+          {
+            "name": "port",
+            "kind": "integer",
+            "required": true
+          },
+          {
+            "name": "remote",
+            "kind": "name",
+            "required": false
+          },
+          {
+            "name": "interface",
+            "kind": "name",
+            "required": false
+          }
+        ],
+        "needs": [
+          {
+            "verb": "net.firewall",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "manage"
+              }
+            },
+            "why": {
+              "en": "Add one validated allow or deny rule to the managed nftables table."
+            }
+          }
+        ]
+      },
+      {
+        "name": "firewall-manager.delete",
+        "summary": {
+          "en": "Delete a managed rule"
+        },
+        "args": [
+          {
+            "name": "rule_id",
+            "kind": "name",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "net.firewall",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "manage"
+              }
+            },
+            "why": {
+              "en": "Delete one exact managed firewall rule."
+            }
+          }
+        ]
+      },
+      {
+        "name": "firewall-manager.clear",
+        "summary": {
+          "en": "Clear all managed rules"
+        },
+        "args": [
+          {
+            "name": "confirm",
+            "kind": "bool",
+            "required": true,
+            "choices": [
+              true
+            ]
+          }
+        ],
+        "needs": [
+          {
+            "verb": "net.firewall",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "manage"
+              }
+            },
+            "why": {
+              "en": "Remove every rule from Claw's dedicated table."
+            }
+          }
+        ]
+      },
+      {
+        "name": "firewall-manager.restore",
+        "summary": {
+          "en": "Restore a managed firewall backup"
+        },
+        "args": [
+          {
+            "name": "backup_token",
+            "kind": "name",
+            "required": true
+          },
+          {
+            "name": "confirm",
+            "kind": "bool",
+            "required": true,
+            "choices": [
+              true
+            ]
+          }
+        ],
+        "needs": [
+          {
+            "verb": "net.firewall",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "manage"
+              }
+            },
+            "why": {
+              "en": "Restore the exact previous managed state if no newer revision exists."
+            }
+          }
+        ]
+      }
+    ]
   }
 }

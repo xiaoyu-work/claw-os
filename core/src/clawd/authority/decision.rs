@@ -30,7 +30,7 @@ use crate::proc::SessionInfo;
 
 use super::grant::{Audience, Issuer, Requirement, Subject};
 use super::handle::{GrantId, GrantRef};
-use super::store::{authority, GrantView, Presentation};
+use super::store::{authority, GrantView, Presentation, RelayProof};
 
 /// Proof that the authority spent an exact capability set for this
 /// request.
@@ -74,6 +74,7 @@ pub struct Decision {
     bound_pid: u32,
     generation: u64,
     presentation: Presentation,
+    relay: Option<RelayProof>,
     /// The registry row the subject session refers to, resolved once
     /// under the owner's own path view. Providers that need the row
     /// read it from here instead of looking it up again.
@@ -89,6 +90,7 @@ impl Decision {
         route: &'static str,
         audience: Audience,
         presentation: Presentation,
+        relay: Option<RelayProof>,
         session: Option<SessionInfo>,
         requirement: &Requirement,
     ) -> Self {
@@ -104,6 +106,7 @@ impl Decision {
             bound_pid: view.bound_pid,
             generation: view.generation,
             presentation,
+            relay,
             session,
             obligation: requirement.is_route_derived(),
             exercised: AtomicBool::new(false),
@@ -204,7 +207,13 @@ impl Decision {
             super::audit::record_empty_requirement(self);
             return Err("a capability check must name at least one capability".to_string());
         }
-        match authority().consume(self.grant_id, required, &self.presentation) {
+        let spent = match self.relay.as_ref() {
+            Some(proof) => {
+                authority().consume_relayed(self.grant_id, required, &self.presentation, proof)
+            }
+            None => authority().consume(self.grant_id, required, &self.presentation),
+        };
+        match spent {
             Ok(view) => {
                 // Only a *successful* spend satisfies the obligation.
                 // A refusal the provider ignored leaves the route owing
@@ -241,6 +250,14 @@ impl Decision {
         session: Option<SessionInfo>,
         requirement: &Requirement,
     ) -> Self {
-        Self::new(view, route, audience, presentation, session, requirement)
+        Self::new(
+            view,
+            route,
+            audience,
+            presentation,
+            None,
+            session,
+            requirement,
+        )
     }
 }

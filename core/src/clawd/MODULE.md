@@ -10,6 +10,8 @@ and agent tasks.
 - Accept authenticated Unix-socket RPC.
 - Derive client/session identity and capability context.
 - Dispatch privileged services and app/MCP session operations.
+- Manage owner/App-scoped persistent MCP service Hosts and mint single-use,
+  action-bound authorizations for calls relayed by authenticated task Hosts.
 - Own task ownership/lease, durable approval waits, retry, and task
   lifecycle RPC.
 - Expose owner-scoped approval views used by the Agent Web control center;
@@ -34,8 +36,9 @@ and agent tasks.
 | `agent_client.rs` | Client RPC for agent task submit/result/cancel/status |
 | `tasks.rs` | Task queue, summary/list, cancel, retry, and session continuity |
 | `usage.rs` | Peer-UID-scoped Agent token usage queries |
-| `app_sessions.rs` | App/native/MCP session authority: derives identity and capabilities, plans approvals, issues launch grants |
-| `../extension_host/broker.rs` | Per-task private proxy: verifies SCM credentials, host/child ancestry, route class, and nearest child session before normal dispatch |
+| `app_sessions.rs` | App/native/MCP session authority: derives identity and capabilities, plans approvals, issues launch grants, consumes service-bound call tickets |
+| `app_services.rs` | Persistent owner/App service manager, lifecycle policy, capacity/restart control, and single-use call authorization |
+| `../extension_host/broker.rs` | Purpose-bound private proxy: verifies SCM credentials, Host/child ancestry, route class, and nearest child session before normal dispatch |
 | `scheduler.rs` | Proactive-scheduler authority: validates `cos cron` / `cos triggers` requests and derives what a job may carry |
 | `notifications.rs` | Notification RPC handlers, due-nudge fanout, and external delivery dispatcher |
 | `system_caps.rs` | System capability derivation |
@@ -250,6 +253,35 @@ grant is bound to an identity the daemon derives from the peer itself — the
 authenticated parent session, or the peer's exact uid/pid/start-time — never to
 a session string the request supplied and never to anything a sibling process
 shares.
+
+Agent-facing App calls arrive only through `app_service.call` on an
+authenticated task Host's private broker. The request cannot assert its Host,
+lease, owner, or task identity: the private broker supplies those facts after
+SCM credential, pid/start-time, purpose, and lease verification. The daemon
+then re-verifies the signed package and caller authority, resolves typed
+arguments and target capabilities, and hands `app_services.rs` a closed
+authorization plan. That canonical argument map remains authoritative inside
+the service Host; it is schema-validated there without following filesystem
+paths a second time. Filesystem calls also carry a daemon-captured mount
+source/target/mode/class and device/inode snapshot, which the worker must match
+before launch.
+
+The service manager keys instances by owner uid and App id, not by task, so a
+`lazy` or `always-on` MCP service can survive the task that first used it.
+Execution crosses a second private broker into an App-service-purpose Host.
+The daemon's random call token expires at the caller deadline, is single-use,
+and is bound to the
+exact service Host instance, package, generation, caller context, target
+capabilities, authorized mount snapshot, and executable action digest.
+`app_session.set_transient`
+atomically consumes it; a mismatch burns the token. No public route, business
+argument, environment value, or App process can mint or widen one. Reusable
+children complete their zero-capability handshake before token issuance;
+single-call sandboxes initially execute only the trusted `claw-app-runner`,
+blocked on a private stdin gate. After binding that process, the service Host
+atomically consumes the token and installs the grant before releasing the
+runner to `exec` package code and begin its handshake. The gate provides
+ordering only; it cannot replace or widen daemon authorization.
 
 The installed package's provenance ceiling is applied here too, and here is
 where it is authoritative. `app_sessions.rs` resolves it from its own verified

@@ -180,7 +180,11 @@
           "required": false,
           "binding": "flag",
           "default": "formal",
-          "choices": ["formal", "casual", "short"]
+          "choices": [
+            "formal",
+            "casual",
+            "short"
+          ]
         },
         {
           "name": "lang",
@@ -322,6 +326,301 @@
   "dependencies": {
     "binaries": [
       "thunderbird"
+    ]
+  },
+  "schema_version": 2,
+  "mcp": {
+    "entry": "server.py",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "access": {
+      "system_agent": true,
+      "apps": []
+    },
+    "tools": [
+      {
+        "name": "mail-ai.summarize",
+        "summary": {
+          "en": "Summarize an email body into a one-line summary, key points, and action items"
+        },
+        "args": [
+          {
+            "name": "subject",
+            "kind": "text",
+            "required": false,
+            "default": ""
+          },
+          {
+            "name": "from",
+            "kind": "text",
+            "required": false,
+            "default": ""
+          },
+          {
+            "name": "body",
+            "kind": "text",
+            "required": true
+          },
+          {
+            "name": "lang",
+            "kind": "text",
+            "required": false,
+            "default": "en"
+          }
+        ],
+        "needs": [
+          {
+            "verb": "ai.chat.untrusted",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Send the email body to a model and get back a structured summary."
+            }
+          },
+          {
+            "verb": "memory.write",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "self-ref",
+                "value": "mail-ai"
+              }
+            },
+            "why": {
+              "en": "Remember the email summary so the agent can recall it later."
+            }
+          }
+        ]
+      },
+      {
+        "name": "mail-ai.smart_reply",
+        "summary": {
+          "en": "Generate three reply suggestions (formal / casual / short) for an email thread"
+        },
+        "args": [
+          {
+            "name": "subject",
+            "kind": "text",
+            "required": false,
+            "default": ""
+          },
+          {
+            "name": "from",
+            "kind": "text",
+            "required": false,
+            "default": ""
+          },
+          {
+            "name": "thread",
+            "kind": "text",
+            "required": true
+          },
+          {
+            "name": "my-intent",
+            "kind": "text",
+            "required": false,
+            "default": ""
+          },
+          {
+            "name": "lang",
+            "kind": "text",
+            "required": false,
+            "default": "en"
+          }
+        ],
+        "needs": [
+          {
+            "verb": "ai.chat.untrusted",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Send the thread context to a model and get back three reply drafts."
+            }
+          }
+        ]
+      },
+      {
+        "name": "mail-ai.smart_compose",
+        "summary": {
+          "en": "Continue or complete a draft from a brief intent (e.g. 'decline politely')"
+        },
+        "args": [
+          {
+            "name": "subject",
+            "kind": "text",
+            "required": false,
+            "default": ""
+          },
+          {
+            "name": "to",
+            "kind": "text",
+            "required": false,
+            "default": ""
+          },
+          {
+            "name": "draft",
+            "kind": "text",
+            "required": false,
+            "default": ""
+          },
+          {
+            "name": "intent",
+            "kind": "text",
+            "required": true
+          },
+          {
+            "name": "style",
+            "kind": "text",
+            "required": false,
+            "default": "formal",
+            "choices": [
+              "formal",
+              "casual",
+              "short"
+            ]
+          },
+          {
+            "name": "lang",
+            "kind": "text",
+            "required": false,
+            "default": "en"
+          }
+        ],
+        "needs": [
+          {
+            "verb": "ai.chat.untrusted",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Send the intent and current draft to a model and get back a completion."
+            }
+          }
+        ]
+      },
+      {
+        "name": "mail-ai.translate",
+        "summary": {
+          "en": "Translate email text into a target language"
+        },
+        "args": [
+          {
+            "name": "text",
+            "kind": "text",
+            "required": true
+          },
+          {
+            "name": "target",
+            "kind": "text",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "ai.chat.untrusted",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Send the source text and target language to a model for translation."
+            }
+          }
+        ]
+      },
+      {
+        "name": "mail-ai.triage",
+        "summary": {
+          "en": "Classify an incoming email into a category and propose tags"
+        },
+        "args": [
+          {
+            "name": "subject",
+            "kind": "text",
+            "required": false,
+            "default": ""
+          },
+          {
+            "name": "from",
+            "kind": "text",
+            "required": false,
+            "default": ""
+          },
+          {
+            "name": "snippet",
+            "kind": "text",
+            "required": false,
+            "default": ""
+          },
+          {
+            "name": "has-attachments",
+            "kind": "bool",
+            "required": false,
+            "default": false
+          }
+        ],
+        "needs": [
+          {
+            "verb": "ai.chat.untrusted",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Send the sender / subject / snippet to a model and get back a category + tags."
+            }
+          },
+          {
+            "verb": "memory.write",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "self-ref",
+                "value": "mail-ai"
+              }
+            },
+            "why": {
+              "en": "Remember high-priority triage decisions so the agent can recall what mattered."
+            }
+          }
+        ]
+      },
+      {
+        "name": "mail-ai.chat",
+        "summary": {
+          "en": "Answer a question grounded in supplied email context ('chat with your mailbox')"
+        },
+        "args": [
+          {
+            "name": "question",
+            "kind": "text",
+            "required": true
+          },
+          {
+            "name": "context-json",
+            "kind": "text",
+            "required": false,
+            "default": "[]"
+          },
+          {
+            "name": "lang",
+            "kind": "text",
+            "required": false,
+            "default": "en"
+          }
+        ],
+        "needs": [
+          {
+            "verb": "ai.chat.untrusted",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Send the question and surrounding messages to a model for a grounded answer."
+            }
+          }
+        ]
+      }
     ]
   }
 }

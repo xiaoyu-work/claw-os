@@ -168,9 +168,9 @@ fn no_secret_or_model_text_reaches_the_chain() {
         EventSource::Kernel,
         JournalEvent::ToolProposed {
             turn: 0,
-            tool: Label::new("cos_app_run"),
+            tool: Label::new("app_email__email_send"),
             tool_use_id: Label::new("t-1"),
-            known: true,
+            known: false,
             input: crate::audit_policy::text_digest(SECRETS[0]),
         },
     );

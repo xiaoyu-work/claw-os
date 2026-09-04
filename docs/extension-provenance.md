@@ -222,57 +222,52 @@ quarantines the selected id with an actionable diagnostic rather than falling
 back to unsigned content. The ABI and its additional runtime restrictions are
 documented in [extension-abi.md](extension-abi.md).
 
-## App session servers
+## App Mesh services
 
-An App with a `session` block runs as a stdio MCP server, and that
-launch is bound to one snapshot like any other:
+An App with a `schema_version: 2` `mcp` block runs as a manifest-bound
+stdio service. Its package and authority are bound independently:
 
-1. `AppLaunch` is built from the verified package, so the manifest, the
-   runtime selection, the session block and the capability ceiling all
-   come from one parse of one set of signed bytes.
-2. The session entry — the explicit `session.entry` or the runtime
-   default — must be a **declared signed entrypoint**. Being present in
-   the package and covered by the signed file tree is not enough; a
-   signed package must not become a launcher for anything shipped
-   alongside it.
-3. `bind_for_launch` opens the manifest and the entry by descriptor and
-   holds them. The binding is kept for the whole life of the session,
-   not dropped after `spawn`.
-4. The pinned inodes are re-asserted immediately before `spawn`, on
-   every reuse of a cached session, and on every tool call. A warm
-   cache is exactly where a replaced script would otherwise go
-   unnoticed, so "it is already in the table" is never sufficient.
-5. The launch policy is derived from the verified snapshot and the
-   session grant, and the child starts inside the hostile-worker
-   sandbox. Reuse of a cached session re-derives that policy and
-   refuses the child if the digest moved.
+1. Discovery verifies the complete signed App package before trusting
+   `app.json`, tool schemas, access rules, or entrypoint metadata.
+2. The bridge passes the resulting `PackageRef` to `clawd`; the daemon
+   independently re-discovers the installed App and requires the id,
+   version, digest, publisher, and trust generation to match.
+3. `mcp.entry` must be a declared signed entrypoint. Merely appearing in
+   the signed file tree does not make a file executable.
+4. The launch binding pins the manifest, entrypoint, package directory,
+   target session, pid, and process start time. The service uses the
+   distinct `app-mcp` session group.
+5. Every authority-bearing call performs fresh package verification
+   rather than trusting the discovery cache. A signed child file
+   replaced in place after registration invalidates the next call.
+6. The daemon validates the exact declared tool, authenticated caller,
+   access policy, capability generation, package binding, and deadline
+   before deriving target authority from `mcp.tools[].needs`.
 
-The same `(dev, ino)` identities are recorded in the launch audit and
-bound by the sandbox as mounts, so the pinned set is enforced twice over
-and reconstructable from the audit log either way.
+The same package identity and process facts are recorded in the launch
+audit and enforced by the sandbox, so the binding is reconstructable.
 
-**This path is sandboxed.** The App-session stdio child is launched
-through `worker::prepare` — the same hostile-worker provider every App
-operation, MCP server and adapter goes through — with
-`StdioPlan::Streamed`, because its stdin/stdout are the JSON-RPC
-transport rather than something to capture. It gets the `McpServer`
-tier: a private mount, PID, IPC, UTS, user and network namespace, the
-strict seccomp filter, a cgroup or rlimit governor, its package
-read-only and pinned by inode, its own partition of the data root, no
-egress at all, and a per-launch broker endpoint shadowing the real
-`clawd` socket. There is no unsandboxed fallback: a host that cannot
-enforce this refuses to open the session.
+**This path is sandboxed.** The App Mesh stdio child is launched through
+`worker::prepare` with `StdioPlan::Streamed`, because its stdin/stdout
+are the JSON-RPC transport rather than captured output. It gets the
+`McpServer` tier: private mount, PID, IPC, UTS, user, and network
+namespaces; strict seccomp; a cgroup or rlimit governor; a read-only
+package; its own App data partition; no direct egress; and a
+per-launch broker endpoint shadowing the real `clawd` socket. A host
+that cannot enforce the policy refuses the launch.
 
-The sandbox is derived from the session's *standing* grant, which is
-`agent.invoke` on itself and nothing more. A standing filesystem or
-network grant would have to be honoured for every later call, so it
-refuses the launch instead.
+The service's at-rest grant cannot perform one tool call's privileged
+work. For each authenticated call, `clawd` installs a separate
+deadline-bound `AppGateway` grant derived from that exact tool and
+effective arguments, then clears it on completion, error, timeout,
+cancellation, or teardown. Caller `agent.invoke` authority is never
+copied into the target grant.
 
 ### Where a call's own authority goes
 
-A reusable server serves calls whose capability sets differ, and a live
-worker's mounts and egress cannot be revised. So before anything is
-granted anywhere, the launcher classifies the set bound to the call:
+A reusable service handles calls whose capability sets differ, and a
+live worker's mounts and egress cannot be revised. Before granting the
+target, the host classifies the set bound to the call:
 
 | Classification | Where it runs |
 | --- | --- |

@@ -35,9 +35,9 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
 use super::protocol::{
-    CallToolParams, CallToolResult, ClientCapabilities, Implementation, InitializeParams,
-    InitializeResult, JsonRpcError, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
-    ListToolsResult, RequestId, PROTOCOL_VERSION,
+    CallToolMetadata, CallToolParams, CallToolResult, ClientCapabilities, Implementation,
+    InitializeParams, InitializeResult, JsonRpcError, JsonRpcNotification, JsonRpcRequest,
+    JsonRpcResponse, ListToolsResult, RequestId, PROTOCOL_VERSION,
 };
 use super::transport::{Transport, TransportError};
 
@@ -261,9 +261,37 @@ impl McpClient {
         name: impl Into<String>,
         arguments: Option<Value>,
     ) -> Result<CallToolResult, ClientError> {
-        let params = CallToolParams {
-            name: name.into(),
+        self.call_tool_inner(name.into(), arguments, None).await
+    }
+
+    pub async fn call_tool_with_context(
+        self: &Arc<Self>,
+        name: impl Into<String>,
+        arguments: Option<Value>,
+        call_context: crate::agent::tools::app_gateway::McpCallContext,
+    ) -> Result<CallToolResult, ClientError> {
+        call_context.validate().map_err(ClientError::Protocol)?;
+        self.call_tool_inner(
+            name.into(),
             arguments,
+            Some(CallToolMetadata {
+                call_context: Some(call_context),
+                ..CallToolMetadata::default()
+            }),
+        )
+        .await
+    }
+
+    async fn call_tool_inner(
+        self: &Arc<Self>,
+        name: String,
+        arguments: Option<Value>,
+        metadata: Option<CallToolMetadata>,
+    ) -> Result<CallToolResult, ClientError> {
+        let params = CallToolParams {
+            name,
+            arguments,
+            metadata,
         };
         let v = self
             .request(

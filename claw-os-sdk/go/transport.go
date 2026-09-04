@@ -29,7 +29,7 @@ import (
 const DefaultTimeout = 60 * time.Second
 
 // maxOutput caps captured stdout+stderr (8 MiB) — generous for
-// embeddings / base64 artifact paths without unbounded RAM.
+// large structured tool results without unbounded RAM.
 const maxOutput = 8 * 1024 * 1024
 
 // UnavailableError means the `cos` binary could not be invoked, timed
@@ -50,14 +50,10 @@ func (e *DeniedError) Error() string {
 	return "call denied"
 }
 
-// CosBinary resolves the `cos` binary. It honors CLAW_COS_BIN then
-// COS_BIN (both used across the SDK family and dev/test setups),
+// CosBinary resolves the `cos` binary. It honors CLAW_COS_BIN,
 // falling back to `cos` on $PATH.
 func CosBinary() string {
 	if b := os.Getenv("CLAW_COS_BIN"); b != "" {
-		return b
-	}
-	if b := os.Getenv("COS_BIN"); b != "" {
 		return b
 	}
 	return "cos"
@@ -65,24 +61,19 @@ func CosBinary() string {
 
 // cosOutcome is the parsed result of one `cos` invocation.
 type cosOutcome struct {
-	// Envelope is the unconstrained top-level JSON value the kernel emitted.
-	Envelope any
-	// Status is the process exit code (so callers can treat a non-zero
-	// exit as failure even when stdout was valid JSON).
-	Status int
+	Data any
 }
 
 // cosCallJSON runs `cos <args>` and parses its stdout as a JSON object.
 // label names the logical call (e.g. "cos ai chat") for error messages.
-// Returns an *UnavailableError for transport problems; the envelope is
-// returned untouched so domain code decides what a non-zero Status or an
-// "error" field means.
+// Returns an *UnavailableError for transport/protocol problems and a
+// *DeniedError for a valid kernel error envelope.
 func cosCallJSON(label string, args []string) (*cosOutcome, error) {
 	bin := CosBinary()
 	ctx, cancel := context.WithTimeout(context.Background(), DefaultTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd := exec.CommandContext(ctx, bin, append([]string{"--wire=1"}, args...)...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -104,10 +95,7 @@ func cosCallJSON(label string, args []string) (*cosOutcome, error) {
 
 	text := strings.TrimSpace(stdout.String())
 	if text == "" {
-		text = strings.TrimSpace(stderr.String())
-	}
-	if text == "" {
-		return nil, &UnavailableError{Msg: fmt.Sprintf("%s returned no output (exit %d)", label, status)}
+		return nil, &UnavailableError{Msg: fmt.Sprintf("%s returned no wire response (exit %d)", label, status)}
 	}
 	if len(text) > maxOutput {
 		return nil, &UnavailableError{Msg: fmt.Sprintf("%s output exceeded %d bytes", label, maxOutput)}
@@ -123,16 +111,20 @@ func cosCallJSON(label string, args []string) (*cosOutcome, error) {
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		return nil, &UnavailableError{Msg: fmt.Sprintf("%s returned trailing JSON data", label)}
 	}
-	return &cosOutcome{Envelope: env, Status: status}, nil
-}
-
-func (o *cosOutcome) hasError() bool {
-	envelope, ok := o.Envelope.(map[string]any)
-	if !ok {
-		return false
+	if err := ValidateEnvelope(env); err != nil {
+		return nil, &UnavailableError{Msg: fmt.Sprintf("%s returned an invalid wire envelope: %v", label, err)}
 	}
-	_, ok = envelope["error"]
-	return ok
+	envelope := asMap(env)
+	if asBool(envelope["ok"]) {
+		if status != 0 {
+			return nil, &UnavailableError{Msg: fmt.Sprintf("%s returned a success envelope with exit %d", label, status)}
+		}
+		return &cosOutcome{Data: envelope["data"]}, nil
+	}
+	if status == 0 {
+		return nil, &UnavailableError{Msg: fmt.Sprintf("%s returned an error envelope with exit 0", label)}
+	}
+	return nil, &DeniedError{Payload: envelope}
 }
 
 func truncate(s string, limit int) string {

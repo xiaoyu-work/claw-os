@@ -1,0 +1,150 @@
+{
+  "id": "libreoffice",
+  "version": "0.1.0",
+  "schema_version": 2,
+  "name": {
+    "en": "LibreOffice converter"
+  },
+  "summary": {
+    "en": "Convert office documents with LibreOffice headless."
+  },
+  "runtime": "python",
+  "dependencies": {
+    "binaries": [
+      "soffice"
+    ]
+  },
+  "mcp": {
+    "entry": "main.py",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "tools": [
+      {
+        "name": "office.convert",
+        "summary": {
+          "en": "Convert an office document to a requested format."
+        },
+        "args": [
+          {
+            "name": "input",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "Absolute source document path."
+            }
+          },
+          {
+            "name": "output_dir",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "Absolute destination directory."
+            }
+          },
+          {
+            "name": "target_format",
+            "kind": "text",
+            "required": true,
+            "label": {
+              "en": "LibreOffice output format token."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "input"
+            },
+            "why": {
+              "en": "Read the source document."
+            }
+          },
+          {
+            "verb": "fs.write",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "output_dir"
+            },
+            "why": {
+              "en": "Write the converted document."
+            }
+          },
+          {
+            "verb": "proc.spawn",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "soffice"
+              }
+            },
+            "why": {
+              "en": "Run LibreOffice headless to convert the document."
+            }
+          }
+        ]
+      },
+      {
+        "name": "office.convert_to_pdf",
+        "summary": {
+          "en": "Convert an office document to PDF."
+        },
+        "args": [
+          {
+            "name": "input",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "Absolute source document path."
+            }
+          },
+          {
+            "name": "output_dir",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "Absolute destination directory."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "input"
+            },
+            "why": {
+              "en": "Read the source document."
+            }
+          },
+          {
+            "verb": "fs.write",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "output_dir"
+            },
+            "why": {
+              "en": "Write the converted PDF."
+            }
+          },
+          {
+            "verb": "proc.spawn",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "soffice"
+              }
+            },
+            "why": {
+              "en": "Run LibreOffice headless to create the PDF."
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

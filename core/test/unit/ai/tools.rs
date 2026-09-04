@@ -24,7 +24,11 @@ fn catalog_names_are_unique_and_sane() {
             "duplicate tool name in catalog: {}",
             t.name
         );
-        assert!(t.name.contains('.'), "tool names should be ns.name: {}", t.name);
+        assert!(
+            t.name.contains('.'),
+            "tool names should be ns.name: {}",
+            t.name
+        );
         assert!(!t.summary.is_empty());
         assert!(!t.args_schema.is_empty());
         assert!(!t.returns_schema.is_empty());
@@ -34,13 +38,15 @@ fn catalog_names_are_unique_and_sane() {
 #[test]
 fn execute_rejects_unknown_tool() {
     let err = execute("nope.nope", "app", &json!({})).unwrap_err();
-    assert!(err.contains("unknown tool"), "got: {err}");
+    assert!(err.to_string().contains("unknown tool"), "got: {err}");
+    assert_eq!(err.wire_code(), "UNKNOWN_VERB");
 }
 
 #[test]
 fn execute_rejects_missing_required_arg() {
     let err = execute("fs.read_text", "app", &json!({})).unwrap_err();
-    assert!(err.contains("path"), "got: {err}");
+    assert!(err.to_string().contains("path"), "got: {err}");
+    assert_eq!(err.wire_code(), "INVALID_ARGS");
 }
 
 #[test]
@@ -354,11 +360,8 @@ fn env_lock() -> std::sync::MutexGuard<'static, ()> {
 
 fn with_tmp_apps<F: FnOnce()>(label: &str, manifests: &[(&str, &str)], f: F) {
     let _g = env_lock();
-    let dir = std::env::temp_dir().join(format!(
-        "cos-tools-allow-{}-{}",
-        label,
-        std::process::id()
-    ));
+    let dir =
+        std::env::temp_dir().join(format!("cos-tools-allow-{}-{}", label, std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     for (id, body) in manifests {
         let app_dir = dir.join(id);
@@ -421,19 +424,19 @@ fn execute_rejects_tool_not_in_allowlist() {
     // discovery silently drops it and the assertion below fires
     // with the cryptic "unknown app" message instead of the
     // intended allowlist error.
-    crate::caps::manifest::Manifest::from_json(&m)
-        .expect("test fixture manifest must parse");
+    crate::caps::manifest::Manifest::from_json(&m).expect("test fixture manifest must parse");
     with_tmp_apps("not-in-allowlist", &[(app, &m)], || {
         // valid path arg so we get past derive_scope; allowlist
         // check must still trip.
-        let err = execute("fs.read_text", app, &json!({"path": "/tmp/x"}))
-            .unwrap_err();
+        let err = execute("fs.read_text", app, &json!({"path": "/tmp/x"})).unwrap_err();
+        let message = err.to_string();
         assert!(
-            err.starts_with("tool not in ai.tools:"),
+            message.starts_with("tool not in ai.tools:"),
             "wrong error bucket: {err}"
         );
-        assert!(err.contains("fs.read_text"), "{err}");
-        assert!(err.contains(app), "{err}");
+        assert!(message.contains("fs.read_text"), "{err}");
+        assert!(message.contains(app), "{err}");
+        assert_eq!(err.wire_code(), "PERMISSION_DENIED");
     });
 }
 
@@ -442,13 +445,14 @@ fn execute_rejects_app_without_ai_block() {
     let app = "no-ai-app";
     let m = manifest_no_ai(app);
     with_tmp_apps("no-ai-block", &[(app, &m)], || {
-        let err = execute("fs.read_text", app, &json!({"path": "/tmp/x"}))
-            .unwrap_err();
+        let err = execute("fs.read_text", app, &json!({"path": "/tmp/x"})).unwrap_err();
+        let message = err.to_string();
         assert!(
-            err.starts_with("no ai policy:"),
+            message.starts_with("no ai policy:"),
             "wrong error bucket: {err}"
         );
-        assert!(err.contains(app), "{err}");
+        assert!(message.contains(app), "{err}");
+        assert_eq!(err.wire_code(), "PERMISSION_DENIED");
     });
 }
 
@@ -457,9 +461,9 @@ fn execute_rejects_unknown_app() {
     let other = "different-app";
     let m = manifest_with_tools(other, &["kv.get"]);
     with_tmp_apps("unknown-app", &[(other, &m)], || {
-        let err = execute("kv.get", "nope", &json!({"key": "x"}))
-            .unwrap_err();
-        assert!(err.starts_with("unknown app:"), "got: {err}");
+        let err = execute("kv.get", "nope", &json!({"key": "x"})).unwrap_err();
+        assert!(err.to_string().starts_with("unknown app:"), "got: {err}");
+        assert_eq!(err.wire_code(), "UNKNOWN_APP");
     });
 }
 
@@ -473,9 +477,10 @@ fn execute_allowlist_runs_after_arg_shape_check() {
     let m = manifest_with_tools(app, &["fs.read_text"]);
     with_tmp_apps("args-shape-first", &[(app, &m)], || {
         let err = execute("fs.read_text", app, &json!({})).unwrap_err();
-        assert!(err.contains("path"), "expected arg error, got: {err}");
+        let message = err.to_string();
+        assert!(message.contains("path"), "expected arg error, got: {err}");
         assert!(
-            !err.starts_with("tool not in ai.tools:"),
+            !message.starts_with("tool not in ai.tools:"),
             "allowlist must not fire on bad args: {err}"
         );
     });

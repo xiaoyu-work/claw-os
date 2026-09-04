@@ -14,6 +14,7 @@ fn peer(uid: u32) -> ClientIdentity {
         execution_uid: None,
         start_time_ticks: Some(7),
         attended_local: false,
+        extension_host: None,
     }
 }
 
@@ -525,7 +526,10 @@ async fn a_route_that_this_peer_cannot_reach_is_refused_over_the_socket() {
 fn every_route_is_reachable_by_name_and_declares_an_access_class() {
     for route in ROUTES {
         assert_eq!(Command::parse(route.name), Some(route.command));
-        assert!(matches!(route.access, Access::User | Access::Root));
+        assert!(matches!(
+            route.access,
+            Access::User | Access::Root | Access::PrivateTaskHost
+        ));
         assert!(matches!(route.kind, Kind::Query | Kind::Mutation));
     }
 }

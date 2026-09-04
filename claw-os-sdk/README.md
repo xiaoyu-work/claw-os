@@ -20,6 +20,7 @@ claw-os-sdk/
 │   │   ├── budget_show.schema.json cos agent budget show reply
 │   │   ├── tool.schema.json        catalog tool invocation
 │   │   ├── tool_catalog.schema.json catalog tool list
+│   │   ├── mcp_call_context.schema.json authenticated App-call identity
 │   │   ├── contract.json           validators + stable error codes
 │   │   ├── app.schema.json         cos app <id> <verb>
 │   │   └── manifest.schema.json    app.json schema
@@ -34,7 +35,8 @@ claw-os-sdk/
 │   └── src/
 │       ├── lib.rs               top-level re-exports + transport
 │       ├── envelope.rs          common envelope parse / error
-│       ├── ai.rs                stable chat + unsupported compatibility shims
+│       ├── ai.rs                gated chat API
+│       ├── mcp/                 native App MCP server runtime
 │       ├── tools.rs             tools::call / tools::catalog
 │       └── generated.rs         codegen output (envelope types)
 │
@@ -43,7 +45,7 @@ claw-os-sdk/
 │   ├── README.md
 │   └── src/claw_os_sdk/
 │       ├── __init__.py
-│       ├── ai.py, tools.py, serve.py, claw_os_session.py
+│       ├── ai.py, tools.py, mcp.py, claw_os_session.py
 │       └── generated.py
 │
 ├── node/                Node SDK (npm package `@claw-os/sdk`)
@@ -74,11 +76,11 @@ claw-os-sdk/
 
 ## The model
 
-Every SDK in every language is a **thin client** over the same
-**wire protocol v1**, which is the JSON envelope that `cos` (the
-kernel CLI) writes to stdout. Routing flags use argv; AI prompt and
-system bodies use private `0600` temporary files so they never appear
-in `/proc/*/cmdline`.
+Every SDK consumes the same **wire protocol v1**. Outbound AI and
+system calls use the JSON envelope that `cos` writes to stdout.
+Inbound App tools use private MCP stdio owned by the App Host, with a
+Gateway-authenticated call context that is never taken from tool
+arguments.
 
 ```
 ┌──────────────────────┐
@@ -106,14 +108,9 @@ parent → app process → cos child). A pure-library binding can't claim
 
 ## AI support
 
-Across Rust, Python, Node, and Go, the stable hand-written AI surface is
-`chat` / `chat-untrusted`. Supplying origin `external-content`
-automatically selects `ai.chat.untrusted`.
-
-The existing embed, image, vision, audio, and video helper names and
-signatures remain for compatibility. They are deprecated, experimental,
-and currently unsupported, and always return a language-specific typed
-unsupported error before invoking `cos`.
+Across Rust, Python, Node, and Go, the hand-written AI surface is `chat` /
+`chat-untrusted`. Supplying origin `external-content` automatically selects
+`ai.chat.untrusted`. Unsupported modality helpers are not published.
 
 A v2 socket transport is planned (see `wire/v2-design.md`) to bring
 per-call latency down from ~50 ms to µs-class, but the same envelopes
@@ -199,7 +196,7 @@ Install from an immutable release artifact or tag, never from `main`.
 |-----------|--------|
 | `wire/v1` schemas | Initial draft |
 | `wire/codegen.py` | Emits deterministic Rust, Python, Node, Go, and MCP validation bindings |
-| `rust/` | Moved from `crates/claw-bridge`; adds `ai`, `tools`. The `policy / fs / exec / pkg / notify / net` modules moved on into `cos-runtime/`. |
+| `rust/` | Public `ai`, `tools`, and native App `mcp` modules. The `policy / fs / exec / pkg / notify / net` modules live in `cos-runtime/`. |
 | `python/` | Moved from `apps/_lib`; packaged as `claw-os-sdk`. The internal `policy` / `snapshot` helpers moved on into `cos-runtime/python/`. |
 | `node/` | Built out — `ai`, `tools`, `gui` over wire v1, with tests |
 | `go/`   | Built out — `ai`, `tools`, `gui` over wire v1, with tests |

@@ -4,6 +4,7 @@ use serde_json::Value;
 use crate::agent::tools::mcp::integration::McpServerSpec;
 use crate::agent::tools::mcp::protocol::{CallToolResult, ToolDescriptor};
 use crate::clawd::wire::RequestId;
+use crate::provenance::runtime::PackageRef;
 
 pub const PROTOCOL_VERSION: u32 = 9;
 pub const MAX_CONTROL_FRAME_BYTES: usize = 8 * 1024 * 1024;
@@ -25,8 +26,26 @@ pub const MAX_CONTROL_CONNECTIONS: usize = MAX_CANONICAL_CONTROL_ACTIONS
 pub const MAX_REQUEST_TIMEOUT_MS: u64 = 180_000;
 pub const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 130_000;
 pub const READY_TIMEOUT_MS: u64 = 15_000;
+pub const MAX_TASK_LEASE_DURATION_MS: u64 = 86_400_000;
 pub const EXTENSION_HOST_GROUP: &str = "extension-host";
+pub const APP_SERVICE_HOST_GROUP: &str = "app-service-host";
 pub const BROKER_SOCKET_ENV: &str = "COS_EXTENSION_BROKER_SOCKET";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum HostPurpose {
+    Task,
+    AppService,
+}
+
+impl HostPurpose {
+    pub const fn group(self) -> &'static str {
+        match self {
+            Self::Task => EXTENSION_HOST_GROUP,
+            Self::AppService => APP_SERVICE_HOST_GROUP,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -42,19 +61,26 @@ pub struct ApprovedPath {
 #[serde(deny_unknown_fields)]
 pub struct HostBootstrap {
     pub protocol: u32,
+    pub purpose: HostPurpose,
     pub task_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_id: Option<String>,
     pub owner_uid: u32,
     pub extension_uid: u32,
     pub execution_gid: u32,
     pub enforce_groups: bool,
-    pub worker_pid: u32,
+    pub controller_uid: u32,
+    pub controller_gid: u32,
+    pub controller_pid: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub worker_start_time_ticks: Option<u64>,
+    pub controller_start_time_ticks: Option<u64>,
     pub lease_nonce: String,
     pub expires_at_ms: u64,
     pub capability_generation: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<PackageRef>,
     pub control_socket: String,
     pub broker_socket: String,
     pub approved_paths: Vec<ApprovedPath>,
@@ -82,26 +108,32 @@ impl HostBootstrap {
         if crate::agentd::grant::now_ms() > self.expires_at_ms {
             return Err("extension-host bootstrap lease has expired".to_string());
         }
-        let Some(worker_start_time_ticks) = self.worker_start_time_ticks else {
-            return Err("extension-host bootstrap omitted worker start time".to_string());
+        let Some(controller_start_time_ticks) = self.controller_start_time_ticks else {
+            return Err("extension-host bootstrap omitted controller start time".to_string());
         };
-        if crate::proc::read_start_time_ticks_pub(self.worker_pid) != Some(worker_start_time_ticks)
+        if crate::proc::read_start_time_ticks_pub(self.controller_pid)
+            != Some(controller_start_time_ticks)
         {
-            return Err("extension-host bootstrap worker identity is stale".to_string());
+            return Err("extension-host bootstrap controller identity is stale".to_string());
         }
         let host_pid = std::process::id();
         let binding = ExtensionBinding {
             protocol: self.protocol,
+            purpose: self.purpose,
             task_id: self.task_id,
             session_id: self.session_id,
+            app_id: self.app_id,
             owner_uid: self.owner_uid,
             extension_uid: self.extension_uid,
             owner_gid: self.execution_gid,
             capability_generation: self.capability_generation,
+            package: self.package,
             approved_paths: self.approved_paths,
             agent_extensions: self.agent_extensions,
-            worker_pid: self.worker_pid,
-            worker_start_time_ticks: self.worker_start_time_ticks,
+            controller_uid: self.controller_uid,
+            controller_gid: self.controller_gid,
+            controller_pid: self.controller_pid,
+            controller_start_time_ticks: self.controller_start_time_ticks,
             host_pid,
             host_start_time_ticks: crate::proc::read_start_time_ticks_pub(host_pid),
             lease_nonce: self.lease_nonce,
@@ -203,6 +235,72 @@ impl McpInvocationAudit {
             return Err("MCP invocation audit identity is invalid".to_string());
         }
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppInvocationAudit {
+    pub app_id: String,
+    pub tool: String,
+    pub invoke_target: String,
+    pub capability_generation: String,
+    pub context: crate::agent::tools::app_gateway::McpCallContext,
+}
+
+impl AppInvocationAudit {
+    pub fn new(
+        app_id: impl Into<String>,
+        tool: impl Into<String>,
+        capability_generation: impl Into<String>,
+        context: crate::agent::tools::app_gateway::McpCallContext,
+    ) -> Result<Self, String> {
+        let app_id = app_id.into();
+        let tool = tool.into();
+        let invocation = Self {
+            invoke_target: crate::agent::tools::app_gateway::invoke_target(&app_id, &tool)?,
+            app_id,
+            tool,
+            capability_generation: capability_generation.into(),
+            context,
+        };
+        invocation.validate_shape()?;
+        Ok(invocation)
+    }
+
+    pub fn validate_shape(&self) -> Result<(), String> {
+        if self.invoke_target
+            != crate::agent::tools::app_gateway::invoke_target(&self.app_id, &self.tool)?
+            || self.capability_generation.len() != 16
+            || !self
+                .capability_generation
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            return Err("App invocation audit target is invalid".to_string());
+        }
+        self.context.validate()
+    }
+
+    pub fn validate_live_binding(&self, binding: &ExtensionBinding) -> Result<(), String> {
+        self.validate_shape()?;
+        if binding.purpose != HostPurpose::Task {
+            return Err("App invocation audit requires a task extension host".to_string());
+        }
+        if self.capability_generation != binding.capability_generation {
+            return Err("App invocation used a substituted capability generation".to_string());
+        }
+        self.context.validate_extension_runtime_binding(binding)
+    }
+
+    pub fn validate_audit_binding(&self, binding: &ExtensionBinding) -> Result<(), String> {
+        self.validate_shape()?;
+        if self.capability_generation != binding.capability_generation {
+            return Err(
+                "App invocation audit used a substituted capability generation".to_string(),
+            );
+        }
+        self.context.validate_extension_audit_binding(binding)
     }
 }
 
@@ -365,19 +463,26 @@ impl AgentExtensionAudit {
 #[serde(deny_unknown_fields)]
 pub struct ExtensionBinding {
     pub protocol: u32,
+    pub purpose: HostPurpose,
     pub task_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_id: Option<String>,
     pub owner_uid: u32,
     pub extension_uid: u32,
     pub owner_gid: u32,
     pub capability_generation: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<PackageRef>,
     pub approved_paths: Vec<ApprovedPath>,
     #[serde(default)]
     pub agent_extensions: Vec<crate::provenance::verify::PackageVerificationReceipt>,
-    pub worker_pid: u32,
+    pub controller_uid: u32,
+    pub controller_gid: u32,
+    pub controller_pid: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub worker_start_time_ticks: Option<u64>,
+    pub controller_start_time_ticks: Option<u64>,
     pub host_pid: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_start_time_ticks: Option<u64>,
@@ -396,7 +501,7 @@ impl ExtensionBinding {
             ));
         }
         if self.task_id.is_empty() || self.task_id.len() > 128 {
-            return Err("extension-host binding has an invalid task id".to_string());
+            return Err("extension-host binding has an invalid lease id".to_string());
         }
         if self
             .session_id
@@ -405,15 +510,27 @@ impl ExtensionBinding {
         {
             return Err("extension-host binding has an invalid session id".to_string());
         }
+        if self.app_id.as_deref().is_some_and(|value| {
+            let mut bytes = value.bytes();
+            value.len() > 128
+                || !bytes.next().is_some_and(|byte| byte.is_ascii_lowercase())
+                || !bytes.all(|byte| {
+                    byte.is_ascii_lowercase()
+                        || byte.is_ascii_digit()
+                        || matches!(byte, b'_' | b'-')
+                })
+        }) {
+            return Err("extension-host binding has an invalid App id".to_string());
+        }
         if self.owner_uid == 0
             || self.extension_uid == 0
             || self.extension_uid == self.owner_uid
             || (61_000..=61_063).contains(&self.owner_uid)
             || !(61_000..=61_063).contains(&self.extension_uid)
             || self.owner_gid == 0
-            || self.worker_pid <= 1
+            || self.controller_pid <= 1
             || self.host_pid <= 1
-            || self.worker_start_time_ticks.is_none()
+            || self.controller_start_time_ticks.is_none()
             || self.host_start_time_ticks.is_none()
         {
             return Err("extension-host binding names a privileged or invalid process".to_string());
@@ -428,6 +545,32 @@ impl ExtensionBinding {
         }
         if self.control_socket.is_empty() || self.broker_socket.is_empty() {
             return Err("extension-host binding omitted a channel path".to_string());
+        }
+        match self.purpose {
+            HostPurpose::Task => {
+                if self.controller_uid != self.owner_uid
+                    || self.controller_gid != self.owner_gid
+                    || self.package.is_some()
+                {
+                    return Err("task extension-host binding has an invalid controller".to_string());
+                }
+            }
+            HostPurpose::AppService => {
+                let Some(package) = self.package.as_ref() else {
+                    return Err(
+                        "App service extension-host binding omitted package identity".to_string(),
+                    );
+                };
+                if self.controller_uid != 0
+                    || self.session_id.is_none()
+                    || self.app_id.as_deref() != Some(package.id.as_str())
+                {
+                    return Err(
+                        "App service extension-host binding has an invalid controller or package"
+                            .to_string(),
+                    );
+                }
+            }
         }
         if self.capability_generation.len() != 16
             || !self
@@ -469,12 +612,43 @@ impl ExtensionBinding {
         Ok(crate::crypto::sha256_hex(&bytes))
     }
 
-    pub fn validate_worker(&self, pid: u32, start_time_ticks: Option<u64>) -> Result<(), String> {
+    pub fn validate_controller(
+        &self,
+        uid: u32,
+        gid: u32,
+        pid: u32,
+        start_time_ticks: Option<u64>,
+    ) -> Result<(), String> {
         self.validate_shape()?;
-        if self.worker_pid != pid || self.worker_start_time_ticks != start_time_ticks {
-            return Err("extension-host binding belongs to a different worker".to_string());
+        if self.controller_uid != uid
+            || self.controller_gid != gid
+            || self.controller_pid != pid
+            || self.controller_start_time_ticks != start_time_ticks
+        {
+            return Err("extension-host binding belongs to a different controller".to_string());
         }
         Ok(())
+    }
+
+    pub fn validate_fresh_controller(
+        &self,
+        uid: u32,
+        gid: u32,
+        pid: u32,
+        start_time_ticks: Option<u64>,
+    ) -> Result<(), String> {
+        self.validate_controller(uid, gid, pid, start_time_ticks)?;
+        if crate::agentd::grant::now_ms() > self.expires_at_ms {
+            return Err("extension-host binding lease has expired".to_string());
+        }
+        Ok(())
+    }
+
+    pub fn validate_worker(&self, pid: u32, start_time_ticks: Option<u64>) -> Result<(), String> {
+        if self.purpose != HostPurpose::Task {
+            return Err("App service extension host cannot be used as a task host".to_string());
+        }
+        self.validate_controller(self.owner_uid, self.owner_gid, pid, start_time_ticks)
     }
 
     pub fn validate_fresh_worker(
@@ -482,11 +656,10 @@ impl ExtensionBinding {
         pid: u32,
         start_time_ticks: Option<u64>,
     ) -> Result<(), String> {
-        self.validate_worker(pid, start_time_ticks)?;
-        if crate::agentd::grant::now_ms() > self.expires_at_ms {
-            return Err("extension-host binding lease has expired".to_string());
+        if self.purpose != HostPurpose::Task {
+            return Err("App service extension host cannot be used as a task host".to_string());
         }
-        Ok(())
+        self.validate_fresh_controller(self.owner_uid, self.owner_gid, pid, start_time_ticks)
     }
 
     pub fn validate_host(&self, pid: u32, start_time_ticks: Option<u64>) -> Result<(), String> {
@@ -542,16 +715,23 @@ pub enum HostAction {
         #[serde(default)]
         args: Vec<String>,
     },
-    AppOpen {
-        app_id: String,
-    },
     AppCall {
         app_id: String,
         tool: String,
         #[serde(default)]
         arguments: Value,
+        audit: AppInvocationAudit,
     },
-    AppClose {
+    AuthorizedAppCall {
+        app_id: String,
+        tool: String,
+        #[serde(default)]
+        arguments: Value,
+        authorized_mounts: Vec<crate::worker::AuthorizedMount>,
+        authorization: String,
+        context: crate::agent::tools::app_gateway::McpCallContext,
+    },
+    WarmApp {
         app_id: String,
     },
     McpAttach {
@@ -673,15 +853,10 @@ pub enum HostResult {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output: Option<String>,
     },
-    AppOpened {
-        tool_count: usize,
-    },
     AppCall {
         value: CallToolResult,
     },
-    AppClosed {
-        closed: bool,
-    },
+    AppWarmed,
     McpAttached {
         tools: Vec<ToolDescriptor>,
     },

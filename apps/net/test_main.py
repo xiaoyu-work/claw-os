@@ -52,22 +52,15 @@ def test_repeatable_inline_headers_reach_argparse_in_order():
     assert parsed.header == ["A: 1", "--urgent", "B: 2"]
 
 
-def test_download_accepts_output_flag_alias_and_rejects_conflicts():
+def test_download_requires_canonical_positional_output():
     parsed = main._build_download_parser().parse_args(
-        ["https://example.test/file", "--output", "/workspace/file"]
+        ["https://example.test/file", "/workspace/file"]
     )
-    assert parsed.output is None
-    assert parsed.output_alias == "/workspace/file"
-    result = main.run(
-        "download",
-        [
-            "https://example.test/file",
-            "/workspace/a",
-            "--output",
-            "/workspace/b",
-        ],
-    )
-    assert "both positional and --output" in result["error"]
+    assert parsed.output == "/workspace/file"
+    with pytest.raises(SystemExit):
+        main._build_download_parser().parse_args(
+            ["https://example.test/file", "--output", "/workspace/file"]
+        )
 
 
 def _run_download(response, destination):
@@ -149,7 +142,7 @@ def test_exact_size_limit_is_successful(tmp_path):
     _assert_only_destination(tmp_path, destination)
 
 
-def test_download_accepts_bridge_bound_positional_output(tmp_path):
+def test_download_accepts_explicit_positional_output(tmp_path):
     destination = tmp_path / "bound.bin"
     response = _Response(b"bound")
 
@@ -168,8 +161,8 @@ def test_download_accepts_bridge_bound_positional_output(tmp_path):
     assert destination.read_bytes() == b"bound"
 
 
-def test_download_requires_bridge_bound_output():
-    with pytest.raises(ValueError, match="not bound"):
+def test_download_requires_explicit_output():
+    with pytest.raises(SystemExit):
         main.cmd_download(["https://example.com/file"])
 
 

@@ -23,13 +23,10 @@ class IsGuiLaunchTests(unittest.TestCase):
     def test_env_flag_detected(self) -> None:
         os.environ["COS_APP_GUI"] = "1"
         self.assertTrue(gui.is_gui_launch())
-        self.assertTrue(gui.is_gui_launch("anything"))
 
-    def test_command_fallback(self) -> None:
+    def test_command_does_not_replace_host_context(self) -> None:
         os.environ.pop("COS_APP_GUI", None)
-        self.assertTrue(gui.is_gui_launch("--gui"))
-        self.assertFalse(gui.is_gui_launch("create"))
-        self.assertFalse(gui.is_gui_launch(None))
+        self.assertFalse(gui.is_gui_launch())
 
 
 class ContextTests(unittest.TestCase):
@@ -59,18 +56,23 @@ class ContextTests(unittest.TestCase):
         ctx = gui.context()
         self.assertEqual(ctx.files, ["/tmp/x.md", "/tmp/y.md"])
 
-    def test_missing_app_id_defaults_to_unknown(self) -> None:
+    def test_missing_app_id_is_rejected(self) -> None:
         os.environ.pop("COS_APP_ID", None)
         os.environ.pop("COS_ARGS_JSON", None)
-        ctx = gui.context()
-        self.assertEqual(ctx.app_id, "unknown")
-        self.assertEqual(ctx.files, [])
+        with self.assertRaisesRegex(ValueError, "COS_APP_ID"):
+            gui.context()
 
-    def test_malformed_args_json_is_ignored(self) -> None:
+    def test_malformed_args_json_is_rejected(self) -> None:
         os.environ["COS_APP_ID"] = "notes"
         os.environ["COS_ARGS_JSON"] = "not-json"
-        ctx = gui.context()
-        self.assertEqual(ctx.files, [])
+        with self.assertRaisesRegex(ValueError, "valid JSON"):
+            gui.context()
+
+    def test_non_string_file_is_rejected(self) -> None:
+        os.environ["COS_APP_ID"] = "notes"
+        os.environ["COS_ARGS_JSON"] = '["/tmp/x.md", 7]'
+        with self.assertRaisesRegex(ValueError, "array of strings"):
+            gui.context()
 
 
 class OverlayTests(unittest.TestCase):

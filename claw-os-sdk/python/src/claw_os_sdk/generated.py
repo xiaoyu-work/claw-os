@@ -92,10 +92,8 @@ class AiToolCall(TypedDict):
 class App(TypedDict, total=False):
     """App-verb invocation reply.
 
-    Reply shape for `cos app <id> <verb> [args]`. The payload is the verb's own
-    JSON output — what schema you get depends on which verb you called. The
-    kernel guarantees only that the body is valid JSON (or stderr-routed when
-    stdout would be ambiguous).
+    Success data for `cos --wire=1 app <id> <verb> [args]`. The kernel places
+    the operation-specific object under the wire envelope's `data` field.
     """
     verb: str
     app: str
@@ -116,9 +114,7 @@ class _EnvelopeRequired(TypedDict):
 class Envelope(_EnvelopeRequired, total=False):
     """Envelope.
 
-    Common wrapper around every wire v1 reply. Forward-compatible target shape —
-    the current kernel still emits flat per-command shapes that SDKs adapt to
-    this envelope.
+    Common wrapper around every wire v1 reply requested with `cos --wire=1`.
     """
     audit_id: str
     data: Dict[str, Any]
@@ -134,18 +130,18 @@ class _ManifestRequired(TypedDict):
 class Manifest(_ManifestRequired, total=False):
     """App manifest (app.json).
 
-    The manifest every app under COS_APPS_DIR must provide. The kernel parses
-    and validates this (core/src/caps/manifest.rs) to derive the app's
-    operations, optional MCP session tools, optional desktop GUI surface,
-    capability needs, and AI policy.
+    The manifest every app under COS_APPS_DIR must provide. MCP Apps declare one
+    versioned service with tools, lifecycle, caller restrictions, capability
+    needs, and optional AI and desktop surfaces.
     """
+    schema_version: int
     summary: "Localizedtext"
     icon: str
     runtime: str
     entry: str
     operations: Dict[str, Any]
     ai: "Aipolicy"
-    session: "Session"
+    mcp: "Mcpservice"
     desktop: "Desktop"
     dependencies: Dict[str, Any]
 
@@ -181,12 +177,8 @@ class Arg(_ArgRequired, total=False):
     required: bool
     required_when: "Needcondition"
     repeatable: bool
-    aliases: List[str]
-    positional_alias: bool
     choices: List[Any]
     default: Any
-    default_from: "Argdefaultbinding"
-    trusted_resolver: str
     label: "Localizedtext"
 
 class Positionalarg(TypedDict, total=False):
@@ -199,25 +191,10 @@ class Optionalpositionalgap(TypedDict, total=False):
     """
     pass
 
-class Optionalpositional(TypedDict, total=False):
-    """optionalPositional.
-    """
-    pass
-
 class Defaultedpositional(TypedDict, total=False):
     """defaultedPositional.
     """
     pass
-
-class _ArgdefaultbindingRequired(TypedDict):
-    arg: str
-
-class Argdefaultbinding(_ArgdefaultbindingRequired, total=False):
-    """argDefaultBinding.
-    """
-    transform: str
-    prefix: str
-    fallback: str
 
 class _NeedRequired(TypedDict):
     verb: str
@@ -285,27 +262,41 @@ class Aibudget(TypedDict, total=False):
     """
     monthly_units: int
 
-class Session(TypedDict, total=False):
-    """session.
+class _McpserviceRequired(TypedDict):
+    tools: List["Mcptool"]
+
+class Mcpservice(_McpserviceRequired, total=False):
+    """mcpService.
 
     Long-lived MCP server the app launches for stateful, agent-driven tool
     calls.
     """
     entry: str
     transport: str
-    tools: List["Sessiontool"]
+    lifecycle: str
+    access: "Mcpaccess"
 
-class _SessiontoolRequired(TypedDict):
+class Mcpaccess(TypedDict, total=False):
+    """mcpAccess.
+
+    Caller restrictions for an MCP App service. Callers still require exact
+    invoke authority.
+    """
+    system_agent: bool
+    apps: List[str]
+    external_agents: bool
+
+class _McptoolRequired(TypedDict):
     name: str
     summary: "Localizedtext"
 
-class Sessiontool(_SessiontoolRequired, total=False):
-    """sessionTool.
+class Mcptool(_McptoolRequired, total=False):
+    """mcpTool.
 
     One MCP-callable tool. Mirrors operation: args + needs drive the model's
     view and the kernel's enforcement.
     """
-    args: List["Arg"]
+    args: List[Any]
     needs: List["Need"]
 
 class Desktop(TypedDict, total=False):
@@ -321,6 +312,35 @@ class Desktop(TypedDict, total=False):
     mime_types: List[str]
     single_instance: bool
     panel_applet: bool
+
+class _McpCallContextRequired(TypedDict):
+    wire_version: int
+    call_id: str
+    trace_id: str
+    depth: int
+    caller: "McpPrincipal"
+
+class McpCallContext(_McpCallContextRequired, total=False):
+    """MCP call context.
+
+    Authenticated call identity and lineage injected by the Claw MCP Gateway
+    over the private App-host transport. Caller-supplied MCP arguments must
+    never populate this object.
+    """
+    parent_call_id: str
+    deadline_unix_ms: int
+    session_id: str
+    task_id: str
+
+class _McpPrincipalRequired(TypedDict):
+    kind: str
+    id: str
+    owner_uid: int
+
+class McpPrincipal(_McpPrincipalRequired, total=False):
+    """McpPrincipal.
+    """
+    app_id: str
 
 class _PermsRequired(TypedDict):
     decision: str
@@ -411,9 +431,12 @@ class WireDecodeError(ValueError):
 
 WIRE_CONST = "WIRE_CONST"
 WIRE_ENUM = "WIRE_ENUM"
+WIRE_MAX_LENGTH = "WIRE_MAX_LENGTH"
 WIRE_MAXIMUM = "WIRE_MAXIMUM"
+WIRE_MIN_LENGTH = "WIRE_MIN_LENGTH"
 WIRE_MINIMUM = "WIRE_MINIMUM"
 WIRE_ONE_OF = "WIRE_ONE_OF"
+WIRE_PATTERN = "WIRE_PATTERN"
 WIRE_REQUIRED = "WIRE_REQUIRED"
 WIRE_TYPE = "WIRE_TYPE"
 WIRE_UNKNOWN_FIELD = "WIRE_UNKNOWN_FIELD"
@@ -658,6 +681,19 @@ def _validate_wire_schema(
     allowed = rule.get("enum")
     if isinstance(allowed, list) and value not in allowed:
         raise _wire_error(WIRE_ENUM, schema_name, path, "value is not in the allowed enum")
+    if isinstance(value, str):
+        minimum_length = rule.get("minLength")
+        if isinstance(minimum_length, int) and len(value) < minimum_length:
+            raise _wire_error(WIRE_MIN_LENGTH, schema_name, path, f"length must be >= {minimum_length}")
+        maximum_length = rule.get("maxLength")
+        if isinstance(maximum_length, int) and len(value) > maximum_length:
+            raise _wire_error(WIRE_MAX_LENGTH, schema_name, path, f"length must be <= {maximum_length}")
+        pattern = rule.get("pattern")
+        if isinstance(pattern, str):
+            match = re.search(pattern, value)
+            full_match = rule.get("x-full-match") is True
+            if match is None or (full_match and match.span() != (0, len(value))):
+                raise _wire_error(WIRE_PATTERN, schema_name, path, "string does not match pattern")
     if integer is not None:
         minimum = rule.get("minimum")
         minimum_integer = _exact_integer(minimum)
@@ -704,6 +740,18 @@ _WIRE_SCHEMA_BUDGET_SHOW: Dict[str, Any] = decode_wire_json(r'''{"$id":"https://
 def validate_budget_show(value: Any) -> None:
     """Validate a value against wire/v1/budget_show.schema.json."""
     _validate_wire_schema(_WIRE_SCHEMA_BUDGET_SHOW, _WIRE_SCHEMA_BUDGET_SHOW, value, "BudgetShow", "$")
+
+_WIRE_SCHEMA_ENVELOPE: Dict[str, Any] = decode_wire_json(r'''{"$id":"https://claw-os.dev/wire/v1/envelope.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"description":"Common wrapper around every wire v1 reply requested with `cos --wire=1`.","oneOf":[{"additionalProperties":false,"properties":{"audit_id":{"type":"string"},"data":{"type":"object"},"ok":{"const":true},"wire_version":{"const":1,"type":"integer"}},"required":["ok","wire_version","data"],"type":"object"},{"additionalProperties":false,"properties":{"audit_id":{"type":"string"},"code":{"minLength":1,"type":"string"},"detail":{"type":"object"},"error":{"minLength":1,"type":"string"},"ok":{"const":false},"wire_version":{"const":1,"type":"integer"}},"required":["ok","wire_version","error","code"],"type":"object"}],"properties":{"audit_id":{"description":"Audit log entry id (ULID).","type":"string"},"code":{"description":"Stable error code from wire/v1/error_codes.md.","minLength":1,"type":"string"},"data":{"description":"Request-specific success payload. See the per-family schema for shape.","type":"object"},"detail":{"description":"Request-specific error payload.","type":"object"},"error":{"description":"Human-readable error summary. Present only when ok is false.","minLength":1,"type":"string"},"ok":{"description":"true iff the kernel accepted and dispatched the call.","type":"boolean"},"wire_version":{"const":1,"type":"integer"}},"required":["ok","wire_version"],"title":"Envelope","type":"object"}''')
+
+def validate_envelope(value: Any) -> None:
+    """Validate a value against wire/v1/envelope.schema.json."""
+    _validate_wire_schema(_WIRE_SCHEMA_ENVELOPE, _WIRE_SCHEMA_ENVELOPE, value, "Envelope", "$")
+
+_WIRE_SCHEMA_MCP_CALL_CONTEXT: Dict[str, Any] = decode_wire_json(r'''{"$defs":{"McpPrincipal":{"additionalProperties":false,"properties":{"app_id":{"pattern":"^[a-z][a-z0-9_-]*$","type":"string","x-full-match":true},"id":{"maxLength":256,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$","type":"string","x-full-match":true},"kind":{"enum":["system-agent","app","app-agent","external-agent","cli"],"type":"string"},"owner_uid":{"maximum":4294967295,"minimum":0,"type":"integer"}},"required":["kind","id","owner_uid"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/mcp_call_context.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"description":"Authenticated call identity and lineage injected by the Claw MCP Gateway over the private App-host transport. Caller-supplied MCP arguments must never populate this object.","properties":{"call_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$","type":"string","x-full-match":true},"caller":{"$ref":"#/$defs/McpPrincipal"},"deadline_unix_ms":{"maximum":9007199254740991,"minimum":1,"type":"integer"},"depth":{"maximum":16,"minimum":0,"type":"integer"},"parent_call_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$","type":"string","x-full-match":true},"session_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$","type":"string","x-full-match":true},"task_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$","type":"string","x-full-match":true},"trace_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$","type":"string","x-full-match":true},"wire_version":{"const":1,"maximum":1,"minimum":1,"type":"integer"}},"required":["wire_version","call_id","trace_id","depth","caller"],"title":"MCP call context","type":"object"}''')
+
+def validate_mcp_call_context(value: Any) -> None:
+    """Validate a value against wire/v1/mcp_call_context.schema.json."""
+    _validate_wire_schema(_WIRE_SCHEMA_MCP_CALL_CONTEXT, _WIRE_SCHEMA_MCP_CALL_CONTEXT, value, "McpCallContext", "$")
 
 _WIRE_SCHEMA_TOOL_CATALOG: Dict[str, Any] = decode_wire_json(r'''{"$defs":{"WireCatalogEntry":{"additionalProperties":true,"properties":{"args_schema":{"additionalProperties":true,"type":"object"},"name":{"type":"string"},"returns_schema":{"additionalProperties":true,"type":"object"},"stability":{"enum":["stable","experimental"],"type":"string"},"summary":{"type":"string"},"verb":{"type":"string"}},"required":["name","summary","verb","stability","args_schema","returns_schema"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/tool_catalog.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Shape returned by `cos ai tools`.","properties":{"tools":{"items":{"$ref":"#/$defs/WireCatalogEntry"},"type":"array"}},"required":["tools"],"title":"Catalog tool list reply","type":"object"}''')
 

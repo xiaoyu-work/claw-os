@@ -64,10 +64,8 @@ export interface AiToolCall {
 
 /**
  * App-verb invocation reply.
- * Reply shape for `cos app <id> <verb> [args]`. The payload is the verb's own
- * JSON output — what schema you get depends on which verb you called. The
- * kernel guarantees only that the body is valid JSON (or stderr-routed when
- * stdout would be ambiguous).
+ * Success data for `cos --wire=1 app <id> <verb> [args]`. The kernel places
+ * the operation-specific object under the wire envelope's `data` field.
  */
 export interface App {
   verb?: string;
@@ -86,9 +84,7 @@ export interface BudgetShow {
 
 /**
  * Envelope.
- * Common wrapper around every wire v1 reply. Forward-compatible target shape —
- * the current kernel still emits flat per-command shapes that SDKs adapt to
- * this envelope.
+ * Common wrapper around every wire v1 reply requested with `cos --wire=1`.
  */
 export interface Envelope {
   ok: boolean;
@@ -102,14 +98,14 @@ export interface Envelope {
 
 /**
  * App manifest (app.json).
- * The manifest every app under COS_APPS_DIR must provide. The kernel parses
- * and validates this (core/src/caps/manifest.rs) to derive the app's
- * operations, optional MCP session tools, optional desktop GUI surface,
- * capability needs, and AI policy.
+ * The manifest every app under COS_APPS_DIR must provide. MCP Apps declare one
+ * versioned service with tools, lifecycle, caller restrictions, capability
+ * needs, and optional AI and desktop surfaces.
  */
 export interface Manifest {
   id: string;
   version: string;
+  schema_version?: 2;
   name: Localizedtext;
   summary?: Localizedtext;
   icon?: string;
@@ -117,7 +113,7 @@ export interface Manifest {
   entry?: string;
   operations?: Record<string, unknown>;
   ai?: Aipolicy;
-  session?: Session;
+  mcp?: Mcpservice;
   desktop?: Desktop;
   dependencies?: Record<string, unknown>;
 }
@@ -153,12 +149,8 @@ export interface Arg {
   required?: boolean;
   required_when?: Needcondition;
   repeatable?: boolean;
-  aliases?: string[];
-  positional_alias?: boolean;
   choices?: unknown[];
   default?: unknown;
-  default_from?: Argdefaultbinding;
-  trusted_resolver?: "email-provider" | "email-host" | "calendar-provider" | "ntfy-server";
   label?: Localizedtext;
 }
 
@@ -175,25 +167,9 @@ export interface Optionalpositionalgap {
 }
 
 /**
- * optionalPositional.
- */
-export interface Optionalpositional {
-}
-
-/**
  * defaultedPositional.
  */
 export interface Defaultedpositional {
-}
-
-/**
- * argDefaultBinding.
- */
-export interface Argdefaultbinding {
-  arg: string;
-  transform?: "identity" | "url-path-basename";
-  prefix?: string;
-  fallback?: string;
 }
 
 /**
@@ -261,25 +237,38 @@ export interface Aibudget {
 }
 
 /**
- * session.
+ * mcpService.
  * Long-lived MCP server the app launches for stateful, agent-driven tool
  * calls.
  */
-export interface Session {
+export interface Mcpservice {
   entry?: string;
   transport?: "stdio";
-  tools?: Sessiontool[];
+  lifecycle?: "lazy" | "always-on" | "while-app-running";
+  access?: Mcpaccess;
+  tools: Mcptool[];
 }
 
 /**
- * sessionTool.
+ * mcpAccess.
+ * Caller restrictions for an MCP App service. Callers still require exact
+ * invoke authority.
+ */
+export interface Mcpaccess {
+  system_agent?: boolean;
+  apps?: string[];
+  external_agents?: boolean;
+}
+
+/**
+ * mcpTool.
  * One MCP-callable tool. Mirrors operation: args + needs drive the model's
  * view and the kernel's enforcement.
  */
-export interface Sessiontool {
+export interface Mcptool {
   name: string;
   summary: Localizedtext;
-  args?: Arg[];
+  args?: unknown[];
   needs?: Need[];
 }
 
@@ -296,6 +285,34 @@ export interface Desktop {
   mime_types?: string[];
   single_instance?: boolean;
   panel_applet?: boolean;
+}
+
+/**
+ * MCP call context.
+ * Authenticated call identity and lineage injected by the Claw MCP Gateway
+ * over the private App-host transport. Caller-supplied MCP arguments must
+ * never populate this object.
+ */
+export interface McpCallContext {
+  wire_version: 1;
+  call_id: string;
+  trace_id: string;
+  parent_call_id?: string;
+  depth: number;
+  deadline_unix_ms?: number;
+  session_id?: string;
+  task_id?: string;
+  caller: McpPrincipal;
+}
+
+/**
+ * McpPrincipal.
+ */
+export interface McpPrincipal {
+  kind: "system-agent" | "app" | "app-agent" | "external-agent" | "cli";
+  id: string;
+  owner_uid: number;
+  app_id?: string;
 }
 
 /**
@@ -358,9 +375,12 @@ export class WireDecodeError extends Error {
 
 export const WIRE_CONST = "WIRE_CONST" as const;
 export const WIRE_ENUM = "WIRE_ENUM" as const;
+export const WIRE_MAX_LENGTH = "WIRE_MAX_LENGTH" as const;
 export const WIRE_MAXIMUM = "WIRE_MAXIMUM" as const;
+export const WIRE_MIN_LENGTH = "WIRE_MIN_LENGTH" as const;
 export const WIRE_MINIMUM = "WIRE_MINIMUM" as const;
 export const WIRE_ONE_OF = "WIRE_ONE_OF" as const;
+export const WIRE_PATTERN = "WIRE_PATTERN" as const;
 export const WIRE_REQUIRED = "WIRE_REQUIRED" as const;
 export const WIRE_TYPE = "WIRE_TYPE" as const;
 export const WIRE_UNKNOWN_FIELD = "WIRE_UNKNOWN_FIELD" as const;
@@ -545,6 +565,25 @@ function validateWireSchema(
   if (Array.isArray(allowed) && !allowed.some((entry) => Object.is(entry, value))) {
     throw wireError(WIRE_ENUM, schemaName, path, "value is not in the allowed enum");
   }
+  if (typeof value === "string") {
+    const minimumLength = rule["minLength"];
+    const length = Array.from(value).length;
+    if (typeof minimumLength === "number" && length < minimumLength) {
+      throw wireError(WIRE_MIN_LENGTH, schemaName, path, `length must be >= ${minimumLength}`);
+    }
+    const maximumLength = rule["maxLength"];
+    if (typeof maximumLength === "number" && length > maximumLength) {
+      throw wireError(WIRE_MAX_LENGTH, schemaName, path, `length must be <= ${maximumLength}`);
+    }
+    const pattern = rule["pattern"];
+    if (typeof pattern === "string") {
+      const match = new RegExp(pattern, "u").exec(value);
+      const fullMatch = rule["x-full-match"] === true;
+      if (match === null || (fullMatch && (match.index !== 0 || match[0].length !== value.length))) {
+        throw wireError(WIRE_PATTERN, schemaName, path, "string does not match pattern");
+      }
+    }
+  }
   if (numberLexeme !== undefined) {
     const minimum = rule["minimum"];
     const minimumLexeme = wireNumberLexeme(minimum);
@@ -653,6 +692,28 @@ export function validateBudgetShow(value: unknown): asserts value is BudgetShow 
 
 export function normalizeBudgetShowIntegers(value: unknown): void {
   normalizeWireIntegers(_WIRE_SCHEMA_BUDGET_SHOW, _WIRE_SCHEMA_BUDGET_SHOW, value);
+}
+
+const _WIRE_SCHEMA_ENVELOPE: WireRule = decodeWireJson("{\"$id\":\"https://claw-os.dev/wire/v1/envelope.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":\"Common wrapper around every wire v1 reply requested with `cos --wire=1`.\",\"oneOf\":[{\"additionalProperties\":false,\"properties\":{\"audit_id\":{\"type\":\"string\"},\"data\":{\"type\":\"object\"},\"ok\":{\"const\":true},\"wire_version\":{\"const\":1,\"type\":\"integer\"}},\"required\":[\"ok\",\"wire_version\",\"data\"],\"type\":\"object\"},{\"additionalProperties\":false,\"properties\":{\"audit_id\":{\"type\":\"string\"},\"code\":{\"minLength\":1,\"type\":\"string\"},\"detail\":{\"type\":\"object\"},\"error\":{\"minLength\":1,\"type\":\"string\"},\"ok\":{\"const\":false},\"wire_version\":{\"const\":1,\"type\":\"integer\"}},\"required\":[\"ok\",\"wire_version\",\"error\",\"code\"],\"type\":\"object\"}],\"properties\":{\"audit_id\":{\"description\":\"Audit log entry id (ULID).\",\"type\":\"string\"},\"code\":{\"description\":\"Stable error code from wire/v1/error_codes.md.\",\"minLength\":1,\"type\":\"string\"},\"data\":{\"description\":\"Request-specific success payload. See the per-family schema for shape.\",\"type\":\"object\"},\"detail\":{\"description\":\"Request-specific error payload.\",\"type\":\"object\"},\"error\":{\"description\":\"Human-readable error summary. Present only when ok is false.\",\"minLength\":1,\"type\":\"string\"},\"ok\":{\"description\":\"true iff the kernel accepted and dispatched the call.\",\"type\":\"boolean\"},\"wire_version\":{\"const\":1,\"type\":\"integer\"}},\"required\":[\"ok\",\"wire_version\"],\"title\":\"Envelope\",\"type\":\"object\"}") as WireRule;
+
+export function validateEnvelope(value: unknown): asserts value is Envelope & Record<string, unknown> {
+  validateWireSchema(_WIRE_SCHEMA_ENVELOPE, _WIRE_SCHEMA_ENVELOPE, value, "Envelope", "$");
+  normalizeWireIntegers(_WIRE_SCHEMA_ENVELOPE, _WIRE_SCHEMA_ENVELOPE, value);
+}
+
+export function normalizeEnvelopeIntegers(value: unknown): void {
+  normalizeWireIntegers(_WIRE_SCHEMA_ENVELOPE, _WIRE_SCHEMA_ENVELOPE, value);
+}
+
+const _WIRE_SCHEMA_MCP_CALL_CONTEXT: WireRule = decodeWireJson("{\"$defs\":{\"McpPrincipal\":{\"additionalProperties\":false,\"properties\":{\"app_id\":{\"pattern\":\"^[a-z][a-z0-9_-]*$\",\"type\":\"string\",\"x-full-match\":true},\"id\":{\"maxLength\":256,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$\",\"type\":\"string\",\"x-full-match\":true},\"kind\":{\"enum\":[\"system-agent\",\"app\",\"app-agent\",\"external-agent\",\"cli\"],\"type\":\"string\"},\"owner_uid\":{\"maximum\":4294967295,\"minimum\":0,\"type\":\"integer\"}},\"required\":[\"kind\",\"id\",\"owner_uid\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/mcp_call_context.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":\"Authenticated call identity and lineage injected by the Claw MCP Gateway over the private App-host transport. Caller-supplied MCP arguments must never populate this object.\",\"properties\":{\"call_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:-]*$\",\"type\":\"string\",\"x-full-match\":true},\"caller\":{\"$ref\":\"#/$defs/McpPrincipal\"},\"deadline_unix_ms\":{\"maximum\":9007199254740991,\"minimum\":1,\"type\":\"integer\"},\"depth\":{\"maximum\":16,\"minimum\":0,\"type\":\"integer\"},\"parent_call_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:-]*$\",\"type\":\"string\",\"x-full-match\":true},\"session_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$\",\"type\":\"string\",\"x-full-match\":true},\"task_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$\",\"type\":\"string\",\"x-full-match\":true},\"trace_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:-]*$\",\"type\":\"string\",\"x-full-match\":true},\"wire_version\":{\"const\":1,\"maximum\":1,\"minimum\":1,\"type\":\"integer\"}},\"required\":[\"wire_version\",\"call_id\",\"trace_id\",\"depth\",\"caller\"],\"title\":\"MCP call context\",\"type\":\"object\"}") as WireRule;
+
+export function validateMcpCallContext(value: unknown): asserts value is McpCallContext & Record<string, unknown> {
+  validateWireSchema(_WIRE_SCHEMA_MCP_CALL_CONTEXT, _WIRE_SCHEMA_MCP_CALL_CONTEXT, value, "McpCallContext", "$");
+  normalizeWireIntegers(_WIRE_SCHEMA_MCP_CALL_CONTEXT, _WIRE_SCHEMA_MCP_CALL_CONTEXT, value);
+}
+
+export function normalizeMcpCallContextIntegers(value: unknown): void {
+  normalizeWireIntegers(_WIRE_SCHEMA_MCP_CALL_CONTEXT, _WIRE_SCHEMA_MCP_CALL_CONTEXT, value);
 }
 
 const _WIRE_SCHEMA_TOOL_CATALOG: WireRule = decodeWireJson("{\"$defs\":{\"WireCatalogEntry\":{\"additionalProperties\":true,\"properties\":{\"args_schema\":{\"additionalProperties\":true,\"type\":\"object\"},\"name\":{\"type\":\"string\"},\"returns_schema\":{\"additionalProperties\":true,\"type\":\"object\"},\"stability\":{\"enum\":[\"stable\",\"experimental\"],\"type\":\"string\"},\"summary\":{\"type\":\"string\"},\"verb\":{\"type\":\"string\"}},\"required\":[\"name\",\"summary\",\"verb\",\"stability\",\"args_schema\",\"returns_schema\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/tool_catalog.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":true,\"description\":\"Shape returned by `cos ai tools`.\",\"properties\":{\"tools\":{\"items\":{\"$ref\":\"#/$defs/WireCatalogEntry\"},\"type\":\"array\"}},\"required\":[\"tools\"],\"title\":\"Catalog tool list reply\",\"type\":\"object\"}") as WireRule;

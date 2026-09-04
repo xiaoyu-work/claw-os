@@ -8,7 +8,7 @@ rust-version = "1.90"
 # Route user-intent fs/exec/pkg calls through the kernel's capability
 # gate + audit log instead of hitting std::fs / Command::new directly.
 # Backed by the `cos app <name> <verb>` dispatcher.
-cos-mcp-serve = { path = "../../crates/cos-mcp-serve" }
+claw-os-sdk = { path = "../../claw-os-sdk/rust" }
 cos-runtime = { path = "../../cos-runtime/rust" }
 anyhow = "1"
 async-trait = "0.1"

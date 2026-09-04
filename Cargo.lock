@@ -584,13 +584,16 @@ dependencies = [
 name = "claw-os-sdk"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "base64",
  "num-bigint",
  "num-traits",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
@@ -786,17 +789,6 @@ dependencies = [
  "serde_json",
  "tracing",
  "tracing-subscriber",
-]
-
-[[package]]
-name = "cos-mcp-serve"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
 ]
 
 [[package]]

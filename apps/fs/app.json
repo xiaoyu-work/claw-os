@@ -483,5 +483,482 @@
       "coreutils",
       "ripgrep"
     ]
+  },
+  "schema_version": 2,
+  "mcp": {
+    "entry": "server.py",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "access": {
+      "system_agent": true,
+      "apps": []
+    },
+    "tools": [
+      {
+        "name": "fs.ls",
+        "summary": {
+          "en": "Show the names of files inside a folder."
+        },
+        "args": [
+          {
+            "name": "path",
+            "kind": "path",
+            "required": false,
+            "default": "."
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "path"
+            },
+            "why": {
+              "en": "Read the contents of the folder you asked to list."
+            }
+          }
+        ]
+      },
+      {
+        "name": "fs.read",
+        "summary": {
+          "en": "Read a file",
+          "zh-CN": "读取文件"
+        },
+        "args": [
+          {
+            "name": "path",
+            "kind": "path",
+            "required": true
+          },
+          {
+            "name": "offset",
+            "kind": "integer",
+            "required": false,
+            "default": 0
+          },
+          {
+            "name": "limit",
+            "kind": "integer",
+            "required": false,
+            "default": 1000000
+          },
+          {
+            "name": "start",
+            "kind": "integer",
+            "required": false
+          },
+          {
+            "name": "end",
+            "kind": "integer",
+            "required": false
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "path"
+            },
+            "why": {
+              "en": "Read the file you asked to open."
+            }
+          }
+        ]
+      },
+      {
+        "name": "fs.write",
+        "summary": {
+          "en": "Write to a file",
+          "zh-CN": "写入文件"
+        },
+        "args": [
+          {
+            "name": "path",
+            "kind": "path",
+            "required": true
+          },
+          {
+            "name": "content",
+            "kind": "text",
+            "required": false
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.write",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "path"
+            },
+            "why": {
+              "en": "Write the content you provided to that file."
+            }
+          }
+        ]
+      },
+      {
+        "name": "fs.rm",
+        "summary": {
+          "en": "Delete a file",
+          "zh-CN": "删除文件"
+        },
+        "args": [
+          {
+            "name": "path",
+            "kind": "path",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.delete",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "path"
+            },
+            "why": {
+              "en": "Remove the file you specified."
+            }
+          }
+        ]
+      },
+      {
+        "name": "fs.mkdir",
+        "summary": {
+          "en": "Create a folder",
+          "zh-CN": "创建文件夹"
+        },
+        "args": [
+          {
+            "name": "path",
+            "kind": "path",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.write",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "path"
+            },
+            "why": {
+              "en": "Create a new folder at that path."
+            }
+          }
+        ]
+      },
+      {
+        "name": "fs.stat",
+        "summary": {
+          "en": "Show file info",
+          "zh-CN": "显示文件信息"
+        },
+        "args": [
+          {
+            "name": "path",
+            "kind": "path",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.meta",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "path"
+            },
+            "why": {
+              "en": "Read metadata (size, dates, tags) for the file you asked about."
+            }
+          }
+        ]
+      },
+      {
+        "name": "fs.search",
+        "summary": {
+          "en": "Search files",
+          "zh-CN": "搜索文件"
+        },
+        "args": [
+          {
+            "name": "query",
+            "kind": "text",
+            "required": true
+          },
+          {
+            "name": "path",
+            "kind": "path",
+            "required": false,
+            "default": "/workspace"
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "path"
+            },
+            "why": {
+              "en": "Scan files under the path you specified for the search query."
+            }
+          }
+        ]
+      },
+      {
+        "name": "fs.tag",
+        "summary": {
+          "en": "Tag a file",
+          "zh-CN": "标记文件"
+        },
+        "args": [
+          {
+            "name": "path",
+            "kind": "path",
+            "required": true
+          },
+          {
+            "name": "tags",
+            "kind": "text",
+            "required": true,
+            "repeatable": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.write",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "path",
+              "transform": "parent"
+            },
+            "why": {
+              "en": "Update the metadata sidecar next to the file with the new tags."
+            }
+          }
+        ]
+      },
+      {
+        "name": "fs.recent",
+        "summary": {
+          "en": "Recently changed files",
+          "zh-CN": "最近更改的文件"
+        },
+        "args": [
+          {
+            "name": "n",
+            "kind": "integer",
+            "required": false,
+            "default": 10
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "path",
+                "value": "/workspace/**"
+              }
+            },
+            "why": {
+              "en": "Walk the workspace to find recently modified files."
+            }
+          }
+        ]
+      },
+      {
+        "name": "fs.rename",
+        "summary": {
+          "en": "Rename a file or folder"
+        },
+        "args": [
+          {
+            "name": "src",
+            "kind": "path",
+            "required": true
+          },
+          {
+            "name": "dst",
+            "kind": "path",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.delete",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "src"
+            },
+            "why": {
+              "en": "Remove the source path after renaming it."
+            }
+          },
+          {
+            "verb": "fs.write",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "dst"
+            },
+            "why": {
+              "en": "Create the renamed item at the destination path."
+            }
+          }
+        ]
+      },
+      {
+        "name": "fs.move",
+        "summary": {
+          "en": "Move a file or folder"
+        },
+        "args": [
+          {
+            "name": "src",
+            "kind": "path",
+            "required": true
+          },
+          {
+            "name": "dst",
+            "kind": "path",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.delete",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "src"
+            },
+            "why": {
+              "en": "Remove the item from its source path."
+            }
+          },
+          {
+            "verb": "fs.write",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "dst"
+            },
+            "why": {
+              "en": "Create the moved item at the destination path."
+            }
+          }
+        ]
+      },
+      {
+        "name": "fs.copy",
+        "summary": {
+          "en": "Copy a file or folder"
+        },
+        "args": [
+          {
+            "name": "src",
+            "kind": "path",
+            "required": true
+          },
+          {
+            "name": "dst",
+            "kind": "path",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "src"
+            },
+            "why": {
+              "en": "Read the source item you asked to copy."
+            }
+          },
+          {
+            "verb": "fs.write",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "dst"
+            },
+            "why": {
+              "en": "Create the copied item at the destination path."
+            }
+          }
+        ]
+      },
+      {
+        "name": "fs.read_bytes",
+        "summary": {
+          "en": "Read binary file data"
+        },
+        "args": [
+          {
+            "name": "path",
+            "kind": "path",
+            "required": true
+          },
+          {
+            "name": "offset",
+            "kind": "integer",
+            "required": false,
+            "default": 0
+          },
+          {
+            "name": "limit",
+            "kind": "integer",
+            "required": false,
+            "default": 8388608
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "path"
+            },
+            "why": {
+              "en": "Read binary data from the file you specified."
+            }
+          }
+        ]
+      },
+      {
+        "name": "fs.write_bytes",
+        "summary": {
+          "en": "Write binary file data"
+        },
+        "args": [
+          {
+            "name": "path",
+            "kind": "path",
+            "required": true
+          },
+          {
+            "name": "content",
+            "kind": "text",
+            "required": false
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.write",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "path"
+            },
+            "why": {
+              "en": "Write binary data to the file you specified."
+            }
+          }
+        ]
+      }
+    ]
   }
 }

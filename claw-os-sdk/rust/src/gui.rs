@@ -23,7 +23,7 @@
 //!
 //! fn main() {
 //!     if gui::is_gui_launch() {
-//!         let ctx = gui::Context::from_env();
+//!         let ctx = gui::Context::from_env().expect("authenticated GUI context");
 //!         // draw your own window using ctx.app_id / ctx.files,
 //!         // call crate::ai / crate::tools for kernel-mediated work,
 //!         // and ctx.open_agent_overlay(None) to summon "Ask Claw".
@@ -53,25 +53,11 @@ const ASK_CLAW_REQUEST_LIMIT: usize = 32 * 1024;
 #[cfg(target_os = "linux")]
 const ASK_CLAW_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Command value the bridge passes (and the default `desktop.exec`) when
-/// an app is launched as a GUI.
-pub const GUI_COMMAND: &str = "--gui";
-
 /// Returns `true` when the current process was spawned as a desktop GUI.
 ///
-/// Detection prefers the `COS_APP_GUI` environment variable the bridge
-/// sets for the long-lived GUI process. The `command` fallback (for apps
-/// with a custom `desktop.exec`) is available via
-/// [`is_gui_launch_for`].
+/// The bridge sets `COS_APP_GUI=1` for the authenticated desktop launch.
 pub fn is_gui_launch() -> bool {
     std::env::var("COS_APP_GUI").as_deref() == Ok("1")
-}
-
-/// Like [`is_gui_launch`], but also treats a `command` equal to
-/// [`GUI_COMMAND`] as a GUI launch (for callers that route their own
-/// argv and may use a custom `desktop.exec`).
-pub fn is_gui_launch_for(command: &str) -> bool {
-    is_gui_launch() || command == GUI_COMMAND
 }
 
 /// The kernel context handed to a desktop app at launch.
@@ -86,13 +72,19 @@ pub struct Context {
 
 impl Context {
     /// Build the context from the environment the kernel set up.
-    pub fn from_env() -> Self {
-        let app_id = std::env::var("COS_APP_ID").unwrap_or_else(|_| "unknown".to_string());
-        let files = std::env::var("COS_ARGS_JSON")
-            .ok()
-            .and_then(|raw| serde_json::from_str::<Vec<String>>(&raw).ok())
-            .unwrap_or_default();
-        Self { app_id, files }
+    pub fn from_env() -> Result<Self, String> {
+        let app_id = std::env::var("COS_APP_ID")
+            .map_err(|_| "COS_APP_ID is required for a GUI launch".to_string())?;
+        if app_id.is_empty() {
+            return Err("COS_APP_ID is required for a GUI launch".to_string());
+        }
+        let files = match std::env::var("COS_ARGS_JSON") {
+            Ok(raw) => serde_json::from_str::<Vec<String>>(&raw)
+                .map_err(|error| format!("COS_ARGS_JSON must be an array of strings: {error}"))?,
+            Err(std::env::VarError::NotPresent) => Vec::new(),
+            Err(error) => return Err(format!("read COS_ARGS_JSON: {error}")),
+        };
+        Ok(Self { app_id, files })
     }
 
     /// Summon the system "Ask Claw" agent overlay.

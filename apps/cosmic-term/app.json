@@ -1,0 +1,125 @@
+{
+  "id": "cosmic-term",
+  "version": "0.1.0",
+  "schema_version": 2,
+  "name": {
+    "en": "Terminal"
+  },
+  "summary": {
+    "en": "Run audited commands, resolve programs, and open the native terminal."
+  },
+  "runtime": "binary",
+  "mcp": {
+    "entry": "/usr/bin/cosmic-term",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "tools": [
+      {
+        "name": "term.run",
+        "summary": {
+          "en": "Run one program with arguments and return stdout, stderr, exit code, and timeout state."
+        },
+        "args": [
+          {
+            "name": "command",
+            "kind": "name",
+            "required": true,
+            "label": {
+              "en": "Program to execute."
+            }
+          },
+          {
+            "name": "arguments",
+            "kind": "text",
+            "required": false,
+            "repeatable": true,
+            "default": [],
+            "label": {
+              "en": "Ordered arguments passed to the program."
+            }
+          },
+          {
+            "name": "timeout_secs",
+            "kind": "integer",
+            "required": false,
+            "default": 30,
+            "label": {
+              "en": "Timeout in seconds; values are clamped to 1 through 600."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "proc.spawn",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "command"
+            },
+            "why": {
+              "en": "Start exactly the requested program through the audited process runner."
+            }
+          }
+        ]
+      },
+      {
+        "name": "term.which",
+        "summary": {
+          "en": "Resolve a program name to its absolute path on PATH."
+        },
+        "args": [
+          {
+            "name": "program",
+            "kind": "name",
+            "required": true,
+            "label": {
+              "en": "Program name to locate."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.meta",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "program"
+            },
+            "why": {
+              "en": "Look up where the requested program lives on the filesystem."
+            }
+          }
+        ]
+      },
+      {
+        "name": "term.open",
+        "summary": {
+          "en": "Open an interactive terminal, optionally in a working directory."
+        },
+        "args": [
+          {
+            "name": "cwd",
+            "kind": "path",
+            "required": false,
+            "label": {
+              "en": "Absolute initial working directory."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "proc.spawn",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "cosmic-term"
+              }
+            },
+            "why": {
+              "en": "Open the native terminal for the user."
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

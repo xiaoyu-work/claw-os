@@ -1,26 +1,20 @@
 use super::*;
 
 #[test]
-fn operation_schema_preserves_literal_and_bound_defaults() {
+fn operation_schema_preserves_literal_defaults() {
     let manifest = Manifest::from_json(
         r#"{
               "id": "defaults",
               "version": "0.1",
-              "name": "Defaults",
+              "name": {"en": "Defaults"},
               "operations": {
                 "run": {
-                  "label": "Run",
+                  "label": {"en": "Run"},
                   "args": [
                     {"name": "url", "kind": "text", "required": true},
                     {"name": "root", "kind": "path", "binding": "flag",
                      "default": "/workspace"},
-                    {"name": "output", "kind": "path",
-                     "default_from": {
-                       "arg": "url",
-                       "transform": "url-path-basename",
-                       "prefix": "~/",
-                       "fallback": "download"
-                     }},
+                    {"name": "output", "kind": "path", "default": "~/download"},
                     {"name": "verbose", "kind": "bool", "default": false}
                   ]
                 }
@@ -40,11 +34,7 @@ fn operation_schema_preserves_literal_and_bound_defaults() {
     assert_eq!(parameters[2]["type"], "string");
     assert_eq!(parameters[2]["required"], false);
     assert_eq!(parameters[2]["kind"], "positional");
-    assert_eq!(parameters[2]["default_from"]["arg"], "url");
-    assert_eq!(
-        parameters[2]["default_from"]["transform"],
-        "url-path-basename"
-    );
+    assert_eq!(parameters[2]["default"], "~/download");
     assert_eq!(parameters[3]["type"], "boolean");
     assert_eq!(parameters[3]["binding"], "flag");
 }
@@ -71,14 +61,12 @@ fn bundled_apps_declare_their_optional_path_defaults() {
 
     let net = load("net");
     let output = &net.operations["download"].args[1];
-    let binding = output.default_from.as_ref().unwrap();
-    assert_eq!(binding.arg, "url");
+    assert!(output.required);
     assert_eq!(
-        binding.transform,
-        crate::caps::manifest::ArgDefaultTransform::UrlPathBasename
+        output.effective_binding(),
+        crate::caps::manifest::ArgBinding::Positional
     );
-    assert_eq!(binding.prefix, "~/");
-    assert_eq!(binding.fallback.as_deref(), Some("download"));
+    assert!(output.default.is_none());
 }
 
 #[test]
@@ -212,14 +200,23 @@ fn bundled_conditional_capabilities_are_exact() {
             .join("app.json");
         Manifest::from_json(&std::fs::read_to_string(path).unwrap()).unwrap()
     };
-    let active = |caps: Vec<Vec<crate::caps::Cap>>| {
-        caps.into_iter().flatten().collect::<Vec<_>>()
-    };
+    let active = |caps: Vec<Vec<crate::caps::Cap>>| caps.into_iter().flatten().collect::<Vec<_>>();
 
     let calendar = load(&["calendar"]);
-    let local = active(calendar.resolve_needs("today", &BTreeMap::new()).unwrap());
-    assert!(local.iter().all(|cap| cap.verb != crate::caps::Verb::SECRET_READ));
-    assert!(local.iter().all(|cap| cap.verb != crate::caps::Verb::NET_DIAL));
+    let local = active(
+        calendar
+            .resolve_needs(
+                "today",
+                &BTreeMap::from([("provider".to_string(), serde_json::json!("local"))]),
+            )
+            .unwrap(),
+    );
+    assert!(local
+        .iter()
+        .all(|cap| cap.verb != crate::caps::Verb::SECRET_READ));
+    assert!(local
+        .iter()
+        .all(|cap| cap.verb != crate::caps::Verb::NET_DIAL));
     let google = active(
         calendar
             .resolve_needs(
@@ -239,13 +236,15 @@ fn bundled_conditional_capabilities_are_exact() {
     assert!(google
         .iter()
         .all(|cap| cap.verb != crate::caps::Verb::DATA_DB_READ));
-    assert!(!google.iter().any(|cap| {
-        cap.scope == crate::caps::Scope::name("default/MICROSOFT_ACCESS_TOKEN")
-    }));
+    assert!(!google
+        .iter()
+        .any(|cap| { cap.scope == crate::caps::Scope::name("default/MICROSOFT_ACCESS_TOKEN") }));
 
     let doc = load(&["doc"]);
     let stdin = active(doc.resolve_needs("summarize", &BTreeMap::new()).unwrap());
-    assert!(stdin.iter().all(|cap| cap.verb != crate::caps::Verb::FS_READ));
+    assert!(stdin
+        .iter()
+        .all(|cap| cap.verb != crate::caps::Verb::FS_READ));
     let file = active(
         doc.resolve_needs(
             "summarize",
@@ -276,10 +275,7 @@ fn bundled_conditional_capabilities_are_exact() {
                 "wifi-connect",
                 &BTreeMap::from([
                     ("ssid".to_string(), serde_json::json!("home")),
-                    (
-                        "credential".to_string(),
-                        serde_json::json!("wifi/home"),
-                    ),
+                    ("credential".to_string(), serde_json::json!("wifi/home")),
                 ]),
             )
             .unwrap(),
@@ -314,7 +310,9 @@ fn bundled_conditional_capabilities_are_exact() {
         cap.verb == crate::caps::Verb::NET_DIAL
             && cap.scope == crate::caps::Scope::host("api.search.brave.com")
     }));
-    assert!(brave.iter().all(|cap| cap.scope != crate::caps::Scope::Wild));
+    assert!(brave
+        .iter()
+        .all(|cap| cap.scope != crate::caps::Scope::Wild));
 }
 
 #[test]
@@ -324,8 +322,7 @@ fn bundled_schema_exposes_repeatables_choices_and_stdin() {
         .unwrap();
     let load = |id: &str| {
         Manifest::from_json(
-            &std::fs::read_to_string(repository.join("apps").join(id).join("app.json"))
-                .unwrap(),
+            &std::fs::read_to_string(repository.join("apps").join(id).join("app.json")).unwrap(),
         )
         .unwrap()
     };
@@ -342,10 +339,8 @@ fn bundled_schema_exposes_repeatables_choices_and_stdin() {
     assert_eq!(header["items"]["type"], "string");
     assert_eq!(header["repeatable"], true);
     let download = operation_schema(&net.operations["download"]);
-    assert_eq!(
-        download["parameters"][1]["aliases"],
-        serde_json::json!(["--output"])
-    );
+    assert_eq!(download["parameters"][1]["required"], true);
+    assert_eq!(download["parameters"][1]["binding"], "positional");
 
     let calendar = load("calendar");
     let schema = operation_schema(&calendar.operations["today"]);
@@ -355,7 +350,10 @@ fn bundled_schema_exposes_repeatables_choices_and_stdin() {
     );
 
     let doc = load("doc");
-    assert_eq!(operation_schema(&doc.operations["summarize"])["stdin"], true);
+    assert_eq!(
+        operation_schema(&doc.operations["summarize"])["stdin"],
+        true
+    );
 
     let usb = load("usb-guard");
     let authorize = operation_schema(&usb.operations["authorize"]);
@@ -365,12 +363,9 @@ fn bundled_schema_exposes_repeatables_choices_and_stdin() {
     );
 
     let googlechat = Manifest::from_json(
-        &std::fs::read_to_string(
-            repository.join("apps/gateway/googlechat/app.json"),
-        )
-        .unwrap(),
+        &std::fs::read_to_string(repository.join("apps/gateway/googlechat/app.json")).unwrap(),
     )
     .unwrap();
     let schema = operation_schema(&googlechat.operations["send"]);
-    assert_eq!(schema["parameters"][1]["positional_alias"], true);
+    assert_eq!(schema["parameters"][1]["binding"], "flag");
 }

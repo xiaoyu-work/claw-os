@@ -7,7 +7,7 @@ import (
 
 func TestToolBuildsArgvAndParses(t *testing.T) {
 	body := `{"tool": "fs.read_text", "app_id": "notes", "status": "ok", "result": {"content": "hi"}}`
-	bin, argvOut := fakeCos(t, body, 0)
+	bin, argvOut := fakeCos(t, wireSuccess(body), 0)
 	var res *ToolResult
 	var err error
 	withCos(t, bin, map[string]string{"COS_APP_ID": "notes"}, func() {
@@ -23,14 +23,14 @@ func TestToolBuildsArgvAndParses(t *testing.T) {
 		t.Fatalf("value = %v", res.Value)
 	}
 	argv := readArgv(t, argvOut)
-	want := []string{"ai", "tool", "fs.read_text", "--app", "notes", "--args"}
+	want := []string{"--wire=1", "ai", "tool", "fs.read_text", "--app", "notes", "--args"}
 	for i, w := range want {
 		if argv[i] != w {
 			t.Fatalf("argv[%d] = %q, want %q (full %v)", i, argv[i], w, argv)
 		}
 	}
-	if argv[6] != `{"path":"/x"}` {
-		t.Fatalf("args json = %q", argv[6])
+	if argv[7] != `{"path":"/x"}` {
+		t.Fatalf("args json = %q", argv[7])
 	}
 }
 
@@ -52,7 +52,7 @@ func TestToolRequiresAppID(t *testing.T) {
 }
 
 func TestToolDenied(t *testing.T) {
-	bin, _ := fakeCos(t, `{"error": "capability denied: fs.read"}`, 1)
+	bin, _ := fakeCos(t, wireErrorEnvelope("capability denied: fs.read", "PERMISSION_DENIED"), 1)
 	var err error
 	withCos(t, bin, map[string]string{"COS_APP_ID": "notes"}, func() {
 		_, err = CallTool("fs.read_text", nil, "")
@@ -69,7 +69,7 @@ func TestCatalogParses(t *testing.T) {
 		{"name": "kv.get", "summary": "get", "verb": "data.kv.read", "stability": "experimental",
 		 "args_schema": {}, "returns_schema": {}}
 	]}`
-	bin, argvOut := fakeCos(t, body, 0)
+	bin, argvOut := fakeCos(t, wireSuccess(body), 0)
 	var entries []CatalogEntry
 	var err error
 	withCos(t, bin, nil, func() {
@@ -92,8 +92,8 @@ func TestCatalogParses(t *testing.T) {
 	}
 	// Catalog must NOT pass --app or a `list` subcommand.
 	argv := readArgv(t, argvOut)
-	if len(argv) != 2 || argv[0] != "ai" || argv[1] != "tools" {
-		t.Fatalf("catalog argv = %v, want [ai tools]", argv)
+	if len(argv) != 3 || argv[0] != "--wire=1" || argv[1] != "ai" || argv[2] != "tools" {
+		t.Fatalf("catalog argv = %v, want [--wire=1 ai tools]", argv)
 	}
 }
 
@@ -115,7 +115,7 @@ func TestProposedLosslessInputRoundTripsThroughCallTool(t *testing.T) {
 
 	bin, argvOut := fakeCos(
 		t,
-		`{"tool":"echo","app_id":"notes","status":"ok","result":null}`,
+		wireSuccess(`{"tool":"echo","app_id":"notes","status":"ok","result":null}`),
 		0,
 	)
 	withCos(t, bin, nil, func() {
@@ -134,7 +134,7 @@ func TestCallToolPreservesArbitraryJSONAndLosslessResults(t *testing.T) {
 	for _, args := range []any{nil, "scalar", []any{json.Number("1"), true}} {
 		bin, argvOut := fakeCos(
 			t,
-			`{"tool":"echo","app_id":"notes","status":"ok","result":0.12345678901234567890}`,
+			wireSuccess(`{"tool":"echo","app_id":"notes","status":"ok","result":0.12345678901234567890}`),
 			0,
 		)
 		var result *ToolResult
@@ -170,7 +170,7 @@ func TestCatalogSchemasRetainLosslessNumbers(t *testing.T) {
 		"args_schema":{"minimum":` + lexeme + `},
 		"returns_schema":{"maximum":` + lexeme + `}
 	}]}`
-	bin, _ := fakeCos(t, body, 0)
+	bin, _ := fakeCos(t, wireSuccess(body), 0)
 	var entries []CatalogEntry
 	var err error
 	withCos(t, bin, nil, func() {

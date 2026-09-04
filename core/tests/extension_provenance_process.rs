@@ -173,7 +173,7 @@ fn app_package(fx: &Fixture, id: &str, body: &str) -> PathBuf {
     fs::create_dir_all(&dir).unwrap();
     write(
         &dir.join("app.json"),
-        &format!(r#"{{"id":"{id}","version":"1.0.0","name":"{id}","operations":{{}}}}"#),
+        &format!(r#"{{"id":"{id}","version":"1.0.0","name":{{"en":"{id}"}},"operations":{{}}}}"#),
     );
     write(&dir.join("main.py"), body);
     fs::set_permissions(dir.join("main.py"), fs::Permissions::from_mode(0o755)).unwrap();
@@ -498,7 +498,7 @@ fn unsigned_and_tampered_bundles_never_reach_the_live_path() {
     fs::create_dir_all(&unsigned).unwrap();
     write(
         &unsigned.join("app.json"),
-        r#"{"id":"plain","version":"1","name":"plain","operations":{}}"#,
+        r#"{"id":"plain","version":"1","name":{"en":"plain"},"operations":{}}"#,
     );
     let err = install::stage_directory(
         &unsigned,
@@ -704,7 +704,7 @@ fn environment_cannot_introduce_a_trust_root_or_disable_verification() {
     fs::create_dir_all(&unsigned).unwrap();
     write(
         &unsigned.join("app.json"),
-        r#"{"id":"scratch","version":"1","name":"scratch","operations":{}}"#,
+        r#"{"id":"scratch","version":"1","name":{"en":"scratch"},"operations":{}}"#,
     );
     let err = verify::verify_package(
         &unsigned,
@@ -975,8 +975,8 @@ fn capability_derivation_and_execution_share_one_snapshot() {
     fs::create_dir_all(&dir).unwrap();
     write(
         &dir.join("app.json"),
-        r#"{"id":"notes","version":"1.0.0","name":"notes",
-             "operations":{"go":{"label":"Go","args":[],"needs":[]}}}"#,
+        r#"{"id":"notes","version":"1.0.0","name":{"en":"notes"},
+             "operations":{"go":{"label":{"en":"Go"},"args":[],"needs":[]}}}"#,
     );
     write(
         &dir.join("main.py"),
@@ -1000,8 +1000,8 @@ fn capability_derivation_and_execution_share_one_snapshot() {
     // Replace the manifest on disk with one that demands far more.
     write(
         &dir.join("app.json"),
-        r#"{"id":"notes","version":"9.9.9","name":"notes",
-             "operations":{"go":{"label":"Go","args":[],
+        r#"{"id":"notes","version":"9.9.9","name":{"en":"notes"},
+             "operations":{"go":{"label":{"en":"Go"},"args":[],
                "needs":[{"verb":"sys.identity","scope":{"kind":"wild"},"why":"escalate"}]}}}"#,
     );
 
@@ -1054,7 +1054,7 @@ fn an_undeclared_file_is_not_an_entrypoint() {
     fs::create_dir_all(&dir).unwrap();
     write(
         &dir.join("app.json"),
-        r#"{"id":"notes","version":"1.0.0","name":"notes","operations":{}}"#,
+        r#"{"id":"notes","version":"1.0.0","name":{"en":"notes"},"operations":{}}"#,
     );
     write(&dir.join("main.py"), "print('ok')\n");
     write(&dir.join("helper.py"), "print('helper')\n");
@@ -1084,7 +1084,7 @@ fn unsigned_developer_content_declares_only_its_manifest_entry() {
     fs::create_dir_all(&dir).unwrap();
     write(
         &dir.join("app.json"),
-        r#"{"id":"scratch","version":"1","name":"scratch","operations":{}}"#,
+        r#"{"id":"scratch","version":"1","name":{"en":"scratch"},"operations":{}}"#,
     );
     write(&dir.join("main.py"), "print('ok')\n");
     write(&dir.join("extra.py"), "print('extra')\n");

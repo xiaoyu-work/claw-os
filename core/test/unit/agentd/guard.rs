@@ -60,10 +60,14 @@ fn the_model_and_tool_runtime_is_refused_inside_the_broker() {
     let dir = crate::test_env::secure_scratch_dir("agentd-guard-app");
     std::fs::write(
         dir.join("app.json"),
-        r#"{"id":"guarded","version":"1","name":"Guarded","operations":{}}"#,
+        r#"{"id":"guarded","version":"1","name": {"en": "Guarded"},"operations":{}}"#,
     )
     .unwrap();
-    std::fs::write(dir.join("main.py"), "def run(command, args):\n    return {}\n").unwrap();
+    std::fs::write(
+        dir.join("main.py"),
+        "def run(command, args):\n    return {}\n",
+    )
+    .unwrap();
     let launch = crate::test_env::app_launch(&dir, "guarded");
 
     let app = crate::bridge::run_python_app(

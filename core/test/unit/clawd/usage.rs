@@ -34,6 +34,7 @@ fn client(uid: u32) -> ClientIdentity {
         execution_uid: None,
         start_time_ticks: Some(1),
         attended_local: false,
+        extension_host: None,
     }
 }
 

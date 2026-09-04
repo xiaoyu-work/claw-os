@@ -65,6 +65,32 @@ pub mod overrides;
 pub mod tools;
 pub mod user_budget;
 
+pub(super) fn wire_error(
+    code: &'static str,
+    message: impl Into<String>,
+    detail: Option<serde_json::Value>,
+) -> String {
+    let mut error = serde_json::json!({
+        "error": message.into(),
+        "code": code,
+    });
+    if let Some(detail) = detail.filter(serde_json::Value::is_object) {
+        error["detail"] = detail;
+    }
+    error.to_string()
+}
+
+pub(super) fn invalid_args(message: impl Into<String>) -> String {
+    wire_error("INVALID_ARGS", message, None)
+}
+
+pub(super) fn permission_denied(
+    message: impl Into<String>,
+    detail: Option<serde_json::Value>,
+) -> String {
+    wire_error("PERMISSION_DENIED", message, detail)
+}
+
 /// Dispatcher for `cos ai <command>`. Exposes:
 ///   * `chat` — single-shot, gated, modality-derived LLM call.
 ///   * `tool` — single Tool invocation from the App-facing catalog
@@ -76,8 +102,10 @@ pub fn run(command: &str, args: &[String]) -> Result<serde_json::Value, String> 
         "chat" => chat::chat_cmd(args),
         "tool" => tool_cmd(args),
         "tools" => tools_list_cmd(args),
-        other => Err(format!(
-            "unknown command: cos ai {other}. try: chat | tool | tools"
+        other => Err(wire_error(
+            "UNKNOWN_VERB",
+            format!("unknown command: cos ai {other}. try: chat | tool | tools"),
+            None,
         )),
     }
 }
@@ -112,43 +140,50 @@ fn tool_cmd(args: &[String]) -> Result<serde_json::Value, String> {
                 i += 1;
             }
             other => {
-                return Err(format!("unknown flag for `cos ai tool`: {other}"));
+                return Err(invalid_args(format!(
+                    "unknown flag for `cos ai tool`: {other}"
+                )));
             }
         }
     }
 
     let name = name.ok_or_else(|| {
-        "missing tool name. usage: cos ai tool <name> --app <id> --args <json>".to_string()
+        invalid_args("missing tool name. usage: cos ai tool <name> --app <id> --args <json>")
     })?;
-    let app = app.ok_or_else(|| "--app is required".to_string())?;
+    let app = app.ok_or_else(|| invalid_args("--app is required"))?;
 
-    chat::enforce_identity_for(&app)?;
+    chat::enforce_identity_for(&app).map_err(|error| permission_denied(error, None))?;
 
     let raw = match (args_json, args_file) {
         (Some(s), _) => s,
         (None, Some(path)) => std::fs::read_to_string(&path)
-            .map_err(|e| format!("--args-file {path}: {e}"))?,
+            .map_err(|e| invalid_args(format!("--args-file {path}: {e}")))?,
         (None, None) => "{}".to_string(),
     };
-    let parsed: serde_json::Value =
-        serde_json::from_str(&raw).map_err(|e| format!("--args is not valid JSON: {e}"))?;
+    let parsed: serde_json::Value = serde_json::from_str(&raw)
+        .map_err(|e| invalid_args(format!("--args is not valid JSON: {e}")))?;
 
-    let result = tools::execute(&name, &app, &parsed)?;
-    Ok(serde_json::to_value(result).unwrap_or(serde_json::json!({})))
+    let result = tools::execute(&name, &app, &parsed).map_err(|error| error.to_wire_error())?;
+    serde_json::to_value(result)
+        .map_err(|error| wire_error("INTERNAL_ERROR", error.to_string(), None))
 }
 
 /// Implements `cos ai tools` — print the App-facing Tool catalog.
 fn tools_list_cmd(args: &[String]) -> Result<serde_json::Value, String> {
     if !args.is_empty() {
-        return Err(format!(
+        return Err(invalid_args(format!(
             "`cos ai tools` takes no arguments; got: {}",
             args.join(" ")
-        ));
+        )));
     }
-    let entries: Vec<_> = tools::CATALOG
+    let entries: Result<Vec<_>, String> = tools::CATALOG
         .iter()
         .map(|t| {
-            serde_json::json!({
+            let args_schema = serde_json::from_str::<serde_json::Value>(t.args_schema)
+                .map_err(|error| wire_error("INTERNAL_ERROR", error.to_string(), None))?;
+            let returns_schema = serde_json::from_str::<serde_json::Value>(t.returns_schema)
+                .map_err(|error| wire_error("INTERNAL_ERROR", error.to_string(), None))?;
+            Ok(serde_json::json!({
                 "name": t.name,
                 "summary": t.summary,
                 "verb": t.verb.as_str(),
@@ -156,18 +191,15 @@ fn tools_list_cmd(args: &[String]) -> Result<serde_json::Value, String> {
                     tools::Stability::Stable => "stable",
                     tools::Stability::Experimental => "experimental",
                 },
-                "args_schema": serde_json::from_str::<serde_json::Value>(t.args_schema).unwrap_or(serde_json::json!({})),
-                "returns_schema": serde_json::from_str::<serde_json::Value>(t.returns_schema).unwrap_or(serde_json::json!({})),
-            })
+                "args_schema": args_schema,
+                "returns_schema": returns_schema,
+            }))
         })
         .collect();
-    Ok(serde_json::json!({ "tools": entries }))
+    Ok(serde_json::json!({ "tools": entries? }))
 }
 
 #[cfg(test)]
 mod tests {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/test/unit/ai.rs"
-    ));
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/ai.rs"));
 }

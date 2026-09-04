@@ -55,5 +55,53 @@
   "dependencies": {
     "binaries": [],
     "optional_binaries": []
+  },
+  "schema_version": 2,
+  "mcp": {
+    "entry": "server.py",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "access": {
+      "system_agent": true,
+      "apps": []
+    },
+    "tools": [
+      {
+        "name": "agent.open",
+        "summary": {
+          "en": "Open the native Agent window"
+        }
+      },
+      {
+        "name": "agent.overlay",
+        "summary": {
+          "en": "Open the Spotlight-style Super+A quick-summon overlay"
+        },
+        "args": [
+          {
+            "name": "voice",
+            "kind": "bool",
+            "required": false,
+            "default": false
+          },
+          {
+            "name": "query",
+            "kind": "text",
+            "required": false
+          },
+          {
+            "name": "context",
+            "kind": "text",
+            "required": false
+          }
+        ]
+      },
+      {
+        "name": "agent.url",
+        "summary": {
+          "en": "Return the authenticated local bridge endpoint"
+        }
+      }
+    ]
   }
 }

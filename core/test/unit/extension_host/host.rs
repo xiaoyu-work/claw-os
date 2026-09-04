@@ -13,16 +13,21 @@ fn state() -> HostState {
     }];
     let binding = super::super::protocol::ExtensionBinding {
         protocol: PROTOCOL_VERSION,
+        purpose: super::super::protocol::HostPurpose::Task,
         task_id: "task-a".to_string(),
         session_id: Some("session-a".to_string()),
+        app_id: None,
         owner_uid: worker_uid,
         extension_uid: 61_000,
         owner_gid,
         capability_generation: "a".repeat(16),
+        package: None,
         approved_paths: approved_paths.clone(),
         agent_extensions: Vec::new(),
-        worker_pid: pid,
-        worker_start_time_ticks: crate::proc::read_start_time_ticks_pub(pid),
+        controller_uid: worker_uid,
+        controller_gid: owner_gid,
+        controller_pid: pid,
+        controller_start_time_ticks: crate::proc::read_start_time_ticks_pub(pid),
         host_pid: pid,
         host_start_time_ticks: crate::proc::read_start_time_ticks_pub(pid),
         lease_nonce: "0123456789abcdef0123456789abcdef".to_string(),
@@ -39,10 +44,10 @@ fn state() -> HostState {
         binding,
         task_id: "task-a".to_string(),
         session_id: Some("session-a".to_string()),
-        worker_uid,
-        owner_gid,
-        worker_pid: pid,
-        worker_start_time_ticks: crate::proc::read_start_time_ticks_pub(pid),
+        controller_uid: worker_uid,
+        controller_gid: owner_gid,
+        controller_pid: pid,
+        controller_start_time_ticks: crate::proc::read_start_time_ticks_pub(pid),
         lease_nonce: "0123456789abcdef0123456789abcdef".to_string(),
         recent: Mutex::new(VecDeque::new()),
         active: Mutex::new(HashMap::new()),
@@ -82,7 +87,7 @@ fn abi_binding(state: &HostState, extension_id: &str) -> super::super::abi::AbiB
     super::super::abi::AbiBinding {
         task_id: state.task_id.clone(),
         session_id: state.session_id.clone().unwrap(),
-        owner_uid: state.worker_uid,
+        owner_uid: state.controller_uid,
         extension_id: extension_id.to_string(),
         extension_version: "1.0.0".to_string(),
         package_digest: format!("sha256:{}", "a".repeat(64)),
@@ -121,19 +126,19 @@ fn route_spoofing_cross_session_and_grant_replay_are_rejected() {
     cross_session.session_id = Some("session-b".to_string());
     assert!(validate_request(&cross_session, process(), &state)
         .unwrap_err()
-        .contains("task lease"));
+        .contains("host lease"));
 
     let mut wrong_nonce = make_request(&state);
     wrong_nonce.lease_nonce = "ffffffffffffffffffffffffffffffff".to_string();
     assert!(validate_request(&wrong_nonce, process(), &state)
         .unwrap_err()
-        .contains("task lease"));
+        .contains("host lease"));
 
     let mut substituted_binding = make_request(&state);
     substituted_binding.binding_digest = "f".repeat(64);
     assert!(validate_request(&substituted_binding, process(), &state)
         .unwrap_err()
-        .contains("task lease"));
+        .contains("host lease"));
 }
 
 #[test]
@@ -158,7 +163,7 @@ fn another_process_cannot_drive_the_host_control_socket() {
     other.pid = other.pid.saturating_add(1);
     assert!(validate_request(&make_request(&state), other, &state)
         .unwrap_err()
-        .contains("different worker"));
+        .contains("different controller"));
 }
 
 #[test]
@@ -206,21 +211,21 @@ async fn saturated_events_and_stalled_readers_cannot_starve_canonical_or_priorit
     let event_actions = Arc::new(Semaphore::new(MAX_AGENT_EVENT_ACTIONS));
     let priority_actions = Arc::new(Semaphore::new(MAX_PRIORITY_CONTROL_ACTIONS));
     let canonical = tokio::spawn(accept_control(
-        bind_control_listener(&base).unwrap(),
+        bind_control_listener(&base, 0o660).unwrap(),
         ControlLane::Canonical,
         state.clone(),
         Arc::new(Semaphore::new(MAX_CANONICAL_ADMISSIONS)),
         canonical_actions.clone(),
     ));
     let events = tokio::spawn(accept_control(
-        bind_control_listener(&event_path).unwrap(),
+        bind_control_listener(&event_path, 0o660).unwrap(),
         ControlLane::AgentEvent,
         state.clone(),
         Arc::new(Semaphore::new(MAX_AGENT_EVENT_ADMISSIONS)),
         event_actions.clone(),
     ));
     let priority = tokio::spawn(accept_control(
-        bind_control_listener(&priority_path).unwrap(),
+        bind_control_listener(&priority_path, 0o660).unwrap(),
         ControlLane::Priority,
         state.clone(),
         Arc::new(Semaphore::new(MAX_PRIORITY_ADMISSIONS)),
@@ -238,8 +243,8 @@ async fn saturated_events_and_stalled_readers_cannot_starve_canonical_or_priorit
     }
 
     let mut app = make_request(&state);
-    app.action = HostAction::AppClose {
-        app_id: "missing-app".to_string(),
+    app.action = HostAction::McpDetach {
+        server: "missing-app".to_string(),
     };
     let app_response = exchange(&base, &app).await;
     assert!(app_response.ok);
@@ -341,7 +346,7 @@ fn control_capacity_is_globally_bounded_and_lane_separated() {
     assert!(MAX_AGENT_EVENT_ACTIONS >= 64);
     for action in [
         HostAction::Ping,
-        HostAction::AppClose {
+        HostAction::WarmApp {
             app_id: "app".to_string(),
         },
         HostAction::McpDetach {
@@ -372,4 +377,40 @@ fn interrupted_detach_acknowledges_only_proven_process_and_package_cleanup() {
         detached_after_cleanup(Ok(())),
         Ok(HostResult::AgentExtensionDetached { detached: true })
     ));
+}
+
+#[tokio::test]
+async fn task_and_service_hosts_cannot_swap_app_actions() {
+    let task = Arc::new(state());
+    let error = dispatch(
+        HostAction::WarmApp {
+            app_id: "notes".to_string(),
+        },
+        task,
+    )
+    .await
+    .expect_err("task host must not warm a persistent service");
+    assert!(error.contains("App service"), "{error}");
+
+    let mut service = state();
+    service.binding.purpose = super::super::protocol::HostPurpose::AppService;
+    service.binding.app_id = Some("notes".to_string());
+    service.binding.package = Some(crate::provenance::runtime::PackageRef {
+        kind: crate::provenance::PackageKind::App,
+        id: "notes".to_string(),
+        content_digest: "a".repeat(64),
+        publisher_key_id: None,
+        tier: "system".to_string(),
+    });
+    let error = dispatch(
+        HostAction::RunApp {
+            app_id: "notes".to_string(),
+            command: "show".to_string(),
+            args: Vec::new(),
+        },
+        Arc::new(service),
+    )
+    .await
+    .expect_err("service host must not run task actions");
+    assert!(error.contains("cannot run App"), "{error}");
 }

@@ -35,15 +35,13 @@ fn scaffold_is_returned_when_no_extra() {
 
 #[test]
 fn scaffold_steers_gui_launches_through_launcher() {
-    // GUI launches route through the generic app gateway's launcher app, not
-    // the exec app. Typed per-app proxies are intentionally absent by default.
     let p = build_system_prompt(None);
     assert!(
-        p.contains("`cos_app_run` with `app=\"launcher\"`"),
-        "scaffold should route launch discovery through the generic app runner"
+        p.contains("`cos_tool_search` with `server=\"launcher\"`"),
+        "scaffold should route launch discovery through the MCP App Mesh"
     );
     assert!(
-        p.contains("Never start GUI binaries through `app=\"exec\"`"),
+        p.contains("Never use the `exec` App for GUI binaries"),
         "scaffold should explicitly contrast with the exec app"
     );
     assert!(
@@ -55,9 +53,11 @@ fn scaffold_steers_gui_launches_through_launcher() {
 #[test]
 fn scaffold_explains_progressive_app_disclosure() {
     let prompt = build_system_prompt(None);
-    assert!(prompt.contains("`cos_app_catalog search`"));
-    assert!(prompt.contains("then invoke it through `cos_app_run`"));
-    assert!(prompt.contains("Do not guess unavailable `cos_app_<id>` tool names"));
+    assert!(prompt.contains("Search the permitted catalog with `cos_tool_search`"));
+    assert!(prompt.contains("schema with `cos_tool_describe`"));
+    assert!(prompt.contains("invoke it through `cos_tool_call`"));
+    assert!(prompt.contains("Do not guess internal `app_<id>__<tool>` names"));
+    assert!(prompt.contains("never translate their arguments into CLI argv"));
 }
 
 #[test]

@@ -106,7 +106,7 @@ impl TrustTier {
 
 /// Direction of a bind mount. There is no "maybe writable": the
 /// derivation decides once, from the capability that justified it.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum MountMode {
     ReadOnly,
@@ -123,7 +123,9 @@ impl MountMode {
 }
 
 /// Why a mount exists. Audit records the class, never the path.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, serde::Serialize)]
+#[derive(
+    Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, serde::Serialize, serde::Deserialize,
+)]
 #[serde(rename_all = "kebab-case")]
 pub enum MountClass {
     /// Interpreter, shared libraries, CA bundle — read-only system.
@@ -165,6 +167,23 @@ impl MountClass {
     pub const fn requires_display_trust(self) -> bool {
         matches!(self, MountClass::Display | MountClass::Device)
     }
+}
+
+/// One capability-derived mount as it existed at daemon authorization.
+///
+/// A single-call worker accepts the mount only if path resolution and
+/// inode identity still match this snapshot. The provider then pins the
+/// same inode through `exec`, closing both halves of the authorization
+/// to mount TOCTOU window.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthorizedMount {
+    pub source: PathBuf,
+    pub target: PathBuf,
+    pub mode: MountMode,
+    pub class: MountClass,
+    pub device: u64,
+    pub inode: u64,
 }
 
 /// One canonical host path exposed inside the sandbox.

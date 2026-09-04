@@ -1,61 +1,262 @@
 {
   "id": "desktop-manager",
   "version": "0.1.0",
-  "name": {"en": "Desktop Manager"},
-  "summary": {"en": "Discover, focus, close, and restart COSMIC Wayland windows"},
+  "name": {
+    "en": "Desktop Manager"
+  },
+  "summary": {
+    "en": "Discover, focus, close, and restart COSMIC Wayland windows"
+  },
   "icon": "🗔",
   "runtime": "python",
   "operations": {
     "list": {
-      "label": {"en": "List running desktop windows"},
+      "label": {
+        "en": "List running desktop windows"
+      },
       "needs": [
         {
           "verb": "sys.observe",
-          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "desktop"}},
-          "why": {"en": "Read window titles, AppIDs, stable identifiers, and compositor state."}
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "desktop"
+            }
+          },
+          "why": {
+            "en": "Read window titles, AppIDs, stable identifiers, and compositor state."
+          }
         }
       ]
     },
     "focus": {
-      "label": {"en": "Focus a desktop window"},
-      "args": [{"name": "identifier", "kind": "name", "required": true}],
-      "needs": [
-        {
-          "verb": "desktop.window",
-          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "control"}},
-          "why": {"en": "Ask the compositor to activate the selected window."}
-        }
-      ]
-    },
-    "close": {
-      "label": {"en": "Close a desktop window"},
-      "args": [{"name": "identifier", "kind": "name", "required": true}],
-      "needs": [
-        {
-          "verb": "desktop.window",
-          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "control"}},
-          "why": {"en": "Ask the compositor to close the selected window."}
-        }
-      ]
-    },
-    "restart": {
-      "label": {"en": "Restart a desktop application"},
+      "label": {
+        "en": "Focus a desktop window"
+      },
       "args": [
-        {"name": "identifier", "kind": "name", "required": true},
-        {"name": "app_id", "kind": "name", "required": true}
+        {
+          "name": "identifier",
+          "kind": "name",
+          "required": true
+        }
       ],
       "needs": [
         {
           "verb": "desktop.window",
-          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "control"}},
-          "why": {"en": "Close every window whose compositor AppID matches the selected window."}
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "control"
+            }
+          },
+          "why": {
+            "en": "Ask the compositor to activate the selected window."
+          }
+        }
+      ]
+    },
+    "close": {
+      "label": {
+        "en": "Close a desktop window"
+      },
+      "args": [
+        {
+          "name": "identifier",
+          "kind": "name",
+          "required": true
+        }
+      ],
+      "needs": [
+        {
+          "verb": "desktop.window",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "control"
+            }
+          },
+          "why": {
+            "en": "Ask the compositor to close the selected window."
+          }
+        }
+      ]
+    },
+    "restart": {
+      "label": {
+        "en": "Restart a desktop application"
+      },
+      "args": [
+        {
+          "name": "identifier",
+          "kind": "name",
+          "required": true
+        },
+        {
+          "name": "app_id",
+          "kind": "name",
+          "required": true
+        }
+      ],
+      "needs": [
+        {
+          "verb": "desktop.window",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "control"
+            }
+          },
+          "why": {
+            "en": "Close every window whose compositor AppID matches the selected window."
+          }
         },
         {
           "verb": "desktop.launch",
-          "scope": {"kind": "from-arg", "arg": "app_id"},
-          "why": {"en": "Relaunch the exact desktop AppID after its windows close."}
+          "scope": {
+            "kind": "from-arg",
+            "arg": "app_id"
+          },
+          "why": {
+            "en": "Relaunch the exact desktop AppID after its windows close."
+          }
         }
       ]
     }
+  },
+  "schema_version": 2,
+  "mcp": {
+    "entry": "server.py",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "access": {
+      "system_agent": true,
+      "apps": []
+    },
+    "tools": [
+      {
+        "name": "desktop-manager.list",
+        "summary": {
+          "en": "List running desktop windows"
+        },
+        "needs": [
+          {
+            "verb": "sys.observe",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "desktop"
+              }
+            },
+            "why": {
+              "en": "Read window titles, AppIDs, stable identifiers, and compositor state."
+            }
+          }
+        ]
+      },
+      {
+        "name": "desktop-manager.focus",
+        "summary": {
+          "en": "Focus a desktop window"
+        },
+        "args": [
+          {
+            "name": "identifier",
+            "kind": "name",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "desktop.window",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "control"
+              }
+            },
+            "why": {
+              "en": "Ask the compositor to activate the selected window."
+            }
+          }
+        ]
+      },
+      {
+        "name": "desktop-manager.close",
+        "summary": {
+          "en": "Close a desktop window"
+        },
+        "args": [
+          {
+            "name": "identifier",
+            "kind": "name",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "desktop.window",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "control"
+              }
+            },
+            "why": {
+              "en": "Ask the compositor to close the selected window."
+            }
+          }
+        ]
+      },
+      {
+        "name": "desktop-manager.restart",
+        "summary": {
+          "en": "Restart a desktop application"
+        },
+        "args": [
+          {
+            "name": "identifier",
+            "kind": "name",
+            "required": true
+          },
+          {
+            "name": "app_id",
+            "kind": "name",
+            "required": true
+          }
+        ],
+        "needs": [
+          {
+            "verb": "desktop.window",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "control"
+              }
+            },
+            "why": {
+              "en": "Close every window whose compositor AppID matches the selected window."
+            }
+          },
+          {
+            "verb": "desktop.launch",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "app_id"
+            },
+            "why": {
+              "en": "Relaunch the exact desktop AppID after its windows close."
+            }
+          }
+        ]
+      }
+    ]
   }
 }

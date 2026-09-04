@@ -123,7 +123,7 @@ def probe():
 
 
 def policy(verb, name):
-    binary = os.environ.get("COS_BIN", "cos")
+    binary = os.environ.get("CLAW_COS_BIN", "cos")
     proc = subprocess.run(
         [binary, "__policy", "check", verb, "--name", name],
         capture_output=True,
@@ -411,12 +411,18 @@ impl<'a> Spec<'a> {
 
     fn derive(&self) -> Result<cos::worker::LaunchPolicy, String> {
         let entry = self.package.join("server.py");
+        let authorized_mounts = if self.lifetime == SessionLifetime::SingleCall {
+            cos::worker::derive::authorize_granted_path_mounts(&self.policy_caps)?
+        } else {
+            Vec::new()
+        };
         cos::worker::derive::app_session(AppSessionInput {
             app_id: self.app_id,
             app_dir: self.package,
             program: PathBuf::from("/usr/bin/python3"),
             argv: vec![entry.to_string_lossy().into_owned()],
             caps: &self.policy_caps,
+            authorized_mounts: &authorized_mounts,
             lifetime: self.lifetime,
             session_id: self.session_id,
             data_dir: &self.data.to_string_lossy(),
@@ -1097,6 +1103,7 @@ fn a_normal_signed_app_cannot_request_a_desktop_transport() {
         program: PathBuf::from("/usr/bin/python3"),
         argv: vec![entry.to_string_lossy().into_owned()],
         caps: &CapSet::new(),
+        authorized_mounts: &[],
         lifetime: SessionLifetime::Reusable,
         session_id: "app-probe",
         data_dir: &data.path().to_string_lossy(),

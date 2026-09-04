@@ -5,22 +5,17 @@
 //! tools so it can navigate, inspect and act on the user's filesystem
 //! without having to spawn an interactive Files window first.
 //!
-//! Every tool funnels through the same kernel boundary as the GUI
-//! (`cos_runtime::fs::*` → `cos app fs <verb>`), so capability gating,
-//! audit logging and approval gating apply uniformly. The agent
-//! doesn't get a more permissive path than the user.
-//!
-//! AI ops (`files.summarize`, `files.explain`, `files.find_similar`)
-//! intentionally reuse the *same* `claw_glue::ai` helpers the
-//! right-click menu calls. That keeps the agent's "Ask Claw about this
-//! file" path identical to the user's.
+//! The authoritative tool catalog, arguments, and capability needs live in
+//! `apps/cosmic-files/app.json`. Implementations reuse the GUI's guarded
+//! runtime and AI helpers where those paths exist; recursive search executes
+//! inside the App Host sandbox under the manifest-derived filesystem grant.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use cos_mcp_serve::{Server, Tool, ToolResult};
-use serde_json::{Value, json};
+use claw_os_sdk::mcp::{App, CallContext, Tool, ToolResult};
+use serde_json::{json, Value};
 use walkdir::WalkDir;
 
 use crate::claw_glue;
@@ -37,26 +32,10 @@ impl Tool for ListTool {
         "files.list"
     }
 
-    fn description(&self) -> &'static str {
-        "List the entries under a directory. Goes through the same \
-         capability-gated `fs.ls` path the GUI uses."
-    }
-
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "Absolute directory path."
-                }
-            },
-            "required": ["path"],
-            "additionalProperties": false
-        })
-    }
-
-    async fn exec(&self, input: Value) -> ToolResult {
+    async fn handle(&self, input: Value, context: CallContext) -> ToolResult {
+        if let Err(error) = context.check_cancelled() {
+            return ToolResult::error(error.to_string());
+        }
         let path = match string_arg(&input, "path") {
             Ok(v) => v,
             Err(e) => return e,
@@ -73,7 +52,7 @@ impl Tool for ListTool {
                         })
                     })
                     .collect();
-                ToolResult::ok(json!({ "path": r.path, "entries": entries }).to_string())
+                ToolResult::text(json!({ "path": r.path, "entries": entries }).to_string())
             }
             Err(e) => denied_or_err(&e, "files.list"),
         }
@@ -92,28 +71,16 @@ impl Tool for MetadataTool {
         "files.metadata"
     }
 
-    fn description(&self) -> &'static str {
-        "Get size, type and mtime for a path."
-    }
-
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "path": {"type": "string"}
-            },
-            "required": ["path"],
-            "additionalProperties": false
-        })
-    }
-
-    async fn exec(&self, input: Value) -> ToolResult {
+    async fn handle(&self, input: Value, context: CallContext) -> ToolResult {
+        if let Err(error) = context.check_cancelled() {
+            return ToolResult::error(error.to_string());
+        }
         let path = match string_arg(&input, "path") {
             Ok(v) => v,
             Err(e) => return e,
         };
         match cos_runtime::fs::stat(&path) {
-            Ok(s) => ToolResult::ok(
+            Ok(s) => ToolResult::text(
                 json!({
                     "path": s.path,
                     "size_bytes": s.size,
@@ -141,28 +108,10 @@ impl Tool for SearchTool {
         "files.search"
     }
 
-    fn description(&self) -> &'static str {
-        "Recursively search a directory for entries whose name contains a \
-         case-insensitive substring. Returns at most `limit` paths \
-         (default 50, max 500). Honors `.gitignore` and skips hidden \
-         entries by default."
-    }
-
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "root": {"type": "string", "description": "Absolute directory to walk."},
-                "query": {"type": "string", "description": "Case-insensitive substring."},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 50},
-                "include_hidden": {"type": "boolean", "default": false}
-            },
-            "required": ["root", "query"],
-            "additionalProperties": false
-        })
-    }
-
-    async fn exec(&self, input: Value) -> ToolResult {
+    async fn handle(&self, input: Value, context: CallContext) -> ToolResult {
+        if let Err(error) = context.check_cancelled() {
+            return ToolResult::error(error.to_string());
+        }
         let root = match string_arg(&input, "root") {
             Ok(v) => v,
             Err(e) => return e,
@@ -182,10 +131,13 @@ impl Tool for SearchTool {
             .unwrap_or(false);
         let needle = query.to_lowercase();
 
-        let results = tokio::task::spawn_blocking(move || {
+        let search_context = context.clone();
+        let results = tokio::task::spawn_blocking(move || -> Result<Vec<Value>, String> {
             let mut hits: Vec<Value> = Vec::new();
-            for entry in WalkDir::new(&root).follow_links(false).into_iter().filter_entry(
-                |e| {
+            for entry in WalkDir::new(&root)
+                .follow_links(false)
+                .into_iter()
+                .filter_entry(|e| {
                     if include_hidden {
                         return true;
                     }
@@ -193,8 +145,11 @@ impl Tool for SearchTool {
                         .to_str()
                         .map(|s| !s.starts_with('.'))
                         .unwrap_or(true)
-                },
-            ) {
+                })
+            {
+                search_context
+                    .check_cancelled()
+                    .map_err(|error| error.to_string())?;
                 let Ok(entry) = entry else { continue };
                 let name = entry.file_name().to_string_lossy().to_lowercase();
                 if name.contains(&needle) {
@@ -207,12 +162,17 @@ impl Tool for SearchTool {
                     }
                 }
             }
-            hits
+            Ok(hits)
         })
-        .await
-        .unwrap_or_default();
+        .await;
 
-        ToolResult::ok(json!({ "matches": results }).to_string())
+        let results = match results {
+            Ok(Ok(results)) => results,
+            Ok(Err(error)) => return ToolResult::error(error),
+            Err(error) => return ToolResult::error(format!("files.search join: {error}")),
+        };
+
+        ToolResult::text(json!({ "matches": results }).to_string())
     }
 }
 
@@ -228,23 +188,10 @@ impl Tool for RevealTool {
         "files.reveal"
     }
 
-    fn description(&self) -> &'static str {
-        "Open a cosmic-files window pointing at the given directory (or \
-         the directory containing the given file). The agent uses this \
-         to hand control back to the user for visual confirmation \
-         before a destructive operation."
-    }
-
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {"path": {"type": "string"}},
-            "required": ["path"],
-            "additionalProperties": false
-        })
-    }
-
-    async fn exec(&self, input: Value) -> ToolResult {
+    async fn handle(&self, input: Value, context: CallContext) -> ToolResult {
+        if let Err(error) = context.check_cancelled() {
+            return ToolResult::error(error.to_string());
+        }
         let path = match string_arg(&input, "path") {
             Ok(v) => v,
             Err(e) => return e,
@@ -257,7 +204,7 @@ impl Tool for RevealTool {
         };
         let dir_str = dir.to_string_lossy().to_string();
         match cos_runtime::exec::start(&["cosmic-files", &dir_str]) {
-            Ok(_) => ToolResult::ok(json!({"opened": dir_str}).to_string()),
+            Ok(_) => ToolResult::text(json!({"opened": dir_str}).to_string()),
             Err(e) => denied_or_err(&e, "files.reveal"),
         }
     }
@@ -269,53 +216,34 @@ impl Tool for RevealTool {
 // ---------------------------------------------------------------------------
 
 macro_rules! ai_path_tool {
-    ($struct_name:ident, $tool_name:literal, $desc:literal, $glue:ident) => {
+    ($struct_name:ident, $tool_name:literal, $glue:ident) => {
         struct $struct_name;
         #[async_trait]
         impl Tool for $struct_name {
             fn name(&self) -> &'static str {
                 $tool_name
             }
-            fn description(&self) -> &'static str {
-                $desc
-            }
-            fn input_schema(&self) -> Value {
-                json!({
-                    "type": "object",
-                    "properties": {"path": {"type": "string"}},
-                    "required": ["path"],
-                    "additionalProperties": false
-                })
-            }
-            async fn exec(&self, input: Value) -> ToolResult {
+            async fn handle(&self, input: Value, context: CallContext) -> ToolResult {
+                if let Err(error) = context.check_cancelled() {
+                    return ToolResult::error(error.to_string());
+                }
                 let path = match string_arg(&input, "path") {
                     Ok(v) => v,
                     Err(e) => return e,
                 };
-                match claw_glue::ai::$glue(PathBuf::from(path)).await {
-                    Ok(text) => ToolResult::ok(json!({"text": text}).to_string()),
-                    Err(e) => ToolResult::err(e),
+                let result = claw_glue::ai::$glue(PathBuf::from(path)).await;
+                match result {
+                    Ok(text) => ToolResult::text(json!({"text": text}).to_string()),
+                    Err(e) => ToolResult::error(e),
                 }
             }
         }
     };
 }
 
-ai_path_tool!(
-    SummarizeTool,
-    "files.summarize",
-    "Summarize a single document. Routes through the same `cos app doc \
-     summarize` pipeline the right-click 'AI summary' menu uses.",
-    summarize
-);
+ai_path_tool!(SummarizeTool, "files.summarize", summarize);
 
-ai_path_tool!(
-    ExplainTool,
-    "files.explain",
-    "Explain a document's content in plain language. Routes through \
-     `cos app doc explain`.",
-    explain
-);
+ai_path_tool!(ExplainTool, "files.explain", explain);
 
 struct FindSimilarTool;
 
@@ -325,24 +253,10 @@ impl Tool for FindSimilarTool {
         "files.find_similar"
     }
 
-    fn description(&self) -> &'static str {
-        "Find documents similar in content / topic to the given file. \
-         Backed by the local Recoll index."
-    }
-
-    fn input_schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "path": {"type": "string"},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 20}
-            },
-            "required": ["path"],
-            "additionalProperties": false
-        })
-    }
-
-    async fn exec(&self, input: Value) -> ToolResult {
+    async fn handle(&self, input: Value, context: CallContext) -> ToolResult {
+        if let Err(error) = context.check_cancelled() {
+            return ToolResult::error(error.to_string());
+        }
         let path = match string_arg(&input, "path") {
             Ok(v) => v,
             Err(e) => return e,
@@ -352,7 +266,11 @@ impl Tool for FindSimilarTool {
             .and_then(|v| v.as_u64())
             .unwrap_or(20)
             .clamp(1, 200) as usize;
-        match claw_glue::ai::find_similar(PathBuf::from(path), limit).await {
+        let result = claw_glue::ai::find_similar(PathBuf::from(path), limit).await;
+        if let Err(error) = context.check_cancelled() {
+            return ToolResult::error(error.to_string());
+        }
+        match result {
             Ok(hits) => {
                 let arr: Vec<Value> = hits
                     .into_iter()
@@ -364,9 +282,9 @@ impl Tool for FindSimilarTool {
                         })
                     })
                     .collect();
-                ToolResult::ok(json!({"matches": arr}).to_string())
+                ToolResult::text(json!({"matches": arr}).to_string())
             }
-            Err(e) => ToolResult::err(e),
+            Err(e) => ToolResult::error(e),
         }
     }
 }
@@ -380,11 +298,11 @@ fn string_arg(input: &Value, key: &str) -> Result<String, ToolResult> {
         .get(key)
         .and_then(|v| v.as_str())
         .map(str::to_string)
-        .ok_or_else(|| ToolResult::err(format!("missing required string '{key}'")))
+        .ok_or_else(|| ToolResult::error(format!("missing required string '{key}'")))
 }
 
 fn denied_or_err<E: std::fmt::Display>(err: &E, tool: &str) -> ToolResult {
-    ToolResult::err(format!("{tool}: {err}"))
+    ToolResult::error(format!("{tool}: {err}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -396,16 +314,15 @@ pub(crate) fn run() -> anyhow::Result<()> {
         .enable_all()
         .build()?;
     rt.block_on(async {
-        Server::new("cosmic-files", env!("CARGO_PKG_VERSION"))
-            .tool(Arc::new(ListTool))
-            .tool(Arc::new(MetadataTool))
-            .tool(Arc::new(SearchTool))
-            .tool(Arc::new(RevealTool))
-            .tool(Arc::new(SummarizeTool))
-            .tool(Arc::new(ExplainTool))
-            .tool(Arc::new(FindSimilarTool))
-            .serve_stdio()
-            .await
-            .map_err(|e| anyhow::anyhow!("cosmic-files MCP server exited: {e}"))
+        let mut app = App::from_environment()?;
+        app.bind(Arc::new(ListTool))?;
+        app.bind(Arc::new(MetadataTool))?;
+        app.bind(Arc::new(SearchTool))?;
+        app.bind(Arc::new(RevealTool))?;
+        app.bind(Arc::new(SummarizeTool))?;
+        app.bind(Arc::new(ExplainTool))?;
+        app.bind(Arc::new(FindSimilarTool))?;
+        app.serve_stdio().await
     })
+    .map_err(|error| anyhow::anyhow!("cosmic-files MCP server exited: {error}"))
 }

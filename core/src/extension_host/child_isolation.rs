@@ -379,8 +379,8 @@ fn prepare_impl(
         roots.push(root.to_path_buf());
     }
     if options.expose_provider_authority {
-        for key in ["COS_SDK_PYTHON_DIR"] {
-            if let Some(path) = std::env::var_os(key).map(PathBuf::from) {
+        if let Some(paths) = std::env::var_os("COS_SDK_PYTHON_DIR") {
+            for path in std::env::split_paths(&paths).filter(|path| !path.as_os_str().is_empty()) {
                 if path.exists() {
                     roots.push(path);
                 }

@@ -124,7 +124,6 @@ def _build_search_parser():
     p.add_argument("--query", required=True)
     p.add_argument("--max-results", type=int, default=10)
     p.add_argument("--provider", required=True, choices=["gmail", "outlook"])
-    p.add_argument("--host", default=None)
     return p
 
 
@@ -133,7 +132,6 @@ def _build_list_parser():
     p.add_argument("--max-results", type=int, default=10)
     p.add_argument("--unread", action="store_true")
     p.add_argument("--provider", required=True, choices=["gmail", "outlook"])
-    p.add_argument("--host", default=None)
     return p
 
 
@@ -141,7 +139,6 @@ def _build_read_parser():
     p = argparse.ArgumentParser(prog="cos email read", add_help=False)
     p.add_argument("--id", required=True, dest="message_id")
     p.add_argument("--provider", required=True, choices=["gmail", "outlook"])
-    p.add_argument("--host", default=None)
     return p
 
 
@@ -200,9 +197,8 @@ def _smtp_connection(host, port, timeout=30):
     )
 
 
-def _send_smtp(to, subject, body, cc=None, host=None):
+def _send_smtp(to, subject, body, host, cc=None):
     """Send an email via SMTP."""
-    host = host or os.environ.get("SMTP_HOST", "localhost")
     port = int(os.environ.get("SMTP_PORT", "587"))
     user = os.environ.get("SMTP_USER", "")
     password, _ = _credential_value("SMTP_PASSWORD")
@@ -615,23 +611,21 @@ def cmd_send(args):
         return {"error": "missing required arguments: --to, --subject, --body"}
 
     provider = opts.provider
-    host = opts.host or {
-        "smtp": os.environ.get("SMTP_HOST", "localhost"),
-        "gmail": GMAIL_API_HOST,
-        "outlook": OUTLOOK_API_HOST,
-    }[provider]
-
     if provider == "smtp":
+        if not opts.host:
+            return {"error": "missing required argument: --host for smtp provider"}
         policy.require("secret.read", name="default/SMTP_PASSWORD")
-        policy.require("net.dial", host=host)
-        result = _send_smtp(opts.to, opts.subject, opts.body, cc=opts.cc, host=host)
+        policy.require("net.dial", host=opts.host)
+        result = _send_smtp(
+            opts.to, opts.subject, opts.body, opts.host, cc=opts.cc
+        )
     elif provider == "gmail":
         policy.require("secret.read", name="default/GOOGLE_ACCESS_TOKEN")
-        policy.require("net.dial", host=host)
+        policy.require("net.dial", host=GMAIL_API_HOST)
         result = _send_gmail(opts.to, opts.subject, opts.body, cc=opts.cc)
     elif provider == "outlook":
         policy.require("secret.read", name="default/MICROSOFT_ACCESS_TOKEN")
-        policy.require("net.dial", host=host)
+        policy.require("net.dial", host=OUTLOOK_API_HOST)
         result = _send_outlook(opts.to, opts.subject, opts.body, cc=opts.cc)
     else:
         return {"error": f"unknown provider: {provider}"}
@@ -649,17 +643,13 @@ def cmd_search(args):
         return {"error": "missing required argument: --query"}
 
     provider = opts.provider
-    host = opts.host or (GMAIL_API_HOST if provider == "gmail" else OUTLOOK_API_HOST)
-    if provider == "smtp":
-        return {"error": "search requires gmail or outlook provider"}
-
     if provider == "gmail":
         policy.require("secret.read", name="default/GOOGLE_ACCESS_TOKEN")
-        policy.require("net.dial", host=host)
+        policy.require("net.dial", host=GMAIL_API_HOST)
         return _search_gmail(opts.query, opts.max_results)
     elif provider == "outlook":
         policy.require("secret.read", name="default/MICROSOFT_ACCESS_TOKEN")
-        policy.require("net.dial", host=host)
+        policy.require("net.dial", host=OUTLOOK_API_HOST)
         return _search_outlook(opts.query, opts.max_results)
     else:
         return {"error": f"unknown provider: {provider}"}
@@ -673,17 +663,13 @@ def cmd_list(args):
         return {"error": "invalid arguments for list command"}
 
     provider = opts.provider
-    host = opts.host or (GMAIL_API_HOST if provider == "gmail" else OUTLOOK_API_HOST)
-    if provider == "smtp":
-        return {"error": "list requires gmail or outlook provider"}
-
     if provider == "gmail":
         policy.require("secret.read", name="default/GOOGLE_ACCESS_TOKEN")
-        policy.require("net.dial", host=host)
+        policy.require("net.dial", host=GMAIL_API_HOST)
         return _list_gmail(opts.max_results, opts.unread)
     elif provider == "outlook":
         policy.require("secret.read", name="default/MICROSOFT_ACCESS_TOKEN")
-        policy.require("net.dial", host=host)
+        policy.require("net.dial", host=OUTLOOK_API_HOST)
         return _list_outlook(opts.max_results, opts.unread)
     else:
         return {"error": f"unknown provider: {provider}"}
@@ -697,17 +683,13 @@ def cmd_read(args):
         return {"error": "missing required argument: --id"}
 
     provider = opts.provider
-    host = opts.host or (GMAIL_API_HOST if provider == "gmail" else OUTLOOK_API_HOST)
-    if provider == "smtp":
-        return {"error": "read requires gmail or outlook provider"}
-
     if provider == "gmail":
         policy.require("secret.read", name="default/GOOGLE_ACCESS_TOKEN")
-        policy.require("net.dial", host=host)
+        policy.require("net.dial", host=GMAIL_API_HOST)
         return _read_gmail(opts.message_id)
     elif provider == "outlook":
         policy.require("secret.read", name="default/MICROSOFT_ACCESS_TOKEN")
-        policy.require("net.dial", host=host)
+        policy.require("net.dial", host=OUTLOOK_API_HOST)
         return _read_outlook(opts.message_id)
     else:
         return {"error": f"unknown provider: {provider}"}

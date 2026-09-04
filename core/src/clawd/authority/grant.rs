@@ -257,6 +257,9 @@ impl Subject {
 pub enum Issuer {
     /// Minted for a launcher registering an App/MCP session.
     AppSessionAuthority,
+    /// Minted for one authenticated App MCP call after caller and target
+    /// authority have been checked independently.
+    AppGateway,
     /// Minted for a session the daemon itself entered (scheduler
     /// delegation, system Agent task).
     TrustedSession,
@@ -270,6 +273,7 @@ impl Issuer {
     pub fn as_str(self) -> &'static str {
         match self {
             Issuer::AppSessionAuthority => "app-session",
+            Issuer::AppGateway => "app-gateway",
             Issuer::TrustedSession => "trusted-session",
             Issuer::Approval => "approval",
             Issuer::Scheduler => "scheduler",

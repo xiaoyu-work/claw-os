@@ -569,16 +569,14 @@ impl SourceKind {
         }
         match tool_name {
             "cos_app_memory" => Self::AppMemory,
-            "cos_app_catalog" => Self::AppToolMetadata,
             "cos_browser" => Self::WebPageContent,
             "cos_tts" | "cos_stt" | "cos_imagegen" | "cos_vision" => Self::MediaTranscript,
             "cos_skill" => Self::SkillInstructions,
             "cos_recall" | "cos_recall_semantic" | "cos_memory" => Self::RecalledMemory,
             "cos_todo" => Self::TodoList,
-            // Every App surface: the generic gateway, session tools and
-            // per-App proxies. The App, not the kernel, authored the
-            // bytes, and a worker broker result is App output too.
-            name if name.starts_with("cos_app_") || name.starts_with("app_") => Self::AppToolResult,
+            // MCP App tools are registered under `app_`; the App, not the
+            // kernel, authored the returned bytes.
+            name if name.starts_with("app_") => Self::AppToolResult,
             _ => Self::BuiltinToolResult,
         }
     }

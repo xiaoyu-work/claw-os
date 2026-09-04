@@ -11,7 +11,7 @@ edition = "2024"
 
 [dependencies]
 cos-runtime = { path = "../../cos-runtime/rust" }
-cos-mcp-serve = { path = "../../crates/cos-mcp-serve" }
+claw-os-sdk = { path = "../../claw-os-sdk/rust" }
 ashpd = { version = "0.12", default-features = false, features = ["tokio"] }
 async-trait = "0.1"
 jiff = "0.2"

@@ -16,6 +16,35 @@ fn named_session_id_error_stays_generic() {
     );
 }
 
+#[test]
+fn pending_app_mcp_session_remains_live_during_bind_window() {
+    let info = SessionInfo {
+        session_id: "app-pending".to_string(),
+        pid: 0,
+        command: vec!["server.py".to_string()],
+        started_at: chrono::Utc::now().to_rfc3339(),
+        stdout_path: String::new(),
+        stderr_path: String::new(),
+        group: Some("app-mcp".to_string()),
+        parent: Some("app-service".to_string()),
+        workdir: None,
+        exit_code: None,
+        ended_at: None,
+        tier: None,
+        scope: None,
+        priority: None,
+        caps: None,
+        transient_caps: None,
+        role: None,
+        app_id: Some("notes".to_string()),
+        pending_bind: true,
+        start_time_ticks: None,
+        client: crate::session::SessionClient::default(),
+    };
+    assert!(pending_bind_is_fresh(&info));
+    assert!(registry_session_is_active(&info));
+}
+
 /// PID recycle protection: a registry entry with a pid that is
 /// currently alive but whose recorded `start_time_ticks` does
 /// not match the kernel's report must be treated as exited.

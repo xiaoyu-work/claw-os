@@ -9,7 +9,8 @@ separate description from system authority.
 
 - Maintain the capability catalog and risk metadata.
 - Parse, normalize, and compare scopes.
-- Validate app manifests and derive operation needs.
+- Validate human-facing operations and MCP-first App services, then derive
+  exact per-tool capability needs.
 - Enforce permissions for sessions, tools, apps, and broker requests.
 - Route denied Agent capabilities into attended, exact-scope consent
   without turning approval into ambient session authority.
@@ -24,7 +25,7 @@ separate description from system authority.
 | `consent.rs` | Attended versus unattended consent context |
 | `scope.rs` | Scope kinds, normalization, containment |
 | `manifest.rs` | `app.json` schema and validation |
-| `../../test/unit/caps/manifest.rs` | Manifest parsing, need binding, AI/session/desktop tests |
+| `../../test/unit/caps/manifest.rs` | Manifest parsing, need binding, AI/MCP/desktop tests |
 | `enforcement.rs` | Permission decision path |
 | `mod.rs` | Shared capability types and exports |
 

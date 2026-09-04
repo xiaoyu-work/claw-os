@@ -20,6 +20,8 @@ executes neither.
 - Run exactly one task and report it back (`worker`).
 - Bind each worker grant to the exact extension host and install the host
   client before constructing the model-visible tool projection.
+- Renew the private task Host lease from authenticated worker heartbeats and
+  return the authoritative rolling deadline to the worker.
 
 ## Key Files
 
@@ -28,7 +30,7 @@ executes neither.
 | `guard.rs` | Process-wide broker flag; every runtime surface fails closed inside `clawd` |
 | `spawn.rs` | `socketpair` + `pre_exec` privilege drop, fd/env isolation, session/process-group isolation, worker image checks |
 | `grant.rs` | HMAC-signed job grant, its bindings, and both verification directions |
-| `protocol.rs` | Frames, route allowlist, protocol version, bounded framing, permission-mediation types |
+| `protocol.rs` | Frames, route allowlist, protocol version, bounded framing, lease-renewal and permission-mediation types |
 | `supervisor.rs` | Broker-side claim → spawn → lease → pump → finish, permission mediation, reconciliation |
 | `worker.rs` | Worker-side handshake, dedicated channel thread, sinks, audit forwarding, approval gateway, cancellation |
 | `../extension_host/` | Dynamic App/MCP host, task-bound control, route-filtered broker proxy, cleanup |
@@ -81,6 +83,16 @@ bindings. The host accepts
 control requests only from the exact worker credentials. Its broker proxy
 accepts lifecycle routes only from the exact host and provider routes only
 from a descendant's nearest registered App/MCP session.
+
+The signed binding is immutable bootstrap identity; its initial expiry is not
+the lifetime of a healthy long-running task. Every authenticated heartbeat
+renews the supervisor task lease and the private broker `ExtensionLease`.
+`clawd` sends the resulting absolute deadline back as a typed frame on fd 3,
+and the worker updates only its installed Host client's rolling deadline.
+Another task id, an unbounded deadline, a missing client, or a lost
+acknowledgement closes the worker instead of retaining stale authority. The
+private broker checks its own renewed lease on every relay, so the worker-side
+deadline is an early refusal rather than the source of authority.
 
 Assignment is a durable two-phase gate. `clawd` sends PREPARE with distinct
 grant-signed prepare/commit nonces; the worker verifies it, reports the exact
@@ -184,11 +196,13 @@ Removing the worker's broker access is deliberate:
 
 - **App and MCP sessions started from inside a task.** Registering one needs
   `claw-extension-host`. The worker still has no `app_session.*` route and
-  cannot write the root-owned routed registry. The host reaches only the
-  lifecycle allowlist on its private socket; hosted descendants reach only
+  cannot write the root-owned routed registry. Its task Host relays typed App
+  calls over `app_service.call`; `clawd` re-authorizes them and dispatches to a
+  separate owner/App service Host that may outlive the task. Each Host reaches
+  only its purpose-specific private routes, and hosted descendants reach only
   session-scoped provider routes for their nearest registered child session.
-  If the host is absent, dynamic execution fails closed instead of falling
-  back into `claw-agentd`.
+  If either Host or its authenticated lease is absent, dynamic execution fails
+  closed instead of falling back into `claw-agentd`.
 - **Scheduler mutation from inside a task.** `cos cron` / `cos triggers` state
   lives in the root-owned daemon tree, so a worker can read its own scope but
   cannot persist system schedules. `scheduler.run` is a broker route and is not
@@ -205,8 +219,9 @@ records correlate within a task rather than across the daemon's lifetime.
 
 A worker or extension host that panics, is killed, exits unexpectedly, stops
 heartbeating, sends a frame outside its grant, or speaks a different protocol
-version only ends its own task. The supervisor terminates both process trees
-and reaps them. Extension execution starts only after a delegated cgroup-v2
+version only ends its own task. An invalid or unacknowledged Host lease renewal
+does the same. The supervisor terminates both process trees and reaps them.
+Extension execution starts only after a delegated cgroup-v2
 CPU/memory/pids subtree, finite limits, pre-exec host membership, and working
 `cgroup.kill` have all been verified. A mandatory private mount namespace
 provides task-private tmpfs instances for `/tmp`, `/var/tmp`, `/dev/shm`, and

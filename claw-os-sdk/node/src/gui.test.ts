@@ -26,10 +26,8 @@ test("isGuiLaunch detects COS_APP_GUI", () => {
   });
 });
 
-test("isGuiLaunch falls back to the --gui command", () => {
+test("isGuiLaunch requires host context", () => {
   withEnv({ COS_APP_GUI: undefined }, () => {
-    assert.equal(gui.isGuiLaunch("--gui"), true);
-    assert.equal(gui.isGuiLaunch("open"), false);
     assert.equal(gui.isGuiLaunch(), false);
   });
 });
@@ -43,16 +41,23 @@ test("context decodes files from COS_ARGS_JSON", () => {
   assert.deepEqual(ctx.files, ["/a.md", "/b.md"]);
 });
 
-test("context defaults app id and ignores malformed args json", () => {
-  const ctx = withEnv({ COS_APP_ID: undefined, COS_ARGS_JSON: "not json" }, () =>
-    gui.context(),
-  );
-  assert.equal(ctx.appId, "unknown");
-  assert.deepEqual(ctx.files, []);
+test("context requires app identity", () => {
+  withEnv({ COS_APP_ID: undefined, COS_ARGS_JSON: undefined }, () => {
+    assert.throws(() => gui.context(), /COS_APP_ID/);
+  });
+});
+
+test("context rejects malformed args json", () => {
+  withEnv({ COS_APP_ID: "notes", COS_ARGS_JSON: "not json" }, () => {
+    assert.throws(() => gui.context(), /valid JSON/);
+  });
+  withEnv({ COS_APP_ID: "notes", COS_ARGS_JSON: '["/a",7]' }, () => {
+    assert.throws(() => gui.context(), /array of strings/);
+  });
 });
 
 test("explicit files override the environment", () => {
-  const ctx = withEnv({ COS_ARGS_JSON: JSON.stringify(["/x"]) }, () =>
+  const ctx = withEnv({ COS_APP_ID: "notes", COS_ARGS_JSON: JSON.stringify(["/x"]) }, () =>
     gui.context(["/explicit"]),
   );
   assert.deepEqual(ctx.files, ["/explicit"]);

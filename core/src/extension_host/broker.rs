@@ -21,7 +21,7 @@ use crate::extension_host::spawn::HostPaths;
 
 const MAX_CONNECTIONS: usize = 16;
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
-const WRITE_TIMEOUT: Duration = Duration::from_secs(60);
+const WRITE_TIMEOUT: Duration = Duration::from_secs(190);
 
 const HOST_LIFECYCLE_ROUTES: &[Command] = &[
     Command::AppSessionRegister,
@@ -66,14 +66,16 @@ const CHILD_PROVIDER_ROUTES: &[Command] = &[
 
 #[derive(Debug)]
 pub struct ExtensionLease {
+    pub purpose: crate::extension_host::protocol::HostPurpose,
     pub task_id: String,
     pub task_session_id: Option<String>,
     pub host_session_id: Option<String>,
     pub owner_uid: u32,
     pub extension_uid: u32,
     pub owner_gid: u32,
-    pub worker_pid: u32,
-    pub worker_start_time_ticks: Option<u64>,
+    pub capability_generation: String,
+    pub controller_pid: u32,
+    pub controller_start_time_ticks: Option<u64>,
     pub host_pid: u32,
     pub host_start_time_ticks: Option<u64>,
     deadline_ms: AtomicU64,
@@ -83,27 +85,31 @@ pub struct ExtensionLease {
 impl ExtensionLease {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
+        purpose: crate::extension_host::protocol::HostPurpose,
         task_id: String,
         task_session_id: Option<String>,
         host_session_id: Option<String>,
         owner_uid: u32,
         extension_uid: u32,
         owner_gid: u32,
-        worker_pid: u32,
-        worker_start_time_ticks: Option<u64>,
+        capability_generation: String,
+        controller_pid: u32,
+        controller_start_time_ticks: Option<u64>,
         host_pid: u32,
         host_start_time_ticks: Option<u64>,
         deadline_ms: u64,
     ) -> Self {
         Self {
+            purpose,
             task_id,
             task_session_id,
             host_session_id,
             owner_uid,
             extension_uid,
             owner_gid,
-            worker_pid,
-            worker_start_time_ticks,
+            capability_generation,
+            controller_pid,
+            controller_start_time_ticks,
             host_pid,
             host_start_time_ticks,
             deadline_ms: AtomicU64::new(deadline_ms),
@@ -111,11 +117,10 @@ impl ExtensionLease {
         }
     }
 
-    pub fn renew(&self, lease: Duration) {
-        self.deadline_ms.store(
-            crate::agentd::grant::now_ms().saturating_add(lease.as_millis() as u64),
-            Ordering::SeqCst,
-        );
+    pub fn renew(&self, lease: Duration) -> u64 {
+        let deadline = crate::agentd::grant::now_ms().saturating_add(lease.as_millis() as u64);
+        self.deadline_ms.store(deadline, Ordering::SeqCst);
+        deadline
     }
 
     pub fn close(&self) {
@@ -129,8 +134,8 @@ impl ExtensionLease {
         if crate::agentd::grant::now_ms() > self.deadline_ms.load(Ordering::SeqCst) {
             return Err("extension task lease expired".to_string());
         }
-        if !process_matches(self.worker_pid, self.worker_start_time_ticks) {
-            return Err("extension task worker is no longer live".to_string());
+        if !process_matches(self.controller_pid, self.controller_start_time_ticks) {
+            return Err("extension host controller is no longer live".to_string());
         }
         if !process_matches(self.host_pid, self.host_start_time_ticks) {
             return Err("extension host is no longer live".to_string());
@@ -375,13 +380,6 @@ async fn serve_connection(
         write_fault(&mut peer_stream, id, Fault::PeerUnverified).await;
         return;
     };
-    let client = ClientIdentity::from_verified_delegation(
-        process.pid,
-        lease.owner_uid,
-        process.uid,
-        process.gid,
-        process.start_time_ticks,
-    );
     if lease.verify_live().is_err()
         || process.uid != lease.extension_uid
         || process.gid != lease.owner_gid
@@ -390,6 +388,24 @@ async fn serve_connection(
         write_fault(&mut peer_stream, id, Fault::NotAuthorized).await;
         return;
     }
+    let client = ClientIdentity::from_verified_delegation(
+        process.pid,
+        lease.owner_uid,
+        process.uid,
+        process.gid,
+        process.start_time_ticks,
+        crate::clawd::client_identity::AuthenticatedExtensionHost {
+            purpose: lease.purpose,
+            lease_id: lease.task_id.clone(),
+            authority_session_id: lease.task_session_id.clone(),
+            host_session_id: lease.host_session_id.clone(),
+            owner_uid: lease.owner_uid,
+            extension_uid: lease.extension_uid,
+            capability_generation: lease.capability_generation.clone(),
+            host_pid: lease.host_pid,
+            host_start_time_ticks: lease.host_start_time_ticks,
+        },
+    );
 
     let response =
         crate::clawd::server::dispatch_verified_request(request, &client, &state, &admission).await;
@@ -401,6 +417,9 @@ fn request_allowed(request: &Request, process: peer::PeerProcess, lease: &Extens
     if process.pid == lease.host_pid
         && Some(process.start_time_ticks) == lease.host_start_time_ticks
     {
+        if request.command == Command::AppServiceCall {
+            return lease.purpose == crate::extension_host::protocol::HostPurpose::Task;
+        }
         return host_lifecycle_route(request.command);
     }
     if !crate::proc::process_descends_from(process.pid, lease.host_pid) {
@@ -425,7 +444,7 @@ fn session_matches_request(
 ) -> bool {
     session.session_id != host_session_id
         && session.parent.as_deref() == Some(host_session_id)
-        && matches!(session.group.as_deref(), Some("app" | "mcp"))
+        && matches!(session.group.as_deref(), Some("app" | "app-mcp" | "mcp"))
         && request
             .params
             .get("session")

@@ -1,8 +1,15 @@
-//! Trusted-code classification for the handful of vendor App session
-//! servers that cannot work without a desktop transport.
+//! Kernel-side allowlist for the bundled native Desktop Apps whose MCP
+//! service is implemented by a root-owned system program rather than by
+//! a file the package ships.
 //!
-//! Three bundled Apps expose their tool surface as a stdio MCP server
-//! and reach the desktop over the **session bus**:
+//! Every row names one App id and the one absolute program its manifest
+//! `mcp.entry` may point at. Naming a program outside the package is the
+//! *first* thing a row grants, and for most rows it is the only thing:
+//! those Apps run as ordinary hostile [`McpServer`](super::TrustTier::McpServer)
+//! workers with no desktop transport at all.
+//!
+//! Three of them additionally reach the desktop over the **session
+//! bus**, because their tool surface is a bus call:
 //!
 //! | App | What the tool actually does |
 //! | --- | --- |
@@ -34,16 +41,16 @@
 //!    every component of it is root-owned, non-symlink and not
 //!    group/world-writable;
 //! 4. the artifact that will actually be executed is root-owned,
-//!    non-symlink, not group/world-writable, and — when the manifest
-//!    names a program outside the package — is byte-for-byte the
-//!    absolute path this table names.
+//!    non-symlink, not group/world-writable, and is byte-for-byte the
+//!    absolute path this table names for that App id.
 //!
 //! A manifest field, a developer grant, a signed third-party package, a
 //! symlink or bind alias onto an approved root, and the App id on its
-//! own are each insufficient. Anything that fails returns `None` and
-//! the App runs as an ordinary hostile [`McpServer`](super::TrustTier::McpServer)
-//! with no transport at all — its tools then fail with a clear
-//! error rather than silently gaining reach.
+//! own are each insufficient. Anything that fails returns `None`, and a
+//! manifest that named a system program then has no way to launch at
+//! all — the caller refuses rather than running an unclassified binary.
+//! A row that carries no transport never gains one from any of this:
+//! the transport list is source, per row, and empty is the default.
 
 use std::path::{Path, PathBuf};
 
@@ -67,32 +74,66 @@ impl Transport {
 /// One kernel-side row. Everything in it is source, never input.
 struct Row {
     app_id: &'static str,
-    /// Absolute program the manifest's `session.entry` may name when it
-    /// points outside the package. `None` requires the ordinary rule —
-    /// a package-relative, declared, signed entrypoint.
-    system_program: Option<&'static str>,
+    /// The absolute program this App's `mcp.entry` may name. Exact, and
+    /// the only path outside the package this App id can ever execute.
+    system_program: &'static str,
+    /// Desktop transports the row grants. Empty for every App whose
+    /// tools do not need one, which is most of them.
     transports: &'static [Transport],
 }
 
+/// No transport at all: the row exists only to let this App id name its
+/// own system program.
+const NO_TRANSPORT: &[Transport] = &[];
+
+/// The owner's session bus, and nothing else.
+const SESSION_BUS: &[Transport] = &[Transport::SessionBus];
+
 const ALLOWLIST: &[Row] = &[
     Row {
+        app_id: "cosmic-files",
+        system_program: "/usr/bin/cosmic-files",
+        transports: NO_TRANSPORT,
+    },
+    Row {
+        app_id: "cosmic-edit",
+        system_program: "/usr/bin/cosmic-edit",
+        transports: NO_TRANSPORT,
+    },
+    Row {
+        app_id: "cosmic-store",
+        system_program: "/usr/bin/cosmic-store",
+        transports: NO_TRANSPORT,
+    },
+    Row {
+        app_id: "cosmic-settings",
+        system_program: "/usr/bin/cosmic-settings",
+        transports: NO_TRANSPORT,
+    },
+    Row {
+        app_id: "cosmic-term",
+        system_program: "/usr/bin/cosmic-term",
+        transports: NO_TRANSPORT,
+    },
+    Row {
+        app_id: "cosmic-launcher",
+        system_program: "/usr/bin/cosmic-launcher",
+        transports: NO_TRANSPORT,
+    },
+    Row {
         app_id: "cosmic-player",
-        system_program: Some("/usr/bin/cosmic-player"),
-        transports: &[Transport::SessionBus],
+        system_program: "/usr/bin/cosmic-player",
+        transports: SESSION_BUS,
     },
     Row {
         app_id: "cosmic-screenshot",
-        system_program: Some("/usr/bin/cosmic-screenshot"),
-        transports: &[Transport::SessionBus],
+        system_program: "/usr/bin/cosmic-screenshot",
+        transports: SESSION_BUS,
     },
     Row {
-        // The manifest entry is the package's own signed `server.sh`,
-        // which execs the root-owned binary out of the read-only system
-        // image. No system program override is needed, and none is
-        // granted.
         app_id: "cosmic-notifications",
-        system_program: None,
-        transports: &[Transport::SessionBus],
+        system_program: "/usr/bin/cosmic-notifications",
+        transports: SESSION_BUS,
     },
 ];
 
@@ -111,34 +152,30 @@ impl DesktopGrant {
 
 /// The absolute program an App's manifest may name outside its package.
 ///
-/// Consulted by the session-entry check so `cosmic-player` and
-/// `cosmic-screenshot` can point at the root-owned desktop binary that
-/// implements their tool surface. It answers only for the fixed rows
-/// above, so no other App can name a path outside its package.
+/// Consulted by the MCP-entry check so the bundled native Desktop Apps
+/// can point at the root-owned binary that implements their tool
+/// surface. It answers only for the fixed rows above, so no other App
+/// can name a path outside its package.
 pub fn allowlisted_system_program(app_id: &str) -> Option<&'static str> {
     ALLOWLIST
         .iter()
         .find(|row| row.app_id == app_id)
-        .and_then(|row| row.system_program)
+        .map(|row| row.system_program)
 }
 
 /// Classify one App session launch.
 ///
-/// `program` is the artifact the runtime selection resolved — the
-/// desktop binary itself for the two `binary` Apps, the shell
-/// interpreter for `cosmic-notifications`. `extra_artifacts` are the
-/// other root-owned files the launch depends on, so the notification
-/// App's `/usr/bin/cosmic-notifications` is checked even though the
-/// program is `bash`.
+/// `program` is the artifact the runtime selection resolved — for every
+/// row here, the desktop binary itself.
 ///
-/// Returns `None` — never an error — when anything fails, because the
-/// correct outcome is an ordinary sandboxed session with no transport,
-/// not a refused launch.
+/// Returns `None` — never an error — when anything fails. The caller
+/// refuses a manifest that names a system program without this
+/// classification, regardless of whether the fixed row carries a
+/// desktop transport.
 pub fn classify(
     app_id: &str,
     package: &crate::provenance::VerifiedPackage,
     program: &Path,
-    extra_artifacts: &[PathBuf],
 ) -> Option<DesktopGrant> {
     let row = ALLOWLIST.iter().find(|row| row.app_id == app_id)?;
     // Vendor provenance, not a signature. A publisher-signed package
@@ -155,21 +192,14 @@ pub fn classify(
     let dir = package.dir().canonicalize().ok()?;
     crate::provenance::fsec::require_secure_location(&dir, &[0]).ok()?;
 
-    // Everything that will execute is root-owned and immutable to the
-    // owner. `program` is the entry point; the extras are what a
-    // trusted shim hands control to.
+    // What will execute is root-owned and immutable to the owner, and
+    // is exactly the path this row names. Exact path equality against
+    // kernel source, after canonicalisation, so an alias resolving to
+    // the same inode by a different name is still refused.
     root_owned(program)?;
-    if let Some(expected) = row.system_program {
-        // Exact path equality against kernel source, after
-        // canonicalisation, so an alias resolving to the same inode by
-        // a different name is still refused.
-        let expected = Path::new(expected).canonicalize().ok()?;
-        if program.canonicalize().ok()? != expected {
-            return None;
-        }
-    }
-    for artifact in extra_artifacts {
-        root_owned(artifact)?;
+    let expected = Path::new(row.system_program).canonicalize().ok()?;
+    if program.canonicalize().ok()? != expected {
+        return None;
     }
     Some(DesktopGrant {
         transports: row.transports.to_vec(),
@@ -182,20 +212,6 @@ fn root_owned(path: &Path) -> Option<()> {
     let canonical = path.canonicalize().ok()?;
     crate::provenance::fsec::require_secure_location(&canonical, &[0]).ok()?;
     Some(())
-}
-
-/// The root-owned artifacts a classified session hands control to
-/// beyond its program.
-///
-/// `cosmic-notifications` runs `bash <package>/server.sh`, and that
-/// script's whole body is `exec /usr/bin/cosmic-notifications`. The
-/// binary is therefore part of what the transport is granted to, and it
-/// is checked as such.
-pub fn extra_artifacts_for(app_id: &str) -> Vec<PathBuf> {
-    match app_id {
-        "cosmic-notifications" => vec![PathBuf::from("/usr/bin/cosmic-notifications")],
-        _ => Vec::new(),
-    }
 }
 
 /// Path the classified session bus appears at inside the sandbox.
@@ -485,12 +501,12 @@ fn parse_unix_bus_address(raw: &str) -> Result<PathBuf, BusRefusal> {
                     "bus address is abstract; the sandbox owns a private network \
                      namespace and cannot reach an abstract socket"
                         .to_string(),
-                ))
+                ));
             }
             other => {
                 return Err(BusRefusal(format!(
                     "bus address carries unsupported option `{other}`"
-                )))
+                )));
             }
         }
     }

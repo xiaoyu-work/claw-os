@@ -115,6 +115,15 @@ impl BrokerError {
         }
     }
 
+    pub fn indeterminate(message: impl Into<String>) -> Self {
+        Self {
+            kind: BrokerErrorKind::Indeterminate,
+            message: message.into(),
+            data: None,
+            audit_class: Some("indeterminate"),
+        }
+    }
+
     /// Attach the stable class audit records store in place of the
     /// message text.
     pub fn classified(mut self, class: &'static str) -> Self {

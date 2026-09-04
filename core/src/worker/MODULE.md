@@ -4,13 +4,13 @@
 
 `core/src/worker/` is the single definition of how Claw OS runs code it
 did not write. Python and polyglot App operations, GUI App surfaces,
-App session servers, MCP servers, adapters and model-authored commands
+App Mesh services, external MCP servers, adapters and model-authored commands
 are all launched through it, under the same enforceable namespace,
 seccomp, cgroup, filesystem and network policy.
 
 There is no second isolation implementation. `crate::sandbox`
-(`cos_sandbox`), `crate::bridge` (Apps, GUI surfaces and App session
-servers) and `crate::agent::tools::mcp::integration` (MCP servers and
+(`cos_sandbox`), `crate::bridge` (Apps, GUI surfaces and App Mesh
+services) and `crate::agent::tools::mcp::integration` (external MCP servers and
 adapters) are consumers of this module, not peers of it.
 
 ## Trust tiers
@@ -19,7 +19,7 @@ adapters) are consumers of this module, not peers of it.
 | --- | --- | --- | --- | --- |
 | `AppOperation` | one manifest operation | yes | no | brokered, exact hosts |
 | `DesktopSurface` | a manifest `desktop.exec` launch | yes | yes | brokered, exact hosts |
-| `McpServer` | configured MCP servers, adapters, App session servers | yes | no | denied |
+| `McpServer` | App Mesh services, configured MCP servers, and adapters | yes | no | denied |
 | `AgentExec` | `cos_sandbox exec` | yes | no | brokered, exact hosts |
 | `TrustedDesktopSession` | the fixed vendor App session servers that need the session bus | yes | one exact socket | denied |
 | `TrustedNativeHost` | the root-owned `mail-ai` native host | no | yes | host |
@@ -53,7 +53,7 @@ and a root-owned executed artifact.
 | --- | --- |
 | `policy.rs` | `LaunchPolicy`, tiers, mounts, limits, digest, audit facts |
 | `derive.rs` | Trusted derivation from manifest/caps/runtime |
-| `trusted_desktop.rs` | Fixed vendor table for App sessions that need the session bus |
+| `trusted_desktop.rs` | Fixed vendor table of native Desktop App ids, their system programs, and the few that also need the session bus |
 | `migrate.rs` | One-time move of legacy App state into its partition |
 | `provider.rs` | `WorkerSandbox` seam, availability, fail-closed `prepare` |
 | `linux.rs` | bubblewrap argv, `pre_exec`, rlimits, identity |
@@ -138,6 +138,18 @@ bubblewrap as `/proc/self/fd/N`. A path swapped for a symlink, another
 directory or a fresh mount between validation and setup fails the launch
 rather than being followed.
 
+For an App Mesh single-call worker, validation starts at daemon authorization:
+the canonical source/target, mode, class and `st_dev`/`st_ino` of every
+capability-derived mount are bound into the call ticket. Session derivation
+must reproduce that exact snapshot, then the provider performs the descriptor
+pin above. A symlink or inode replacement anywhere between authorization and
+`exec` therefore refuses the call instead of changing what enters the sandbox.
+The resource sandbox first runs only the trusted `claw-app-runner`, blocked on
+its parent-owned stdin gate. The Host binds that process and consumes the
+single-use daemon ticket before releasing it to `exec` any package code, so
+neither module initialization nor an MCP handshake can race ahead of the
+transient grant.
+
 ## Networking
 
 A worker has no route: its network namespace is empty and the seccomp
@@ -204,7 +216,7 @@ per-launch broker endpoint bind-mounted at that path, which:
 **The endpoint's checks authorize nothing.** They are a cheap early
 refusal so an obviously unauthorized call costs no round trip. Every
 relayed call is decided by `clawd`: the inner route's typed body is
-decoded by the one route registry, the *live* App session grant is
+decoded by the one route registry, the *live* App workload grant is
 resolved, the route's own authority decision is taken, and the owning
 provider spends the exact capability before any effect happens.
 

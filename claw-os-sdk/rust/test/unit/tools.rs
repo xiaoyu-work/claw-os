@@ -21,7 +21,7 @@ fn denial_preserves_original_structured_payload() {
     let bin = dir.path().join("cos");
     std::fs::write(
         &bin,
-        "#!/bin/sh\nprintf '%s\\n' '{\"error\":\"opaque\",\"code\":\"DENIED\",\"detail\":{\"scope\":\"x\"}}'\nexit 1\n",
+        "#!/bin/sh\nprintf '%s\\n' '{\"ok\":false,\"wire_version\":1,\"error\":\"opaque\",\"code\":\"PERMISSION_DENIED\",\"detail\":{\"scope\":\"x\"}}'\nexit 1\n",
     )
     .unwrap();
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -33,8 +33,10 @@ fn denial_preserves_original_structured_payload() {
         ToolError::Denied { payload, .. } => assert_eq!(
             payload,
             serde_json::json!({
+                "ok": false,
+                "wire_version": 1,
                 "error": "opaque",
-                "code": "DENIED",
+                "code": "PERMISSION_DENIED",
                 "detail": {"scope": "x"}
             })
         ),

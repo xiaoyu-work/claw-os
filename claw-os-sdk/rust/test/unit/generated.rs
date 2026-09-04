@@ -1,6 +1,7 @@
 use crate::generated::{
-    validate_ai, validate_budget_show, validate_tool, validate_tool_catalog, WIRE_ENUM,
-    WIRE_MAXIMUM, WIRE_MINIMUM, WIRE_REQUIRED, WIRE_TYPE, WIRE_UNKNOWN_FIELD,
+    validate_ai, validate_budget_show, validate_mcp_call_context, validate_tool,
+    validate_tool_catalog, WIRE_ENUM, WIRE_MAXIMUM, WIRE_MAX_LENGTH, WIRE_MINIMUM, WIRE_MIN_LENGTH,
+    WIRE_PATTERN, WIRE_REQUIRED, WIRE_TYPE, WIRE_UNKNOWN_FIELD,
 };
 
 fn valid_ai() -> serde_json::Value {
@@ -128,6 +129,7 @@ fn validators_accept_v1_tool_inputs_and_reject_malformed_items() {
 fn root_types_and_budget_show_have_stable_contracts() {
     for root_error in [
         validate_ai(&serde_json::Value::Null).unwrap_err(),
+        validate_mcp_call_context(&serde_json::Value::Null).unwrap_err(),
         validate_tool(&serde_json::Value::Null).unwrap_err(),
         validate_tool_catalog(&serde_json::Value::Null).unwrap_err(),
     ] {
@@ -149,4 +151,54 @@ fn root_types_and_budget_show_have_stable_contracts() {
     .unwrap_err();
     assert_eq!(chat_budget.code, WIRE_REQUIRED);
     assert_eq!(chat_budget.path, "$.app");
+}
+
+#[test]
+fn mcp_call_context_is_closed_and_depth_bounded() {
+    let context = serde_json::json!({
+        "wire_version": 1,
+        "call_id": "call-1",
+        "trace_id": "trace-1",
+        "depth": 0,
+        "caller": {
+            "kind": "system-agent",
+            "id": "session-1",
+            "owner_uid": 1000
+        }
+    });
+    validate_mcp_call_context(&context).unwrap();
+
+    let mut unknown = context.clone();
+    unknown["caller"]["token"] = serde_json::json!("forged");
+    let error = validate_mcp_call_context(&unknown).unwrap_err();
+    assert_eq!(error.code, WIRE_UNKNOWN_FIELD);
+    assert_eq!(error.path, "$.caller.token");
+
+    let mut too_deep = context;
+    too_deep["depth"] = serde_json::json!(17);
+    let error = validate_mcp_call_context(&too_deep).unwrap_err();
+    assert_eq!(error.code, WIRE_MAXIMUM);
+    assert_eq!(error.path, "$.depth");
+
+    for (call_id, code) in [
+        ("".to_string(), WIRE_MIN_LENGTH),
+        ("x".repeat(129), WIRE_MAX_LENGTH),
+        ("call id".to_string(), WIRE_PATTERN),
+        ("call-1\n".to_string(), WIRE_PATTERN),
+    ] {
+        let malformed = serde_json::json!({
+            "wire_version": 1,
+            "call_id": call_id,
+            "trace_id": "trace-1",
+            "depth": 0,
+            "caller": {
+                "kind": "system-agent",
+                "id": "session-1",
+                "owner_uid": 1000
+            }
+        });
+        let error = validate_mcp_call_context(&malformed).unwrap_err();
+        assert_eq!(error.code, code);
+        assert_eq!(error.path, "$.call_id");
+    }
 }

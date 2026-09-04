@@ -1,16 +1,13 @@
 use super::*;
 
 #[test]
-fn parse_bare_string_means_english() {
-    let t: LocalizedText = serde_json::from_str(r#""Files""#).unwrap();
-    assert_eq!(t.en_str(), "Files");
-    assert!(t.has_english());
+fn bare_string_is_rejected() {
+    assert!(serde_json::from_str::<LocalizedText>(r#""Files""#).is_err());
 }
 
 #[test]
 fn parse_object_form() {
-    let t: LocalizedText =
-        serde_json::from_str(r#"{"en": "Files", "zh-CN": "文件"}"#).unwrap();
+    let t: LocalizedText = serde_json::from_str(r#"{"en": "Files", "zh-CN": "文件"}"#).unwrap();
     assert_eq!(t.en_str(), "Files");
     assert_eq!(t.get(Locale::En), "Files");
     // The fallback works for an unrecognised locale even though our

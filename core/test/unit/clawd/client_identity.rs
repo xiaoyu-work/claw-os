@@ -9,7 +9,24 @@ fn unknown_identity_has_no_uid_or_home() {
 
 #[test]
 fn delegated_identity_keeps_principal_and_kernel_uids_distinct() {
-    let identity = ClientIdentity::from_verified_delegation(42, 1000, 61_184, 61_183, 7);
+    let identity = ClientIdentity::from_verified_delegation(
+        42,
+        1000,
+        61_184,
+        61_183,
+        7,
+        AuthenticatedExtensionHost {
+            purpose: crate::extension_host::protocol::HostPurpose::Task,
+            lease_id: "task-a".to_string(),
+            authority_session_id: Some("session-a".to_string()),
+            host_session_id: Some("host-a".to_string()),
+            owner_uid: 1000,
+            extension_uid: 61_184,
+            capability_generation: "a".repeat(16),
+            host_pid: 42,
+            host_start_time_ticks: Some(7),
+        },
+    );
     assert_eq!(identity.uid, Some(1000));
     assert_eq!(identity.execution_uid, Some(61_184));
     assert_eq!(identity.process_uid(), Some(61_184));

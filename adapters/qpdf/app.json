@@ -1,0 +1,305 @@
+{
+  "id": "qpdf",
+  "version": "0.1.0",
+  "schema_version": 2,
+  "name": {
+    "en": "qpdf PDF toolkit"
+  },
+  "summary": {
+    "en": "Inspect, split, merge, and decrypt PDF files with qpdf."
+  },
+  "runtime": "python",
+  "dependencies": {
+    "binaries": [
+      "qpdf"
+    ]
+  },
+  "mcp": {
+    "entry": "main.py",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "tools": [
+      {
+        "name": "pdf.info",
+        "summary": {
+          "en": "Return page count and encryption status for a PDF."
+        },
+        "args": [
+          {
+            "name": "path",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "Absolute path to the PDF."
+            }
+          },
+          {
+            "name": "password",
+            "kind": "text",
+            "required": false,
+            "default": "",
+            "label": {
+              "en": "Password for an encrypted PDF."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "path"
+            },
+            "why": {
+              "en": "Read the requested PDF."
+            }
+          },
+          {
+            "verb": "proc.spawn",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "qpdf"
+              }
+            },
+            "why": {
+              "en": "Run qpdf to inspect the document."
+            }
+          }
+        ]
+      },
+      {
+        "name": "pdf.split_pages",
+        "summary": {
+          "en": "Extract selected pages from a PDF into a new file."
+        },
+        "args": [
+          {
+            "name": "input",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "Absolute source PDF path."
+            }
+          },
+          {
+            "name": "output",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "Absolute destination PDF path."
+            }
+          },
+          {
+            "name": "pages",
+            "kind": "text",
+            "required": true,
+            "label": {
+              "en": "qpdf page range."
+            }
+          },
+          {
+            "name": "password",
+            "kind": "text",
+            "required": false,
+            "default": "",
+            "label": {
+              "en": "Password for an encrypted source PDF."
+            }
+          },
+          {
+            "name": "overwrite",
+            "kind": "bool",
+            "required": false,
+            "default": false,
+            "label": {
+              "en": "Allow replacing an existing output file."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "input"
+            },
+            "why": {
+              "en": "Read the source PDF."
+            }
+          },
+          {
+            "verb": "fs.write",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "output"
+            },
+            "why": {
+              "en": "Write the extracted pages."
+            }
+          },
+          {
+            "verb": "proc.spawn",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "qpdf"
+              }
+            },
+            "why": {
+              "en": "Run qpdf to extract pages."
+            }
+          }
+        ]
+      },
+      {
+        "name": "pdf.merge",
+        "summary": {
+          "en": "Concatenate multiple PDFs into one output file."
+        },
+        "args": [
+          {
+            "name": "inputs",
+            "kind": "path",
+            "required": true,
+            "repeatable": true,
+            "label": {
+              "en": "Ordered absolute source PDF paths."
+            }
+          },
+          {
+            "name": "output",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "Absolute destination PDF path."
+            }
+          },
+          {
+            "name": "overwrite",
+            "kind": "bool",
+            "required": false,
+            "default": false,
+            "label": {
+              "en": "Allow replacing an existing output file."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "inputs"
+            },
+            "why": {
+              "en": "Read each source PDF."
+            }
+          },
+          {
+            "verb": "fs.write",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "output"
+            },
+            "why": {
+              "en": "Write the merged PDF."
+            }
+          },
+          {
+            "verb": "proc.spawn",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "qpdf"
+              }
+            },
+            "why": {
+              "en": "Run qpdf to merge the documents."
+            }
+          }
+        ]
+      },
+      {
+        "name": "pdf.decrypt",
+        "summary": {
+          "en": "Write a decrypted copy of a PDF."
+        },
+        "args": [
+          {
+            "name": "input",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "Absolute source PDF path."
+            }
+          },
+          {
+            "name": "output",
+            "kind": "path",
+            "required": true,
+            "label": {
+              "en": "Absolute destination PDF path."
+            }
+          },
+          {
+            "name": "password",
+            "kind": "text",
+            "required": false,
+            "default": "",
+            "label": {
+              "en": "Password for the encrypted source PDF."
+            }
+          },
+          {
+            "name": "overwrite",
+            "kind": "bool",
+            "required": false,
+            "default": false,
+            "label": {
+              "en": "Allow replacing an existing output file."
+            }
+          }
+        ],
+        "needs": [
+          {
+            "verb": "fs.read",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "input"
+            },
+            "why": {
+              "en": "Read the encrypted PDF."
+            }
+          },
+          {
+            "verb": "fs.write",
+            "scope": {
+              "kind": "from-arg",
+              "arg": "output"
+            },
+            "why": {
+              "en": "Write the decrypted PDF."
+            }
+          },
+          {
+            "verb": "proc.spawn",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "name",
+                "value": "qpdf"
+              }
+            },
+            "why": {
+              "en": "Run qpdf to decrypt the document."
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -12,22 +12,11 @@ import pathlib
 import re
 import shutil
 import subprocess
-import sys
+
+from claw_os_sdk.mcp import App
+
 
 _HERE = pathlib.Path(__file__).resolve().parent
-_CANDIDATES = [
-    pathlib.Path(os.environ["CLAW_PYTHON_LIB"]) if os.environ.get("CLAW_PYTHON_LIB") else None,
-    _HERE.parent.parent / "claw-os-sdk" / "python" / "src",
-    pathlib.Path("/opt/claw/python"),
-    pathlib.Path("/usr/lib/cos/python"),
-    pathlib.Path("/usr/lib/claw/python"),
-]
-for _cand in _CANDIDATES:
-    if _cand and (_cand / "claw_os_sdk").is_dir():
-        sys.path.insert(0, str(_cand))
-        break
-
-from claw_os_sdk.serve import App  # noqa: E402
 
 
 def _qpdf_bin() -> str:
@@ -64,21 +53,10 @@ def _validate_range(spec: str) -> str:
     return s
 
 
-app = App()
+app = App.from_manifest(_HERE / "app.json")
 
 
-@app.tool(
-    "pdf.info",
-    summary="Return number of pages and encryption status for a PDF.",
-    args={
-        "path": {"type": "string", "description": "Absolute path to the PDF."},
-        "password": {
-            "type": "string",
-            "description": "Owner or user password if the PDF is encrypted. Empty for unencrypted PDFs.",
-        },
-    },
-    required=["path"],
-)
+@app.tool("pdf.info")
 def pdf_info(path: str, password: str = "") -> dict:
     src = pathlib.Path(path)
     if not src.is_file():
@@ -102,27 +80,7 @@ def pdf_info(path: str, password: str = "") -> dict:
     }
 
 
-@app.tool(
-    "pdf.split_pages",
-    summary="Extract a subset of pages from a PDF into a new file.",
-    args={
-        "input": {"type": "string", "description": "Absolute path to the source PDF."},
-        "output": {"type": "string", "description": "Destination PDF path."},
-        "pages": {
-            "type": "string",
-            "description": "qpdf page-range syntax (e.g. '1', '1-3', '1,3-5,7-z'). 'z' means last page.",
-        },
-        "password": {
-            "type": "string",
-            "description": "Owner/user password if the source is encrypted.",
-        },
-        "overwrite": {
-            "type": "boolean",
-            "description": "Overwrite the output file if it already exists. Default false.",
-        },
-    },
-    required=["input", "output", "pages"],
-)
+@app.tool("pdf.split_pages")
 def pdf_split_pages(
     input: str, output: str, pages: str, password: str = "", overwrite: bool = False
 ) -> str:
@@ -141,23 +99,7 @@ def pdf_split_pages(
     return str(dst)
 
 
-@app.tool(
-    "pdf.merge",
-    summary="Concatenate multiple PDFs into a single output file.",
-    args={
-        "inputs": {
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "Ordered list of absolute paths to source PDFs (length ≥ 2).",
-        },
-        "output": {"type": "string", "description": "Destination PDF path."},
-        "overwrite": {
-            "type": "boolean",
-            "description": "Overwrite output if it exists. Default false.",
-        },
-    },
-    required=["inputs", "output"],
-)
+@app.tool("pdf.merge")
 def pdf_merge(inputs: list, output: str, overwrite: bool = False) -> str:
     if not isinstance(inputs, list) or len(inputs) < 2:
         raise ValueError("inputs must be a list of at least two PDF paths")
@@ -179,23 +121,7 @@ def pdf_merge(inputs: list, output: str, overwrite: bool = False) -> str:
     return str(dst)
 
 
-@app.tool(
-    "pdf.decrypt",
-    summary="Write a copy of the PDF with all password / DRM removed.",
-    args={
-        "input": {"type": "string", "description": "Source PDF path."},
-        "output": {"type": "string", "description": "Destination PDF path."},
-        "password": {
-            "type": "string",
-            "description": "Owner or user password. Required if the PDF is actually encrypted.",
-        },
-        "overwrite": {
-            "type": "boolean",
-            "description": "Overwrite output if it exists. Default false.",
-        },
-    },
-    required=["input", "output"],
-)
+@app.tool("pdf.decrypt")
 def pdf_decrypt(input: str, output: str, password: str = "", overwrite: bool = False) -> str:
     src = pathlib.Path(input)
     if not src.is_file():

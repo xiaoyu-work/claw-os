@@ -420,18 +420,14 @@ fn default_registry_has_builtins_and_cos_proxy() {
     assert!(r.get("cos_stt").is_some());
     assert!(r.get("cos_imagegen").is_some());
     assert!(r.get("cos_doctor").is_some());
-    // Generic catalog + run are always registered, regardless of
-    // whether any typed cos_app_<id> proxies were picked up from
-    // $COS_APPS_DIR (which is environment-dependent at test time).
-    assert!(r.get("cos_app_catalog").is_some());
-    assert!(r.get("cos_app_run").is_some());
+    assert!(r.get("cos_app_catalog").is_none());
+    assert!(r.get("cos_app_run").is_none());
 
     // Lower bound: 2 builtins + cos_delegate + cos_todo + cos_clarify
     // + cos_skill
-    // + every cos_proxy tool (primitives + cos_memory) + cos_app_catalog
-    // + cos_app_run + 3 media tools, plus optionally cos_recall and active
-    // stateful App-session tools.
-    let expected_min = 6 + super::super::cos_proxy::total_count() + 2 + 3;
+    // + every cos_proxy tool (primitives + cos_memory) + 3 media tools,
+    // plus optionally cos_recall and authenticated MCP App tools.
+    let expected_min = 6 + super::super::cos_proxy::total_count() + 3;
     assert!(
         r.len() >= expected_min,
         "expected at least {} tools, got {}",
@@ -709,34 +705,6 @@ async fn execution_rechecks_exact_validated_arguments_after_exposure() {
         .await;
     assert!(!allowed.is_error);
     assert_eq!(executions.load(Ordering::SeqCst), 1);
-}
-
-#[test]
-fn worker_does_not_advertise_unreachable_app_session_tools() {
-    let mut registry = ToolRegistry::new();
-    registry.register(Arc::new(
-        crate::agent::tools::cos_apps_session::CosAppSessionOpen::default(),
-    ));
-    let caps = crate::caps::CapSet::from_caps([crate::caps::Cap::new(
-        crate::caps::Verb::AGENT_INVOKE,
-        crate::caps::Scope::name("**"),
-    )]);
-    let direct = ToolExposureContext::isolated(Guardrails::permissive())
-        .with_identity("direct", 1000, crate::session::SessionSource::LocalCli)
-        .with_capabilities(caps.clone())
-        .with_host(crate::agent::tools::exposure::ExecutionHost::Direct);
-    let worker = ToolExposureContext::isolated(Guardrails::permissive())
-        .with_identity("worker", 1000, crate::session::SessionSource::BrokerTask)
-        .with_capabilities(caps)
-        .with_host(crate::agent::tools::exposure::ExecutionHost::AgentWorker);
-
-    assert!(registry
-        .names_for(&direct)
-        .contains(&"cos_app_session_open"));
-    assert!(!registry
-        .names_for(&worker)
-        .contains(&"cos_app_session_open"));
-    assert!(registry.get_for(&worker, "cos_app_session_open").is_none());
 }
 
 #[test]

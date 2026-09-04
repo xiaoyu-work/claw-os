@@ -66,5 +66,60 @@
         }
       ]
     }
+  },
+  "schema_version": 2,
+  "mcp": {
+    "entry": "server.py",
+    "transport": "stdio",
+    "lifecycle": "lazy",
+    "access": {
+      "system_agent": true,
+      "apps": []
+    },
+    "tools": [
+      {
+        "name": "summarize.run",
+        "summary": {
+          "en": "Read text from --file or stdin and return a 3-line summary."
+        },
+        "args": [
+          {
+            "name": "text",
+            "kind": "text",
+            "required": false,
+            "repeatable": true
+          },
+          {
+            "name": "file",
+            "kind": "path",
+            "required": false
+          }
+        ],
+        "needs": [
+          {
+            "verb": "ai.chat.untrusted",
+            "scope": {
+              "kind": "wild"
+            },
+            "why": {
+              "en": "Send the text to a model so it can be condensed for you."
+            }
+          },
+          {
+            "verb": "memory.write",
+            "scope": {
+              "kind": "fixed",
+              "scope": {
+                "kind": "self-ref",
+                "value": "summarize"
+              }
+            },
+            "why": {
+              "en": "Remember the summary so the agent can recall it later."
+            }
+          }
+        ]
+      }
+    ]
   }
 }
