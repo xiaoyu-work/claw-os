@@ -15,16 +15,23 @@ from cos_runtime import policy  # noqa: E402
 
 SNAPSHOT_ID_RE = re.compile(r"^snap_[0-9a-f]{32}$")
 TIMEOUT_SECS = int(os.environ.get("CLAW_SNAPSHOT_TIMEOUT", "1800"))
+DEFAULT_DESCRIPTION = "Claw OS recovery point"
 
 
-def _cos_binary():
+def _cos_binary() -> str | None:
     return os.environ.get("COS_BIN") or shutil.which("cos")
 
 
-def _broker(action, value=None, confirm=False):
+def _broker(
+    action: str,
+    value: str | None = None,
+    confirm: bool = False,
+) -> dict:
     cos_bin = _cos_binary()
     if not cos_bin:
-        return {"error": "cos binary not found; snapshot broker unavailable"}
+        raise FileNotFoundError(
+            "cos binary not found; System Snapshot broker unavailable"
+        )
     argv = [cos_bin, "__snapshot", action]
     if value is not None:
         argv.append(value)
@@ -41,42 +48,62 @@ def _broker(action, value=None, confirm=False):
             check=False,
         )
     except (FileNotFoundError, PermissionError) as exc:
-        return {"error": str(exc)}
-    except subprocess.TimeoutExpired:
-        return {"error": f"snapshot broker exceeded {TIMEOUT_SECS}s"}
+        raise RuntimeError(f"System Snapshot broker execution failed: {exc}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"System Snapshot broker exceeded {TIMEOUT_SECS}s"
+        ) from exc
     payload_text = (result.stdout or "").strip() or (result.stderr or "").strip()
     try:
         payload = json.loads(payload_text) if payload_text else {}
-    except json.JSONDecodeError:
-        return {"error": "snapshot broker returned invalid JSON"}
-    if result.returncode != 0 and "error" not in payload:
-        payload["error"] = f"snapshot broker exited {result.returncode}"
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("System Snapshot broker returned invalid JSON") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("System Snapshot broker returned a non-object result")
+    error = payload.get("error")
+    if error is not None:
+        if not isinstance(error, str) or not error:
+            raise RuntimeError(
+                "System Snapshot broker returned an invalid error payload"
+            )
+        raise RuntimeError(error)
+    if result.returncode != 0:
+        raise RuntimeError(f"System Snapshot broker exited {result.returncode}")
     return payload
 
 
-def run(command, args):
-    from canonical_argv import normalize_canonical_argv
-    args = normalize_canonical_argv(args, bool_flags={"confirm"})
-    if command in ("status", "list"):
-        if args:
-            return {"error": f"{command} takes no arguments"}
-        policy.require("sys.observe", name="system-snapshots")
-        return _broker(command)
-    if command == "create":
-        if len(args) > 1:
-            return {"error": "create accepts at most one description"}
-        policy.require("sys.snapshot", wild=True)
-        return _broker("create", args[0] if args else "Claw OS recovery point")
-    if command == "delete":
-        if len(args) != 1 or SNAPSHOT_ID_RE.fullmatch(args[0]) is None:
-            return {"error": "delete requires a valid snapshot id"}
-        policy.require("sys.snapshot", wild=True)
-        return _broker("delete", args[0])
-    if command == "rollback":
-        confirm = "--confirm" in args
-        ids = [value for value in args if value != "--confirm"]
-        if len(ids) != 1 or SNAPSHOT_ID_RE.fullmatch(ids[0]) is None or not confirm:
-            return {"error": "rollback requires <snapshot-id> --confirm"}
-        policy.require("sys.snapshot", wild=True)
-        return _broker("rollback", ids[0], confirm=True)
-    return {"error": f"unknown command: {command}"}
+def _validate_snapshot_id(snapshot_id: str) -> str:
+    if not isinstance(snapshot_id, str) or SNAPSHOT_ID_RE.fullmatch(snapshot_id) is None:
+        raise ValueError("snapshot id must match snap_<32 lowercase hex digits>")
+    return snapshot_id
+
+
+def status() -> dict:
+    policy.require("sys.observe", name="system-snapshots")
+    return _broker("status")
+
+
+def list_snapshots() -> dict:
+    policy.require("sys.observe", name="system-snapshots")
+    return _broker("list")
+
+
+def create_snapshot(description: str | None = None) -> dict:
+    if description is not None and not isinstance(description, str):
+        raise ValueError("description must be text")
+    policy.require("sys.snapshot", wild=True)
+    return _broker("create", description if description is not None else DEFAULT_DESCRIPTION)
+
+
+def delete_snapshot(snapshot_id: str) -> dict:
+    snapshot_id = _validate_snapshot_id(snapshot_id)
+    policy.require("sys.snapshot", wild=True)
+    return _broker("delete", snapshot_id)
+
+
+def rollback_snapshot(snapshot_id: str, confirm: bool) -> dict:
+    snapshot_id = _validate_snapshot_id(snapshot_id)
+    if confirm is not True:
+        raise ValueError("rollback requires confirm=true")
+    policy.require("sys.snapshot", wild=True)
+    return _broker("rollback", snapshot_id, confirm=True)
