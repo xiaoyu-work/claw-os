@@ -9,371 +9,6 @@
   },
   "icon": "🖥",
   "runtime": "python",
-  "operations": {
-    "status": {
-      "label": {
-        "en": "Inspect displays and backlights"
-      },
-      "needs": [
-        {
-          "verb": "sys.observe",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "display"
-            }
-          },
-          "why": {
-            "en": "Read COSMIC output modes/layout and kernel backlight state."
-          }
-        }
-      ],
-      "args": []
-    },
-    "enable": {
-      "label": {
-        "en": "Enable an output"
-      },
-      "args": [
-        {
-          "name": "output",
-          "kind": "name",
-          "required": true
-        }
-      ],
-      "needs": [
-        {
-          "verb": "device.display",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "manage"
-            }
-          },
-          "why": {
-            "en": "Enable the selected COSMIC output."
-          }
-        }
-      ]
-    },
-    "disable": {
-      "label": {
-        "en": "Disable an output"
-      },
-      "args": [
-        {
-          "name": "output",
-          "kind": "name",
-          "required": true
-        }
-      ],
-      "needs": [
-        {
-          "verb": "device.display",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "manage"
-            }
-          },
-          "why": {
-            "en": "Disable the selected output unless it is the last enabled display."
-          }
-        }
-      ]
-    },
-    "mirror": {
-      "label": {
-        "en": "Mirror one output from another"
-      },
-      "args": [
-        {
-          "name": "output",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "from",
-          "kind": "name",
-          "required": true
-        }
-      ],
-      "needs": [
-        {
-          "verb": "device.display",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "manage"
-            }
-          },
-          "why": {
-            "en": "Mirror a selected output from another output."
-          }
-        }
-      ]
-    },
-    "position": {
-      "label": {
-        "en": "Position an output"
-      },
-      "args": [
-        {
-          "name": "output",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "x",
-          "kind": "integer",
-          "required": true
-        },
-        {
-          "name": "y",
-          "kind": "integer",
-          "required": true
-        }
-      ],
-      "needs": [
-        {
-          "verb": "device.display",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "manage"
-            }
-          },
-          "why": {
-            "en": "Change the selected output's logical position."
-          }
-        }
-      ]
-    },
-    "mode": {
-      "label": {
-        "en": "Set output mode and optional properties"
-      },
-      "args": [
-        {
-          "name": "output",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "width",
-          "kind": "integer",
-          "required": true
-        },
-        {
-          "name": "height",
-          "kind": "integer",
-          "required": true
-        },
-        {
-          "name": "adaptive-sync",
-          "kind": "name",
-          "binding": "flag",
-          "required": false
-        },
-        {
-          "name": "refresh",
-          "kind": "number",
-          "binding": "flag",
-          "required": false
-        },
-        {
-          "name": "scale",
-          "kind": "number",
-          "binding": "flag",
-          "required": false
-        },
-        {
-          "name": "x",
-          "kind": "integer",
-          "binding": "flag",
-          "required": false
-        },
-        {
-          "name": "y",
-          "kind": "integer",
-          "binding": "flag",
-          "required": false
-        },
-        {
-          "name": "transform",
-          "kind": "name",
-          "binding": "flag",
-          "required": false
-        }
-      ],
-      "needs": [
-        {
-          "verb": "device.display",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "manage"
-            }
-          },
-          "why": {
-            "en": "Change mode, refresh, scale, position, rotation, or adaptive sync."
-          }
-        }
-      ]
-    },
-    "scale": {
-      "label": {
-        "en": "Set output scale"
-      },
-      "args": [
-        {
-          "name": "output",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "scale",
-          "kind": "number",
-          "required": true
-        }
-      ],
-      "needs": [
-        {
-          "verb": "device.display",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "manage"
-            }
-          },
-          "why": {
-            "en": "Change scale while preserving the current mode and refresh."
-          }
-        }
-      ]
-    },
-    "apply-layout": {
-      "label": {
-        "en": "Apply a full cosmic-randr KDL layout"
-      },
-      "args": [
-        {
-          "name": "source",
-          "kind": "path",
-          "required": true
-        },
-        {
-          "name": "confirm",
-          "kind": "bool",
-          "required": true,
-          "binding": "flag",
-          "choices": [
-            true
-          ]
-        }
-      ],
-      "needs": [
-        {
-          "verb": "device.display",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "manage"
-            }
-          },
-          "why": {
-            "en": "Apply the complete validated display layout."
-          }
-        },
-        {
-          "verb": "fs.read",
-          "scope": {
-            "kind": "from-arg",
-            "arg": "source"
-          },
-          "why": {
-            "en": "Read layout KDL from the exact approved file."
-          }
-        }
-      ]
-    },
-    "brightness": {
-      "label": {
-        "en": "Set a kernel backlight percentage"
-      },
-      "args": [
-        {
-          "name": "backlight",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "percent",
-          "kind": "integer",
-          "required": true
-        }
-      ],
-      "needs": [
-        {
-          "verb": "device.display",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "manage"
-            }
-          },
-          "why": {
-            "en": "Change one exact kernel backlight device."
-          }
-        }
-      ]
-    },
-    "restore": {
-      "label": {
-        "en": "Restore a previous display state"
-      },
-      "args": [
-        {
-          "name": "backup_token",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "confirm",
-          "kind": "bool",
-          "required": true,
-          "binding": "flag",
-          "choices": [
-            true
-          ]
-        }
-      ],
-      "needs": [
-        {
-          "verb": "device.display",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "manage"
-            }
-          },
-          "why": {
-            "en": "Restore the previous layout or brightness if current state still matches."
-          }
-        }
-      ]
-    }
-  },
   "schema_version": 2,
   "mcp": {
     "entry": "server.py",
@@ -473,7 +108,7 @@
             "required": true
           },
           {
-            "name": "from",
+            "name": "source_output",
             "kind": "name",
             "required": true
           }
@@ -554,34 +189,55 @@
             "required": true
           },
           {
-            "name": "adaptive-sync",
+            "name": "adaptive_sync",
             "kind": "name",
-            "required": false
+            "binding": "flag",
+            "required": false,
+            "choices": [
+              "true",
+              "automatic",
+              "false"
+            ]
           },
           {
             "name": "refresh",
             "kind": "number",
+            "binding": "flag",
             "required": false
           },
           {
             "name": "scale",
             "kind": "number",
+            "binding": "flag",
             "required": false
           },
           {
             "name": "x",
             "kind": "integer",
+            "binding": "flag",
             "required": false
           },
           {
             "name": "y",
             "kind": "integer",
+            "binding": "flag",
             "required": false
           },
           {
             "name": "transform",
             "kind": "name",
-            "required": false
+            "binding": "flag",
+            "required": false,
+            "choices": [
+              "normal",
+              "rotate90",
+              "rotate180",
+              "rotate270",
+              "flipped",
+              "flipped90",
+              "flipped180",
+              "flipped270"
+            ]
           }
         ],
         "needs": [
