@@ -9,92 +9,6 @@
   },
   "icon": "📷",
   "runtime": "python",
-  "operations": {
-    "status": {
-      "label": {
-        "en": "List PipeWire camera nodes"
-      },
-      "needs": [
-        {
-          "verb": "sys.observe",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "camera"
-            }
-          },
-          "why": {
-            "en": "Read Video/Source nodes and portal/GStreamer availability."
-          }
-        }
-      ]
-    },
-    "capture": {
-      "label": {
-        "en": "Capture one still image"
-      },
-      "args": [
-        {
-          "name": "node_id",
-          "kind": "integer",
-          "required": true
-        },
-        {
-          "name": "expected_serial",
-          "kind": "integer",
-          "required": true
-        },
-        {
-          "name": "destination",
-          "kind": "path",
-          "required": true
-        },
-        {
-          "name": "format",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "width",
-          "kind": "integer",
-          "required": false,
-          "default": 1280
-        },
-        {
-          "name": "height",
-          "kind": "integer",
-          "required": false,
-          "default": 720
-        }
-      ],
-      "needs": [
-        {
-          "verb": "device.camera",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "capture"
-            }
-          },
-          "why": {
-            "en": "Activate the selected camera only if its PipeWire serial still matches."
-          }
-        },
-        {
-          "verb": "fs.write",
-          "scope": {
-            "kind": "from-arg",
-            "arg": "destination"
-          },
-          "why": {
-            "en": "Persist the image to this exact new path without overwriting."
-          }
-        }
-      ]
-    }
-  },
   "schema_version": 2,
   "mcp": {
     "entry": "server.py",
@@ -135,32 +49,38 @@
           {
             "name": "node_id",
             "kind": "integer",
+            "binding": "positional",
             "required": true
           },
           {
             "name": "expected_serial",
             "kind": "integer",
+            "binding": "positional",
             "required": true
           },
           {
             "name": "destination",
             "kind": "path",
+            "binding": "positional",
             "required": true
           },
           {
             "name": "format",
             "kind": "name",
+            "binding": "positional",
             "required": true
           },
           {
             "name": "width",
             "kind": "integer",
+            "binding": "positional",
             "required": false,
             "default": 1280
           },
           {
             "name": "height",
             "kind": "integer",
+            "binding": "positional",
             "required": false,
             "default": 720
           }

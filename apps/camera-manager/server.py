@@ -1,4 +1,34 @@
-from cos_runtime.mcp import serve_manifest_operations
-from main import run
+from claw_os_sdk.mcp import App
 
-serve_manifest_operations(run)
+from main import capture, status
+
+
+app = App.from_manifest()
+
+
+@app.tool("camera-manager.status")
+def camera_status() -> dict:
+    return status()
+
+
+@app.tool("camera-manager.capture")
+def capture_image(
+    node_id: int,
+    expected_serial: int,
+    destination: str,
+    format: str,
+    width: int = 1280,
+    height: int = 720,
+) -> dict:
+    return capture(
+        node_id,
+        expected_serial,
+        destination,
+        format,
+        width,
+        height,
+    )
+
+
+if __name__ == "__main__":
+    app.serve()
