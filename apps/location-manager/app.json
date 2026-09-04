@@ -9,56 +9,6 @@
   },
   "icon": "📍",
   "runtime": "python",
-  "operations": {
-    "locate": {
-      "label": {
-        "en": "Request current location"
-      },
-      "args": [
-        {
-          "name": "accuracy",
-          "kind": "name",
-          "required": false,
-          "default": "city"
-        }
-      ],
-      "needs": [
-        {
-          "verb": "device.location",
-          "scope": {
-            "kind": "wild"
-          },
-          "why": {
-            "en": "Request geographic coordinates from the system GeoClue service."
-          }
-        }
-      ]
-    },
-    "timezone": {
-      "label": {
-        "en": "Suggest the current timezone"
-      },
-      "args": [
-        {
-          "name": "accuracy",
-          "kind": "name",
-          "required": false,
-          "default": "city"
-        }
-      ],
-      "needs": [
-        {
-          "verb": "device.location",
-          "scope": {
-            "kind": "wild"
-          },
-          "why": {
-            "en": "Use a GeoClue fix to suggest nearby IANA timezone regions."
-          }
-        }
-      ]
-    }
-  },
   "schema_version": 2,
   "mcp": {
     "entry": "server.py",
@@ -79,7 +29,14 @@
             "name": "accuracy",
             "kind": "name",
             "required": false,
-            "default": "city"
+            "default": "city",
+            "choices": [
+              "country",
+              "city",
+              "neighborhood",
+              "street",
+              "exact"
+            ]
           }
         ],
         "needs": [
@@ -104,7 +61,14 @@
             "name": "accuracy",
             "kind": "name",
             "required": false,
-            "default": "city"
+            "default": "city",
+            "choices": [
+              "country",
+              "city",
+              "neighborhood",
+              "street",
+              "exact"
+            ]
           }
         ],
         "needs": [

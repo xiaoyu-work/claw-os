@@ -23,7 +23,9 @@ def _cos_binary():
 def _broker(action, accuracy):
     cos_bin = _cos_binary()
     if not cos_bin:
-        return {"error": "cos binary not found; Location Manager broker unavailable"}
+        raise FileNotFoundError(
+            "cos binary not found; Location Manager broker unavailable"
+        )
     argv = [cos_bin, "__location", action, "--accuracy", accuracy]
     try:
         result = subprocess.run(
@@ -35,29 +37,31 @@ def _broker(action, accuracy):
             env=scrub_env(),
             check=False,
         )
-    except (FileNotFoundError, PermissionError) as exc:
-        return {"error": str(exc)}
-    except subprocess.TimeoutExpired:
-        return {"error": f"Location Manager broker exceeded {TIMEOUT_SECS}s"}
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"Location Manager broker exceeded {TIMEOUT_SECS}s"
+        ) from exc
     payload_text = (result.stdout or "").strip() or (result.stderr or "").strip()
     try:
         payload = json.loads(payload_text) if payload_text else {}
-    except json.JSONDecodeError:
-        return {"error": "Location Manager broker returned invalid JSON"}
-    if result.returncode != 0 and "error" not in payload:
-        payload["error"] = f"Location Manager broker exited {result.returncode}"
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Location Manager broker returned invalid JSON") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("Location Manager broker returned a non-object result")
+    error = payload.get("error")
+    if result.returncode != 0 or error:
+        if not isinstance(error, str) or not error:
+            error = f"Location Manager broker exited {result.returncode}"
+        raise RuntimeError(error)
     return payload
 
 
-def run(command, args):
-    from canonical_argv import normalize_canonical_argv
-    args = normalize_canonical_argv(args)
-    if command not in {"locate", "timezone"}:
-        return {"error": f"unknown command: {command}"}
-    if len(args) > 1:
-        return {"error": f"{command} accepts at most one accuracy"}
-    accuracy = args[0] if args else "city"
+def query(action, accuracy="city"):
+    if action not in {"locate", "timezone"}:
+        raise ValueError(f"unknown location action: {action}")
     if accuracy not in ACCURACIES:
-        return {"error": "accuracy must be country|city|neighborhood|street|exact"}
+        raise ValueError(
+            "accuracy must be country|city|neighborhood|street|exact"
+        )
     policy.require("device.location", wild=True)
-    return _broker(command, accuracy)
+    return _broker(action, accuracy)

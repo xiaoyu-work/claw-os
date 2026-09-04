@@ -1,4 +1,20 @@
-from cos_runtime.mcp import serve_manifest_operations
-from main import run
+from claw_os_sdk.mcp import App
 
-serve_manifest_operations(run)
+from main import query
+
+
+app = App.from_manifest()
+
+
+@app.tool("location-manager.locate")
+def locate(accuracy="city"):
+    return query("locate", accuracy)
+
+
+@app.tool("location-manager.timezone")
+def timezone(accuracy="city"):
+    return query("timezone", accuracy)
+
+
+if __name__ == "__main__":
+    app.serve()
