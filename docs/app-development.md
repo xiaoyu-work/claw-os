@@ -542,6 +542,7 @@ Set explicitly only when overriding defaults
 |---|---|---|
 | `COS_APPS_DIR` | Apps root the kernel scans. | `/usr/lib/cos/apps` |
 | `COS_DATA_DIR` | Where the current process persists Claw OS data. Inside a sandboxed operation this is the app's own partition, `<data-root>/apps/<app-id>` — never the owner's data root. | `$XDG_DATA_HOME/cos`, normally `~/.local/share/cos`; clawd overrides this to `/var/lib/cos` |
+| `COS_OWNER_HOME` | Verified home path of the user the App service represents. Use it only to resolve a manifest-approved `~/...` resource; the path grants no access by itself, and `$HOME` remains private App state. | (auto) |
 | `COS_APPLICATIONS_DIR` | Where `cos app install` writes generated desktop launchers. | `/usr/share/applications` |
 | `COS_SDK_PYTHON_DIR` | Force the SDK lookup to a specific dir. Must contain both `claw_os_sdk/` and `cos_runtime/` as subdirs. | unset → kernel probes `/usr/lib/cos/python` + sibling dev paths |
 | `COS_APP_ID` | The id of the calling app. **Auto-set by the bridge** from `app.json`; do not override. | (auto) |

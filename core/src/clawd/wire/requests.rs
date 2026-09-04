@@ -643,6 +643,8 @@ pub struct DesktopControl {
     pub app_id: Option<Name>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identifier: Option<Name>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uris: Option<TextList<32, PATH_BYTES>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

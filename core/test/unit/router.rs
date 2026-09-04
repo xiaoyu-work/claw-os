@@ -257,6 +257,60 @@ fn hidden_policy_bridge_remains_available_to_runtimes() {
 }
 
 #[test]
+fn hidden_desktop_parser_preserves_repeatable_option_shaped_uris() {
+    let args = [
+        "__desktop",
+        "launch",
+        "--app-id",
+        "com.example.App",
+        "--uri",
+        "--new-window",
+        "--uri",
+        "file:///data/report.txt",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect::<Vec<_>>();
+    let parsed = parse_desktop_bridge_args(&args).unwrap();
+    assert_eq!(parsed.action, "launch");
+    assert_eq!(parsed.identifier, None);
+    assert_eq!(parsed.app_id.as_deref(), Some("com.example.App"));
+    assert_eq!(
+        parsed.uris,
+        vec![
+            "--new-window".to_string(),
+            "file:///data/report.txt".to_string()
+        ]
+    );
+
+    let missing = ["__desktop", "launch", "--uri"]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    assert!(parse_desktop_bridge_args(&missing)
+        .unwrap_err()
+        .contains("--uri requires a value"));
+
+    let unknown = ["__desktop", "launch", "--unknown", "value"]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    assert!(parse_desktop_bridge_args(&unknown)
+        .unwrap_err()
+        .contains("unknown internal desktop flag"));
+
+    for flag in ["--app-id", "--identifier"] {
+        let duplicate = ["__desktop", "launch", flag, "first", flag, "second"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        assert!(parse_desktop_bridge_args(&duplicate)
+            .unwrap_err()
+            .contains("may only be provided once"));
+    }
+}
+
+#[test]
 fn show_command_schema_returns_json() {
     let result = show_command_schema("checkpoint", "create");
     assert!(result.is_ok());
@@ -1844,6 +1898,32 @@ fn render_error_mcp_result_is_a_nonzero_error_with_server_text() {
 fn render_empty_mcp_result_prints_nothing() {
     let result = json!({ "content": [] });
     assert_eq!(render_call_tool_result(&result).unwrap(), None);
+}
+
+#[test]
+fn mcp_cli_audit_records_only_argument_shape() {
+    let args = vec![
+        "com.example.App".to_string(),
+        "--uri".to_string(),
+        "https://example.test/private?token=secret".to_string(),
+        "--path".to_string(),
+        "/home/user/private.txt".to_string(),
+    ];
+
+    let projected = mcp_audit_projection(&args);
+
+    assert_eq!(
+        projected,
+        vec![
+            "arg_count=5".to_string(),
+            format!(
+                "arg_bytes={}",
+                args.iter().map(|argument| argument.len()).sum::<usize>()
+            ),
+        ]
+    );
+    assert!(!projected.join(" ").contains("private"));
+    assert!(!projected.join(" ").contains("secret"));
 }
 
 #[cfg(unix)]

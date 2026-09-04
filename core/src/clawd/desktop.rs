@@ -10,13 +10,15 @@ use std::time::{Duration, Instant};
 
 use crate::caps::{Cap, Scope, Verb};
 
-use super::authority::{Authorized, Decision};
+use super::authority::Decision;
 use super::client_identity::ClientIdentity;
 
 const HELPER_TIMEOUT: Duration = Duration::from_secs(20);
 const LAUNCH_TIMEOUT: Duration = Duration::from_secs(30);
 const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 const STREAM_CAP_BYTES: usize = 2 * 1024 * 1024;
+const MAX_LAUNCH_URIS: usize = 32;
+const MAX_URI_BYTES: usize = 4096;
 static DESKTOP_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 pub async fn control(
@@ -46,13 +48,24 @@ pub async fn control(
         let action = required_string(&params, "action")?;
         let identifier = optional_string(&params, "identifier")?;
         let app_id = optional_string(&params, "app_id")?;
-        validate_action(&action, identifier.as_deref(), app_id.as_deref())?;
-        let requested = requested_caps(&action, app_id.as_deref());
-        let _authorized = authorize_session(authority, &requested)?;
+        let uris = optional_string_list(&params, "uris")?;
+        validate_action(&action, identifier.as_deref(), app_id.as_deref(), &uris)?;
+        authorize_caller(authority, &action)?;
+        let uris = canonicalize_launch_uris(&uris)?;
+        let requested = requested_caps(&action, app_id.as_deref(), &uris)?;
+        let _authorized = authority.require_all(&requested)?;
         let environment = DesktopEnvironment::for_user(uid, gid, home, peer_pid)?;
 
         if action == "list" {
             return run_helper(&environment, &["list"]).await;
+        }
+        if action == "launch" {
+            return launch_desktop_app(
+                &environment,
+                app_id.as_deref().expect("validated launch app_id"),
+                &uris,
+            )
+            .await;
         }
         let _guard = tokio::time::timeout(
             LOCK_TIMEOUT,
@@ -79,10 +92,14 @@ pub async fn control(
     }
 }
 
-fn requested_caps(action: &str, app_id: Option<&str>) -> Vec<Cap> {
-    match action {
+fn requested_caps(action: &str, app_id: Option<&str>, uris: &[String]) -> Result<Vec<Cap>, String> {
+    let mut caps = match action {
         "list" => vec![Cap::new(Verb::SYS_OBSERVE, Scope::name("desktop"))],
         "focus" | "close" => vec![Cap::new(Verb::DESKTOP_WINDOW, Scope::name("control"))],
+        "launch" => vec![Cap::new(
+            Verb::DESKTOP_LAUNCH,
+            Scope::name(app_id.unwrap_or_default()),
+        )],
         "restart" => vec![
             Cap::new(Verb::DESKTOP_WINDOW, Scope::name("control")),
             Cap::new(
@@ -91,7 +108,15 @@ fn requested_caps(action: &str, app_id: Option<&str>) -> Vec<Cap> {
             ),
         ],
         _ => Vec::new(),
+    };
+    if action == "launch" {
+        for uri in uris {
+            if let Some(path) = canonical_file_uri_path(uri)? {
+                caps.push(Cap::new(Verb::FS_READ, Scope::path(path)));
+            }
+        }
     }
+    Ok(caps)
 }
 
 /// Final provider check, taken against the decision the broker already
@@ -103,9 +128,12 @@ fn requested_caps(action: &str, app_id: Option<&str>) -> Vec<Cap> {
 /// process registry or re-derives policy, so the two can no longer
 /// disagree; the check still runs, because a privileged mutation
 /// should be refused twice.
-fn authorize_session(authority: &Decision, requested: &[Cap]) -> Result<Authorized, String> {
-    authority.require_app("desktop-manager")?;
-    authority.require_all(requested)
+fn authorize_caller(authority: &Decision, action: &str) -> Result<(), String> {
+    match action {
+        "launch" => authority.require_app("launcher"),
+        "list" | "focus" | "close" | "restart" => authority.require_app("desktop-manager"),
+        _ => return Err(format!("unknown desktop action: {action}")),
+    }
 }
 
 async fn restart(
@@ -125,7 +153,7 @@ async fn restart(
             "error": "application still has open windows; relaunch was skipped",
         }));
     }
-    let launch = launch_desktop_app(environment, app_id).await?;
+    let launch = launch_desktop_app(environment, app_id, &[]).await?;
     tokio::time::sleep(Duration::from_millis(500)).await;
     let windows = run_helper(environment, &["list"]).await?;
     let matching = windows["windows"]
@@ -171,53 +199,35 @@ async fn run_helper(environment: &DesktopEnvironment, args: &[&str]) -> Result<V
 async fn launch_desktop_app(
     environment: &DesktopEnvironment,
     app_id: &str,
+    uris: &[String],
 ) -> Result<Value, String> {
-    let (program, args) =
-        if let Some(gtk_launch) = tool_path(&["/usr/bin/gtk-launch", "/bin/gtk-launch"]) {
-            (PathBuf::from(gtk_launch), vec![app_id.to_string()])
-        } else if let Some(gio) = tool_path(&["/usr/bin/gio", "/bin/gio"]) {
-            let desktop_file = find_desktop_file(&environment.home, app_id)?;
-            (
-                PathBuf::from(gio),
-                vec![
-                    "launch".to_string(),
-                    desktop_file.to_string_lossy().into_owned(),
-                ],
-            )
-        } else {
-            return Err("neither gtk-launch nor gio is installed".to_string());
-        };
-    let output =
-        run_user_command(program.clone(), args, environment.clone(), LAUNCH_TIMEOUT).await?;
-    if !output.status.success() {
-        return Err(format!(
-            "{} exited {}: {}",
-            program.display(),
-            output.status.code().unwrap_or(-1),
-            tail(&output.stderr)
-        ));
+    let program = PathBuf::from("/usr/bin/gtk4-launch");
+    let args = gtk4_launch_args(app_id, uris);
+    let status =
+        run_user_launch_command(program.clone(), args, environment.clone(), LAUNCH_TIMEOUT).await?;
+    if !status.success() {
+        return Err(launch_exit_error(status));
     }
     Ok(json!({
         "launched": true,
         "app_id": app_id,
         "launcher": program,
-        "stdout_tail": tail(&output.stdout),
-        "stderr_tail": tail(&output.stderr),
     }))
 }
 
-fn find_desktop_file(home: &Path, app_id: &str) -> Result<PathBuf, String> {
-    for root in [
-        home.join(".local/share/applications"),
-        PathBuf::from("/usr/local/share/applications"),
-        PathBuf::from("/usr/share/applications"),
-    ] {
-        let candidate = root.join(format!("{app_id}.desktop"));
-        if candidate.is_file() {
-            return Ok(candidate);
-        }
+fn gtk4_launch_args(app_id: &str, uris: &[String]) -> Vec<String> {
+    let mut args = Vec::with_capacity(uris.len() + 2);
+    args.push("--".to_string());
+    args.push(app_id.to_string());
+    args.extend(uris.iter().cloned());
+    args
+}
+
+fn launch_exit_error(status: ExitStatus) -> String {
+    match status.code() {
+        Some(code) => format!("gtk4-launch exited {code}"),
+        None => "gtk4-launch was terminated by a signal".to_string(),
     }
-    Err(format!("desktop entry not found for app_id {app_id:?}"))
 }
 
 #[derive(Clone)]
@@ -407,16 +417,99 @@ fn validate_action(
     action: &str,
     identifier: Option<&str>,
     app_id: Option<&str>,
+    uris: &[String],
 ) -> Result<(), String> {
     match action {
-        "list" if identifier.is_none() && app_id.is_none() => Ok(()),
-        "focus" | "close" if valid_identifier(identifier) && app_id.is_none() => Ok(()),
-        "restart" if valid_identifier(identifier) && valid_app_id(app_id) => Ok(()),
-        "list" => Err("list does not accept identifier or app_id".to_string()),
+        "list" if identifier.is_none() && app_id.is_none() && uris.is_empty() => Ok(()),
+        "focus" | "close"
+            if valid_identifier(identifier) && app_id.is_none() && uris.is_empty() =>
+        {
+            Ok(())
+        }
+        "restart" if valid_identifier(identifier) && valid_app_id(app_id) && uris.is_empty() => {
+            Ok(())
+        }
+        "launch" if identifier.is_none() && valid_app_id(app_id) => validate_launch_uris(uris),
+        "list" => Err("list does not accept identifier, app_id, or uris".to_string()),
         "focus" | "close" => Err(format!("{action} requires one valid window identifier")),
         "restart" => Err("restart requires a window identifier and exact app_id".to_string()),
+        "launch" => Err("launch requires an exact app_id and no identifier".to_string()),
         _ => Err(format!("unknown desktop action: {action}")),
     }
+}
+
+fn validate_launch_uris(uris: &[String]) -> Result<(), String> {
+    if uris.len() > MAX_LAUNCH_URIS {
+        return Err(format!("launch accepts at most {MAX_LAUNCH_URIS} URIs"));
+    }
+    if uris.iter().any(|uri| {
+        uri.is_empty()
+            || uri.len() > MAX_URI_BYTES
+            || uri.chars().any(|character| character.is_control())
+    }) {
+        return Err(format!(
+            "launch URIs must be non-empty, at most {MAX_URI_BYTES} bytes, \
+             and contain no control characters"
+        ));
+    }
+    for uri in uris {
+        url::Url::parse(uri).map_err(|_| "launch values must be absolute URIs".to_string())?;
+    }
+    Ok(())
+}
+
+fn canonical_file_uri_path(uri: &str) -> Result<Option<String>, String> {
+    let parsed =
+        url::Url::parse(uri).map_err(|_| "launch values must be absolute URIs".to_string())?;
+    if parsed.scheme() != "file" {
+        return Ok(None);
+    }
+    if parsed.host_str().is_some()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.port().is_some()
+    {
+        return Err("file launch URIs must refer to the local host".to_string());
+    }
+    if parsed.query().is_some() || parsed.fragment().is_some() {
+        return Err("file launch URIs must not contain a query or fragment".to_string());
+    }
+
+    let requested = parsed
+        .to_file_path()
+        .map_err(|_| "file launch URI must contain an absolute local path".to_string())?;
+    let canonical = std::fs::canonicalize(&requested)
+        .map_err(|error| format!("cannot resolve launch file: {error}"))?;
+    if canonical != requested {
+        return Err("file launch URI path must already be canonical".to_string());
+    }
+    let metadata = std::fs::metadata(&canonical)
+        .map_err(|error| format!("cannot inspect launch file: {error}"))?;
+    if !metadata.is_file() {
+        return Err("file launch URI path must be a regular file".to_string());
+    }
+    let path = canonical
+        .to_str()
+        .ok_or_else(|| "file launch URI path must be valid UTF-8".to_string())?;
+    let canonical_uri = url::Url::from_file_path(&canonical)
+        .map_err(|()| "cannot construct canonical file launch URI".to_string())?;
+    if canonical_uri.as_str() != uri {
+        return Err("file launch URI must already use its canonical form".to_string());
+    }
+    Ok(Some(path.to_string()))
+}
+
+fn canonicalize_launch_uris(uris: &[String]) -> Result<Vec<String>, String> {
+    uris.iter()
+        .map(|uri| {
+            let Some(path) = canonical_file_uri_path(uri)? else {
+                return Ok(uri.clone());
+            };
+            url::Url::from_file_path(path)
+                .map(Into::into)
+                .map_err(|()| "cannot construct canonical file launch URI".to_string())
+        })
+        .collect()
 }
 
 fn valid_identifier(value: Option<&str>) -> bool {
@@ -430,9 +523,11 @@ fn valid_identifier(value: Option<&str>) -> bool {
 
 fn valid_app_id(value: Option<&str>) -> bool {
     value.is_some_and(|value| {
-        !value.is_empty()
+        value
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphanumeric)
             && value.len() <= 255
-            && !value.starts_with('-')
             && value
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
@@ -452,11 +547,20 @@ fn required_string(params: &Value, key: &str) -> Result<String, String> {
     optional_string(params, key)?.ok_or_else(|| format!("missing required string parameter: {key}"))
 }
 
-fn tool_path(candidates: &[&'static str]) -> Option<&'static str> {
-    candidates
-        .iter()
-        .copied()
-        .find(|candidate| Path::new(candidate).is_file())
+fn optional_string_list(params: &Value, key: &str) -> Result<Vec<String>, String> {
+    match params.get(key) {
+        None | Some(Value::Null) => Ok(Vec::new()),
+        Some(Value::Array(values)) => values
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| format!("parameter `{key}` must contain only strings"))
+            })
+            .collect(),
+        Some(_) => Err(format!("parameter `{key}` must be an array or null")),
+    }
 }
 
 async fn run_user_command(
@@ -470,74 +574,65 @@ async fn run_user_command(
         .map_err(|error| format!("desktop command worker failed: {error}"))?
 }
 
+async fn run_user_launch_command(
+    program: PathBuf,
+    args: Vec<String>,
+    environment: DesktopEnvironment,
+    timeout: Duration,
+) -> Result<ExitStatus, String> {
+    tokio::task::spawn_blocking(move || {
+        run_user_launch_command_sync(program, args, environment, timeout)
+    })
+    .await
+    .map_err(|error| format!("desktop launch worker failed: {error}"))?
+}
+
+fn run_user_launch_command_sync(
+    program: PathBuf,
+    args: Vec<String>,
+    environment: DesktopEnvironment,
+    timeout: Duration,
+) -> Result<ExitStatus, String> {
+    let mut command = configured_user_command(&program, &args, &environment);
+    command.stdout(Stdio::null()).stderr(Stdio::null());
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("failed to launch {}: {error}", program.display()))?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                child.wait().map_err(|error| {
+                    format!("wait for timed-out {}: {error}", program.display())
+                })?;
+                return Err(format!(
+                    "{} timed out after {}s",
+                    program.display(),
+                    timeout.as_secs()
+                ));
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("wait for {}: {error}", program.display()));
+            }
+        }
+    }
+}
+
 fn run_user_command_sync(
     program: PathBuf,
     args: Vec<String>,
     environment: DesktopEnvironment,
     timeout: Duration,
 ) -> Result<CommandOutput, String> {
-    let mut command = Command::new(&program);
-    command
-        .args(args)
-        .env_clear()
-        .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
-        .env("HOME", &environment.home)
-        .env("USER", &environment.username)
-        .env("LOGNAME", &environment.username)
-        .env("LC_ALL", "C.UTF-8")
-        .env("XDG_RUNTIME_DIR", &environment.runtime_dir)
-        .env("WAYLAND_DISPLAY", &environment.wayland_display)
-        .env(
-            "DBUS_SESSION_BUS_ADDRESS",
-            format!("unix:path={}/bus", environment.runtime_dir.display()),
-        )
-        .env("XDG_CURRENT_DESKTOP", "COSMIC")
-        .current_dir("/")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    if let Some(display) = &environment.display {
-        command.env("DISPLAY", display);
-    }
-    if let Some(xauthority) = &environment.xauthority {
-        command.env("XAUTHORITY", xauthority);
-    }
-    let uid = environment.uid;
-    let gid = environment.gid;
-    let expected_parent = unsafe { libc::getpid() };
-    unsafe {
-        command.pre_exec(move || {
-            if libc::setgroups(0, std::ptr::null()) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            if libc::setgid(gid) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            if libc::setuid(uid) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            if libc::getppid() != expected_parent {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::BrokenPipe,
-                    "desktop broker exited before child setup completed",
-                ));
-            }
-            if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            let limit = libc::rlimit {
-                rlim_cur: 0,
-                rlim_max: 0,
-            };
-            if libc::setrlimit(libc::RLIMIT_CORE as _, &limit) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
+    let mut command = configured_user_command(&program, &args, &environment);
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = command
         .spawn()
         .map_err(|error| format!("failed to launch {}: {error}", program.display()))?;
@@ -593,6 +688,74 @@ fn run_user_command_sync(
         stdout_truncated,
         stderr_truncated,
     })
+}
+
+fn configured_user_command(
+    program: &Path,
+    args: &[String],
+    environment: &DesktopEnvironment,
+) -> Command {
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .env_clear()
+        .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+        .env("HOME", &environment.home)
+        .env("USER", &environment.username)
+        .env("LOGNAME", &environment.username)
+        .env("LC_ALL", "C.UTF-8")
+        .env("XDG_RUNTIME_DIR", &environment.runtime_dir)
+        .env("WAYLAND_DISPLAY", &environment.wayland_display)
+        .env(
+            "DBUS_SESSION_BUS_ADDRESS",
+            format!("unix:path={}/bus", environment.runtime_dir.display()),
+        )
+        .env("XDG_CURRENT_DESKTOP", "COSMIC")
+        .current_dir("/")
+        .stdin(Stdio::null());
+    if let Some(display) = &environment.display {
+        command.env("DISPLAY", display);
+    }
+    if let Some(xauthority) = &environment.xauthority {
+        command.env("XAUTHORITY", xauthority);
+    }
+    let uid = environment.uid;
+    let gid = environment.gid;
+    let expected_parent = unsafe { libc::getpid() };
+    unsafe {
+        command.pre_exec(move || {
+            if libc::setgroups(0, std::ptr::null()) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::setgid(gid) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::setuid(uid) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::getppid() != expected_parent {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "desktop broker exited before child setup completed",
+                ));
+            }
+            if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let limit = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            if libc::setrlimit(libc::RLIMIT_CORE as _, &limit) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    command
 }
 
 struct CommandOutput {

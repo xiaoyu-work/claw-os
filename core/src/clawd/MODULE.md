@@ -289,6 +289,20 @@ local execution. This CLI path is selected only for MCP-only Apps (empty
 `operations` plus an `mcp` service); Apps that still declare operations keep the
 legacy `run(command, args)` dispatch until they migrate.
 
+The manifest-defined `launcher` App-service sandbox receives no Wayland socket
+or session bus and must not spawn desktop binaries. Provenance-classified
+native desktop services remain the sole explicit transport-bearing exception.
+The `launcher` App validates an exact AppID, bounded non-file URIs, and
+canonical local paths, requiring exact
+`fs.read` authority before converting local files to `file://` URIs and calling
+the typed `system.desktop.control` `launch` provider. The provider independently
+requires the `launcher` App identity, exact `desktop.launch:name:<app-id>`
+authority, and exact `fs.read:path:<path>` authority for every local file URI,
+then reconstructs the owner's desktop environment and invokes the
+image-provided `gtk4-launch` outside the sandbox without accepting an
+executable path from the App. The other desktop actions remain restricted to
+`desktop-manager`.
+
 The service manager keys instances by owner uid and App id, not by task, so a
 `lazy` or `always-on` MCP service can survive the task that first used it.
 Execution crosses a second private broker into an App-service-purpose Host.

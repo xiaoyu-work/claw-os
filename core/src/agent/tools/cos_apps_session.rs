@@ -663,6 +663,9 @@ fn plan_session_launch(
 
     let apps_dir_str = apps_dir.to_string_lossy().to_string();
     let data_dir = data_dir_string();
+    let owner_home = crate::paths::verified_home_for_uid(owner_uid)?
+        .to_string_lossy()
+        .into_owned();
     let entry_path = match &entry {
         SessionEntry::Packaged(rel) => launch.dir().join(rel),
         SessionEntry::System(abs) => PathBuf::from(abs),
@@ -741,6 +744,7 @@ fn plan_session_launch(
         apps_dir: apps_dir_str,
         extra_env: BTreeMap::from([
             ("PYTHONPATH".to_string(), pythonpath),
+            ("COS_OWNER_HOME".to_string(), owner_home),
             // The verified manifest, at the same absolute path the
             // read-only package mount exposes inside the sandbox. The
             // App reads its own operation/tool contract from the bytes

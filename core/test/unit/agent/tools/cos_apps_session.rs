@@ -648,6 +648,11 @@ fn both_launch_shapes_export_the_verified_manifest_path() {
         plan.extra_env.get("COS_MCP_SERVER").map(String::as_str),
         Some("1")
     );
+    let owner_home = crate::paths::verified_home_for_uid(crate::provenance::fsec::effective_uid())
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    assert_eq!(plan.extra_env.get("COS_OWNER_HOME"), Some(&owner_home));
 
     // Both worker shapes are derived from this one plan, so both carry
     // it: the reusable server and the single-call worker.
@@ -678,6 +683,7 @@ fn both_launch_shapes_export_the_verified_manifest_path() {
             "the {} worker lost the manifest path",
             lifetime.as_str()
         );
+        assert_eq!(policy.env.get("COS_OWNER_HOME"), Some(&owner_home));
         // Read-only, and inside the package mount rather than beside
         // it: the App can read the bytes that were verified and cannot
         // rewrite them.

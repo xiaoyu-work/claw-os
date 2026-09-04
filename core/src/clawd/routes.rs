@@ -1343,6 +1343,7 @@ routes! {
             ("action", FieldRule::Token),
             ("app_id", FieldRule::Token),
             ("identifier", FieldRule::Token),
+            ("uris", FieldRule::Size),
         ],
         run: |c| {
             let authority = c.authority()?;

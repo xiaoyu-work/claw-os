@@ -773,6 +773,24 @@ operations on error. The command maps to exactly one tool by the
 and `--stdin` is rejected because the MCP tool contract carries no piped input
 yet.
 
+The manifest-defined `launcher` App-service sandbox has no desktop session
+authority and never spawns GUI binaries directly. Provenance-classified native
+desktop services are the only App workers that may receive an explicitly
+classified desktop transport. `launcher.open` accepts bounded non-file URIs and
+exact canonical local paths separately, requires `fs.read` for every local
+file, converts those paths to `file://` URIs, and sends only the validated
+desktop AppID plus URIs through the typed `system.desktop.control` `launch`
+action. `clawd` independently requires the `launcher` App identity, the exact
+`desktop.launch:name:<app-id>` capability, and exact `fs.read:path:<path>`
+authority for every local file URI before reconstructing the owner's
+Wayland/session-bus environment and running the image-provided `gtk4-launch`
+outside the sandbox; the App never supplies an executable path.
+
+Human MCP-only CLI dispatch writes only argument count and aggregate byte size
+to the local CLI audit record. Raw URI, path, and other typed argument contents
+remain out of that record; the daemon's typed route audit applies its own field
+projection independently.
+
 Agent-to-App and App-to-App calls use the private App Gateway. The caller must
 hold exact authority for `<app-id>/<tool-name>`, and the target manifest's
 `mcp.access` policy must admit the authenticated principal. `clawd` then

@@ -414,6 +414,51 @@ fn dispatch_credential_typed(args: &[String]) -> CommandResult<Option<String>> {
     }
 }
 
+#[derive(Debug, Eq, PartialEq)]
+struct DesktopBridgeArgs {
+    action: String,
+    identifier: Option<String>,
+    app_id: Option<String>,
+    uris: Vec<String>,
+}
+
+fn parse_desktop_bridge_args(args: &[String]) -> Result<DesktopBridgeArgs, String> {
+    let action = args
+        .get(1)
+        .ok_or_else(|| "internal desktop command required".to_string())?
+        .clone();
+    let mut identifier = None;
+    let mut app_id = None;
+    let mut uris = Vec::new();
+    let mut index = 2;
+    while index < args.len() {
+        let flag = args[index].as_str();
+        if !matches!(flag, "--identifier" | "--app-id" | "--uri") {
+            return Err(format!("unknown internal desktop flag: {flag}"));
+        }
+        let value = args
+            .get(index + 1)
+            .ok_or_else(|| format!("{flag} requires a value"))?
+            .clone();
+        match flag {
+            "--identifier" if identifier.is_none() => identifier = Some(value),
+            "--app-id" if app_id.is_none() => app_id = Some(value),
+            "--uri" => uris.push(value),
+            "--identifier" | "--app-id" => {
+                return Err(format!("{flag} may only be provided once"));
+            }
+            _ => unreachable!("validated internal desktop flag"),
+        }
+        index += 2;
+    }
+    Ok(DesktopBridgeArgs {
+        action,
+        identifier,
+        app_id,
+        uris,
+    })
+}
+
 fn dispatch_with_stdin_impl(
     args: &[String],
     stdin_data: Option<Vec<u8>>,
@@ -672,33 +717,17 @@ fn dispatch_with_stdin_impl(
     }
 
     if name == "__desktop" {
-        let action = args
-            .get(1)
-            .ok_or_else(|| "internal desktop command required".to_string())?;
+        let desktop = parse_desktop_bridge_args(args)?;
         let session = env::var("COS_SESSION")
             .map_err(|_| "internal desktop command requires COS_SESSION".to_string())?;
-        let mut identifier = None;
-        let mut app_id = None;
-        let mut index = 2;
-        while index < args.len() {
-            let value = args
-                .get(index + 1)
-                .ok_or_else(|| format!("{} requires a value", args[index]))?
-                .clone();
-            match args[index].as_str() {
-                "--identifier" => identifier = Some(value),
-                "--app-id" => app_id = Some(value),
-                other => return Err(format!("unknown internal desktop flag: {other}")),
-            }
-            index += 2;
-        }
         let value = request_clawd(
             Command::SystemDesktopControl,
             json!({
                 "session": session,
-                "action": action,
-                "identifier": identifier,
-                "app_id": app_id,
+                "action": desktop.action,
+                "identifier": desktop.identifier,
+                "app_id": desktop.app_id,
+                "uris": desktop.uris,
             }),
         )?;
         return Ok(Some(value.to_string()));
@@ -1628,6 +1657,7 @@ fn run_app_mcp_command(
 ) -> Result<Option<String>, String> {
     let start = Instant::now();
     let audit = audit_path();
+    let audit_args = mcp_audit_projection(args);
 
     let tool = apps::mcp_tool_for_command(&app.manifest, command)?;
     let tool_name = tool.name.clone();
@@ -1680,7 +1710,15 @@ fn run_app_mcp_command(
         let rendered = render_call_tool_result(&result);
         let status = if rendered.is_err() { "error" } else { "ok" };
         let error_msg = rendered.as_ref().err().map(String::as_str);
-        audit::log_entry(&audit, app_name, command, args, start, status, error_msg);
+        audit::log_entry(
+            &audit,
+            app_name,
+            command,
+            &audit_args,
+            start,
+            status,
+            error_msg,
+        );
         rendered
     } else {
         // Preserve the typed broker error category and any peer-only data
@@ -1688,13 +1726,31 @@ fn run_app_mcp_command(
         let error = response
             .error
             .ok_or_else(|| "clawd app_service.cli_call request failed".to_string())?;
-        audit::log_entry(&audit, app_name, command, args, start, "error", Some(&error.message));
+        audit::log_entry(
+            &audit,
+            app_name,
+            command,
+            &audit_args,
+            start,
+            "error",
+            Some(&error.message),
+        );
         let mut payload = json!({ "error": error.message, "code": error.code });
         if let Some(data) = error.data {
             payload["data"] = data;
         }
         Err(payload.to_string())
     }
+}
+
+fn mcp_audit_projection(args: &[String]) -> Vec<String> {
+    vec![
+        format!("arg_count={}", args.len()),
+        format!(
+            "arg_bytes={}",
+            args.iter().map(|argument| argument.len()).sum::<usize>()
+        ),
+    ]
 }
 
 /// Whether the pre-`--` option region requests top-level `--stdin`.

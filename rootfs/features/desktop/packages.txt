@@ -110,6 +110,7 @@ libpixman-1-dev
 
 # --- GTK4 (for apps that link against it) ---
 libgtk-4-1
+libgtk-4-bin
 libgtk-4-dev
 
 # --- Multimedia (cosmic-player) ---
