@@ -9,187 +9,6 @@
   },
   "icon": "📋",
   "runtime": "python",
-  "operations": {
-    "status": {
-      "label": {
-        "en": "Inspect clipboard provider and types"
-      },
-      "needs": [
-        {
-          "verb": "clipboard.read",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "selection"
-            }
-          },
-          "why": {
-            "en": "Inspect offered clipboard MIME types and provider capabilities."
-          }
-        }
-      ],
-      "args": [
-        {
-          "name": "primary",
-          "kind": "bool",
-          "binding": "flag",
-          "required": false,
-          "default": false
-        }
-      ]
-    },
-    "types": {
-      "label": {
-        "en": "List clipboard MIME types"
-      },
-      "needs": [
-        {
-          "verb": "clipboard.read",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "selection"
-            }
-          },
-          "why": {
-            "en": "Read the MIME types currently offered by the selection owner."
-          }
-        }
-      ],
-      "args": [
-        {
-          "name": "primary",
-          "kind": "bool",
-          "binding": "flag",
-          "required": false,
-          "default": false
-        }
-      ]
-    },
-    "read": {
-      "label": {
-        "en": "Read clipboard content"
-      },
-      "args": [
-        {
-          "name": "mime",
-          "kind": "name",
-          "required": false
-        },
-        {
-          "name": "primary",
-          "kind": "bool",
-          "binding": "flag",
-          "required": false,
-          "default": false
-        }
-      ],
-      "needs": [
-        {
-          "verb": "clipboard.read",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "selection"
-            }
-          },
-          "why": {
-            "en": "Read potentially sensitive clipboard bytes."
-          }
-        }
-      ]
-    },
-    "write": {
-      "label": {
-        "en": "Write clipboard content from a file"
-      },
-      "args": [
-        {
-          "name": "source",
-          "kind": "path",
-          "required": true
-        },
-        {
-          "name": "mime",
-          "kind": "name",
-          "required": false
-        },
-        {
-          "name": "primary",
-          "kind": "bool",
-          "binding": "flag",
-          "required": false,
-          "default": false
-        }
-      ],
-      "needs": [
-        {
-          "verb": "clipboard.write",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "selection"
-            }
-          },
-          "why": {
-            "en": "Replace the current Wayland clipboard selection."
-          }
-        },
-        {
-          "verb": "fs.read",
-          "scope": {
-            "kind": "from-arg",
-            "arg": "source"
-          },
-          "why": {
-            "en": "Read the exact source file through a pinned descriptor."
-          }
-        }
-      ]
-    },
-    "clear": {
-      "label": {
-        "en": "Clear the clipboard"
-      },
-      "args": [
-        {
-          "name": "confirm",
-          "kind": "bool",
-          "required": true,
-          "binding": "flag",
-          "choices": [
-            true
-          ]
-        },
-        {
-          "name": "primary",
-          "kind": "bool",
-          "binding": "flag",
-          "required": false,
-          "default": false
-        }
-      ],
-      "needs": [
-        {
-          "verb": "clipboard.write",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "selection"
-            }
-          },
-          "why": {
-            "en": "Clear the current clipboard selection."
-          }
-        }
-      ]
-    }
-  },
   "schema_version": 2,
   "mcp": {
     "entry": "server.py",
@@ -210,7 +29,8 @@
             "name": "primary",
             "kind": "bool",
             "required": false,
-            "default": false
+            "default": false,
+            "binding": "flag"
           }
         ],
         "needs": [
@@ -239,7 +59,8 @@
             "name": "primary",
             "kind": "bool",
             "required": false,
-            "default": false
+            "default": false,
+            "binding": "flag"
           }
         ],
         "needs": [
@@ -273,7 +94,8 @@
             "name": "primary",
             "kind": "bool",
             "required": false,
-            "default": false
+            "default": false,
+            "binding": "flag"
           }
         ],
         "needs": [
@@ -312,7 +134,8 @@
             "name": "primary",
             "kind": "bool",
             "required": false,
-            "default": false
+            "default": false,
+            "binding": "flag"
           }
         ],
         "needs": [
@@ -353,13 +176,15 @@
             "required": true,
             "choices": [
               true
-            ]
+            ],
+            "binding": "flag"
           },
           {
             "name": "primary",
             "kind": "bool",
             "required": false,
-            "default": false
+            "default": false,
+            "binding": "flag"
           }
         ],
         "needs": [

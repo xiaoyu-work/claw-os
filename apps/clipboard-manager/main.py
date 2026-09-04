@@ -15,14 +15,22 @@ from cos_runtime import policy  # noqa: E402
 TIMEOUT_SECS = int(os.environ.get("CLAW_CLIPBOARD_MANAGER_TIMEOUT", "120"))
 
 
-def _cos_binary():
+def _cos_binary() -> str | None:
     return os.environ.get("COS_BIN") or shutil.which("cos")
 
 
-def _broker(action, mime=None, source=None, primary=False, confirm=False):
+def _broker(
+    action: str,
+    mime: str | None = None,
+    source: str | None = None,
+    primary: bool = False,
+    confirm: bool = False,
+) -> dict:
     cos_bin = _cos_binary()
     if not cos_bin:
-        return {"error": "cos binary not found; Clipboard Manager broker unavailable"}
+        raise FileNotFoundError(
+            "cos binary not found; Clipboard Manager broker unavailable"
+        )
     argv = [cos_bin, "__clipboard", action]
     if mime is not None:
         argv.extend(["--mime", mime])
@@ -42,73 +50,111 @@ def _broker(action, mime=None, source=None, primary=False, confirm=False):
             env=scrub_env(),
             check=False,
         )
-    except (FileNotFoundError, PermissionError) as exc:
-        return {"error": str(exc)}
-    except subprocess.TimeoutExpired:
-        return {"error": f"Clipboard Manager broker exceeded {TIMEOUT_SECS}s"}
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"Clipboard Manager broker executable not found: {cos_bin}"
+        ) from exc
+    except PermissionError as exc:
+        raise PermissionError(
+            f"permission denied launching Clipboard Manager broker: {cos_bin}"
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise TimeoutError(
+            f"Clipboard Manager broker exceeded {TIMEOUT_SECS}s"
+        ) from exc
     payload_text = (result.stdout or "").strip() or (result.stderr or "").strip()
     try:
         payload = json.loads(payload_text) if payload_text else {}
-    except json.JSONDecodeError:
-        return {"error": "Clipboard Manager broker returned invalid JSON"}
-    if result.returncode != 0 and "error" not in payload:
-        payload["error"] = f"Clipboard Manager broker exited {result.returncode}"
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            "Clipboard Manager broker returned invalid JSON"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("Clipboard Manager broker returned a non-object result")
+    if "error" in payload:
+        error = payload["error"]
+        if not isinstance(error, str) or not error:
+            raise RuntimeError(
+                "Clipboard Manager broker returned an invalid error payload"
+            )
+        raise RuntimeError(error)
+    if result.returncode != 0:
+        raise RuntimeError(f"Clipboard Manager broker exited {result.returncode}")
     return payload
 
 
-def _options(args):
-    primary = "--primary" in args
-    return primary, [arg for arg in args if arg != "--primary"]
+def _validate_selection(primary: bool) -> None:
+    if type(primary) is not bool:
+        raise ValueError("primary must be a boolean")
 
 
-def _mime(value):
+def _validate_mime(mime: str | None) -> None:
+    if mime is None:
+        return
     if (
-        not value
-        or len(value) > 255
-        or "/" not in value
-        or value.startswith("-")
-        or any(character.isspace() or ord(character) < 32 for character in value)
+        not isinstance(mime, str)
+        or not mime
+        or len(mime) > 255
+        or "/" not in mime
+        or mime.startswith("-")
+        or any(character.isspace() or ord(character) < 32 for character in mime)
     ):
         raise ValueError("invalid MIME type")
-    return value
 
 
-def run(command, args):
-    from canonical_argv import normalize_canonical_argv
-    args = normalize_canonical_argv(args, bool_flags={"primary", "confirm"})
-    primary, values = _options(args)
-    if command in {"status", "types"}:
-        if values:
-            return {"error": f"{command} accepts only --primary"}
-        policy.require("clipboard.read", name="selection")
-        return _broker(command, primary=primary)
-    if command == "read":
-        if len(values) > 1:
-            return {"error": "read accepts [mime] [--primary]"}
-        try:
-            mime = _mime(values[0]) if values else None
-        except ValueError as exc:
-            return {"error": str(exc)}
-        policy.require("clipboard.read", name="selection")
-        return _broker(command, mime=mime, primary=primary)
-    if command == "write":
-        if not 1 <= len(values) <= 2:
-            return {"error": "write requires <source> [mime] [--primary]"}
-        source = os.path.realpath(values[0])
-        if source != values[0] or os.path.islink(values[0]) or not os.path.isabs(source):
-            return {"error": "source must be a canonical non-symlink path"}
-        try:
-            mime = _mime(values[1]) if len(values) == 2 else None
-        except ValueError as exc:
-            return {"error": str(exc)}
-        policy.require("clipboard.write", name="selection")
-        policy.require("fs.read", path=source)
-        return _broker(command, mime=mime, source=source, primary=primary)
-    if command == "clear":
-        confirm = "--confirm" in values
-        remaining = [value for value in values if value != "--confirm"]
-        if remaining or not confirm:
-            return {"error": "clear requires --confirm [--primary]"}
-        policy.require("clipboard.write", name="selection")
-        return _broker(command, primary=primary, confirm=True)
-    return {"error": f"unknown command: {command}"}
+def status(primary: bool = False) -> dict:
+    _validate_selection(primary)
+    policy.require("clipboard.read", name="selection")
+    return _broker("status", primary=primary)
+
+
+def list_types(primary: bool = False) -> dict:
+    _validate_selection(primary)
+    policy.require("clipboard.read", name="selection")
+    return _broker("types", primary=primary)
+
+
+def read(mime: str | None = None, primary: bool = False) -> dict:
+    _validate_mime(mime)
+    _validate_selection(primary)
+    policy.require("clipboard.read", name="selection")
+    return _broker("read", mime=mime, primary=primary)
+
+
+def write(
+    source: str,
+    mime: str | None = None,
+    primary: bool = False,
+) -> dict:
+    if (
+        not isinstance(source, str)
+        or not source
+        or len(source) > 4096
+        or any(ord(character) < 32 for character in source)
+    ):
+        raise ValueError("source must be a canonical non-symlink path")
+    canonical_source = os.path.realpath(source)
+    if (
+        canonical_source != source
+        or os.path.islink(source)
+        or not os.path.isabs(canonical_source)
+    ):
+        raise ValueError("source must be a canonical non-symlink path")
+    _validate_mime(mime)
+    _validate_selection(primary)
+    policy.require("clipboard.write", name="selection")
+    policy.require("fs.read", path=canonical_source)
+    return _broker(
+        "write",
+        mime=mime,
+        source=canonical_source,
+        primary=primary,
+    )
+
+
+def clear(confirm: bool, primary: bool = False) -> dict:
+    if type(confirm) is not bool or not confirm:
+        raise ValueError("clear requires confirmation")
+    _validate_selection(primary)
+    policy.require("clipboard.write", name="selection")
+    return _broker("clear", primary=primary, confirm=True)
