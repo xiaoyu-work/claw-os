@@ -21,14 +21,21 @@ COREDUMP_ID_RE = re.compile(
 )
 
 
-def _cos_binary():
+def _cos_binary() -> str | None:
     return os.environ.get("COS_BIN") or shutil.which("cos")
 
 
-def _broker(action, since_minutes=None, limit=None, coredump_id=None):
+def _broker(
+    action: str,
+    since_minutes: int | None = None,
+    limit: int | None = None,
+    coredump_id: str | None = None,
+) -> dict:
     cos_bin = _cos_binary()
     if not cos_bin:
-        return {"error": "cos binary not found; Crash Doctor broker unavailable"}
+        raise FileNotFoundError(
+            "cos binary not found; Crash Doctor broker unavailable"
+        )
     argv = [cos_bin, "__crash", action]
     if since_minutes is not None:
         argv.extend(["--since-minutes", str(since_minutes)])
@@ -46,28 +53,41 @@ def _broker(action, since_minutes=None, limit=None, coredump_id=None):
             env=scrub_env(),
             check=False,
         )
-    except (FileNotFoundError, PermissionError) as exc:
-        return {"error": str(exc)}
-    except subprocess.TimeoutExpired:
-        return {"error": f"Crash Doctor broker exceeded {TIMEOUT_SECS}s"}
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(
+            f"Crash Doctor broker executable not found: {cos_bin}"
+        ) from exc
+    except PermissionError as exc:
+        raise PermissionError(
+            f"permission denied launching Crash Doctor broker: {cos_bin}"
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise TimeoutError(
+            f"Crash Doctor broker exceeded {TIMEOUT_SECS}s"
+        ) from exc
     payload_text = (result.stdout or "").strip() or (result.stderr or "").strip()
     try:
         payload = json.loads(payload_text) if payload_text else {}
-    except json.JSONDecodeError:
-        return {"error": "Crash Doctor broker returned invalid JSON"}
-    if result.returncode != 0 and "error" not in payload:
-        payload["error"] = f"Crash Doctor broker exited {result.returncode}"
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Crash Doctor broker returned invalid JSON") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError("Crash Doctor broker returned a non-object result")
+    if "error" in payload:
+        error = payload["error"]
+        if not isinstance(error, str) or not error:
+            raise RuntimeError("Crash Doctor broker returned an invalid error payload")
+        raise RuntimeError(error)
+    if result.returncode != 0:
+        raise RuntimeError(f"Crash Doctor broker exited {result.returncode}")
     return payload
 
 
-def _query_bounds(args):
-    if len(args) > 2:
-        raise ValueError("expected [since_minutes] [limit]")
-    try:
-        since_minutes = int(args[0]) if args else 60
-        limit = int(args[1]) if len(args) == 2 else 20
-    except ValueError as exc:
-        raise ValueError("since_minutes and limit must be integers") from exc
+def _validate_query_bounds(
+    since_minutes: object,
+    limit: object,
+) -> tuple[int, int]:
+    if type(since_minutes) is not int or type(limit) is not int:
+        raise ValueError("since_minutes and limit must be integers")
     if not 1 <= since_minutes <= MAX_SINCE_MINUTES:
         raise ValueError(f"since_minutes must be 1..{MAX_SINCE_MINUTES}")
     if not 1 <= limit <= MAX_LIMIT:
@@ -75,24 +95,30 @@ def _query_bounds(args):
     return since_minutes, limit
 
 
-def run(command, args):
-    from canonical_argv import normalize_canonical_argv
-    args = normalize_canonical_argv(args)
-    if command in {"recent", "diagnose"}:
-        try:
-            since_minutes, limit = _query_bounds(args)
-        except ValueError as exc:
-            return {"error": str(exc)}
-        policy.require("sys.crash", name="system")
-        return _broker(command, since_minutes, limit)
-    if command == "backtrace":
-        if len(args) != 1 or COREDUMP_ID_RE.fullmatch(args[0]) is None:
-            return {
-                "error": (
-                    "backtrace requires one "
-                    "<32-hex-boot-id>:<pid>:<timestamp-us> coredump id"
-                )
-            }
-        policy.require("sys.crash", name="system")
-        return _broker(command, coredump_id=args[0].lower())
-    return {"error": f"unknown command: {command}"}
+def _validate_coredump_id(coredump_id: object) -> str:
+    if (
+        not isinstance(coredump_id, str)
+        or COREDUMP_ID_RE.fullmatch(coredump_id) is None
+    ):
+        raise ValueError(
+            "id must be a <32-hex-boot-id>:<pid>:<timestamp-us> coredump id"
+        )
+    return coredump_id.lower()
+
+
+def recent(since_minutes: int = 60, limit: int = 20) -> dict:
+    since_minutes, limit = _validate_query_bounds(since_minutes, limit)
+    policy.require("sys.crash", name="system")
+    return _broker("recent", since_minutes, limit)
+
+
+def diagnose(since_minutes: int = 60, limit: int = 20) -> dict:
+    since_minutes, limit = _validate_query_bounds(since_minutes, limit)
+    policy.require("sys.crash", name="system")
+    return _broker("diagnose", since_minutes, limit)
+
+
+def backtrace(coredump_id: str) -> dict:
+    coredump_id = _validate_coredump_id(coredump_id)
+    policy.require("sys.crash", name="system")
+    return _broker("backtrace", coredump_id=coredump_id)
