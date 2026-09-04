@@ -18,55 +18,6 @@
       "external-content"
     ]
   },
-  "operations": {
-    "run": {
-      "label": {
-        "en": "Summarize text"
-      },
-      "summary": {
-        "en": "Read text from --file or stdin and return a 3-line summary."
-      },
-      "stdin": true,
-      "args": [
-        {
-          "name": "text",
-          "kind": "text",
-          "required": false,
-          "repeatable": true
-        },
-        {
-          "name": "file",
-          "kind": "path",
-          "required": false,
-          "binding": "flag"
-        }
-      ],
-      "needs": [
-        {
-          "verb": "ai.chat.untrusted",
-          "scope": {
-            "kind": "wild"
-          },
-          "why": {
-            "en": "Send the text to a model so it can be condensed for you."
-          }
-        },
-        {
-          "verb": "memory.write",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "self-ref",
-              "value": "summarize"
-            }
-          },
-          "why": {
-            "en": "Remember the summary so the agent can recall it later."
-          }
-        }
-      ]
-    }
-  },
   "schema_version": 2,
   "mcp": {
     "entry": "server.py",
@@ -80,19 +31,13 @@
       {
         "name": "summarize.run",
         "summary": {
-          "en": "Read text from --file or stdin and return a 3-line summary."
+          "en": "Summarize explicitly provided text into three short lines."
         },
         "args": [
           {
             "name": "text",
             "kind": "text",
-            "required": false,
-            "repeatable": true
-          },
-          {
-            "name": "file",
-            "kind": "path",
-            "required": false
+            "required": true
           }
         ],
         "needs": [

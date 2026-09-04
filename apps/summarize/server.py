@@ -1,4 +1,15 @@
-from cos_runtime.mcp import serve_manifest_operations
-from main import run
+from claw_os_sdk.mcp import App
 
-serve_manifest_operations(run)
+from main import summarize
+
+
+app = App.from_manifest()
+
+
+@app.tool("summarize.run")
+def summarize_text(text: str) -> dict:
+    return summarize(text)
+
+
+if __name__ == "__main__":
+    app.serve()
