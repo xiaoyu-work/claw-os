@@ -9,223 +9,6 @@
   },
   "icon": "🔌",
   "runtime": "python",
-  "operations": {
-    "status": {
-      "label": {
-        "en": "Inspect USB devices and block policy"
-      },
-      "needs": [
-        {
-          "verb": "sys.observe",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "usb"
-            }
-          },
-          "why": {
-            "en": "Read USB identity, authorization, block devices, and managed rules."
-          }
-        }
-      ],
-      "args": []
-    },
-    "authorize": {
-      "label": {
-        "en": "Authorize or deauthorize a current USB device"
-      },
-      "args": [
-        {
-          "name": "device",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "state",
-          "kind": "name",
-          "required": true,
-          "choices": [
-            "on",
-            "off"
-          ]
-        },
-        {
-          "name": "confirm",
-          "kind": "bool",
-          "required": false,
-          "binding": "flag",
-          "choices": [
-            true
-          ],
-          "required_when": {
-            "kind": "arg-equals",
-            "arg": "state",
-            "value": "off"
-          }
-        }
-      ],
-      "needs": [
-        {
-          "verb": "device.usb",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "control"
-            }
-          },
-          "why": {
-            "en": "Change this currently connected USB device's authorization state."
-          }
-        }
-      ]
-    },
-    "block": {
-      "label": {
-        "en": "Persistently block a USB device"
-      },
-      "args": [
-        {
-          "name": "device",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "confirm",
-          "kind": "bool",
-          "required": true,
-          "binding": "flag",
-          "choices": [
-            true
-          ]
-        }
-      ],
-      "needs": [
-        {
-          "verb": "device.usb",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "control"
-            }
-          },
-          "why": {
-            "en": "Create a vendor/product/serial udev block rule and deauthorize the device."
-          }
-        }
-      ]
-    },
-    "unblock": {
-      "label": {
-        "en": "Remove a persistent USB block rule"
-      },
-      "args": [
-        {
-          "name": "rule_id",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "confirm",
-          "kind": "bool",
-          "required": true,
-          "binding": "flag",
-          "choices": [
-            true
-          ]
-        }
-      ],
-      "needs": [
-        {
-          "verb": "device.usb",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "control"
-            }
-          },
-          "why": {
-            "en": "Remove one exact managed block rule and reauthorize a unique connected match."
-          }
-        }
-      ]
-    },
-    "eject": {
-      "label": {
-        "en": "Safely eject USB storage"
-      },
-      "args": [
-        {
-          "name": "device",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "confirm",
-          "kind": "bool",
-          "required": true,
-          "binding": "flag",
-          "choices": [
-            true
-          ]
-        }
-      ],
-      "needs": [
-        {
-          "verb": "device.usb",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "control"
-            }
-          },
-          "why": {
-            "en": "Power off whole USB disks after protected-mount and swap checks."
-          }
-        }
-      ]
-    },
-    "restore": {
-      "label": {
-        "en": "Restore USB block policy"
-      },
-      "args": [
-        {
-          "name": "backup_token",
-          "kind": "name",
-          "required": true
-        },
-        {
-          "name": "confirm",
-          "kind": "bool",
-          "required": true,
-          "binding": "flag",
-          "choices": [
-            true
-          ]
-        }
-      ],
-      "needs": [
-        {
-          "verb": "device.usb",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "control"
-            }
-          },
-          "why": {
-            "en": "Restore the previous persistent block policy if no newer revision exists."
-          }
-        }
-      ]
-    }
-  },
   "schema_version": 2,
   "mcp": {
     "entry": "server.py",
@@ -288,7 +71,8 @@
               "kind": "arg-equals",
               "arg": "state",
               "value": "off"
-            }
+            },
+            "binding": "flag"
           }
         ],
         "needs": [
@@ -324,7 +108,8 @@
             "required": true,
             "choices": [
               true
-            ]
+            ],
+            "binding": "flag"
           }
         ],
         "needs": [
@@ -360,7 +145,8 @@
             "required": true,
             "choices": [
               true
-            ]
+            ],
+            "binding": "flag"
           }
         ],
         "needs": [
@@ -396,7 +182,8 @@
             "required": true,
             "choices": [
               true
-            ]
+            ],
+            "binding": "flag"
           }
         ],
         "needs": [
@@ -432,7 +219,8 @@
             "required": true,
             "choices": [
               true
-            ]
+            ],
+            "binding": "flag"
           }
         ],
         "needs": [
