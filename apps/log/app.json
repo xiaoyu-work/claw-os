@@ -9,137 +9,6 @@
   },
   "icon": "📜",
   "runtime": "python",
-  "operations": {
-    "read": {
-      "label": {
-        "en": "Read recent log entries (filter by --app, --status)"
-      },
-      "needs": [
-        {
-          "verb": "data.log.read",
-          "scope": {
-            "kind": "wild"
-          },
-          "why": {
-            "en": "Read entries from the system audit log."
-          }
-        }
-      ],
-      "args": [
-        {
-          "name": "limit",
-          "kind": "integer",
-          "required": false,
-          "binding": "flag",
-          "default": 20
-        },
-        {
-          "name": "app",
-          "kind": "text",
-          "required": false,
-          "binding": "flag"
-        },
-        {
-          "name": "status",
-          "kind": "text",
-          "required": false,
-          "binding": "flag"
-        }
-      ]
-    },
-    "tail": {
-      "label": {
-        "en": "Show last N log entries"
-      },
-      "needs": [
-        {
-          "verb": "data.log.read",
-          "scope": {
-            "kind": "wild"
-          },
-          "why": {
-            "en": "Read the most recent entries from the system audit log."
-          }
-        }
-      ],
-      "args": [
-        {
-          "name": "n",
-          "kind": "integer",
-          "required": false,
-          "default": 10
-        }
-      ]
-    },
-    "search": {
-      "label": {
-        "en": "Search logs by keyword (filter by --app)"
-      },
-      "needs": [
-        {
-          "verb": "data.log.read",
-          "scope": {
-            "kind": "wild"
-          },
-          "why": {
-            "en": "Scan the system audit log for entries matching your query."
-          }
-        }
-      ],
-      "args": [
-        {
-          "name": "query",
-          "kind": "text",
-          "required": true,
-          "repeatable": true
-        },
-        {
-          "name": "limit",
-          "kind": "integer",
-          "required": false,
-          "binding": "flag",
-          "default": 20
-        },
-        {
-          "name": "app",
-          "kind": "text",
-          "required": false,
-          "binding": "flag"
-        }
-      ]
-    },
-    "write": {
-      "label": {
-        "en": "Write a manual log entry"
-      },
-      "needs": [
-        {
-          "verb": "data.log.write",
-          "scope": {
-            "kind": "wild"
-          },
-          "why": {
-            "en": "Append a manual entry to the system audit log."
-          }
-        }
-      ],
-      "args": [
-        {
-          "name": "message",
-          "kind": "text",
-          "required": true,
-          "repeatable": true
-        },
-        {
-          "name": "level",
-          "kind": "text",
-          "required": false,
-          "binding": "flag",
-          "default": "info"
-        }
-      ]
-    }
-  },
   "schema_version": 2,
   "mcp": {
     "entry": "server.py",
@@ -160,17 +29,24 @@
             "name": "limit",
             "kind": "integer",
             "required": false,
+            "binding": "flag",
             "default": 20
           },
           {
             "name": "app",
             "kind": "text",
-            "required": false
+            "required": false,
+            "binding": "flag"
           },
           {
             "name": "status",
             "kind": "text",
-            "required": false
+            "required": false,
+            "binding": "flag",
+            "choices": [
+              "ok",
+              "error"
+            ]
           }
         ],
         "needs": [
@@ -195,6 +71,7 @@
             "name": "n",
             "kind": "integer",
             "required": false,
+            "binding": "positional",
             "default": 10
           }
         ],
@@ -220,18 +97,20 @@
             "name": "query",
             "kind": "text",
             "required": true,
-            "repeatable": true
+            "binding": "positional"
           },
           {
             "name": "limit",
             "kind": "integer",
             "required": false,
+            "binding": "flag",
             "default": 20
           },
           {
             "name": "app",
             "kind": "text",
-            "required": false
+            "required": false,
+            "binding": "flag"
           }
         ],
         "needs": [
@@ -256,12 +135,19 @@
             "name": "message",
             "kind": "text",
             "required": true,
-            "repeatable": true
+            "binding": "positional"
           },
           {
             "name": "level",
             "kind": "text",
             "required": false,
+            "binding": "flag",
+            "choices": [
+              "debug",
+              "info",
+              "warn",
+              "error"
+            ],
             "default": "info"
           }
         ],

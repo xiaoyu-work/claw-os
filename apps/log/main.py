@@ -5,8 +5,11 @@ This app lets you read, tail, and search that log.
 You can also write manual entries.
 """
 
+from __future__ import annotations
+
 import json
 import os
+import re
 from datetime import datetime, timezone
 
 from cos_runtime import policy
@@ -15,75 +18,105 @@ DATA_DIR = os.environ.get("COS_DATA_DIR", "/var/lib/cos")
 LOG_DIR = os.path.join(DATA_DIR, "logs")
 LOG_FILE = os.path.join(LOG_DIR, "audit.jsonl")
 
+APP_ID_RE = re.compile(r"^[a-z][a-z0-9_-]*$")
 VALID_LEVELS = ("debug", "info", "warn", "error")
+VALID_STATUSES = ("ok", "error")
 
 
-def _read_entries():
-    """Read all log entries from disk. Returns empty list if file missing."""
-    if not os.path.isfile(LOG_FILE):
-        return []
-    entries = []
-    with open(LOG_FILE, "r") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
+def _validate_count(value: object, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{name} must be an integer")
+    if not 1 <= value <= 1000:
+        raise ValueError(f"{name} must be 1..1000")
+    return value
+
+
+def _validate_app(app: object) -> str | None:
+    if app is None:
+        return None
+    if not isinstance(app, str) or APP_ID_RE.fullmatch(app) is None:
+        raise ValueError("app must be a non-empty app ID string")
+    return app
+
+
+def _validate_choice(
+    value: object,
+    name: str,
+    choices: tuple[str, ...],
+) -> str:
+    if not isinstance(value, str) or value not in choices:
+        raise ValueError(f"{name} must be one of: {', '.join(choices)}")
+    return value
+
+
+def _validate_text(value: object, name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{name} must be a non-empty string")
+    return value
+
+
+def _read_entries() -> list[dict[str, object]]:
+    """Read and validate all log entries, or return empty for a missing log."""
+    entries: list[dict[str, object]] = []
+    try:
+        log_file = open(LOG_FILE, "r", encoding="utf-8")
+    except FileNotFoundError:
+        return entries
+
+    with log_file:
+        for line_number, line in enumerate(log_file, start=1):
             try:
-                entries.append(json.loads(line))
-            except (json.JSONDecodeError, ValueError):
-                continue
+                entry: object = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise ValueError(
+                    f"audit log line {line_number} contains invalid JSON: "
+                    f"{error.msg}"
+                ) from error
+            if not isinstance(entry, dict):
+                raise ValueError(
+                    f"audit log line {line_number} must contain a JSON object"
+                )
+            entries.append(entry)
     return entries
 
 
-def _cmd_write(args):
-    """Write a manual log entry. Usage: write <message> [--level LEVEL]"""
-    from canonical_argv import parse_canonical_argv
-    try:
-        message_parts, options = parse_canonical_argv(args, value_flags={"level"})
-    except ValueError as error:
-        return {"error": str(error)}
-    level = options.get("level", "info").lower()
-    if level not in VALID_LEVELS:
-        return {"error": f"invalid level: {level} (must be one of {', '.join(VALID_LEVELS)})"}
-
-    if not message_parts:
-        return {"error": "usage: log write <message> [--level LEVEL]"}
+def write(message: str, level: str = "info") -> dict[str, object]:
+    """Append one manual log entry."""
+    message = _validate_text(message, "message")
+    level = _validate_choice(level, "level", VALID_LEVELS)
+    policy.require("data.log.write", wild=True)
 
     entry = {
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "source": "user",
         "level": level,
-        "message": " ".join(message_parts),
+        "message": message,
     }
 
     os.makedirs(LOG_DIR, exist_ok=True)
-    with open(LOG_FILE, "a") as f:
-        f.write(json.dumps(entry) + "\n")
+    with open(LOG_FILE, "a", encoding="utf-8") as log_file:
+        log_file.write(json.dumps(entry) + "\n")
 
     return entry
 
 
-def _cmd_read(args):
-    """Read recent log entries. Usage: read [--limit N] [--app NAME] [--status ok|error]"""
-    from canonical_argv import parse_canonical_argv
-    try:
-        positionals, options = parse_canonical_argv(
-            args, value_flags={"limit", "app", "status"}
-        )
-        limit = int(options.get("limit", 20))
-    except (ValueError, TypeError) as error:
-        return {"error": str(error)}
-    if positionals:
-        return {"error": f"unknown argument: {positionals[0]}"}
-    app_filter = options.get("app")
-    status_filter = options.get("status")
-
+def read(
+    limit: int = 20,
+    app: str | None = None,
+    status: str | None = None,
+) -> dict[str, object]:
+    """Read matching log entries newest first."""
+    limit = _validate_count(limit, "limit")
+    app = _validate_app(app)
+    if status is not None:
+        status = _validate_choice(status, "status", VALID_STATUSES)
+    policy.require("data.log.read", wild=True)
     entries = _read_entries()
 
-    if app_filter:
-        entries = [e for e in entries if e.get("app") == app_filter]
-    if status_filter:
-        entries = [e for e in entries if e.get("status") == status_filter]
+    if app is not None:
+        entries = [entry for entry in entries if entry.get("app") == app]
+    if status is not None:
+        entries = [entry for entry in entries if entry.get("status") == status]
 
     total = len(entries)
     entries = list(reversed(entries))[:limit]
@@ -91,73 +124,34 @@ def _cmd_read(args):
     return {"entries": entries, "total": total}
 
 
-def _cmd_tail(args):
-    """Show last N log entries. Usage: tail [N]"""
-    from canonical_argv import parse_canonical_argv
-    try:
-        args, _ = parse_canonical_argv(args)
-    except ValueError as error:
-        return {"error": str(error)}
-    n = 10
-    if args:
-        try:
-            n = int(args[0])
-        except ValueError:
-            return {"error": f"invalid number: {args[0]}"}
-
+def tail(n: int = 10) -> dict[str, object]:
+    """Return the final N log entries in chronological order."""
+    n = _validate_count(n, "n")
+    policy.require("data.log.read", wild=True)
     entries = _read_entries()
     return {"entries": entries[-n:]}
 
 
-def _cmd_search(args):
-    """Search logs by keyword. Usage: search <query> [--limit N] [--app NAME]"""
-    from canonical_argv import parse_canonical_argv
-    try:
-        query_parts, options = parse_canonical_argv(
-            args, value_flags={"limit", "app"}
-        )
-        limit = int(options.get("limit", 20))
-    except (ValueError, TypeError) as error:
-        return {"error": str(error)}
-    app_filter = options.get("app")
-
-    if not query_parts:
-        return {"error": "usage: log search <query> [--limit N] [--app NAME]"}
-
-    query = " ".join(query_parts).lower()
+def search(
+    query: str,
+    limit: int = 20,
+    app: str | None = None,
+) -> dict[str, object]:
+    """Search matching log entries in their stored order."""
+    query = _validate_text(query, "query")
+    limit = _validate_count(limit, "limit")
+    app = _validate_app(app)
+    policy.require("data.log.read", wild=True)
     entries = _read_entries()
 
-    if app_filter:
-        entries = [e for e in entries if e.get("app") == app_filter]
+    if app is not None:
+        entries = [entry for entry in entries if entry.get("app") == app]
 
-    # Search across all text fields in each entry
-    matches = []
-    for e in entries:
-        text = json.dumps(e).lower()
-        if query in text:
-            matches.append(e)
+    lowered_query = query.lower()
+    matches = [
+        entry
+        for entry in entries
+        if lowered_query in json.dumps(entry).lower()
+    ]
 
     return {"entries": matches[:limit], "total": len(matches)}
-
-
-def run(command, args):
-    """Entry point called by cos."""
-    commands = {
-        "write": _cmd_write,
-        "read": _cmd_read,
-        "tail": _cmd_tail,
-        "search": _cmd_search,
-    }
-    handler = commands.get(command)
-    if handler is None:
-        return {"error": f"unknown command: {command}"}
-    try:
-        if command == "write":
-            policy.require("data.log.write", wild=True)
-        else:
-            policy.require("data.log.read", wild=True)
-        return handler(args)
-    except policy.PermissionDenied as denied:
-        return {"error": str(denied), "denial": denied.denial}
-    except policy.PolicyUnavailable as exc:
-        return {"error": f"capability check failed: {exc}"}
