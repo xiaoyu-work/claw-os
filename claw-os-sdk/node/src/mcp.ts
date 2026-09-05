@@ -111,8 +111,6 @@ export class CallCancelled extends Error {
 export class CallContext {
   readonly callId: string;
   readonly traceId: string;
-  readonly parentCallId?: string;
-  readonly depth: number;
   readonly deadlineUnixMs?: number;
   readonly sessionId?: string;
   readonly taskId?: string;
@@ -133,8 +131,6 @@ export class CallContext {
   ) {
     this.callId = authenticated.call_id;
     this.traceId = authenticated.trace_id;
-    this.parentCallId = authenticated.parent_call_id;
-    this.depth = authenticated.depth;
     this.deadlineUnixMs = authenticated.deadline_unix_ms;
     this.sessionId = authenticated.session_id;
     this.taskId = authenticated.task_id;
@@ -891,7 +887,6 @@ function loadManifest(path: string): {
     }
     rejectUnknownFields(manifest.mcp.access, "`mcp.access`", [
       "system_agent",
-      "apps",
       "external_agents",
     ]);
   }

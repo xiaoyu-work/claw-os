@@ -16,14 +16,11 @@ use crate::session::SessionSource;
 
 pub const CALL_CONTEXT_META_KEY: &str = "claw-os.dev/call-context";
 pub const CALL_CONTEXT_WIRE_VERSION: u8 = 1;
-pub const MAX_CALL_DEPTH: u8 = 16;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum McpPrincipalKind {
     SystemAgent,
-    App,
-    AppAgent,
     ExternalAgent,
     Cli,
 }
@@ -32,8 +29,6 @@ impl McpPrincipalKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::SystemAgent => "system-agent",
-            Self::App => "app",
-            Self::AppAgent => "app-agent",
             Self::ExternalAgent => "external-agent",
             Self::Cli => "cli",
         }
@@ -46,37 +41,30 @@ pub struct McpPrincipal {
     pub kind: McpPrincipalKind,
     pub id: String,
     pub owner_uid: u32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub app_id: Option<String>,
 }
 
 impl McpPrincipal {
-    fn from_exposure(context: &ToolExposureContext) -> Result<Self, String> {
-        let app_id = context.app_id().map(str::to_string);
-        let kind = if app_id.is_some() {
-            McpPrincipalKind::AppAgent
-        } else {
-            match context.client().source {
-                SessionSource::LocalCli
-                | SessionSource::LocalWeb
-                | SessionSource::BrokerTask
-                | SessionSource::ScheduledTrigger
-                | SessionSource::System => McpPrincipalKind::SystemAgent,
-                SessionSource::ExternalMcp | SessionSource::DelegatedAgent => {
-                    McpPrincipalKind::ExternalAgent
-                }
-                SessionSource::App | SessionSource::ChildProcess | SessionSource::Unknown => {
-                    return Err(
-                        "MCP App call has no authenticated caller classification".to_string()
-                    );
-                }
+    pub(crate) fn from_exposure(context: &ToolExposureContext) -> Result<Self, String> {
+        if context.app_id().is_some() {
+            return Err("Apps and App-owned agents cannot call App services".to_string());
+        }
+        let kind = match context.client().source {
+            SessionSource::LocalCli
+            | SessionSource::LocalWeb
+            | SessionSource::BrokerTask
+            | SessionSource::ScheduledTrigger
+            | SessionSource::System => McpPrincipalKind::SystemAgent,
+            SessionSource::ExternalMcp | SessionSource::DelegatedAgent => {
+                McpPrincipalKind::ExternalAgent
+            }
+            SessionSource::App | SessionSource::ChildProcess | SessionSource::Unknown => {
+                return Err("MCP App call has no authenticated caller classification".to_string());
             }
         };
         let principal = Self {
             kind,
             id: context.authority_session_id().to_string(),
             owner_uid: context.owner_uid(),
-            app_id,
         };
         principal.validate()?;
         Ok(principal)
@@ -85,20 +73,6 @@ impl McpPrincipal {
     fn validate(&self) -> Result<(), String> {
         if !valid_workload_id(&self.id, 256) {
             return Err("MCP caller has an invalid workload id".to_string());
-        }
-        match self.kind {
-            McpPrincipalKind::App | McpPrincipalKind::AppAgent => {
-                if !self.app_id.as_deref().is_some_and(valid_app_id) {
-                    return Err("App MCP caller has no valid App identity".to_string());
-                }
-            }
-            McpPrincipalKind::SystemAgent
-            | McpPrincipalKind::ExternalAgent
-            | McpPrincipalKind::Cli => {
-                if self.app_id.is_some() {
-                    return Err("non-App MCP caller asserted an App identity".to_string());
-                }
-            }
         }
         Ok(())
     }
@@ -110,9 +84,6 @@ pub struct McpCallContext {
     pub wire_version: u8,
     pub call_id: String,
     pub trace_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent_call_id: Option<String>,
-    pub depth: u8,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deadline_unix_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -196,8 +167,6 @@ impl McpCallContext {
             wire_version: CALL_CONTEXT_WIRE_VERSION,
             trace_id: call_id.clone(),
             call_id,
-            parent_call_id: None,
-            depth: 0,
             deadline_unix_ms: Some(deadline),
             session_id: Some(exposure.authority_session_id().to_string()),
             task_id: exposure.task_id().map(str::to_string),
@@ -214,12 +183,7 @@ impl McpCallContext {
         if !valid_call_id(&self.call_id) || !valid_call_id(&self.trace_id) {
             return Err("MCP call context has an invalid call or trace id".to_string());
         }
-        if self
-            .parent_call_id
-            .as_deref()
-            .is_some_and(|value| !valid_call_id(value))
-            || self.depth > MAX_CALL_DEPTH
-            || self.deadline_unix_ms == Some(0)
+        if self.deadline_unix_ms == Some(0)
             || self
                 .session_id
                 .as_deref()
@@ -284,22 +248,16 @@ impl McpCallContext {
             .session_id
             .as_deref()
             .ok_or_else(|| "extension binding has no Agent session".to_string())?;
-        let principal_matches = match binding.app_id.as_deref() {
-            Some(app_id) => {
-                self.caller.kind == McpPrincipalKind::AppAgent
-                    && self.caller.app_id.as_deref() == Some(app_id)
-            }
-            None => {
-                self.caller.kind == McpPrincipalKind::SystemAgent && self.caller.app_id.is_none()
-            }
-        };
+        let principal_matches = binding.app_id.is_none()
+            && matches!(
+                self.caller.kind,
+                McpPrincipalKind::SystemAgent | McpPrincipalKind::ExternalAgent
+            );
         if !principal_matches
             || self.caller.owner_uid != binding.owner_uid
             || self.caller.id != session_id
             || self.session_id.as_deref() != Some(session_id)
             || self.task_id.as_deref() != Some(binding.task_id.as_str())
-            || self.parent_call_id.is_some()
-            || self.depth != 0
             || self.deadline_unix_ms.is_none_or(|deadline| {
                 let now = crate::agentd::grant::now_ms();
                 (require_live_deadline && deadline <= now)
@@ -326,10 +284,6 @@ pub fn authorize_manifest(manifest: &Manifest, caller: &McpPrincipal) -> Result<
         .ok_or_else(|| format!("App `{}` has no MCP service", manifest.id))?;
     let allowed = match caller.kind {
         McpPrincipalKind::SystemAgent => service.access.system_agent,
-        McpPrincipalKind::App | McpPrincipalKind::AppAgent => caller
-            .app_id
-            .as_ref()
-            .is_some_and(|app| service.access.apps.iter().any(|allowed| allowed == app)),
         McpPrincipalKind::ExternalAgent => service.access.external_agents,
         // An authenticated local CLI principal may explicitly address a
         // service even when `access.system_agent` is false. Access is a

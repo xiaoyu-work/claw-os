@@ -154,12 +154,11 @@ fn root_types_and_budget_show_have_stable_contracts() {
 }
 
 #[test]
-fn mcp_call_context_is_closed_and_depth_bounded() {
+fn mcp_call_context_is_closed() {
     let context = serde_json::json!({
         "wire_version": 1,
         "call_id": "call-1",
         "trace_id": "trace-1",
-        "depth": 0,
         "caller": {
             "kind": "system-agent",
             "id": "session-1",
@@ -177,7 +176,7 @@ fn mcp_call_context_is_closed_and_depth_bounded() {
     let mut too_deep = context;
     too_deep["depth"] = serde_json::json!(17);
     let error = validate_mcp_call_context(&too_deep).unwrap_err();
-    assert_eq!(error.code, WIRE_MAXIMUM);
+    assert_eq!(error.code, WIRE_UNKNOWN_FIELD);
     assert_eq!(error.path, "$.depth");
 
     for (call_id, code) in [
@@ -190,7 +189,6 @@ fn mcp_call_context_is_closed_and_depth_bounded() {
             "wire_version": 1,
             "call_id": call_id,
             "trace_id": "trace-1",
-            "depth": 0,
             "caller": {
                 "kind": "system-agent",
                 "id": "session-1",

@@ -174,6 +174,11 @@ where
 /// Invoke `cos --wire=1 app <app> <verb> <args...>` and return the
 /// request-specific success payload.
 ///
+/// This is a human CLI/desktop client, not an App-to-App transport.
+/// The broker rejects App processes and App-owned agents using it, even
+/// when their grants contain `agent.invoke`. Apps use gated AI, controlled
+/// system services, and shared libraries; the system Agent orchestrates Apps.
+///
 /// `stdin` is the body to forward to the subprocess on stdin (used by
 /// `fs.write` to ship the file content without re-encoding through
 /// argv). Pass `None` to inherit the parent's stdin behaviour.

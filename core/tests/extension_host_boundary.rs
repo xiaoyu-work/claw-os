@@ -606,8 +606,6 @@ async fn worker_child() {
         wire_version: cos::agent::tools::app_gateway::CALL_CONTEXT_WIRE_VERSION,
         call_id: "call-boundary".to_string(),
         trace_id: "call-boundary".to_string(),
-        parent_call_id: None,
-        depth: 0,
         deadline_unix_ms: Some(
             (std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -622,7 +620,6 @@ async fn worker_child() {
             kind: cos::agent::tools::app_gateway::McpPrincipalKind::SystemAgent,
             id: binding.session_id.clone().expect("bound session"),
             owner_uid: binding.owner_uid,
-            app_id: None,
         },
     };
     let error = client

@@ -10,7 +10,6 @@ fn manifest() -> Manifest {
           "mcp": {
             "access": {
               "system_agent": false,
-              "apps": ["crm"],
               "external_agents": true
             },
             "tools": [{
@@ -23,18 +22,16 @@ fn manifest() -> Manifest {
     .unwrap()
 }
 
-fn principal(kind: McpPrincipalKind, app_id: Option<&str>) -> McpPrincipal {
+fn principal(kind: McpPrincipalKind) -> McpPrincipal {
     McpPrincipal {
         kind,
         id: match kind {
-            McpPrincipalKind::App | McpPrincipalKind::AppAgent => "app-session",
             McpPrincipalKind::ExternalAgent => "spiffe://claw.test/agent/client",
             McpPrincipalKind::Cli => "cli-session",
             McpPrincipalKind::SystemAgent => "agent-session",
         }
         .to_string(),
         owner_uid: 1000,
-        app_id: app_id.map(str::to_string),
     }
 }
 
@@ -86,21 +83,15 @@ fn invoke_scope_is_exact_to_app_and_tool() {
 fn manifest_access_restricts_each_authenticated_principal_class() {
     let manifest = manifest();
     assert!(
-        authorize_manifest(&manifest, &principal(McpPrincipalKind::SystemAgent, None)).is_err()
+        authorize_manifest(&manifest, &principal(McpPrincipalKind::SystemAgent)).is_err()
     );
     // An authenticated local CLI principal may explicitly address a service
     // even though this manifest sets `access.system_agent = false`. Access is
     // a caller restriction, not authority; the CLI path still enforces exact
     // `agent.invoke:<app>/<tool>` authority in the daemon.
-    assert!(authorize_manifest(&manifest, &principal(McpPrincipalKind::Cli, None)).is_ok());
-    assert!(authorize_manifest(&manifest, &principal(McpPrincipalKind::App, Some("crm"))).is_ok());
-    assert!(authorize_manifest(
-        &manifest,
-        &principal(McpPrincipalKind::AppAgent, Some("notes"))
-    )
-    .is_err());
+    assert!(authorize_manifest(&manifest, &principal(McpPrincipalKind::Cli)).is_ok());
     assert!(
-        authorize_manifest(&manifest, &principal(McpPrincipalKind::ExternalAgent, None)).is_ok()
+        authorize_manifest(&manifest, &principal(McpPrincipalKind::ExternalAgent)).is_ok()
     );
 }
 
@@ -108,18 +99,16 @@ fn manifest_access_restricts_each_authenticated_principal_class() {
 fn cli_principal_is_allowed_but_never_valid_on_the_task_host_binding() {
     // A CLI principal is allowed to address any MCP service's manifest, but it
     // can never satisfy the private task-host extension binding: that path only
-    // accepts SystemAgent/AppAgent principals, so a CLI identity stays
+    // accepts Agent principals, so a CLI identity stays
     // impossible on the private Task Host path.
     let manifest = manifest();
-    assert!(authorize_manifest(&manifest, &principal(McpPrincipalKind::Cli, None)).is_ok());
+    assert!(authorize_manifest(&manifest, &principal(McpPrincipalKind::Cli)).is_ok());
 
     let binding = binding();
     let context = McpCallContext {
         wire_version: CALL_CONTEXT_WIRE_VERSION,
         call_id: "cli-a".to_string(),
         trace_id: "cli-a".to_string(),
-        parent_call_id: None,
-        depth: 0,
         deadline_unix_ms: Some(crate::agentd::grant::now_ms() + 1_000),
         session_id: None,
         task_id: None,
@@ -127,7 +116,6 @@ fn cli_principal_is_allowed_but_never_valid_on_the_task_host_binding() {
             kind: McpPrincipalKind::Cli,
             id: "cli.uid1000.pid42.start1".to_string(),
             owner_uid: 1000,
-            app_id: None,
         },
     };
     // The daemon-derived CLI context is structurally valid on its own...
@@ -143,8 +131,6 @@ fn call_context_is_bound_to_extension_lease() {
         wire_version: CALL_CONTEXT_WIRE_VERSION,
         call_id: "call-a".to_string(),
         trace_id: "call-a".to_string(),
-        parent_call_id: None,
-        depth: 0,
         deadline_unix_ms: Some(crate::agentd::grant::now_ms() + 1_000),
         session_id: Some("session-a".to_string()),
         task_id: Some("task-a".to_string()),
@@ -152,10 +138,13 @@ fn call_context_is_bound_to_extension_lease() {
             kind: McpPrincipalKind::SystemAgent,
             id: "session-a".to_string(),
             owner_uid: 1000,
-            app_id: None,
         },
     };
     context.validate_extension_binding(&binding).unwrap();
+
+    let mut external = context.clone();
+    external.caller.kind = McpPrincipalKind::ExternalAgent;
+    external.validate_extension_binding(&binding).unwrap();
 
     let invocation = crate::extension_host::protocol::AppInvocationAudit::new(
         "email",
@@ -184,8 +173,6 @@ fn renewed_task_lease_supersedes_only_the_bootstrap_deadline() {
         wire_version: CALL_CONTEXT_WIRE_VERSION,
         call_id: "call-renewed".to_string(),
         trace_id: "call-renewed".to_string(),
-        parent_call_id: None,
-        depth: 0,
         deadline_unix_ms: Some(now + 20_000),
         session_id: Some("session-a".to_string()),
         task_id: Some("task-a".to_string()),
@@ -193,7 +180,6 @@ fn renewed_task_lease_supersedes_only_the_bootstrap_deadline() {
             kind: McpPrincipalKind::SystemAgent,
             id: "session-a".to_string(),
             owner_uid: 1000,
-            app_id: None,
         },
     };
     assert!(
@@ -218,35 +204,24 @@ fn renewed_task_lease_supersedes_only_the_bootstrap_deadline() {
 }
 
 #[test]
-fn app_agent_context_requires_the_broker_bound_app_identity() {
+fn app_owned_agent_cannot_claim_a_system_agent_identity() {
     let mut binding = binding();
     binding.app_id = Some("crm".to_string());
     let context = McpCallContext {
         wire_version: CALL_CONTEXT_WIRE_VERSION,
         call_id: "call-app".to_string(),
         trace_id: "call-app".to_string(),
-        parent_call_id: None,
-        depth: 0,
         deadline_unix_ms: Some(crate::agentd::grant::now_ms() + 1_000),
         session_id: Some("session-a".to_string()),
         task_id: Some("task-a".to_string()),
         caller: McpPrincipal {
-            kind: McpPrincipalKind::AppAgent,
+            kind: McpPrincipalKind::SystemAgent,
             id: "session-a".to_string(),
             owner_uid: 1000,
-            app_id: Some("crm".to_string()),
         },
     };
-    context.validate_extension_binding(&binding).unwrap();
-
-    let mut substituted = context.clone();
-    substituted.caller.app_id = Some("notes".to_string());
-    assert!(substituted.validate_extension_binding(&binding).is_err());
-
-    let mut downgraded = context;
-    downgraded.caller.kind = McpPrincipalKind::SystemAgent;
-    downgraded.caller.app_id = None;
-    assert!(downgraded.validate_extension_binding(&binding).is_err());
+    assert!(context.validate_extension_binding(&binding).is_err());
+    assert!(context.validate_extension_audit_binding(&binding).is_err());
 }
 
 #[test]
@@ -255,25 +230,41 @@ fn call_context_rejects_unbounded_or_inconsistent_identity() {
         wire_version: CALL_CONTEXT_WIRE_VERSION,
         call_id: "call-a".to_string(),
         trace_id: "trace-a".to_string(),
-        parent_call_id: None,
-        depth: 0,
         deadline_unix_ms: Some(crate::agentd::grant::now_ms() + 1_000),
         session_id: Some("session-a".to_string()),
         task_id: Some("task-a".to_string()),
-        caller: principal(McpPrincipalKind::App, Some("crm")),
+        caller: principal(McpPrincipalKind::SystemAgent),
     };
     context.validate().unwrap();
 
-    context.depth = MAX_CALL_DEPTH + 1;
-    assert!(context.validate().is_err());
-    context.depth = 0;
     context.call_id = "call-a\nforged".to_string();
     assert!(context.validate().is_err());
     context.call_id = "call-a".to_string();
-    context.caller.kind = McpPrincipalKind::SystemAgent;
+    context.caller.id = "\nforged".to_string();
     assert!(context.validate().is_err());
 
-    context.caller = principal(McpPrincipalKind::App, Some("crm"));
+    context.caller = principal(McpPrincipalKind::SystemAgent);
     context.deadline_unix_ms = Some(1);
     assert!(context.remaining(Duration::from_secs(1)).is_err());
+}
+
+#[test]
+fn removed_app_principals_and_cross_call_fields_are_rejected() {
+    let base = serde_json::json!({
+        "wire_version": 1, "call_id": "call-1", "trace_id": "trace-1",
+        "caller": {"kind": "cli", "id": "cli-1", "owner_uid": 1000}
+    });
+    for kind in ["app", "app-agent"] {
+        let mut value = base.clone();
+        value["caller"]["kind"] = kind.into();
+        assert!(serde_json::from_value::<McpCallContext>(value).is_err());
+    }
+    for field in ["parent_call_id", "depth"] {
+        let mut value = base.clone();
+        value[field] = serde_json::Value::Null;
+        assert!(serde_json::from_value::<McpCallContext>(value).is_err());
+    }
+    let mut value = base;
+    value["caller"]["app_id"] = serde_json::Value::Null;
+    assert!(serde_json::from_value::<McpCallContext>(value).is_err());
 }

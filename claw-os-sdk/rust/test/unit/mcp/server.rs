@@ -15,6 +15,41 @@ use crate::mcp::protocol::{CallToolResult, ContentItem};
 use crate::mcp::transport::in_memory_pair;
 use crate::mcp::MAX_MANIFEST_BYTES;
 
+#[tokio::test]
+async fn removed_cross_app_contract_is_rejected_before_handlers() {
+    let mut value = manifest(json!([{"name": "echo", "summary": {"en": "Echo"}}]));
+    value["mcp"]["access"] = json!({"apps": []});
+    let mut file = NamedTempFile::new().unwrap();
+    file.write_all(value.to_string().as_bytes()).unwrap();
+    assert!(App::from_manifest(file.path()).is_err());
+
+    let (client, server) = in_memory_pair();
+    let task = tokio::spawn(protocol_only_app().serve(server));
+    let base = context("removed");
+    let mut cases = Vec::new();
+    for kind in ["app", "app-agent"] {
+        let mut value = base.clone();
+        value["caller"]["kind"] = json!(kind);
+        cases.push((value, "WIRE_ENUM"));
+    }
+    let mut caller = base.clone();
+    caller["caller"]["app_id"] = Value::Null;
+    cases.push((caller, "WIRE_UNKNOWN_FIELD"));
+    for key in ["depth", "parent_call_id"] {
+        let mut value = base.clone();
+        value[key] = Value::Null;
+        cases.push((value, "WIRE_UNKNOWN_FIELD"));
+    }
+    for (index, (value, code)) in cases.into_iter().enumerate() {
+        send(&client, call(json!(index), "echo", json!({"text": "x"}), value)).await;
+        let reply = receive(&client).await;
+        assert_eq!(reply["error"]["code"], ERR_INVALID_PARAMS);
+        assert!(reply["error"]["message"].as_str().unwrap().contains(code));
+    }
+    drop(client);
+    task.await.unwrap().unwrap();
+}
+
 fn manifest(tools: Value) -> Value {
     json!({
         "schema_version": 2,
@@ -49,14 +84,12 @@ fn context(call_id: &str) -> Value {
         "wire_version": 1,
         "call_id": call_id,
         "trace_id": format!("trace-{call_id}"),
-        "depth": 1,
         "session_id": "session-1",
         "task_id": "task-1",
         "caller": {
-            "kind": "app",
+            "kind": "system-agent",
             "id": "caller",
-            "owner_uid": 1000,
-            "app_id": "caller_app"
+            "owner_uid": 1000
         }
     })
 }
@@ -256,10 +289,9 @@ async fn authenticated_context_is_mandatory_and_not_derived_from_args() {
         async fn handle(&self, args: Value, context: CallContext) -> ToolResult {
             let snapshot = context.authenticated();
             ToolResult::text(format!(
-                "{}:{}:{}:{}",
+                "{}:{}:{}",
                 context.caller().id,
                 snapshot.trace_id,
-                context.depth(),
                 args["caller"]
             ))
         }
@@ -302,7 +334,7 @@ async fn authenticated_context_is_mandatory_and_not_derived_from_args() {
     let response = receive(&client).await;
     assert_eq!(
         response["result"]["content"][0]["text"],
-        "caller:trace-immutable:1:\"spoof\""
+        "caller:trace-immutable:\"spoof\""
     );
 
     drop(client);
@@ -437,7 +469,7 @@ async fn large_numeric_ids_and_arguments_preserve_lexemes() {
 
     client
         .send(
-            r#"{"jsonrpc":"2.0","id":0.123456789012345678901234567890,"method":"tools/call","params":{"name":"number.echo","arguments":{"value":18446744073709551616},"_meta":{"claw-os.dev/call-context":{"wire_version":1,"call_id":"large","trace_id":"trace-large","depth":0,"caller":{"kind":"cli","id":"cli","owner_uid":1000}}}}}"#
+            r#"{"jsonrpc":"2.0","id":0.123456789012345678901234567890,"method":"tools/call","params":{"name":"number.echo","arguments":{"value":18446744073709551616},"_meta":{"claw-os.dev/call-context":{"wire_version":1,"call_id":"large","trace_id":"trace-large","caller":{"kind":"cli","id":"cli","owner_uid":1000}}}}}"#
                 .into(),
         )
         .await

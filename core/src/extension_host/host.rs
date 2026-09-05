@@ -668,6 +668,9 @@ async fn dispatch(
             args,
         } => {
             require_purpose(&state, super::protocol::HostPurpose::Task, "run App")?;
+            if state.binding.app_id.is_some() {
+                return Err("App-owned agents cannot launch Apps".to_string().into());
+            }
             validate_name(&app_id, "App id")?;
             validate_text(&command, "App command", 256)?;
             validate_args(&args)?;

@@ -10,6 +10,8 @@ Rust, Python, Node, and Go bindings.
 - Maintain versioned wire types and operation/capability schemas.
 - Define the MCP-first App service contract: lifecycle, caller restrictions,
   manifest-declared tools, and capability needs.
+- Admit System Agent, permitted external Agent, and authenticated CLI callers,
+  never Apps or App-owned agents. Cross-App orchestration is system-Agent-owned.
 - Provide public SDK calls without exposing internal broker details.
 - Keep language bindings behaviorally compatible.
 - Own decoder validation and JSON-RPC error codes in `wire/v1/contract.json`
@@ -25,7 +27,7 @@ Rust, Python, Node, and Go bindings.
 | `wire/v1/contract.json` | Generated decoder set, stable validation errors, and JSON-RPC codes |
 | `wire/v1/ask-claw-launcher.md` | Versioned secure desktop overlay launcher handshake |
 | `wire/v1/manifest.schema.json` | Versioned App/MCP service, tool, access, and capability contract |
-| `wire/v1/mcp_call_context.schema.json` | Gateway-authenticated caller identity, lineage, depth, and deadline |
+| `wire/v1/mcp_call_context.schema.json` | Gateway-authenticated caller identity, task/session correlation, and deadline |
 | `rust/` | Rust public SDK |
 | `python/` | Python public SDK |
 | `node/` | Node public SDK |

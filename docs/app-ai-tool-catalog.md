@@ -31,10 +31,11 @@ For the higher-level architecture and the line between `cos ai`
 (App-facing primitive) and `cos agent` (kernel's own Agent product),
 see [`docs/app-ai-integration.md`](./app-ai-integration.md).
 
-> **App-defined tools live in the App Mesh.** The catalog below is the
+> **App-defined tools are Agent-facing services.** The catalog below is the
 > *kernel-provided* Tool set an App may expose to its own model request.
-> Agent-to-App and App-to-App tools are App-owned, declared in signed
+> Agent-to-App tools are App-owned, declared in signed
 > `app.json.mcp.tools[]`, and called through the authenticated Gateway.
+> Apps cannot call these services; the system Agent orchestrates cross-App work.
 > See [App, Agent, and AI Integration](./app-ai-integration.md).
 
 ---

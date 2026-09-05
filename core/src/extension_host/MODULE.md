@@ -28,8 +28,9 @@ extensions.
   use only session/peer-session provider routes for their nearest registered
   App/MCP session.
 - Let task Hosts run one-shot Apps and configured MCP servers and relay typed
-  App Mesh calls, but never execute those relayed calls; never run their code
+  Agent-to-App calls, but never execute those relayed calls; never run their code
   in `clawd` or `claw-agentd`.
+- Reject App-owned task bindings on App launch and typed App-call paths.
 - Let service Hosts execute only daemon-authorized calls for their exact bound
   App/package and warm `always-on` MCP children.
 - Reverify installed Agent extension packages into `VerifiedPackage` snapshots,

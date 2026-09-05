@@ -65,13 +65,11 @@ function context(callId: string): Record<string, unknown> {
     wire_version: 1,
     call_id: callId,
     trace_id: `trace-${callId}`,
-    depth: 1,
     session_id: "session-1",
     caller: {
-      kind: "app",
+      kind: "system-agent",
       id: "caller-app",
       owner_uid: 1000,
-      app_id: "caller",
     },
   };
 }
@@ -164,6 +162,27 @@ class Harness {
   }
 }
 
+test("removed cross-App call context is rejected before handlers", async () => {
+  const harness = new Harness(protocolOnlyApp());
+  const base = context("removed");
+  const caller = { kind: "system-agent", id: "agent", owner_uid: 1000 };
+  const cases = [
+    { ...base, caller: { ...caller, kind: "app" } },
+    { ...base, caller: { ...caller, kind: "app-agent" } },
+    { ...base, caller: { ...caller, app_id: null } },
+    { ...base, parent_call_id: null },
+    { ...base, depth: null },
+  ];
+  for (const [id, value] of cases.entries()) {
+    harness.send(callFrame(id, "test_app.noop", {}, { [CALL_CONTEXT_META_KEY]: value }));
+    const reply = await harness.waitFor((frame) => frame.id === id);
+    const error = reply.error as Frame;
+    assert.equal(error.code, ERR_INVALID_PARAMS);
+    assert.match(String(error.message), id < 2 ? /WIRE_ENUM/ : /WIRE_UNKNOWN_FIELD/);
+  }
+  await harness.close();
+});
+
 test("manifest contract is closed and requires tools", () => {
   const tool = {
     name: "test_app.status",
@@ -177,6 +196,7 @@ test("manifest contract is closed and requires tools", () => {
     mcp: { tools: [tool] },
   };
   for (const manifest of [
+    { ...base, mcp: { ...base.mcp, access: { apps: [] } } },
     { ...base, unknown: true },
     { ...base, mcp: { ...base.mcp, unknown: true } },
     { ...base, mcp: { tools: [{ ...tool, unknown: true }] } },

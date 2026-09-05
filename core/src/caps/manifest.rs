@@ -618,9 +618,6 @@ pub struct McpAccess {
     /// The owner-scoped system Agent may discover and call this service.
     #[serde(default = "default_mcp_system_agent")]
     pub system_agent: bool,
-    /// Verified App identities allowed to request this service.
-    #[serde(default)]
-    pub apps: Vec<String>,
     /// Authenticated agents entering through the external MCP gateway.
     #[serde(default)]
     pub external_agents: bool,
@@ -630,7 +627,6 @@ impl Default for McpAccess {
     fn default() -> Self {
         Self {
             system_agent: true,
-            apps: Vec::new(),
             external_agents: false,
         }
     }
@@ -1015,10 +1011,6 @@ pub enum ManifestError {
     McpNoTools,
     #[error("manifest field `session` was removed; declare the service under `mcp`")]
     RemovedSessionField,
-    #[error("manifest `mcp.access.apps[]`: invalid App id `{app}`")]
-    McpAccessInvalidApp { app: String },
-    #[error("manifest `mcp.access.apps[]`: App `{app}` declared twice")]
-    McpAccessDuplicateApp { app: String },
     #[error("mcp tool `{tool}`: name must match [a-z][a-z0-9._-]* — got `{tool}`")]
     McpToolInvalidName { tool: String },
     #[error("mcp tool `{name}` declared twice")]
@@ -1220,15 +1212,6 @@ impl Manifest {
         if let Some(service) = &self.mcp {
             if service.tools.is_empty() {
                 return Err(ManifestError::McpNoTools);
-            }
-            let mut seen_apps = std::collections::BTreeSet::new();
-            for app in &service.access.apps {
-                if !is_valid_id(app) {
-                    return Err(ManifestError::McpAccessInvalidApp { app: app.clone() });
-                }
-                if !seen_apps.insert(app.as_str()) {
-                    return Err(ManifestError::McpAccessDuplicateApp { app: app.clone() });
-                }
             }
         }
         self.name

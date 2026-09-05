@@ -1,5 +1,26 @@
 use super::*;
 
+#[test]
+fn app_owned_agents_cannot_discover_or_dispatch_app_services_even_with_invoke() {
+    let invoke = Cap::new(Verb::AGENT_INVOKE, crate::caps::Scope::name("email/email.search"));
+    let rule = ToolExposure::always()
+        .requiring_app_service_caller()
+        .requiring_caps([invoke.clone()]);
+    let agent = ToolExposureContext::isolated(Guardrails::permissive())
+        .with_identity("agent-session", 1000, SessionSource::BrokerTask)
+        .with_capabilities(CapSet::from_caps([invoke]));
+    assert_eq!(rule.decide(&agent), ExposureDecision::Visible);
+
+    for source in [SessionSource::BrokerTask, SessionSource::ExternalMcp, SessionSource::LocalCli] {
+        let mut app = agent.clone().with_identity("app-agent", 1000, source);
+        app.app_id = Some("crm".to_string());
+        assert!(matches!(rule.decide(&app), ExposureDecision::Hidden(_)));
+        assert!(crate::agent::tools::app_gateway::McpPrincipal::from_exposure(&app).is_err());
+    }
+    let app = agent.with_identity("app", 1000, SessionSource::App);
+    assert!(matches!(rule.decide(&app), ExposureDecision::Hidden(_)));
+}
+
 fn cap(verb: Verb, scope: crate::caps::Scope) -> CapSet {
     CapSet::from_caps([Cap::new(verb, scope)])
 }

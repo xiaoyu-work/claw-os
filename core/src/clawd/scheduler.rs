@@ -444,11 +444,8 @@ fn caller_authority(
     let scheduled = scheduled_ceiling(home);
     let requester = format!("uid:{uid} pid:{pid} start:{start_time_ticks}");
     match nearest_registered_session(sessions, pid)? {
-        Some(session) if session.app_id.is_some() => Err(format!(
-            "App session `{}` cannot manage proactive jobs",
-            session.session_id
-        )),
         Some(session) => {
+            super::app_sessions::require_non_app_session_ancestry(sessions, session)?;
             let held = session.caps.clone().unwrap_or_default();
             let delegable = held.intersect(&scheduled);
             Ok(CallerAuthority {

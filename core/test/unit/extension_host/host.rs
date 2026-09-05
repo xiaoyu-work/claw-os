@@ -380,6 +380,63 @@ fn interrupted_detach_acknowledges_only_proven_process_and_package_cleanup() {
 }
 
 #[tokio::test]
+async fn app_owned_tasks_cannot_run_apps_or_relay_forged_system_agent_calls() {
+    use crate::agent::tools::app_gateway::{
+        McpCallContext, McpPrincipal, McpPrincipalKind, CALL_CONTEXT_WIRE_VERSION,
+    };
+
+    let mut app_task = state();
+    app_task.binding.app_id = Some("notes".to_string());
+    let app_task = Arc::new(app_task);
+    for target in ["notes", "email"] {
+        let error = dispatch(
+            HostAction::RunApp {
+                app_id: target.to_string(),
+                command: "show".to_string(),
+                args: Vec::new(),
+            },
+            app_task.clone(),
+        )
+        .await
+        .expect_err("App-owned tasks must not launch even their own App");
+        assert!(error.contains("App-owned agents cannot launch Apps"), "{error}");
+
+        let context = McpCallContext {
+            wire_version: CALL_CONTEXT_WIRE_VERSION,
+            call_id: "call-a".to_string(),
+            trace_id: "call-a".to_string(),
+            deadline_unix_ms: Some(crate::agentd::grant::now_ms() + 1_000),
+            session_id: app_task.binding.session_id.clone(),
+            task_id: Some(app_task.binding.task_id.clone()),
+            caller: McpPrincipal {
+                kind: McpPrincipalKind::SystemAgent,
+                id: app_task.binding.session_id.clone().unwrap(),
+                owner_uid: app_task.binding.owner_uid,
+            },
+        };
+        let audit = super::super::protocol::AppInvocationAudit::new(
+            target,
+            "show",
+            app_task.binding.capability_generation.clone(),
+            context,
+        )
+        .unwrap();
+        let error = dispatch(
+            HostAction::AppCall {
+                app_id: target.to_string(),
+                tool: "show".to_string(),
+                arguments: serde_json::json!({}),
+                audit,
+            },
+            app_task.clone(),
+        )
+        .await
+        .expect_err("a forged system Agent context must not reach the broker");
+        assert!(error.contains("authenticated task"), "{error}");
+    }
+}
+
+#[tokio::test]
 async fn task_and_service_hosts_cannot_swap_app_actions() {
     let task = Arc::new(state());
     let error = dispatch(

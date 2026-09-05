@@ -158,14 +158,6 @@ impl CallContext {
         &self.authenticated.trace_id
     }
 
-    pub fn parent_call_id(&self) -> Option<&str> {
-        self.authenticated.parent_call_id.as_deref()
-    }
-
-    pub fn depth(&self) -> u8 {
-        self.authenticated.depth
-    }
-
     pub fn session_id(&self) -> Option<&str> {
         self.authenticated.session_id.as_deref()
     }

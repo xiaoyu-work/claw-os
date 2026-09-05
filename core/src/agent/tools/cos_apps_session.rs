@@ -2193,6 +2193,7 @@ impl Tool for AppSessionTool {
 
     fn exposure(&self) -> ToolExposure {
         ToolExposure::always()
+            .requiring_app_service_caller()
             .requiring_caps([crate::caps::Cap::new(
                 crate::caps::Verb::AGENT_INVOKE,
                 self.invoke_scope.clone(),

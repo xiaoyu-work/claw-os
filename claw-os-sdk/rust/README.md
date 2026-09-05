@@ -21,6 +21,12 @@ The `cos` kernel performs capability checks when public SDK operations run.
 Native Apps expose agent-callable tools through `claw_os_sdk::mcp`; MCP is a
 module of this SDK rather than a separate developer package.
 
+The generic `call`/`call_typed` transport is for authenticated human CLI and
+desktop clients, not App-to-App calls. Broker admission rejects App processes
+and App-owned agents even if they hold invoke grants. App code uses gated AI,
+controlled system services, and shared libraries; the built-in system Agent
+owns cross-App workflows.
+
 ## Expose manifest-declared MCP tools
 
 The App manifest is the only source of identity, summaries, and input schemas:

@@ -202,12 +202,11 @@ func TestRootTypeAndBudgetShowContract(t *testing.T) {
 	}
 }
 
-func TestMcpCallContextIsClosedAndDepthBounded(t *testing.T) {
+func TestMcpCallContextIsClosed(t *testing.T) {
 	context := decodeWireValue(t, `{
 		"wire_version":1,
 		"call_id":"call-1",
 		"trace_id":"trace-1",
-		"depth":0,
 		"caller":{"kind":"system-agent","id":"session-1","owner_uid":1000}
 	}`)
 	if err := ValidateMcpCallContext(context); err != nil {
@@ -218,7 +217,6 @@ func TestMcpCallContextIsClosedAndDepthBounded(t *testing.T) {
 		"wire_version":1,
 		"call_id":"call-1",
 		"trace_id":"trace-1",
-		"depth":0,
 		"caller":{"kind":"system-agent","id":"session-1","owner_uid":1000,"token":"forged"}
 	}`)
 	err := ValidateMcpCallContext(unknown).(*WireDecodeError)
@@ -229,7 +227,7 @@ func TestMcpCallContextIsClosedAndDepthBounded(t *testing.T) {
 	tooDeep := context.(map[string]any)
 	tooDeep["depth"] = json.Number("17")
 	err = ValidateMcpCallContext(tooDeep).(*WireDecodeError)
-	if err.Code != WireMaximum || err.Path != "$.depth" {
+	if err.Code != WireUnknownField || err.Path != "$.depth" {
 		t.Fatalf("depth error = %#v", err)
 	}
 
@@ -246,7 +244,6 @@ func TestMcpCallContextIsClosedAndDepthBounded(t *testing.T) {
 			"wire_version":1,
 			"call_id":"call-1",
 			"trace_id":"trace-1",
-			"depth":0,
 			"caller":{"kind":"system-agent","id":"session-1","owner_uid":1000}
 		}`).(map[string]any)
 		malformed["call_id"] = test.callID

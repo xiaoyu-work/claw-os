@@ -3,7 +3,7 @@
 Claw OS has one public, multi-language developer surface:
 [`claw-os-sdk`](../claw-os-sdk/). Python, Rust, Node, and Go consume the
 same versioned wire schemas. MCP is an SDK module and the only typed service
-contract for Agent-to-App and App-to-App calls; it is not a separate SDK or a
+contract for Agent-to-App calls; it is not a separate SDK or a
 second registration format.
 
 This document explains the architecture. For app authoring steps, see
@@ -13,7 +13,7 @@ This document explains the architecture. For app authoring steps, see
 ## 1. One App contract
 
 An App package has one signed `app.json`. `schema_version: 2` and the `mcp`
-block define the App Mesh surface:
+block define the App service surface:
 
 ```json
 {
@@ -30,9 +30,6 @@ block define the App Mesh surface:
     "lifecycle": "lazy",
     "access": {
       "system_agent": true,
-      "apps": [
-        "calendar"
-      ],
       "external_agents": false
     },
     "tools": [
@@ -81,7 +78,7 @@ The removed top-level `session` field is rejected rather than translated.
 
 `operations` may still be declared for direct human CLI commands such as
 `cos app notes export`. They receive validated argv and are not another typed
-App Mesh protocol. Desktop metadata remains in the same manifest and uses the
+App service protocol. Desktop metadata remains in the same manifest and uses the
 same App identity.
 
 ## 2. Authentication is workload identity
@@ -95,13 +92,13 @@ in MCP arguments or environment variables.
 - session id;
 - process id and process start time;
 - task id and Extension Host ancestry;
-- System Agent or App Agent principal kind; and
-- the verified App id for an App or App Agent.
+- System Agent, permitted external Agent, or authenticated local CLI identity.
 
 For a task-owned Extension Host, the broker signs the binding between the
-task, capability generation, caller session, and optional App Agent id. The
-host may relay one call from that exact parent, but descendants cannot reuse
-the context or downgrade an App Agent to the System Agent.
+task, capability generation, caller session, and App ownership where present.
+App ownership disqualifies a caller from the App service path. The host may
+relay a call only for an admitted Agent parent; descendants cannot reuse the
+context or downgrade an App-owned agent to the System Agent.
 
 The Gateway serializes this identity under the reserved MCP metadata key:
 
@@ -109,15 +106,15 @@ The Gateway serializes this identity under the reserved MCP metadata key:
 _meta["claw-os.dev/call-context"]
 ```
 
-The versioned context contains `call_id`, `trace_id`, `parent_call_id`,
-`depth`, `deadline_unix_ms`, `session_id`, `task_id`, and `caller`. It is
+The versioned context contains `call_id`, `trace_id`, `deadline_unix_ms`,
+`session_id`, `task_id`, and `caller` (`kind`, `id`, `owner_uid`). It is
 separate from business arguments and is not a bearer capability. The target
 App may use it for ownership, partitioning, diagnostics, cancellation, and
 progress, but privileged work still requires live daemon authority.
 
 ## 3. Authorization has two independent sides
 
-Every App Mesh call checks both the caller and the target:
+Every App service call checks both the caller and the target:
 
 | Check | Meaning |
 | --- | --- |
@@ -154,7 +151,7 @@ Authority from call A cannot be spent by call B.
 ## 4. End-to-end call flow
 
 ```text
-System Agent, App Agent, or App
+System Agent or permitted external Agent
   -> trusted ToolExposureContext
   -> exact agent.invoke:<app>/<tool> authorization
   -> task-owned Extension Host control channel
@@ -253,21 +250,20 @@ Node uses `mcp.App.fromManifest()` plus `app.tool(name, handler)`. Go uses
 - support progress and cooperative cancellation; and
 - reserve stdout for newline-delimited MCP JSON-RPC.
 
-## 6. App-to-App and App-to-Agent
+## 6. Cross-App orchestration and gated App AI
 
-App-to-App and Agent-to-App use the same Gateway. The only differences are the
-authenticated caller principal and the target manifest's `mcp.access` rule.
-Developers do not implement service credentials, token rotation, signature
-checking, or policy middleware.
+Cross-App workflows belong to the built-in system Agent. Apps cannot call
+other Apps, including through App-owned AI agents, shell helpers, or a forged
+CLI origin. An `agent.invoke` grant does not override that boundary.
+`mcp.access` admits only `system_agent` and `external_agents`; removed App
+principals, caller `app_id`, nesting fields, and App allowlists are rejected.
+The broker checks registered session ancestry before App launch and rejects
+App-origin system Agent task and proactive-job admission.
 
-An App that needs to call another App declares the exact target
-`agent.invoke` need in its own signed manifest. `clawd` checks that declaration
-against the App's live authority, creates the child call context with increased
-depth and linked trace ids, and applies the target App's independent access and
-capability policy.
-
-An App can invoke the OS Agent through the public SDK's AI/Agent gates when its
-manifest declares the corresponding AI capability. Provider credentials,
+Apps may use controlled system services, shared libraries, and the public
+SDK's gated AI when their manifests declare the corresponding capabilities.
+`tools.call` addresses the fixed `cos ai tool` primitive catalog, not arbitrary
+App tools. Provider credentials,
 model selection, budgets, prompt-origin policy, and model-visible logging stay
 inside the core Agent.
 
@@ -296,4 +292,4 @@ Configured third-party MCP servers remain a separate attachment boundary.
 Their untrusted descriptors stay behind `mcp_catalog` and `mcp_invoke`, opaque
 session/task/generation-bound handles, structural sanitization, and explicit
 approval. They do not become Apps, receive App identity, or bypass the signed
-`app.json` App Mesh contract.
+`app.json` App service contract.

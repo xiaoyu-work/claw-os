@@ -53,7 +53,6 @@ def _context(
         "wire_version": 1,
         "call_id": call_id,
         "trace_id": "trace-1",
-        "depth": 0,
         "session_id": "session-1",
         "task_id": "task-1",
         "caller": {
@@ -119,6 +118,10 @@ class ManifestBindingTests(unittest.TestCase):
             "summary": {"en": "Show status."},
         }
         invalid_manifests = [
+            {
+                **_manifest(tool),
+                "mcp": {**_manifest(tool)["mcp"], "access": {"apps": []}},
+            },
             {**_manifest(tool), "unknown": True},
             {
                 **_manifest(tool),
@@ -292,6 +295,30 @@ class ManifestBindingTests(unittest.TestCase):
 
 
 class AuthenticatedContextTests(unittest.TestCase):
+    def test_removed_app_identity_and_cross_call_metadata_are_rejected(self) -> None:
+        for field, value in (
+            ("kind", "app"),
+            ("kind", "app-agent"),
+            ("app_id", "caller"),
+        ):
+            with self.subTest(field=field, value=value):
+                directory, app = self._app()
+                self.addCleanup(directory.cleanup)
+                context = _context()
+                context["caller"][field] = value
+                frames = _drive(app, _call("mail.context", {"caller": "x"}, context=context))
+                self.assertEqual(frames[0]["error"]["code"], mcp.ERR_INVALID_PARAMS)
+                expected = "WIRE_ENUM" if field == "kind" else "WIRE_UNKNOWN_FIELD"
+                self.assertIn(expected, frames[0]["error"]["message"])
+        for field in ("parent_call_id", "depth"):
+            directory, app = self._app()
+            self.addCleanup(directory.cleanup)
+            context = _context()
+            context[field] = None
+            frames = _drive(app, _call("mail.context", {"caller": "x"}, context=context))
+            self.assertEqual(frames[0]["error"]["code"], mcp.ERR_INVALID_PARAMS)
+            self.assertIn("WIRE_UNKNOWN_FIELD", frames[0]["error"]["message"])
+
     def _app(self) -> tuple[tempfile.TemporaryDirectory, mcp.App]:
         directory, path = _write_manifest(
             _manifest(

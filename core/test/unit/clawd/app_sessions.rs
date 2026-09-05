@@ -850,6 +850,35 @@ fn an_app_session_cannot_mint_further_sessions() {
 }
 
 #[test]
+fn app_owned_task_hosts_and_forged_cli_helpers_cannot_orchestrate_apps() {
+    let (pid, ticks) = this_process();
+    for source in [
+        crate::session::SessionSource::BrokerTask,
+        crate::session::SessionSource::LocalCli,
+        crate::session::SessionSource::ExternalMcp,
+    ] {
+        let mut helper = session_row("helper", pid, None, home_reader_ceiling());
+        helper.parent = Some("app-owner".to_string());
+        helper.client.source = source;
+        helper.group = Some(crate::extension_host::protocol::EXTENSION_HOST_GROUP.to_string());
+        let app = session_row("app-owner", pid + 1, Some("crm"), home_reader_ceiling());
+        let rows = vec![helper, app];
+        let error = launcher_authority(&rows, pid, ticks, &home()).unwrap_err();
+        assert!(error.contains("app-owner"), "{error}");
+    }
+}
+
+#[test]
+fn launcher_ancestry_rejects_missing_parents_and_cycles() {
+    let (pid, ticks) = this_process();
+    let mut row = session_row("helper", pid, None, home_reader_ceiling());
+    row.parent = Some("missing".to_string());
+    assert!(launcher_authority(&[row.clone()], pid, ticks, &home()).is_err());
+    row.parent = Some(row.session_id.clone());
+    assert!(launcher_authority(&[row], pid, ticks, &home()).is_err());
+}
+
+#[test]
 fn only_the_exact_broker_registered_extension_host_may_launch_under_nonewprivs() {
     let (pid, ticks) = this_process();
     let mut host = session_row("extension-1", pid, None, home_reader_ceiling());
@@ -3520,8 +3549,6 @@ fn cli_principal_is_daemon_derived_and_the_context_is_exact() {
         wire_version: CALL_CONTEXT_WIRE_VERSION,
         call_id: "cli-abc".to_string(),
         trace_id: "cli-abc".to_string(),
-        parent_call_id: None,
-        depth: 0,
         deadline_unix_ms: Some(crate::agentd::grant::now_ms() + 1_000),
         session_id: None,
         task_id: None,
@@ -3529,7 +3556,6 @@ fn cli_principal_is_daemon_derived_and_the_context_is_exact() {
             kind: McpPrincipalKind::Cli,
             id: cli_principal_id(1000, 4242, Some(99)),
             owner_uid: 1000,
-            app_id: None,
         },
     };
     context

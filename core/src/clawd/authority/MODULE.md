@@ -44,6 +44,10 @@ before its handler runs.
 | `PeerSession` | Addressed by the caller's own registered session; authenticated from process ancestry and given a single-use request-scoped grant | `system.package.restore`, `system.service.restore`, `credential.oauth-refresh` |
 | `Handle` | Addressed by the opaque handle itself | App session bind / set-transient / deregister |
 
+Peer-scoped task routes additionally authenticate non-App process/session
+ancestry. An App or App-owned agent cannot turn a task request into fresh
+system-Agent authority.
+
 Agent approval redemption uses the same store without exposing another broker
 route. After a durable exact consent record is spent, `clawd` issues an
 `AgentWorker`-audience grant with `Issuer::Approval`, bound to the verified

@@ -451,9 +451,15 @@ pub struct ToolExposure {
     attended_local: bool,
     extension: Option<String>,
     memory: Option<(Vec<Verb>, MemoryExposure)>,
+    app_service_caller: bool,
 }
 
 impl ToolExposure {
+    pub fn requiring_app_service_caller(mut self) -> Self {
+        self.app_service_caller = true;
+        self
+    }
+
     pub fn always() -> Self {
         Self::default()
     }
@@ -512,6 +518,11 @@ impl ToolExposure {
     }
 
     pub fn decide(&self, context: &ToolExposureContext) -> ExposureDecision {
+        if self.app_service_caller {
+            if let Err(error) = super::app_gateway::McpPrincipal::from_exposure(context) {
+                return ExposureDecision::Hidden(error);
+            }
+        }
         if self.attended_local && !context.is_attended_local() {
             return ExposureDecision::Hidden("requires an attended local session".to_string());
         }

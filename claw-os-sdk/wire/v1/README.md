@@ -79,9 +79,15 @@ by the Claw App Host. For every `tools/call`, the Gateway replaces any
 caller-supplied Claw metadata and injects a value conforming to
 `mcp_call_context.schema.json` under
 `_meta["claw-os.dev/call-context"]`. It binds the authenticated workload
-principal to the call/trace lineage, nesting depth, owner, task/session, and
+principal to the call/trace correlation, owner, task/session, and
 deadline. This context is descriptive, not authority; the App Host retains
 the transient target capability grant.
+
+Caller kinds are `system-agent`, `external-agent`, and `cli`. App principals,
+caller `app_id`, `parent_call_id`, and `depth` are rejected, not translated.
+Apps cannot call other Apps; cross-App orchestration belongs to the system
+Agent. The manifest access object accepts only `system_agent` and
+`external_agents`.
 
 The Python runtime exposes that value through `claw_os_sdk.mcp.current_context()`
 and supports MCP progress tokens plus cooperative

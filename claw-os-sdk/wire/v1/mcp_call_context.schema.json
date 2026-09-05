@@ -4,7 +4,7 @@
   "title": "MCP call context",
   "description": "Authenticated call identity and lineage injected by the Claw MCP Gateway over the private App-host transport. Caller-supplied MCP arguments must never populate this object.",
   "type": "object",
-  "required": ["wire_version", "call_id", "trace_id", "depth", "caller"],
+  "required": ["wire_version", "call_id", "trace_id", "caller"],
   "additionalProperties": false,
   "properties": {
     "wire_version": {
@@ -26,18 +26,6 @@
       "maxLength": 128,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
       "x-full-match": true
-    },
-    "parent_call_id": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 128,
-      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
-      "x-full-match": true
-    },
-    "depth": {
-      "type": "integer",
-      "minimum": 0,
-      "maximum": 16
     },
     "deadline_unix_ms": {
       "type": "integer",
@@ -70,7 +58,7 @@
       "properties": {
         "kind": {
           "type": "string",
-          "enum": ["system-agent", "app", "app-agent", "external-agent", "cli"]
+          "enum": ["system-agent", "external-agent", "cli"]
         },
         "id": {
           "type": "string",
@@ -83,11 +71,6 @@
           "type": "integer",
           "minimum": 0,
           "maximum": 4294967295
-        },
-        "app_id": {
-          "type": "string",
-          "pattern": "^[a-z][a-z0-9_-]*$",
-          "x-full-match": true
         }
       }
     }

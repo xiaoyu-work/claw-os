@@ -1096,6 +1096,29 @@ fn mcp_block_parses_with_minimal_tool() {
 }
 
 #[test]
+fn mcp_first_service_bundled_access_contract() {
+    let mut directories = vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../apps")];
+    let mut checked = 0;
+    while let Some(directory) = directories.pop() {
+        for entry in std::fs::read_dir(directory).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_dir() {
+                directories.push(entry.path());
+            } else if entry.file_name() == "app.json" {
+                let value: serde_json::Value =
+                    serde_json::from_slice(&std::fs::read(entry.path()).unwrap()).unwrap();
+                if let Some(access) = value.get("mcp").and_then(|mcp| mcp.get("access")) {
+                    serde_json::from_value::<McpAccess>(access.clone())
+                        .unwrap_or_else(|error| panic!("{}: {error}", entry.path().display()));
+                    checked += 1;
+                }
+            }
+        }
+    }
+    assert!(checked > 0);
+}
+
+#[test]
 fn mcp_first_service_parses_lifecycle_access_and_tools() {
     let manifest = parse(
         r#"{
@@ -1108,7 +1131,6 @@ fn mcp_first_service_parses_lifecycle_access_and_tools() {
                 "lifecycle": "always-on",
                 "access": {
                   "system_agent": true,
-                  "apps": ["crm"],
                   "external_agents": false
                 },
                 "tools": [
@@ -1126,7 +1148,6 @@ fn mcp_first_service_parses_lifecycle_access_and_tools() {
     assert_eq!(service.entry.as_deref(), Some("server.py"));
     assert_eq!(service.lifecycle, McpLifecycle::AlwaysOn);
     assert!(service.access.system_agent);
-    assert_eq!(service.access.apps, vec!["crm"]);
     assert!(!service.access.external_agents);
     assert_eq!(service.tools[0].name, "email.search");
 }
@@ -1145,7 +1166,6 @@ fn mcp_first_service_uses_restrictive_caller_defaults() {
     let service = manifest.mcp.as_ref().expect("MCP service");
     assert_eq!(service.lifecycle, McpLifecycle::Lazy);
     assert!(service.access.system_agent);
-    assert!(service.access.apps.is_empty());
     assert!(!service.access.external_agents);
 }
 
@@ -1267,7 +1287,7 @@ fn mcp_first_service_rejects_invalid_callers() {
             }"#,
     )
     .unwrap_err();
-    assert!(matches!(invalid, ManifestError::McpAccessInvalidApp { .. }));
+    assert!(invalid.to_string().contains("unknown field `apps`"));
 
     let duplicate = Manifest::from_json(
         r#"{
@@ -1282,10 +1302,7 @@ fn mcp_first_service_rejects_invalid_callers() {
             }"#,
     )
     .unwrap_err();
-    assert!(matches!(
-        duplicate,
-        ManifestError::McpAccessDuplicateApp { .. }
-    ));
+    assert!(duplicate.to_string().contains("unknown field `apps`"));
 
     let unknown_field = Manifest::from_json(
         r#"{

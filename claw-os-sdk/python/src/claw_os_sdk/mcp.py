@@ -1,7 +1,7 @@
 """Manifest-bound MCP server runtime for Claw OS Apps.
 
-This is the public way for an App to participate in the private Claw
-App Mesh. The Gateway authenticates the caller, derives exact
+This is the public way for an App to expose a private Claw service.
+The Gateway authenticates the non-App caller, derives exact
 capabilities from the verified manifest, and then forwards the call to
 this runtime over the App Host's private stdio transport.
 
@@ -121,7 +121,6 @@ class McpPrincipal:
     kind: str
     id: str
     owner_uid: int
-    app_id: Optional[str] = None
 
 
 @dataclass
@@ -140,9 +139,7 @@ class CallContext:
 
     call_id: str
     trace_id: str
-    depth: int
     caller: McpPrincipal
-    parent_call_id: Optional[str] = None
     deadline_unix_ms: Optional[int] = None
     session_id: Optional[str] = None
     task_id: Optional[str] = None
@@ -285,7 +282,7 @@ class App:
     Construct with :meth:`from_manifest`, bind each declared tool with
     ``@app.tool(name)``, then call :meth:`serve`. Direct construction is
     rejected because code-authored tool schemas and unauthenticated calls
-    are not part of the Claw App Mesh contract.
+    are not part of the Claw App service contract.
     """
 
     name: str
@@ -779,8 +776,6 @@ class App:
         return CallContext(
             call_id=raw_context["call_id"],
             trace_id=raw_context["trace_id"],
-            parent_call_id=raw_context.get("parent_call_id"),
-            depth=raw_context["depth"],
             deadline_unix_ms=raw_context.get("deadline_unix_ms"),
             session_id=raw_context.get("session_id"),
             task_id=raw_context.get("task_id"),
@@ -788,7 +783,6 @@ class App:
                 kind=caller["kind"],
                 id=caller["id"],
                 owner_uid=caller["owner_uid"],
-                app_id=caller.get("app_id"),
             ),
             _cancelled=state.cancelled,
             _progress_token=progress_token,
@@ -910,7 +904,7 @@ def _load_manifest_service(path: pathlib.Path) -> tuple[str, str, List[_Tool]]:
             raise ManifestError("`mcp.access` must be an object")
         _reject_unknown_fields(
             access,
-            {"system_agent", "apps", "external_agents"},
+            {"system_agent", "external_agents"},
             "`mcp.access`",
         )
     raw_tools = service.get("tools")

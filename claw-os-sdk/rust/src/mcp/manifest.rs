@@ -181,7 +181,7 @@ fn parse(manifest: Value) -> Result<Manifest, AppError> {
         reject_unknown_fields(
             access,
             "`mcp.access`",
-            &["system_agent", "apps", "external_agents"],
+            &["system_agent", "external_agents"],
         )?;
     }
     let raw_tools = match service.get("tools") {

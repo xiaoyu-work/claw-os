@@ -5,8 +5,6 @@ fn context() -> McpCallContext {
         wire_version: crate::agent::tools::app_gateway::CALL_CONTEXT_WIRE_VERSION,
         call_id: "call-a".to_string(),
         trace_id: "trace-a".to_string(),
-        parent_call_id: None,
-        depth: 0,
         deadline_unix_ms: Some(crate::agentd::grant::now_ms() + 60_000),
         session_id: Some("session-a".to_string()),
         task_id: Some("task-a".to_string()),
@@ -14,7 +12,6 @@ fn context() -> McpCallContext {
             kind: crate::agent::tools::app_gateway::McpPrincipalKind::SystemAgent,
             id: "session-a".to_string(),
             owner_uid: 1000,
-            app_id: None,
         },
     }
 }

@@ -7,6 +7,12 @@ surface of Claw OS. Everything that's not in here is internal kernel
 plumbing or vendored upstream code — third-party app developers should
 need nothing more than what this folder exports.
 
+Apps expose MCP services to the system Agent, permitted external agents, and
+authenticated human CLI/desktop clients. They cannot call other Apps, directly
+or through App-owned AI agents. Cross-App orchestration belongs to the built-in
+system Agent. Apps may use gated AI, controlled system services, and shared
+libraries; `tools.call` addresses the fixed AI primitive catalog, not App MCP.
+
 ## Layout
 
 ```

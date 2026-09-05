@@ -302,8 +302,6 @@ pub struct Mcpaccess {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_agent: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub apps: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external_agents: Option<bool>,
 }
 
@@ -351,9 +349,6 @@ pub struct McpCallContext {
     pub call_id: String,
     pub trace_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub parent_call_id: Option<String>,
-    pub depth: u8,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deadline_unix_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
@@ -368,8 +363,6 @@ pub struct McpPrincipal {
     pub kind: String,
     pub id: String,
     pub owner_uid: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub app_id: Option<String>,
 }
 
 /// Permissions request / reply
@@ -801,7 +794,7 @@ pub fn normalize_envelope_integers(value: &mut serde_json::Value) {
     normalize_wire_integers(&schema, &schema, value);
 }
 
-const _WIRE_SCHEMA_MCP_CALL_CONTEXT: &str = r###"{"$defs":{"McpPrincipal":{"additionalProperties":false,"properties":{"app_id":{"pattern":"^[a-z][a-z0-9_-]*$","type":"string","x-full-match":true},"id":{"maxLength":256,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$","type":"string","x-full-match":true},"kind":{"enum":["system-agent","app","app-agent","external-agent","cli"],"type":"string"},"owner_uid":{"maximum":4294967295,"minimum":0,"type":"integer"}},"required":["kind","id","owner_uid"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/mcp_call_context.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"description":"Authenticated call identity and lineage injected by the Claw MCP Gateway over the private App-host transport. Caller-supplied MCP arguments must never populate this object.","properties":{"call_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$","type":"string","x-full-match":true},"caller":{"$ref":"#/$defs/McpPrincipal"},"deadline_unix_ms":{"maximum":9007199254740991,"minimum":1,"type":"integer"},"depth":{"maximum":16,"minimum":0,"type":"integer"},"parent_call_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$","type":"string","x-full-match":true},"session_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$","type":"string","x-full-match":true},"task_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$","type":"string","x-full-match":true},"trace_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$","type":"string","x-full-match":true},"wire_version":{"const":1,"maximum":1,"minimum":1,"type":"integer"}},"required":["wire_version","call_id","trace_id","depth","caller"],"title":"MCP call context","type":"object"}"###;
+const _WIRE_SCHEMA_MCP_CALL_CONTEXT: &str = r###"{"$defs":{"McpPrincipal":{"additionalProperties":false,"properties":{"id":{"maxLength":256,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$","type":"string","x-full-match":true},"kind":{"enum":["system-agent","external-agent","cli"],"type":"string"},"owner_uid":{"maximum":4294967295,"minimum":0,"type":"integer"}},"required":["kind","id","owner_uid"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/mcp_call_context.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"description":"Authenticated call identity and lineage injected by the Claw MCP Gateway over the private App-host transport. Caller-supplied MCP arguments must never populate this object.","properties":{"call_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$","type":"string","x-full-match":true},"caller":{"$ref":"#/$defs/McpPrincipal"},"deadline_unix_ms":{"maximum":9007199254740991,"minimum":1,"type":"integer"},"session_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$","type":"string","x-full-match":true},"task_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$","type":"string","x-full-match":true},"trace_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$","type":"string","x-full-match":true},"wire_version":{"const":1,"maximum":1,"minimum":1,"type":"integer"}},"required":["wire_version","call_id","trace_id","caller"],"title":"MCP call context","type":"object"}"###;
 pub fn validate_mcp_call_context(value: &serde_json::Value) -> Result<(), WireDecodeError> {
     let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_MCP_CALL_CONTEXT)
         .expect("generated wire schema must be valid JSON");

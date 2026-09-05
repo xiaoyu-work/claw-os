@@ -338,7 +338,6 @@
       "additionalProperties": false,
       "properties": {
         "system_agent": { "type": "boolean", "default": true, "description": "Allow the owner-scoped system Agent." },
-        "apps": { "type": "array", "items": { "type": "string", "pattern": "^[a-z][a-z0-9_-]*$" }, "uniqueItems": true, "description": "Verified App identities allowed to request this service." },
         "external_agents": { "type": "boolean", "default": false, "description": "Allow authenticated external-Gateway agents." }
       }
     },

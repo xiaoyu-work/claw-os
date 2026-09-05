@@ -10,6 +10,8 @@ and agent tasks.
 - Accept authenticated Unix-socket RPC.
 - Derive client/session identity and capability context.
 - Dispatch privileged services and app/MCP session operations.
+- Reject App-origin App invocation and system Agent task orchestration, including
+  App-owned agents and intermediate registered helper/Host sessions.
 - Manage owner/App-scoped persistent MCP service Hosts and mint single-use,
   action-bound authorizations for calls relayed by authenticated task Hosts.
 - Own task ownership/lease, durable approval waits, retry, and task

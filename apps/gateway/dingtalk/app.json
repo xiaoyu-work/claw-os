@@ -151,8 +151,7 @@
     "transport": "stdio",
     "lifecycle": "lazy",
     "access": {
-      "system_agent": true,
-      "apps": []
+      "system_agent": true
     },
     "tools": [
       {

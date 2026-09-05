@@ -914,8 +914,6 @@ pub(crate) async fn prepare_cli_app_service_call(
         wire_version: CALL_CONTEXT_WIRE_VERSION,
         trace_id: call_id.clone(),
         call_id,
-        parent_call_id: None,
-        depth: 0,
         deadline_unix_ms: Some(deadline_ms),
         session_id: None,
         task_id: None,
@@ -923,7 +921,6 @@ pub(crate) async fn prepare_cli_app_service_call(
             kind: McpPrincipalKind::Cli,
             id: cli_principal_id(uid, launcher.pid, launcher.start_time_ticks),
             owner_uid: uid,
-            app_id: None,
         },
     };
     context.validate().map_err(BrokerError::authorization)?;
@@ -1288,8 +1285,7 @@ async fn validate_mcp_call_context(
 
     let principal_matches = match context.caller.kind {
         McpPrincipalKind::SystemAgent => {
-            context.caller.app_id.is_none()
-                && caller.app_id.is_none()
+            caller.app_id.is_none()
                 && matches!(
                     caller.client.source,
                     crate::session::SessionSource::LocalCli
@@ -1299,17 +1295,8 @@ async fn validate_mcp_call_context(
                         | crate::session::SessionSource::System
                 )
         }
-        McpPrincipalKind::AppAgent => {
-            context.caller.app_id.as_deref() == caller.app_id.as_deref() && caller.app_id.is_some()
-        }
-        McpPrincipalKind::App => {
-            context.caller.app_id.as_deref() == caller.app_id.as_deref()
-                && caller.app_id.is_some()
-                && caller.client.source == crate::session::SessionSource::App
-        }
         McpPrincipalKind::ExternalAgent => {
-            context.caller.app_id.is_none()
-                && caller.app_id.is_none()
+            caller.app_id.is_none()
                 && matches!(
                     caller.client.source,
                     crate::session::SessionSource::ExternalMcp
@@ -1393,20 +1380,19 @@ fn launcher_authority(
     home: &std::path::Path,
 ) -> Result<LauncherAuthority, String> {
     match nearest_registered_session(sessions, pid)? {
-        Some(session) if session.app_id.is_some() => Err(format!(
-            "App session `{}` cannot register further App sessions",
-            session.session_id
-        )),
-        Some(session) => Ok(LauncherAuthority {
-            pid,
-            start_time_ticks,
-            parent: Some(session.session_id.clone()),
-            caps: session.caps.clone().unwrap_or_else(CapSet::new),
-            tier: session.tier,
-            scope: session.scope.clone(),
-            priority: session.priority.clone(),
-            role: session.role.clone(),
-        }),
+        Some(session) => {
+            require_non_app_session_ancestry(sessions, session)?;
+            Ok(LauncherAuthority {
+                pid,
+                start_time_ticks,
+                parent: Some(session.session_id.clone()),
+                caps: session.caps.clone().unwrap_or_else(CapSet::new),
+                tier: session.tier,
+                scope: session.scope.clone(),
+                priority: session.priority.clone(),
+                role: session.role.clone(),
+            })
+        }
         None => Ok(LauncherAuthority {
             pid,
             start_time_ticks,
@@ -1418,6 +1404,35 @@ fn launcher_authority(
             role: Some(Role::Worker.name().to_string()),
         }),
     }
+}
+
+/// An intermediate task Host or helper session must not erase App ownership.
+pub(crate) fn require_non_app_session_ancestry<'a>(
+    sessions: &'a [SessionInfo],
+    mut session: &'a SessionInfo,
+) -> Result<(), String> {
+    for _ in 0..=sessions.len() {
+        if session.app_id.is_some() || session.client.source == crate::session::SessionSource::App {
+            return Err(format!(
+                "App session `{}` cannot orchestrate App calls or system Agent tasks",
+                session.session_id
+            ));
+        }
+        let Some(parent) = session.parent.as_deref() else {
+            return Ok(());
+        };
+        session = sessions
+            .iter()
+            .find(|candidate| candidate.session_id == parent)
+            .ok_or_else(|| "cannot authenticate launcher session ancestry".to_string())?;
+    }
+    Err("launcher session ancestry contains a cycle".to_string())
+}
+
+pub(crate) async fn require_non_app_caller(client: &ClientIdentity) -> Result<(), String> {
+    let uid = client.require_uid()?;
+    let home = client.require_home_dir()?;
+    authenticate_launcher(client, uid, home).await.map(|_| ())
 }
 
 /// Walk the peer's process ancestry looking for a session `clawd`

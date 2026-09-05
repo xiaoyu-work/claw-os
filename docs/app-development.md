@@ -10,11 +10,18 @@ For the architectural background see
 audit) and [`app-ai-tool-catalog.md`](app-ai-tool-catalog.md) (catalog
 of agent-callable tools). This document is the **how to** counterpart.
 
-App-to-Agent and App-to-App integration uses `schema_version: 2` and one
+Agent-to-App integration uses `schema_version: 2` and one
 top-level `mcp` service containing lifecycle, caller access, tools, and exact
 capability needs. The removed `session` block is rejected. Optional
 `operations` remain the human-facing `cos app <id> <operation>` CLI surface;
 they are not a second Agent tool contract.
+
+Apps do not call other Apps. Cross-App workflows are orchestrated by the
+built-in system Agent. Apps may use gated AI, controlled kernel/system
+services, and shared libraries. `mcp.access` accepts only `system_agent` and
+`external_agents`; an App allowlist is not supported. App-owned AI agents
+cannot access App services or mint system Agent tasks. The broker enforces
+this using authenticated process/session ancestry, not environment flags.
 
 A staged migration is moving Apps off `operations` + `main.py run(command,
 args)` and onto the single `mcp.tools` contract. Until an App migrates it keeps

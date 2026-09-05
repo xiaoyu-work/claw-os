@@ -224,12 +224,11 @@ class WireValidationTests(unittest.TestCase):
         self.assertEqual(budget.units_cap, 0)
         self.assertEqual(run.call_args.args[0][:2], ["cos", "--wire=1"])
 
-    def test_mcp_call_context_is_closed_and_depth_bounded(self) -> None:
+    def test_mcp_call_context_is_closed(self) -> None:
         context = {
             "wire_version": 1,
             "call_id": "call-1",
             "trace_id": "trace-1",
-            "depth": 0,
             "caller": {
                 "kind": "system-agent",
                 "id": "session-1",
@@ -249,7 +248,7 @@ class WireValidationTests(unittest.TestCase):
         too_deep["depth"] = 17
         with self.assertRaises(WireDecodeError) as raised:
             validate_mcp_call_context(too_deep)
-        self.assertEqual(raised.exception.code, WIRE_MAXIMUM)
+        self.assertEqual(raised.exception.code, WIRE_UNKNOWN_FIELD)
         self.assertEqual(raised.exception.path, "$.depth")
 
         for call_id, code in (

@@ -324,7 +324,7 @@ fn an_app_session_cannot_manage_proactive_jobs() {
     let sessions = vec![session_row("app-1", pid, Some("fs"), caps)];
     let error =
         caller_authority(&sessions, OWNER_UID, pid, 7, &home()).expect_err("App sessions denied");
-    assert!(error.contains("cannot manage proactive jobs"), "{error}");
+    assert!(error.contains("cannot orchestrate"), "{error}");
 }
 
 #[test]

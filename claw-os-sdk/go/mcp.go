@@ -742,8 +742,6 @@ func materializeMCPCallContext(raw map[string]any) McpCallContext {
 		WireVersion:    int(asUint64(raw["wire_version"])),
 		CallId:         raw["call_id"].(string),
 		TraceId:        raw["trace_id"].(string),
-		ParentCallId:   asString(raw["parent_call_id"]),
-		Depth:          asUint64(raw["depth"]),
 		DeadlineUnixMs: asUint64(raw["deadline_unix_ms"]),
 		SessionId:      asString(raw["session_id"]),
 		TaskId:         asString(raw["task_id"]),
@@ -751,7 +749,6 @@ func materializeMCPCallContext(raw map[string]any) McpCallContext {
 			Kind:     caller["kind"].(string),
 			Id:       caller["id"].(string),
 			OwnerUid: asUint64(caller["owner_uid"]),
-			AppId:    asString(caller["app_id"]),
 		},
 	}
 }
@@ -969,7 +966,7 @@ func parseMCPManifest(manifest map[string]any) (*MCPApp, error) {
 		if err := rejectMCPUnknownFields(
 			object,
 			"`mcp.access`",
-			"system_agent", "apps", "external_agents",
+			"system_agent", "external_agents",
 		); err != nil {
 			return nil, err
 		}

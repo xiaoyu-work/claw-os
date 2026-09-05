@@ -811,11 +811,18 @@ then reads host interface and route state or performs bounded DNS resolution
 and DNS-pinned TCP probes. TCP and staged diagnosis require an explicit port;
 there is no worker-network or direct-socket fallback.
 
-Agent-to-App and App-to-App calls use the private App Gateway. The caller must
+Cross-App workflows belong to the built-in system Agent, never to Apps calling
+Apps. Apps may use gated AI, controlled system services, and shared libraries.
+App processes and App-owned agents cannot discover or invoke App services,
+launch other Apps, or submit system Agent tasks, even with invoke grants.
+Registered session ancestry is checked so an intermediate task Host, helper,
+or a claimed CLI identity cannot erase App ownership.
+
+Agent-to-App calls use the private App Gateway. The caller must
 hold exact authority for `<app-id>/<tool-name>`, and the target manifest's
 `mcp.access` policy must admit the authenticated principal. `clawd` then
 re-verifies the current signed package, validates the exact declared tool,
-generation, lineage, and deadline, and derives a separate target grant from
+generation, task/session identity, and deadline, and derives a separate target grant from
 that tool's `needs[]`. Caller invoke authority never enters the target grant.
 
 The authenticated local CLI path shares that authority model but derives its
@@ -833,8 +840,10 @@ the CLI and task-host paths converge on the same owner/App service manager, so
 there is no alternate App process path.
 
 The task-owned Extension Host is the only dynamic boundary directly available
-to `claw-agentd`. Its broker-derived binding distinguishes System Agent from
-an exact App Agent identity. The worker sends only typed App id, tool name, and
+to `claw-agentd`. Its broker-derived binding retains App ownership for bounded
+App AI, but rejects that ownership on App invocation paths. Only System Agent
+and permitted external-Agent principals can use the typed App-call path.
+The worker sends only typed App id, tool name, and
 arguments. The task Host cannot execute an App call; it relays over its private
 broker, which injects the verified task/Host lease facts. `clawd` re-authorizes
 the call, selects an owner/App-scoped service Host, and makes its canonical

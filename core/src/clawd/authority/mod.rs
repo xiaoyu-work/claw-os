@@ -308,6 +308,11 @@ pub async fn authorize(
     })?;
 
     if descriptor.subject == SubjectSource::Peer {
+        if descriptor.audience == Audience::Task {
+            super::app_sessions::require_non_app_caller(client)
+                .await
+                .map_err(|_| Fault::NotAuthorized)?;
+        }
         // Nothing to resolve: the access class the registry enforced is
         // the whole decision, and a peer-scoped route may not declare a
         // capability requirement (a unit test asserts it).

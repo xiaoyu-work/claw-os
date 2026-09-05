@@ -198,12 +198,11 @@ test("root types and budget show have stable contracts", () => {
   );
 });
 
-test("MCP call context is closed and depth bounded", () => {
+test("MCP call context is closed", () => {
   const context = {
     wire_version: 1,
     call_id: "call-1",
     trace_id: "trace-1",
-    depth: 0,
     caller: {
       kind: "system-agent",
       id: "session-1",
@@ -226,7 +225,7 @@ test("MCP call context is closed and depth bounded", () => {
     () => validateMcpCallContext({ ...context, depth: 17 }),
     (error: unknown) =>
       error instanceof WireDecodeError &&
-      error.code === WIRE_MAXIMUM &&
+      error.code === WIRE_UNKNOWN_FIELD &&
       error.path === "$.depth",
   );
   for (const [callId, code] of [

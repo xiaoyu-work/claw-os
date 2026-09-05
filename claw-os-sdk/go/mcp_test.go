@@ -15,6 +15,51 @@ import (
 	"time"
 )
 
+func TestRemovedCrossAppContractIsRejected(t *testing.T) {
+	path := writeMCPRawManifest(t, `{"schema_version":2,"id":"example","version":"1","name":{"en":"Example"},"mcp":{"access":{"apps":[]},"tools":[{"name":"example.noop","summary":{"en":"Noop"}}]}}`)
+	if _, err := LoadMCPApp(path); err == nil {
+		t.Fatal("removed App access allowlist accepted")
+	}
+	for _, field := range []string{"app", "app-agent", "app_id", "depth", "parent_call_id"} {
+		t.Run(field, func(t *testing.T) {
+			app, err := LoadMCPApp(writeMCPTestManifest(t, `{"name":"example.noop","summary":{"en":"Noop"}}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := app.Bind("example.noop", func(map[string]any, *MCPCall) (any, error) {
+				t.Error("rejected call reached handler")
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			value := decodeWireValue(t, validMCPContextJSON("removed", 0)).(map[string]any)
+			code := WireUnknownField
+			switch field {
+			case "app", "app-agent":
+				value["caller"].(map[string]any)["kind"] = field
+				code = WireEnum
+			case "app_id":
+				value["caller"].(map[string]any)[field] = nil
+			default:
+				value[field] = nil
+			}
+			err = ValidateMcpCallContext(value)
+			if wire, ok := err.(*WireDecodeError); !ok || wire.Code != code {
+				t.Fatalf("wire error = %v", err)
+			}
+			meta, err := json.Marshal(map[string]any{MCPCallContextMetaKey: value})
+			if err != nil {
+				t.Fatal(err)
+			}
+			frames := serveMCPFrames(t, app, mcpCallFrame("1", "example.noop", "{}", string(meta)))
+			fault := frames[0]["error"].(map[string]any)
+			if fault["code"].(json.Number).String() != "-32602" {
+				t.Fatalf("fault = %#v", fault)
+			}
+		})
+	}
+}
+
 func writeMCPTestManifest(t *testing.T, tools string) string {
 	t.Helper()
 	return writeMCPRawManifest(t, fmt.Sprintf(`{
@@ -41,7 +86,7 @@ func validMCPContextJSON(callID string, deadline int64) string {
 		deadlineField = fmt.Sprintf(`,"deadline_unix_ms":%d`, deadline)
 	}
 	return fmt.Sprintf(
-		`{"wire_version":1.0,"call_id":%q,"trace_id":"trace-1","parent_call_id":"parent-1","depth":2e0,"session_id":"session-1","task_id":"task-1","caller":{"kind":"app","id":"caller-app","owner_uid":1e3,"app_id":"caller"}%s}`,
+		`{"wire_version":1.0,"call_id":%q,"trace_id":"trace-1","session_id":"session-1","task_id":"task-1","caller":{"kind":"system-agent","id":"caller-agent","owner_uid":1e3}%s}`,
 		callID,
 		deadlineField,
 	)
@@ -169,8 +214,7 @@ func TestMCPManifestListBindingContextArgumentsAndResults(t *testing.T) {
 		t.Fatalf("handler count = %s", gotCount)
 	}
 	if gotContext.CallId != "call-"+largeID ||
-		gotContext.Caller.Id != "caller-app" ||
-		gotContext.ParentCallId != "parent-1" ||
+		gotContext.Caller.Id != "caller-agent" ||
 		gotContext.SessionId != "session-1" {
 		t.Fatalf("authenticated context = %#v", gotContext)
 	}

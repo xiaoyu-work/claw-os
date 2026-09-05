@@ -112,8 +112,6 @@ fn test_call_context() -> crate::agent::tools::app_gateway::McpCallContext {
         wire_version: crate::agent::tools::app_gateway::CALL_CONTEXT_WIRE_VERSION,
         trace_id: call_id.clone(),
         call_id,
-        parent_call_id: None,
-        depth: 0,
         deadline_unix_ms: Some(crate::agentd::grant::now_ms() + 60_000),
         session_id: Some("test-session".to_string()),
         task_id: None,
@@ -121,7 +119,6 @@ fn test_call_context() -> crate::agent::tools::app_gateway::McpCallContext {
             kind: crate::agent::tools::app_gateway::McpPrincipalKind::SystemAgent,
             id: "test-session".to_string(),
             owner_uid: 1000,
-            app_id: None,
         },
     }
 }
