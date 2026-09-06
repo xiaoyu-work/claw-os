@@ -79,10 +79,33 @@ fn call_surfaces_error_field_as_app_error() {
             assert_eq!(message, "file not found: /x");
             assert_eq!(code, "RESOURCE_NOT_FOUND");
         }
+
         other => panic!("expected AppError, got {other:?}"),
     }
 
     std::env::remove_var("CLAW_COS_BIN");
+}
+
+#[test]
+#[cfg(unix)]
+fn call_reaps_early_stdin_refusal_and_preserves_typed_error() {
+    let dir = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let response = serde_json::json!({
+        "ok": false, "wire_version": 1,
+        "error": "body rejected ".repeat(16 * 1024), "code": "INVALID_ARGUMENT"
+    })
+    .to_string();
+    let bin = write_fake_cos(dir.path(), &response, 1);
+    std::env::set_var("CLAW_COS_BIN", &bin);
+    let error = call(
+        "fs",
+        "write",
+        ["--args-stdin"],
+        Some(&vec![b'x'; APP_ARGS_STDIN_MAX_BYTES]),
+    )
+    .unwrap_err();
+    std::env::remove_var("CLAW_COS_BIN");
+    assert!(matches!(error, BridgeError::AppError { code, .. } if code == "INVALID_ARGUMENT"));
 }
 
 #[test]

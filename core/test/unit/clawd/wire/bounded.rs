@@ -89,6 +89,7 @@ fn structured_payloads_are_bounded_in_depth_width_and_size() {
     for index in 0..=MAX_STRUCTURED_OBJECT_LEN {
         object.insert(format!("k{index}"), json!(1));
     }
+
     assert!(Structured::parse(Value::Object(object)).is_err());
 
     let long_string = Value::String("x".repeat(MAX_STRUCTURED_STRING_BYTES + 1));
@@ -100,6 +101,17 @@ fn structured_payloads_are_bounded_in_depth_width_and_size() {
         Value::Object(map)
     };
     assert!(Structured::parse(long_key).is_err());
+}
+
+#[test]
+fn cli_mcp_arguments_allow_bounded_content_without_relaxing_metadata_limits() {
+    let content = json!({"content": "text\0".repeat(32 * 1024)});
+    assert!(Structured::parse(content.clone()).is_err());
+    assert!(McpArguments::parse(content).is_ok());
+    assert!(McpArguments::parse(json!({"content":"x".repeat(APP_ARGS_STDIN_MAX_BYTES)})).is_err());
+    assert!(McpArguments::parse(json!({"content":nest(MAX_STRUCTURED_DEPTH + 1)})).is_err());
+    assert!(McpArguments::parse(json!({"content":vec![0; MAX_STRUCTURED_ARRAY_LEN + 1]})).is_err());
+    assert!(McpArguments::parse(json!([])).is_err());
 }
 
 #[test]

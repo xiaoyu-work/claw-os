@@ -62,12 +62,15 @@ Local events stored in SQLite. Add `--provider google` or `--provider outlook` w
 ```bash
 cos app fs ls /home/cos
 cos app fs read /home/cos/file.txt
-cos app fs write /home/cos/output.txt    # reads content from stdin
+cos app fs write /home/cos/output.txt --content='hello'
 cos app fs stat /home/cos/file.txt
 cos app fs search "pattern" /home/cos
 cos app fs rm /home/cos/tmp
 cos app fs mkdir /home/cos/new-dir
 ```
+
+Filesystem commands use the MCP-only contract. Writes require explicit
+`--content` (strict base64 for `write_bytes`); `--stdin` is not supported.
 
 ## Documents
 

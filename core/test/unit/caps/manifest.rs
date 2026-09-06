@@ -346,6 +346,92 @@ fn mcp_tool_defaults_feed_arguments_and_capabilities() {
 }
 
 #[test]
+fn fs_mcp_manifest_requires_content_and_scopes_metadata_sidecars() {
+    let manifest = parse(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../apps/fs/app.json"
+    )));
+    assert!(manifest.operations.is_empty());
+    assert_eq!(manifest.mcp.as_ref().unwrap().tools.len(), 14);
+    let directory = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let root = root.to_str().unwrap();
+    let note = format!("{root}/note.txt");
+    let paths = crate::caps::args::PathContext {
+        home: "/home/test".into(),
+        cwd: Some(root.into()),
+    };
+    let ls = manifest
+        .resolve_mcp_tool_call("fs.ls", &BTreeMap::new(), &paths)
+        .unwrap();
+    assert_eq!(ls.values["path"], serde_json::json!(root));
+    assert_eq!(ls.needs[0][0].scope, Scope::path(root));
+    for tool in ["fs.write", "fs.write_bytes"] {
+        let mut args = BTreeMap::from([("path".into(), serde_json::json!("note.txt"))]);
+        assert!(manifest.resolve_mcp_tool_call(tool, &args, &paths).is_err());
+        args.insert("content".into(), serde_json::json!(""));
+        let call = manifest.resolve_mcp_tool_call(tool, &args, &paths).unwrap();
+        assert_eq!(call.values["content"], serde_json::json!(""));
+        assert_eq!(call.needs[0][0].scope, Scope::path(&note));
+    }
+    for tool in ["fs.stat", "fs.tag"] {
+        let mut args = BTreeMap::from([("path".into(), serde_json::json!("note.txt"))]);
+        if tool == "fs.tag" {
+            args.insert("tags".into(), serde_json::json!(["blue"]));
+        }
+        let call = manifest.resolve_mcp_tool_call(tool, &args, &paths).unwrap();
+        assert_eq!(call.needs[0][0].verb.to_string(), "fs.meta");
+        assert_eq!(call.needs[0][0].scope, Scope::path(&note));
+        assert_eq!(call.needs[1][0].verb.to_string(), "fs.read");
+        assert_eq!(call.needs[1][0].scope, Scope::path(root));
+        if tool == "fs.tag" {
+            assert_eq!(call.needs[2][0].verb.to_string(), "fs.write");
+            assert_eq!(call.needs[2][0].scope, Scope::path(root));
+        }
+    }
+}
+
+#[test]
+fn fs_mcp_cli_content_binds_without_operations_or_stdin() {
+    let manifest = parse(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../apps/fs/app.json"
+    )));
+    let paths = crate::caps::args::PathContext {
+        home: "/home/test".into(),
+        cwd: Some(std::env::current_dir().unwrap().to_str().unwrap().into()),
+    };
+    for command in ["write", "write_bytes"] {
+        let tool = crate::apps::mcp_tool_for_command(&manifest, command).unwrap();
+        for content in ["", "--literal\nUnicode: é", "AAEC"] {
+            let argv = [
+                format!("--content={content}"),
+                "--".into(),
+                "--output".into(),
+            ];
+            let supplied = crate::caps::args::bind_supplied_cli_args(&tool.args, &argv).unwrap();
+            let call = manifest
+                .resolve_mcp_tool_call(&tool.name, &supplied, &paths)
+                .unwrap();
+            assert_eq!(call.values["content"], serde_json::json!(content));
+            assert!(call.values["path"].as_str().unwrap().ends_with("/--output"));
+        }
+        assert!(crate::caps::args::bind_supplied_cli_args(
+            &tool.args,
+            &["file".into(), "--stdin".into()],
+        )
+        .is_err());
+    }
+    let tool = crate::apps::mcp_tool_for_command(&manifest, "tag").unwrap();
+    let supplied = crate::caps::args::bind_supplied_cli_args(
+        &tool.args,
+        &["file".into(), "reviewed".into(), "blue".into()],
+    )
+    .unwrap();
+    assert_eq!(supplied["tags"], serde_json::json!(["reviewed", "blue"]));
+}
+
+#[test]
 fn fixed_path_scopes_reject_environment_placeholders() {
     let error = Manifest::from_json(
         r#"{

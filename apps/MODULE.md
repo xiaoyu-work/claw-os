@@ -53,7 +53,8 @@ controlled kernel/system services, and shared libraries.
 | Path | Role |
 | --- | --- |
 | `<id>/app.json` | App identity and operation/capability contract |
-| `<id>/main.py` | Behavior-only `run(command, args)` implementation |
+| `<id>/main.py` | Typed behavior for MCP-only Apps; `run(command, args)` only for unmigrated operations |
+| `fs/server.py` | Direct filesystem MCP handlers; authenticated per-call session ids for snapshots |
 | `<id>/test_main.py` | App behavior, validation, and scope tests |
 | `_shared/` | Shared safe filesystem/HTTP/process helpers |
 | `gateway/` | External messaging gateways and shared gateway safety helpers |
@@ -80,7 +81,12 @@ through the Claw OS SDK/agent gate. Bundled capability checks use
 Schema/listing paths are generated from `app.json` and must not execute
 `main.py`. Unknown operations are rejected by the kernel before dispatch;
 unknown flags are rejected during manifest binding; entrypoints retain an
-unknown-operation error for direct unit invocation.
+unknown-operation error for direct unit invocation only while using the legacy
+operation bridge. MCP-only entrypoints have no argv dispatcher.
+
+The `fs` App's explicit-content writes, read bounds, metadata scopes and
+snapshot ownership are documented in the
+[filesystem MCP contract](../docs/app-development.md#filesystem-mcp-contract).
 
 ## Tests
 

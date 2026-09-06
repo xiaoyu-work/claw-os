@@ -40,26 +40,32 @@ fn operation_schema_preserves_literal_defaults() {
 }
 
 #[test]
+fn fs_mcp_tools_declare_their_optional_path_defaults() {
+    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let fs =
+        Manifest::from_json(&std::fs::read_to_string(repository.join("apps/fs/app.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        mcp_tool_for_command(&fs, "ls").unwrap().args[0].default,
+        Some(serde_json::json!("."))
+    );
+    assert_eq!(
+        mcp_tool_for_command(&fs, "search").unwrap().args[1].default,
+        Some(serde_json::json!("/workspace"))
+    );
+}
+
+#[test]
 fn bundled_apps_declare_their_optional_path_defaults() {
     let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap();
-    let load = |id: &str| {
-        let path = repository.join("apps").join(id).join("app.json");
-        Manifest::from_json(&std::fs::read_to_string(path).unwrap()).unwrap()
-    };
-
-    let fs = load("fs");
-    assert_eq!(
-        fs.operations["ls"].args[0].default,
-        Some(serde_json::json!("."))
-    );
-    assert_eq!(
-        fs.operations["search"].args[1].default,
-        Some(serde_json::json!("/workspace"))
-    );
-
-    let net = load("net");
+    let net = Manifest::from_json(
+        &std::fs::read_to_string(repository.join("apps/net/app.json")).unwrap(),
+    )
+    .unwrap();
     let output = &net.operations["download"].args[1];
     assert!(output.required);
     assert_eq!(
@@ -154,16 +160,17 @@ fn known_first_party_schema_drift_is_resolved_in_manifests() {
     );
 
     let fs = load(&["fs"]);
-    for operation in ["rename", "move", "copy", "read_bytes", "write_bytes"] {
+    assert!(is_mcp_only_cli(&fs));
+    for command in ["rename", "move", "copy", "read_bytes", "write_bytes"] {
         assert!(
-            fs.operations.contains_key(operation),
-            "fs manifest omitted `{operation}`"
+            mcp_tool_for_command(&fs, command).is_ok(),
+            "fs manifest omitted `{command}`"
         );
     }
-    assert_eq!(fs.operations["rename"].needs.len(), 2);
-    assert_eq!(fs.operations["copy"].needs.len(), 2);
+    assert_eq!(mcp_tool_for_command(&fs, "rename").unwrap().needs.len(), 2);
+    assert_eq!(mcp_tool_for_command(&fs, "copy").unwrap().needs.len(), 2);
     assert_eq!(
-        fs.operations["read_bytes"].args[1].effective_binding(),
+        mcp_tool_for_command(&fs, "read_bytes").unwrap().args[1].effective_binding(),
         crate::caps::manifest::ArgBinding::Flag
     );
 

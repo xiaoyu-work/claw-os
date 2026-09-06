@@ -101,6 +101,11 @@ failures remain execution errors without classifying by message text. Mutating
 routes are never cancelled by the broker: dropping one at an await point could
 leave a package half-installed, so they are bounded by their own tool and lock
 timeouts plus a per-route in-flight ceiling.
+
+The human `app_service.cli_call` route uses bounded `McpArguments` for JSON
+business content up to 1008 KiB, leaving envelope headroom inside the unchanged
+1 MiB request frame. General metadata retains `Structured`'s 64 KiB string
+limit; argument depth, node, array and object limits remain enforced.
 ## Capability Authority
 
 `authority/` holds the one thing that decides what a request may do. A **grant**

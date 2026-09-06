@@ -43,6 +43,11 @@ execution separately. The historical `dispatch` functions remain
 source-compatible wrappers and render the same CLI strings/JSON once at the
 outer boundary.
 
+MCP-only human App commands support exclusive `--args-stdin` JSON arguments.
+`main.rs` bounds the stream; `router.rs` applies the canonical manifest
+validator before the unchanged authenticated `app_service.cli_call` route.
+Raw operation stdin is a separate contract and is never forwarded to MCP Apps.
+
 ## Dependencies
 
 Read [`../MODULE.md`](../MODULE.md) for the core boundary and

@@ -74,6 +74,9 @@ fn extract_stdin_request(argv: Vec<String>, operation_accepts_stdin: bool) -> (V
     if !operation_accepts_stdin {
         return (argv, false);
     }
+    if argv.get(3..).is_some_and(|args| args == ["--args-stdin"]) {
+        return (argv, true);
+    }
     let mut kept = Vec::with_capacity(argv.len());
     let mut requested = false;
     let mut options = true;
@@ -244,8 +247,14 @@ fn main() {
     let _session_guard = caps::bootstrap_user_cli_session(&args);
 
     let result = if stdin_requested {
-        match app_stdin_max_bytes().and_then(|limit| read_requested_stdin(std::io::stdin(), limit))
-        {
+        match app_stdin_max_bytes().and_then(|limit| {
+            let limit = if args.get(3..).is_some_and(|args| args == ["--args-stdin"]) {
+                limit.min(cos::clawd::wire::bounded::APP_ARGS_STDIN_MAX_BYTES)
+            } else {
+                limit
+            };
+            read_requested_stdin(std::io::stdin(), limit)
+        }) {
             Ok(stdin_data) => router::dispatch_with_stdin(&args, Some(stdin_data)),
             Err(error) => Err(error),
         }

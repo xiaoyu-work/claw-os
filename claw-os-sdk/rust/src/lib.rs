@@ -143,6 +143,10 @@ fn truncate_diag(s: &str, limit: usize) -> String {
 
 const DIAG_LIMIT: usize = 256;
 const WIRE_V1_FLAG: &str = "--wire=1";
+/// Bounded CLI MCP JSON body: the 1 MiB broker request minus 16 KiB for framing.
+/// Keep in sync with core's `clawd::wire::bounded::APP_ARGS_STDIN_MAX_BYTES`.
+#[doc(hidden)]
+pub const APP_ARGS_STDIN_MAX_BYTES: usize = 1024 * 1024 - 16 * 1024;
 
 /// Idiomatic alias preferred by external SDK consumers. New code
 /// should `use claw_os_sdk::Error;` rather than the historical
@@ -179,9 +183,10 @@ where
 /// when their grants contain `agent.invoke`. Apps use gated AI, controlled
 /// system services, and shared libraries; the system Agent orchestrates Apps.
 ///
-/// `stdin` is the body to forward to the subprocess on stdin (used by
-/// `fs.write` to ship the file content without re-encoding through
-/// argv). Pass `None` to inherit the parent's stdin behaviour.
+/// `stdin` is the body to forward to the subprocess on stdin for operations
+/// that explicitly support it. For MCP-only Apps pass exactly `["--args-stdin"]`
+/// and a bounded JSON object of manifest-declared business arguments. This never
+/// supplies caller identity or context. Pass `None` for ordinary argv calls.
 pub fn call<A>(
     app: &str,
     verb: &str,
@@ -193,6 +198,15 @@ where
     A::Item: AsRef<OsStr>,
 {
     let mut cmd = build_command(app, verb, args);
+    if cmd.get_args().skip(4).eq([OsStr::new("--args-stdin")])
+        && stdin.is_some_and(|bytes| bytes.len() > APP_ARGS_STDIN_MAX_BYTES)
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("MCP arguments exceed the {APP_ARGS_STDIN_MAX_BYTES}-byte limit"),
+        )
+        .into());
+    }
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     if stdin.is_some() {
         cmd.stdin(Stdio::piped());
@@ -203,20 +217,26 @@ where
         _ => BridgeError::Io(e),
     })?;
 
-    if let Some(bytes) = stdin {
-        if let Some(mut s) = child.stdin.take() {
-            s.write_all(bytes)?;
-            // Explicitly drop the stdin handle so the subprocess sees
-            // EOF and can shut down its read side. Without this drop
-            // `wait_with_output` below would deadlock on subprocesses
-            // that read all of stdin before producing any output
-            // (which is exactly what the Python apps do).
-            drop(s);
-        }
-    }
-
-    decode_wire_response(app, verb, child.wait_with_output()?)
-        .map_err(StructuredCosError::into_bridge)
+    // Drain output while writing: early refusals may close stdin or fill stdout.
+    // Always reap the child, and prefer its typed error over a resulting EPIPE.
+    let pipe = child.stdin.take();
+    let (output, written) = std::thread::scope(|scope| {
+        let writer = stdin
+            .zip(pipe)
+            .map(|(bytes, mut pipe)| scope.spawn(move || pipe.write_all(bytes)));
+        let output = child.wait_with_output();
+        let written = match writer {
+            Some(writer) => writer
+                .join()
+                .unwrap_or_else(|_| Err(std::io::Error::other("cos stdin writer panicked"))),
+            None => Ok(()),
+        };
+        (output, written)
+    });
+    let result =
+        decode_wire_response(app, verb, output?).map_err(StructuredCosError::into_bridge)?;
+    written?;
+    Ok(result)
 }
 
 /// Typed variant of [`call`] — deserialises stdout into the caller's

@@ -31,6 +31,9 @@ pub const MAX_STRUCTURED_ARRAY_LEN: usize = 1024;
 pub const MAX_STRUCTURED_OBJECT_LEN: usize = 256;
 /// Longest object key inside a structured payload.
 pub const MAX_STRUCTURED_KEY_BYTES: usize = 256;
+/// CLI JSON arguments leave 16 KiB of the broker frame for selectors/envelopes.
+/// Keep the SDK's `APP_ARGS_STDIN_MAX_BYTES` in sync.
+pub const APP_ARGS_STDIN_MAX_BYTES: usize = super::MAX_REQUEST_BYTES - 16 * 1024;
 
 /// Longest a client may ask a long-polling route to wait: one day,
 /// which is the ceiling `cos agent ask` already uses. Without a bound
@@ -222,7 +225,7 @@ impl Structured {
 
     pub fn parse(value: Value) -> Result<Self, &'static str> {
         let mut nodes = 0usize;
-        validate_structured(&value, 0, &mut nodes)?;
+        validate_structured(&value, 0, &mut nodes, MAX_STRUCTURED_STRING_BYTES)?;
         Ok(Self(value))
     }
 }
@@ -241,7 +244,41 @@ const STRUCTURED_ARRAY_TOO_LONG: &str = "structured payload contains an oversize
 const STRUCTURED_OBJECT_TOO_WIDE: &str = "structured payload contains an oversized object";
 const STRUCTURED_KEY_TOO_LONG: &str = "structured payload contains an oversized key";
 
-fn validate_structured(value: &Value, depth: usize, nodes: &mut usize) -> Result<(), &'static str> {
+/// Business arguments for a human CLI MCP call. Unlike general broker metadata,
+/// content strings may fill the bounded request; all structural limits remain.
+#[derive(Debug, Clone, Serialize)]
+#[serde(transparent)]
+pub struct McpArguments(Value);
+
+impl McpArguments {
+    pub fn parse(value: Value) -> Result<Self, &'static str> {
+        if !value.is_object() {
+            return Err("MCP arguments must be a JSON object");
+        }
+        if serde_json::to_vec(&value)
+            .map_err(|_| "cannot encode MCP arguments")?
+            .len()
+            > APP_ARGS_STDIN_MAX_BYTES
+        {
+            return Err("MCP arguments exceed the JSON stdin byte limit");
+        }
+        validate_structured(&value, 0, &mut 0, APP_ARGS_STDIN_MAX_BYTES)?;
+        Ok(Self(value))
+    }
+}
+
+impl<'de> Deserialize<'de> for McpArguments {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::parse(Value::deserialize(deserializer)?).map_err(de::Error::custom)
+    }
+}
+
+fn validate_structured(
+    value: &Value,
+    depth: usize,
+    nodes: &mut usize,
+    max_string_bytes: usize,
+) -> Result<(), &'static str> {
     if depth > MAX_STRUCTURED_DEPTH {
         return Err(STRUCTURED_TOO_DEEP);
     }
@@ -252,7 +289,7 @@ fn validate_structured(value: &Value, depth: usize, nodes: &mut usize) -> Result
     match value {
         Value::Null | Value::Bool(_) | Value::Number(_) => Ok(()),
         Value::String(text) => {
-            if text.len() > MAX_STRUCTURED_STRING_BYTES {
+            if text.len() > max_string_bytes {
                 Err(STRUCTURED_STRING_TOO_LONG)
             } else {
                 Ok(())
@@ -263,7 +300,7 @@ fn validate_structured(value: &Value, depth: usize, nodes: &mut usize) -> Result
                 return Err(STRUCTURED_ARRAY_TOO_LONG);
             }
             for item in items {
-                validate_structured(item, depth + 1, nodes)?;
+                validate_structured(item, depth + 1, nodes, max_string_bytes)?;
             }
             Ok(())
         }
@@ -275,7 +312,7 @@ fn validate_structured(value: &Value, depth: usize, nodes: &mut usize) -> Result
                 if key.len() > MAX_STRUCTURED_KEY_BYTES {
                     return Err(STRUCTURED_KEY_TOO_LONG);
                 }
-                validate_structured(item, depth + 1, nodes)?;
+                validate_structured(item, depth + 1, nodes, max_string_bytes)?;
             }
             Ok(())
         }

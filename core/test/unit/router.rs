@@ -81,6 +81,25 @@ fn app_stdin_opt_in_resolves_only_installed_manifest_operations() {
     ] {
         assert!(!app_operation_accepts_stdin_in(&invocation, root.path()));
     }
+    let mcp_app = root.path().join("mcp-pipe");
+    std::fs::create_dir_all(&mcp_app).unwrap();
+    std::fs::write(mcp_app.join("app.json"), serde_json::to_vec(&json!({
+        "id":"mcp-pipe","version":"1.0","schema_version":2,"name":{"en":"MCP pipe"},
+        "mcp":{"entry":"server.py","tools":[{"name":"mcp-pipe.get","summary":{"en":"Get"},"args":[]}]}
+    })).unwrap()).unwrap();
+    assert!(app_operation_accepts_stdin_in(
+        &args(&["app", "mcp-pipe", "get", "--args-stdin"]),
+        root.path()
+    ));
+    for invocation in [
+        args(&["app", "mcp-pipe", "get", "--args-stdin", "extra"]),
+        args(&["app", "mcp-pipe", "get", "--stdin"]),
+        args(&["app", "mcp-pipe", "get", "--", "--args-stdin"]),
+        args(&["app", "mcp-pipe", "unknown", "--args-stdin"]),
+        args(&["app", "mcp-pipe", "get", "--schema", "--args-stdin"]),
+    ] {
+        assert!(!app_operation_accepts_stdin_in(&invocation, root.path()));
+    }
 }
 
 #[test]
@@ -1910,6 +1929,88 @@ fn mcp_stdin_is_only_requested_in_the_option_region() {
 }
 
 #[test]
+fn mcp_json_arguments_use_canonical_validation_and_roundtrip_large_content() {
+    let manifest =
+        caps::manifest::Manifest::from_json(include_str!("../../../apps/fs/app.json")).unwrap();
+    let marker = ["--args-stdin".to_string()];
+    let content = "large text é\0\n".repeat(24 * 1024);
+    assert!(content.len() > 128 * 1024);
+    let body = serde_json::to_vec(&json!({"path": "file", "content": content})).unwrap();
+    let parsed = bind_mcp_command_arguments(&manifest, "write", &marker, Some(&body)).unwrap();
+    assert_eq!(parsed["content"], content);
+    assert_eq!(parsed["path"], "file");
+    assert!(
+        serde_json::from_value::<crate::clawd::wire::requests::AppServiceCliCall>(
+            json!({"app_id":"fs","tool":"fs.write","arguments":parsed})
+        )
+        .is_ok()
+    );
+
+    let read_body = br#"{"path":"file"}"#;
+    let json_read =
+        bind_mcp_command_arguments(&manifest, "read", &marker, Some(read_body)).unwrap();
+    let argv_read = bind_mcp_command_arguments(&manifest, "read", &["file".into()], None).unwrap();
+    assert_eq!(json_read, argv_read);
+    assert_eq!(
+        bind_mcp_command_arguments(
+            &manifest,
+            "write",
+            &["--content=small".into(), "file".into()],
+            None
+        )
+        .unwrap(),
+        json!({"path": "file", "content": "small"})
+    );
+
+    for invalid in [
+        b"".as_slice(),
+        b"not json",
+        b"null",
+        b"[]",
+        b"\"text\"",
+        br#"{"path":"file"}"#,
+        br#"{"path":"file","content":42}"#,
+        br#"{"path":"file","content":"","context":{}}"#,
+        br#"{"path":"file","content":"","session_id":"forged"}"#,
+        br#"{"path":"file","content":"","caller":{"kind":"cli"}}"#,
+        br#"{"path":"file","content":"","identity":"root"}"#,
+    ] {
+        assert!(bind_mcp_command_arguments(&manifest, "write", &marker, Some(invalid)).is_err());
+    }
+    assert!(bind_mcp_command_arguments(&manifest, "write", &marker, None).is_err());
+    for args in [
+        vec!["--args-stdin".into(), "file".into()],
+        vec!["--args-stdin".into(), "--stdin".into()],
+        vec!["--args-stdin".into(), "--args-stdin".into()],
+        vec!["--stdin".into()],
+        vec![],
+    ] {
+        assert!(bind_mcp_command_arguments(&manifest, "write", &args, Some(&body)).is_err());
+    }
+    let cap = crate::clawd::wire::bounded::APP_ARGS_STDIN_MAX_BYTES;
+    let overhead = serde_json::to_vec(&json!({"path":"file","content":""}))
+        .unwrap()
+        .len();
+    let body =
+        serde_json::to_vec(&json!({"path":"file","content":"x".repeat(cap - overhead)})).unwrap();
+    assert_eq!(body.len(), cap);
+    let parsed = bind_mcp_command_arguments(&manifest, "write", &marker, Some(&body)).unwrap();
+    // Exercise the actual broker request decoder, not just a CLI-only parser.
+    let request = json!({"app_id":"fs","tool":"fs.write","arguments":parsed});
+    assert!(serde_json::to_vec(&request).unwrap().len() < crate::clawd::wire::MAX_REQUEST_BYTES);
+    assert!(
+        serde_json::from_value::<crate::clawd::wire::requests::AppServiceCliCall>(request).is_ok()
+    );
+    let mut oversized = body;
+    oversized.push(b' ');
+    assert!(
+        bind_mcp_command_arguments(&manifest, "write", &marker, Some(&oversized))
+            .unwrap_err()
+            .contains("exceed")
+    );
+}
+
+#[test]
 fn render_structured_mcp_result_prints_canonical_json() {
     // A structured App result is mirrored into a text content block as
     // canonical JSON; the CLI prints that structured value.
@@ -2060,7 +2161,7 @@ fn mcp_only_app_uses_daemon_dispatch_and_never_falls_back_to_main_py() {
         assert!(unknown.is_err());
         assert!(!ran_marker.exists());
 
-        // Top-level `--stdin` is rejected for MCP tools in this foundation; the
+        // Top-level raw `--stdin` is rejected for MCP tools; the
         // daemon is never contacted and no code runs.
         let stdin = dispatch(&[
             "app".to_string(),

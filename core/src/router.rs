@@ -118,9 +118,9 @@ fn apps_dir() -> PathBuf {
     PathBuf::from(env::var("COS_APPS_DIR").unwrap_or_else(|_| "/usr/lib/cos/apps".into()))
 }
 
-/// Return whether argv resolves to an installed manifest operation that opts
-/// into caller stdin. Management, help, schema, and desktop routes never read
-/// stdin eagerly.
+/// Return whether argv explicitly selects stdin for an installed operation or
+/// an MCP-only command's JSON arguments. Management, help, schema, and desktop
+/// routes never read stdin eagerly.
 pub fn app_operation_accepts_stdin(args: &[String]) -> bool {
     app_operation_accepts_stdin_in(args, &apps_dir())
 }
@@ -144,6 +144,12 @@ fn app_operation_accepts_stdin_in(args: &[String], root: &Path) -> bool {
     // gated by `require_runnable`.
     apps::find(root, app_id)
         .and_then(|app| {
+            if apps::is_mcp_only_cli(&app.manifest) {
+                return Some(
+                    args[3..] == ["--args-stdin"]
+                        && apps::mcp_tool_for_command(&app.manifest, &args[2]).is_ok(),
+                );
+            }
             app.manifest
                 .operations
                 .get(&args[2])
@@ -1810,16 +1816,8 @@ fn run_app_mcp_command(
     let tool_name = tool.name.clone();
     let invoke_target = format!("{app_name}/{tool_name}");
 
-    // stdin is not part of the MCP tool contract in this foundation. Reject an
-    // explicit top-level `--stdin` in the option region, or any forwarded
-    // stdin bytes, rather than silently dropping input. Piped-input Apps will
-    // migrate to explicit typed content arguments later.
-    if stdin_data.is_some() || mcp_stdin_requested(args) {
-        return Err(format!(
-            "cos app {app_name} {command}: MCP tools do not accept piped stdin; \
-             remove --stdin (typed content arguments will come with migration)"
-        ));
-    }
+    let arguments = bind_mcp_command_arguments(&app.manifest, command, args, stdin_data.as_deref())
+        .map_err(|error| format!("cos app {app_name} {command}: {error}"))?;
 
     // Capability gate: the caller must hold exact `agent.invoke:<app>/<tool>`
     // authority. The daemon independently re-derives and enforces this; the
@@ -1831,14 +1829,6 @@ fn run_app_mcp_command(
             return Err(denial.summary());
         }
     }
-
-    // One manifest-derived binder maps CLI argv to the tool's declared args
-    // (unknown flags and excess positionals are rejected here). The daemon
-    // fills manifest defaults and validates required/choice constraints from
-    // the same manifest, so the two never diverge.
-    let bound = caps::args::bind_supplied_cli_args(&tool.args, args)
-        .map_err(|error| format!("cos app {app_name} {command}: {error}"))?;
-    let arguments = Value::Object(bound.into_iter().collect());
 
     let request = crate::clawd::protocol::Request::build(
         Command::AppServiceCliCall,
@@ -1888,6 +1878,53 @@ fn run_app_mcp_command(
         }
         Err(payload.to_string())
     }
+}
+
+fn bind_mcp_command_arguments(
+    manifest: &caps::manifest::Manifest,
+    command: &str,
+    args: &[String],
+    stdin_data: Option<&[u8]>,
+) -> Result<Value, String> {
+    use crate::clawd::wire::bounded::{McpArguments, APP_ARGS_STDIN_MAX_BYTES};
+
+    let tool = apps::mcp_tool_for_command(manifest, command)?;
+    let json_requested = args
+        .iter()
+        .take_while(|arg| arg.as_str() != "--")
+        .any(|arg| arg == "--args-stdin");
+    let supplied = if json_requested {
+        if args != ["--args-stdin"] {
+            return Err("--args-stdin is mutually exclusive with other tool arguments".into());
+        }
+        let bytes = stdin_data.ok_or("--args-stdin requires a JSON object on stdin")?;
+        if bytes.len() > APP_ARGS_STDIN_MAX_BYTES {
+            return Err(format!(
+                "MCP arguments exceed the {APP_ARGS_STDIN_MAX_BYTES}-byte limit"
+            ));
+        }
+        let value: Value = serde_json::from_slice(bytes)
+            .map_err(|error| format!("invalid --args-stdin JSON: {error}"))?;
+        value
+            .as_object()
+            .ok_or("--args-stdin requires a JSON object")?
+            .iter()
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect()
+    } else {
+        if stdin_data.is_some() || mcp_stdin_requested(args) {
+            return Err("MCP tools reject raw --stdin; use --args-stdin with a JSON object".into());
+        }
+        caps::args::bind_supplied_cli_args(&tool.args, args)?
+    };
+    // Same defaults, required/conditional fields and choices as daemon MCP
+    // preparation. Paths and all authority are still derived by the daemon.
+    let bound = manifest
+        .resolve_mcp_tool_args(&tool.name, &supplied)
+        .map_err(|error| error.to_string())?;
+    let arguments = Value::Object(bound.into_iter().collect());
+    McpArguments::parse(arguments.clone()).map_err(str::to_string)?;
+    Ok(arguments)
 }
 
 fn mcp_audit_projection(args: &[String]) -> Vec<String> {

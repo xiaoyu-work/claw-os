@@ -378,7 +378,7 @@ pub struct AppServiceCall {
 pub struct AppServiceCliCall {
     pub app_id: Name,
     pub tool: Text<LABEL_BYTES>,
-    pub arguments: Structured,
+    pub arguments: super::bounded::McpArguments,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

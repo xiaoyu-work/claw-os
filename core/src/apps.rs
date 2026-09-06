@@ -343,8 +343,8 @@ pub fn mcp_tool_for_command<'a>(
 /// Build the stable CLI schema for one MCP tool, mirroring
 /// [`operation_schema`]. Reuses [`arg_schema`], so `binding` metadata
 /// surfaces here for CLI introspection while the model-facing MCP
-/// `inputSchema` (generated separately) never carries it. MCP tools do
-/// not take piped stdin in this foundation.
+/// `inputSchema` (generated separately) never carries it. `stdin: false` means
+/// no raw operation stdin; `--args-stdin` carries a JSON argument object instead.
 pub fn tool_schema(tool: &McpTool) -> Value {
     let parameters = tool.args.iter().map(arg_schema).collect::<Vec<_>>();
     json!({

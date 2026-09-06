@@ -12,7 +12,6 @@ def authenticated_mcp_params(params, *, call_id="test-call"):
         "wire_version": 1,
         "call_id": call_id,
         "trace_id": "test-trace",
-        "depth": 0,
         "session_id": "test-session",
         "task_id": "test-task",
         "caller": {

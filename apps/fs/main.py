@@ -1,559 +1,186 @@
-"""fs — Agent-native file system with metadata and search."""
+"""Filesystem behavior for the manifest-bound fs MCP tools."""
 
 import base64
 import json
 import os
 import shutil
+import stat as file_stat
 import subprocess
 import sys
 
-# Import the shared helper package living at ``apps/_shared``. Each app
-# runs as its own Python process so we splice the parent of this app
-# directory onto sys.path before the import.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from _shared.atomic import atomic_write_bytes, atomic_write_json  # noqa: E402,F401
+from _shared.atomic import atomic_write_bytes, atomic_write_json  # noqa: E402
 from _shared.env_scrub import scrub_env  # noqa: E402
-
-from cos_runtime import policy  # noqa: E402
-from cos_runtime import snapshot  # noqa: E402
+from _shared.paths import safe_realpath  # noqa: E402
+from cos_runtime import policy, snapshot  # noqa: E402
 
 
 WORKSPACE = "/workspace"
 META_FILENAME = ".cos-meta.json"
-MAX_READ_BYTES = 1_000_000  # 1 MB output limit for file reads
-SEARCH_TIMEOUT = 30  # seconds
-COPY_TIMEOUT = 120  # bounded for the rare shutil-uses-subprocess path
-
-# Cap on how many bytes a single line-range read may return.
-MAX_LINE_RANGE_BYTES = 16 * 1024 * 1024  # 16 MiB
-
-
-def _abs(path):
-    """Resolve ``path`` to its real, symlink-followed absolute form.
-
-    SECURITY: every path that flows to ``policy.require`` MUST be
-    realpath-resolved here first, otherwise a symlink like
-    ``/workspace/escape -> /etc/shadow`` would pass an
-    ``fs.read /workspace/escape`` capability check and then leak
-    ``/etc/shadow`` on ``open()``. ``os.path.realpath`` resolves the
-    final filename component too, closing the TOCTOU window between
-    the cap check and the open.
-
-    For paths that do not yet exist (write / mkdir / rename
-    destinations), ``realpath`` resolves whichever leading components
-    do exist and leaves the tail alone, which is exactly what we
-    want.
-    """
-    return os.path.realpath(path)
+MAX_READ_BYTES = 1_000_000
+# MCP duplicates structured results as text; leave room for both representations
+# in its 16 MiB frame and for the text result in the 8 MiB Host frame.
+MAX_READ_BYTES_BINARY = 4 * 1024 * 1024
+MAX_LINE_RANGE_BYTES = 1_000_000
+SEARCH_TIMEOUT = 30
 
 
-def _open_nofollow(path, flags, mode=0o644):
-    """``os.open`` with ``O_NOFOLLOW`` so a symlink swapped in after
-    the cap check fails the open instead of silently following.
-
-    ``O_NOFOLLOW`` only affects the *final* component; we rely on
-    :func:`_abs` to have resolved every intermediate dir. The pair
-    is the standard defence against symlink-race sandbox escapes.
-    """
-    nofollow = getattr(os, "O_NOFOLLOW", 0)
-    return os.open(path, flags | nofollow, mode)
+def _text(value: str, name: str, *, empty: bool = False) -> None:
+    if not isinstance(value, str) or (not empty and not value):
+        raise ValueError(f"{name} must be {'a' if empty else 'a nonempty'} string")
 
 
-def _load_meta(directory):
-    """Load the .cos-meta.json sidecar from a directory."""
-    meta_path = os.path.join(directory, META_FILENAME)
-    if os.path.isfile(meta_path):
-        try:
-            with open(meta_path) as f:
-                return json.load(f)
-        except (OSError, json.JSONDecodeError, ValueError):
-            return {}
-    return {}
+def _abs(path: str) -> str:
+    _text(path, "path")
+    if "\0" in path:
+        raise ValueError("path must not contain NUL")
+    return safe_realpath(path)
 
 
-def _save_meta(directory, meta):
-    """Save the .cos-meta.json sidecar to a directory atomically."""
-    meta_path = os.path.join(directory, META_FILENAME)
-    atomic_write_json(meta_path, meta)
+def _integer(value: int, name: str, minimum: int = 0) -> None:
+    if type(value) is not int or value < minimum:
+        raise ValueError(f"{name} must be an integer >= {minimum}")
 
 
-# ── Command handlers ─────────────────────────────────────────────
+def _open_nofollow(path: str, flags: int, mode: int = 0o644) -> int:
+    # The resolved path is checked by policy; reject replacement leaf symlinks.
+    return os.open(path, flags | os.O_NOFOLLOW, mode)
 
 
-def cmd_ls(args):
-    if not args:
-        raise Exception("ls path default was not bound by the app bridge")
-    path = _abs(args[0])
-    policy.require("fs.read", path=path)
-    if not os.path.isdir(path):
-        return {"error": f"not a directory: {path}"}
-    entries = sorted(os.listdir(path))
-    files = []
-    for name in entries:
-        full = os.path.join(path, name)
-        files.append({
-            "name": name,
-            "is_dir": os.path.isdir(full),
-        })
-    return {"path": path, "files": files}
+def _open_file(path: str):
+    fd = _open_nofollow(path, os.O_RDONLY | os.O_NONBLOCK)
+    if not file_stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        raise ValueError(f"not a regular file: {path}")
+    return os.fdopen(fd, "rb")
 
 
-def cmd_read(args):
-    if not args:
-        raise Exception("read requires a path argument")
+def _meta_path(directory: str) -> str:
+    path = os.path.join(directory, META_FILENAME)
+    if os.path.islink(path):
+        raise ValueError(f"metadata sidecar must not be a symlink: {path}")
+    return path
 
-    # Parse positional and optional args
-    path = None
-    offset = 0
-    limit = MAX_READ_BYTES
-    start_line = None
-    end_line = None
-    rest = list(args)
 
-    # First positional arg is the path
-    positional = []
-    i = 0
-    while i < len(rest):
-        if rest[i] == "--offset" and i + 1 < len(rest):
-            offset = int(rest[i + 1])
-            i += 2
-        elif rest[i] == "--limit" and i + 1 < len(rest):
-            limit = int(rest[i + 1])
-            i += 2
-        elif rest[i] == "--start" and i + 1 < len(rest):
-            start_line = int(rest[i + 1])
-            i += 2
-        elif rest[i] == "--end" and i + 1 < len(rest):
-            end_line = int(rest[i + 1])
-            i += 2
-        else:
-            positional.append(rest[i])
-            i += 1
-
-    if not positional:
-        raise Exception("read requires a path argument")
-    path = _abs(positional[0])
-    policy.require("fs.read", path=path)
-
-    if not os.path.isfile(path):
-        return {"error": f"file not found: {path}"}
-
-    # Line range mode: --start N [--end M]
-    if start_line is not None:
-        # SECURITY/OOM: stream line-by-line and only collect the
-        # requested range, capped by MAX_LINE_RANGE_BYTES so we never
-        # hand the agent a 4GB blob even if start/end span a huge
-        # file. The old code did ``f.readlines()`` which materialised
-        # the whole file in memory before slicing.
-        s = max(1, start_line)
-        e = end_line if end_line is not None else None
-        if e is not None and e < s:
-            return {
-                "path": path,
-                "content": "",
-                "start_line": start_line,
-                "end_line": e,
-                "total_lines": 0,
-                "lines_returned": 0,
-            }
-        selected_chunks = []
-        selected_count = 0
-        total_lines = 0
-        truncated = False
-        size = 0
-        try:
-            with open(path, "r", errors="replace") as f:
-                for total_lines, line in enumerate(f, start=1):
-                    if total_lines < s:
-                        continue
-                    if e is not None and total_lines > e:
-                        # Still need to keep counting to report total_lines accurately.
-                        continue
-                    if not truncated:
-                        new_size = size + len(line)
-                        if new_size > MAX_LINE_RANGE_BYTES:
-                            room = MAX_LINE_RANGE_BYTES - size
-                            if room > 0:
-                                selected_chunks.append(line[:room])
-                                size = MAX_LINE_RANGE_BYTES
-                                selected_count += 1
-                            truncated = True
-                        else:
-                            selected_chunks.append(line)
-                            size = new_size
-                            selected_count += 1
-        except OSError as exc:
-            return {"error": f"could not read {path}: {exc}"}
-        content = "".join(selected_chunks)
-        result = {
-            "path": path,
-            "content": content,
-            "start_line": start_line,
-            "end_line": e if e is not None else total_lines,
-            "total_lines": total_lines,
-            "lines_returned": selected_count,
-        }
-        if truncated:
-            result["truncated"] = True
-        return result
-
-    # Byte offset mode (original behavior)
-    total_size = os.path.getsize(path)
-    effective_limit = min(limit, MAX_READ_BYTES)
-
+def _load_meta(directory: str) -> dict:
+    path = _meta_path(directory)
     try:
-        fd = _open_nofollow(path, os.O_RDONLY)
-    except OSError as exc:
-        return {"error": f"could not open {path}: {exc}"}
-    try:
-        with os.fdopen(fd, "rb", closefd=True) as f:
-            if offset > 0:
-                f.seek(offset)
-            raw = f.read(effective_limit + 1)
-    except OSError as exc:
-        return {"error": f"could not read {path}: {exc}"}
-
-    truncated = len(raw) > effective_limit
-    if truncated:
-        raw = raw[:effective_limit]
-
-    content = raw.decode("utf-8", errors="replace")
-    result = {"path": path, "content": content}
-    if offset > 0:
-        result["offset"] = offset
-    if truncated:
-        result["truncated"] = True
-        result["total_size"] = total_size
-    return result
+        stream = _open_file(path)
+    except FileNotFoundError:
+        return {}
+    with stream:
+        meta = json.load(stream)
+    if not isinstance(meta, dict) or any(
+        not isinstance(entry, dict)
+        or (
+            "tags" in entry
+            and (
+                not isinstance(entry["tags"], list)
+                or any(not isinstance(tag, str) for tag in entry["tags"])
+            )
+        )
+        for entry in meta.values()
+    ):
+        raise ValueError(f"invalid metadata sidecar: {path}")
+    return meta
 
 
-def cmd_write(args):
-    if not args:
-        raise Exception("write requires a path argument")
-    path = _abs(args[0])
-    policy.require("fs.write", path=path)
-    # Parse --content flag
-    content = None
-    rest = args[1:]
-    for i, arg in enumerate(rest):
-        if arg == "--content" and i + 1 < len(rest):
-            content = rest[i + 1]
-            break
-    if content is None:
-        # Read from stdin
-        content = sys.stdin.read()
-    # Ensure parent directory exists
-    parent = os.path.dirname(path)
-    if parent and not os.path.isdir(parent):
-        os.makedirs(parent, exist_ok=True)
-    snapshot.snapshot(path, "write")
-    # Atomic write — tmp + fsync + replace + fsync(parent). Prevents a
-    # concurrent reader from seeing a half-written file and keeps the
-    # original on the disk on crash.
-    data = content.encode("utf-8") if isinstance(content, str) else bytes(content)
-    atomic_write_bytes(path, data)
-    return {"path": path, "bytes": len(data)}
+def ls(path: str = ".") -> dict:
+    path = _abs(path)
+    policy.require("fs.read", path=path)
+    with os.scandir(path) as entries:
+        files = [
+            {"name": entry.name, "is_dir": entry.is_dir(follow_symlinks=False)}
+            for entry in entries
+        ]
+    return {"path": path, "files": sorted(files, key=lambda entry: entry["name"])}
 
 
-def cmd_rm(args):
-    if not args:
-        raise Exception("rm requires a path argument")
-    path = _abs(args[0])
-    policy.require("fs.delete", path=path)
-    if not os.path.exists(path):
-        return {"error": f"not found: {path}"}
-    snapshot.snapshot(path, "rm")
-    if os.path.isdir(path):
-        shutil.rmtree(path)
-    else:
-        os.remove(path)
-    return {"removed": path}
+def _read_lines(path: str, start: int, end: int | None) -> dict:
+    import io
 
-
-def cmd_mkdir(args):
-    if not args:
-        raise Exception("mkdir requires a path argument")
-    path = _abs(args[0])
-    policy.require("fs.write", path=path)
-    os.makedirs(path, exist_ok=True)
-    return {"created": path}
-
-
-def cmd_stat(args):
-    if not args:
-        raise Exception("stat requires a path argument")
-    path = _abs(args[0])
-    policy.require("fs.meta", path=path)
-    if not os.path.exists(path):
-        return {"error": f"not found: {path}"}
-    st = os.stat(path)
+    chunks = []
+    size = total_lines = selected_count = 0
+    line_number = 1
+    last_selected = 0
+    truncated = False
+    with _open_file(path) as raw, io.TextIOWrapper(
+        raw, encoding="utf-8", errors="replace"
+    ) as stream:
+        # Bounded fragments also handle a file containing one enormous line.
+        while chunk := stream.readline(64 * 1024):
+            total_lines = line_number
+            if start <= line_number and (end is None or line_number <= end):
+                data = chunk.encode("utf-8")
+                room = MAX_LINE_RANGE_BYTES - size
+                selected = data[:room].decode("utf-8", errors="ignore") if room else ""
+                if selected and not truncated:
+                    chunks.append(selected)
+                    size += len(selected.encode("utf-8"))
+                    if last_selected != line_number:
+                        selected_count += 1
+                        last_selected = line_number
+                if len(data) > room:
+                    truncated = True
+            if chunk.endswith("\n"):
+                line_number += 1
     result = {
         "path": path,
-        "size": st.st_size,
-        "is_dir": os.path.isdir(path),
-        "is_file": os.path.isfile(path),
-        "modified": st.st_mtime,
-        "created": st.st_ctime,
-        "permissions": oct(st.st_mode),
+        "content": "".join(chunks),
+        "start_line": start,
+        "end_line": end if end is not None else total_lines,
+        "total_lines": total_lines,
+        "lines_returned": selected_count,
     }
-    # Include tags if present
-    directory = os.path.dirname(path) if os.path.isfile(path) else path
-    basename = os.path.basename(path)
-    meta = _load_meta(directory)
-    if basename in meta and "tags" in meta[basename]:
-        result["tags"] = meta[basename]["tags"]
+    if truncated:
+        result["truncated"] = True
     return result
 
 
-def cmd_search(args):
-    if not args:
-        raise Exception("search requires a query argument")
-    if len(args) < 2:
-        raise Exception("search path default was not bound by the app bridge")
-    query = args[0]
-    search_path = _abs(args[1])
-    policy.require("fs.read", path=search_path)
-    if not os.path.exists(search_path):
-        return {"error": f"path not found: {search_path}"}
-    matches = []
-    # Use ripgrep with --json so we don't have to guess at separator
-    # parsing on filenames that happen to contain `:` (URLs, Windows
-    # drive letters mounted into the sandbox, etc.).
-    try:
-        result = subprocess.run(
-            ["rg", "--json", "--color", "never", query, search_path],
-            capture_output=True,
-            text=True,
-            timeout=SEARCH_TIMEOUT,
-            stdin=subprocess.DEVNULL,
-            env=scrub_env(),
-            check=False,
-        )
-        for line in result.stdout.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-            except (json.JSONDecodeError, ValueError):
-                continue
-            if record.get("type") != "match":
-                continue
-            data = record.get("data") or {}
-            path_field = (data.get("path") or {}).get("text") or ""
-            line_no = data.get("line_number") or 0
-            line_text = (data.get("lines") or {}).get("text") or ""
-            matches.append({
-                "path": path_field,
-                "line": int(line_no),
-                "text": line_text.rstrip("\n"),
-            })
-    except FileNotFoundError:
-        # rg not installed, fall back to filename search only
-        pass
-    except subprocess.TimeoutExpired:
-        pass
-    # Also search filenames
-    for dirpath, dirnames, filenames in os.walk(search_path):
-        for fname in filenames:
-            if query.lower() in fname.lower():
-                full = os.path.join(dirpath, fname)
-                # Avoid duplicating paths already found by rg
-                if not any(m["path"] == full for m in matches):
-                    matches.append({"path": full, "line": 0, "text": f"[filename match: {fname}]"})
-    return {"query": query, "matches": matches}
+def _read_slice(path: str, offset: int, limit: int) -> tuple[bytes, int, bool]:
+    with _open_file(path) as stream:
+        total_size = os.fstat(stream.fileno()).st_size
+        stream.seek(offset)
+        raw = stream.read(limit + 1)
+    return raw[:limit], total_size, len(raw) > limit
 
 
-def cmd_tag(args):
-    if len(args) < 2:
-        raise Exception("tag requires a path and at least one tag")
-    path = _abs(args[0])
-    new_tags = args[1:]
-    if not os.path.isfile(path):
-        return {"error": f"not a file: {path}"}
-    directory = os.path.dirname(path)
-    policy.require("fs.write", path=directory)
-    basename = os.path.basename(path)
-    meta = _load_meta(directory)
-    if basename not in meta:
-        meta[basename] = {}
-    existing = meta[basename].get("tags", [])
-    # Merge tags, avoiding duplicates
-    for t in new_tags:
-        if t not in existing:
-            existing.append(t)
-    meta[basename]["tags"] = existing
-    _save_meta(directory, meta)
-    return {"path": path, "tags": existing}
-
-
-def cmd_recent(args):
-    n = int(args[0]) if args else 10
-    policy.require("fs.read", path=WORKSPACE)
-    files = []
-    for dirpath, dirnames, filenames in os.walk(WORKSPACE):
-        # Skip hidden directories
-        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
-        for fname in filenames:
-            if fname.startswith("."):
-                continue
-            full = os.path.join(dirpath, fname)
-            try:
-                mtime = os.path.getmtime(full)
-                files.append({"path": full, "modified": mtime})
-            except OSError:
-                pass
-    # Sort by modified time descending
-    files.sort(key=lambda x: x["modified"], reverse=True)
-    return {"files": files[:n]}
-
-
-def cmd_rename(args):
-    """Rename / move a file or directory. Requires fs.delete on the
-    source (we're removing it from the source path) AND fs.write on
-    the destination (we're creating it there).
-
-    Args: <src> <dst>
-    """
-    if len(args) < 2:
-        raise Exception("rename requires <src> and <dst> arguments")
-    src = _abs(args[0])
-    dst = _abs(args[1])
-    policy.require("fs.delete", path=src)
-    policy.require("fs.write", path=dst)
-    if not os.path.exists(src):
-        return {"error": f"not found: {src}"}
-    if os.path.exists(dst):
-        return {"error": f"destination already exists: {dst}"}
-    parent = os.path.dirname(dst)
-    if parent and not os.path.isdir(parent):
-        os.makedirs(parent, exist_ok=True)
-    snapshot.snapshot_pair(src, dst, "rename")
-    os.rename(src, dst)
-    return {"from": src, "to": dst}
-
-
-# Alias: "move" is what users / GUI menus call this. Same enforcement
-# story (delete src + write dst) so we route through the same handler.
-def cmd_move(args):
-    return cmd_rename(args)
-
-
-def cmd_copy(args):
-    """Copy a file or directory tree. Requires fs.read on the source
-    and fs.write on the destination.
-
-    Args: <src> <dst>
-    """
-    if len(args) < 2:
-        raise Exception("copy requires <src> and <dst> arguments")
-    src = _abs(args[0])
-    dst = _abs(args[1])
-    policy.require("fs.read", path=src)
-    policy.require("fs.write", path=dst)
-    if not os.path.exists(src):
-        return {"error": f"not found: {src}"}
-    if os.path.exists(dst):
-        return {"error": f"destination already exists: {dst}"}
-    parent = os.path.dirname(dst)
-    if parent and not os.path.isdir(parent):
-        os.makedirs(parent, exist_ok=True)
-    snapshot.snapshot(dst, "copy")
-    if os.path.isdir(src):
-        # SECURITY: pass ``symlinks=False`` so copytree follows symlinks
-        # rather than preserving them. ``ignore_dangling_symlinks=True``
-        # ensures a dangling symlink in the tree does not abort the
-        # whole copy. After the copy, walk the destination and verify
-        # every entry's realpath stays inside ``dst`` — refuses to leak
-        # a symlink target outside the destination root.
-        try:
-            shutil.copytree(
-                src,
-                dst,
-                symlinks=False,
-                ignore_dangling_symlinks=True,
-            )
-        except shutil.Error as exc:
-            return {"error": f"copy failed: {exc}"}
-        dst_root = os.path.realpath(dst)
-        leaked = []
-        for dirpath, dirnames, filenames in os.walk(dst, followlinks=False):
-            for name in dirnames + filenames:
-                full = os.path.join(dirpath, name)
-                try:
-                    real = os.path.realpath(full)
-                except OSError:
-                    continue
-                try:
-                    common = os.path.commonpath([dst_root, real])
-                except ValueError:
-                    common = ""
-                if common != dst_root:
-                    leaked.append(full)
-        if leaked:
-            # Refuse the copy: tear down the destination so the agent
-            # can't read through an escape link.
-            try:
-                shutil.rmtree(dst)
-            except OSError:
-                pass
-            return {
-                "error": "refused: destination contained symlinks pointing outside scope",
-                "leaked": leaked,
-            }
-        return {"from": src, "to": dst, "kind": "dir"}
-    shutil.copy2(src, dst)
-    return {"from": src, "to": dst, "kind": "file"}
-
-
-# Cap on a single read_bytes response so we don't hand a GUI a 4GB
-# blob in one shot. Larger files are read in pages by passing
-# successive --offset values.
-MAX_READ_BYTES_BINARY = 8 * 1024 * 1024  # 8 MiB
-
-
-def cmd_read_bytes(args):
-    """Read a slice of a file as base64 — the binary-safe counterpart
-    to ``cmd_read``. Doesn't decode as UTF-8, so it works for images
-    and other binary content.
-
-    Args: <path> [--offset N] [--limit N]
-    """
-    if not args:
-        raise Exception("read_bytes requires a path argument")
-    path = _abs(args[0])
-    offset = 0
-    limit = MAX_READ_BYTES_BINARY
-    rest = args[1:]
-    i = 0
-    while i < len(rest):
-        if rest[i] == "--offset" and i + 1 < len(rest):
-            offset = int(rest[i + 1])
-            i += 2
-        elif rest[i] == "--limit" and i + 1 < len(rest):
-            limit = int(rest[i + 1])
-            i += 2
-        else:
-            i += 1
+def read(
+    path: str,
+    offset: int = 0,
+    limit: int = MAX_READ_BYTES,
+    start: int | None = None,
+    end: int | None = None,
+) -> dict:
+    path = _abs(path)
+    _integer(offset, "offset")
+    _integer(limit, "limit", 1)
+    if start is not None:
+        _integer(start, "start", 1)
+    if end is not None:
+        _integer(end, "end", 1)
+        if start is None or end < start:
+            raise ValueError("end requires start and must be >= start")
+    if start is not None and (offset != 0 or limit != MAX_READ_BYTES):
+        raise ValueError("line ranges cannot be combined with byte offset/limit")
     policy.require("fs.read", path=path)
-    if not os.path.isfile(path):
-        return {"error": f"file not found: {path}"}
-    total_size = os.path.getsize(path)
-    effective_limit = min(limit, MAX_READ_BYTES_BINARY)
-    try:
-        fd = _open_nofollow(path, os.O_RDONLY)
-    except OSError as exc:
-        return {"error": f"could not open {path}: {exc}"}
-    try:
-        with os.fdopen(fd, "rb", closefd=True) as f:
-            if offset > 0:
-                f.seek(offset)
-            raw = f.read(effective_limit + 1)
-    except OSError as exc:
-        return {"error": f"could not read {path}: {exc}"}
-    truncated = len(raw) > effective_limit
+    if start is not None:
+        return _read_lines(path, start, end)
+    raw, total_size, truncated = _read_slice(path, offset, min(limit, MAX_READ_BYTES))
+    result = {"path": path, "content": raw.decode("utf-8", errors="replace")}
+    if offset:
+        result["offset"] = offset
     if truncated:
-        raw = raw[:effective_limit]
+        result.update(truncated=True, total_size=total_size)
+    return result
+
+
+def read_bytes(path: str, offset: int = 0, limit: int = MAX_READ_BYTES_BINARY) -> dict:
+    path = _abs(path)
+    _integer(offset, "offset")
+    _integer(limit, "limit", 1)
+    policy.require("fs.read", path=path)
+    raw, total_size, truncated = _read_slice(path, offset, min(limit, MAX_READ_BYTES_BINARY))
     result = {
         "path": path,
         "offset": offset,
@@ -566,68 +193,231 @@ def cmd_read_bytes(args):
     return result
 
 
-def cmd_write_bytes(args):
-    """Write raw bytes (base64-encoded on the wire) to a file. The
-    binary-safe counterpart to ``cmd_write``. Use this for clipboard
-    paste of images, drag-drop of binary content, archive extraction,
-    and any other path where the GUI has bytes rather than text.
+def _snapshot(path: str, operation: str, session_id: str | None) -> None:
+    # A persistent MCP service's process environment is not the caller's session.
+    if session_id is not None:
+        snapshot.snapshot(path, operation, session_id=session_id)
 
-    Args: <path> [--content <base64>]
-    If ``--content`` is omitted, base64 is read from stdin.
-    """
-    if not args:
-        raise Exception("write_bytes requires a path argument")
-    path = _abs(args[0])
+
+def _write(path: str, data: bytes, operation: str, session_id: str | None) -> dict:
     policy.require("fs.write", path=path)
-    content_b64 = None
-    rest = args[1:]
-    for i, arg in enumerate(rest):
-        if arg == "--content" and i + 1 < len(rest):
-            content_b64 = rest[i + 1]
-            break
-    if content_b64 is None:
-        content_b64 = sys.stdin.read()
-    try:
-        data = base64.b64decode(content_b64, validate=False)
-    except Exception as exc:
-        return {"error": f"invalid base64: {exc}"}
-    parent = os.path.dirname(path)
-    if parent and not os.path.isdir(parent):
-        os.makedirs(parent, exist_ok=True)
-    snapshot.snapshot(path, "write_bytes")
+    _snapshot(path, operation, session_id)
     atomic_write_bytes(path, data)
     return {"path": path, "bytes": len(data)}
 
 
-# ── Dispatch ──────────────────────────────────────────────────────
-
-COMMANDS = {
-    "ls": cmd_ls,
-    "read": cmd_read,
-    "read_bytes": cmd_read_bytes,
-    "write": cmd_write,
-    "write_bytes": cmd_write_bytes,
-    "rm": cmd_rm,
-    "mkdir": cmd_mkdir,
-    "stat": cmd_stat,
-    "search": cmd_search,
-    "tag": cmd_tag,
-    "recent": cmd_recent,
-    "rename": cmd_rename,
-    "move": cmd_move,
-    "copy": cmd_copy,
-}
+def write(path: str, content: str, *, session_id: str | None = None) -> dict:
+    path = _abs(path)
+    _text(content, "content", empty=True)
+    return _write(path, content.encode("utf-8"), "write", session_id)
 
 
-def run(command, args):
-    from canonical_argv import normalize_canonical_argv
-    args = normalize_canonical_argv(args)
-    handler = COMMANDS.get(command)
-    if handler is None:
-        return {"error": f"unknown command: {command}"}
-    try:
-        return handler(args)
-    except policy.PermissionDenied as denied:
-        return {"error": str(denied), "denial": denied.denial}
-    except policy.PolicyUnavailable as exc:
-        return {"error": f"capability check failed: {exc}"}
+def write_bytes(path: str, content: str, *, session_id: str | None = None) -> dict:
+    path = _abs(path)
+    _text(content, "content", empty=True)
+    data = base64.b64decode(content, validate=True)
+    return _write(path, data, "write_bytes", session_id)
+
+
+def rm(path: str, *, session_id: str | None = None) -> dict:
+    path = _abs(path)
+    policy.require("fs.delete", path=path)
+    st = os.lstat(path)
+    _snapshot(path, "rm", session_id)
+    if file_stat.S_ISDIR(st.st_mode):
+        shutil.rmtree(path)
+    else:
+        os.remove(path)
+    return {"removed": path}
+
+
+def mkdir(path: str, *, session_id: str | None = None) -> dict:
+    path = _abs(path)
+    policy.require("fs.write", path=path)
+    _snapshot(path, "mkdir", session_id)
+    os.makedirs(path, exist_ok=True)
+    return {"created": path}
+
+
+def stat(path: str) -> dict:
+    path = _abs(path)
+    policy.require("fs.meta", path=path)
+    st = os.lstat(path)
+    result = {
+        "path": path,
+        "size": st.st_size,
+        "is_dir": file_stat.S_ISDIR(st.st_mode),
+        "is_file": file_stat.S_ISREG(st.st_mode),
+        "modified": st.st_mtime,
+        "created": st.st_ctime,
+        "permissions": oct(st.st_mode),
+    }
+    if result["is_file"]:
+        directory = os.path.dirname(path)
+        policy.require("fs.read", path=directory)
+        entry = _load_meta(directory).get(os.path.basename(path), {})
+        if "tags" in entry:
+            result["tags"] = entry["tags"]
+    return result
+
+
+def _walk_error(error: OSError) -> None:
+    raise error
+
+
+def _rg_text(field: dict) -> str:
+    if "text" in field:
+        return field["text"]
+    return base64.b64decode(field["bytes"], validate=True).decode("utf-8", errors="replace")
+
+
+def search(query: str, path: str = WORKSPACE) -> dict:
+    _text(query, "query")
+    if "\0" in query:
+        raise ValueError("query must not contain NUL")
+    path = _abs(path)
+    policy.require("fs.read", path=path)
+    result = subprocess.run(
+        ["rg", "--json", "--color", "never", "--", query, path],
+        capture_output=True,
+        text=True,
+        timeout=SEARCH_TIMEOUT,
+        stdin=subprocess.DEVNULL,
+        env=scrub_env(),
+        check=False,
+    )
+    if result.returncode not in (0, 1):
+        raise RuntimeError(f"ripgrep exited {result.returncode}: {result.stderr.strip()}")
+    matches = []
+    for line in result.stdout.splitlines():
+        record = json.loads(line)
+        if record["type"] == "match":
+            data = record["data"]
+            matches.append({
+                "path": _rg_text(data["path"]),
+                "line": data["line_number"],
+                "text": _rg_text(data["lines"]).rstrip("\n"),
+            })
+    matched_paths = {match["path"] for match in matches}
+    if os.path.isfile(path):
+        candidates = [(os.path.dirname(path), [], [os.path.basename(path)])]
+    else:
+        candidates = os.walk(path, onerror=_walk_error, followlinks=False)
+    for directory, _, filenames in candidates:
+        for name in filenames:
+            full = os.path.join(directory, name)
+            if query.lower() in name.lower() and full not in matched_paths:
+                matches.append({"path": full, "line": 0, "text": f"[filename match: {name}]"})
+    return {"query": query, "matches": matches}
+
+
+def tag(path: str, tags: list[str], *, session_id: str | None = None) -> dict:
+    path = _abs(path)
+    if not isinstance(tags, list) or not tags:
+        raise ValueError("tags must be a nonempty list of strings")
+    for value in tags:
+        _text(value, "tag")
+    directory = os.path.dirname(path)
+    policy.require("fs.meta", path=path)
+    policy.require("fs.read", path=directory)
+    policy.require("fs.write", path=directory)
+    if not file_stat.S_ISREG(os.lstat(path).st_mode):
+        raise ValueError(f"not a regular file: {path}")
+    meta = _load_meta(directory)
+    entry = meta.setdefault(os.path.basename(path), {})
+    existing = entry.setdefault("tags", [])
+    for value in tags:
+        if value not in existing:
+            existing.append(value)
+    meta_path = _meta_path(directory)
+    _snapshot(meta_path, "tag", session_id)
+    atomic_write_json(meta_path, meta)
+    return {"path": path, "tags": existing}
+
+
+def recent(n: int = 10) -> dict:
+    _integer(n, "n")
+    root = _abs(WORKSPACE)
+    policy.require("fs.read", path=root)
+    files = []
+    for directory, dirs, names in os.walk(root, onerror=_walk_error, followlinks=False):
+        dirs[:] = [name for name in dirs if not name.startswith(".")]
+        for name in names:
+            if name.startswith("."):
+                continue
+            path = os.path.join(directory, name)
+            st = os.lstat(path)
+            if file_stat.S_ISREG(st.st_mode):
+                files.append({"path": path, "modified": st.st_mtime})
+    files.sort(key=lambda entry: entry["modified"], reverse=True)
+    return {"files": files[:n]}
+
+
+def rename(src: str, dst: str, *, session_id: str | None = None) -> dict:
+    src, dst = _abs(src), _abs(dst)
+    if src != dst and os.path.commonpath([src, dst]) == src:
+        raise ValueError("rename destination must not be inside the source")
+    policy.require("fs.delete", path=src)
+    policy.require("fs.write", path=dst)
+    os.lstat(src)
+    if os.path.lexists(dst):
+        raise FileExistsError(f"destination already exists: {dst}")
+    if session_id is not None:
+        snapshot.snapshot_pair(src, dst, "rename", session_id=session_id)
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    os.rename(src, dst)
+    return {"from": src, "to": dst}
+
+
+def move(src: str, dst: str, *, session_id: str | None = None) -> dict:
+    return rename(src, dst, session_id=session_id)
+
+
+def _check_tree(path: str) -> None:
+    for directory, dirs, files in os.walk(path, onerror=_walk_error, followlinks=False):
+        for name in dirs + files:
+            entry = os.path.join(directory, name)
+            st = os.lstat(entry)
+            if not (file_stat.S_ISREG(st.st_mode) or file_stat.S_ISDIR(st.st_mode)):
+                raise ValueError(f"copy refuses symlinks and special files: {entry}")
+
+
+def _copy_file(src: str, dst: str) -> str:
+    with _open_file(src) as source:
+        st = os.fstat(source.fileno())
+        fd = _open_nofollow(dst, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+        with os.fdopen(fd, "wb") as destination:
+            shutil.copyfileobj(source, destination)
+            destination.flush()
+            os.fchmod(destination.fileno(), file_stat.S_IMODE(st.st_mode))
+            os.utime(destination.fileno(), ns=(st.st_atime_ns, st.st_mtime_ns))
+    return dst
+
+
+def copy(src: str, dst: str, *, session_id: str | None = None) -> dict:
+    src, dst = _abs(src), _abs(dst)
+    if os.path.commonpath([src, dst]) == src:
+        raise ValueError("copy destination must not be inside the source")
+    policy.require("fs.read", path=src)
+    policy.require("fs.write", path=dst)
+    st = os.lstat(src)
+    if os.path.lexists(dst):
+        raise FileExistsError(f"destination already exists: {dst}")
+    is_dir = file_stat.S_ISDIR(st.st_mode)
+    if is_dir:
+        _check_tree(src)
+    elif not file_stat.S_ISREG(st.st_mode):
+        raise ValueError(f"not a regular file: {src}")
+    _snapshot(dst, "copy", session_id)
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    if is_dir:
+        # Never dereference a link inserted after the preflight walk.
+        shutil.copytree(src, dst, symlinks=True, copy_function=_copy_file)
+        try:
+            _check_tree(dst)
+        except ValueError:
+            shutil.rmtree(dst)
+            raise
+    else:
+        _copy_file(src, dst)
+    return {"from": src, "to": dst, "kind": "dir" if is_dir else "file"}

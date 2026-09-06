@@ -34,8 +34,15 @@ daemon rather than by running `main.py`. To keep CLI syntax stable without
 `binding` (`positional`/`flag`) as an operation arg. `binding` is CLI-only
 metadata: it never appears in the model-facing MCP `inputSchema`, and the
 default binding is unchanged (`bool` → flag, everything else → positional).
-MCP-only commands do not accept `--stdin`; piped-input Apps keep their
-`operations` until they migrate to explicit typed content arguments.
+MCP-only commands reject raw `--stdin`. Use `cos app <id> <command> --args-stdin`
+to send one JSON object of manifest-declared business arguments instead of
+ordinary tool arguments. The marker must be the only tool argument; malformed,
+empty, non-object, unknown-field, and oversized input is rejected before a tool
+can run. Defaults, required fields and choices use the same manifest validation
+as argv. No caller/session/context authority comes from the object.
+Input is at most 1008 KiB of serialized JSON (including escapes and base64), or
+a lower `COS_APP_STDIN_MAX_BYTES`. This leaves 16 KiB for the unchanged 1 MiB
+broker request envelope. Canonical arguments must also fit this budget.
 
 For Python, bind the manifest's tool names without duplicating their schemas:
 
@@ -258,8 +265,8 @@ arguments. Conditional needs bind fixed or caller-supplied scopes only after
 the selected provider/mode condition applies.
 
 An operation may set `stdin: true` to receive explicitly forwarded caller
-input. The top-level CLI opts in with `--stdin`, for example
-`printf data | cos app fs write /workspace/out.txt --stdin`. This switch is
+input. The top-level CLI opts in with `--stdin` only for operations declaring
+that support. This switch is
 recognized only in an App operation's pre-`--` option region, so command-owned
 `--stdin` flags elsewhere remain untouched. The CLI streams at most 16 MiB
 (configurable with `COS_APP_STDIN_MAX_BYTES`) and fails before launch on
@@ -268,6 +275,62 @@ service, and ordinary CLI calls therefore keep child stdin closed. Python list
 handlers use `apps/canonical_argv.py`;
 argparse and gateway parsers consume the same inline flags and `--` delimiter
 directly.
+
+### Filesystem MCP contract
+
+The bundled `fs` App is MCP-only: all 14 commands are declared once under
+[`apps/fs/app.json`](../apps/fs/app.json)'s `mcp.tools`, with direct SDK
+handlers in `server.py` and typed behavior in `main.py`. Human CLI calls use
+the same tools:
+
+```bash
+cos app fs write /workspace/out.txt --content='hello'
+cos app fs write /workspace/empty.txt --content=
+cos app fs write_bytes /workspace/out.bin --content=AAEC
+printf '%s' '{"path":"/workspace/out.txt","content":"hello\u0000world"}' | cos app fs write --args-stdin
+cos app fs read /workspace/out.txt --offset=0 --limit=1000
+cos app fs read /workspace/out.txt --start=1 --end=20
+cos app fs tag /workspace/out.txt reviewed blue
+```
+
+`write` and `write_bytes` require explicit string `content`; neither reads
+raw stdin, and `--stdin` is rejected. Empty content is valid. Binary content is
+strict base64 (no ignored whitespace or invalid characters). Small human CLI
+writes may use argv; use `--args-stdin` for larger content or embedded NUL.
+Rust runtime writes always send `{path, content}` as bounded JSON over stdin,
+never content in argv. The App still receives only explicit MCP arguments.
+
+Byte offsets are nonnegative integers and limits are positive integers,
+capped at 1,000,000 bytes for text and 4 MiB for binary reads. Line ranges are
+inclusive, 1-based, and capped at 1,000,000 bytes of UTF-8 output while still counting
+the whole file. `end` requires `start` and cannot precede it. Line mode cannot
+be combined with a nonzero byte offset or a nondefault byte limit. `recent`
+accepts a nonnegative count, skips hidden entries and symlinks, and defaults
+to ten regular files under `/workspace`.
+Binary and line caps are lower than the legacy operation limits so the
+duplicated MCP text/structured response fits the 16 MiB MCP frame and the
+text result fits the 8 MiB Host frame. Continue larger reads with byte offsets
+or narrower line ranges.
+The Rust `cos_runtime::fs::read_bytes` convenience wrapper rejects a truncated
+response rather than returning a prefix as a complete file. Text `read` retains
+its explicit `ReadResult.truncated` field.
+
+Paths are resolved before capability checks. Recursive copies reject
+symlinks and special files rather than materializing out-of-scope targets.
+Listings do not follow child symlinks when reporting directory status.
+Tags belong to regular files and merge into the sibling `.cos-meta.json`;
+`stat` reads those tags. Because the scope vocabulary has no sibling transform,
+both declare read authority on the parent directory, while `tag` also declares
+parent write authority and file metadata authority. Missing sidecars mean no
+tags; corrupt, unreadable or symlinked sidecars fail rather than being ignored
+or overwritten. Search requires ripgrep: missing binaries, timeouts and
+non-match-related failures are errors, not filename-only fallback success.
+All filesystem failures propagate as MCP tool errors.
+
+Mutations snapshot before changing their targets, including tag sidecars and
+new directories. The server supplies the authenticated call's session id,
+never the persistent service's environment or a tool argument; calls without
+a session do not snapshot into an unrelated service session.
 
 The return value (a dict, list, or scalar) is JSON-dumped to stdout.
 Return `None` to print nothing.

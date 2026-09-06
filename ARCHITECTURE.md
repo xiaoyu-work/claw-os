@@ -769,9 +769,24 @@ authenticated-CLI broker route, `app_service.cli_call` (`Access::User`). This is
 a migration gate, not a runtime fallback: an MCP-only App never runs `main.py`,
 never launches an unbrokered local child, and never falls back to
 operations on error. The command maps to exactly one tool by the
-`<app-id>.<command>` convention; ambiguous or non-matching commands are refused,
-and `--stdin` is rejected because the MCP tool contract carries no piped input
-yet.
+`<app-id>.<command>` convention; ambiguous or non-matching commands are refused.
+The explicit, exclusive `--args-stdin` selector accepts a bounded JSON object
+of business arguments instead of argv. Both paths use the same manifest
+defaults/validation and broker authorization. Raw `--stdin` remains rejected;
+App code receives only canonical MCP arguments, never the CLI input stream.
+JSON input is capped at 1008 KiB (or a lower `COS_APP_STDIN_MAX_BYTES`), leaving
+envelope headroom under the unchanged 1 MiB broker request cap. Only the CLI
+route's argument strings use this larger bounded allowance; general broker
+metadata retains its 64 KiB string cap and all structural limits still apply.
+
+The MCP-only `fs` service accepts explicit text/base64 content for writes.
+Rust desktop filesystem writes always serialize `{path, content}` over this
+JSON channel, avoiding argv size/NUL limits without a fallback transport.
+Its SDK handlers pass the authenticated call's session id to typed mutation
+functions for snapshots; the persistent service's launch environment never
+chooses the mutation owner. Metadata sidecar reads and writes are separately
+declared parent-directory capabilities. See the
+[filesystem MCP contract](docs/app-development.md#filesystem-mcp-contract).
 
 The manifest-defined `launcher` App-service sandbox has no desktop session
 authority and never spawns GUI binaries directly. Provenance-classified native
