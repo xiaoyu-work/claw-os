@@ -5,6 +5,22 @@ fn parse(s: &str) -> Manifest {
 }
 
 #[test]
+fn editor_tools_derive_only_owned_service_capabilities() {
+    let manifest = parse(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../apps/cosmic-edit/app.json")));
+    let empty = BTreeMap::new();
+    let open = manifest.resolve_mcp_tool_needs("edit.open", &empty).unwrap();
+    assert_eq!(open.into_iter().flatten().collect::<Vec<_>>(),
+        vec![crate::caps::Cap::new(crate::caps::Verb::DESKTOP_LAUNCH, crate::caps::Scope::name("com.clawos.Edit"))]);
+    let args = BTreeMap::from([("path".into(), serde_json::json!("/work/document"))]);
+    let open = manifest.resolve_mcp_tool_needs("edit.open", &args).unwrap();
+    assert_eq!(open.into_iter().flatten().count(), 2);
+    let summary = manifest.resolve_mcp_tool_needs("edit.summarize", &args).unwrap();
+    let summary: Vec<_> = summary.into_iter().flatten().collect();
+    assert_eq!(summary.len(), 2);
+    assert!(summary.iter().all(|cap| cap.verb == crate::caps::Verb::FS_READ || cap.verb == crate::caps::Verb::AI_CHAT_UNTRUSTED));
+}
+
+#[test]
 fn minimal_manifest_parses() {
     let m = parse(
         r#"{

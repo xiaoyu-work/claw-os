@@ -104,6 +104,20 @@ Apps use the Claw OS SDK/agent gate rather than provider SDKs. Provider choice,
 credentials, consent, budgets, model-visible logging, and fallback behavior
 remain owned by the core agent.
 
+SDK `ai::chat` calls `cos ai chat`, which always sends a bounded `ai.chat`
+broker request. The worker relay rederives the registered App session and live
+transient capabilities; the daemon runs the existing single-shot AI gate, not
+the system Agent loop. App workers need no local session registry, credentials
+or provider network. The gate applies verified manifest policy, owner consent,
+safety and budgets and persists exact safety-filtered model inputs in the
+owner-partitioned AI ledger. Revoked/replaced grants cancel in-flight calls;
+dispatched reservations are conservatively charged on cancellation.
+
+Filesystem providers resolve the authenticated owner's primary and
+supplementary groups from the system account database, never from an isolated
+extension's execution GID. Synchronous filesystem guards change only the
+provider thread's credentials and restore them before yielding or returning.
+
 Bundled desktop apps launch Ask Claw through `cos_runtime::ask_claw`. Their
 thin `claw_glue` adapters define only typed, app-specific context fields; the
 runtime owns bounded JSON serialization, anonymous process-bound stdin
@@ -787,6 +801,32 @@ functions for snapshots; the persistent service's launch environment never
 chooses the mutation owner. Metadata sidecar reads and writes are separately
 declared parent-directory capabilities. See the
 [filesystem MCP contract](docs/app-development.md#filesystem-mcp-contract).
+
+The editor's **App handlers** do not use that human App-dispatch bridge.
+`cos_runtime::filesystem` carries bounded text requests on stdin through
+`cos __filesystem` to `system.filesystem.read` / `system.filesystem.write`.
+The broker spends exact canonical `fs.read` / `fs.write` scopes, rejects
+worker-forbidden paths, pins directory descriptors against symlink swaps,
+and atomically replaces complete files. File access and staging run under
+the authenticated owner's filesystem UID/GID, without inherited daemon
+supplementary groups; the broker identity owns only journal/inverse-store IO
+and final pinned atomic publication. Oversize or non-UTF-8 reads fail
+without returning a partial document. Task writes resolve the durable
+session from the broker-issued task binding and record pinned prior bytes
+using the session inverse store; normal mutation journal bracketing also
+applies. No worker-supplied session chooses an inverse store.
+
+Editor activation uses `system.desktop.control` with its fixed native target,
+not App `exec`; file activation additionally requires exact read authority.
+Editor AI requests use SDK `ai::chat`, with the editor's own identity and
+`external-content` origin. The document is data, separate from system
+instructions; summaries do not write another App's memory. Trusted-human
+interactive desktop wrappers remain separate from these App handler paths.
+
+Both broker and Host placement use the same editor classification: its read
+and write capabilities remain broker-only, so the reusable editor worker
+receives no file or writable parent mounts. Unsupported scopes still fail
+closed; the classification changes no capability grants.
 
 The manifest-defined `launcher` App-service sandbox has no desktop session
 authority and never spawns GUI binaries directly. Provenance-classified native

@@ -8,6 +8,19 @@ use serde_json::json;
 const APP_ID: &str = "com.example.App";
 
 #[test]
+fn editor_launch_is_fixed_target_and_not_cross_app_authority() {
+    let decision = decision_for_app(Some("cosmic-edit"), vec![], "editor-launch");
+    authorize_caller(&decision, "launch").unwrap();
+    assert!(authorize_caller(&decision, "restart").is_err());
+    authorize_editor_target(&decision, Some("com.clawos.Edit"), &[]).unwrap();
+    authorize_editor_target(&decision, Some("com.clawos.Edit"), &["file:///work/a".into()]).unwrap();
+    assert!(authorize_editor_target(&decision, Some(APP_ID), &[]).is_err());
+    assert!(authorize_editor_target(&decision, Some("com.clawos.Edit"), &["https://example.test".into()]).is_err());
+    assert!(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../desktop/edit/res/com.clawos.Edit.desktop"))
+        .lines().any(|line| line == "Exec=cosmic-edit %F"));
+}
+
+#[test]
 fn desktop_action_validation_is_strict() {
     validate_action("focus", Some("window-1"), None, &[]).unwrap();
     validate_action("restart", Some("window-1"), Some(APP_ID), &[]).unwrap();

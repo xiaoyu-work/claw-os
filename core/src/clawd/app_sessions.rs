@@ -808,15 +808,18 @@ fn finalize_prepared_app_service_call(
         .flatten()
         .cloned()
         .collect::<Vec<_>>();
-    let placement = crate::agent::tools::cos_apps_session::classify_call(&placement_caps);
+    let placement = crate::agent::tools::cos_apps_session::classify_app_call(app_id, &placement_caps);
     if let crate::agent::tools::cos_apps_session::CallPlacement::Unsupported(reason) = &placement {
         return Err(BrokerError::authorization(format!(
             "App `{app_id}` tool `{tool}` cannot be authorized: {reason}"
         )));
     }
-    let authorized_mounts =
+    let authorized_mounts = if placement == crate::agent::tools::cos_apps_session::CallPlacement::Reusable {
+        Vec::new()
+    } else {
         crate::worker::derive::authorize_granted_path_mounts(&CapSet::from_caps(placement_caps))
-            .map_err(BrokerError::authorization)?;
+            .map_err(BrokerError::authorization)?
+    };
     let ceiling = app_ceiling(app)?;
     let mut plan = derive_plan(
         &declared_tool.needs,

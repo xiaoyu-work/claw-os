@@ -56,6 +56,10 @@ which tool calls are exposed and executed.
 | `mcp/` | MCP attachment and proxy tools |
 | `memory.rs`, `recall.rs` | Agent memory tools |
 
+The broker and Host share `classify_app_call`: editor filesystem operations
+use controlled providers in a resource-free reusable worker, not file mounts.
+This placement rule does not add or relax authority.
+
 ## Dependencies
 
 Runtime dispatch depends on the registry plus one trusted

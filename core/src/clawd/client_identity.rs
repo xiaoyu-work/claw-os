@@ -195,6 +195,111 @@ fn resolve_home(_uid: u32) -> Option<PathBuf> {
     None
 }
 
+/// Thread-local filesystem credentials. Never hold across an await or move to
+/// another thread. Broker-owned session stores must be accessed outside it.
+#[cfg(target_os = "linux")]
+pub(crate) struct FsIdentityGuard {
+    previous_uid: libc::c_int,
+    previous_gid: libc::c_int,
+    previous_groups: Option<Vec<libc::gid_t>>,
+    _thread: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+#[cfg(target_os = "linux")]
+impl FsIdentityGuard {
+    pub(crate) fn enter(uid: u32) -> Result<Self, String> {
+        let (gid, groups) = owner_groups(uid)?;
+        Self::enter_groups(uid, gid, &groups)
+    }
+
+    fn enter_groups(uid: u32, gid: u32, groups: &[libc::gid_t]) -> Result<Self, String> {
+        let previous_groups = {
+            let count = unsafe { libc::getgroups(0, std::ptr::null_mut()) };
+            if count < 0 {
+                return Err(std::io::Error::last_os_error().to_string());
+            }
+            let mut previous = vec![0; count as usize];
+            if unsafe { libc::getgroups(count, previous.as_mut_ptr()) } < 0 {
+                return Err(std::io::Error::last_os_error().to_string());
+            }
+            // libc::setgroups synchronizes all threads; this raw syscall only
+            // changes the synchronous provider thread, like setfsuid itself.
+            let mut current = previous.clone();
+            current.sort_unstable();
+            let mut wanted = groups.to_vec();
+            wanted.sort_unstable();
+            if current == wanted {
+                None
+            } else {
+                if unsafe { libc::syscall(libc::SYS_setgroups, groups.len(), groups.as_ptr()) } != 0
+                {
+                    return Err(std::io::Error::last_os_error().to_string());
+                }
+                Some(previous)
+            }
+        };
+        let guard = Self {
+            previous_gid: unsafe { libc::setfsgid(gid) },
+            previous_uid: unsafe { libc::setfsuid(uid) },
+            previous_groups,
+            _thread: std::marker::PhantomData,
+        };
+        if unsafe { libc::setfsuid(!0) } != uid as libc::c_int
+            || unsafe { libc::setfsgid(!0) } != gid as libc::c_int
+        {
+            return Err(format!("failed to enter filesystem identity {uid}:{gid}"));
+        }
+        Ok(guard)
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for FsIdentityGuard {
+    fn drop(&mut self) {
+        unsafe {
+            libc::setfsuid(self.previous_uid as libc::uid_t);
+            libc::setfsgid(self.previous_gid as libc::gid_t);
+            if libc::setfsuid(!0) != self.previous_uid || libc::setfsgid(!0) != self.previous_gid {
+                std::process::abort();
+            }
+            if let Some(groups) = &self.previous_groups {
+                // Continuing a daemon thread under unknown credentials is unsafe.
+                if libc::syscall(libc::SYS_setgroups, groups.len(), groups.as_ptr()) != 0 {
+                    std::process::abort();
+                }
+            }
+        }
+    }
+}
+
+/// Resolve account credentials, not the isolated process's execution GID.
+/// NSS failures and unknown owners fail closed; no ambient-group fallback.
+#[cfg(target_os = "linux")]
+pub(crate) fn owner_groups(uid: u32) -> Result<(u32, Vec<libc::gid_t>), String> {
+    let mut buf = vec![0 as libc::c_char; 16 * 1024];
+    let mut pwd: libc::passwd = unsafe { std::mem::zeroed() };
+    let mut result = std::ptr::null_mut();
+    let rc = unsafe { libc::getpwuid_r(uid, &mut pwd, buf.as_mut_ptr(), buf.len(), &mut result) };
+    if rc != 0 || result.is_null() || pwd.pw_name.is_null() || pwd.pw_uid != uid {
+        return Err(format!("filesystem owner account {uid} is unavailable"));
+    }
+    let mut count = 0;
+    unsafe { libc::getgrouplist(pwd.pw_name, pwd.pw_gid, std::ptr::null_mut(), &mut count) };
+    if !(1..=65_536).contains(&count) {
+        return Err(format!("filesystem owner groups for {uid} are unavailable"));
+    }
+    let mut groups = vec![0; count as usize];
+    if unsafe { libc::getgrouplist(pwd.pw_name, pwd.pw_gid, groups.as_mut_ptr(), &mut count) } < 0 {
+        return Err(format!(
+            "filesystem owner groups for {uid} changed during lookup"
+        ));
+    }
+    groups.truncate(count as usize);
+    groups.sort_unstable();
+    groups.dedup();
+    Ok((pwd.pw_gid, groups))
+}
+
 #[cfg(test)]
 mod tests {
     include!(concat!(

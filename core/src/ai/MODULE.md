@@ -11,6 +11,14 @@ system callers that request AI work outside the interactive agent loop.
 - Apply consent and budget decisions.
 - Build provider-neutral requests through the configured agent provider.
 - Record usage and deny direct provider ownership by apps.
+- Serve SDK `cos ai chat` through the authenticated `clawd` `ai.chat` route.
+  Workers receive neither the session registry, provider credentials nor network
+  access. The gate uses the live exact App capability, owner configuration,
+  verified manifest, consent, budget and safety policy; no local fallback exists.
+- Persist safety-filtered provider requests in the owner's AI budget database
+  (`ai_inputs`), correlated to the authenticated App session. This history is
+  not App or agent memory. Cancellation retains the dispatched reservation's
+  conservative estimate; completed calls settle actual usage.
 
 ## Key Files
 

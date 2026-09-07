@@ -1329,6 +1329,45 @@ routes! {
     crash::inspect(c.params, authority).await.map_err(BrokerError::from)
         },
     }
+    AiChat {
+        name: "ai.chat",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget { max_in_flight: 4, deadline: Deadline::Uninterruptible },
+        authority: session(Audience::SystemService),
+        body: body::AiChat,
+        audit: &[("session", FieldRule::Token), ("app_id", FieldRule::Identifier), ("origin", FieldRule::Token), ("prompt", FieldRule::Size), ("system", FieldRule::Size), ("tools", FieldRule::Size), ("max_units", FieldRule::Count)],
+        run: |c| {
+            let authority = c.authority()?;
+            super::ai::chat(c.params, c.client, authority).await
+        },
+    }
+    SystemFilesystemRead {
+        name: "system.filesystem.read",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: session(Audience::SystemService),
+        body: body::FilesystemAccess,
+        audit: &[("session", FieldRule::Token), ("request", FieldRule::Size)],
+        run: |c| {
+            let authority = c.authority()?;
+            super::filesystem::access(c.params, authority, false).await.map_err(BrokerError::from)
+        },
+    }
+    SystemFilesystemWrite {
+        name: "system.filesystem.write",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: session(Audience::SystemService),
+        body: body::FilesystemAccess,
+        audit: &[("session", FieldRule::Token), ("request", FieldRule::Size)],
+        run: |c| {
+            let authority = c.authority()?;
+            super::filesystem::access(c.params, authority, true).await.map_err(BrokerError::from)
+        },
+    }
     SystemDesktopControl {
         name: "system.desktop.control",
         access: Access::User,

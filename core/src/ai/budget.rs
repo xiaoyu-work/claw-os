@@ -28,11 +28,7 @@ pub enum BudgetError {
     #[error("budget store error: {0}")]
     Sqlite(#[from] rusqlite::Error),
     #[error("budget exceeded: app `{app}` used {used} of {cap} units this period")]
-    OverUnitCap {
-        app: String,
-        used: u64,
-        cap: u64,
-    },
+    OverUnitCap { app: String, used: u64, cap: u64 },
     #[error("budget units exceed the SQLite integer storage range")]
     StorageRange,
     #[error(
@@ -127,6 +123,46 @@ fn ensure_reserved_column(conn: &Connection) -> rusqlite::Result<()> {
 }
 
 impl Store {
+    pub(crate) fn open_for_owner(uid: u32) -> Result<Self, String> {
+        let (gid, _) = crate::clawd::client_identity::owner_groups(uid)?;
+        if uid != 0 {
+            crate::storage::ensure_owner_agent_state_dir(uid, gid)
+                .map_err(|error| error.to_string())?;
+        }
+        // SQLite creation/schema work is synchronous. Never carry filesystem
+        // credentials across the provider await. Keep the shared ledger
+        // owner-accessible when the system Agent subsequently opens it.
+        let _identity = crate::clawd::client_identity::FsIdentityGuard::enter(uid)?;
+        let store = Self::open()?;
+        crate::storage::set_private_file(&db_path()).map_err(|error| error.to_string())?;
+        Ok(store)
+    }
+
+    /// Persist the exact safety-filtered model input before dispatch. This is
+    /// owner-partitioned AI history, never injected into another App's memory.
+    pub(crate) fn record_input(
+        &self,
+        session: &str,
+        app: &str,
+        origin: &str,
+        request: &crate::agent::llm::types::ChatRequest,
+    ) -> Result<(), String> {
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS ai_inputs (
+                id INTEGER PRIMARY KEY, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                session TEXT NOT NULL, app TEXT NOT NULL, origin TEXT NOT NULL, request TEXT NOT NULL
+            )",
+        ).map_err(|error| error.to_string())?;
+        let request = serde_json::to_string(request).map_err(|error| error.to_string())?;
+        self.conn
+            .execute(
+                "INSERT INTO ai_inputs(session, app, origin, request) VALUES (?1, ?2, ?3, ?4)",
+                params![session, app, origin, request],
+            )
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
     /// Open (and create on first use) the budget store.
     pub fn open() -> Result<Self, String> {
         let path = db_path();
@@ -166,8 +202,7 @@ impl Store {
         let (used, reserved) = row.unwrap_or((0, 0));
         Ok(Snapshot {
             period,
-            units_used: (used.max(0) as u64)
-                .saturating_add(reserved.max(0) as u64),
+            units_used: (used.max(0) as u64).saturating_add(reserved.max(0) as u64),
         })
     }
 
@@ -229,9 +264,10 @@ impl Store {
                 cap: cap_units,
             });
         }
-        let new_reserved = reserved.checked_add(units).ok_or(BudgetError::StorageRange)?;
-        let stored_reserved =
-            i64::try_from(new_reserved).map_err(|_| BudgetError::StorageRange)?;
+        let new_reserved = reserved
+            .checked_add(units)
+            .ok_or(BudgetError::StorageRange)?;
+        let stored_reserved = i64::try_from(new_reserved).map_err(|_| BudgetError::StorageRange)?;
         tx.execute(
             "INSERT INTO ai_budget(app_id, period, units_used, units_reserved) \
              VALUES (?1, ?2, 0, ?3) \
@@ -357,10 +393,11 @@ impl Store {
             reserved -= from_reserved;
             used = used.saturating_sub(reduction - from_reserved);
         }
-        let total = used.checked_add(reserved).ok_or(BudgetError::StorageRange)?;
+        let total = used
+            .checked_add(reserved)
+            .ok_or(BudgetError::StorageRange)?;
         let stored_used = i64::try_from(used).map_err(|_| BudgetError::StorageRange)?;
-        let stored_reserved =
-            i64::try_from(reserved).map_err(|_| BudgetError::StorageRange)?;
+        let stored_reserved = i64::try_from(reserved).map_err(|_| BudgetError::StorageRange)?;
         tx.execute(
             "UPDATE ai_budget SET units_used = ?3, units_reserved = ?4 \
              WHERE app_id = ?1 AND period = ?2",
@@ -421,10 +458,8 @@ impl Store {
         let total = new_used
             .checked_add(new_reserved)
             .ok_or(BudgetError::StorageRange)?;
-        let stored_used =
-            i64::try_from(new_used).map_err(|_| BudgetError::StorageRange)?;
-        let stored_reserved =
-            i64::try_from(new_reserved).map_err(|_| BudgetError::StorageRange)?;
+        let stored_used = i64::try_from(new_used).map_err(|_| BudgetError::StorageRange)?;
+        let stored_reserved = i64::try_from(new_reserved).map_err(|_| BudgetError::StorageRange)?;
         tx.execute(
             "UPDATE ai_budget SET units_used = ?3, units_reserved = ?4 \
              WHERE app_id = ?1 AND period = ?2",
@@ -486,8 +521,7 @@ impl Store {
             let total = new_used
                 .checked_add(new_reserved)
                 .ok_or(BudgetError::StorageRange)?;
-            let stored_used =
-                i64::try_from(new_used).map_err(|_| BudgetError::StorageRange)?;
+            let stored_used = i64::try_from(new_used).map_err(|_| BudgetError::StorageRange)?;
             let stored_reserved =
                 i64::try_from(new_reserved).map_err(|_| BudgetError::StorageRange)?;
             if cap_error.is_none() && cap_units > 0 && total > cap_units {
@@ -497,12 +531,7 @@ impl Store {
                     cap: cap_units,
                 });
             }
-            updates.push((
-                app.to_string(),
-                stored_used,
-                stored_reserved,
-                total,
-            ));
+            updates.push((app.to_string(), stored_used, stored_reserved, total));
         }
         for (app, stored_used, stored_reserved, _) in &updates {
             tx.execute(
@@ -525,11 +554,7 @@ impl Store {
     /// delta)`. Use this only when there is no matching reservation
     /// to pin against — e.g. one-off corrections from an admin CLI.
     /// Hot-path callers should pin to `Snapshot.period`.
-    pub fn settle_now(
-        &mut self,
-        app: &str,
-        delta_units: i64,
-    ) -> Result<Snapshot, BudgetError> {
+    pub fn settle_now(&mut self, app: &str, delta_units: i64) -> Result<Snapshot, BudgetError> {
         let period = current_period_utc();
         self.settle(app, &period, delta_units)
     }

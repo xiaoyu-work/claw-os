@@ -158,24 +158,30 @@
         ],
         "needs": [
           {
-            "verb": "proc.spawn",
+            "verb": "desktop.launch",
             "scope": {
               "kind": "fixed",
               "scope": {
                 "kind": "name",
-                "value": "cosmic-edit"
+                "value": "com.clawos.Edit"
               }
             },
             "why": {
               "en": "Open the native text editor for the user."
             }
+          },
+          {
+            "verb": "fs.read",
+            "scope": {"kind": "from-arg", "arg": "path"},
+            "when": {"kind": "arg-present", "arg": "path"},
+            "why": {"en": "Allow the native editor to open the requested file."}
           }
         ]
       },
       {
         "name": "edit.summarize",
         "summary": {
-          "en": "Summarize a file through the bundled document App and OS AI gate."
+          "en": "Summarize a file through the OS AI gate."
         },
         "args": [
           {
@@ -205,19 +211,6 @@
             },
             "why": {
               "en": "Send the file text through the OS AI gate for summarization."
-            }
-          },
-          {
-            "verb": "memory.write",
-            "scope": {
-              "kind": "fixed",
-              "scope": {
-                "kind": "self-ref",
-                "value": "doc"
-              }
-            },
-            "why": {
-              "en": "Remember the summary using the document App's existing scope."
             }
           }
         ]

@@ -52,11 +52,24 @@ fn a_launch_with_no_relay_grant_reaches_no_route_at_all() {
 fn a_route_family_the_launch_cannot_justify_is_refused() {
     let authority = relaying_authority(vec![Cap::new(Verb::FS_READ, Scope::path("/tmp/**"))]);
     for command in Command::ALL.iter().copied() {
+        if command == Command::SystemFilesystemRead {
+            admit(command, &authority).expect("fs.read admits only the filesystem read provider");
+            continue;
+        }
         assert!(
             admit(command, &authority).is_err(),
             "{command:?} admitted on fs.read alone"
         );
     }
+}
+
+#[test]
+fn filesystem_write_admission_does_not_follow_read_authority() {
+    let read = relaying_authority(vec![Cap::new(Verb::FS_READ, Scope::path("/work/file"))]);
+    assert!(admit(Command::SystemFilesystemWrite, &read).is_err());
+    let write = relaying_authority(vec![Cap::new(Verb::FS_WRITE, Scope::path("/work/file"))]);
+    admit(Command::SystemFilesystemWrite, &write).unwrap();
+    assert!(admit(Command::SystemFilesystemRead, &write).is_err());
 }
 
 #[test]
@@ -75,6 +88,17 @@ fn every_admissible_route_is_explicitly_mapped() {
         let error = admit(command, &wide).unwrap_err();
         assert!(error.contains("no admission rule"), "{name}: {error}");
     }
+}
+#[test]
+fn ai_chat_admission_is_explicit_and_cannot_admit_app_invocation() {
+    for verb in [Verb::AI_CHAT, Verb::AI_CHAT_UNTRUSTED] {
+        let granted = relaying_authority(vec![Cap::new(verb, Scope::name("model"))]);
+        admit(Command::AiChat, &granted).unwrap();
+        assert!(admit(Command::AppServiceCliCall, &granted).is_err());
+        assert!(admit(Command::AppSessionRegister, &granted).is_err());
+    }
+    let read = relaying_authority(vec![Cap::new(Verb::FS_READ, Scope::Wild)]);
+    assert!(admit(Command::AiChat, &read).is_err());
 }
 
 #[test]

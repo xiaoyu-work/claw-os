@@ -189,6 +189,21 @@ impl Decision {
         self.require_all(std::slice::from_ref(&cap))
     }
 
+    /// Revalidate a long-running session operation without spending another use.
+    /// A replaced transient grant is a different invocation, not a renewal.
+    pub(crate) fn ensure_current(&self) -> Result<(), String> {
+        let session = self.session_id().ok_or("operation has no session")?;
+        let live = match &self.relay {
+            Some(proof) => authority().resolve_session_relayed(session, &self.presentation, proof),
+            None => authority().resolve_session(session, &self.presentation),
+        }
+        .map_err(|error| error.to_string())?;
+        if live.id != self.grant_id {
+            return Err("operation's capability generation is no longer current".into());
+        }
+        Ok(())
+    }
+
     /// Check and spend a whole capability set, all or none.
     ///
     /// The check runs against the live grant, not against the snapshot

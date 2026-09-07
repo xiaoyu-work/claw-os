@@ -33,6 +33,7 @@ const HOST_LIFECYCLE_ROUTES: &[Command] = &[
 ];
 
 const CHILD_PROVIDER_ROUTES: &[Command] = &[
+    Command::AiChat,
     Command::CredentialOauthRefresh,
     Command::SystemAudioControl,
     Command::SystemAccessibilityControl,
@@ -45,6 +46,8 @@ const CHILD_PROVIDER_ROUTES: &[Command] = &[
     Command::SystemCrashInspect,
     Command::SystemBrowserControl,
     Command::SystemDesktopControl,
+    Command::SystemFilesystemRead,
+    Command::SystemFilesystemWrite,
     Command::SystemDisplayControl,
     Command::SystemEventsControl,
     Command::SystemFirewallControl,

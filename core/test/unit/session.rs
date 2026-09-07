@@ -1186,10 +1186,27 @@ fn record_fs_write_snapshots_existing_file() {
             assert_eq!(*p, path.to_string_lossy().into_owned());
             prev_blob.clone().expect("path existed, prev_blob must be Some")
         }
+
         other => panic!("expected FsWrite, got {other:?}"),
     };
 
     assert_eq!(read_blob(&sid, &blob_id).unwrap(), b"original bytes");
+}
+
+#[test]
+fn record_fs_write_bytes_keeps_the_pinned_snapshot_not_a_path_reread() {
+    let _lock = lock_env();
+    let _data = redirect_data_dir();
+    let sid = create("pinned snapshot").unwrap();
+    let path = sessions_root().join("logical-document");
+    std::fs::write(&path, b"changed after read").unwrap();
+    record_fs_write_bytes(&sid, &path, Some(b"pinned original")).unwrap();
+    let mutations = iter_mutations(&sid).unwrap();
+    let Mutation::FsWrite { prev_blob: Some(blob), path: recorded } = &mutations[0].mutation else {
+        panic!("expected write inverse");
+    };
+    assert_eq!(recorded, path.to_str().unwrap());
+    assert_eq!(read_blob(&sid, blob).unwrap(), b"pinned original");
 }
 
 #[test]

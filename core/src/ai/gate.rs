@@ -516,6 +516,28 @@ pub fn chat_blocking(req: ChatRequest) -> Result<ChatResult, AiError> {
 /// allowed (status=ok or status=error after the provider runs) and
 /// denied (status=denied with a stable `denial_reason` token).
 pub async fn chat(req: ChatRequest) -> Result<ChatResult, AiError> {
+    chat_with_authority(req, None).await
+}
+
+pub(crate) async fn chat_authorized(
+    req: ChatRequest,
+    authority: &crate::clawd::authority::Decision,
+) -> Result<ChatResult, AiError> {
+    authority
+        .require_app(&req.app_id)
+        .map_err(|error| AiError::Denied(serde_json::json!({"error": error})))?;
+    let modality = Modality::derive(&req)?;
+    let model = config::current_snapshot().agent.model.clone();
+    let _authorized = authority
+        .require(crate::caps::Cap::new(modality.verb(), Scope::name(model)))
+        .map_err(|error| AiError::Denied(serde_json::json!({"error": error})))?;
+    chat_with_authority(req, Some(authority)).await
+}
+
+async fn chat_with_authority(
+    req: ChatRequest,
+    authority: Option<&crate::clawd::authority::Decision>,
+) -> Result<ChatResult, AiError> {
     let started = std::time::Instant::now();
     // Best-effort verb derivation up-front so audit records carry it
     // even on denial paths. `Modality::derive` runs again inside
@@ -525,7 +547,7 @@ pub async fn chat(req: ChatRequest) -> Result<ChatResult, AiError> {
     let verb_label: Option<String> = Modality::derive(&req)
         .ok()
         .map(|m| m.verb().as_str().to_string());
-    let result = chat_inner(&req).await;
+    let result = chat_inner(&req, authority).await;
     let duration_ms = started.elapsed().as_millis() as u64;
 
     match &result {
@@ -541,7 +563,7 @@ pub async fn chat(req: ChatRequest) -> Result<ChatResult, AiError> {
                     ..Default::default()
                 },
                 duration_ms,
-                None,
+                authority.and_then(|a| a.session_id()),
             )
             .with_app(&req.app_id);
             if !ok.verb.is_empty() {
@@ -556,7 +578,7 @@ pub async fn chat(req: ChatRequest) -> Result<ChatResult, AiError> {
                 denial_reason_token(err),
                 &err.to_string(),
                 duration_ms,
-                None,
+                authority.and_then(|a| a.session_id()),
             );
             if let Some(v) = &verb_label {
                 rec = rec.with_verb(v);
@@ -735,14 +757,28 @@ impl Drop for BudgetReservation {
 /// Inner gate sequence. Returns the structured error variants so
 /// [`chat`] can map them to a stable `denial_reason` for the audit
 /// stream before the caller sees them.
-async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
+async fn chat_inner(
+    req: &ChatRequest,
+    authority: Option<&crate::clawd::authority::Decision>,
+) -> Result<ChatResult, AiError> {
     let modality = Modality::derive(req)?;
     if !modality.is_chat_like() {
         return Err(AiError::ModalityNotSupported(modality.label()));
     }
 
     // 1. Locate the app and its AI policy.
-    let app = lookup_app(&req.app_id)?;
+    let app = if authority.is_some() {
+        // A long-lived broker must reverify, not keep a stale cached policy
+        // after package replacement or publisher revocation.
+        let dir = std::env::var_os("COS_APPS_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/usr/lib/cos/apps"));
+        apps::discover_verified(&dir)
+            .remove(&req.app_id)
+            .ok_or_else(|| AiError::UnknownApp(req.app_id.clone()))?
+    } else {
+        lookup_app(&req.app_id)?
+    };
     let manifest_policy = app
         .manifest
         .ai
@@ -814,7 +850,9 @@ async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
     let model = cfg.model.clone();
 
     // 6. Capability check at the kernel boundary.
-    caps::require(verb, Scope::name(&model)).map_err(|d| AiError::Denied(d.to_json()))?;
+    if authority.is_none() {
+        caps::require(verb, Scope::name(&model)).map_err(|d| AiError::Denied(d.to_json()))?;
+    }
 
     // 7. Apply safety pipeline to the prompt (when present).
     let (prompt_for_provider, prompt_redacted) = match req.prompt.as_deref() {
@@ -900,7 +938,11 @@ async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
 
     let provider = llm::registry::build(&cfg.provider, &model, cfg)
         .map_err(|e| AiError::Provider(e.to_string()))?;
-    let store = Store::open().map_err(AiError::Internal)?;
+    let store = match authority {
+        Some(authority) => Store::open_for_owner(authority.owner_uid()),
+        None => Store::open(),
+    }
+    .map_err(AiError::Internal)?;
     let user_cap = user_budget::load()
         .map_err(AiError::Internal)?
         .monthly_units;
@@ -914,10 +956,34 @@ async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
 
     // 10. Invoke the provider. Any provider error drops the guard and
     // refunds the untouched reservation.
-    let llm_resp = provider
-        .chat(llm_req)
-        .await
-        .map_err(|e| AiError::Provider(e.to_string()))?;
+    let llm_resp = if let Some(authority) = authority {
+        authority
+            .ensure_current()
+            .map_err(|error| AiError::Denied(serde_json::json!({"error": error})))?;
+        reservation
+            .store
+            .record_input(
+                authority
+                    .session_id()
+                    .ok_or_else(|| AiError::Internal("missing App session".into()))?,
+                &req.app_id,
+                &req.origin,
+                &llm_req,
+            )
+            .map_err(AiError::Internal)?;
+        // Once dispatched, cancellation cannot prove the upstream spent zero.
+        reservation.retain_estimate_on_drop();
+        let response = await_authorized(authority, provider.chat(llm_req)).await;
+        if matches!(&response, Err(AiError::Provider(_))) {
+            reservation.refund_on_drop = true;
+        }
+        response?
+    } else {
+        provider
+            .chat(llm_req)
+            .await
+            .map_err(|e| AiError::Provider(e.to_string()))?
+    };
     reservation.retain_estimate_on_drop();
 
     // 11. Extract the text body.
@@ -981,6 +1047,29 @@ async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
             })
             .collect(),
     })
+}
+
+/// Observe live transient authority while awaiting a potentially slow provider.
+/// The route's absolute timeout also drops this future and its reservation.
+pub(crate) async fn await_authorized(
+    authority: &crate::clawd::authority::Decision,
+    pending: impl std::future::Future<Output = LlmResult<LlmChatResponse>>,
+) -> Result<LlmChatResponse, AiError> {
+    authority
+        .ensure_current()
+        .map_err(|error| AiError::Denied(serde_json::json!({"error": error})))?;
+    tokio::pin!(pending);
+    loop {
+        tokio::select! {
+            response = &mut pending => {
+                authority.ensure_current().map_err(|error| AiError::Denied(serde_json::json!({"error": error})))?;
+                return response.map_err(|error| AiError::Provider(error.to_string()));
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
+                authority.ensure_current().map_err(|error| AiError::Denied(serde_json::json!({"error": error})))?;
+            }
+        }
+    }
 }
 
 /// Per-modality required-input check. Runs after origin validation so

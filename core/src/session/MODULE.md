@@ -19,6 +19,7 @@ and lifecycle state used across broker and agent operations.
 | Path | Role |
 | --- | --- |
 | `mod.rs` | Session API and lifecycle |
+| `recorder.rs` | Typed inverse snapshots, including already-read bytes from pinned filesystem-provider descriptors |
 | `journal/` | Authoritative session event journal (see its `MODULE.md`) |
 | `../../test/unit/session.rs` | Persistence, expiry, concurrency, and validation tests |
 

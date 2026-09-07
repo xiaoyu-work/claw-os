@@ -1,6 +1,7 @@
 pub mod a11y_wayland;
 pub mod accessibility;
 pub mod agent_client;
+pub mod ai;
 pub mod app_services;
 pub mod app_sessions;
 pub mod audio;
@@ -24,6 +25,7 @@ pub mod desktop;
 pub mod desktop_wayland;
 pub mod display;
 pub mod event_center;
+pub mod filesystem;
 pub mod firewall;
 pub mod hardware;
 pub mod heartbeat;

@@ -243,6 +243,29 @@ fn ephemeral_budget_store_via_tempdir() -> (tempfile::TempDir, Store) {
     (dir, store)
 }
 
+#[tokio::test]
+async fn dispatched_app_request_timeout_retains_its_budget_reservation() {
+    let _lock = crate::test_env::lock_env();
+    let dir = tempfile::tempdir().unwrap();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", dir.path());
+    let store = Store::open().unwrap();
+    let call = async move {
+        let mut reservation =
+            BudgetReservation::reserve(store, "cosmic-edit".into(), 500, 1000, 0).unwrap();
+        reservation.retain_estimate_on_drop();
+        std::future::pending::<()>().await;
+        drop(reservation);
+    };
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(1), call)
+            .await
+            .is_err()
+    );
+    let store = Store::open().unwrap();
+    assert_eq!(store.current("cosmic-edit").unwrap().units_used, 500);
+    assert!(BudgetReservation::reserve(store, "cosmic-edit".into(), 501, 1000, 0).is_err());
+}
+
 /// The `BudgetReservation` Drop guard refunds the reserved
 /// units when it goes out of scope without `commit()`. This is
 /// the audit fix for `ai/gate.rs HIGH`: previously a provider

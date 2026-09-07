@@ -3,8 +3,7 @@
 //! Launched with `COS_MCP_SERVER=1`, the binary becomes a stdio MCP
 //! server instead of opening an editor window. The agent gets the
 //! same file-editing primitives the user has, going through the same
-//! capability gate (`cos_runtime::fs::*`) and AI plumbing
-//! (`cos app doc *`) — no shortcuts.
+//! controlled filesystem/desktop services and SDK AI gate — no App calls.
 //!
 //! `apps/cosmic-edit/app.json` is the sole authority for tool descriptions,
 //! arguments, defaults, and capability needs.
@@ -44,7 +43,14 @@ impl Tool for ReadTool {
             Ok(p) => p,
             Err(e) => return e,
         };
-        let res = tokio::task::spawn_blocking(move || cos_runtime::fs::read(&path)).await;
+        let worker_context = context.clone();
+        let res = tokio::task::spawn_blocking(move || {
+            worker_context
+                .check_cancelled()
+                .map_err(|e| e.to_string())?;
+            cos_runtime::filesystem::read(&path).map_err(|e| e.to_string())
+        })
+        .await;
         if let Err(error) = context.check_cancelled() {
             return ToolResult::error(error.to_string());
         }
@@ -81,8 +87,11 @@ impl Tool for WriteTool {
             Ok(c) => c,
             Err(e) => return e,
         };
-        let res =
-            tokio::task::spawn_blocking(move || cos_runtime::fs::write(&path, &content)).await;
+        let res = tokio::task::spawn_blocking(move || {
+            context.check_cancelled().map_err(|e| e.to_string())?;
+            cos_runtime::filesystem::write(&path, &content).map_err(|e| e.to_string())
+        })
+        .await;
         match res {
             Ok(Ok(_)) => ToolResult::text(json!({"written": true}).to_string()),
             Ok(Err(e)) => ToolResult::error(format!("edit.write: {e}")),
@@ -121,22 +130,9 @@ impl Tool for ReplaceRangeTool {
         if find.is_empty() {
             return ToolResult::error("'find' must not be empty");
         }
-        let res = tokio::task::spawn_blocking(move || -> Result<usize, String> {
-            let r = cos_runtime::fs::read(&path).map_err(|e| format!("read: {e}"))?;
-            let body = r.content;
-            let count = body.matches(&find).count();
-            if count == 0 {
-                return Err(format!("'find' not present in {path}"));
-            }
-            if count > 1 {
-                return Err(format!(
-                    "'find' is not unique in {path} ({count} matches); \
-                     widen the context"
-                ));
-            }
-            let new = body.replacen(&find, &replace, 1);
-            cos_runtime::fs::write(&path, &new).map_err(|e| format!("write: {e}"))?;
-            Ok(1)
+        let res = tokio::task::spawn_blocking(move || {
+            context.check_cancelled().map_err(|e| e.to_string())?;
+            cos_runtime::filesystem::replace(&path, &find, &replace).map_err(|e| e.to_string())
         })
         .await;
         match res {
@@ -162,17 +158,14 @@ impl Tool for OpenTool {
         if let Err(error) = context.check_cancelled() {
             return ToolResult::error(error.to_string());
         }
-        let path = input
-            .get("path")
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
-        let argv: Vec<String> = match path {
-            Some(p) => vec!["cosmic-edit".into(), p],
-            None => vec!["cosmic-edit".into()],
+        let path = match input.get("path") {
+            None => None,
+            Some(Value::String(path)) => Some(path.clone()),
+            Some(_) => return ToolResult::error("path must be a string when supplied"),
         };
         let res = tokio::task::spawn_blocking(move || {
-            let argv_b: Vec<&str> = argv.iter().map(String::as_str).collect();
-            cos_runtime::exec::start(&argv_b)
+            context.check_cancelled().map_err(|e| e.to_string())?;
+            cos_runtime::desktop::open_editor(path.as_deref()).map_err(|e| e.to_string())
         })
         .await;
         match res {
@@ -202,7 +195,7 @@ impl Tool for SummarizeTool {
             Ok(p) => p,
             Err(e) => return e,
         };
-        let result = claw_glue::ai::summarize(path.into()).await;
+        let result = claw_glue::ai::transform(path, "summarize", None, context).await;
         match result {
             Ok(s) => ToolResult::text(json!({"summary": s}).to_string()),
             Err(e) => ToolResult::error(format!("edit.summarize: {e}")),
@@ -225,7 +218,7 @@ impl Tool for ExplainTool {
             Ok(p) => p,
             Err(e) => return e,
         };
-        let result = claw_glue::ai::explain(path.into()).await;
+        let result = claw_glue::ai::transform(path, "explain", None, context).await;
         match result {
             Ok(s) => ToolResult::text(json!({"text": s}).to_string()),
             Err(e) => ToolResult::error(format!("edit.explain: {e}")),
@@ -252,7 +245,7 @@ impl Tool for RewriteTool {
             Ok(i) => i,
             Err(e) => return e,
         };
-        let result = claw_glue::ai::rewrite(path.into(), instruction).await;
+        let result = claw_glue::ai::transform(path, "rewrite", Some(instruction), context).await;
         match result {
             Ok(s) => ToolResult::text(json!({"text": s}).to_string()),
             Err(e) => ToolResult::error(format!("edit.rewrite: {e}")),
@@ -280,4 +273,9 @@ pub(crate) fn run() -> anyhow::Result<()> {
         app.serve_stdio().await
     })
     .map_err(|error| anyhow::anyhow!("cosmic-edit MCP server exited: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/mcp.rs"));
 }

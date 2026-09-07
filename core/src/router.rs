@@ -848,6 +848,19 @@ fn dispatch_with_stdin_impl(
         return Ok(Some(value.to_string()));
     }
 
+    if name == "__filesystem" {
+        if args.len() != 3 || !matches!(args[1].as_str(), "read" | "write") || args[2] != "--request-stdin" {
+            return Err("internal filesystem bridge requires `read|write --request-stdin`".into());
+        }
+        let request = parse_internal_bridge_request(stdin_data.as_deref(),
+            crate::clawd::wire::bounded::APP_ARGS_STDIN_MAX_BYTES, "filesystem")?;
+        let session = env::var("COS_SESSION")
+            .map_err(|_| "internal filesystem command requires COS_SESSION")?;
+        let command = if args[1] == "read" { Command::SystemFilesystemRead } else { Command::SystemFilesystemWrite };
+        let value = request_wire_clawd(command, json!({"session":session,"request":request}))?;
+        return Ok(Some(value.to_string()));
+    }
+
     if name == "__desktop" {
         let desktop = parse_desktop_bridge_args(args)?;
         let session = env::var("COS_SESSION")

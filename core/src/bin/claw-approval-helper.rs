@@ -69,7 +69,7 @@ fn main() {
         .unwrap_or_else(|err| fail(&format!("failed to create runtime: {err}")));
     let response = runtime
         .block_on(client::request(config::socket_path(), request))
-        .unwrap_or_else(|err| fail(&err));
+        .unwrap_or_else(|err| fail(&err.to_string()));
     if !response.ok {
         let message = response
             .error

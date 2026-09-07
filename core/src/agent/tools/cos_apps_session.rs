@@ -1077,6 +1077,20 @@ pub(crate) fn classify_call(caps: &[crate::caps::Cap]) -> CallPlacement {
     placement
 }
 
+/// The editor's file verbs are implemented by the filesystem provider, not
+/// local IO. Keep its worker resource-free; capabilities still reach the
+/// broker unchanged. This is placement, never a source of authority.
+pub(crate) fn classify_app_call(app_id: &str, caps: &[crate::caps::Cap]) -> CallPlacement {
+    let placement = classify_call(caps);
+    if app_id != "cosmic-edit" || matches!(placement, CallPlacement::Unsupported(_)) {
+        return placement;
+    }
+    let direct = caps.iter().filter(|cap| !matches!(
+        cap.verb, crate::caps::Verb::FS_READ | crate::caps::Verb::FS_WRITE,
+    )).cloned().collect::<Vec<_>>();
+    classify_call(&direct)
+}
+
 fn scope_label(scope: &crate::caps::Scope) -> String {
     use crate::caps::Scope;
     match scope {
@@ -2451,7 +2465,7 @@ pub(crate) async fn host_call_session(
     let (args, caps) = resolve_daemon_authorized_call(&app.manifest, tool_name, &input)?;
     let maximum_timeout = call_timeout.min(DEFAULT_TIMEOUT);
     context.remaining(maximum_timeout)?;
-    let placement = classify_call(&caps);
+    let placement = classify_app_call(app_id, &caps);
     if let CallPlacement::Unsupported(reason) = &placement {
         return Err(HostedAppError::remote(format!(
             "app `{app_id}` tool `{tool_name}` cannot be authorized: {reason}"

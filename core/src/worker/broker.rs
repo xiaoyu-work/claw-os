@@ -400,6 +400,7 @@ fn is_forbidden(command: Command) -> bool {
 /// route is closed to workers until somebody decides otherwise.
 fn required_verbs(command: Command) -> &'static [Verb] {
     match command.as_str() {
+        "ai.chat" => &[Verb::AI_CHAT, Verb::AI_CHAT_UNTRUSTED],
         "system.network.control" => &[Verb::NET_MANAGE],
         "system.network.diagnose" => &[Verb::SYS_OBSERVE, Verb::NET_RESOLVE, Verb::NET_PROBE],
         "system.firewall.control" => &[Verb::NET_FIREWALL],
@@ -411,6 +412,8 @@ fn required_verbs(command: Command) -> &'static [Verb] {
         "system.container.control" => &[Verb::SYS_CONTAINER],
         "system.crash.inspect" => &[Verb::SYS_CRASH],
         "system.desktop.control" => &[Verb::DESKTOP_WINDOW, Verb::DESKTOP_LAUNCH],
+        "system.filesystem.read" => &[Verb::FS_READ],
+        "system.filesystem.write" => &[Verb::FS_WRITE],
         "system.browser.control" => &[
             Verb::BROWSER_TABS_READ,
             Verb::BROWSER_NAV,

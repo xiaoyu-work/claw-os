@@ -64,6 +64,38 @@ async fn serve_once(
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn filesystem_business_text_roundtrips_the_typed_socket_without_app_dispatch() {
+    let bound = bind();
+    let path = bound.path.clone();
+    let contents = "text é\0\n".repeat(32 * 1024);
+    let expected = contents.clone();
+    let server = tokio::spawn(serve_once(bound.listener, move |envelope| {
+        let params = (Command::SystemFilesystemWrite.route().decode)(envelope.params.clone())
+            .expect("typed filesystem parameters");
+        assert_eq!(params["request"]["content"], expected);
+        Response::ok(
+            envelope.id,
+            json!({"path": "/work/file", "bytes": expected.len()}),
+        )
+    }));
+    let request = Request::build(
+        Command::SystemFilesystemWrite,
+        json!({
+            "session": "authenticated-session",
+            "request": {"action": "write", "path": "/work/file", "content": contents},
+        }),
+    );
+    let response =
+        tokio::task::spawn_blocking(move || cos::clawd::client::request_blocking(&path, request))
+            .await
+            .expect("client task")
+            .expect("filesystem response");
+    assert!(response.ok);
+    let (_, envelope) = server.await.expect("server task");
+    assert_eq!(envelope.command.as_str(), "system.filesystem.write");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_connected_client_is_identified_by_kernel_credentials_on_its_message() {
     let bound = bind();
     let path = bound.path.clone();
@@ -117,7 +149,7 @@ async fn a_response_for_another_request_is_refused_by_the_client() {
         .await
         .expect("client task")
         .expect_err("a mismatched correlation id must not be accepted");
-    assert!(error.contains("correlate"), "{error}");
+    assert!(error.to_string().contains("correlate"), "{error}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -139,7 +171,7 @@ async fn a_response_from_another_protocol_version_is_refused_by_the_client() {
         .await
         .expect("client task")
         .expect_err("a foreign protocol version must not be accepted");
-    assert!(error.contains("protocol"), "{error}");
+    assert!(error.to_string().contains("protocol"), "{error}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -8,12 +8,7 @@ fn rejects_missing_app() {
 
 #[test]
 fn rejects_unknown_flag() {
-    let err = chat_cmd(&[
-        "--app".into(),
-        "foo".into(),
-        "--frobnicate".into(),
-    ])
-    .unwrap_err();
+    let err = chat_cmd(&["--app".into(), "foo".into(), "--frobnicate".into()]).unwrap_err();
     assert!(err.contains("unknown flag"), "got: {err}");
 }
 
@@ -58,4 +53,23 @@ fn parse_tools_flag_trims_and_drops_empty() {
 fn parse_tools_flag_empty_string_yields_empty_vec() {
     assert!(parse_tools_flag("").is_empty());
     assert!(parse_tools_flag("  ,  ").is_empty());
+}
+
+#[test]
+fn unavailable_broker_never_falls_back_to_app_local_identity_or_provider() {
+    let _lock = crate::test_env::lock_env();
+    let dir = tempfile::tempdir().unwrap();
+    let _socket = crate::test_env::TestEnvVarGuard::set(
+        crate::extension_host::protocol::BROKER_SOCKET_ENV,
+        dir.path().join("absent.sock"),
+    );
+    let _session = crate::test_env::TestEnvVarGuard::set("COS_SESSION", "test-unmounted");
+    let error = chat_cmd(&["--app", "cosmic-edit", "--prompt", "document"].map(str::to_string))
+        .unwrap_err();
+    let error: Value = serde_json::from_str(&error).unwrap();
+    assert_eq!(error["code"], "KERNEL_UNAVAILABLE");
+    assert!(!error["error"]
+        .as_str()
+        .unwrap()
+        .contains("session is not registered"));
 }

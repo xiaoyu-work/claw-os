@@ -78,7 +78,7 @@ pub use meta::{
     Status,
 };
 pub use mutation::{Mutation, MutationRecord};
-pub use recorder::{record_fs_delete, record_fs_rename, record_fs_write};
+pub use recorder::{record_fs_delete, record_fs_rename, record_fs_write, record_fs_write_bytes};
 pub use rollback::{rollback, Outcome as RollbackOutcome, Status as RollbackStatus};
 pub use runtime::{
     pause, promote_to_durable, resume, DurableSession, PromoteError, TransitionError,

@@ -37,6 +37,7 @@ and agent tasks.
 | `routes.rs` | The route registry: wire name, typed decode, access class, budget, audit fields, authorization descriptor, handler |
 | `authority/` | The capability authority: grants, opaque handles, attenuation, the route middleware and its audit facts |
 | `agent_client.rs` | Client RPC for agent task submit/result/cancel/status |
+| `ai.rs` | Authenticated App single-shot AI gate; owner configuration, current transient capabilities, bounded concurrency/deadline, no App-local provider execution |
 | `tasks.rs` | Task queue, summary/list, cancel, retry, and session continuity |
 | `usage.rs` | Peer-UID-scoped Agent token usage queries |
 | `app_sessions.rs` | App/native/MCP session authority: derives identity and capabilities, plans approvals, issues launch grants, consumes service-bound call tickets |
@@ -46,6 +47,8 @@ and agent tasks.
 | `notifications.rs` | Notification RPC handlers, due-nudge fanout, and external delivery dispatcher |
 | `browser.rs` | Attached-browser provider: exact action capabilities, expected-origin injection, owner socket validation, and bounded Native Messaging frames |
 | `network_diagnostics.rs` | Host-network diagnostic provider: interface/route inspection, bounded DNS resolution, and DNS-pinned TCP probes for the `netdiag` App |
+| `filesystem.rs` | Exact-scope bounded text reads and atomic writes/replacements for App workers; pinned paths, task-owned inverse snapshots, no App dispatch |
+| `client_identity.rs` | Peer/owner identity and synchronous thread-local filesystem credentials; trusted owner primary/supplementary groups, distinct from extension execution GID, with restoration on every exit |
 | `system_caps.rs` | System capability derivation |
 | `session_scope.rs` | Trusted-session override and its owner-policy clamp |
 | Service modules | One privileged capability provider per domain |

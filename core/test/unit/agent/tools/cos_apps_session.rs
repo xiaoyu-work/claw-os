@@ -1363,6 +1363,13 @@ async fn a_revoked_package_ends_the_open_session_on_the_next_call() {
 
 #[test]
 fn the_call_classifier_separates_brokered_from_resource_bearing_calls() {
+    let editor_files = [
+        Cap::new(Verb::FS_READ, Scope::path("/work/document")),
+        Cap::new(Verb::FS_WRITE, Scope::path("/work/document")),
+    ];
+    assert_eq!(classify_app_call("cosmic-edit", &editor_files), CallPlacement::Reusable);
+    assert_eq!(classify_app_call("fs", &editor_files), CallPlacement::Ephemeral);
+    assert!(matches!(classify_app_call("cosmic-edit", &[Cap::new(Verb::FS_WRITE, Scope::Wild)]), CallPlacement::Unsupported(_)));
     use crate::caps::{Cap, Scope, Verb};
 
     // Nothing to mount: the reusable server answers it through the

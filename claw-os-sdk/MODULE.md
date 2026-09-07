@@ -13,6 +13,9 @@ Rust, Python, Node, and Go bindings.
 - Admit System Agent, permitted external Agent, and authenticated CLI callers,
   never Apps or App-owned agents. Cross-App orchestration is system-Agent-owned.
 - Provide public SDK calls without exposing internal broker details.
+- AI chat retains its public options and error envelope while `cos ai chat`
+  transports bounded prompt/system/tool/budget data to the authenticated broker.
+  Hosted Apps neither resolve local session registries nor own provider access.
 - Keep language bindings behaviorally compatible.
 - Own decoder validation and JSON-RPC error codes in `wire/v1/contract.json`
   plus the versioned schemas.
@@ -29,6 +32,7 @@ Rust, Python, Node, and Go bindings.
 | `wire/v1/manifest.schema.json` | Versioned App/MCP service, tool, access, and capability contract |
 | `wire/v1/mcp_call_context.schema.json` | Gateway-authenticated caller identity, task/session correlation, and deadline |
 | `rust/` | Rust public SDK |
+| `rust/src/lib.rs` | Shared CLI wire/error decoder, including bounded stdin for controlled primitive business data |
 | `python/` | Python public SDK |
 | `node/` | Node public SDK |
 | `go/` | Go public SDK |

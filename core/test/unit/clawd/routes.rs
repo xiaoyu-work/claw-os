@@ -4,6 +4,7 @@ use serde_json::json;
 /// Expected non-root route surface. Changes here are intentional API and
 /// authority changes rather than incidental registry drift.
 const EXPECTED_USER_COMMANDS: &[&str] = &[
+    "ai.chat",
     "daemon.health",
     "daemon.status",
     "task.submit",
@@ -29,6 +30,8 @@ const EXPECTED_USER_COMMANDS: &[&str] = &[
     "system.config.control",
     "system.crash.inspect",
     "system.desktop.control",
+    "system.filesystem.read",
+    "system.filesystem.write",
     "system.browser.control",
     "system.display.control",
     "system.events.control",

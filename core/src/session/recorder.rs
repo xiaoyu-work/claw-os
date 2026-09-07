@@ -50,14 +50,25 @@ use super::store::{self, SessionError};
 /// `path` is stored verbatim in the log — pass an absolute path so a
 /// future rollback in a different cwd still resolves correctly.
 pub fn record_fs_write(sid: &SessionId, path: &Path) -> Result<u64, SessionError> {
-    let path_str = path.to_string_lossy().into_owned();
-
-    let prev_blob = if path.exists() && !path.is_dir() {
-        let bytes = fs::read(path).map_err(|e| SessionError::io(path.to_path_buf(), e))?;
-        Some(inverse::write_blob(sid, &bytes)?)
+    let previous = if path.exists() && !path.is_dir() {
+        Some(fs::read(path).map_err(|e| SessionError::io(path.to_path_buf(), e))?)
     } else {
         None
     };
+    record_fs_write_bytes(sid, path, previous.as_deref())
+}
+
+/// Record bytes already read through a provider's pinned file descriptor.
+/// The path is the authorized logical path, not a mutable path to re-open.
+pub fn record_fs_write_bytes(
+    sid: &SessionId,
+    path: &Path,
+    previous: Option<&[u8]>,
+) -> Result<u64, SessionError> {
+    let path_str = path.to_string_lossy().into_owned();
+    let prev_blob = previous
+        .map(|bytes| inverse::write_blob(sid, bytes))
+        .transpose()?;
 
     let rec = MutationRecord::new(Mutation::FsWrite {
         path: path_str,

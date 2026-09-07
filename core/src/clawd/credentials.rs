@@ -4,6 +4,8 @@ use crate::caps::{Cap, Scope, Verb};
 
 use super::authority::{Authorized, Decision};
 use super::client_identity::ClientIdentity;
+#[cfg(target_os = "linux")]
+use super::client_identity::FsIdentityGuard;
 use super::protocol::BrokerError;
 
 pub async fn oauth_refresh(
@@ -27,9 +29,6 @@ pub async fn oauth_refresh(
             ));
         }
         let uid = client.require_uid()?;
-        let gid = client
-            .gid
-            .ok_or_else(|| "clawd peer gid is unavailable".to_string())?;
         let home = client.require_home_dir()?;
         let namespace = required_string(&params, "namespace")?;
         let credential = required_string(&params, "credential")?;
@@ -47,7 +46,7 @@ pub async fn oauth_refresh(
             )));
         }
         crate::paths::with_user_override(uid, home, async move {
-            let _identity = FsIdentityGuard::enter(uid, gid).map_err(BrokerError::execution)?;
+            let _identity = FsIdentityGuard::enter(uid).map_err(BrokerError::execution)?;
             let result = crate::credential::broker_refresh_access_token(&credential, &namespace)
                 .map_err(BrokerError::execution)?;
             Ok(json!({
@@ -58,45 +57,6 @@ pub async fn oauth_refresh(
             }))
         })
         .await
-    }
-}
-
-#[cfg(target_os = "linux")]
-struct FsIdentityGuard {
-    previous_uid: libc::c_int,
-    previous_gid: libc::c_int,
-}
-
-#[cfg(target_os = "linux")]
-impl FsIdentityGuard {
-    fn enter(uid: u32, gid: u32) -> Result<Self, String> {
-        let previous_gid = unsafe { libc::setfsgid(gid as libc::gid_t) };
-        let previous_uid = unsafe { libc::setfsuid(uid as libc::uid_t) };
-        let current_uid = unsafe { libc::setfsuid(!0 as libc::uid_t) };
-        let current_gid = unsafe { libc::setfsgid(!0 as libc::gid_t) };
-        if current_uid != uid as libc::c_int || current_gid != gid as libc::c_int {
-            unsafe {
-                libc::setfsuid(previous_uid as libc::uid_t);
-                libc::setfsgid(previous_gid as libc::gid_t);
-            }
-            return Err(format!(
-                "failed to enter credential filesystem identity {uid}:{gid}"
-            ));
-        }
-        Ok(Self {
-            previous_uid,
-            previous_gid,
-        })
-    }
-}
-
-#[cfg(target_os = "linux")]
-impl Drop for FsIdentityGuard {
-    fn drop(&mut self) {
-        unsafe {
-            libc::setfsuid(self.previous_uid as libc::uid_t);
-            libc::setfsgid(self.previous_gid as libc::gid_t);
-        }
     }
 }
 

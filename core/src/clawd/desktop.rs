@@ -51,6 +51,7 @@ pub async fn control(
         let uris = optional_string_list(&params, "uris")?;
         validate_action(&action, identifier.as_deref(), app_id.as_deref(), &uris)?;
         authorize_caller(authority, &action)?;
+        authorize_editor_target(authority, app_id.as_deref(), &uris)?;
         let uris = canonicalize_launch_uris(&uris)?;
         let requested = requested_caps(&action, app_id.as_deref(), &uris)?;
         let _authorized = authority.require_all(&requested)?;
@@ -130,10 +131,28 @@ fn requested_caps(action: &str, app_id: Option<&str>, uris: &[String]) -> Result
 /// should be refused twice.
 fn authorize_caller(authority: &Decision, action: &str) -> Result<(), String> {
     match action {
+        "launch" if authority.app_is("cosmic-edit") => Ok(()),
         "launch" => authority.require_app("launcher"),
         "list" | "focus" | "close" | "restart" => authority.require_app("desktop-manager"),
-        _ => return Err(format!("unknown desktop action: {action}")),
+        _ => Err(format!("unknown desktop action: {action}")),
     }
+}
+
+fn authorize_editor_target(
+    authority: &Decision,
+    app_id: Option<&str>,
+    uris: &[String],
+) -> Result<(), String> {
+    if authority.app_is("cosmic-edit")
+        && (app_id != Some("com.clawos.Edit")
+            || uris.len() > 1
+            || uris.iter().any(|uri| !uri.starts_with("file://")))
+    {
+        return Err(
+            "the editor may launch only its own native target with one optional local file".into(),
+        );
+    }
+    Ok(())
 }
 
 async fn restart(

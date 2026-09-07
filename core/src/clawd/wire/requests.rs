@@ -443,10 +443,11 @@ pub struct AppSessionRelay {
     /// something other than a `Session`-subject system-service route,
     /// is refused before its body is decoded.
     pub command: Text<COMMAND_BYTES>,
-    /// The inner route's own parameters, decoded by that route's typed
-    /// body before it is authorized or dispatched.
+    /// Bounded business data, including full filesystem text. The inner
+    /// route's typed decoder reapplies its field-specific limits before
+    /// authorization; this transport allowance grants no broader authority.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub params: Option<Structured>,
+    pub params: Option<super::bounded::McpArguments>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -669,6 +670,44 @@ pub struct DesktopControl {
     pub identifier: Option<Name>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uris: Option<TextList<32, PATH_BYTES>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FilesystemAccess {
+    pub session: Token,
+    pub request: FilesystemOperation,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AiChat {
+    pub session: Token,
+    pub app_id: Name,
+    pub origin: Token,
+    pub prompt: super::bounded::FileText,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system: Option<super::bounded::FileText>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_units: Option<u64>,
+    pub tools: TextList<64, 256>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum FilesystemOperation {
+    Read {
+        path: Text<PATH_BYTES>,
+    },
+    Write {
+        path: Text<PATH_BYTES>,
+        content: super::bounded::FileText,
+    },
+    Replace {
+        path: Text<PATH_BYTES>,
+        find: super::bounded::FileText,
+        replace: super::bounded::FileText,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

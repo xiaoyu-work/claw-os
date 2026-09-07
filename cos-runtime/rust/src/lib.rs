@@ -17,16 +17,16 @@
 //! | [`ask_claw`]  | desktop     | supervised Agent overlay   |
 //! | [`policy`]    | `policy`    | hidden policy bridge       |
 //! | [`fs`]        | `app`       | `cos app fs ...`           |
+//! | [`filesystem`] | system    | controlled text-file provider |
+//! | [`desktop`]   | system     | controlled native editor launch |
 //! | [`exec`]      | `app`       | `cos app exec ...`         |
 //! | [`pkg`]       | `app`       | `cos app pkg ...`          |
 //! | [`notify`]    | `app`       | `cos app notify ...`       |
 //! | [`net`]       | `app`       | `cos app net ...`          |
 //!
-//! Apart from `policy`, every module is a thin typed wrapper around
-//! `cos app <id> <verb>` and exists so that capability gating, audit,
-//! and session checkpointing happen uniformly regardless of whether a
-//! mutation originated from the terminal, a Python app, or a cosmic
-//! desktop binary.
+//! App handlers use controlled providers (`filesystem`, `desktop`) and SDK AI.
+//! The `fs`, `exec`, `pkg`, `notify` and `net` modules are trusted-human
+//! CLI/desktop bridges, not App-to-App interfaces.
 //!
 //! ## Wire layer
 //!
@@ -39,6 +39,8 @@ pub use claw_os_sdk::{call, call_typed, cos_call_json, BridgeError, Error};
 
 pub mod ask_claw;
 pub mod exec;
+pub mod desktop;
+pub mod filesystem;
 pub mod fs;
 pub mod net;
 pub mod notify;

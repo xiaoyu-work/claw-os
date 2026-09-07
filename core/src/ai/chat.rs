@@ -49,11 +49,11 @@
 //!
 //! Per `docs/app-ai-integration.md` §3, an App's identity is established
 //! **only** when the kernel itself spawns the App (`cos app <id> <op>`).
-//! `core/src/bridge.rs` creates a registered App session, binds it to the
-//! spawned PID, and injects both `COS_SESSION` and `COS_APP_ID`. A call is
-//! accepted only when the env claim, registry `app_id`, and nearest App
-//! process ancestry all agree with `--app`. No environment variable is
-//! trusted as an identity boundary by itself.
+//! The kernel creates a registered App session and binds it to the spawned
+//! process. `COS_SESSION` routes the request; the broker authenticates the
+//! peer (or its verified worker relay), registered App and live transient
+//! grant. No registry or provider credentials are needed inside the App.
+//! Every chat uses this broker path, with no local-execution fallback.
 
 use serde_json::Value;
 
@@ -194,7 +194,6 @@ pub fn chat_cmd(args: &[String]) -> Result<Value, String> {
     }
 
     let app = app.ok_or_else(|| super::invalid_args("--app is required"))?;
-    enforce_identity_for(&app).map_err(|error| super::permission_denied(error, None))?;
 
     let prompt_text: Option<String> = match (prompt, prompt_file) {
         (Some(_), Some(_)) => {
@@ -203,10 +202,7 @@ pub fn chat_cmd(args: &[String]) -> Result<Value, String> {
             ));
         }
         (Some(p), None) => Some(p),
-        (None, Some(path)) => Some(
-            std::fs::read_to_string(&path)
-                .map_err(|e| super::invalid_args(format!("--prompt-file {path}: {e}")))?,
-        ),
+        (None, Some(path)) => Some(read_input_file(&path)?),
         (None, None) => None,
     };
     let system_text: Option<String> = match (system, system_file) {
@@ -216,10 +212,7 @@ pub fn chat_cmd(args: &[String]) -> Result<Value, String> {
             ));
         }
         (Some(value), None) => Some(value),
-        (None, Some(path)) => Some(
-            std::fs::read_to_string(&path)
-                .map_err(|e| super::invalid_args(format!("--system-file {path}: {e}")))?,
-        ),
+        (None, Some(path)) => Some(read_input_file(&path)?),
         (None, None) => None,
     };
 
@@ -239,15 +232,57 @@ pub fn chat_cmd(args: &[String]) -> Result<Value, String> {
         tools,
     };
 
-    let result = gate::chat_blocking(req).map_err(|error| {
-        let detail = match &error {
-            gate::AiError::Denied(denial) => Some(denial.clone()),
-            _ => None,
-        };
-        super::wire_error(error.wire_code(), error.to_string(), detail)
+    broker_chat(req)
+}
+
+fn read_input_file(path: &str) -> Result<String, String> {
+    use std::io::Read;
+    let limit = crate::clawd::wire::bounded::FILE_TEXT_MAX_BYTES;
+    let mut input = String::new();
+    std::fs::File::open(path)
+        .and_then(|file| file.take((limit + 1) as u64).read_to_string(&mut input))
+        .map_err(|error| super::invalid_args(format!("AI input file: {error}")))?;
+    if input.len() > limit {
+        return Err(super::invalid_args("AI input file exceeds the text limit"));
+    }
+    Ok(input)
+}
+
+fn broker_chat(req: gate::ChatRequest) -> Result<Value, String> {
+    // This is a routing identifier only. The broker authenticates the process
+    // and resolves its live App grant; no registry or credentials enter workers.
+    let session = std::env::var("COS_SESSION")
+        .map_err(|_| super::permission_denied("App session is required", None))?;
+    let params = serde_json::json!({
+        "session": session, "app_id": req.app_id, "origin": req.origin,
+        "prompt": req.prompt, "system": req.system, "max_units": req.max_units,
+        "tools": req.tools,
+    });
+    let command = crate::clawd::routes::Command::AiChat;
+    (command.route().decode)(params.clone())
+        .map_err(|_| super::invalid_args("AI request exceeds the bounded chat contract"))?;
+    let response = crate::clawd::client::request_blocking(
+        crate::paths::clawd_socket_path(),
+        crate::clawd::protocol::Request::build(command, params),
+    )
+    .map_err(|error| super::wire_error("KERNEL_UNAVAILABLE", error.to_string(), None))?;
+    if response.ok {
+        return response.result.ok_or_else(|| {
+            super::wire_error("KERNEL_UNAVAILABLE", "AI broker returned no result", None)
+        });
+    }
+    let error = response.error.ok_or_else(|| {
+        super::wire_error("KERNEL_UNAVAILABLE", "AI broker returned no error", None)
     })?;
-    serde_json::to_value(result)
-        .map_err(|error| super::wire_error("INTERNAL_ERROR", error.to_string(), None))
+    if let Some(detail) = error.data.and_then(|data| data.get("ai_error").cloned()) {
+        return Err(detail.to_string());
+    }
+    let code = match error.code.as_str() {
+        "not_authorized" => "PERMISSION_DENIED",
+        "invalid_params" => "INVALID_ARGS",
+        _ => "KERNEL_UNAVAILABLE",
+    };
+    Err(super::wire_error(code, error.message, None))
 }
 
 /// Verify the caller is the App they claim to be.

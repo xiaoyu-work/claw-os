@@ -34,6 +34,29 @@ pub const MAX_STRUCTURED_KEY_BYTES: usize = 256;
 /// CLI JSON arguments leave 16 KiB of the broker frame for selectors/envelopes.
 /// Keep the SDK's `APP_ARGS_STDIN_MAX_BYTES` in sync.
 pub const APP_ARGS_STDIN_MAX_BYTES: usize = super::MAX_REQUEST_BYTES - 16 * 1024;
+pub const FILE_TEXT_MAX_BYTES: usize = 1_000_000;
+
+/// UTF-8 file content is data, including NUL/control characters. Unlike
+/// metadata Text it is constrained by bytes only, with no lossy normalization.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct FileText(String);
+
+impl FileText {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for FileText {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(deserializer)?;
+        if raw.len() > FILE_TEXT_MAX_BYTES {
+            return Err(de::Error::custom(TOO_LONG));
+        }
+        Ok(Self(raw))
+    }
+}
 
 /// Longest a client may ask a long-polling route to wait: one day,
 /// which is the ceiling `cos agent ask` already uses. Without a bound

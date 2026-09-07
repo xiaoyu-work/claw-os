@@ -19,7 +19,7 @@ fn filesystem_identity_guard_restores_calling_identity() {
     let uid = unsafe { libc::geteuid() as u32 };
     let gid = unsafe { libc::getegid() as u32 };
     {
-        let _guard = FsIdentityGuard::enter(uid, gid).unwrap();
+        let _guard = FsIdentityGuard::enter(uid).unwrap();
         assert_eq!(
             unsafe { libc::setfsuid(!0 as libc::uid_t) },
             uid as libc::c_int

@@ -286,6 +286,29 @@ where
     cos_call_json_structured(family, verb, args).map_err(StructuredCosError::into_bridge)
 }
 
+/// Invoke a controlled CLI primitive with bounded business data on stdin.
+/// Uses the same wire envelope/error decoder as [`cos_call_json`].
+pub fn cos_call_json_with_stdin<A>(
+    family: &str,
+    verb: &str,
+    args: A,
+    input: &[u8],
+) -> Result<serde_json::Value, BridgeError>
+where
+    A: IntoIterator,
+    A::Item: AsRef<OsStr>,
+{
+    if input.len() > APP_ARGS_STDIN_MAX_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "primitive input exceeds the request limit",
+        )
+        .into());
+    }
+    cos_call_json_structured_input(family, verb, args, Some(input))
+        .map_err(StructuredCosError::into_bridge)
+}
+
 #[derive(Debug)]
 pub(crate) struct StructuredAppError {
     pub app: String,
@@ -412,6 +435,19 @@ where
     A: IntoIterator,
     A::Item: AsRef<OsStr>,
 {
+    cos_call_json_structured_input(family, verb, args, None)
+}
+
+fn cos_call_json_structured_input<A>(
+    family: &str,
+    verb: &str,
+    args: A,
+    input: Option<&[u8]>,
+) -> Result<serde_json::Value, StructuredCosError>
+where
+    A: IntoIterator,
+    A::Item: AsRef<OsStr>,
+{
     let bin = std::env::var("CLAW_COS_BIN").unwrap_or_else(|_| "cos".into());
     let mut cmd = Command::new(bin);
     cmd.arg(WIRE_V1_FLAG);
@@ -419,11 +455,25 @@ where
         cmd.arg(a);
     }
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.stdin(if input.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    });
 
-    let child = cmd.spawn().map_err(|e| match e.kind() {
+    let mut child = cmd.spawn().map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => BridgeError::BinaryNotFound(e),
         _ => BridgeError::Io(e),
     })?;
+    if let Some(input) = input {
+        use std::io::Write;
+        let result = child.stdin.take().expect("piped stdin").write_all(input);
+        if let Err(error) = result {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(BridgeError::Io(error).into());
+        }
+    }
 
     decode_wire_response(family, verb, child.wait_with_output()?)
 }
