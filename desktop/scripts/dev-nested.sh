@@ -124,7 +124,7 @@ build_one() {
         ( cd "$dir" && make all )
     elif [ -f "$dir/justfile" ] || [ -f "$dir/Justfile" ]; then
         # `just build-release` is the documented dev recipe (see e.g.
-        # desktop/files/justfile:50). Fall back to cargo if absent.
+        # each component's justfile). Fall back to cargo if absent.
         if just --justfile "$dir/justfile" --list 2>/dev/null | grep -q '^ *build-release\b'; then
             ( cd "$dir" && just build-release )
         elif just --justfile "$dir/Justfile" --list 2>/dev/null | grep -q '^ *build-release\b'; then

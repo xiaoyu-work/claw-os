@@ -1,2 +1,0 @@
-connect = התחברות
-progress = { $percent }%

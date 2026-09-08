@@ -24,6 +24,7 @@ Debian packages and a signed multi-architecture APT repository.
 | `deb/build-debs.sh` | Package staging and `.deb` assembly |
 | `apps.lock.json` | Immutable clawos-app source revision and expected product/App payload |
 | `../scripts/app_sources.py` | Fetch pinned product sources and stage their package-owned payload |
+| External Files `python/claw_files/` | Shared document parsing/conversion staged in the Agent package; native Files embeds the same source, and both executables stay desktop-owned |
 | `../tools/install-browser-agent.sh` | Manual Browser extension/Native Host deployment from the same product pin |
 | `deb/tests/test_app_sources.py` | Immutable source/cache, payload identity, and OS native-launcher ownership |
 | `deb/*/control` | Package metadata, ABI generation, and runtime dependencies |

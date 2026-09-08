@@ -32,6 +32,7 @@ component crates plus Claw-specific agent bridges and applets.
 | `toolkit/`, `text/`, `theme/` | Shared UI/rendering foundations |
 | [`clawos-app/products/mail`](https://github.com/xiaoyu-work/clawos-app/tree/main/products/mail) | External Mail product source and paired Firefox build dependency; not part of the COSMIC build |
 | [external Editor](https://github.com/xiaoyu-work/clawos-app/tree/main/products/editor) | Complete native UI/MCP/resources; controlled filesystem/desktop and SDK AI remain OS-provided; build with `just editor-build` |
+| [external Files](https://github.com/xiaoyu-work/clawos-app/tree/main/products/files) | Complete native UI/library/companion and shared business sources; build both executables with `just files-build`; OS keeps authority and index service |
 
 ## Dependencies
 

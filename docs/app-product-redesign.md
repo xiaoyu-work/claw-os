@@ -28,7 +28,8 @@ There are no sibling-checkout dependencies or runtime download fallbacks.
 | `calendar` | Moved to `clawos-app/products/calendar/apps/calendar`; event storage and provider authority unchanged |
 | `panel-calendar` | Complete native UI, assets, manifest, tests and build inputs moved to `clawos-app/products/calendar`; OS shell injects a shared policy-gated provider and retains desktop package ownership |
 | `panel-clipboard` | Complete native popup, CopyQ adapter/scripts, resources, manifest, tests and build inputs moved to `clawos-app/products/clipboard`; OS host supplies history-only policy, with desktop package ownership preserved; CopyQ history/Wayland selection integration remains separate |
-| `fs` | Moved to `clawos-app/products/files/apps/fs`; all fourteen MCP tools and snapshot authority preserved; native Files UI still pending |
+| `fs` | Moved to `clawos-app/products/files/apps/fs`; all fourteen MCP tools and snapshot authority preserved |
+| `cosmic-files` | Complete native UI/library/companion, resources and original locked build moved to Files; shared filesystem/Recoll/parser and SDK AI replace App calls; identities and existing UI/MCP data remain separate |
 | `docs` | Moved to `clawos-app/products/files/apps/docs`; four Recoll-backed tools, owner index state and scopes preserved; background indexing remains OS-owned |
 | `search` | Moved to `clawos-app/products/browser/apps/search`; explicit provider choice, two MCP tools and exact credential/network scopes preserved |
 | `web` | Moved to `clawos-app/products/browser/apps/web`; existing five-operation CLI/MCP adapter and AI gate preserved; reusable `cos-browser` engine remains OS-owned |

@@ -68,6 +68,15 @@ owns `/usr/bin/cosmic-edit`, `/usr/lib/cos/apps/cosmic-edit` and the
 permissions or model credentials are moved, and no separate runtime updater
 is introduced.
 
+Files follows the same immutable native source composition, preserving
+`/usr/bin/cosmic-files`, `/usr/bin/cosmic-files-applet`, its descriptor and
+desktop resources in `claw-os-desktop`. The Agent package owns the shared
+`claw_files.document` parser used by the remaining Document App; it arrives
+through the same signed package, never a runtime download. Files metadata
+declares its tag-sidecar parent read; reveal uses only `com.clawos.Files`
+desktop authority, and summary memory is `self:cosmic-files` rather than
+`self:doc`. Existing grants are not unioned or silently transferred.
+
 Updates only ever move forward. An older Claw OS release stays validly signed
 forever, so the signature alone cannot tell a current release from a superseded
 one; see [Downgrade protection](#downgrade-protection) for what stops one being

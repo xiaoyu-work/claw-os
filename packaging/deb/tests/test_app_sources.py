@@ -264,6 +264,7 @@ def test_native_manual_image_and_asset_build_paths_agree():
     ("desktop-widgets", "widget-rail"),
     ("launcher", "cosmic-launcher"),
     ("editor", "cosmic-edit"),
+    ("files", "cosmic-files"),
 ])
 def test_external_desktop_app_stays_out_of_agent_package(locked_source, tmp_path, product, app_id):
     root, lock = locked_source
@@ -342,7 +343,7 @@ def test_duplicate_native_exports_are_rejected(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize(("product", "component"), [
-    ("launcher", "launcher"), ("editor", "edit"),
+    ("launcher", "launcher"), ("editor", "edit"), ("files", "files"),
 ])
 def test_standalone_app_uses_external_source_and_matching_chroot_layout(product, component):
     just = (ROOT / "desktop/justfile").read_text()
@@ -394,5 +395,6 @@ def test_desktop_build_prepares_once_and_propagates_prepared_inputs(tmp_path):
     assert (tmp_path / "prepared").read_text() == "prepared\n"
     calls = (tmp_path / "runner.calls").read_text().splitlines()
     assert calls.count("editor-build") == 1
+    assert calls.count("files-build") == 1
     assert calls.count("launcher-build") == 1
     assert calls.count("applets/build-release") == 1

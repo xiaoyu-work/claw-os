@@ -8,6 +8,54 @@ use serde_json::json;
 const APP_ID: &str = "com.example.App";
 
 #[test]
+fn files_launch_is_fixed_target_and_metadata_only() {
+    let decision = decision_for_app(Some("cosmic-files"), vec![], "files-launch");
+    authorize_caller(&decision, "launch").unwrap();
+    for action in ["restart", "list", "focus", "close"] {
+        assert!(authorize_caller(&decision, action).is_err());
+    }
+    authorize_editor_target(&decision, Some("com.clawos.Files"), &["file:///work/a".into()]).unwrap();
+    for (target, uris) in [
+        ("com.clawos.Edit", vec!["file:///work/a".into()]),
+        ("com.clawos.Files", vec!["https://example.test".into()]),
+        ("com.clawos.Files", vec![]),
+        ("com.clawos.Files", vec!["file:///work/a".into(), "file:///work/b".into()]),
+    ] {
+        assert!(authorize_editor_target(&decision, Some(target), &uris).is_err());
+    }
+}
+
+#[test]
+fn files_local_uri_accepts_directories_without_widening_editor_uris() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = fs::canonicalize(root.path()).unwrap();
+    let uri = url::Url::from_file_path(&directory).unwrap().to_string();
+    assert_eq!(canonical_local_uri_path(&uri, true).unwrap(), Some(directory.display().to_string()));
+    assert!(canonical_file_uri_path(&uri).is_err());
+    let link = directory.join("link");
+    std::os::unix::fs::symlink(&directory, &link).unwrap();
+    let uri = url::Url::from_file_path(link).unwrap().to_string();
+    assert!(canonical_local_uri_path(&uri, true).is_err());
+}
+
+#[tokio::test]
+async fn files_reveal_requires_both_exact_capabilities_before_desktop_access() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = fs::canonicalize(root.path()).unwrap();
+    let uri = url::Url::from_file_path(&directory).unwrap().to_string();
+    for (index, caps) in [
+        vec![Cap::new(Verb::FS_META, Scope::path(directory.to_str().unwrap()))],
+        vec![Cap::new(Verb::DESKTOP_LAUNCH, Scope::name("com.clawos.Files"))],
+        vec![Cap::new(Verb::FS_META, Scope::path("/not-the-requested-directory")),
+             Cap::new(Verb::DESKTOP_LAUNCH, Scope::name("com.clawos.Files"))],
+    ].into_iter().enumerate() {
+        let decision = decision_for_app(Some("cosmic-files"), caps, &format!("files-denied-{index}"));
+        assert!(reveal_files(&[uri.clone()], &decision, 1000, 1000, directory.clone(), 1)
+            .await.is_err());
+    }
+}
+
+#[test]
 fn editor_launch_is_fixed_target_and_not_cross_app_authority() {
     let decision = decision_for_app(Some("cosmic-edit"), vec![], "editor-launch");
     authorize_caller(&decision, "launch").unwrap();

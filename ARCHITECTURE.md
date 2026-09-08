@@ -122,6 +122,17 @@ Filesystem scope enforcement, atomic writes, task-owned inverse snapshots,
 AI identity/consent/budget/audit and model providers remain OS-owned.
 `cosmic-edit` and its resources remain desktop-package assets with unchanged
 installed identity and user state.
+The complete native Files source/library and `cosmic-files-applet` companion
+live in `clawos-app/products/files`, composed at `build/native-apps/cosmic-files`
+with their original locked toolkit patches. Native UI/MCP embed the same
+product filesystem, owner-scoped Recoll and shared document parsing sources;
+the SDK/runtime still provide policy, snapshots, AI consent/budget/audit and
+memory authority. The remaining Document App imports the same parser from
+the Agent package's `claw_files.document` library. Native reveal admits only
+`cosmic-files` to its fixed `com.clawos.Files` target with exact metadata scope.
+Summary memory is Files-owned; metadata's sidecar needs an explicit parent
+read. User files, UI caches/settings and the existing Recoll index are not
+migrated or unified, and no App invokes another App.
 The Terminal product also owns the `exec` App source; core process authority
 and sandbox enforcement remain in the OS.
 The Containers product owns `container-manager` and its fourteen MCP handlers;

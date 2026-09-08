@@ -3,15 +3,19 @@ just := just_executable()
 make := `which make`
 launcher := '../build/native-apps/cosmic-launcher/justfile'
 editor := '../build/native-apps/cosmic-edit/justfile'
+files := '../build/native-apps/cosmic-files/justfile'
 
 prepare-native-apps:
-    if [ "${CLAW_NATIVE_APPS_PREPARED:-0}" = 1 ]; then test -f {{ launcher }} && test -f {{ editor }}; else python3 ../scripts/app_sources.py --native; fi
+    if [ "${CLAW_NATIVE_APPS_PREPARED:-0}" = 1 ]; then test -f {{ launcher }} && test -f {{ editor }} && test -f {{ files }}; else python3 ../scripts/app_sources.py --native; fi
 
 launcher-build: prepare-native-apps
     {{ just }} --justfile {{ launcher }} build-release --locked
 
 editor-build: prepare-native-apps
     {{ just }} --justfile {{ editor }} build-release --locked
+
+files-build: prepare-native-apps
+    {{ just }} --justfile {{ files }} build-release --locked
 
 [default]
 build: prepare-native-apps
@@ -24,7 +28,7 @@ build: prepare-native-apps
     {{ just }} bg/build-release
     {{ make }} -C comp all
     {{ just }} editor-build
-    {{ just }} files/build-release
+    {{ just }} files-build
     {{ just }} greeter/build-release
     {{ just }} idle/build-release
     {{ just }} initial-setup/build-release
@@ -51,7 +55,7 @@ install rootdir="" prefix="/usr/local": build
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} bg/install
     {{ make }} -C comp install DESTDIR={{rootdir}} prefix={{prefix}}
     {{ just }} --justfile {{ editor }} rootdir={{rootdir}} prefix={{prefix}} install
-    {{ just }} rootdir={{rootdir}} prefix={{prefix}} files/install
+    {{ just }} --justfile {{ files }} rootdir={{rootdir}} prefix={{prefix}} install
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} greeter/install
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} icons/install
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} icons-tela-pkg/install
@@ -95,7 +99,7 @@ clean:
     rm -rf bg/target
     rm -rf comp/target
     rm -rf ../build/native-apps/cosmic-edit/target
-    {{ just }} files/clean
+    rm -rf ../build/native-apps/cosmic-files/target
     rm -rf greeter/target
     {{ just }} idle/clean
     {{ just }} initial-setup/clean

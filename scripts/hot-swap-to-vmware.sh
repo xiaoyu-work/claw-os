@@ -10,7 +10,7 @@
 #   cos                    — workspace root,        target/release/cos
 #   cos-agent-ui           — desktop/agent,         target/release/cos-agent-ui
 #   cos-agent-bridge       — desktop/agent,         target/release/cos-agent-bridge
-#   cosmic-files           — desktop/files,         target/release/cosmic-files
+#   cosmic-files           — build/native-apps/cosmic-files, target/release/cosmic-files
 #   cosmic-edit            — build/native-apps/cosmic-edit, target/release/cosmic-edit
 #   cosmic-term            — desktop/term,          target/release/cosmic-term
 #   cosmic-initial-setup   — desktop/initial-setup, target/release/cosmic-initial-setup
@@ -69,7 +69,7 @@ target_spec() {
     cos)                   echo ".|cos|/usr/bin/cos" ;;
     cos-agent-ui)          echo "desktop/agent|cos-agent-ui|/usr/bin/cos-agent-ui" ;;
     cos-agent-bridge)      echo "desktop/agent|cos-agent-bridge|/usr/bin/cos-agent-bridge" ;;
-    cosmic-files)          echo "desktop/files|cosmic-files|/usr/bin/cosmic-files" ;;
+    cosmic-files)          echo "build/native-apps/cosmic-files|cosmic-files|/usr/bin/cosmic-files" ;;
     cosmic-edit)           echo "build/native-apps/cosmic-edit|cosmic-edit|/usr/bin/cosmic-edit" ;;
     cosmic-term)           echo "desktop/term|cosmic-term|/usr/bin/cosmic-term" ;;
     cosmic-initial-setup)  echo "desktop/initial-setup|cosmic-initial-setup|/usr/bin/cosmic-initial-setup" ;;
@@ -109,7 +109,7 @@ if [ "$DO_BUILD" = 1 ]; then
   build_script=""
   for t in "${TARGETS[@]}"; do
     IFS='|' read -r cargo_dir bin _ <<<"$(target_spec "$t")"
-    if [ "$t" = cosmic-edit ]; then
+    if [ "$t" = cosmic-edit ] || [ "$t" = cosmic-files ]; then
       build_script+="python3 scripts/app_sources.py --native; "
     fi
     build_script+="echo '== build $bin ($cargo_dir) =='; (cd '$cargo_dir' && cargo build --release --bin '$bin') || exit 1; "

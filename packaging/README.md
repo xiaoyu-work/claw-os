@@ -60,6 +60,13 @@ enforcement, the native launcher and package signing. Product source changes
 are released by updating this pin and publishing the normal OS packages;
 installed systems do not fetch executable code from Git.
 
+Native Files is composed under `build/native-apps/cosmic-files`, preserving
+both executables and resources in the desktop package. Files also exports the
+shared `claw_files.document` parsing/conversion library into the Agent package;
+the remaining Document App and native Files use this one implementation.
+The native executable embeds its product helpers and uses installed OS
+SDK/runtime libraries, not mutable App entrypoints.
+
 It also creates the empty root-owned `/usr/lib/cos/extensions` registry.
 Executable Agent extension packages placed there remain inactive until their
 signed id is selected in user configuration; see

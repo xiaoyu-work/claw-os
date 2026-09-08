@@ -38,7 +38,6 @@ desktop/
 ├── randr/                  Multi-monitor control
 ├── initial-setup/          First-run wizard
 │
-├── files/                  File manager
 ├── term/                   Terminal
 ├── store/                  App store
 ├── settings/               System settings
@@ -60,6 +59,14 @@ desktop/
 ```
 
 ## Building
+
+The complete [Files product](https://github.com/xiaoyu-work/clawos-app/tree/main/products/files)
+is built with `just files-build` from the immutable App pin. Generated source
+under `build/native-apps/cosmic-files` retains the original toolkit graph,
+file-chooser library, `cosmic-files` and `cosmic-files-applet`, translations and
+resources. Normal install preserves both executable paths and desktop-package
+ownership. UI/MCP share product libraries and controlled OS services, not App
+calls; source relocation does not unify their data or validate visual behavior.
 
 The [Mail product source](https://github.com/xiaoyu-work/clawos-app/tree/main/products/mail)
 has moved to `clawos-app`, including Thunderbird provenance and its paired

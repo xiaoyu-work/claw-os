@@ -52,6 +52,9 @@ pub async fn control(
         validate_action(&action, identifier.as_deref(), app_id.as_deref(), &uris)?;
         authorize_caller(authority, &action)?;
         authorize_editor_target(authority, app_id.as_deref(), &uris)?;
+        if authority.app_is("cosmic-files") {
+            return reveal_files(&uris, authority, uid, gid, home, peer_pid).await;
+        }
         let uris = canonicalize_launch_uris(&uris)?;
         let requested = requested_caps(&action, app_id.as_deref(), &uris)?;
         let _authorized = authority.require_all(&requested)?;
@@ -131,7 +134,7 @@ fn requested_caps(action: &str, app_id: Option<&str>, uris: &[String]) -> Result
 /// should be refused twice.
 fn authorize_caller(authority: &Decision, action: &str) -> Result<(), String> {
     match action {
-        "launch" if authority.app_is("cosmic-edit") => Ok(()),
+        "launch" if authority.app_is("cosmic-edit") || authority.app_is("cosmic-files") => Ok(()),
         "launch" => authority.require_app("launcher"),
         "list" | "focus" | "close" | "restart" => authority.require_app("desktop-manager"),
         _ => Err(format!("unknown desktop action: {action}")),
@@ -143,6 +146,12 @@ fn authorize_editor_target(
     app_id: Option<&str>,
     uris: &[String],
 ) -> Result<(), String> {
+    if authority.app_is("cosmic-files")
+        && (app_id != Some("com.clawos.Files") || uris.len() != 1
+            || !uris[0].starts_with("file://"))
+    {
+        return Err("Files may reveal only one local path in its own native target".into());
+    }
     if authority.app_is("cosmic-edit")
         && (app_id != Some("com.clawos.Edit")
             || uris.len() > 1
@@ -153,6 +162,28 @@ fn authorize_editor_target(
         );
     }
     Ok(())
+}
+
+async fn reveal_files(
+    uris: &[String], authority: &Decision, uid: u32, gid: u32,
+    home: PathBuf, peer_pid: u32,
+) -> Result<Value, String> {
+    let path = canonical_local_uri_path(&uris[0], true)?
+        .ok_or("Files requires a local file URI")?;
+    let _authorized = authority.require_all(&[
+        Cap::new(Verb::DESKTOP_LAUNCH, Scope::name("com.clawos.Files")),
+        Cap::new(Verb::FS_META, Scope::path(&path)),
+    ])?;
+    let path = Path::new(&path);
+    let directory = if path.is_dir() { path } else {
+        path.parent().ok_or("file has no containing directory")?
+    };
+    let uri = url::Url::from_file_path(directory)
+        .map_err(|_| "cannot construct Files directory URI")?.to_string();
+    let environment = DesktopEnvironment::for_user(uid, gid, home, peer_pid)?;
+    let mut result = launch_desktop_app(&environment, "com.clawos.Files", &[uri]).await?;
+    result["directory"] = json!(directory);
+    Ok(result)
 }
 
 async fn restart(
@@ -478,6 +509,10 @@ fn validate_launch_uris(uris: &[String]) -> Result<(), String> {
 }
 
 fn canonical_file_uri_path(uri: &str) -> Result<Option<String>, String> {
+    canonical_local_uri_path(uri, false)
+}
+
+fn canonical_local_uri_path(uri: &str, allow_directory: bool) -> Result<Option<String>, String> {
     let parsed =
         url::Url::parse(uri).map_err(|_| "launch values must be absolute URIs".to_string())?;
     if parsed.scheme() != "file" {
@@ -504,7 +539,7 @@ fn canonical_file_uri_path(uri: &str) -> Result<Option<String>, String> {
     }
     let metadata = std::fs::metadata(&canonical)
         .map_err(|error| format!("cannot inspect launch file: {error}"))?;
-    if !metadata.is_file() {
+    if !(metadata.is_file() || (allow_directory && metadata.is_dir())) {
         return Err("file launch URI path must be a regular file".to_string());
     }
     let path = canonical

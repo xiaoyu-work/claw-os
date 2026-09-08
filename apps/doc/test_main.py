@@ -16,6 +16,11 @@ pytestmark = pytest.mark.skipif(
 
 @pytest.fixture
 def doc_app():
+    root = Path(__file__).resolve().parents[2]
+    sources = load_local_module(root / "scripts/app_sources.py", "doc_app_sources")
+    library = sources.prepare_sources(sources.read_lock()) / "products/files/python"
+    if str(library) not in sys.path:
+        sys.path.insert(0, str(library))
     return load_local_module(Path(__file__).with_name("main.py"), "doc_app_main")
 
 
