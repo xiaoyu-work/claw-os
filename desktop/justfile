@@ -1,7 +1,15 @@
 set dotenv-load
 just := just_executable()
 make := `which make`
+launcher := '../build/native-apps/cosmic-launcher/justfile'
 
+prepare-native-apps:
+    if [ "${CLAW_NATIVE_APPS_PREPARED:-0}" = 1 ]; then test -f {{ launcher }}; else python3 ../scripts/app_sources.py --native; fi
+
+launcher-build: prepare-native-apps
+    {{ just }} --justfile {{ launcher }} build-release --locked
+
+[default]
 build:
     mkdir -p build
     {{ just }} applets/build-release
@@ -13,7 +21,7 @@ build:
     {{ just }} greeter/build-release
     {{ just }} idle/build-release
     {{ just }} initial-setup/build-release
-    {{ just }} launcher/build-release
+    {{ just }} launcher-build
     {{ just }} notifications/build-release
     {{ just }} osd/build-release
     {{ just }} panel/build-release
@@ -42,7 +50,7 @@ install rootdir="" prefix="/usr/local": build
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} icons-tela-pkg/install
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} idle/install
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} initial-setup/install
-    {{ just }} rootdir={{rootdir}} prefix={{prefix}} launcher/install
+    {{ just }} --justfile {{ launcher }} rootdir={{rootdir}} prefix={{prefix}} install
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} notifications/install
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} osd/install
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} panel/install
@@ -84,7 +92,7 @@ clean:
     rm -rf greeter/target
     {{ just }} idle/clean
     {{ just }} initial-setup/clean
-    rm -rf launcher/target
+    rm -rf ../build/native-apps/cosmic-launcher/target
     rm -rf panel/target
     rm -rf player/target
     rm -rf notifications/target

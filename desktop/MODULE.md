@@ -21,7 +21,8 @@ component crates plus Claw-specific agent bridges and applets.
 | `PROVENANCE.md` | Upstream origin and revision per component |
 | `justfile` | Desktop build/install orchestration |
 | `applets/claw-applet-services/` | Shared policy, read-only Calendar/task-list providers and system telemetry; no UI/App dependencies |
-| `../scripts/app_sources.py --native` | Materialize pinned product-declared Calendar/Clipboard/Widget Rail native UI and assets under ignored build storage before direct Cargo use |
+| `../scripts/app_sources.py --native` | Materialize pinned Calendar/Clipboard/Widget Rail libraries and standalone Launcher source/assets under ignored build storage before direct Cargo use |
+| `launcher-backend/` | Shared launcher library/service; native frontend is owned by external `clawos-app/products/launcher` |
 | `applets/cosmic-applets/` | Host native libraries; inject Calendar agenda, Clipboard history-policy and Widget Rail typed data callbacks, and generate product-owned desktop entries |
 | `agent/` | Native agent bridge and UI |
 | `agent/protocol/` | Versioned desktop Agent HTTP/SSE presentation contract |
@@ -38,6 +39,13 @@ Desktop processes communicate with core through stable CLI, HTTP/SSE, DBus,
 Wayland, SDK, or MCP boundaries. Preserve licenses and avoid pulling privileged
 agent logic into GPL desktop processes. Component workspaces remain independent
 of the root Rust workspace.
+
+`just launcher-build` prepares and builds the immutable external native
+Launcher under `build/native-apps/cosmic-launcher`, linking OS toolkit,
+SDK/runtime and launcher-backend dependencies. Normal desktop build/install
+uses the same justfile and installs `/usr/bin/cosmic-launcher` for the packaged
+native descriptor. Its compiled-in product MCP backend uses the OS Python
+SDK and typed desktop launch service, never another App.
 
 Bundled apps launch Ask Claw through `cos_runtime::ask_claw`, with only typed
 app-specific context adapters in their local `claw_glue` modules. The runtime

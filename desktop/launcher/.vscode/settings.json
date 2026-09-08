@@ -1,9 +1,0 @@
-{
-    "rust-analyzer.check.overrideCommand": [
-        "just",
-        "check-json"
-    ],
-    "githubPullRequests.ignoredPullRequestBranches": [
-        "master"
-    ]
-}

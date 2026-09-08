@@ -1,5 +1,9 @@
 use super::*;
 
+mod app_sources {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/support/app_sources.rs"));
+}
+
 fn env_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     LOCK.lock().unwrap_or_else(|p| p.into_inner())
@@ -1689,19 +1693,14 @@ const SHIPPED_MCP_APPS: &[&str] = &[
     "cosmic-notifications",
 ];
 
-/// The manifests bundled in this repository, read from `apps/`.
+/// Shipped manifests resolved from their declared local or immutable product source.
 ///
 /// These are the Apps that actually ship an `mcp` block, and this is
 /// the check that the launcher can still make sense of each one: the
 /// entry resolves, every tool's arguments bind, and the capabilities
 /// each call needs land somewhere the launcher can actually put them.
 fn shipped_manifest(id: &str) -> crate::caps::manifest::Manifest {
-    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .join("apps")
-        .join(id)
-        .join("app.json");
+    let path = app_sources::app_dir(id).join("app.json");
     let text =
         std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     crate::caps::manifest::Manifest::from_json(&text)

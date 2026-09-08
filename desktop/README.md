@@ -27,8 +27,7 @@ desktop/
 ├── session/                Session manager; launches the rest
 ├── greeter/                Display manager (login screen)
 ├── panel/                  Top / bottom panel (dock + taskbar)
-├── launcher/               Spotlight-style command launcher (UI)
-├── launcher-backend/       Launcher search backend (pop-launcher upstream)
+├── launcher-backend/        Shared launcher protocol/service (UI source is external)
 ├── applets/                Battery / wifi / volume / clock / ...
 ├── applibrary/             App grid (Launchpad equivalent)
 ├── workspaces/             Workspaces / Overview
@@ -129,7 +128,7 @@ This is **your codebase** — there is no upstream sync. Refactor, rename,
 delete components freely. Suggested first moves:
 
 1. Pick one component to learn the toolkit patterns (`panel/` is small)
-2. Add a `cos-agent` integration point in `launcher/` or as a new applet
+2. Add a `cos-agent` integration point in the external Launcher product or as a new applet
 3. Wire AI features through the `cos` binary via DBus / pipe / subprocess so
    the AI layer stays isolated from GPL-3 propagation
 

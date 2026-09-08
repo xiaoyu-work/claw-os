@@ -43,7 +43,7 @@ upstream identifiers; rename them before any commercial release.
 | `icons/` | github.com/pop-os/cosmic-icons | `2c697e8e97cf` | CC-BY-SA-4.0 |
 | `idle/` | github.com/pop-os/cosmic-idle | `c95d066b5b64` | GPL-3.0 |
 | `initial-setup/` | github.com/pop-os/cosmic-initial-setup | `24a9b1ee0d11` | GPL-3.0 |
-| `launcher/` | github.com/pop-os/cosmic-launcher | `1e57708e5af9` | GPL-3.0 |
+| [external Launcher](https://github.com/xiaoyu-work/clawos-app/tree/main/products/launcher/native) | github.com/pop-os/cosmic-launcher | `1e57708e5af9` | GPL-3.0; pinned through `packaging/apps.lock.json` |
 | `launcher-backend/` | github.com/pop-os/launcher | `5b8685107166` | MPL-2.0 |
 | `notifications/` | github.com/pop-os/cosmic-notifications | `a899bfbc6715` | GPL-3.0 |
 | `osd/` | github.com/pop-os/cosmic-osd | `c57df29816e9` | GPL-3.0 |

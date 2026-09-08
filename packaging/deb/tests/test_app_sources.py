@@ -262,6 +262,7 @@ def test_native_manual_image_and_asset_build_paths_agree():
 @pytest.mark.parametrize(("product", "app_id"), [
     ("calendar", "panel-calendar"), ("clipboard", "panel-clipboard"),
     ("desktop-widgets", "widget-rail"),
+    ("launcher", "cosmic-launcher"),
 ])
 def test_external_desktop_app_stays_out_of_agent_package(locked_source, tmp_path, product, app_id):
     root, lock = locked_source
@@ -337,3 +338,21 @@ def test_duplicate_native_exports_are_rejected(tmp_path, monkeypatch):
     monkeypatch.setattr(sources, "prepare_sources", lambda _: tmp_path)
     with pytest.raises(ValueError, match="duplicate"):
         sources.prepare_native()
+
+
+def test_standalone_launcher_uses_external_source_and_matching_chroot_layout():
+    just = (ROOT / "desktop/justfile").read_text()
+    assert "launcher := '../build/native-apps/cosmic-launcher/justfile'" in just
+    assert "launcher-build: prepare-native-apps" in just
+    assert "[default]\nbuild:" in just
+    assert "{{ just }} --justfile {{ launcher }} build-release --locked" in just
+    assert "{{ just }} --justfile {{ launcher }} rootdir={{rootdir}} prefix={{prefix}} install" in just
+    assert "{{ just }} launcher/build-release" not in just
+    script = (ROOT / "rootfs/features/desktop/install.sh").read_text()
+    assert 'CHROOT_SRC="$ROOTFS/build/desktop"' in script
+    assert "cd /build/desktop" in script
+    assert "/build/desktop-src" not in script
+    assert not (ROOT / "desktop/launcher").exists()
+    assert not (ROOT / "apps/cosmic-launcher").exists()
+    assert "cosmic-launcher" in sources.read_lock()["apps"]
+    assert "cosmic-launcher" in sources.desktop_apps()

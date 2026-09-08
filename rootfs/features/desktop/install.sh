@@ -93,7 +93,7 @@ fi
 
 echo "  :: validating desktop source tree at $DESKTOP_SRC"
 missing=0
-for sub in comp session panel launcher settings greeter toolkit; do
+for sub in comp session panel settings greeter toolkit; do
     [ -e "$DESKTOP_SRC/$sub" ] || { echo "    missing: $sub"; missing=1; }
 done
 [ "$missing" = "0" ] || {
@@ -181,10 +181,10 @@ fi
 #    Several desktop/* crates have `path = "../../crates/<x>"` dependencies
 #    pointing at the top-level repo `crates/` directory (for example,
 #    claw-bridge). Bind-mount that too so the relative path resolves
-#    inside the chroot (../../crates from /build/desktop-src/<x> →
+#    inside the chroot (../../crates from /build/desktop/<x> →
 #    /build/crates).
 #
-#    Likewise desktop/{term,edit,files,launcher}/Cargo.toml depend on
+#    Likewise desktop/{term,edit,files}/Cargo.toml depend on
 #    `path = "../../cos-runtime/rust"` for the internal SDK that wraps
 #    every `cos app <id> <verb>` call (audit + caps + snapshot). Without
 #    this mount cargo cannot resolve cos-runtime inside the chroot and
@@ -196,7 +196,7 @@ fi
 #    or cargo dies in the desktop crates with "failed to read
 #    /build/claw-os-sdk/rust/Cargo.toml".
 # ---------------------------------------------------------------------------
-CHROOT_SRC="$ROOTFS/build/desktop-src"
+CHROOT_SRC="$ROOTFS/build/desktop"
 CHROOT_CRATES="$ROOTFS/build/crates"
 CHROOT_RUNTIME="$ROOTFS/build/cos-runtime"
 CHROOT_SDK="$ROOTFS/build/claw-os-sdk"
@@ -289,13 +289,13 @@ chroot "$ROOTFS" env \
     #
     # It lives under the bind-mounted source tree, so it stays on the host
     # as an incremental cache between runs and never lands in the image.
-    export CARGO_TARGET_DIR=/build/desktop-src/target
-    cd /build/desktop-src
+    export CARGO_TARGET_DIR=/build/desktop/target
+    cd /build/desktop
     just build
     # NB: pass rootdir and prefix as POSITIONAL args. `just install rootdir=""`
     # would set rootdir to the literal string "rootdir=" (the entire token is
     # the value of positional param 1), producing nonsense install paths like
-    # `/build/desktop-src/rootdir=/prefix=/usr/bin/cosmic-greeter`. The
+    # `/build/desktop/rootdir=/prefix=/usr/bin/cosmic-greeter`. The
     # cosmic-* binaries then never reach /usr/bin and the resulting image has
     # no working desktop. See desktop/justfile recipe `install rootdir="" prefix="/usr/local"`.
     just install "$DESKTOP_PACKAGE_ROOT" /usr
@@ -319,7 +319,7 @@ chroot "$ROOTFS" env \
     # /usr/local/bin/cos-agent-bridge. These binaries and the secure SDK
     # launcher helper must be produced here or the desktop Agent cannot start.
     # ----------------------------------------------------------------------
-    if [ ! -f /build/desktop-src/agent/Cargo.toml ]; then
+    if [ ! -f /build/desktop/agent/Cargo.toml ]; then
         echo "error: required desktop Agent workspace is missing" >&2
         exit 1
     fi
@@ -328,7 +328,7 @@ chroot "$ROOTFS" env \
         exit 1
     fi
     echo "  :: building cos-agent-ui + cos-agent-bridge + cos-ask-claw-launcher"
-    cd /build/desktop-src/agent
+    cd /build/desktop/agent
     cargo build --release --workspace
     cargo build --release --manifest-path /build/cos-runtime/rust/Cargo.toml \
         --bin cos-ask-claw-launcher

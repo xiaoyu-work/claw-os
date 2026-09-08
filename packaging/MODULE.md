@@ -70,6 +70,10 @@ authority launcher and distributes these together in `claw-os-agent`.
 External desktop Apps are excluded from Agent staging. `panel-calendar`, `panel-clipboard` and `widget-rail` are
 resolved from the same immutable source pin by desktop package assembly;
 their complete product-owned native UIs are linked into `cosmic-applets`.
+The complete standalone Launcher source/resources are composed from that pin
+too; `cosmic-launcher` remains a desktop-package descriptor and executable.
+Its Python MCP code is embedded at compilation and imports the packaged
+Agent SDK/runtime, already guaranteed by desktop → base → agent dependencies.
 `deb/claw-os-desktop/apps.list` remains the package-ownership authority.
 App partition accounting includes nested gateway manifests. Shared gateway
 libraries remain OS-owned, and the canonical argument module is installed in

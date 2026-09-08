@@ -103,6 +103,15 @@ remain in the OS. No new state store or cross-App call is introduced.
 `panel-calendar`, `panel-clipboard` and `widget-rail` remain owned by the desktop
 Debian package, with original launcher identities and independent grants
 unchanged; installed updates remain signed APT packages.
+The complete standalone native Launcher is also owned by
+`clawos-app/products/launcher` and built from `build/native-apps/cosmic-launcher`.
+Its executable/resources and `cosmic-launcher` descriptor stay in the desktop
+package. Native MCP embeds the canonical product Python backend and adapter
+inside the verified binary; it uses the OS Python SDK and exact policy/typed
+desktop launch service instead of forwarding to another App. The normal UI
+still consumes the OS-owned `desktop/launcher-backend` library/service and
+forked toolkit. This move shares Python/native MCP business logic but does not
+unify UI-service catalog/history or change isolated App data/grants.
 The Terminal product also owns the `exec` App source; core process authority
 and sandbox enforcement remain in the OS.
 The Containers product owns `container-manager` and its fourteen MCP handlers;
