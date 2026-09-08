@@ -57,6 +57,9 @@ pub async fn control(
         if store_caller(authority, &action, app_id.as_deref()) {
             return open_store(&uris, authority, uid, gid, home, peer_pid).await;
         }
+        if settings_caller(authority, &action, app_id.as_deref()) {
+            return open_settings(&uris, authority, uid, gid, home, peer_pid).await;
+        }
         authorize_caller(authority, &action)?;
         authorize_editor_target(authority, app_id.as_deref(), &uris)?;
         if authority.app_is("cosmic-files") {
@@ -189,6 +192,64 @@ fn store_caller(authority: &Decision, action: &str, app_id: Option<&str>) -> boo
     action == "launch" && app_id == Some("com.clawos.Store")
         && (authority.app_is("cosmic-store")
             || (authority.app_id().is_none() && authority.task_id().is_none()))
+}
+
+fn settings_caller(authority: &Decision, action: &str, app_id: Option<&str>) -> bool {
+    action == "launch" && app_id == Some("com.clawos.Settings")
+        && (authority.app_is("cosmic-settings")
+            || (authority.app_id().is_none() && authority.task_id().is_none()))
+}
+
+fn settings_launch_args(uris: &[String]) -> Result<Vec<String>, String> {
+    match uris {
+        [] => Ok(vec![]),
+        [uri] => {
+            let page = uri.strip_prefix("settings://").ok_or("Settings requires a page URI")?;
+            if page.is_empty() || page.len() > 64
+                || !page.starts_with(|c: char| c.is_ascii_lowercase())
+                || !page.bytes().all(|c| c.is_ascii_lowercase() || c == b'-')
+            {
+                return Err("invalid Settings page identifier".into());
+            }
+            Ok(vec![page.into()])
+        }
+        _ => Err("Settings accepts at most one page".into()),
+    }
+}
+
+async fn open_settings(
+    uris: &[String], authority: &Decision, uid: u32, gid: u32,
+    home: PathBuf, peer_pid: u32,
+) -> Result<Value, String> {
+    let args = settings_launch_args(uris)?;
+    let _authorized = authority.require(Cap::new(
+        Verb::PROC_SPAWN, Scope::name("cosmic-settings"),
+    ))?;
+    let environment = DesktopEnvironment::for_user(uid, gid, home, peer_pid)?;
+    let program = PathBuf::from("/usr/bin/cosmic-settings");
+    let mut command = tokio::process::Command::from(configured_user_command(&program, &args, &environment));
+    command.stdout(Stdio::null()).stderr(Stdio::null());
+    let child = command.spawn().map_err(|error| format!("native Settings launch failed: {error}"))?;
+    confirm_native_start(child).await?;
+    Ok(json!({"launched": true, "app_id": "com.clawos.Settings", "launcher": program}))
+}
+
+async fn confirm_native_start(mut child: tokio::process::Child) -> Result<(), String> {
+    // A first Settings instance owns the GUI event loop; unlike gtk4-launch,
+    // it must not be awaited until exit and killed at the helper deadline.
+    match tokio::time::timeout(Duration::from_millis(200), child.wait()).await {
+        Ok(Ok(status)) if status.success() => Ok(()),
+        Ok(Ok(status)) => Err(format!("native Settings launcher failed: {status}")),
+        Ok(Err(error)) => Err(format!("wait for native Settings launch: {error}")),
+        Err(_) => {
+            tokio::spawn(async move {
+                if let Err(error) = child.wait().await {
+                    tracing::warn!(%error, "failed to reap native Settings process");
+                }
+            });
+            Ok(())
+        }
+    }
 }
 
 fn store_launch_args(uris: &[String]) -> Result<Vec<String>, String> {

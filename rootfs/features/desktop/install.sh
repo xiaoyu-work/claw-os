@@ -93,7 +93,7 @@ fi
 
 echo "  :: validating desktop source tree at $DESKTOP_SRC"
 missing=0
-for sub in comp session panel settings greeter toolkit; do
+for sub in comp session panel settings-daemon greeter toolkit; do
     [ -e "$DESKTOP_SRC/$sub" ] || { echo "    missing: $sub"; missing=1; }
 done
 [ "$missing" = "0" ] || {

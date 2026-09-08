@@ -73,6 +73,13 @@ retains the Store descriptor, executable and resources; pkg remains in the
 Agent package with its own transaction grants. The native read-only catalog
 embeds shared product logic and imports only installed OS support libraries.
 
+Native Settings is composed under `build/native-apps/cosmic-settings`, retaining
+the full nested workspace, all original default pages and toolkit patches.
+The desktop package keeps its native manifest/binary, page entries, translations,
+icons, polkit resources and config defaults. Its eleven management Apps remain
+separate Agent-package identities; source relocation does not move user settings
+or copy settings-daemon/provider authority into the product.
+
 It also creates the empty root-owned `/usr/lib/cos/extensions` registry.
 Executable Agent extension packages placed there remain inactive until their
 signed id is selected in user configuration; see

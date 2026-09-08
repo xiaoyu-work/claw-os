@@ -7,6 +7,79 @@ use serde_json::json;
 
 const APP_ID: &str = "com.example.App";
 
+#[tokio::test]
+async fn settings_native_launch_acknowledges_without_killing_the_gui_lifetime() {
+    let child = tokio::process::Command::new("/bin/sleep").arg("0.5").spawn().unwrap();
+    let pid = child.id().unwrap();
+    confirm_native_start(child).await.unwrap();
+    assert!(Path::new(&format!("/proc/{pid}")).exists());
+    tokio::time::sleep(Duration::from_millis(450)).await;
+    assert!(!Path::new(&format!("/proc/{pid}")).exists(), "child must be reaped");
+}
+
+#[tokio::test]
+async fn settings_native_launch_reports_immediate_failure_or_activation_exit() {
+    for (program, succeeds) in [("/bin/true", true), ("/bin/false", false)] {
+        let child = tokio::process::Command::new(program).spawn().unwrap();
+        assert_eq!(confirm_native_start(child).await.is_ok(), succeeds);
+    }
+}
+
+#[test]
+fn settings_launch_preserves_identity_without_provider_or_generic_launch_authority() {
+    let settings = decision_for_app(Some("cosmic-settings"), vec![], "settings-launch");
+    assert!(settings_caller(&settings, "launch", Some("com.clawos.Settings")));
+    assert!(!settings_caller(&settings, "launch", Some("com.clawos.Store")));
+    for action in ["launch", "restart", "list", "focus", "close"] {
+        assert!(authorize_caller(&settings, action).is_err());
+        if action != "launch" {
+            assert!(!settings_caller(&settings, action, Some("com.clawos.Settings")));
+        }
+    }
+    for app in [
+        "accessibility-manager", "audio-manager", "bluetooth-manager", "camera-manager",
+        "display-manager", "desktop-manager", "location-manager", "network-manager",
+        "power-manager", "printer-manager", "user-manager", "launcher", "exec", "cosmic-store",
+    ] {
+        assert!(settings.require_app(app).is_err());
+        let other = decision_for_app(Some(app), vec![], &format!("settings-other-{app}"));
+        assert!(!settings_caller(&other, "launch", Some("com.clawos.Settings")));
+    }
+    let human = decision_for_app(None, vec![], "settings-human");
+    assert!(settings_caller(&human, "launch", Some("com.clawos.Settings")));
+}
+
+#[test]
+fn settings_launch_page_is_data_not_path_or_command_option() {
+    assert!(settings_launch_args(&[]).unwrap().is_empty());
+    validate_action("launch", None, Some("com.clawos.Settings"), &["settings://date-time".into()])
+        .unwrap();
+    assert_eq!(settings_launch_args(&["settings://date-time".into()]).unwrap(), vec!["date-time"]);
+    for uris in [
+        vec!["settings://--help".into()], vec!["file:///etc/passwd".into()],
+        vec!["settings://../users".into()], vec!["settings://users".into(), "settings://sound".into()],
+        vec!["settings://".into()], vec!["settings://a b".into()],
+        vec!["settings://users?command=delete".into()], vec!["settings://users\0".into()],
+        vec![format!("settings://{}", "x".repeat(65))],
+    ] {
+        assert!(settings_launch_args(&uris).is_err());
+    }
+}
+
+#[tokio::test]
+async fn settings_launch_requires_exact_original_proc_scope_before_desktop_access() {
+    for (index, caps) in [
+        vec![], vec![Cap::new(Verb::SYS_OBSERVE, Scope::name("desktop"))],
+        vec![Cap::new(Verb::DESKTOP_LAUNCH, Scope::name("com.clawos.Settings"))],
+        vec![Cap::new(Verb::PROC_SPAWN, Scope::name("cosmic-store"))],
+    ].into_iter().enumerate() {
+        let decision = decision_for_app(Some("cosmic-settings"), caps, &format!("settings-denied-{index}"));
+        let error = open_settings(&[], &decision, 1000, 1000, PathBuf::from("/nonexistent"), 1)
+            .await.unwrap_err();
+        assert!(!error.contains("home"), "{error}");
+    }
+}
+
 #[test]
 fn store_launch_is_exact_target_without_other_app_or_transaction_authority() {
     let store = decision_for_app(Some("cosmic-store"), vec![], "store-launch");

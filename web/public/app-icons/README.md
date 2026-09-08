@@ -8,7 +8,7 @@ These are the same first-party icons shipped by the native Claw OS desktop:
 | `files.svg` | `desktop/files/res/icons/hicolor/scalable/apps/com.clawos.Files.svg` |
 | `edit.svg` | [Editor product native resource](https://github.com/xiaoyu-work/clawos-app/blob/main/products/editor/native/cosmic-edit/res/icons/hicolor/scalable/apps/com.clawos.Edit.svg), pinned by `packaging/apps.lock.json` |
 | `store.svg` | `clawos-app/products/store/native/cosmic-store/res/icons/hicolor/scalable/apps/com.clawos.Store.svg` (external source pinned by `packaging/apps.lock.json`) |
-| `settings.svg` | `desktop/settings/resources/icons/scalable/apps/com.clawos.Settings.svg` |
+| `settings.svg` | [Settings product icon](https://github.com/xiaoyu-work/clawos-app/blob/main/products/settings/native/cosmic-settings/resources/icons/scalable/apps/com.clawos.Settings.svg) |
 | `player.svg` | `desktop/player/res/icons/hicolor/scalable/apps/com.clawos.Player.svg` |
 | `screenshot.svg` | `desktop/screenshot/resources/icons/hicolor/scalable/apps/com.clawos.Screenshot.svg` |
 

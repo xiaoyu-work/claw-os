@@ -202,8 +202,18 @@ Identity status requires `sys.observe:identities`, not mutation authority.
 Account changes retain `sys.identity:manage` and password changes additionally
 require exact credential reads. Shadow utilities, account state and owner-bound
 rollback stay OS-owned. All eleven management App sources assigned to Settings
-have moved; native Settings still awaits its full UI/build migration, without
-combining provider authority.
+have moved, along with the complete native Settings workspace, all page and
+subscription crates, original default renderer/toolkit patches, resources,
+translations and configuration schemas. `just settings-build` composes the
+immutable App source under `build/native-apps/cosmic-settings`; Settings Daemon,
+shared toolkit and privileged providers remain here. Native MCP retains only
+page listing/search and fixed Settings activation under
+`proc.spawn:cosmic-settings`. It cannot inherit the eleven manager identities,
+invoke generic desktop launch, or call other Apps. Human UI adapters use OS
+filesystem/process services and SDK policy/snapshots; original human
+D-Bus/Wayland access is unchanged and unavailable through this MCP catalog.
+Source relocation neither moves user configuration nor consolidates provider
+backends or validates interactive visual/device behavior.
 Security owns `security-center` and its seven sensitive read-only MCP tools.
 The dedicated `sys.security:audit` grant and App-bound inspection authority
 are unchanged. Journal/configuration inspection, privileged collectors and

@@ -91,6 +91,15 @@ Store's complete native source now follows the same immutable App pin.
 transaction identity. APT, installed package state, Flatpak/PackageKit human
 policies and separate App grants do not migrate or gain a runtime Git updater.
 
+Settings' complete nested native workspace follows the same immutable App pin.
+The signed desktop package keeps `/usr/bin/cosmic-settings`, its separate
+manifest, localized page entries, polkit resources and default config schemas.
+The paired OS launch service accepts only the fixed Settings target under
+`proc.spawn:cosmic-settings`. The eleven management Apps remain Agent-package
+identities with their original scopes. User configuration, credentials and
+device/account state are not moved, and Settings Daemon/shared providers stay
+OS-owned. No runtime source download or permission-union migration is added.
+
 Updates only ever move forward. An older Claw OS release stays validly signed
 forever, so the signature alone cannot tell a current release from a superseded
 one; see [Downgrade protection](#downgrade-protection) for what stops one being

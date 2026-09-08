@@ -36,7 +36,9 @@ Product sources are moving individually to
 `gateway-pushover`, `gateway-webhook`, `gateway-homeassistant`, `panel-calendar`, `panel-clipboard`, `widget-rail`,
 the Browser extension/Native Host, Mail UI/native source and complete Calendar/Clipboard/Widget Rail panel sources
 are owned there already. Complete native Launcher, Editor and Files sources
-and descriptors are external too. The remaining Document App shares Files'
+and descriptors are external too, as are complete native Terminal, Store and
+Settings. Settings preserves its separate page-discovery/fixed-launch identity,
+not a union of the eleven managers' grants. The remaining Document App shares Files'
 staged `claw_files.document` parsing/conversion library, not an App interface.
 Do not recreate a local copy: OS package assembly consumes the immutable revision in
 [`packaging/apps.lock.json`](../packaging/apps.lock.json). Source relocation

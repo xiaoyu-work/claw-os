@@ -6,9 +6,10 @@ editor := '../build/native-apps/cosmic-edit/justfile'
 files := '../build/native-apps/cosmic-files/justfile'
 terminal := '../build/native-apps/cosmic-term/justfile'
 store := '../build/native-apps/cosmic-store/justfile'
+settings := '../build/native-apps/cosmic-settings/justfile'
 
 prepare-native-apps:
-    if [ "${CLAW_NATIVE_APPS_PREPARED:-0}" = 1 ]; then test -f {{ launcher }} && test -f {{ editor }} && test -f {{ files }} && test -f {{ terminal }} && test -f {{ store }}; else python3 ../scripts/app_sources.py --native; fi
+    if [ "${CLAW_NATIVE_APPS_PREPARED:-0}" = 1 ]; then test -f {{ launcher }} && test -f {{ editor }} && test -f {{ files }} && test -f {{ terminal }} && test -f {{ store }} && test -f {{ settings }}; else python3 ../scripts/app_sources.py --native; fi
 
 launcher-build: prepare-native-apps
     {{ just }} --justfile {{ launcher }} build-release --locked
@@ -24,6 +25,9 @@ terminal-build: prepare-native-apps
 
 store-build: prepare-native-apps
     {{ just }} --justfile {{ store }} build-release --locked
+
+settings-build: prepare-native-apps
+    {{ just }} --justfile {{ settings }} build-release --locked
 
 [default]
 build: prepare-native-apps
@@ -47,7 +51,7 @@ build: prepare-native-apps
     {{ just }} player/build-release
     {{ just }} randr/build-release
     {{ just }} screenshot/build-release
-    {{ just }} settings/build-release
+    {{ just }} settings-build
     {{ make }} -C settings-daemon all
     {{ just }} session/build-release
     {{ just }} store-build
@@ -76,7 +80,7 @@ install rootdir="" prefix="/usr/local": build
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} player/install
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} randr/install
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} screenshot/install
-    {{ just }} rootdir={{rootdir}} prefix={{prefix}} settings/install
+    {{ just }} --justfile {{ settings }} rootdir={{rootdir}} prefix={{prefix}} install
     {{ make }} -C settings-daemon install DESTDIR={{rootdir}} prefix={{prefix}}
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} session/install
     {{ just }} --justfile {{ store }} rootdir={{rootdir}} prefix={{prefix}} install
@@ -118,7 +122,7 @@ clean:
     rm -rf osd/target
     rm -rf randr/target
     rm -rf screenshot/target
-    rm -rf settings/target
+    rm -rf ../build/native-apps/cosmic-settings/target
     rm -rf settings-daemon/target
     rm -rf session/target
     rm -rf ../build/native-apps/cosmic-store/target

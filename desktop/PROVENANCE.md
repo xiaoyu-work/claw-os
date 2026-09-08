@@ -53,7 +53,7 @@ upstream identifiers; rename them before any commercial release.
 | `randr/` | github.com/pop-os/cosmic-randr | `6e8e795970fa` | MPL-2.0 |
 | `screenshot/` | github.com/pop-os/cosmic-screenshot | `b917c631d155` | GPL-3.0 |
 | `session/` | github.com/pop-os/cosmic-session | `495e591dc659` | GPL-3.0 |
-| `settings/` | github.com/pop-os/cosmic-settings | `703a934b096b` | GPL-3.0 |
+| [external Settings](https://github.com/xiaoyu-work/clawos-app/tree/main/products/settings/native) | github.com/pop-os/cosmic-settings | `703a934b096b` | GPL-3.0-only; complete workspace pinned through `packaging/apps.lock.json` |
 | `settings-daemon/` | github.com/pop-os/cosmic-settings-daemon | `716da6d6af0b` | GPL-3.0 |
 | `simple-wrapper/` | github.com/pop-os/simple-wrapper | `95db0daff42a` | MPL-2.0 |
 | [external Store](https://github.com/xiaoyu-work/clawos-app/tree/main/products/store/native) | github.com/pop-os/cosmic-store | `2c705e725e31` | GPL-3.0; pinned through `packaging/apps.lock.json` |

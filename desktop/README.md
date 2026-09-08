@@ -38,7 +38,6 @@ desktop/
 ├── randr/                  Multi-monitor control
 ├── initial-setup/          First-run wizard
 │
-├── settings/               System settings
 ├── settings-daemon/        Backend for system settings
 ├── player/                 Media player
 ├── screenshot/             Screenshot tool
@@ -57,6 +56,16 @@ desktop/
 ```
 
 ## Building
+
+The complete [Settings product](https://github.com/xiaoyu-work/clawos-app/tree/main/products/settings)
+is built with `just settings-build` from the immutable App pin at
+`build/native-apps/cosmic-settings`. The whole workspace, all default pages,
+subscriptions, translations, config schemas and original toolkit patches are
+preserved. Normal desktop installation uses its original executable/resource
+paths. Native MCP offers page discovery and fixed activation only; the eleven
+manager Apps retain separate grants. The settings daemon and privileged
+providers remain OS-owned. Source relocation does not migrate user settings or
+claim interactive Wayland/device acceptance.
 
 The complete [Store product](https://github.com/xiaoyu-work/clawos-app/tree/main/products/store)
 is built with `just store-build` from the immutable App pin at
