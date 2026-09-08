@@ -221,6 +221,11 @@ interactive-card operations and existing grants. Its old HMAC algorithm is
 corrected to the official custom-bot contract: timestamp-plus-secret key, empty
 message and a seconds timestamp. No unsigned fallback, extra authority or new
 state is introduced; the existing optional unsigned mode is unchanged.
+`gateway-matrix` source is also owned by Messaging Channels. Existing send/status
+and grants remain unchanged, with escaped room IDs, per-send transaction IDs
+and pinned shared transport helpers. Homeserver selection and its existing
+default are preserved. No local state is moved; the inbound `/sync` loop remains
+unimplemented, so this is not a bidirectional connector cutover.
 The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling
