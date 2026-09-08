@@ -116,6 +116,16 @@ origin-bound capability and frame identity.
 
 ## Installed layout
 
+The App, Native Host and MV3 extension source are owned by
+[`clawos-app/products/browser`](https://github.com/xiaoyu-work/clawos-app/tree/main/products/browser).
+The App payload is assembled from `packaging/apps.lock.json`. Extension and
+Native Messaging installation remains an explicit
+[`tools/install-browser-agent.sh`](../tools/install-browser-agent.sh) operation;
+it resolves both sources through the same immutable pin, not a sibling checkout.
+The script configures an allowlist for a manually loaded unpacked extension,
+not automatic force-installation. Extension files and native registration are
+not automatically updated by APT in this migration.
+
 | Path | Contents |
 | --- | --- |
 | `/usr/share/claw/extensions/claw-agent-browser/` | unpacked extension |

@@ -11,8 +11,8 @@
 #
 # Run as root.  Re-run is idempotent (overwrites).
 #
-# After install, restart Chromium.  The extension is force-installed via
-# managed policy, so it loads automatically and is non-removable for the user.
+# This manual installer consumes the OS's immutable product source pin.
+# Load the unpacked extension and pin its ID as described below.
 
 set -euo pipefail
 
@@ -22,8 +22,9 @@ if [[ "${EUID}" -ne 0 ]]; then
 fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-EXT_SRC="${REPO_ROOT}/extensions/claw-agent-browser"
-APP_SRC="${REPO_ROOT}/apps/browser-attached"
+APP_SOURCES="$(python3 "${REPO_ROOT}/scripts/app_sources.py")"
+EXT_SRC="${APP_SOURCES}/products/browser/extension"
+APP_SRC="${APP_SOURCES}/products/browser/apps/browser-attached"
 
 EXT_DEST="/usr/share/claw/extensions/claw-agent-browser"
 HOST_DEST="/usr/lib/cos/browser-agent"
@@ -32,14 +33,15 @@ NM_MANIFEST="/etc/chromium/native-messaging-hosts/com.clawos.browser.json"
 POLICY_FILE="/etc/chromium/policies/managed/claw-agent.json"
 
 # Extension ID is deterministic when packed with a known key, but for the MVP
-# we ship the unpacked extension and force-install it by absolute path on disk.
+# we install the unpacked extension for the administrator to load explicitly.
 # Callers can override CLAW_EXT_ID once they generate a stable packed CRX.
 EXT_ID="${CLAW_EXT_ID:-}"
 
 echo "[claw] installing WebExtension source → ${EXT_DEST}"
 install -d -m 0755 "${EXT_DEST}"
-cp -a "${EXT_SRC}/." "${EXT_DEST}/"
-chmod -R a+rX "${EXT_DEST}"
+for file in manifest.json background.js content.js popup.html popup.js README.md; do
+  install -m 0644 "${EXT_SRC}/${file}" "${EXT_DEST}/${file}"
+done
 
 echo "[claw] installing native host        → ${HOST_DEST}"
 install -d -m 0755 "${HOST_DEST}"

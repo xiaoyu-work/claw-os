@@ -154,10 +154,6 @@ EXCEPTIONS: dict[str, set[str]] = {
         "smtplib.SMTP",
         "smtplib.SMTP_SSL",
     },
-    # trusted-native exemption: the native host runs outside the
-    # sandbox under the kernel-side allowlist, and its socket is
-    # AF_UNIX.
-    "apps/browser-attached/native_host.py": {"socket.socket"},
 }
 
 

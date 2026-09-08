@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 
 import pytest
@@ -91,6 +92,60 @@ def test_agent_package_keeps_native_authority_in_os():
     assert '"$PROJECT_DIR/scripts/app_sources.py" --stage "$AGENT_STAGE"' in script
     assert '$AGENT_STAGE/usr/lib/cos/claw-mail-ai-host' in script
     assert '"$PROJECT_DIR/extensions/claw-mail-ai"' not in script
+
+
+def test_browser_installer_resolves_both_sources_from_the_os_pin(locked_source):
+    root, lock = locked_source
+    upstream = Path(lock["repository"])
+    for relative in (
+        "products/browser/extension/manifest.json",
+        "products/browser/apps/browser-attached/native_host.py",
+    ):
+        path = upstream / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("fixture\n")
+    git = ["git", "-C", str(upstream)]
+    subprocess.run([*git, "add", "products/browser"], check=True)
+    subprocess.run([*git, "commit", "--quiet", "-m", "browser fixture"], check=True)
+    lock["revision"] = subprocess.check_output([*git, "rev-parse", "HEAD"], text=True).strip()
+    lock["products"] = ["browser"]
+    lock["apps"] = ["browser-attached"]
+    (root / "packaging/apps.lock.json").write_text(json.dumps(lock))
+    (root / "scripts").mkdir()
+    shutil.copyfile(ROOT / "scripts/app_sources.py", root / "scripts/app_sources.py")
+    script = (ROOT / "tools/install-browser-agent.sh").read_text()
+    block = script.split('APP_SOURCES=', 1)[1].split('\nEXT_DEST=', 1)[0]
+    result = subprocess.run(
+        ["bash", "-euc", 'APP_SOURCES=' + block + '\nprintf "%s\\n" "$EXT_SRC" "$APP_SRC"'],
+        check=True, capture_output=True, text=True,
+        env={**os.environ, "REPO_ROOT": str(root)},
+    )
+    cached = root / "build/app-sources" / lock["revision"]
+    assert result.stdout.splitlines() == [
+        str(cached / "products/browser/extension"),
+        str(cached / "products/browser/apps/browser-attached"),
+    ]
+    assert (cached / "products/browser/extension/manifest.json").is_file()
+    assert (cached / "products/browser/apps/browser-attached/native_host.py").is_file()
+
+
+def test_browser_installer_copies_extension_assets_without_development_tests(tmp_path):
+    source = tmp_path / "extension"
+    source.mkdir()
+    assets = {"manifest.json", "background.js", "content.js", "popup.html", "popup.js", "README.md"}
+    for name in assets | {"test_contract.py"}:
+        (source / name).write_text(name)
+    target = tmp_path / "installed"
+    script = (ROOT / "tools/install-browser-agent.sh").read_text()
+    start = script.index('install -d -m 0755 "${EXT_DEST}"')
+    end = script.index('echo "[claw] installing native host')
+    subprocess.run(["bash", "-euc", script[start:end]], check=True, env={
+        **os.environ, "EXT_SRC": str(source), "EXT_DEST": str(target),
+    })
+    assert {path.name for path in target.iterdir()} == assets
+    for path in target.iterdir():
+        assert path.read_bytes() == (source / path.name).read_bytes()
+        assert path.stat().st_mode & 0o777 == 0o644
 
 
 def test_real_app_staging_counts_nested_apps_and_installs_shared_parser(tmp_path):
