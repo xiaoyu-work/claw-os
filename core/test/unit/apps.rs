@@ -120,7 +120,10 @@ fn known_first_party_schema_drift_is_resolved_in_manifests() {
         Manifest::from_json(&std::fs::read_to_string(path).unwrap()).unwrap()
     };
 
-    let exec = load(&["exec"]);
+    let exec = Manifest::from_json(
+        &std::fs::read_to_string(app_sources::app_dir("exec").join("app.json")).unwrap(),
+    )
+    .unwrap();
     assert_eq!(
         exec.operations["run"]
             .args

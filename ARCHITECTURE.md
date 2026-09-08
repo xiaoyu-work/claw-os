@@ -86,6 +86,8 @@ Recoll-backed `docs` tools, explicit-provider Browser `search` and headless
 `web` App have moved as well. The `browser-attached` App, Native Host and MV3
 extension now live in the Browser product too. The reusable `cos-browser`
 engine and privileged attached-browser provider remain here.
+The Terminal product also owns the `exec` App source; core process authority
+and sandbox enforcement remain in the OS.
 The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling
