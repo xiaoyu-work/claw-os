@@ -91,6 +91,9 @@ and sandbox enforcement remain in the OS.
 The Containers product owns `container-manager` and its fourteen MCP handlers;
 runtime execution, App-bound container authority and backend isolation remain
 in the OS's container provider.
+Backup and Recovery now owns `backup-center`; the Restic provider, credential
+loading and mount/owner authorization remain here. Whole-system recovery
+(`system-snapshot`) awaits its own migration and retains separate permissions.
 The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling

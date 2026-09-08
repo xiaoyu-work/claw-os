@@ -33,6 +33,7 @@ There are no sibling-checkout dependencies or runtime download fallbacks.
 | `browser-attached` | App, Native Host and full MV3 extension moved to `clawos-app/products/browser`; ten tools and daemon authority preserved; extension deployment remains manual through the OS's fixed source pin |
 | `exec` | Moved to `clawos-app/products/terminal/apps/exec`; six existing CLI/MCP operations and process registry preserved; native Terminal UI and shared session integration still pending |
 | `container-manager` | Moved to `clawos-app/products/containers/apps/container-manager`; fourteen MCP tools, explicit runtimes, namespace/confirmation checks and observe/control scopes preserved; privileged execution remains OS-owned |
+| `backup-center` | Moved to `clawos-app/products/backup-recovery/apps/backup-center`; seven MCP tools, exact data/credential scopes and destructive confirmation preserved; Restic execution stays OS-owned and `system-snapshot` is pending |
 | Other products and connectors | Pending their individual paired migrations |
 
 Moving source does not complete a product redesign milestone or merge legacy
