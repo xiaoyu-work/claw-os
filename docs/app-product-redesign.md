@@ -141,8 +141,8 @@ an upstream URL, or an unbuilt source download.
 
 | Step | Status | Scope and exit condition |
 | --- | --- | --- |
-| P0 | Documented | Publish this ownership map and link it from maintained navigation. |
-| M1 | In progress | Establish the shared Mail AI business seam: all six existing UI/MCP operations call typed functions without argv translation; both entrances use one canonical installed package, reject malformed input before effects, and preserve authority, consent and AI accounting. |
+| P0 | Published | Publish this ownership map and link it from maintained navigation. |
+| M1 | Implemented | All six UI/MCP AI operations call shared typed functions without argv translation. The canonical App, native launcher and versioned XPI ship together; both transports reject malformed input before effects. Native grants derive from the MCP contract and stay limited to AI/own-memory authority. |
 | M2 | Planned | Define the shared Mail account, folder, message, thread and draft model against the chosen upstream implementation. Prove UI and headless callers address the same account/object, and specify explicit provider selection and per-operation grants. |
 | M3 | Planned | Import the pinned Thunderbird product source needed for in-product integration, preserve provenance/licenses, and wire its source build, package output and security updates. Prove the packaged product runs; do not ship a second independent Agent mailbox client. |
 | M4 | Planned | Complete mailbox read/search/send and AI integration through the shared product backend. Consolidate SMTP delivery; cut over `email`, `mail-ai` and `gateway-email` to the canonical Mail identity atomically with manifests, discovery, launchers, extension identity, skills, packages, consent and data handling. Remove the old identities, not alias them. |
@@ -155,6 +155,12 @@ M1 deliberately keeps the current `mail-ai` identity until the M4 identity and
 data cutover can be complete. It is a preparatory shared-code slice, not an
 alias, a claim of unified mailbox state, or the final product organization.
 No new standalone "Agent email" product is introduced during that interval.
+
+M1 includes framed native/MCP execution, UI request-builder contract coverage,
+native-launch argument and capability regressions, a real XPI build, and
+rootfs package-preservation fixtures. A live Thunderbird session and a full
+installed-system package upgrade have not been exercised; source/UI integration
+and installed-product acceptance remain necessary before completing Mail.
 
 M2 informs the internal changes in M3; upstream source inspection may happen
 during M2. Do not design a second mailbox engine first and merely attach the

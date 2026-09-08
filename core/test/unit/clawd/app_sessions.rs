@@ -1356,6 +1356,80 @@ fn a_launch_grant_for_an_unverifiable_launcher_is_refused() {
 // Request parsing
 // ---------------------------------------------------------------------------
 
+fn native_mail_manifest() -> Manifest {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("apps/mail-ai/app.json");
+    Manifest::from_json(&std::fs::read_to_string(path).unwrap()).unwrap()
+}
+
+#[test]
+fn native_mail_caps_use_the_shared_mcp_contract() {
+    let manifest = native_mail_manifest();
+    assert!(manifest.operations.is_empty());
+    let caps = native_manifest_caps(&manifest).unwrap();
+    assert!(caps.covers(&Cap::new(Verb::AI_CHAT_UNTRUSTED, Scope::Wild)));
+    assert!(caps.covers(&Cap::new(
+        Verb::MEMORY_WRITE,
+        Scope::self_ref("mail-ai")
+    )));
+    assert_eq!(caps.len(), 2);
+}
+
+#[test]
+fn native_mail_caps_reject_other_products_and_missing_mcp() {
+    let mut manifest = native_mail_manifest();
+    manifest.id = "email".to_string();
+    assert!(native_manifest_caps(&manifest).is_err());
+    manifest.id = "mail-ai".to_string();
+    manifest.mcp = None;
+    assert!(native_manifest_caps(&manifest).is_err());
+}
+
+#[test]
+fn native_mail_caps_do_not_fall_back_to_operations() {
+    let mut manifest = native_mail_manifest();
+    manifest.operations = test_app().manifest.operations;
+    assert!(native_manifest_caps(&manifest).is_err());
+}
+
+#[test]
+fn native_mail_caps_reject_mailbox_and_cross_product_authority() {
+    for (verb, scope) in [
+        (Verb::NET_DIAL, Scope::host("smtp.example.com:587")),
+        (Verb::SECRET_READ, Scope::name("default/SMTP_PASSWORD")),
+        (Verb::MEMORY_WRITE, Scope::self_ref("email")),
+        (Verb::MEMORY_WRITE, Scope::Wild),
+        (Verb::AGENT_INVOKE, Scope::name("calendar/create")),
+    ] {
+        let mut manifest = native_mail_manifest();
+        let need = &mut manifest.mcp.as_mut().unwrap().tools[0].needs[0];
+        need.verb = verb;
+        need.scope = ScopeBinding::Fixed { scope };
+        assert!(
+            native_manifest_caps(&manifest).is_err(),
+            "native host accepted {verb}"
+        );
+    }
+}
+
+#[test]
+fn native_mail_caps_reject_argument_dependent_authority() {
+    let mut manifest = native_mail_manifest();
+    manifest.mcp.as_mut().unwrap().tools[0].needs[0].when =
+        Some(crate::caps::manifest::NeedCondition::ArgPresent {
+            arg: "body".to_string(),
+        });
+    assert!(native_manifest_caps(&manifest).is_err());
+    manifest.mcp.as_mut().unwrap().tools[0].needs[0].when = None;
+    manifest.mcp.as_mut().unwrap().tools[0].needs[0].scope = ScopeBinding::FromArg {
+        arg: "body".to_string(),
+        transform: crate::caps::manifest::ScopeTransform::Identity,
+    };
+    assert!(native_manifest_caps(&manifest).is_err());
+}
+
 #[test]
 fn launch_kind_is_a_closed_set() {
     assert!(launch_kind(&serde_json::json!({"kind": "operation"})).is_ok());

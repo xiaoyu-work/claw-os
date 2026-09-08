@@ -1063,9 +1063,9 @@ pub fn run_native_app_host(
     let app_dir = app_dir
         .canonicalize()
         .map_err(|error| format!("canonicalize native App directory: {error}"))?;
-    if app_dir != Path::new("/usr/lib/cos/mail-ai") {
+    if app_dir != Path::new("/usr/lib/cos/apps/mail-ai") {
         return Err(format!(
-            "native mail-ai host must run from /usr/lib/cos/mail-ai, got {}",
+            "native mail-ai host must run from /usr/lib/cos/apps/mail-ai, got {}",
             app_dir.display()
         ));
     }

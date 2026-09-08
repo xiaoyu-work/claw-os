@@ -29,6 +29,7 @@ persistence, and structured primitive dispatch.
 | `src/router.rs` | Top-level command and hidden bridge dispatch |
 | `src/bin/clawd.rs` | System daemon entry |
 | `src/bin/claw-agentd.rs` | Unprivileged agent worker entry |
+| `src/bin/claw-mail-ai-host.rs` | Trusted Thunderbird launcher for the canonical `/usr/lib/cos/apps/mail-ai` implementation |
 | `src/bin/claw-security-floor.rs` | Update downgrade-protection verifier used by maintainer scripts |
 | `src/update/` | Signed release manifest, monotonic security floor, recovery authorizations, runtime gates |
 | `src/clawd/server.rs` | IPC broker, identity checks, RPC dispatch, audit hook |

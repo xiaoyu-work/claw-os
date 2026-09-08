@@ -455,6 +455,9 @@ install -m 755 "$EXTENSION_HOST_BIN" "$AGENT_STAGE/usr/local/bin/claw-extension-
 install -m 755 "$APPROVAL_HELPER_BIN" "$AGENT_STAGE/usr/local/bin/claw-approval-helper"
 install -m 755 "$APP_RUNNER_BIN" "$AGENT_STAGE/usr/local/bin/claw-app-runner"
 install -m 755 "$MAIL_AI_HOST_BIN" "$AGENT_STAGE/usr/lib/cos/claw-mail-ai-host"
+python3 "$SCRIPT_DIR/build-mail-extension.py" \
+    "$PROJECT_DIR/extensions/claw-mail-ai" \
+    "$AGENT_STAGE/usr/lib/thunderbird/distribution/extensions/claw-mail-ai@claw.os.xpi"
 install -m 755 "$SECURITY_FLOOR_BIN" "$AGENT_STAGE/usr/lib/cos/bin/claw-security-floor"
 install -m 755 "$SCRIPT_DIR/common/security-floor-hook" \
     "$AGENT_STAGE/usr/lib/cos/apt/security-floor-hook"

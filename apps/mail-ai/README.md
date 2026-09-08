@@ -1,106 +1,130 @@
-# mail-ai — Agent-side AI helpers for Thunderbird
+# Mail AI — shared business foundation
 
-The agent-driven half of the Mail AI feature. This app exposes a tiny
-verb surface that the [`claw-mail-ai` Thunderbird extension](../../extensions/claw-mail-ai)
-calls over Native Messaging. Every model call goes through the kernel's
-AI gate (`cos ai chat`), so keys, monthly budget, safety pipeline and
-audit log are uniform with the rest of `apps/`.
+This is **M1**, the first foundation of the
+[Mail product redesign](../../docs/app-product-redesign.md). The App identity
+remains `mail-ai`. It is not a unified mailbox, a completed Mail product, or a
+completed upstream fork. M2 defines the mailbox contract, M3 integrates the
+pinned upstream source, and M4 merges `email`, `mail-ai`, and `gateway-email`
+with an atomic identity and data/consent cutover.
 
-## Verbs
+The Thunderbird [MailExtension](../../extensions/claw-mail-ai/) and the
+system Agent's authenticated MCP tools call the same typed Python functions in
+[`main.py`](main.py). There are no App-to-App calls, subprocess dispatchers,
+argv parsers, legacy aliases, or duplicated operation schemas. Thunderbird is
+a UI dependency, not a dependency of the headless business implementation.
 
-| Verb            | Purpose                                                                      |
-|-----------------|------------------------------------------------------------------------------|
-| `summarize`     | One-line summary + key points + action items + sentiment for a single email. |
-| `smart_reply`   | Three reply drafts (formal / casual / short) for a thread.                   |
-| `smart_compose` | Continue / complete a draft from a brief intent.                             |
-| `translate`     | Translate email text into a target language.                                 |
-| `triage`        | Classify an incoming email: category + tags + priority.                      |
-| `chat`          | Grounded Q&A over a supplied list of recent emails.                          |
+## Business contract
 
-Two surfaces share these verbs:
+[`app.json`](app.json) is the sole MCP schema. Optional CLI `binding` metadata
+stays on its MCP arguments; there is no separate `operations` table.
 
-1. **The Thunderbird extension** — via the dedicated kernel
-   `claw-mail-ai-host` launcher, which registers the `mail-ai` App
-   identity before starting
-   `native_host.py` over Native Messaging.
-2. **The cos CLI** — `cos app mail-ai <verb> …`, so the same logic is
-   testable from the command line and reachable by other agents.
+| Function / MCP suffix | Required arguments | Optional arguments |
+| --- | --- | --- |
+| `summarize` | `body` | `subject`, `sender`, `lang` |
+| `smart_reply` | `thread` | `subject`, `sender`, `intent`, `lang` |
+| `smart_compose` | `intent` | `subject`, `recipient`, `draft`, `style`, `lang` |
+| `translate` | `text`, `target` | — |
+| `triage` | At least one nonblank `subject`, `sender`, `snippet` | `has_attachments` |
+| `chat` | `question` | `context_json`, `lang` |
 
-## CLI examples
+Every argument is a string except `has_attachments`, which is a boolean.
+`style` is `formal`, `casual`, or `short`; language defaults to `en`.
+`context_json` is a JSON-encoded array of objects with optional string fields
+`sender`, `subject`, `date`, `snippet`. No other context fields are accepted.
+The complete array is validated before the first 20 messages are selected.
+Unknown fields, wrong types, missing required inputs, blank content, and
+malformed context fail before capability checks, model calls, or memory writes.
+
+The existing body/thread/draft limits remain 12,000/24,000/4,000 characters.
+Triage uses at most 1,000 snippet characters; chat uses at most 400 per message.
+Summary quote stripping, response repair, output shaping, and per-operation AI
+unit caps are retained. Chat answers only from the supplied context; it does not
+query a mailbox itself.
+
+## Two transports, one implementation
+
+**MCP:** [`server.py`](server.py) uses public `App.from_manifest`, `App.tool`,
+and `App.serve`. The SDK validates manifest arguments and authenticated call
+metadata. A transport-only result encoder preserves MCP `isError` and structured
+error details; it does not translate argument names or construct argv.
+
+**Native Messaging:** [`native_host.py`](native_host.py) accepts a four-byte
+little-endian length prefix followed by UTF-8 JSON:
+
+```json
+{"id":"request-1","verb":"summarize","args":{"body":"Please review.","sender":"alex"}}
+```
+
+Success is `{"id":"request-1","ok":true,"result":{...}}`; business failures
+are `{"id":"request-1","ok":false,"error":"...","detail":{...}}`.
+The envelope must contain exactly `id`, `verb`, and `args`; the first two
+are nonempty strings and `args` is an object. Argument spellings are identical
+to the table above; underscore/hyphen/`from` aliases are not supported.
+
+Requests call the business functions in process. This transport does not
+invoke `cos app`, manufacture an MCP identity, or access SDK authentication
+internals. Bad requests return an error and leave the host healthy. Truncated,
+zero/oversized, non-UTF-8, or invalid-JSON frames produce a diagnostic on stderr
+and a nonzero exit. Normal EOF exits successfully. Unexpected request errors
+do not expose tracebacks or message bodies.
+
+## Authority and deployment
+
+The root-owned `claw-mail-ai-host` launcher is responsible for verifying the
+Thunderbird parent and registering the provenance-checked `mail-ai` App session.
+The canonical installed App directory is `/usr/lib/cos/apps/mail-ai`; there is
+no separate executable App copy at `/usr/lib/cos/mail-ai`.
+
+The launcher starts `/usr/lib/cos/apps/mail-ai/native_host.py` with isolated
+Python. The host explicitly adds its own canonical directory and
+`/usr/lib/cos/python` for the packaged SDK and runtime; it does not depend on
+`PYTHONPATH` or search legacy install roots. Source-checkout execution uses only
+the matching repository SDK/runtime source directories.
+
+All model calls require exact `ai.chat.untrusted` authority and use
+`claw_os_sdk.ai.chat(origin="external-content")`. Core retains provider
+credentials, owner identity, consent, budgets, safety, and audit. The manifest
+retains strict safety and a 500,000-unit monthly budget. Only summaries and the
+existing notable-triage cases write memory under the `mail-ai` self scope;
+only `memory.MemoryError` is ignored for that optional write.
+
+The installed `claw-os-agent` package supplies the canonical App, shared Python
+SDK/runtime, root-owned launcher, and protocol-matched Thunderbird XPI at
+`/usr/lib/thunderbird/distribution/extensions/claw-mail-ai@claw.os.xpi`.
+Packaging both protocol peers together keeps their argument contracts aligned
+on APT upgrades without making Thunderbird a headless App dependency.
+The canonical-argument transition advances both manifests to `0.2.0` while
+retaining their identities, so Thunderbird recognizes the packaged XPI update.
+Build and install the matching package
+through the normal [packaging workflow](../../packaging/README.md) first.
+Neither the [`claw-mail-ai` rootfs feature](../../rootfs/features/claw-mail-ai/)
+nor [`tools/install-mail-ai.sh`](../../tools/install-mail-ai.sh) copies or
+overwrites those package-owned files; preserving their package provenance is
+required.
+
+The rootfs feature supplies the Thunderbird UI integration and reuses that
+installed package, including its XPI. The development installer only registers
+the native host and Thunderbird policies after requiring the matching
+package-owned App, SDK/runtime, launcher, and XPI. It does not regenerate or
+shell-copy an extension from source, accept a custom host binary, or silently
+fall back to a source App copy. Rebuild/reinstall the package when either the
+business implementation or extension UI changes.
+
+`python3 -I apps/mail-ai/native_host.py --probe` is a side-effect-free
+source-checkout import/operation-list diagnostic, not an installed integration,
+model, or mailbox test.
+
+## Validation
+
+From the repository root on Linux/WSL:
 
 ```bash
-# Summarize
-cos app mail-ai summarize \
-    --subject "Q3 plan" \
-    --from "alex@example.com" \
-    --body  "Hello, please review the attached plan and let me know …"
-
-# Smart reply
-cos app mail-ai smart_reply \
-    --subject "Q3 plan" \
-    --from "alex@example.com" \
-    --thread "From: alex\n…\n\nFrom: you\n…"
-
-# Smart compose
-cos app mail-ai smart_compose \
-    --to "alex@example.com" \
-    --intent "ask Alex to push the deadline by one week" \
-    --style formal
-
-# Translate
-cos app mail-ai translate --text "Bonjour, comment ça va?" --target English
-
-# Triage
-cos app mail-ai triage \
-    --from "noreply@stripe.com" \
-    --subject "Your receipt from Stripe" \
-    --snippet "Thanks for your payment of \$12 …"
-
-# Chat (RAG-style over supplied context)
-cos app mail-ai chat \
-    --question "Who proposed the budget cut?" \
-    --context-json '[{"from":"alex","subject":"Budget","snippet":"…"}]'
+PYTHONPATH=claw-os-sdk/python/src:cos-runtime/python/src \
+  python3 -m pytest -q apps/mail-ai/test_main.py extensions/claw-mail-ai/test_contract.py
 ```
 
-## Native Messaging wire format
-
-The extension speaks Mozilla's Native Messaging protocol (4-byte little-
-endian length prefix + JSON body) over stdio:
-
-```
-→ host:  { "id": "<uuid>", "verb": "summarize", "args": { "body": "…", "subject": "Q3" } }
-← host:  { "id": "<uuid>", "ok": true,  "result": { "summary": "…", … } }
-← host:  { "id": "<uuid>", "ok": false, "error":  "<reason>", "detail": { … } }
-```
-
-`args` is a flat JSON object; underscores in keys are translated to
-dashes, matching the CLI flags (e.g. `has_attachments → --has-attachments`).
-
-## Deployment
-
-System-wide install lives at `rootfs/features/claw-mail-ai/`. It drops:
-
-- `/etc/thunderbird/native-messaging-hosts/os.claw.mail_ai.json`
-  — the manifest Thunderbird reads to find this host. The
-  `allowed_extensions` array pins the extension ID
-  `claw-mail-ai@claw.os`.
-- `/usr/lib/cos/mail-ai/{native_host.py, main.py, _lib/…}`
-  — a self-contained copy of this app. The root-owned
-  `/usr/lib/cos/claw-mail-ai-host` binary invokes it.
-- `/etc/thunderbird/policies/policies.json`
-  — `ExtensionSettings` that pins the extension as system-installed
-  and non-removable, and disables Mozilla telemetry.
-
-For local dev, see `tools/install-mail-ai.sh`.
-
-## Why route through cos ai chat
-
-App developers never see provider SDKs, model names, or API keys.
-The machine owner configures one provider in `/etc/cos/agent.toml`;
-every app's call uses that. External email content is authorized with
-`ai.chat.untrusted`; `claw_os_sdk.ai.chat(origin="external-content")`
-is the only sanctioned path.
-
-This means the same extension code runs against Claude, GPT-4o, a
-local Llama 3, or any future provider, without any code change inside
-this app.
+Tests compare real framed Native Messaging and SDK MCP requests for all six
+operations using deterministic injected AI/policy/memory effects, validate
+failure shapes and malformed input, and execute the JavaScript UI request
+builders with Node and Thunderbird stubs. They do not require Thunderbird or
+an external model, and do not replace core launcher/session/provenance tests.

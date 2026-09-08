@@ -22,6 +22,9 @@ jobs:
           set -euo pipefail
           scripts=(
             scripts/lib/image-identity.sh
+            rootfs/features/claw-mail-ai/install.sh
+            tools/install-mail-ai.sh
+            packaging/deb/build-debs.sh
             targets/docker/build.sh
             targets/docker/container-entrypoint.sh
             targets/wsl/build.sh
@@ -212,4 +215,7 @@ jobs:
       - name: Run Python tests
         env:
           PYTHONPATH: claw-os-sdk/python/src:cos-runtime/python/src
-        run: python3 -m pytest -q apps adapters claw-os-sdk/python/src cos-runtime/python/src
+        run: >-
+          python3 -m pytest -q apps adapters claw-os-sdk/python/src cos-runtime/python/src
+          extensions/claw-mail-ai/test_contract.py
+          packaging/deb/tests/test_mail_extension.py rootfs/features/claw-mail-ai/test_install.py

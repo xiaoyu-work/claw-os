@@ -128,7 +128,7 @@
       pending.set(id, { resolve, timer });
 
       try {
-        port.postMessage({ id, verb, args: args || {} });
+        port.postMessage({ id, verb, args });
       } catch (e) {
         clearTimeout(timer);
         pending.delete(id);

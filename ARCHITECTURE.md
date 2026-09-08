@@ -118,6 +118,14 @@ safety and budgets and persists exact safety-filtered model inputs in the
 owner-partitioned AI ledger. Revoked/replaced grants cancel in-flight calls;
 dispatched reservations are conservatively charged on cancellation.
 
+Mail's UI Native Messaging host and Agent MCP server use the same installed
+package at `/usr/lib/cos/apps/mail-ai`; the desktop feature does not install a
+second implementation. The native host is limited to untrusted-content AI and
+its own memory-write scope, derived from the MCP contract. It cannot inherit
+mailbox or credential authority by adding a tool to that manifest. Full Mail
+account/backend and upstream-source unification remain separate redesign
+milestones, not behavior implied by this shared AI entry point.
+
 Filesystem providers resolve the authenticated owner's primary and
 supplementary groups from the system account database, never from an isolated
 extension's execution GID. Synchronous filesystem guards change only the

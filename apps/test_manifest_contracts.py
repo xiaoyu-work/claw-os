@@ -433,10 +433,14 @@ def _sources():
 
 def _mcp_tool_bindings(tree: ast.Module) -> list[str]:
     bindings: list[str] = []
-    for node in tree.body:
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            decorators = node.decorator_list
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Call):
+            decorators = [node.func]
+        else:
             continue
-        for decorator in node.decorator_list:
+        for decorator in decorators:
             if (
                 isinstance(decorator, ast.Call)
                 and isinstance(decorator.func, ast.Attribute)
@@ -447,6 +451,19 @@ def _mcp_tool_bindings(tree: ast.Module) -> list[str]:
             ):
                 bindings.append(decorator.args[0].value)
     return bindings
+
+
+def test_mcp_binding_inspection_supports_shared_business_functions() -> None:
+    tree = ast.parse("""
+@app.tool("example.decorated")
+def decorated():
+    pass
+
+def create_app():
+    app.tool("example.shared")(business_function)
+    app.tool("example.not_bound")
+""")
+    assert sorted(_mcp_tool_bindings(tree)) == ["example.decorated", "example.shared"]
 
 
 def test_manifest_operations_match_dispatch() -> None:
@@ -1116,7 +1133,6 @@ def test_published_schema_rejects_removed_app_contracts() -> None:
             "lifecycle": "always-on",
             "access": {
                 "system_agent": True,
-                "apps": ["crm"],
                 "external_agents": False,
             },
             "tools": [
@@ -1140,9 +1156,10 @@ def test_published_schema_rejects_removed_app_contracts() -> None:
     conflicting["session"] = {"tools": []}
     assert list(validator.iter_errors(conflicting))
 
-    duplicate_callers = json.loads(json.dumps(mcp_first))
-    duplicate_callers["mcp"]["access"]["apps"] = ["crm", "crm"]
-    assert list(validator.iter_errors(duplicate_callers))
+    for callers in ([], ["crm"], ["crm", "crm"]):
+        app_callers = json.loads(json.dumps(mcp_first))
+        app_callers["mcp"]["access"]["apps"] = callers
+        assert list(validator.iter_errors(app_callers))
 
     mcp_binding = json.loads(json.dumps(mcp_first))
     mcp_binding["mcp"]["tools"][0]["args"][0]["binding"] = "flag"

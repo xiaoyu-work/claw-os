@@ -42,6 +42,12 @@ packaging/
 
 `claw-os-agent` is the exact same package on Ubuntu and Claw OS. It includes
 `cos-browser`, the per-task App/MCP extension host, and all command-style apps.
+It also owns the Mail XPI at
+`/usr/lib/thunderbird/distribution/extensions/claw-mail-ai@claw.os.xpi`, built
+reproducibly by `deb/build-mail-extension.py`. This small UI protocol adapter
+must upgrade with its native host and Python implementation, not wait for an
+independent desktop release. It adds no Thunderbird runtime dependency;
+desktop/rootfs registration enables it when Thunderbird is installed.
 It also creates the empty root-owned `/usr/lib/cos/extensions` registry.
 Executable Agent extension packages placed there remain inactive until their
 signed id is selected in user configuration; see

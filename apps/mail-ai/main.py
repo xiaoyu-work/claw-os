@@ -1,14 +1,10 @@
-"""mail-ai — AI helpers for the Thunderbird ``claw-mail-ai`` MailExtension.
+"""Shared Mail AI business functions for MCP and Thunderbird Native Messaging.
 
-This is the **agent-side** verb surface that the MailExtension talks to
-over a Native Messaging port (see ``native_host.py``). Like every other
-``apps/`` Python app, it routes every model call through the kernel's
-AI gate via ``claw_os_sdk.ai`` — keys, budgets, safety, audit all happen there.
-
-The MailExtension is the **user-driven** surface: the user clicks a
-button, the extension hands us the email body, we hand back a summary
-or a draft. Nothing in this app makes outbound network calls of its
-own; the only privileged thing it does is invoke ``cos ai chat``.
+Both transports call these typed functions in process. AI access goes through
+the kernel gate via ``claw_os_sdk.ai``; credentials, consent, budgets, safety
+and audit stay there. Summary and notable-triage memory writes retain the
+existing ``mail-ai`` self scope. No mailbox ownership or App-to-App calls live
+here: this is the preparatory M1 foundation, not a unified Mail product yet.
 
 Operations
 ----------
@@ -25,7 +21,6 @@ Every operation returns a JSON dict. The shape is stable enough that
 
 from __future__ import annotations
 
-import argparse
 import json
 import re
 
@@ -122,14 +117,18 @@ def _safe_loads(s: str) -> dict | None:
 
 def _ai_call(prompt: str, *, system: str, max_units: int) -> dict:
     """Single chokepoint for every model call in this app."""
-    policy.require("ai.chat.untrusted", wild=True)
     try:
+        policy.require("ai.chat.untrusted", wild=True)
         response = ai.chat(
             prompt=prompt,
             origin="external-content",
             system=system,
             max_units=max_units,
         )
+    except policy.PermissionDenied as denied:
+        return {"error": str(denied), "denial": denied.denial}
+    except policy.PolicyUnavailable as exc:
+        return {"error": f"capability check failed: {exc}"}
     except ai.AiBudgetExceeded as exc:
         return {"error": "AI budget exceeded for this app", "detail": exc.payload}
     except ai.AiSafetyViolation as exc:
@@ -176,71 +175,23 @@ def _wrap(result: dict, payload: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Parsers
+# Shared input validation
 # ---------------------------------------------------------------------------
 
-def _build_summarize_parser():
-    p = argparse.ArgumentParser(prog="cos mail-ai summarize", add_help=False)
-    p.add_argument("--subject", default="")
-    p.add_argument("--from", dest="sender", default="")
-    p.add_argument("--body", required=True)
-    p.add_argument("--lang", default="en", help="output language, e.g. en, zh_CN")
-    return p
+def _text_error(*, required: tuple[str, ...] = (), **values: str) -> dict | None:
+    for name, value in values.items():
+        if not isinstance(value, str):
+            return {"error": f"{name} must be a string"}
+        if name in required and not value.strip():
+            return {"error": f"{name} must be non-empty"}
+    return None
 
 
-def _build_smart_reply_parser():
-    p = argparse.ArgumentParser(prog="cos mail-ai smart_reply", add_help=False)
-    p.add_argument("--subject", default="")
-    p.add_argument("--from", dest="sender", default="")
-    p.add_argument("--thread", required=True, help="full thread text, oldest-first")
-    p.add_argument("--my-intent", dest="intent", default="",
-                   help="optional hint, e.g. 'decline politely'")
-    p.add_argument("--lang", default="en")
-    return p
-
-
-def _build_smart_compose_parser():
-    p = argparse.ArgumentParser(prog="cos mail-ai smart_compose", add_help=False)
-    p.add_argument("--subject", default="")
-    p.add_argument("--to", dest="recipient", default="")
-    p.add_argument("--draft", default="", help="current draft text (may be empty)")
-    p.add_argument("--intent", required=True, help="what the user wants to say")
-    p.add_argument("--style", default="formal", choices=["formal", "casual", "short"])
-    p.add_argument("--lang", default="en")
-    return p
-
-
-def _build_translate_parser():
-    p = argparse.ArgumentParser(prog="cos mail-ai translate", add_help=False)
-    p.add_argument("--text", required=True)
-    p.add_argument("--target", required=True, help="target language code or name")
-    return p
-
-
-def _build_triage_parser():
-    p = argparse.ArgumentParser(prog="cos mail-ai triage", add_help=False)
-    p.add_argument("--subject", default="")
-    p.add_argument("--from", dest="sender", default="")
-    p.add_argument("--snippet", default="", help="short body preview")
-    p.add_argument("--has-attachments", dest="has_attachments",
-                   action="store_true")
-    return p
-
-
-def _build_chat_parser():
-    p = argparse.ArgumentParser(prog="cos mail-ai chat", add_help=False)
-    p.add_argument("--question", required=True)
-    p.add_argument("--context-json", dest="context_json", default="[]",
-                   help="JSON list of {from,subject,date,snippet} objects")
-    p.add_argument("--lang", default="en")
-    return p
-
-
-def _remember_summary(opts, payload):
+def _remember_summary(subject: str, sender: str, payload: dict) -> None:
     """Push the summary of an email into the agent's memory."""
     try:
-        subject = opts.subject or "(no subject)"
-        sender = opts.sender or "(unknown)"
+        subject = subject or "(no subject)"
+        sender = sender or "(unknown)"
         summary = (payload.get("summary") or "").strip()
         action_items = payload.get("action_items") or []
         if not summary and not action_items:
@@ -262,7 +213,7 @@ def _remember_summary(opts, payload):
         pass
 
 
-def _remember_triage(opts, payload):
+def _remember_triage(subject: str, sender: str, payload: dict) -> None:
     """Push a triage decision into the agent's memory (only when notable)."""
     try:
         priority = payload.get("priority")
@@ -270,8 +221,8 @@ def _remember_triage(opts, payload):
         # Skip low-signal triage to keep memory clean.
         if priority not in ("high",) and category in ("other", "newsletter", "marketing"):
             return
-        subject = opts.subject or "(no subject)"
-        sender = opts.sender or "(unknown)"
+        subject = subject or "(no subject)"
+        sender = sender or "(unknown)"
         reason = payload.get("reason") or ""
         text = f"Triaged email from {sender} — {subject}: {category} (priority={priority})"
         if reason:
@@ -303,22 +254,19 @@ _SUMMARIZE_SYSTEM = (
 )
 
 
-def cmd_summarize(args):
-    parser = _build_summarize_parser()
-    try:
-        opts = parser.parse_args(args)
-    except SystemExit:
-        return {"error": "usage: summarize --body <text> [--subject S] [--from F] [--lang L]"}
-
-    body = _truncate(_strip_quoted(opts.body), MAX_BODY_CHARS)
+def summarize(*, body: str, subject: str = "", sender: str = "", lang: str = "en") -> dict:
+    error = _text_error(required=("body", "lang"), body=body, subject=subject, sender=sender, lang=lang)
+    if error:
+        return error
+    body = _truncate(_strip_quoted(body), MAX_BODY_CHARS)
     if not body.strip():
-        return {"error": "--body must be non-empty after quote-stripping"}
+        return {"error": "body must be non-empty after quote-stripping"}
 
     prompt = (
         f"Email metadata:\n"
-        f"  From:    {opts.sender or '(unknown)'}\n"
-        f"  Subject: {opts.subject or '(no subject)'}\n"
-        f"Reply language: {opts.lang}\n\n"
+        f"  From:    {sender or '(unknown)'}\n"
+        f"  Subject: {subject or '(no subject)'}\n"
+        f"Reply language: {lang}\n\n"
         f"--- email body ---\n{body}\n--- end ---"
     )
 
@@ -334,7 +282,7 @@ def cmd_summarize(args):
         "sentiment": str(parsed.get("sentiment") or "neutral"),
         "raw": result["text"] if not parsed else "",
     }
-    _remember_summary(opts, payload)
+    _remember_summary(subject, sender, payload)
     return _wrap(result, payload)
 
 
@@ -354,25 +302,24 @@ _SMART_REPLY_SYSTEM = (
 )
 
 
-def cmd_smart_reply(args):
-    parser = _build_smart_reply_parser()
-    try:
-        opts = parser.parse_args(args)
-    except SystemExit:
-        return {"error": "usage: smart_reply --thread <text> [--subject S] [--from F] [--my-intent I] [--lang L]"}
-
-    thread = _truncate(opts.thread, MAX_THREAD_CHARS)
-    if not thread.strip():
-        return {"error": "--thread must be non-empty"}
+def smart_reply(
+    *, thread: str, subject: str = "", sender: str = "", intent: str = "", lang: str = "en",
+) -> dict:
+    error = _text_error(
+        required=("thread", "lang"), thread=thread, subject=subject, sender=sender, intent=intent, lang=lang,
+    )
+    if error:
+        return error
+    thread = _truncate(thread, MAX_THREAD_CHARS)
 
     intent_hint = (
-        f"User wants the reply to: {opts.intent}\n" if opts.intent.strip() else ""
+        f"User wants the reply to: {intent}\n" if intent.strip() else ""
     )
     prompt = (
         f"Conversation metadata:\n"
-        f"  Last sender: {opts.sender or '(unknown)'}\n"
-        f"  Subject:     {opts.subject or '(no subject)'}\n"
-        f"  Reply language: {opts.lang}\n"
+        f"  Last sender: {sender or '(unknown)'}\n"
+        f"  Subject:     {subject or '(no subject)'}\n"
+        f"  Reply language: {lang}\n"
         f"{intent_hint}\n"
         f"--- thread (oldest first) ---\n{thread}\n--- end ---"
     )
@@ -403,18 +350,20 @@ _SMART_COMPOSE_STYLES = {
 }
 
 
-def cmd_smart_compose(args):
-    parser = _build_smart_compose_parser()
-    try:
-        opts = parser.parse_args(args)
-    except SystemExit:
-        return {"error": "usage: smart_compose --intent <text> [--draft D] [--subject S] [--to T] [--style formal|casual|short] [--lang L]"}
-
-    if not opts.intent.strip():
-        return {"error": "--intent must be non-empty"}
-
-    draft = _truncate(opts.draft, MAX_DRAFT_CHARS)
-    style_hint = _SMART_COMPOSE_STYLES.get(opts.style, _SMART_COMPOSE_STYLES["formal"])
+def smart_compose(
+    *, intent: str, subject: str = "", recipient: str = "", draft: str = "",
+    style: str = "formal", lang: str = "en",
+) -> dict:
+    error = _text_error(
+        required=("intent", "lang"), intent=intent, subject=subject, recipient=recipient,
+        draft=draft, style=style, lang=lang,
+    )
+    if error:
+        return error
+    if style not in _SMART_COMPOSE_STYLES:
+        return {"error": "style must be one of formal, casual, short"}
+    draft = _truncate(draft, MAX_DRAFT_CHARS)
+    style_hint = _SMART_COMPOSE_STYLES[style]
 
     system = (
         "You are an email assistant. Produce a complete email body the user "
@@ -425,10 +374,10 @@ def cmd_smart_compose(args):
     )
 
     prompt = (
-        f"Recipient: {opts.recipient or '(unknown)'}\n"
-        f"Subject:   {opts.subject or '(no subject yet)'}\n"
-        f"Language:  {opts.lang}\n"
-        f"User intent: {opts.intent}\n\n"
+        f"Recipient: {recipient or '(unknown)'}\n"
+        f"Subject:   {subject or '(no subject yet)'}\n"
+        f"Language:  {lang}\n"
+        f"User intent: {intent}\n\n"
         f"--- current draft (may be empty) ---\n{draft}\n--- end ---"
     )
 
@@ -443,7 +392,7 @@ def cmd_smart_compose(args):
     return _wrap(result, {
         "body": body,
         "subject": str(parsed.get("subject") or "").strip(),
-        "style": opts.style,
+        "style": style,
         "raw": result["text"] if not parsed else "",
     })
 
@@ -460,21 +409,14 @@ _TRANSLATE_SYSTEM = (
 )
 
 
-def cmd_translate(args):
-    parser = _build_translate_parser()
-    try:
-        opts = parser.parse_args(args)
-    except SystemExit:
-        return {"error": "usage: translate --text <text> --target <lang>"}
-
-    text = _truncate(opts.text, MAX_BODY_CHARS)
-    if not text.strip():
-        return {"error": "--text must be non-empty"}
-    if not opts.target.strip():
-        return {"error": "--target must be non-empty"}
+def translate(*, text: str, target: str) -> dict:
+    error = _text_error(required=("text", "target"), text=text, target=target)
+    if error:
+        return error
+    text = _truncate(text, MAX_BODY_CHARS)
 
     prompt = (
-        f"Target language: {opts.target}\n\n"
+        f"Target language: {target}\n\n"
         f"--- source ---\n{text}\n--- end ---"
     )
 
@@ -484,7 +426,7 @@ def cmd_translate(args):
 
     return _wrap(result, {
         "translation": result["text"].strip(),
-        "target": opts.target,
+        "target": target,
     })
 
 
@@ -507,21 +449,22 @@ _TRIAGE_SYSTEM = (
 )
 
 
-def cmd_triage(args):
-    parser = _build_triage_parser()
-    try:
-        opts = parser.parse_args(args)
-    except SystemExit:
-        return {"error": "usage: triage [--subject S] [--from F] [--snippet T] [--has-attachments]"}
-
-    if not (opts.subject or opts.sender or opts.snippet):
-        return {"error": "at least one of --subject / --from / --snippet must be supplied"}
+def triage(
+    *, subject: str = "", sender: str = "", snippet: str = "", has_attachments: bool = False,
+) -> dict:
+    error = _text_error(subject=subject, sender=sender, snippet=snippet)
+    if error:
+        return error
+    if not isinstance(has_attachments, bool):
+        return {"error": "has_attachments must be a boolean"}
+    if not any(value.strip() for value in (subject, sender, snippet)):
+        return {"error": "at least one of subject, sender, snippet must be non-empty"}
 
     prompt = (
-        f"From:        {opts.sender or '(unknown)'}\n"
-        f"Subject:     {opts.subject or '(none)'}\n"
-        f"Attachments: {'yes' if opts.has_attachments else 'no'}\n"
-        f"Snippet:     {opts.snippet[:1000] if opts.snippet else '(empty)'}\n"
+        f"From:        {sender or '(unknown)'}\n"
+        f"Subject:     {subject or '(none)'}\n"
+        f"Attachments: {'yes' if has_attachments else 'no'}\n"
+        f"Snippet:     {snippet[:1000] if snippet else '(empty)'}\n"
     )
 
     result = _ai_call(prompt, system=_TRIAGE_SYSTEM, max_units=1000)
@@ -542,7 +485,7 @@ def cmd_triage(args):
         "reason": str(parsed.get("reason") or "").strip(),
         "raw": result["text"] if not parsed else "",
     }
-    _remember_triage(opts, payload)
+    _remember_triage(subject, sender, payload)
     return _wrap(result, payload)
 
 
@@ -560,39 +503,41 @@ _CHAT_SYSTEM = (
 )
 
 
-def cmd_chat(args):
-    parser = _build_chat_parser()
+def chat(*, question: str, context_json: str = "[]", lang: str = "en") -> dict:
+    error = _text_error(
+        required=("question", "context_json", "lang"), question=question, context_json=context_json, lang=lang,
+    )
+    if error:
+        return error
     try:
-        opts = parser.parse_args(args)
-    except SystemExit:
-        return {"error": "usage: chat --question <text> [--context-json <json>] [--lang L]"}
-
-    if not opts.question.strip():
-        return {"error": "--question must be non-empty"}
-
-    try:
-        context = json.loads(opts.context_json)
-        if not isinstance(context, list):
-            return {"error": "--context-json must be a JSON array"}
-    except json.JSONDecodeError as exc:
-        return {"error": f"--context-json is not valid JSON: {exc}"}
+        context = json.loads(context_json)
+    except (json.JSONDecodeError, RecursionError):
+        return {"error": "context_json is not valid JSON"}
+    if not isinstance(context, list):
+        return {"error": "context_json must be a JSON array"}
+    for message in context:
+        if not isinstance(message, dict):
+            return {"error": "context_json messages must be objects"}
+        if message.keys() - {"sender", "subject", "date", "snippet"}:
+            return {"error": "context_json message has unknown fields"}
+        error = _text_error(**message)
+        if error:
+            return {"error": f"context_json: {error['error']}"}
 
     context = context[:MAX_CONTEXT_MESSAGES]
 
     lines = []
     for i, m in enumerate(context, start=1):
-        if not isinstance(m, dict):
-            continue
         lines.append(
-            f"[{i}] from={m.get('from', '?')} | date={m.get('date', '?')} | "
+            f"[{i}] from={m.get('sender', '?')} | date={m.get('date', '?')} | "
             f"subject={m.get('subject', '(none)')}\n"
             f"     {(m.get('snippet') or '')[:400]}"
         )
     ctx_block = "\n".join(lines) if lines else "(no context supplied)"
 
     prompt = (
-        f"Reply language: {opts.lang}\n"
-        f"Question: {opts.question}\n\n"
+        f"Reply language: {lang}\n"
+        f"Question: {question}\n\n"
         f"--- mailbox context ({len(context)} messages) ---\n"
         f"{ctx_block}\n"
         f"--- end ---"
@@ -615,29 +560,14 @@ def cmd_chat(args):
 
 
 # ---------------------------------------------------------------------------
-# Entry point
+# Shared operation registry (no transport or identity construction)
 # ---------------------------------------------------------------------------
 
 HANDLERS = {
-    "summarize": cmd_summarize,
-    "smart_reply": cmd_smart_reply,
-    "smart_compose": cmd_smart_compose,
-    "translate": cmd_translate,
-    "triage": cmd_triage,
-    "chat": cmd_chat,
+    "summarize": summarize,
+    "smart_reply": smart_reply,
+    "smart_compose": smart_compose,
+    "translate": translate,
+    "triage": triage,
+    "chat": chat,
 }
-
-
-def run(command, args):
-    """Entry point called by cos."""
-    from canonical_argv import normalize_argparse_booleans
-    args = normalize_argparse_booleans(args, bool_flags={"has-attachments"})
-    handler = HANDLERS.get(command)
-    if handler is None:
-        return {"error": f"unknown command: {command}"}
-    try:
-        return handler(args)
-    except policy.PermissionDenied as denied:
-        return {"error": str(denied), "denial": denied.denial}
-    except policy.PolicyUnavailable as exc:
-        return {"error": f"capability check failed: {exc}"}

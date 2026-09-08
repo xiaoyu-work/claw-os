@@ -22,6 +22,8 @@ Debian packages and a signed multi-architecture APT repository.
 | Path | Role |
 | --- | --- |
 | `deb/build-debs.sh` | Package staging and `.deb` assembly |
+| `deb/build-mail-extension.py` | Reproducible Mail XPI, packaged with its native host and shared business implementation |
+| `deb/tests/test_mail_extension.py` | Mail UI/native package ownership, archive identity and reproducibility |
 | `deb/*/control` | Package metadata, ABI generation, and runtime dependencies |
 | `deb/*/{preinst,postinst,prerm,postrm}` | Upgrade/install/remove behavior and the downgrade gates |
 | `deb/claw-os-agent/extension-gid-scan.py` | Root-owned mount/ownership/ACL proof used during Agent postinstall |
@@ -63,6 +65,7 @@ without forcing synchronized versions or publication schedules.
 
 ```bash
 ARCH=amd64 ./packaging/deb/build-debs.sh
+python3 -m pytest -q packaging/deb/tests/test_mail_extension.py rootfs/features/claw-mail-ai/test_install.py
 bash packaging/apt-repo/tests/test-sync-existing-packages.sh
 bash packaging/apt-repo/tests/test-release-security-publication.sh
 bash packaging/deb/tests/test-security-floor-packaging.sh

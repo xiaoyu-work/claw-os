@@ -53,6 +53,14 @@ and agent tasks.
 | `session_scope.rs` | Trusted-session override and its owner-policy clamp |
 | Service modules | One privileged capability provider per domain |
 
+The trusted Mail Native Messaging host derives its standing capabilities from
+the same MCP-only manifest as Agent calls. Its compiled ceiling allows only
+untrusted-content AI and `mail-ai`-scoped memory writes. Conditional,
+argument-bound and mailbox/credential capabilities are refused, not inherited
+when the product gains another tool. Native launch still requires the
+root-owned launcher and Thunderbird parent; consent and AI accounting remain
+in the broker gate.
+
 ## Wire Protocol
 
 `/run/cos/clawd.sock` carries broker protocol v2 over the `CBK1` framing: one length-prefixed frame per

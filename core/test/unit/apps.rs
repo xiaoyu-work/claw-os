@@ -175,6 +175,7 @@ fn known_first_party_schema_drift_is_resolved_in_manifests() {
     );
 
     let mail = load(&["mail-ai"]);
+    assert!(is_mcp_only_cli(&mail));
     for (operation, required) in [
         ("summarize", "body"),
         ("smart_reply", "thread"),
@@ -183,14 +184,15 @@ fn known_first_party_schema_drift_is_resolved_in_manifests() {
         ("chat", "question"),
     ] {
         assert!(
-            mail.operations[operation]
+            mcp_tool_for_command(&mail, operation)
+                .unwrap()
                 .args
                 .iter()
                 .any(|arg| arg.name == required && arg.required),
             "mail-ai `{operation}` omitted required flag `{required}`"
         );
     }
-    assert_eq!(mail.operations["triage"].args.len(), 4);
+    assert_eq!(mcp_tool_for_command(&mail, "triage").unwrap().args.len(), 4);
 }
 
 #[test]

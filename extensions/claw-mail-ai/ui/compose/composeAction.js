@@ -105,8 +105,8 @@ async function runSmartReply() {
   const res = await aiCall("smart_reply", {
     thread: threadText,
     subject,
-    from: lastFrom,
-    "my-intent": intent,
+    sender: lastFrom,
+    intent,
     lang,
   });
 
@@ -180,7 +180,7 @@ async function runSmartCompose() {
 
   const res = await aiCall("smart_compose", {
     intent,
-    to,
+    recipient: to,
     subject: details?.subject || "",
     draft,
     style,

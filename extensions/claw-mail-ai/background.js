@@ -231,7 +231,7 @@ browser.messages.onNewMailReceived.addListener(async (folder, messageList) => {
 async function triageMessage(header, settings) {
   const args = {
     subject: header.subject || "",
-    from: (header.author || "").toString(),
+    sender: (header.author || "").toString(),
     snippet: "",
     has_attachments: false,
   };
@@ -376,7 +376,7 @@ browser.runtime.onMessage.addListener((msg, _sender) => {
 
     case "ai":
       // { kind: "ai", verb: "<verb>", args: { … } } → forwards through NM
-      return ClawNative.call(msg.verb, msg.args || {});
+      return ClawNative.call(msg.verb, msg.args);
 
     case "getSettings":
       return getSettings();
@@ -532,7 +532,7 @@ async function listRecentMessages(limit) {
       for (const m of (page?.messages || [])) {
         out.push({
           id: m.id,
-          from: m.author || "",
+          sender: m.author || "",
           subject: m.subject || "",
           date: m.date?.toISOString?.() || String(m.date || ""),
         });

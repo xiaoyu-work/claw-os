@@ -1,6 +1,5 @@
 # claw-mail-ai depends on Thunderbird being installed (the `desktop`
 # feature already pulls it in via rootfs/features/desktop/packages.txt).
 #
-# We add `zip` here so install.sh can pack the extension as a `.xpi`
-# inside the chroot without needing any host-side tooling.
-zip
+# The XPI is built with Python's standard library in claw-os-agent.
+# No additional rootfs package or chroot build tooling is needed here.

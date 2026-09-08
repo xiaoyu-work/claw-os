@@ -70,7 +70,7 @@ async function run() {
   const res = await aiCall("summarize", {
     body: body.plain,
     subject: body.subject,
-    from: body.from,
+    sender: body.from,
     lang: detectLang(settings),
   });
 

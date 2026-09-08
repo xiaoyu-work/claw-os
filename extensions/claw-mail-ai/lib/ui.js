@@ -10,7 +10,7 @@
     return await browser.runtime.sendMessage({
       kind: "ai",
       verb,
-      args: args || {},
+      args,
     });
   }
 

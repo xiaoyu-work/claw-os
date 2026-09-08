@@ -1,191 +1,149 @@
 #!/usr/bin/env python3
-"""Thunderbird Native Messaging host for the claw-mail-ai MailExtension.
+"""Native Messaging transport for the shared Mail AI business functions.
 
-Thunderbird spawns this script when the extension calls
-``browser.runtime.connectNative("os.claw.mail_ai")``. We translate each
-inbound NM frame into a ``cos app mail-ai <verb> …`` style invocation by
-directly importing :mod:`apps.mail-ai.main`, then write the result back
-out in the same NM framing (4-byte little-endian length prefix + JSON
-body, per Chromium / Mozilla spec).
-
-This host is intentionally simple and stateless: there is no socket
-listener (unlike apps/browser-attached, where the agent side also
-needs a way in), because for mail-ai the **only** caller is the
-MailExtension itself. The extension is the user-driven half; the
-Python verbs are pure compute.
-
-The root-owned ``claw-mail-ai-host`` binary registers the ``mail-ai``
-App session before starting this process. Capability, budget, and safety
-enforcement then happen inside ``main._ai_call()`` via
-``cos_runtime.policy`` and ``claw_os_sdk.ai``.
+The root-owned claw-mail-ai-host launcher verifies Thunderbird and registers
+the App session before launching this script with Python's isolated mode.
+This transport neither creates an MCP caller nor invokes another App.
 """
 
 from __future__ import annotations
 
+import inspect
 import json
-import os
+from pathlib import Path
 import struct
 import sys
-import traceback
-from typing import Any, Dict, List
 
 
-MAX_FRAME = 8 * 1024 * 1024  # 8 MiB — matches apps/browser-attached/native_host.py
-
-
-# ---------------------------------------------------------------------------
-# Make `from claw_os_sdk import …` resolve when running as a system script.
-# ---------------------------------------------------------------------------
-# Layout when shipped via the rootfs feature:
-#     /usr/lib/cos/mail-ai/native_host.py            (this file)
-#     /usr/lib/cos/mail-ai/main.py                   (copy of apps/mail-ai/main.py)
-#     /usr/lib/cos/python/claw_os_sdk/               (system copy of the Python SDK)
-# Layout when running from a source checkout (dev / tests):
-#     <repo>/apps/mail-ai/native_host.py
-#     <repo>/apps/mail-ai/main.py
-#     <repo>/claw-os-sdk/python/src/claw_os_sdk/
-# In both cases we want ``main.py`` importable as ``main`` and
-# ``claw_os_sdk`` importable as a package. Prepend the script's own
-# directory and walk up looking for a sibling ``claw-os-sdk/python/src``
-# (dev) or a system-wide ``/usr/lib/cos/python`` (rootfs).
-_HERE = os.path.dirname(os.path.abspath(__file__))
-if _HERE not in sys.path:
-    sys.path.insert(0, _HERE)
+MAX_FRAME = 8 * 1024 * 1024
+EOF = object()
+_HERE = Path(__file__).resolve().parent
 
 
 def _bootstrap_sdk_path() -> None:
-    candidates = []
-    # Walk up from this file looking for the source-checkout SDK path.
-    cur = _HERE
-    for _ in range(6):
-        cur = os.path.dirname(cur)
-        candidates.append(os.path.join(cur, "claw-os-sdk", "python", "src"))
-    # System install paths.
-    candidates.extend([
-        "/usr/lib/cos/python",
-        "/opt/claw/python",
-        "/usr/lib/claw/python",
-    ])
-    for cand in candidates:
-        if cand and os.path.isdir(os.path.join(cand, "claw_os_sdk")):
-            if cand not in sys.path:
-                sys.path.insert(0, cand)
-            return
+    # -I ignores PYTHONPATH and the script directory. Installed execution uses
+    # only the canonical vendor package and explicit shared SDK/runtime tree.
+    if _HERE == Path("/usr/lib/cos/apps/mail-ai"):
+        paths = [Path("/usr/lib/cos/python")]
+    else:
+        root = _HERE.parent.parent
+        paths = [
+            root / "claw-os-sdk" / "python" / "src",
+            root / "cos-runtime" / "python" / "src",
+        ]
+        if not all(path.is_dir() for path in paths):
+            raise ImportError("Mail AI requires the canonical installation or a source checkout")
+    sys.path[:0] = [str(_HERE), *(str(path) for path in paths)]
 
 
 _bootstrap_sdk_path()
 
-import main as mail_ai  # noqa: E402  — sys.path was just rewired
+import main as mail_ai  # noqa: E402
 
 
-# ---------------------------------------------------------------------------
-# NM framing
-# ---------------------------------------------------------------------------
+class FrameError(ValueError):
+    """A malformed frame cannot safely be resumed."""
 
-def _read_frame(stream) -> dict | None:
-    hdr = stream.read(4)
-    if not hdr or len(hdr) < 4:
-        return None
-    (length,) = struct.unpack("<I", hdr)
-    if length == 0 or length > MAX_FRAME:
-        return None
+
+def _reject_constant(value: str) -> None:
+    raise ValueError("non-finite JSON number")
+
+
+def _read_frame(stream):
+    header = stream.read(4)
+    if header == b"":
+        return EOF
+    if len(header) != 4:
+        raise FrameError("truncated native frame header (expected 4 bytes)")
+    (length,) = struct.unpack("<I", header)
+    if not 0 < length <= MAX_FRAME:
+        raise FrameError(f"native frame length must be between 1 and {MAX_FRAME} bytes")
     body = stream.read(length)
-    if body is None or len(body) < length:
-        return None
+    if len(body) != length:
+        raise FrameError("truncated native frame body")
     try:
-        return json.loads(body.decode("utf-8"))
-    except json.JSONDecodeError:
-        return None
+        text = body.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise FrameError("native frame body is not valid UTF-8") from exc
+    try:
+        return json.loads(text, parse_constant=_reject_constant)
+    except (ValueError, RecursionError) as exc:
+        raise FrameError("native frame body is not valid JSON") from exc
 
 
 def _write_frame(stream, payload: dict) -> None:
-    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    body = json.dumps(payload, ensure_ascii=False, allow_nan=False).encode("utf-8")
+    if len(body) > MAX_FRAME:
+        raise FrameError(f"native response exceeds {MAX_FRAME} bytes")
     stream.write(struct.pack("<I", len(body)))
     stream.write(body)
     stream.flush()
 
 
-# ---------------------------------------------------------------------------
-# Verb args → argparse argv
-# ---------------------------------------------------------------------------
-# The extension sends ``{id, verb, args: {…}}`` where args is a flat
-# JSON object. The Python ``main.cmd_*`` handlers expect argv-style
-# ``--key value`` strings. We translate here.
-
-def _args_to_argv(args: Dict[str, Any]) -> List[str]:
-    argv: List[str] = []
-    for k, v in args.items():
-        if v is None:
-            continue
-        flag = "--" + str(k).replace("_", "-")
-        if isinstance(v, bool):
-            if v:
-                argv.append(flag)
-            continue
-        if isinstance(v, (dict, list)):
-            argv.extend([flag, json.dumps(v, ensure_ascii=False)])
-            continue
-        argv.extend([flag, str(v)])
-    return argv
-
-
-def _dispatch(verb: str, args: Dict[str, Any]) -> Dict[str, Any]:
-    if verb not in mail_ai.HANDLERS:
-        return {"error": f"unknown verb: {verb}"}
-    argv = _args_to_argv(args or {})
-    return mail_ai.run(verb, argv)
+def _dispatch(request) -> dict:
+    if not isinstance(request, dict):
+        return {"error": "request must be an object"}
+    if request.keys() != {"id", "verb", "args"}:
+        return {"error": "request must contain exactly id, verb, args"}
+    if not isinstance(request["id"], str) or not request["id"].strip():
+        return {"error": "id must be a non-empty string"}
+    verb = request["verb"]
+    if not isinstance(verb, str) or not verb.strip():
+        return {"error": "verb must be a non-empty string"}
+    args = request["args"]
+    if not isinstance(args, dict):
+        return {"error": "args must be an object"}
+    handler = mail_ai.HANDLERS.get(verb)
+    if handler is None:
+        return {"error": "unknown Mail AI verb"}
+    try:
+        inspect.signature(handler).bind(**args)
+    except TypeError:
+        return {"error": f"invalid arguments for {verb}: check required and unknown fields"}
+    return handler(**args)
 
 
-# ---------------------------------------------------------------------------
-# Main loop
-# ---------------------------------------------------------------------------
+def _reply(request) -> dict:
+    rid = request.get("id", "") if isinstance(request, dict) else ""
+    if not isinstance(rid, str):
+        rid = ""
+    result = _dispatch(request)
+    if "error" in result:
+        return {"id": rid, "ok": False, "error": result["error"], "detail": result}
+    return {"id": rid, "ok": True, "result": result}
+
 
 def main() -> int:
-    in_stream = sys.stdin.buffer
-    out_stream = sys.stdout.buffer
-
     while True:
-        req = _read_frame(in_stream)
-        if req is None:
-            # Thunderbird closed the port (extension unloaded or browser
-            # shutdown). Exit cleanly.
-            return 0
-
-        rid = req.get("id") or ""
-        verb = req.get("verb") or ""
-        args = req.get("args") or {}
-
         try:
-            result = _dispatch(verb, args if isinstance(args, dict) else {})
-            if isinstance(result, dict) and "error" in result and "ok" not in result:
-                _write_frame(out_stream, {"id": rid, "ok": False, "error": result["error"], "detail": result})
-            else:
-                _write_frame(out_stream, {"id": rid, "ok": True, "result": result})
-        except Exception as exc:  # pragma: no cover  — last-resort guard
-            tb = traceback.format_exc(limit=4)
-            _write_frame(out_stream, {
-                "id": rid,
+            request = _read_frame(sys.stdin.buffer)
+        except FrameError as exc:
+            print(f"Mail AI native protocol error: {exc}", file=sys.stderr)
+            return 1
+        if request is EOF:
+            return 0
+        try:
+            reply = _reply(request)
+        except Exception:  # Last-resort request boundary; never expose email bodies or tracebacks.
+            rid = request.get("id", "") if isinstance(request, dict) else ""
+            reply = {
+                "id": rid if isinstance(rid, str) else "",
                 "ok": False,
-                "error": f"native host crashed: {exc}",
-                "traceback": tb,
-            })
+                "error": "Mail AI request failed unexpectedly; retry or check host diagnostics",
+            }
+            print("Mail AI native request failed unexpectedly", file=sys.stderr)
+        try:
+            _write_frame(sys.stdout.buffer, reply)
+        except (FrameError, OSError) as exc:
+            print(f"Mail AI native output error: {type(exc).__name__}", file=sys.stderr)
+            return 1
 
 
 if __name__ == "__main__":
-    if "--probe" in sys.argv:
-        # Diagnostic helper invoked by tools/install-mail-ai.sh: prints
-        # the wired handler names so the operator can sanity-check that
-        # the host loads without maintaining a second operation schema.
-        try:
-            print(
-                json.dumps(
-                    {"ok": True, "verbs": sorted(mail_ai.HANDLERS)},
-                    indent=2,
-                    ensure_ascii=False,
-                )
-            )
-            sys.exit(0)
-        except Exception as exc:
-            print(json.dumps({"ok": False, "error": str(exc)}, indent=2))
-            sys.exit(1)
+    if sys.argv[1:] == ["--probe"]:
+        print(json.dumps({"ok": True, "verbs": sorted(mail_ai.HANDLERS)}))
+        sys.exit(0)
+    if sys.argv[1:]:
+        print("usage: native_host.py [--probe]", file=sys.stderr)
+        sys.exit(2)
     sys.exit(main())

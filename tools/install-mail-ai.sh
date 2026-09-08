@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # tools/install-mail-ai.sh
 #
-# Install the Claw Mail AI WebExtension and its Native Messaging host
-# system-wide for the locally installed Thunderbird.
+# Install the Claw Mail AI WebExtension and Native Messaging registration
+# for Thunderbird. The shared App, SDK and trusted launcher must already be
+# installed together by claw-os-agent; this script never overwrites them.
 #
-#   - WebExtension source       → /usr/share/claw/extensions/claw-mail-ai/
+#   - WebExtension XPI          → /usr/lib/thunderbird/distribution/extensions/ (package-owned)
 #   - Thunderbird policies      → /etc/thunderbird/policies/policies.json
 #   - Thunderbird NM manifest   → /etc/thunderbird/native-messaging-hosts/os.claw.mail_ai.json
-#   - Native host launcher      → /usr/lib/cos/claw-mail-ai-host
-#   - Python host + deps        → /usr/lib/cos/mail-ai/, /usr/lib/cos/python/claw_os_sdk/, /usr/lib/cos/python/cos_runtime/
+#   - Native host launcher      → /usr/lib/cos/claw-mail-ai-host (package-owned)
+#   - Shared App + SDK/runtime   → /usr/lib/cos/apps/mail-ai/, /usr/lib/cos/python/ (package-owned)
 #
 # Run as root. Re-run is idempotent (overwrites).
 #
@@ -22,16 +23,8 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-EXT_SRC="${REPO_ROOT}/extensions/claw-mail-ai"
-APP_SRC="${REPO_ROOT}/apps/mail-ai"
-SDK_PY_SRC="${REPO_ROOT}/claw-os-sdk/python/src/claw_os_sdk"
-RUNTIME_PY_SRC="${REPO_ROOT}/cos-runtime/python/src/cos_runtime"
-
 EXT_ID="claw-mail-ai@claw.os"
-EXT_DEST="/usr/share/claw/extensions/claw-mail-ai"
-APP_DEST="/usr/lib/cos/mail-ai"
-CANONICAL_APP_DEST="/usr/lib/cos/apps/mail-ai"
+APP_DEST="/usr/lib/cos/apps/mail-ai"
 SDK_DEST="/usr/lib/cos/python/claw_os_sdk"
 RUNTIME_DEST="/usr/lib/cos/python/cos_runtime"
 HOST_LAUNCHER="/usr/lib/cos/claw-mail-ai-host"
@@ -41,91 +34,38 @@ XPI_DEST_DIR="/usr/lib/thunderbird/distribution/extensions"
 XPI_DEST="${XPI_DEST_DIR}/${EXT_ID}.xpi"
 
 # Sanity checks.
-for d in "${EXT_SRC}" "${APP_SRC}" "${SDK_PY_SRC}" "${RUNTIME_PY_SRC}"; do
+for d in "${APP_DEST}" "${SDK_DEST}" "${RUNTIME_DEST}"; do
   if [[ ! -d "$d" ]]; then
-    echo "error: source dir missing: $d" >&2
+    echo "error: required extension/package directory missing: $d; install claw-os-agent first" >&2
     exit 1
   fi
 done
-if ! command -v zip >/dev/null 2>&1; then
-  echo "error: 'zip' is required to package the XPI. Install it (apt install zip)." >&2
+if [[ ! -f "${XPI_DEST}" ]]; then
+  echo "error: package-owned Mail extension missing: ${XPI_DEST}; install claw-os-agent first" >&2
   exit 1
 fi
-for binary in /usr/local/bin/claw-app-runner /usr/bin/python3; do
+for binary in /usr/local/bin/claw-app-runner /usr/bin/python3 "${HOST_LAUNCHER}"; do
   if [[ ! -x "${binary}" ]]; then
     echo "error: required executable missing: ${binary}" >&2
     exit 1
   fi
 done
-HOST_BINARY="${CLAW_MAIL_AI_HOST_BIN:-}"
-if [[ -z "${HOST_BINARY}" ]]; then
-  HOST_BINARY="$(find "${REPO_ROOT}/target" -type f -path '*/release/claw-mail-ai-host' -perm -111 2>/dev/null | head -n1 || true)"
-fi
-if [[ -z "${HOST_BINARY}" || ! -x "${HOST_BINARY}" ]]; then
-  echo "error: claw-mail-ai-host binary not found; build the cos release binaries first" >&2
-  exit 1
-fi
+for file in app.json main.py server.py native_host.py; do
+  if [[ ! -f "${APP_DEST}/${file}" ]]; then
+    echo "error: claw-os-agent Mail package is incomplete: ${APP_DEST}/${file}" >&2
+    exit 1
+  fi
+done
 
 # ---------------------------------------------------------------------------
-# 1. WebExtension source — kept around for sideloading/debugging.
+# 1. Reuse the shared, authenticated App package, SDK and UI protocol adapter.
 # ---------------------------------------------------------------------------
-echo "[claw-mail-ai] installing extension source → ${EXT_DEST}"
-install -d -m 0755 "${EXT_DEST}"
-cp -a "${EXT_SRC}/." "${EXT_DEST}/"
-chmod -R a+rX "${EXT_DEST}"
+echo "[claw-mail-ai] using package-owned Mail implementation → ${APP_DEST}"
+echo "[claw-mail-ai] using package-owned Mail extension → ${XPI_DEST}"
 
 # ---------------------------------------------------------------------------
-# 2. Pack XPI for force-install via policies.json.
+# 2. Native Messaging manifest for the package-owned launcher.
 # ---------------------------------------------------------------------------
-echo "[claw-mail-ai] packaging XPI       → ${XPI_DEST}"
-install -d -m 0755 "${XPI_DEST_DIR}"
-rm -f "${XPI_DEST}"
-( cd "${EXT_DEST}" && zip -X -r -q "${XPI_DEST}" . \
-    -x '*.git*' '*.DS_Store' 'test_*.py' '*.swp' '*.bak' )
-chmod 0644 "${XPI_DEST}"
-
-# ---------------------------------------------------------------------------
-# 3. Python host + verb impls.
-# ---------------------------------------------------------------------------
-echo "[claw-mail-ai] installing Python host → ${APP_DEST}"
-install -d -m 0755 "${APP_DEST}"
-cp -a "${APP_SRC}/." "${APP_DEST}/"
-rm -f "${APP_DEST}/test_main.py"     # don't ship tests
-install -d -m 0755 "${CANONICAL_APP_DEST}"
-cp -a "${APP_SRC}/." "${CANONICAL_APP_DEST}/"
-rm -f "${CANONICAL_APP_DEST}/test_main.py"
-chown -R root:root "${APP_DEST}" "${CANONICAL_APP_DEST}"
-find "${APP_DEST}" "${CANONICAL_APP_DEST}" -type d -exec chmod 0755 {} +
-find "${APP_DEST}" "${CANONICAL_APP_DEST}" -type f -exec chmod 0644 {} +
-chmod 0755 "${APP_DEST}/native_host.py"
-
-# Always refresh the SDK/runtime trees so re-runs propagate fixes. The
-# previous `[[ ! -d "${SDK_DEST}" ]]` guard meant the first install
-# pinned a snapshot of the SDK forever and subsequent script runs
-# silently shipped stale code.
-echo "[claw-mail-ai] installing claw-os-sdk → ${SDK_DEST}"
-install -d -m 0755 "${SDK_DEST}"
-cp -af "${SDK_PY_SRC}/." "${SDK_DEST}/"
-chown -R root:root "${SDK_DEST}"
-chmod -R a+rX "${SDK_DEST}"
-find "${SDK_DEST}" -type d -exec chmod 0755 {} +
-find "${SDK_DEST}" -type f -exec chmod 0644 {} +
-
-echo "[claw-mail-ai] installing cos-runtime → ${RUNTIME_DEST}"
-install -d -m 0755 "${RUNTIME_DEST}"
-cp -af "${RUNTIME_PY_SRC}/." "${RUNTIME_DEST}/"
-chown -R root:root "${RUNTIME_DEST}"
-chmod -R a+rX "${RUNTIME_DEST}"
-find "${RUNTIME_DEST}" -type d -exec chmod 0755 {} +
-find "${RUNTIME_DEST}" -type f -exec chmod 0644 {} +
-
-# ---------------------------------------------------------------------------
-# 4. Native Messaging launcher + manifest.
-# ---------------------------------------------------------------------------
-echo "[claw-mail-ai] installing launcher    → ${HOST_LAUNCHER}"
-install -d -m 0755 "$(dirname "${HOST_LAUNCHER}")"
-install -o root -g root -m 0755 "${HOST_BINARY}" "${HOST_LAUNCHER}"
-
 echo "[claw-mail-ai] installing NM manifest → ${NM_MANIFEST}"
 install -d -m 0755 "$(dirname "${NM_MANIFEST}")"
 cat > "${NM_MANIFEST}" <<EOF
@@ -140,7 +80,7 @@ EOF
 chmod 0644 "${NM_MANIFEST}"
 
 # ---------------------------------------------------------------------------
-# 5. Thunderbird policy — force-install the extension.
+# 3. Thunderbird policy — force-install the extension.
 #
 # We MERGE into any existing policies.json instead of clobbering it. The
 # previous behavior overwrote site-admin or distro-supplied policy keys

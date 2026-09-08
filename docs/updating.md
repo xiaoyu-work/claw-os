@@ -37,6 +37,18 @@ Each published package version is generated from the Git commit count and SHA,
 for example `0.1.0+git1226.g876f3ad810ca`. A later repository build therefore
 sorts as a newer Debian package and is selected by APT.
 
+The Mail Native Messaging launcher and MCP service now use the same Python
+package at `/usr/lib/cos/apps/mail-ai`. The Thunderbird XPI is also owned by
+`claw-os-agent`, so an APT upgrade replaces both ends of their protocol.
+The rootfs Mail feature and `tools/install-mail-ai.sh` reuse the App, XPI,
+SDK and launcher installed by `claw-os-agent`; they no longer copy another implementation to
+`/usr/lib/cos/mail-ai` or overwrite package-authenticated code. Install the
+matching Agent package before installing the Thunderbird extension, then
+restart Thunderbird to replace any running native host. The old duplicate
+directory is not a fallback and is no longer loaded. This first redesign
+slice does not rename the App identity or migrate mailbox accounts/data;
+those changes are tracked in the [product redesign plan](app-product-redesign.md).
+
 Updates only ever move forward. An older Claw OS release stays validly signed
 forever, so the signature alone cannot tell a current release from a superseded
 one; see [Downgrade protection](#downgrade-protection) for what stops one being

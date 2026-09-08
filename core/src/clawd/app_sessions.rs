@@ -1969,9 +1969,32 @@ fn gui_plan(
 }
 
 fn native_manifest_caps(manifest: &Manifest) -> Result<CapSet, String> {
+    if manifest.id != "mail-ai" || !manifest.operations.is_empty() {
+        return Err("native Mail host requires the MCP-only mail-ai manifest".to_string());
+    }
+    let service = manifest
+        .mcp
+        .as_ref()
+        .ok_or_else(|| "native Mail host requires an MCP service".to_string())?;
+    // This long-lived UI host only processes supplied content. Adding mailbox
+    // tools must not silently grant it their credentials or mutation authority.
+    let allowed = CapSet::from_caps([
+        Cap::new(crate::caps::Verb::AI_CHAT_UNTRUSTED, Scope::Wild),
+        Cap::new(
+            crate::caps::Verb::MEMORY_WRITE,
+            Scope::self_ref(&manifest.id),
+        ),
+    ]);
     let mut caps = CapSet::new();
-    for operation in manifest.operations.values() {
-        for need in &operation.needs {
+    for tool in &service.tools {
+        for need in &tool.needs {
+            if need.when.is_some() {
+                return Err(format!(
+                    "native host tool `{}` has a conditional capability {}",
+                    tool.name,
+                    need.verb.as_str()
+                ));
+            }
             let scope = match &need.scope {
                 ScopeBinding::Fixed { scope } => scope.clone(),
                 ScopeBinding::Wild => Scope::Wild,
@@ -1985,7 +2008,15 @@ fn native_manifest_caps(manifest: &Manifest) -> Result<CapSet, String> {
                     ));
                 }
             };
-            caps.insert(Cap::new(need.verb, scope));
+            let requested = Cap::new(need.verb, scope);
+            if !allowed.covers(&requested) {
+                return Err(format!(
+                    "native Mail host cannot receive capability {}:{}",
+                    requested.verb.as_str(),
+                    requested.scope
+                ));
+            }
+            caps.insert(requested);
         }
     }
     Ok(caps)

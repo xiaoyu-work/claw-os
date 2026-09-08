@@ -42,3 +42,11 @@ sudo ./rootfs/build.sh --features <comma-separated-features>
 ```
 
 Do not run rootfs builds from `/mnt/c` on WSL.
+
+The Mail registration feature does not build or copy runtime code. Its
+unprivileged fixture test runs the real install script against a temporary
+rootfs and ensures the package-owned App, SDK and XPI remain unchanged:
+
+```bash
+python3 -m pytest -q rootfs/features/claw-mail-ai/test_install.py
+```

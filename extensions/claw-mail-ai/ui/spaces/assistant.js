@@ -1,7 +1,7 @@
 // Mail Assistant — chat interface backed by the cos `chat` verb of
 // apps/mail-ai. History is stored in storage.local.assistantHistory.
-// Each "send" passes the existing history + a fresh snapshot of the
-// user's recent messages so the model has context.
+// Each "send" passes the question and a fresh snapshot of recent message
+// metadata. Conversation history is local UI state, not model context.
 
 const { aiCall, showError, el, localiseDom } = window.ClawUI;
 
@@ -58,6 +58,10 @@ async function onSend() {
 
   // Pull a snapshot of recent messages for the model.
   const recent = await browser.runtime.sendMessage({ kind: "listRecentMessages", limit: 25 });
+  if (!Array.isArray(recent)) {
+    showError(document.getElementById("messages"), recent?.error || "Unable to read recent messages");
+    return;
+  }
 
   // Show a "thinking" placeholder.
   const mc = document.getElementById("messages");
@@ -66,9 +70,10 @@ async function onSend() {
   scrollBottom();
 
   const res = await aiCall("chat", {
-    history: history.slice(-MAX_HISTORY).map(({ role, content }) => ({ role, content })),
-    recent: recent && recent.ok ? recent.messages : [],
-    query: text,
+    question: text,
+    context_json: JSON.stringify(recent.slice(0, 20).map(({ sender, subject, date }) => ({
+      sender, subject, date,
+    }))),
     lang: (browser.i18n.getUILanguage() || "en").replace("-", "_"),
   });
 
@@ -80,7 +85,7 @@ async function onSend() {
     return;
   }
 
-  const reply = (res.result.reply || "").trim() || "(empty reply)";
+  const reply = (res.result.answer || "").trim() || "(empty reply)";
   history.push({ role: "assistant", content: reply, ts: Date.now() });
   await saveHistory(history);
   renderMessage(history[history.length - 1]);
