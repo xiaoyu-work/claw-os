@@ -280,6 +280,10 @@ host authority, and stored tokens remain suppressed for the public default
 server. The durable Notification Service, Rust ntfy adapter and deterministic
 dispatcher stay here; they do not call this App. No second notification store,
 DND policy, retry queue or lease mechanism is introduced by the source move.
+`gateway-pushover` also belongs to Notification Delivery. Its exact API host,
+application/user keys, optional recipient flag and emergency parameters are
+unchanged. Retry/expiry is remote Pushover behavior; returning a receipt is not
+acknowledgement polling or integration with the OS durable notification queue.
 The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling
