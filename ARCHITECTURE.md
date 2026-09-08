@@ -145,8 +145,13 @@ combining provider authority.
 Security owns `security-center` and its seven sensitive read-only MCP tools.
 The dedicated `sys.security:audit` grant and App-bound inspection authority
 are unchanged. Journal/configuration inspection, privileged collectors and
-security report generation stay OS-owned; firewall and USB management still
-await their separate source migrations and do not share inspection authority.
+security report generation stay OS-owned. Security also owns
+`firewall-manager`'s five MCP tools. Firewall status retains
+`sys.observe:firewall`, while mutations retain `net.firewall:manage`.
+The dedicated nftables table, durable rule revisions, startup reconciliation,
+serialized mutations and owner/revision-bound rollback remain in the OS.
+Clear and restore still require explicit confirmation. USB management awaits
+its own migration; none of these providers share inspection authority.
 The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling
