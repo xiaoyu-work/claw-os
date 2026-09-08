@@ -261,6 +261,10 @@ installed state is not copied with source. Like Discord, the legacy
 `cos agent ask` path does not establish authenticated owner-bound connector
 admission. Broker restrictions remain unchanged; supervised lifecycle and
 durable delivery are still pending.
+`gateway-webex` also moves to Messaging Channels, preserving REST send/status,
+email/room routing, Markdown/plain payloads and existing grants. The legacy
+person-ID autodetection described by its manifest is not implemented; relocation
+does not add it or an inbound service. Its Python argument case moves with source.
 The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling

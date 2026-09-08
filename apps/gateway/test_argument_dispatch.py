@@ -63,12 +63,6 @@ def _load(name):
             },
         ),
         (
-            "webex",
-            ["person@example.com", "hello", "--plain"],
-            ("person@example.com", "hello", True),
-            {},
-        ),
-        (
             "ntfy",
             ["hello", "--topic", "alerts", "--title", "Title", "--markdown"],
             ("alerts", "hello"),
