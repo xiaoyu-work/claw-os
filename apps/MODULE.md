@@ -37,7 +37,10 @@ Product sources are moving individually to
 the Browser extension/Native Host, Mail UI/native source and complete Calendar/Clipboard/Widget Rail panel sources
 are owned there already. Complete native Launcher, Editor and Files sources
 and descriptors are external too, as are complete native Terminal, Store and
-Settings. Settings preserves its separate page-discovery/fixed-launch identity,
+Settings and Capture. Capture preserves `cosmic-screenshot`, its complete
+native portal client/resources and original build; non-interactive CLI/MCP
+share the OS screenshot service under separate screen/exact-output grants,
+without a worker session bus or another App call. Settings preserves its separate page-discovery/fixed-launch identity,
 not a union of the eleven managers' grants. The remaining Document App shares Files'
 staged `claw_files.document` parsing/conversion library, not an App interface.
 Do not recreate a local copy: OS package assembly consumes the immutable revision in

@@ -1812,10 +1812,12 @@ fn the_screenshot_call_is_bound_to_the_directory_it_was_given() {
         .resolve_mcp_tool_call("screenshot.capture", &BTreeMap::new(), &paths)
         .expect("default capture");
     let caps: Vec<_> = effective.needs.into_iter().flatten().collect();
-    assert_eq!(caps.len(), 1);
-    assert_eq!(caps[0].verb, crate::caps::Verb::FS_WRITE);
+    assert_eq!(caps.len(), 2);
+    assert_eq!(caps[0].verb, crate::caps::Verb::DESKTOP_CAPTURE);
+    assert_eq!(caps[0].scope, crate::caps::Scope::name("screen"));
+    assert_eq!(caps[1].verb, crate::caps::Verb::FS_WRITE);
     assert_eq!(
-        caps[0].scope,
+        caps[1].scope,
         crate::caps::Scope::path("/home/tester/Pictures")
     );
 
@@ -1829,11 +1831,26 @@ fn the_screenshot_call_is_bound_to_the_directory_it_was_given() {
         .resolve_mcp_tool_call("screenshot.capture", &supplied, &paths)
         .expect("explicit capture");
     let caps: Vec<_> = effective.needs.into_iter().flatten().collect();
+    assert_eq!(caps.len(), 2);
+    assert_eq!(caps[0].scope, crate::caps::Scope::name("screen"));
     assert_eq!(
-        caps[0].scope,
+        caps[1].scope,
         crate::caps::Scope::path("/home/tester/shots")
     );
-    assert_ne!(caps[0].scope, crate::caps::Scope::Wild);
+    assert_ne!(caps[1].scope, crate::caps::Scope::Wild);
+}
+
+#[test]
+fn the_screenshot_call_refuses_interactive_capture_before_worker_admission() {
+    let manifest = shipped_manifest("cosmic-screenshot");
+    let paths = crate::caps::args::PathContext {
+        home: std::path::PathBuf::from("/home/tester"),
+        cwd: None,
+    };
+    let supplied = BTreeMap::from([("interactive".to_string(), serde_json::json!(true))]);
+    assert!(manifest
+        .resolve_mcp_tool_call("screenshot.capture", &supplied, &paths)
+        .is_err());
 }
 
 #[cfg(unix)]

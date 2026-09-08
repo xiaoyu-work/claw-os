@@ -128,14 +128,23 @@ those require process/resource containment rather than a broker-only toggle.
 Already-authorized effects are not rolled back. No user data, manifest or
 provider credentials are rewritten.
 
+Capture's complete native source, descriptor, locales and resources now come
+from the immutable App repository pin. `claw-os-desktop` still owns
+`/usr/bin/cosmic-screenshot`, `/usr/lib/cos/apps/cosmic-screenshot` and
+`com.clawos.Screenshot` resources. Existing screenshots and configuration are
+neither copied nor renamed; the default interactive OS portal UI is unchanged.
+
 The Agent package provides `claw-os-capture-v1`, the typed screenshot service
-for the Capture migration. Non-interactive capture requires an explicit
+required by the Desktop package. Non-interactive App capture requires an explicit
 `desktop.capture:screen` approval in addition to the existing exact
 output-directory write permission; clipboard and interactive destination
 selection are not part of this broker route. The service launches only the
 matching root-owned native Capture client and refuses an older binary without
-its pipe mode. Source migration will make the Desktop package depend on this
-service; no old permission or App identity is silently transferred.
+its pipe mode. Screenshot MCP no longer receives the owner session bus.
+Direct human CLI requests preserve an already-connected stderr terminal for
+the existing OS bootstrap; headless requests need an authenticated session.
+No old permission or App identity is silently transferred, and no runtime
+source download or unverified fallback is introduced.
 
 Updates only ever move forward. An older Claw OS release stays validly signed
 forever, so the signature alone cannot tell a current release from a superseded

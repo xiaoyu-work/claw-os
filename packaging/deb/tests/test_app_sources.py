@@ -13,11 +13,12 @@ import pytest
 ROOT = Path(__file__).resolve().parents[3]
 
 
-def test_settings_permission_service_is_an_installed_dependency():
+@pytest.mark.parametrize("service", ["claw-os-app-permissions-v1", "claw-os-capture-v1"])
+def test_brokered_desktop_service_is_an_installed_dependency(service):
     agent = (ROOT / "packaging/deb/claw-os-agent/control").read_text()
     desktop = (ROOT / "packaging/deb/claw-os-desktop/control").read_text()
-    assert "claw-os-app-permissions-v1" in next(line for line in agent.splitlines() if line.startswith("Provides:"))
-    assert "claw-os-app-permissions-v1" in next(line for line in desktop.splitlines() if line.startswith("Depends:"))
+    assert service in next(line for line in agent.splitlines() if line.startswith("Provides:"))
+    assert service in next(line for line in desktop.splitlines() if line.startswith("Depends:"))
 
 SPEC = importlib.util.spec_from_file_location("app_sources", ROOT / "scripts" / "app_sources.py")
 sources = importlib.util.module_from_spec(SPEC)
@@ -276,6 +277,7 @@ def test_native_manual_image_and_asset_build_paths_agree():
     ("terminal", "cosmic-term"),
     ("store", "cosmic-store"),
     ("settings", "cosmic-settings"),
+    ("capture", "cosmic-screenshot"),
 ])
 def test_external_desktop_app_stays_out_of_agent_package(locked_source, tmp_path, product, app_id):
     root, lock = locked_source
@@ -355,7 +357,7 @@ def test_duplicate_native_exports_are_rejected(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize(("product", "component"), [
     ("launcher", "launcher"), ("editor", "edit"), ("files", "files"), ("terminal", "term"),
-    ("store", "store"), ("settings", "settings"),
+    ("store", "store"), ("settings", "settings"), ("capture", "screenshot"),
 ])
 def test_standalone_app_uses_external_source_and_matching_chroot_layout(product, component):
     just = (ROOT / "desktop/justfile").read_text()
@@ -412,4 +414,5 @@ def test_desktop_build_prepares_once_and_propagates_prepared_inputs(tmp_path):
     assert calls.count("terminal-build") == 1
     assert calls.count("store-build") == 1
     assert calls.count("settings-build") == 1
+    assert calls.count("capture-build") == 1
     assert calls.count("applets/build-release") == 1

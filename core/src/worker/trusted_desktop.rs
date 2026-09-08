@@ -8,13 +8,12 @@
 //! those Apps run as ordinary hostile [`McpServer`](super::TrustTier::McpServer)
 //! workers with no desktop transport at all.
 //!
-//! Three of them additionally reach the desktop over the **session
+//! Two of them additionally reach the desktop over the **session
 //! bus**, because their tool surface is a bus call:
 //!
 //! | App | What the tool actually does |
 //! | --- | --- |
 //! | `cosmic-player` | `zbus::Connection::session()` → MPRIS2 on the active player |
-//! | `cosmic-screenshot` | `ashpd` → `xdg-desktop-portal`, then `org.freedesktop.Notifications` |
 //! | `cosmic-notifications` | `zbus::Connection::session()` → `org.freedesktop.Notifications` |
 //!
 //! None of them initialises a compositor connection in MCP mode — each
@@ -22,6 +21,11 @@
 //! so no Wayland socket, no X authority and no GPU node is granted
 //! here. The session bus alone is what makes the difference between a
 //! working tool and a syscall failure.
+//!
+//! Capture names its fixed native executable but carries no transport.
+//! Its MCP uses the typed screenshot service, separately requiring screen
+//! and exact-directory write authority. Only the OS provider starts the
+//! bounded owner-session portal client.
 //!
 //! ## This is an expanded TCB, deliberately and narrowly
 //!
@@ -128,7 +132,7 @@ const ALLOWLIST: &[Row] = &[
     Row {
         app_id: "cosmic-screenshot",
         system_program: "/usr/bin/cosmic-screenshot",
-        transports: SESSION_BUS,
+        transports: NO_TRANSPORT,
     },
     Row {
         app_id: "cosmic-notifications",

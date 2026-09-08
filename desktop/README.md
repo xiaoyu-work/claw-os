@@ -40,7 +40,6 @@ desktop/
 │
 ├── settings-daemon/        Backend for system settings
 ├── player/                 Media player
-├── screenshot/             Screenshot tool
 │
 ├── toolkit/                UI toolkit (iced-based, MPL-2.0; upstream libcosmic)
 ├── protocols/              Custom Wayland protocols
@@ -56,6 +55,19 @@ desktop/
 ```
 
 ## Building
+
+The complete [Capture product](https://github.com/xiaoyu-work/clawos-app/tree/main/products/capture)
+is built with `just capture-build` from the immutable App pin at
+`build/native-apps/cosmic-screenshot`. All original native files, 72 locales,
+eight icons, desktop entry, license and release settings move together.
+The native client retains its independent ashpd/zbus/Tokio graph; its original
+interactive UI is supplied by the unchanged OS desktop portal, not libcosmic.
+Non-interactive CLI/MCP share the capability-gated OS capture service; workers
+receive no session bus, clipboard access or arbitrary native-launch route.
+The signed desktop package retains the executable/descriptor/resources and
+depends on Agent's `claw-os-capture-v1`. User screenshots and configuration
+are not moved. Private portal/broker fixtures do not claim live Wayland or
+full-image acceptance.
 
 The complete [Settings product](https://github.com/xiaoyu-work/clawos-app/tree/main/products/settings)
 is built with `just settings-build` from the immutable App pin at

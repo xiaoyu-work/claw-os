@@ -8,7 +8,7 @@
 //! `notify.post` tool sends an `org.freedesktop.Notifications.Notify`
 //! call to whichever daemon is already running on the session bus.
 //! This is how `cosmic-screenshot` already posts its "saved to …"
-//! notification (see `desktop/screenshot/src/main.rs`).
+//! notification (see the external Capture product's native `src/main.rs`).
 
 use std::collections::HashMap;
 use std::sync::Arc;

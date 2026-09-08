@@ -31,9 +31,9 @@ fn every_fixed_row_names_exactly_its_system_program() {
 }
 
 #[test]
-fn only_the_three_bus_rows_carry_a_transport() {
+fn only_the_two_bus_rows_carry_a_transport() {
     // Naming a system program and holding the session bus are separate
-    // grants. Six of the nine native Apps get the first and not the
+    // grants. Seven of the nine native Apps get the first and not the
     // second, and their launches stay ordinary hostile MCP servers.
     let with_bus: Vec<&str> = ALLOWLIST
         .iter()
@@ -42,11 +42,11 @@ fn only_the_three_bus_rows_carry_a_transport() {
         .collect();
     assert_eq!(
         with_bus,
-        vec!["cosmic-player", "cosmic-screenshot", "cosmic-notifications"]
+        vec!["cosmic-player", "cosmic-notifications"]
     );
     for row in ALLOWLIST {
         match row.app_id {
-            "cosmic-player" | "cosmic-screenshot" | "cosmic-notifications" => assert_eq!(
+            "cosmic-player" | "cosmic-notifications" => assert_eq!(
                 row.transports,
                 &[Transport::SessionBus],
                 "row `{}` grants more than the session bus",

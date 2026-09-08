@@ -20,6 +20,14 @@ OS-repository commit: publish the product commit first, then pin that exact
 revision in [`packaging/apps.lock.json`](../packaging/apps.lock.json).
 There are no sibling-checkout dependencies or runtime download fallbacks.
 
+Source migration now covers **67 of the original 75 identities** across
+**22 product groups**: 57 Agent-package identities and 10 desktop identities.
+This count includes Capture, not its new OS service or permission scope.
+The eight remaining source identities are `cosmic-player`,
+`cosmic-notifications`, `notify`, `db`, `doc`, `kv`, `net` and `summarize`.
+Source ownership does not complete M2, backend/state consolidation, identity
+and consent cutovers, or visual/installed-image acceptance.
+
 | Source migration | Status |
 | --- | --- |
 | Mail native source, `mail-ai`, extension UI and product tests/build | Moved to `clawos-app/products/mail`; installed identity, paths and authority preserved |
@@ -30,15 +38,17 @@ There are no sibling-checkout dependencies or runtime download fallbacks.
 | `panel-clipboard` | Complete native popup, CopyQ adapter/scripts, resources, manifest, tests and build inputs moved to `clawos-app/products/clipboard`; OS host supplies history-only policy, with desktop package ownership preserved; CopyQ history/Wayland selection integration remains separate |
 | `fs` | Moved to `clawos-app/products/files/apps/fs`; all fourteen MCP tools and snapshot authority preserved |
 | `cosmic-files` | Complete native UI/library/companion, resources and original locked build moved to Files; shared filesystem/Recoll/parser and SDK AI replace App calls; identities and existing UI/MCP data remain separate |
+| Previously completed native slices: `widget-rail`, `cosmic-launcher`, `cosmic-edit`, `cosmic-term`, `cosmic-store`, `cosmic-settings` | Complete sources/resources/builds already moved to Desktop Widgets, Launcher, Editor, Terminal, Store and Settings; source ownership remains distinct from backend/data/visual cutovers |
+| `cosmic-screenshot` | Complete native portal client, all 99 original native files, 72 locales, eight icons, descriptor and original locked release build moved to Capture; UI remains in the shared OS portal; non-interactive CLI/MCP share the typed OS service with separate screen/output grants, no worker session bus or App call; IDs and screenshots/configuration stay unchanged |
 | `docs` | Moved to `clawos-app/products/files/apps/docs`; four Recoll-backed tools, owner index state and scopes preserved; background indexing remains OS-owned |
 | `search` | Moved to `clawos-app/products/browser/apps/search`; explicit provider choice, two MCP tools and exact credential/network scopes preserved |
 | `web` | Moved to `clawos-app/products/browser/apps/web`; existing five-operation CLI/MCP adapter and AI gate preserved; reusable `cos-browser` engine remains OS-owned |
 | `browser-attached` | App, Native Host and full MV3 extension moved to `clawos-app/products/browser`; ten tools and daemon authority preserved; extension deployment remains manual through the OS's fixed source pin |
-| `exec` | Moved to `clawos-app/products/terminal/apps/exec`; six existing CLI/MCP operations and process registry preserved; native Terminal UI and shared session integration still pending |
+| `exec` | Moved to `clawos-app/products/terminal/apps/exec`; six existing CLI/MCP operations and process registry preserved; native Terminal source has also moved, while shared session/state consolidation remains separate |
 | `container-manager` | Moved to `clawos-app/products/containers/apps/container-manager`; fourteen MCP tools, explicit runtimes, namespace/confirmation checks and observe/control scopes preserved; privileged execution remains OS-owned |
 | `backup-center` | Moved to `clawos-app/products/backup-recovery/apps/backup-center`; seven MCP tools, exact data/credential scopes and destructive confirmation preserved; Restic execution stays OS-owned |
 | `system-snapshot` | Moved to `clawos-app/products/backup-recovery/apps/system-snapshot`; five MCP tools, separate recovery authority and rollback confirmation preserved; snapshot index and backend execution stay OS-owned |
-| `pkg` | Moved to `clawos-app/products/store/apps/pkg`; thirteen existing CLI/MCP operations and permissions preserved; native `cosmic-store` and shared service integration remain pending |
+| `pkg` | Moved to `clawos-app/products/store/apps/pkg`; thirteen existing CLI/MCP operations and permissions preserved; native Store source has also moved, while its UI/MCP backend-state consolidation remains separate |
 | `hardware-center` | Moved to `clawos-app/products/diagnostics/apps/hardware-center`; nine MCP tools and named hardware observation scope preserved; privileged collection stays OS-owned |
 | `crash-doctor` | Moved to `clawos-app/products/diagnostics/apps/crash-doctor`; three MCP tools, bounded queries, coredump selectors and sensitive crash scope preserved; journals/coredumps/debugger remain OS-owned |
 | `netdiag` | Moved to `clawos-app/products/diagnostics/apps/netdiag`; five MCP tools, exact target scopes, explicit TCP ports and probe budgets preserved; private bridge and host-network provider remain OS-owned |
@@ -61,7 +71,7 @@ There are no sibling-checkout dependencies or runtime download fallbacks.
 | `systemd` | Moved to `clawos-app/products/maintenance/apps/systemd`; seven MCP tools and exact-unit observation/control grants preserved without new confirmation; systemctl execution, before/after state and supported inverse-state rollback stay OS-owned |
 | `event-center` | Moved to `clawos-app/products/events-audit/apps/event-center`; three MCP tools, sensitive event scope, bounded queries and PID validation preserved; source watchers, event records and pidfd lifetime remain OS-owned and separate from audit/notifications |
 | `log` | Legacy four-tool JSONL implementation moved to `clawos-app/products/events-audit/apps/log`; file layout and read/write grants preserved without copying data; isolated App logs are not the OS audit trail and typed audit-service integration remains pending |
-| `launcher` | Python five-tool App moved to `clawos-app/products/launcher/apps/launcher`; XDG discovery, exact launch/file grants and recent layout preserved; native UI/build and legacy forwarding replacement plus shared catalog/history remain pending |
+| `launcher` | Python five-tool App moved to `clawos-app/products/launcher/apps/launcher`; XDG discovery, exact launch/file grants and recent layout preserved; complete native source/build also moved, while UI-service catalog/history and MCP data remain separate |
 | `clipboard-manager` | Five-tool App moved to `clawos-app/products/clipboard/apps/clipboard-manager`; selection read/write, exact source grant, MIME/primary defaults and clear confirmation preserved; Wayland execution stays OS-owned; unifying its selection backend with the now-migrated native CopyQ history panel remains separate work |
 | `gateway-discord` | Source moved to `clawos-app/products/messaging-channels/apps/gateway/discord`; existing operations/MCP contract, nested install path and state layout preserved; explicit pinned `gateway._shared` imports replace relative lookup; authenticated connector admission/lifecycle and durable replay handling remain pending |
 | `gateway-dingtalk` | Source moved to `clawos-app/products/messaging-channels/apps/gateway/dingtalk`; outbound-only send/status, optional signing, keyword/Markdown/mentions and existing grants preserved; imports use pinned `gateway._shared`; no inbound Agent loop or new state store |
@@ -82,7 +92,7 @@ There are no sibling-checkout dependencies or runtime download fallbacks.
 | `gateway-pushover` | Source moved to `clawos-app/products/notification-delivery/apps/gateway/pushover`; exact API host, application/user keys, recipient flag, metadata and emergency constraints preserved; Python argument case moved, while receipt acknowledgement and durable OS-service integration remain separate |
 | `gateway-webhook` | Source moved to `clawos-app/products/notification-delivery/apps/gateway/webhook`; JSON/raw payload, target flag/default lookup, auth precedence and independent HMAC preserved with existing grants and shared egress; argument/egress regressions relocated and Rust fixture pinned; all three delivery source identities moved, not durable-service integration |
 | `gateway-homeassistant` | Source moved to `clawos-app/products/home-integration/apps/gateway/homeassistant`; REST send/call/status and grants preserved, canonical list parsing fixed for flag-shaped text/options; external server, device state and automation engine not imported, and private endpoint access is not enabled |
-| Other products and connectors | Pending their individual paired migrations |
+| Remaining eight identities listed above | Pending their individual paired source migrations |
 
 Moving source does not complete a product redesign milestone or merge legacy
 identities. APT remains the installed update path until a separate, complete

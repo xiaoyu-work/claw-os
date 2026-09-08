@@ -1,3 +1,0 @@
-cosmic-screenshot = Ekran Görüntüsü
-screenshot-saved-to-clipboard = Ekran görüntüsü panoya kaydedildi
-screenshot-saved-to = Ekran görüntüsü buraya kaydedildi:

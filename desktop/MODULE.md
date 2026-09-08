@@ -21,7 +21,7 @@ component crates plus Claw-specific agent bridges and applets.
 | `PROVENANCE.md` | Upstream origin and revision per component |
 | `justfile` | Desktop build/install orchestration |
 | `applets/claw-applet-services/` | Shared policy, read-only Calendar/task-list providers and system telemetry; no UI/App dependencies |
-| `../scripts/app_sources.py --native` | Materialize pinned Calendar/Clipboard/Widget Rail libraries and standalone Launcher source/assets under ignored build storage before direct Cargo use |
+| `../scripts/app_sources.py --native` | Materialize product-declared native libraries, workspaces and assets under ignored build storage before direct Cargo use |
 | `launcher-backend/` | Shared launcher library/service; native frontend is owned by external `clawos-app/products/launcher` |
 | `applets/cosmic-applets/` | Host native libraries; inject Calendar agenda, Clipboard history-policy and Widget Rail typed data callbacks, and generate product-owned desktop entries |
 | `agent/` | Native agent bridge and UI |
@@ -36,6 +36,7 @@ component crates plus Claw-specific agent bridges and applets.
 | [external Terminal](https://github.com/xiaoyu-work/clawos-app/tree/main/products/terminal) | Complete native terminal UI/MCP/resources; `just terminal-build`; OS keeps snapshots, fixed desktop activation and process authority |
 | [external Store](https://github.com/xiaoyu-work/clawos-app/tree/main/products/store) | Complete native Store UI/MCP/resources and flathub-stats workspace; `just store-build`; OS keeps fixed activation, policy and package transaction authority |
 | [external Settings](https://github.com/xiaoyu-work/clawos-app/tree/main/products/settings) | Complete nested Settings workspace/UI/MCP/resources; `just settings-build`; OS keeps services and fixed activation with the original separate grant |
+| [external Capture](https://github.com/xiaoyu-work/clawos-app/tree/main/products/capture) | Complete native portal client/MCP/resources; `just capture-build`; OS retains the shared interactive portal, session/capture authority and durable output |
 
 ## Dependencies
 

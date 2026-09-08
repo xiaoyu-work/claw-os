@@ -85,6 +85,15 @@ requires it so independent publication cannot silently pair the new UI with
 an old broker. Permission overrides stay in the existing root-owned approval
 generation state, outside App data and signed manifests.
 
+Native Capture is composed under `build/native-apps/cosmic-screenshot` with
+its original independent portal-client graph. The desktop package retains
+`/usr/bin/cosmic-screenshot`, its descriptor, desktop entry and all icons.
+It depends on Agent's `claw-os-capture-v1`: non-interactive capture requires
+separate screen and exact-directory write grants, not a worker session bus.
+The shared interactive portal and installed screenshots/configuration remain
+OS/user-owned. No Capture binary or native resources enter the headless Agent
+payload, and normal signed package updates remain the only installed update path.
+
 It also creates the empty root-owned `/usr/lib/cos/extensions` registry.
 Executable Agent extension packages placed there remain inactive until their
 signed id is selected in user configuration; see

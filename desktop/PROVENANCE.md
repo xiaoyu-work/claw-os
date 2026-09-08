@@ -51,7 +51,7 @@ upstream identifiers; rename them before any commercial release.
 | `player/` | github.com/pop-os/cosmic-player | `d1f63c570c76` | GPL-3.0 |
 | `protocols/` | github.com/pop-os/cosmic-protocols | `c253ec1d6804` | ? |
 | `randr/` | github.com/pop-os/cosmic-randr | `6e8e795970fa` | MPL-2.0 |
-| `screenshot/` | github.com/pop-os/cosmic-screenshot | `b917c631d155` | GPL-3.0 |
+| [external Capture](https://github.com/xiaoyu-work/clawos-app/tree/main/products/capture/native) | github.com/pop-os/cosmic-screenshot | `b917c631d155` | GPL-3.0; complete native client/resources pinned through `packaging/apps.lock.json` |
 | `session/` | github.com/pop-os/cosmic-session | `495e591dc659` | GPL-3.0 |
 | [external Settings](https://github.com/xiaoyu-work/clawos-app/tree/main/products/settings/native) | github.com/pop-os/cosmic-settings | `703a934b096b` | GPL-3.0-only; complete workspace pinned through `packaging/apps.lock.json` |
 | `settings-daemon/` | github.com/pop-os/cosmic-settings-daemon | `716da6d6af0b` | GPL-3.0 |
@@ -102,6 +102,14 @@ The following files at the root of `desktop/` came from
 - Single CI, single release tag, single `git clone` for contributors.
 
 ## License obligations
+
+Capture's complete native portal client, original license, 72 Fluent locales,
+eight icons and all original build inputs moved to the
+[Capture product](https://github.com/xiaoyu-work/clawos-app/blob/main/products/capture/PROVENANCE.md).
+Its portal-driven UX still uses the OS-owned `xdg-desktop-portal` component;
+that shared service and user images/configuration are not product source.
+The immutable App pin supplies the corresponding source for the packaged
+native binary. Existing executable and desktop identifiers are preserved.
 
 The first-party GPL-3.0-only Widget Rail UI has moved to the
 [Desktop Widgets product](https://github.com/xiaoyu-work/clawos-app/tree/main/products/desktop-widgets),

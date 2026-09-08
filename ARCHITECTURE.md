@@ -77,7 +77,17 @@ cross-cutting boundaries rather than hidden implementation details.
 
 ### App source ownership
 
-The OS provides `system.screenshot.capture` for the Capture source migration.
+Capture's complete native portal client, manifest, localization, resources,
+tests and original standalone build now live in `clawos-app/products/capture`.
+`just capture-build` composes the immutable App pin under
+`build/native-apps/cosmic-screenshot`. Its ashpd/zbus/Tokio graph has no
+libcosmic renderer or file-chooser dependency. The signed desktop package
+retains the executable, `com.clawos.Screenshot` resources and descriptor;
+the shared interactive portal UI and user screenshot/configuration paths stay
+unchanged. Source relocation is not an identity, data or visual cutover.
+
+The OS provides `system.screenshot.capture` for Capture's shared
+non-interactive native CLI/MCP implementation.
 It accepts only authenticated `cosmic-screenshot` or non-App human sessions, an explicit
 `desktop.capture:screen` grant and an exact output-directory write grant.
 The provider starts only the root-owned native portal client's
@@ -90,6 +100,9 @@ interactive destination is admitted. Screen permission uses Settings' existing
 owner/App deny gate; no capture-specific permission store is added.
 The service fails explicitly until a
 matching native Capture binary is installed; it never falls back to App calls.
+Desktop depends on Agent's `claw-os-capture-v1` service. Screenshot MCP loses
+its direct session-bus transport; direct human CLI requests may preserve an
+already-connected terminal, but headless callers need an authenticated session.
 
 Products migrate individually from this repository to
 [`xiaoyu-work/clawos-app`](https://github.com/xiaoyu-work/clawos-app).

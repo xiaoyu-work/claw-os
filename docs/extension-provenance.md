@@ -289,13 +289,20 @@ outlives the call, and the reusable server never sees it.
 
 ### Desktop transports
 
-Three bundled Apps expose their tool surface as a session server and
-reach the desktop over the **session bus**: `cosmic-player` (MPRIS),
-`cosmic-screenshot` (the screenshot portal, then a notification) and
+Two bundled Apps expose their tool surface as a session server and
+reach the desktop over the **session bus**: `cosmic-player` (MPRIS) and
 `cosmic-notifications` (`org.freedesktop.Notifications`). None of them
 initialises a compositor connection in MCP mode, so no Wayland socket,
 X authority or GPU node is granted — the session bus alone is the
 difference between a working tool and a syscall failure.
+
+`cosmic-screenshot` retains its fixed, vendor-verified native executable row
+but no desktop transport. Its immutable Capture product uses the typed
+`system.screenshot.capture` service with independent `desktop.capture:screen`
+and exact-directory `fs.write` grants. The OS alone starts the bounded
+owner-session portal helper and persists private PNG output; MCP cannot select
+an interactive destination, clipboard output, source file or arbitrary program.
+The normal human portal UI and notifications remain separate from this worker.
 
 They run in the `TrustedDesktopSession` tier: sandboxed exactly like
 any other hostile stdio server — private namespaces, strict seccomp, a

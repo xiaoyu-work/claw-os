@@ -36,8 +36,11 @@ bind `build/native-apps` at the matching relative dependency path inside the
 chroot. The shell, shared services and forked toolkit stay OS-owned; the App
 source cache and generated inputs never enter the installed image.
 The source mounts preserve the repository-relative `desktop`, SDK/runtime
-and `build/native-apps` layout, including standalone Launcher/Editor/Files/Terminal/Store
+and `build/native-apps` layout, including standalone Launcher/Editor/Files/Terminal/Store/Capture
 and nested Settings workspace dependencies.
+Capture keeps its original portal-client graph rather than inheriting the
+shell renderer; its binary/resources remain desktop-package assets while
+the shared portal and capture authority stay OS-owned.
 
 ## Tests
 

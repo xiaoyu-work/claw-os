@@ -90,6 +90,12 @@ desktop package, as does its separate `cosmic-settings` manifest. Neither
 Settings Daemon/provider code nor user state moves with this product.
 Settings permission management adds the `claw-os-app-permissions-v1` service
 dependency from Desktop to Agent, without forcing synchronized package versions.
+Capture's complete native client/resources follow the same immutable pin and
+desktop ownership. `claw-os-capture-v1` is an additional Desktop-to-Agent service
+dependency, not an App identity or a package-version lockstep. The provider
+owns bounded owner-session capture and non-overwriting private output; the
+native worker no longer holds the session bus. Screenshots/configuration and
+the shared interactive portal are not copied into the product or packages.
 App partition accounting includes nested gateway manifests. Shared gateway
 libraries remain OS-owned, and the canonical argument module is installed in
 `/usr/lib/cos/python` for the packaged legacy App entrypoints.
