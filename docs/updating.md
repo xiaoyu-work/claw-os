@@ -55,6 +55,11 @@ repository. OS package builds consume the exact published revision in
 implementation and XPI together. This is a source-ownership change, not a
 second installed updater: APT still upgrades the signed package, App identity
 and data paths are unchanged, and runtime discovery never downloads from Git.
+The migrated outbound delivery adapter retains `gateway-email` and its
+`/usr/lib/cos/apps/gateway/email` directory. Its policy/SMTP runtime is required;
+missing runtime libraries no longer enable unguarded standalone SMTP. The
+Agent package also installs the shared `canonical_argv.py` module with the
+Python runtime so legacy packaged entrypoints can resolve their parser.
 
 Updates only ever move forward. An older Claw OS release stays validly signed
 forever, so the signature alone cannot tell a current release from a superseded

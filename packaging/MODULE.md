@@ -66,6 +66,9 @@ Migrated products live in `xiaoyu-work/clawos-app`, not a second local App
 implementation. `apps.lock.json` pins their published commit. Product-owned
 staging builds the Mail XPI and Python payload; OS packaging retains the native
 authority launcher and distributes these together in `claw-os-agent`.
+App partition accounting includes nested gateway manifests. Shared gateway
+libraries remain OS-owned, and the canonical argument module is installed in
+`/usr/lib/cos/python` for the packaged legacy App entrypoints.
 
 ## Tests
 

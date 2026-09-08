@@ -514,14 +514,16 @@ for app_dir in "$PROJECT_DIR/apps"/*; do
     fi
     cp -a "$app_dir" "$AGENT_STAGE/usr/lib/cos/apps/$app_id"
 done
+install -m 644 "$PROJECT_DIR/apps/canonical_argv.py" \
+    "$AGENT_STAGE/usr/lib/cos/python/canonical_argv.py"
 external_app_count="$(python3 "$PROJECT_DIR/scripts/app_sources.py" --stage "$AGENT_STAGE")"
 find "$AGENT_STAGE/usr/lib/cos/apps" -name '__pycache__' -type d \
     -exec rm -rf {} + 2>/dev/null || true
 
-source_app_count="$(find "$PROJECT_DIR/apps" -mindepth 2 -maxdepth 2 \
+source_app_count="$(find "$PROJECT_DIR/apps" -mindepth 2 \
     -name app.json -type f | wc -l)"
 source_app_count=$((source_app_count + external_app_count))
-agent_app_count="$(find "$AGENT_STAGE/usr/lib/cos/apps" -mindepth 2 -maxdepth 2 \
+agent_app_count="$(find "$AGENT_STAGE/usr/lib/cos/apps" -mindepth 2 \
     -name app.json -type f | wc -l)"
 desktop_app_count="$(grep -cve '^[[:space:]]*$' "$DESKTOP_APPS_FILE")"
 if [ $((agent_app_count + desktop_app_count)) -ne "$source_app_count" ]; then

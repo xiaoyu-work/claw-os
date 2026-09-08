@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 
@@ -90,3 +91,39 @@ def test_agent_package_keeps_native_authority_in_os():
     assert '"$PROJECT_DIR/scripts/app_sources.py" --stage "$AGENT_STAGE"' in script
     assert '$AGENT_STAGE/usr/lib/cos/claw-mail-ai-host' in script
     assert '"$PROJECT_DIR/extensions/claw-mail-ai"' not in script
+
+
+def test_real_app_staging_counts_nested_apps_and_installs_shared_parser(tmp_path):
+    project = tmp_path / "project"
+    for relative in ("alpha", "desktop-app", "gateway/slack"):
+        app = project / "apps" / relative
+        app.mkdir(parents=True)
+        (app / "app.json").write_text(json.dumps({"id": relative.replace("/", "-")}))
+    (project / "apps/canonical_argv.py").write_text("SHARED_PARSER = True\n")
+    packaging = project / "packaging/deb"
+    (packaging / "claw-os-desktop").mkdir(parents=True)
+    (packaging / "claw-os-desktop/apps.list").write_text("desktop-app\n")
+    (project / "scripts").mkdir()
+    (project / "scripts/app_sources.py").write_text(
+        'from pathlib import Path\n'
+        'import sys\n'
+        'app = Path(sys.argv[-1]) / "usr/lib/cos/apps/gateway/email"\n'
+        'app.mkdir(parents=True)\n'
+        '(app / "app.json").write_text(\'{"id":"gateway-email"}\')\n'
+        'print(1)\n'
+    )
+    stage = tmp_path / "stage"
+    (stage / "usr/lib/cos/apps").mkdir(parents=True)
+    (stage / "usr/lib/cos/python").mkdir()
+    script = (ROOT / "packaging/deb/build-debs.sh").read_text()
+    block = script.split("# All non-graphical apps", 1)[1]
+    block = block[block.index("DESKTOP_APPS_FILE="):]
+    block = block.split('if [ -d "$PROJECT_DIR/skills" ]; then', 1)[0]
+    subprocess.run(["bash", "-euc", block], check=True, env={
+        **os.environ, "PROJECT_DIR": str(project), "SCRIPT_DIR": str(packaging),
+        "AGENT_STAGE": str(stage),
+    })
+    assert (stage / "usr/lib/cos/apps/gateway/email/app.json").is_file()
+    assert (stage / "usr/lib/cos/apps/gateway/slack/app.json").is_file()
+    assert not (stage / "usr/lib/cos/apps/desktop-app").exists()
+    assert (stage / "usr/lib/cos/python/canonical_argv.py").read_text() == "SHARED_PARSER = True\n"
