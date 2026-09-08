@@ -5,7 +5,7 @@ do not yet form one unified document-search pipeline.
 
 | Surface | Implementation | Storage | Current consumer | Status |
 | --- | --- | --- | --- | --- |
-| Document keyword search | Recoll / Xapian | `~/.recoll/` | `apps/docs` | Shipped |
+| Document keyword search | Recoll / Xapian | `~/.recoll/` | Files product's `docs` App | Shipped |
 | Filesystem semantic prototype | `claw-semantic` orchestration + `claw-embed` primitives | JSON-backed `MemoryStore` | `claw-semantic` CLI only | Experimental |
 | Agent semantic memory | `crates/claw-embed` + core memory adapter | SQLite `SemanticStore` | Agent indexing and `cos_recall_semantic` | Shipped when embedding is configured |
 
@@ -16,7 +16,11 @@ installed.
 
 ## Document Search: Recoll
 
-`apps/docs` currently uses Recoll only:
+The `docs` App, owned by
+[`clawos-app/products/files/apps/docs`](https://github.com/xiaoyu-work/clawos-app/tree/main/products/files/apps/docs),
+currently uses Recoll only. OS builds consume its fixed revision through
+`packaging/apps.lock.json`; Recoll binaries and background service installation
+remain system responsibilities.
 
 1. `recollindex` builds the Xapian index over configured top directories.
 2. `recollq` executes keyword queries.
@@ -46,7 +50,7 @@ The daemon watches configured directories with notify/inotify. Its
 exercised end to end, but the resulting similarity scores are not meaningful
 semantic embeddings.
 
-This prototype is not connected to `apps/docs`.
+This prototype is not connected to the `docs` App.
 
 `claw-embed` is the sole owner of the chunk, embedder, extractor, filesystem
 walker, and store contracts. `claw-semantic` retains compatibility re-exports
@@ -77,7 +81,7 @@ The default database is the Agent semantic store below the Claw OS data
 directory.
 
 This path provides real semantic recall for Agent memory, but it does not
-index the user's document directories for `apps/docs`.
+index the user's document directories for the `docs` App.
 
 ## Persistence and Caller Compatibility
 
@@ -118,7 +122,7 @@ mistaken for the production Agent semantic store.
 
 ## Planned Document Fusion
 
-The intended `apps/docs.search` design is still:
+The intended `docs.search` design is still:
 
 1. query Recoll for keyword matches,
 2. query a real filesystem semantic index,
@@ -134,12 +138,12 @@ compatibility stub embedder and JSON store to a real embedding provider and a
 production-scale document store. Those implementations belong behind the
 contracts in `claw-embed`; daemon lifecycle remains in `claw-semantic`.
 
-Only after that decision should `apps/docs` gain semantic queries and RRF
+Only after that decision should the `docs` App gain semantic queries and RRF
 fusion.
 
 ## Current Status
 
-- `apps/docs`: Recoll keyword search only.
+- `docs`: Recoll keyword search only.
 - `claw-semantic`: optional filesystem daemon/CLI using `claw-embed`
   primitives with compatibility JSON persistence and stub embeddings.
 - Agent semantic recall: real embeddings and SQLite storage when configured.
