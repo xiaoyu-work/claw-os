@@ -174,8 +174,13 @@ Events and Audit owns `event-center`'s three MCP tools, retaining the dedicated
 `sys.events:observe` grant, bounded recent queries and process-exit subscriptions.
 Background udev/systemd/journal watchers, source health, persistent event records
 and pidfd watch lifetime/deduplication remain OS-owned. Event records are not
-merged into audit, context-event or notification stores. The `log` App awaits
-its separate migration.
+merged into audit, context-event or notification stores. The product also owns
+the legacy `log` App's four MCP tools, preserving separate `data.log.read/write`
+grants and its existing `COS_DATA_DIR/logs/audit.jsonl` layout. This is direct
+JSONL access, not a broker-backed system audit API: the App Host's isolated data
+directory is not the authoritative audit trail. No logs are copied or system
+audit file access expanded. Typed audit-service integration and safe manual-entry
+semantics remain pending; audit integrity and persistence stay OS-owned.
 The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling
