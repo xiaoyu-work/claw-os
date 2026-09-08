@@ -51,6 +51,7 @@ There are no sibling-checkout dependencies or runtime download fallbacks.
 | `power-manager` | Moved to `clawos-app/products/settings/apps/power-manager`; seven MCP tools, separate observation/critical power grants and strict confirmation preserved; UPower/logind execution and serialization stay OS-owned |
 | `printer-manager` | Moved to `clawos-app/products/settings/apps/printer-manager`; five MCP tools, separate printer grants, exact source-read scope and cancel confirmation preserved; CUPS, pinned source descriptors and job-owner checks stay OS-owned |
 | `user-manager` | Moved to `clawos-app/products/settings/apps/user-manager`; twelve MCP tools and exact identity/secret grants preserved; corrected OS status authorization to match `sys.observe:identities`; account state, password handling and rollback stay OS-owned |
+| `security-center` | Moved to `clawos-app/products/security/apps/security-center`; seven read-only MCP tools and sensitive `sys.security:audit` grant preserved; evidence collection, report generation and App-bound authorization stay OS-owned |
 | Other products and connectors | Pending their individual paired migrations |
 
 Moving source does not complete a product redesign milestone or merge legacy

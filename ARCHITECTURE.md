@@ -142,6 +142,11 @@ require exact credential reads. Shadow utilities, account state and owner-bound
 rollback stay OS-owned. All eleven management App sources assigned to Settings
 have moved; native Settings still awaits its full UI/build migration, without
 combining provider authority.
+Security owns `security-center` and its seven sensitive read-only MCP tools.
+The dedicated `sys.security:audit` grant and App-bound inspection authority
+are unchanged. Journal/configuration inspection, privileged collectors and
+security report generation stay OS-owned; firewall and USB management still
+await their separate source migrations and do not share inspection authority.
 The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling
