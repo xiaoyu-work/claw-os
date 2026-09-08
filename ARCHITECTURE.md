@@ -189,6 +189,13 @@ shared with the shell. Native `cosmic-launcher` UI/build/resources, its legacy
 `cos app launcher` forwarding and shared catalog/history integration remain
 pending. This source move does not introduce App-to-App calls or complete the
 native Launcher migration.
+Clipboard owns `clipboard-manager`'s five MCP tools, keeping selection read/write
+grants separate, exact source-file read authority and explicit clear confirmation.
+Primary selection stays opt-in and MIME defaults remain OS-owned. Wayland session
+validation, wl-clipboard execution, bounded content transfer, source descriptors
+and write serialization remain here. No clipboard contents or history are copied.
+Native `panel-clipboard` and its CopyQ history integration remain pending; its
+history scopes are not merged into selection authority.
 The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling

@@ -59,6 +59,7 @@ There are no sibling-checkout dependencies or runtime download fallbacks.
 | `event-center` | Moved to `clawos-app/products/events-audit/apps/event-center`; three MCP tools, sensitive event scope, bounded queries and PID validation preserved; source watchers, event records and pidfd lifetime remain OS-owned and separate from audit/notifications |
 | `log` | Legacy four-tool JSONL implementation moved to `clawos-app/products/events-audit/apps/log`; file layout and read/write grants preserved without copying data; isolated App logs are not the OS audit trail and typed audit-service integration remains pending |
 | `launcher` | Python five-tool App moved to `clawos-app/products/launcher/apps/launcher`; XDG discovery, exact launch/file grants and recent layout preserved; native UI/build and legacy forwarding replacement plus shared catalog/history remain pending |
+| `clipboard-manager` | Five-tool App moved to `clawos-app/products/clipboard/apps/clipboard-manager`; selection read/write, exact source grant, MIME/primary defaults and clear confirmation preserved; Wayland execution stays OS-owned and native panel/CopyQ history integration remains pending |
 | Other products and connectors | Pending their individual paired migrations |
 
 Moving source does not complete a product redesign milestone or merge legacy
