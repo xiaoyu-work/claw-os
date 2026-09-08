@@ -98,10 +98,11 @@ Snapper/Btrfs/LVM execution remain here.
 Store owns the `pkg` CLI/MCP source. Privileged package transactions, audit,
 rollback and installed package state remain OS-owned. The native
 `cosmic-store` UI and replacement of its legacy App forwarding remain pending.
-Diagnostics owns `hardware-center` and `crash-doctor`. Hardware observation and
-sensitive crash inspection retain separate permissions; collectors, coredumps,
-journal access and debugger execution stay in the OS. The network diagnostic
-App awaits its source migration.
+Diagnostics owns `hardware-center`, `crash-doctor` and `netdiag`. Hardware
+observation, sensitive crash inspection and exact-target network diagnostics
+retain separate permissions. Collectors, coredumps, journal access, debugger
+execution and DNS-pinned network probes stay in the OS; `netdiag` still uses
+its private runtime bridge without direct worker-network access.
 The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling
