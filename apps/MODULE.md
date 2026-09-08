@@ -33,7 +33,7 @@ Product sources are moving individually to
 `gateway-googlechat`, `gateway-larksuite`, `gateway-matrix`, `gateway-mattermost`,
 `gateway-rocketchat`, `gateway-signal`, `gateway-slack`, `gateway-sms`, `gateway-teams`,
 `gateway-telegram`, `gateway-webex`, `gateway-whatsapp`, `gateway-zulip`, `gateway-ntfy`,
-`gateway-pushover`, `gateway-webhook`,
+`gateway-pushover`, `gateway-webhook`, `gateway-homeassistant`,
 the Browser extension/Native Host and Mail UI/native source
 are owned there already.
 Do not recreate a local copy: OS package assembly consumes the immutable revision in

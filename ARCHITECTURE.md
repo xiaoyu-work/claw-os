@@ -289,6 +289,12 @@ moves. Its JSON/raw POST, target flag/default lookup, independent HMAC signing
 and existing grants are unchanged, including wildcard network authority.
 Shared OS egress still gates exact hosts and blocks private destinations and
 redirects. Relocation does not add inbound reception or reliable delivery.
+`gateway-homeassistant` belongs to a separate Home Integration product, not
+the messaging/delivery groups. Its send/call/status REST contract and grants
+are preserved; canonical parsing now keeps flags separate from service/text
+positionals. Home Assistant remains external: no server source, device state,
+automations or UI are imported. Shared OS egress retains its private-address
+block and runtime capability checks.
 The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling
