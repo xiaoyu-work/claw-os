@@ -88,6 +88,9 @@ extension now live in the Browser product too. The reusable `cos-browser`
 engine and privileged attached-browser provider remain here.
 The Terminal product also owns the `exec` App source; core process authority
 and sandbox enforcement remain in the OS.
+The Containers product owns `container-manager` and its fourteen MCP handlers;
+runtime execution, App-bound container authority and backend isolation remain
+in the OS's container provider.
 The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling

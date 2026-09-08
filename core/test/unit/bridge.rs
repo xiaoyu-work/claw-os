@@ -987,29 +987,6 @@ fn bundled_lone_limits_bind_before_optional_selectors() {
     assert_eq!(selected.values["limit"], serde_json::json!(100));
     assert_eq!(selected.argv, ["100", "--source", "security"]);
 
-    let containers = load(&["container-manager"]);
-    let logs = &containers.operations["logs"];
-    let docker = bind_operation_args(logs, &["docker".into(), "web".into(), "50".into()]).unwrap();
-    assert_eq!(docker.values["lines"], serde_json::json!(50));
-    assert_eq!(docker.argv, ["docker", "web", "50"]);
-    let containerd = bind_operation_args(
-        logs,
-        &[
-            "containerd".into(),
-            "web".into(),
-            "25".into(),
-            "--namespace".into(),
-            "default".into(),
-        ],
-    )
-    .unwrap();
-    assert_eq!(containerd.values["lines"], serde_json::json!(25));
-    assert_eq!(containerd.values["namespace"], serde_json::json!("default"));
-    assert_eq!(
-        containerd.argv,
-        ["containerd", "web", "25", "--namespace", "default"]
-    );
-
     let net = load(&["net"]);
     let output = effective_app_home().join("download.bin");
     let args = vec![
@@ -1021,6 +998,72 @@ fn bundled_lone_limits_bind_before_optional_selectors() {
     assert_eq!(
         download.values["output"],
         serde_json::json!(output.to_string_lossy())
+    );
+}
+
+#[test]
+fn container_mcp_logs_bind_limits_before_namespace() {
+    use crate::caps::Cap;
+
+    let containers = Manifest::from_json(
+        &std::fs::read_to_string(app_sources::app_dir("container-manager").join("app.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(containers.operations.is_empty());
+    let logs = crate::apps::mcp_tool_for_command(&containers, "logs").unwrap();
+    for (argv, expected_lines, namespace) in [
+        (vec!["docker", "web"], 100, None),
+        (vec!["docker", "web", "50"], 50, None),
+        (
+            vec!["containerd", "web", "25", "--namespace", "default"],
+            25,
+            Some("default"),
+        ),
+    ] {
+        let argv = argv.into_iter().map(String::from).collect::<Vec<_>>();
+        let supplied = crate::caps::args::bind_supplied_cli_args(&logs.args, &argv).unwrap();
+        let values = containers
+            .resolve_mcp_tool_args(&logs.name, &supplied)
+            .unwrap();
+        assert_eq!(values["lines"], serde_json::json!(expected_lines));
+        assert_eq!(
+            values.get("namespace").and_then(|value| value.as_str()),
+            namespace
+        );
+        let caps = containers.resolve_mcp_tool_needs(&logs.name, &values).unwrap();
+        assert_eq!(
+            caps,
+            vec![vec![Cap::new(Verb::SYS_CONTAINER, Scope::name("observe"))]]
+        );
+    }
+    let args = std::collections::BTreeMap::from([
+        ("runtime".into(), serde_json::json!("containerd")),
+        ("target".into(), serde_json::json!("web")),
+    ]);
+    assert!(containers.resolve_mcp_tool_args(&logs.name, &args).is_err());
+}
+
+#[test]
+fn container_mcp_removal_requires_explicit_confirmation() {
+    use crate::caps::Cap;
+
+    let containers = Manifest::from_json(
+        &std::fs::read_to_string(app_sources::app_dir("container-manager").join("app.json")).unwrap(),
+    )
+    .unwrap();
+    let mut args = std::collections::BTreeMap::from([
+        ("runtime".into(), serde_json::json!("docker")),
+        ("target".into(), serde_json::json!("web")),
+    ]);
+    let tool = "container-manager.remove";
+    assert!(containers.resolve_mcp_tool_args(tool, &args).is_err());
+    args.insert("confirm".into(), serde_json::json!(false));
+    assert!(containers.resolve_mcp_tool_args(tool, &args).is_err());
+    args.insert("confirm".into(), serde_json::json!(true));
+    let caps = containers.resolve_mcp_tool_needs(tool, &args).unwrap();
+    assert_eq!(
+        caps,
+        vec![vec![Cap::new(Verb::SYS_CONTAINER, Scope::name("control"))]]
     );
 }
 
