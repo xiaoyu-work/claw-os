@@ -1,5 +1,9 @@
 use super::*;
 
+mod app_sources {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/support/app_sources.rs"));
+}
+
 #[test]
 fn default_entries_are_runtime_aware() {
     assert_eq!(Runtime::Python.default_entry(), "main.py");
@@ -686,10 +690,7 @@ fn explicit_email_provider_and_host_drive_capability_derivation() {
 
 #[test]
 fn explicit_calendar_provider_selects_only_its_capabilities() {
-    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap();
-    let app_dir = repository.join("apps/calendar");
+    let app_dir = app_sources::app_dir("calendar");
     let manifest = load_manifest(&app_dir).unwrap().unwrap();
     let operation = &manifest.operations["today"];
     assert!(bind_operation_args(operation, &[]).is_err());

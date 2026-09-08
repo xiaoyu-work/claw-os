@@ -9,6 +9,8 @@ dispatched and reusable test/publication pipelines.
 
 - Run core/browser/Python validation, including pinned App source staging and
   preservation of the package-owned runtime during rootfs registration.
+- Prepare immutable product source inputs before cross-repository Rust tests,
+  retaining real App/broker coverage without a second local implementation.
 - Build shared Docker/WSL images per architecture.
 - Build and sign independent multi-architecture APT packages/repository.
 - Build the React/Vite web desktop as an independent Pages input.

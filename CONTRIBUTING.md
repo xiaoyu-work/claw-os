@@ -163,7 +163,13 @@ COS_APPS_DIR=./apps COS_DATA_DIR=/tmp/cos-data ./core/target/debug/cos fs ls .
 
 ### Run Tests
 
+From the repository root, prepare the immutable product inputs used by App
+contract and worker integration tests. This validates the source lock and
+cache; Cargo itself does not download product fixtures.
+
 ```bash
+python3 scripts/app_sources.py
+
 # Core tests share process-global environment variables.
 (cd core && cargo test -- --test-threads=1)
 

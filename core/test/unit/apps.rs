@@ -1,5 +1,9 @@
 use super::*;
 
+mod app_sources {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/support/app_sources.rs"));
+}
+
 #[test]
 fn operation_schema_preserves_literal_defaults() {
     let manifest = Manifest::from_json(
@@ -191,7 +195,10 @@ fn bundled_conditional_capabilities_are_exact() {
     };
     let active = |caps: Vec<Vec<crate::caps::Cap>>| caps.into_iter().flatten().collect::<Vec<_>>();
 
-    let calendar = load(&["calendar"]);
+    let calendar = Manifest::from_json(
+        &std::fs::read_to_string(app_sources::app_dir("calendar").join("app.json")).unwrap(),
+    )
+    .unwrap();
     let local = active(
         calendar
             .resolve_needs(
@@ -331,7 +338,10 @@ fn bundled_schema_exposes_repeatables_choices_and_stdin() {
     assert_eq!(download["parameters"][1]["required"], true);
     assert_eq!(download["parameters"][1]["binding"], "positional");
 
-    let calendar = load("calendar");
+    let calendar = Manifest::from_json(
+        &std::fs::read_to_string(app_sources::app_dir("calendar").join("app.json")).unwrap(),
+    )
+    .unwrap();
     let schema = operation_schema(&calendar.operations["today"]);
     assert_eq!(
         schema["parameters"][0]["enum"],

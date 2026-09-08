@@ -81,13 +81,19 @@ Products migrate individually from this repository to
 [`xiaoyu-work/clawos-app`](https://github.com/xiaoyu-work/clawos-app).
 Mail's native source, `mail-ai`, legacy `email`, restricted `gateway-email`
 delivery and extension UI have moved;
-the remaining Apps stay here until their own paired migration. The App
+Calendar's event/provider operations have moved as well. The remaining Apps
+stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling
 OS checkout. `packaging/apps.lock.json` pins a published App commit, and
 `scripts/app_sources.py` invokes its product-owned staging during OS package
 assembly. Installed execution still uses the existing authenticated package,
 App Host, capabilities and SDK; it never follows a Git branch or downloads
 product code at runtime. The OS retains native authority launchers and services.
+
+Cross-repository App contract and worker tests select real product source by
+the same lock through `core/test/support/app_sources.rs`. CI explicitly prepares
+that source with `scripts/app_sources.py` before Cargo runs. Tests do not fetch
+code themselves or substitute an old local implementation for a migrated App.
 
 ### Capability seams
 

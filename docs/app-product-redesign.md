@@ -25,6 +25,7 @@ There are no sibling-checkout dependencies or runtime download fallbacks.
 | Mail native source, `mail-ai`, extension UI and product tests/build | Moved to `clawos-app/products/mail`; installed identity, paths and authority preserved |
 | `email` | Moved to `clawos-app/products/mail/apps/email`; existing provider grants and installed identity preserved |
 | `gateway-email` | Moved to `clawos-app/products/mail/apps/gateway/email`; nested installation, identity and grants preserved |
+| `calendar` | Moved to `clawos-app/products/calendar/apps/calendar`; event storage and provider authority unchanged; `panel-calendar` still pending |
 | Other products and connectors | Pending their individual paired migrations |
 
 Moving source does not complete a product redesign milestone or merge legacy

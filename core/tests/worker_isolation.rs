@@ -20,6 +20,10 @@ use cos::caps::{Cap, CapSet, Scope, Verb};
 use cos::worker::derive::{AgentExecInput, McpServerInput};
 use cos::worker::{Limits, WorkerLaunch, WorkerOutput};
 
+mod app_sources {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/support/app_sources.rs"));
+}
+
 /// Run `script` under the hostile-worker sandbox with `workspace`
 /// bound in the requested direction, and return what it produced.
 fn run_in_sandbox(workspace: &Path, writable: bool, script: &str) -> WorkerOutput {
@@ -1498,7 +1502,7 @@ fn run_shipped_app(
         pinned_entries: Vec::new(),
         developer: false,
         app_id,
-        app_dir: &apps_root.join(app_id),
+        app_dir: &app_sources::app_dir(app_id),
         operation,
         program: PathBuf::from("/usr/bin/python3"),
         argv,
@@ -1661,8 +1665,8 @@ try:
 except OSError as failure:
     print('direct refused', failure.errno)
 "#,
-        main = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../apps/calendar/main.py")
+        main = app_sources::app_dir("calendar")
+            .join("main.py")
             .canonicalize()
             .expect("calendar main")
             .to_string_lossy(),

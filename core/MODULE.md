@@ -58,6 +58,12 @@ Project-wide rules are in [`../ARCHITECTURE.md`](../ARCHITECTURE.md).
 
 ## Tests
 
+Product contract and worker integration cases use
+`test/support/app_sources.rs` to select source by the OS App lock. Prepare
+migrated product inputs from the repository root with
+`python3 scripts/app_sources.py` before running these cases. Missing pinned
+inputs fail with an actionable diagnostic; tests do not download them.
+
 ```bash
 # Narrow test or module
 cargo test -p cos <test-filter> -- --test-threads=1

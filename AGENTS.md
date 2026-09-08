@@ -100,6 +100,11 @@ python3 wire/codegen.py
 Use the narrowest existing test first. Core tests that mutate process-wide
 environment variables must run serially when combined.
 
+Tests that exercise a migrated product use the immutable App source pin.
+Run `python3 scripts/app_sources.py` before those tests (CI does this explicitly).
+Cargo never downloads product fixtures or substitutes local App source for a
+declared external product.
+
 Rust unit-test bodies live outside production source trees under each crate's
 `test/unit/` directory, mirroring the `src/` path. Production modules contain
 only a small `include!` declaration so unit tests retain private access.

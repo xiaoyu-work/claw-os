@@ -1,5 +1,9 @@
 use super::*;
 
+mod app_sources {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/support/app_sources.rs"));
+}
+
 use crate::caps::Verb;
 
 const FS_MANIFEST: &str = r#"{
@@ -137,10 +141,7 @@ fn delegation(ceiling: CapSet) -> Delegation {
 
 #[test]
 fn daemon_plan_skips_inactive_calendar_provider_needs() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .join("apps/calendar/app.json");
+    let path = app_sources::app_dir("calendar").join("app.json");
     let manifest = Manifest::from_json(&std::fs::read_to_string(path).unwrap()).unwrap();
     let operation = &manifest.operations["today"];
     let values = BTreeMap::from([("provider".to_string(), serde_json::json!("local"))]);
