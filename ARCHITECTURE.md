@@ -254,6 +254,13 @@ Cards, explicit legacy MessageCards and existing grants. Its recipient remains
 informational; only the configured webhook selects the destination. Python
 argument cases move with the product and the Rust binding contract reads the
 immutable source pin. No automatic fallback or inbound service is introduced.
+`gateway-telegram` also moves to Messaging Channels with send/status/start/stop,
+repeatable message text, legacy polling, allowlists and rate limits. Its
+offset/PID layout and existing OS state-partition migration are preserved;
+installed state is not copied with source. Like Discord, the legacy
+`cos agent ask` path does not establish authenticated owner-bound connector
+admission. Broker restrictions remain unchanged; supervised lifecycle and
+durable delivery are still pending.
 The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling
