@@ -102,7 +102,7 @@ arguments.
            │ subprocess: cos ai chat --app <id> --prompt-file <0600 temp>
            ▼
 ┌──────────────────────────────────────────────────────────┐
-│  cos                  (Rust binary, in /usr/bin)         │
+│  cos                  (Rust binary, in /usr/local/bin)   │
 │  - caps gate, audit, budget, safety, provider routing    │
 └──────────────────────────────────────────────────────────┘
 ```

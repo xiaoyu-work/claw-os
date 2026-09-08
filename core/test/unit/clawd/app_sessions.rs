@@ -219,9 +219,21 @@ fn owner_app_revocation_is_enforced_before_launch_grants_are_derived() {
         plan
     };
     authorize_plan(&delegation, plan(), &publisher_ceiling(), "audio-manager").unwrap();
-    crate::approvals::app_policy::revoke(delegation.uid, "audio-manager", cap.clone()).unwrap();
+    let block = crate::approvals::app_policy::revoke(delegation.uid, "audio-manager", cap.clone()).unwrap();
     assert!(authorize_plan(&delegation, plan(), &publisher_ceiling(), "audio-manager").is_err());
     authorize_plan(&delegation, plan(), &publisher_ceiling(), "other-app").unwrap();
+    let id = crate::approvals::submit_owned(cap.verb, cap.scope.clone(),
+        block.session(delegation.uid, "audio-manager"), "restore", None, Some(delegation.uid)).unwrap();
+    crate::approvals::approve_for_owner(
+        &id, crate::approvals::GrantDuration::Forever, None, None, Some(delegation.uid),
+    ).unwrap();
+    authorize_plan(&delegation, plan(), &publisher_ceiling(), "audio-manager").unwrap();
+    let mut missing = LaunchPlan::default();
+    missing.missing.push(cap.clone());
+    assert!(authorize_plan(&delegation, missing, &publisher_ceiling(), "audio-manager").is_err(),
+        "restoring policy cannot satisfy an ordinary launch approval");
+    crate::approvals::app_policy::revoke(delegation.uid, "audio-manager", cap.clone()).unwrap();
+    assert!(authorize_plan(&delegation, plan(), &publisher_ceiling(), "audio-manager").is_err());
 }
 
 /// Launcher authority for a synthetic peer process.

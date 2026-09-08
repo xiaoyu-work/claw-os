@@ -2,6 +2,54 @@ use super::*;
 
 #[cfg(unix)]
 #[test]
+fn explicit_binary_uses_shared_transport_without_path_or_override() {
+    let dir = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let original_bin = std::env::var_os("CLAW_COS_BIN");
+    let original_path = std::env::var_os("PATH");
+    std::env::remove_var("CLAW_COS_BIN");
+    std::env::set_var("PATH", "/usr/bin:/bin");
+    let binary = write_fake_cos(dir.path(), r#"{"ok":true,"wire_version":1,"data":{"selected":true}}"#, 0);
+    let first = cos_call_json_with_binary(&binary, "permissions", "manage", ["__app-permissions", "{}"]);
+    std::env::set_var("CLAW_COS_BIN", dir.path().join("not-created"));
+    let second = cos_call_json_with_binary(&binary, "permissions", "manage", ["__app-permissions", "{}"]);
+    let generic = cos_call_json("permissions", "manage", ["__app-permissions", "{}"]);
+    for (name, previous) in [("CLAW_COS_BIN", original_bin), ("PATH", original_path)] {
+        match previous {
+            Some(value) => std::env::set_var(name, value),
+            None => std::env::remove_var(name),
+        }
+    }
+    assert_eq!(first.unwrap(), second.unwrap());
+    assert!(matches!(generic, Err(BridgeError::BinaryNotFound(_))));
+}
+
+#[cfg(unix)]
+#[test]
+fn explicit_binary_preserves_wire_errors_and_spawn_failures() {
+    let dir = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let missing = cos_call_json_with_binary(
+        dir.path().join("not-created"), "permissions", "manage", ["__app-permissions", "{}"],
+    );
+    assert!(matches!(missing, Err(BridgeError::BinaryNotFound(_))));
+    for (body, code, denied) in [
+        (r#"{"ok":false,"wire_version":1,"error":"refused","code":"PERMISSION_DENIED"}"#, 1, true),
+        (r#"{"enabled":true}"#, 0, false),
+        (r#"{"ok":true,"wire_version":1,"data":{}}"#, 1, false),
+    ] {
+        let binary = write_fake_cos(dir.path(), body, code);
+        let error = cos_call_json_with_binary(
+            binary, "permissions", "manage", ["__app-permissions", "{}"],
+        ).unwrap_err();
+        if denied {
+            assert!(error.is_denied(), "{error}");
+        } else {
+            assert!(matches!(error, BridgeError::Decode { .. }), "{error}");
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn controlled_stdin_transports_share_bounds_and_wire_decoding() {
     let dir = tempfile::tempdir().unwrap();
     let original = std::env::var_os("CLAW_COS_BIN");

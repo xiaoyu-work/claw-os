@@ -349,7 +349,7 @@ pub fn record_revoked(scope: &'static str, subject: Option<&str>, retired: usize
     });
 }
 
-pub fn record_app_permission_revoked(owner_uid: u32, app_id: &str, cap: &Cap, generation: u32, retired: usize) {
+pub fn record_app_permission_revoked(owner_uid: u32, app_id: &str, cap: &Cap, generation: u32, retired: usize) -> Result<(), String> {
     #[derive(Serialize)]
     struct PolicyRevocation<'a> {
         ts: chrono::DateTime<chrono::Utc>,
@@ -360,10 +360,10 @@ pub fn record_app_permission_revoked(owner_uid: u32, app_id: &str, cap: &Cap, ge
         generation: u32,
         retired: usize,
     }
-    write(&PolicyRevocation {
+    super::super::audit::append_jsonl(&PolicyRevocation {
         ts: chrono::Utc::now(), event: "clawd.app_permission.revoked",
         owner_uid, app_id, cap: CapFacts::of(cap), generation, retired,
-    });
+    })
 }
 
 fn decision_route(decision: &Decision) -> &'static str {

@@ -24,12 +24,22 @@ fn permission_policy_snapshot_detects_revocation_without_restarting_other_apps()
     let _caps = crate::test_env::TestEnvVarGuard::set("COS_CAPS_DATA_DIR", dir.path());
     let before = crate::approvals::app_policy::blocks(1000, "audio-manager").unwrap();
     let cap = crate::caps::Cap::new(crate::caps::Verb::SYS_OBSERVE, crate::caps::Scope::name("audio"));
-    crate::approvals::app_policy::revoke(1000, "audio-manager", cap).unwrap();
+    let block = crate::approvals::app_policy::revoke(1000, "audio-manager", cap).unwrap();
     let after = crate::approvals::app_policy::blocks(1000, "audio-manager").unwrap();
     assert_ne!(before, after);
     assert_eq!(before, crate::approvals::app_policy::blocks(1001, "audio-manager").unwrap());
     assert_eq!(before, crate::approvals::app_policy::blocks(1000, "camera-manager").unwrap());
     assert_eq!(after, crate::approvals::app_policy::blocks(1000, "audio-manager").unwrap());
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", dir.path());
+    let id = crate::approvals::submit_owned(block.cap.verb, block.cap.scope.clone(),
+        block.session(1000, "audio-manager"), "restore", None, Some(1000)).unwrap();
+    crate::approvals::approve_for_owner(
+        &id, crate::approvals::GrantDuration::Forever, None, None, Some(1000),
+    ).unwrap();
+    let restored = crate::approvals::app_policy::blocks(1000, "audio-manager").unwrap();
+    assert!(restored[0].enabled(1000, "audio-manager").unwrap());
+    assert_ne!(before, restored, "restoration must not roll back the snapshot used to retire a Host");
+    assert_eq!(after, restored);
 }
 
 #[test]

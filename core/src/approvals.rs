@@ -46,7 +46,8 @@ pub enum GrantDuration {
     Once,
     /// Lasts for the lifetime of the requesting session.
     Session,
-    /// Persisted until the user revokes it; still bound to the approved request.
+    /// Reusable execution approval (still bounded by its security lifetime),
+    /// or until-revoked App policy restoration, never both.
     Forever,
 }
 
@@ -118,9 +119,14 @@ pub struct Decision {
     /// existed. Such a record is evidence that a decision was made, but
     /// it carries no expiry, no use budget and no provenance, so it
     /// grants nothing: [`load_matching_grant`] refuses it. See
-    /// [`GrantBinding`].
+    /// [`GrantBinding`]. App policy restorations intentionally omit it and
+    /// carry a separate non-redeemable receipt instead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grant: Option<GrantBinding>,
+    /// Until-revoked consent for an owner/App deny gate. Never execution
+    /// authority; old Settings receipts are interpreted by `app_policy` only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restoration: Option<app_policy::RestorationBinding>,
 }
 
 /// The bounded authority one approved record stands for.
@@ -556,7 +562,9 @@ impl GrantBinding {
         expected_execution: Option<&ApprovalExecutionIdentity>,
         resumed_request_ids: &[String],
     ) -> bool {
-        if self.uses_remaining == 0 || now >= self.expires_at {
+        if self.uses_remaining == 0 || now >= self.expires_at
+            || expected.session.starts_with(app_policy::SESSION_PREFIX)
+        {
             return false;
         }
         let Some(authorization) = self.authorization.as_ref() else {
@@ -1310,15 +1318,6 @@ fn resolve_locked(
     owner_uid: Option<u32>,
 ) -> Result<Resolved, String> {
     validate_approval_id(id)?;
-    if outcome == Outcome::Approved {
-        if let Some(request) = lookup_pending(id) {
-            if request.session.starts_with(app_policy::SESSION_PREFIX) {
-                if duration != Some(GrantDuration::Forever) {
-                    return Err("App permission restoration requires duration forever (until revoked); it does not grant launch authority".into());
-                }
-            }
-        }
-    }
     let pending = pending_dir().join(format!("{id}.json"));
     if let Some(uid) = owner_uid {
         let request =
@@ -1369,6 +1368,18 @@ fn resolve_locked(
         ));
     }
 
+    let policy_restore = request.session.starts_with(app_policy::SESSION_PREFIX);
+    if outcome == Outcome::Approved && policy_restore {
+        if duration != Some(GrantDuration::Forever) {
+            fs::rename(&scratch, &pending)
+                .map_err(|error| format!("restore pending {id}: {error}"))?;
+            return Err("App permission restoration requires duration forever (until revoked); it does not grant launch authority".into());
+        }
+        if let Err(error) = app_policy::validate_request(&request) {
+            invalidate_claimed_request(id, &scratch, &request, &error)?;
+            return Err(error);
+        }
+    }
     let decided_at = now_secs();
     let authorization = if outcome == Outcome::Approved {
         let authorization = match authorization_for_request(&request) {
@@ -1417,24 +1428,23 @@ fn resolve_locked(
         },
         Outcome::Denied => None,
     };
+    let (grant, restoration) = match generation.zip(authorization) {
+        Some((generation, authorization)) if policy_restore => (None, Some(app_policy::RestorationBinding {
+            authorization, generation, reference: crate::audit_policy::text_digest(id).digest,
+        })),
+        Some((generation, authorization)) => (Some(GrantBinding::mint(
+            duration.unwrap_or(GrantDuration::Once), id, decided_at, generation, authorization,
+        )), None),
+        None => (None, None),
+    };
     let decision = Decision {
         outcome,
         decided_at,
         decided_by,
         duration,
         note,
-        // Only an approval carries authority, and only a bounded one.
-        grant: generation
-            .zip(authorization)
-            .map(|(generation, authorization)| {
-                GrantBinding::mint(
-                    duration.unwrap_or(GrantDuration::Once),
-                    id,
-                    decided_at,
-                    generation,
-                    authorization,
-                )
-            }),
+        grant,
+        restoration,
     };
     let resolved = Resolved { request, decision };
     let dest_dir = match outcome {
@@ -1443,7 +1453,11 @@ fn resolve_locked(
     };
     let dest = dest_dir.join(format!("{id}.json"));
     let payload = serde_json::to_string_pretty(&resolved).map_err(|e| e.to_string())?;
-    write_atomic(&dest, payload.as_bytes())
+    write_atomic_with(&dest, payload.as_bytes(), if policy_restore {
+        Durability::Committed
+    } else {
+        Durability::BestEffort
+    })
         .map_err(|e| format!("write {} {id}: {e}", outcome_dir_name(outcome)))?;
 
     // Best-effort cleanup of the scratch file. If this fails the
@@ -1451,7 +1465,7 @@ fn resolve_locked(
     // scratch file is harmless.
     let _ = fs::remove_file(&scratch);
 
-    crate::clawd::system_journal::record_approval_decision(&resolved);
+    journal_decision(&resolved)?;
 
     Ok(resolved)
 }
@@ -1471,15 +1485,31 @@ fn invalidate_claimed_request(
             duration: None,
             note: Some(reason.to_string()),
             grant: None,
+            restoration: None,
         },
     };
     let dest = denied_dir().join(format!("{id}.json"));
     let payload = serde_json::to_string_pretty(&resolved).map_err(|error| error.to_string())?;
-    write_atomic(&dest, payload.as_bytes())
+    write_atomic_with(&dest, payload.as_bytes(), if request.session.starts_with(app_policy::SESSION_PREFIX) {
+        Durability::Committed
+    } else {
+        Durability::BestEffort
+    })
         .map_err(|error| format!("invalidate approval {id}: {error}"))?;
     let _ = fs::remove_file(scratch);
-    crate::clawd::system_journal::record_approval_decision(&resolved);
+    journal_decision(&resolved)?;
     Ok(())
+}
+
+fn journal_decision(resolved: &Resolved) -> Result<(), String> {
+    let result = crate::clawd::system_journal::record_approval_decision(resolved);
+    if resolved.request.session.starts_with(app_policy::SESSION_PREFIX) {
+        result.map_err(|error| format!(
+            "App permission decision is committed but its journal projection failed: {error}; refresh status"
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 fn outcome_dir_name(o: Outcome) -> &'static str {
@@ -1841,6 +1871,11 @@ pub(crate) fn redeem_resumed_worker_grant_for_owner_operation(
 /// Called with the store lock held. Returns `Ok(None)` when another
 /// caller won the race and the record is already gone.
 fn spend_grant(path: &Path, mut resolved: Resolved) -> Result<Option<ConsumedGrant>, String> {
+    if resolved.decision.restoration.is_some()
+        || resolved.request.session.starts_with(app_policy::SESSION_PREFIX)
+    {
+        return Ok(None);
+    }
     let duration = resolved.decision.duration.unwrap_or(GrantDuration::Once);
     let Some(binding) = resolved.decision.grant.as_mut() else {
         // Refused by `load_matching_grant`; belt and braces.
@@ -2250,6 +2285,9 @@ fn load_matching_grant_with_resumes(
 ) -> Option<Resolved> {
     let data = fs::read_to_string(path).ok()?;
     let resolved = serde_json::from_str::<Resolved>(&data).ok()?;
+    if resolved.decision.restoration.is_some() {
+        return None;
+    }
     if resolved.request.session != expected.session {
         return None;
     }

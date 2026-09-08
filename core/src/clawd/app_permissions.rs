@@ -111,7 +111,8 @@ pub async fn control(
         if action == "revoke" {
             let block = app_policy::revoke(uid, &app_id, cap)?;
             let retired = super::authority::authority().revoke_app(uid, &app_id);
-            super::authority::audit::record_app_permission_revoked(uid, &app_id, &block.cap, block.generation, retired);
+            super::authority::audit::record_app_permission_revoked(uid, &app_id, &block.cap, block.generation, retired)
+                .map_err(|error| format!("App permission was disabled but revocation audit failed: {error}; refresh status"))?;
             return Ok(json!({"app_id":app_id, "permission_id":key, "enabled":false,
                 "revoked":true, "generation":block.generation, "retired_grants":retired,
                 "restart_required":true}));
@@ -143,25 +144,8 @@ fn fixed_cap(need: &Need) -> Option<Cap> {
 }
 
 pub(crate) fn validate_approval(request: &approvals::Request) -> Result<(), String> {
-    let uid = request
-        .owner_uid
-        .ok_or("App permission approval has no owner")?;
-    let app_id = request
-        .session
-        .strip_prefix(app_policy::SESSION_PREFIX)
-        .and_then(|rest| rest.split(':').nth(1))
-        .ok_or("invalid App permission session")?;
-    let matching = app_policy::blocks(uid, app_id)?.iter().any(|block| {
-        block.session(uid, app_id) == request.session
-            && block.cap.verb.as_str() == request.verb
-            && block.cap.scope == request.scope
-    });
-    if !matching {
-        return Err(
-            "App permission request is stale or does not match the owner/App policy".into(),
-        );
-    }
-    let app = super::app_sessions::installed_app(app_id)?;
+    let (_, app_id) = app_policy::validate_request(request)?;
+    let app = super::app_sessions::installed_app(&app_id)?;
     let cap = Cap::new(
         Verb::parse(&request.verb).ok_or("unknown permission verb")?,
         request.scope.clone(),

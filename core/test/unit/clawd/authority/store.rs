@@ -74,11 +74,26 @@ fn app_permission_revocation_blocks_live_spending_and_retires_only_target_app() 
     let (_, sibling) = store.issue(sibling_issue).unwrap();
     let presenter = presentation(Audience::SystemService);
     store.consume(target.id, &[read_cap()], &presenter).unwrap();
-    crate::approvals::app_policy::revoke(current_uid(), "power-manager", read_cap()).unwrap();
+    let block = crate::approvals::app_policy::revoke(current_uid(), "power-manager", read_cap()).unwrap();
     assert!(store.consume(target.id, &[read_cap()], &presenter).is_err());
     store.consume(sibling.id, &[read_cap()], &presenter).unwrap();
     assert_eq!(store.revoke_app(current_uid(), "power-manager"), 1);
     assert!(store.resolve_session("policy-target", &presenter).is_err());
+    store.consume(sibling.id, &[read_cap()], &presenter).unwrap();
+    let id = crate::approvals::submit_owned(block.cap.verb, block.cap.scope.clone(),
+        block.session(current_uid(), "power-manager"), "restore", None, Some(current_uid())).unwrap();
+    crate::approvals::approve_for_owner(
+        &id, crate::approvals::GrantDuration::Forever, None, None, Some(current_uid()),
+    ).unwrap();
+    assert!(store.resolve_session("policy-target", &presenter).is_err(),
+        "restoration must not resurrect the retired daemon grant");
+    let (_, renewed) = store.issue(issuance("policy-renewed", &[Audience::SystemService])).unwrap();
+    store.consume(renewed.id, &[read_cap()], &presenter).unwrap();
+    crate::approvals::generations::revoke(&crate::approvals::RevocationScope::Session {
+        uid: Some(current_uid()), session: block.session(current_uid(), "power-manager"),
+    }).unwrap();
+    assert!(store.consume(renewed.id, &[read_cap()], &presenter).is_err(),
+        "generic session revocation must also retire restored policy on live spends");
     store.consume(sibling.id, &[read_cap()], &presenter).unwrap();
 }
 

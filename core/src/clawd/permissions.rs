@@ -132,6 +132,7 @@ pub fn decide(params: Value, client: &ClientIdentity) -> Result<Value, String> {
                 "consent_context": resolved.request.context,
                 "expires_at": resolved.decision.grant.as_ref().map(|grant| grant.expires_at),
                 "uses_remaining": resolved.decision.grant.as_ref().map(|grant| grant.uses_remaining),
+                "restoration": resolved.decision.restoration.as_ref().map(|_| "until_revoked"),
             }))
         }
         "deny" | "reject" => {

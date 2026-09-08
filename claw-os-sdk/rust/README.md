@@ -133,6 +133,13 @@ modalities are not published as placeholder APIs.
 | `COS_APP_ID`     | App id, required for `ai::chat` and `tools::call` unless passed via `.app(...)`. |
 | `COS_APP_MANIFEST` | Authoritative manifest path used by `mcp::App::from_environment()`. |
 
+Installed native clients whose launcher sanitizes `PATH` can call
+`cos_call_json_with_binary("/usr/local/bin/cos", family, verb, args)`.
+This explicit-binary primitive transport ignores `CLAW_COS_BIN`, changes no
+process environment, and shares the ordinary wire/error decoder. Generic SDK
+calls retain their existing override/PATH behavior. Neither transport supplies
+caller identity, approval or extra capabilities.
+
 ## Wire protocol
 
 This crate implements wire protocol v1. See

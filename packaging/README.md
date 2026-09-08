@@ -83,7 +83,11 @@ Permission-management UI/MCP requires the `claw-os-app-permissions-v1`
 virtual service dependency. The Agent package provides it; the Desktop package
 requires it so independent publication cannot silently pair the new UI with
 an old broker. Permission overrides stay in the existing root-owned approval
-generation state, outside App data and signed manifests.
+generation state and durable approval receipts, outside App data and signed
+manifests. Until-revoked restoration does not extend ordinary execution-grant
+lifetimes. Native activation requires the existing owner user-systemd/session
+bus, never removing `NoNewPrivileges` from system services. The compiled
+permission client uses the packaged `/usr/local/bin/cos` explicitly.
 
 Native Capture is composed under `build/native-apps/cosmic-screenshot` with
 its original independent portal-client graph. The desktop package retains

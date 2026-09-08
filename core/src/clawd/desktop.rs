@@ -13,6 +13,8 @@ use crate::caps::{Cap, Scope, Verb};
 use super::authority::Decision;
 use super::client_identity::ClientIdentity;
 
+mod settings;
+
 const HELPER_TIMEOUT: Duration = Duration::from_secs(20);
 const LAUNCH_TIMEOUT: Duration = Duration::from_secs(30);
 const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
@@ -226,30 +228,8 @@ async fn open_settings(
         Verb::PROC_SPAWN, Scope::name("cosmic-settings"),
     ))?;
     let environment = DesktopEnvironment::for_user(uid, gid, home, peer_pid)?;
-    let program = PathBuf::from("/usr/bin/cosmic-settings");
-    let mut command = tokio::process::Command::from(configured_user_command(&program, &args, &environment));
-    command.stdout(Stdio::null()).stderr(Stdio::null());
-    let child = command.spawn().map_err(|error| format!("native Settings launch failed: {error}"))?;
-    confirm_native_start(child).await?;
-    Ok(json!({"launched": true, "app_id": "com.clawos.Settings", "launcher": program}))
-}
-
-async fn confirm_native_start(mut child: tokio::process::Child) -> Result<(), String> {
-    // A first Settings instance owns the GUI event loop; unlike gtk4-launch,
-    // it must not be awaited until exit and killed at the helper deadline.
-    match tokio::time::timeout(Duration::from_millis(200), child.wait()).await {
-        Ok(Ok(status)) if status.success() => Ok(()),
-        Ok(Ok(status)) => Err(format!("native Settings launcher failed: {status}")),
-        Ok(Err(error)) => Err(format!("wait for native Settings launch: {error}")),
-        Err(_) => {
-            tokio::spawn(async move {
-                if let Err(error) = child.wait().await {
-                    tracing::warn!(%error, "failed to reap native Settings process");
-                }
-            });
-            Ok(())
-        }
-    }
+    settings::launch(args, environment).await?;
+    Ok(json!({"launched": true, "app_id": "com.clawos.Settings", "launcher": settings::PROGRAM}))
 }
 
 fn store_launch_args(uris: &[String]) -> Result<Vec<String>, String> {

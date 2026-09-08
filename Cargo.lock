@@ -5200,6 +5200,7 @@ dependencies = [
  "hex",
  "nix",
  "ordered-stream",
+ "rand 0.9.4",
  "serde",
  "serde_repr",
  "static_assertions",

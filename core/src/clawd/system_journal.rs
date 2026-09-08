@@ -138,8 +138,8 @@ fn approval_request_record(request: &ApprovalRequest) -> Value {
     })
 }
 
-pub fn record_approval_decision(resolved: &ResolvedApproval) {
-    let _ = append(approval_decision_record(resolved));
+pub fn record_approval_decision(resolved: &ResolvedApproval) -> Result<(), String> {
+    append(approval_decision_record(resolved))
 }
 
 fn approval_decision_record(resolved: &ResolvedApproval) -> Value {
@@ -176,6 +176,11 @@ fn approval_decision_record(resolved: &ResolvedApproval) -> Value {
             "expires_at": grant.expires_at,
             "uses_remaining": grant.uses_remaining,
             "generation": grant.generation,
+        })),
+        "restoration": resolved.decision.restoration.as_ref().map(|binding| json!({
+            "reference": binding.reference,
+            "generation": binding.generation,
+            "until_revoked": true,
         })),
         // The approver's free-text note is never journalled.
         "note": resolved

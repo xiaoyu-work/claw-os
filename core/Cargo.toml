@@ -132,3 +132,4 @@ libc = "0.2"
 
 [dev-dependencies]
 clawd-client = { path = "../crates/clawd-client" }
+zbus = { version = "=5.5.0", default-features = false, features = ["p2p"] }

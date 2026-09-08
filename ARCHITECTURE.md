@@ -245,7 +245,19 @@ enforce them; revocation retires that App's live authority. Persistent MCP Hosts
 compare owner/App policy snapshots and restart before the next admitted call
 rather than reusing a revoked launcher handle. Restoration uses
 the existing trusted polkit approval helper and exact generation-bound durable
-approval, without expanding manifest/trust/caller ceilings. Only fixed,
+restoration receipts, not expiring execution grants. Legacy approved Settings
+receipts retain their until-revoked meaning, but exact owner/App/capability and
+owner/session revocation generations still apply; neither old nor new
+restoration receipts can be spent as execution authority. Ordinary launch and
+execution grants keep their existing lifetimes and manifest/trust/caller ceilings.
+Fixed Settings activation crosses the owner's authenticated user systemd service
+manager, not a child GUI or scope beneath `clawd`. Its transient exec service
+starts only `/usr/bin/cosmic-settings` with validated page arguments and a closed
+environment, observes immediate startup failure, and outlives the broker
+request. The daemon/worker `NoNewPrivileges` boundary is unchanged; only the
+independent human desktop process may present polkit confirmation. The native
+permission client selects the installed `/usr/local/bin/cos` through the shared
+SDK decoder without depending on PATH. Only fixed,
 broker-mediated permissions are currently changeable; direct resources remain
 explicitly unsupported. Settings cannot inherit the eleven manager identities,
 invoke generic desktop launch, or call other Apps. Human UI adapters use OS

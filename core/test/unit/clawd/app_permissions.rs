@@ -111,7 +111,16 @@ async fn verified_app_request_trusted_approval_and_revocation_share_owner_policy
     let mut foreign = decision.clone();
     foreign["owner_uid"] = json!(uid + 1);
     assert!(super::super::permissions::decide(foreign, &client(0)).is_err());
-    super::super::permissions::decide(decision, &client(0)).unwrap();
+    let approved = super::super::permissions::decide(decision, &client(0)).unwrap();
+    assert_eq!(approved["restoration"], "until_revoked");
+    assert!(approved["expires_at"].is_null());
+    assert!(approved["uses_remaining"].is_null());
+    let journal = super::super::system_journal::query(json!({"source":"permission.decision"})).unwrap();
+    let record = &journal["operations"][0];
+    assert!(record["grant"].is_null());
+    assert_eq!(record["restoration"]["until_revoked"], true);
+    assert!(record["restoration"]["reference"].is_string());
+    assert!(record["restoration"]["generation"].is_number());
     assert_eq!(
         control(query.clone(), &owner, None).await.unwrap()["permissions"][0]["enabled"],
         true
@@ -122,7 +131,7 @@ async fn verified_app_request_trusted_approval_and_revocation_share_owner_policy
         &crate::caps::CapSet::from_caps([Cap::new(Verb::SYS_OBSERVE, Scope::name("audio"))])
     )
     .is_ok());
-    control(revoke, &owner, None).await.unwrap();
+    control(revoke.clone(), &owner, None).await.unwrap();
     assert_eq!(
         control(query.clone(), &owner, None).await.unwrap()["permissions"][0]["enabled"],
         false
@@ -141,6 +150,15 @@ async fn verified_app_request_trusted_approval_and_revocation_share_owner_policy
     assert!(control(json!({"action":"approve"}), &owner, None)
         .await
         .is_err());
+    let audit = crate::paths::data_dir().join("clawd/audit.jsonl");
+    std::fs::remove_file(&audit).unwrap();
+    std::fs::create_dir(&audit).unwrap();
+    let error = control(revoke, &owner, None).await.unwrap_err();
+    assert!(error.contains("was disabled") && error.contains("revocation audit failed"), "{error}");
+    assert_eq!(
+        control(query.clone(), &owner, None).await.unwrap()["permissions"][0]["enabled"],
+        false
+    );
     std::fs::write(app.join("app.json"), "{}").unwrap();
     assert!(control(query, &owner, None).await.is_err());
 }

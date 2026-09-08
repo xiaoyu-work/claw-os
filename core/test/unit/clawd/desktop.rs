@@ -7,24 +7,6 @@ use serde_json::json;
 
 const APP_ID: &str = "com.example.App";
 
-#[tokio::test]
-async fn settings_native_launch_acknowledges_without_killing_the_gui_lifetime() {
-    let child = tokio::process::Command::new("/bin/sleep").arg("0.5").spawn().unwrap();
-    let pid = child.id().unwrap();
-    confirm_native_start(child).await.unwrap();
-    assert!(Path::new(&format!("/proc/{pid}")).exists());
-    tokio::time::sleep(Duration::from_millis(450)).await;
-    assert!(!Path::new(&format!("/proc/{pid}")).exists(), "child must be reaped");
-}
-
-#[tokio::test]
-async fn settings_native_launch_reports_immediate_failure_or_activation_exit() {
-    for (program, succeeds) in [("/bin/true", true), ("/bin/false", false)] {
-        let child = tokio::process::Command::new(program).spawn().unwrap();
-        assert_eq!(confirm_native_start(child).await.is_ok(), succeeds);
-    }
-}
-
 #[test]
 fn settings_launch_preserves_identity_without_provider_or_generic_launch_authority() {
     let settings = decision_for_app(Some("cosmic-settings"), vec![], "settings-launch");

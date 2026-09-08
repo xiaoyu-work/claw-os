@@ -45,10 +45,12 @@
 //!
 //! ## Transport
 //!
-//! Every call shells out to the `cos` binary on `$PATH`. The
+//! Calls default to the `cos` binary on `$PATH`. The
 //! subprocess model is intentional — identity, audit, and session
 //! context come from process ancestry. Set `CLAW_COS_BIN` to override
-//! the resolved binary (used by tests + dev setups).
+//! the resolved binary (used by tests + dev setups). Installed native clients
+//! can use [`cos_call_json_with_binary`] to select their fixed executable
+//! without changing process-wide environment or duplicating the wire decoder.
 //!
 //! ## Performance
 //!
@@ -286,6 +288,28 @@ where
     cos_call_json_structured(family, verb, args).map_err(StructuredCosError::into_bridge)
 }
 
+/// Invoke a controlled CLI primitive using an explicitly selected executable.
+///
+/// Unlike [`cos_call_json`], this does not consult `CLAW_COS_BIN`. An absolute
+/// path also avoids PATH lookup, as needed by installed native clients launched
+/// with a closed environment. Wire decoding, errors and broker authorization
+/// are unchanged; choosing a binary confers no additional authority.
+pub fn cos_call_json_with_binary<A>(
+    binary: impl AsRef<OsStr>,
+    family: &str,
+    verb: &str,
+    args: A,
+) -> Result<serde_json::Value, BridgeError>
+where
+    A: IntoIterator,
+    A::Item: AsRef<OsStr>,
+{
+    cos_call_json_structured_input(
+        family, verb, args, None, Stdio::piped(), Some(binary.as_ref()),
+    )
+    .map_err(StructuredCosError::into_bridge)
+}
+
 /// Invoke a controlled CLI primitive with bounded business data on stdin.
 /// Uses the same wire envelope/error decoder as [`cos_call_json`].
 pub fn cos_call_json_with_stdin<A>(
@@ -337,7 +361,7 @@ where
         .into());
     }
     let stderr = if terminal { Stdio::inherit() } else { Stdio::piped() };
-    cos_call_json_structured_input(family, verb, args, Some(input), stderr)
+    cos_call_json_structured_input(family, verb, args, Some(input), stderr, None)
         .map_err(StructuredCosError::into_bridge)
 }
 
@@ -467,7 +491,7 @@ where
     A: IntoIterator,
     A::Item: AsRef<OsStr>,
 {
-    cos_call_json_structured_input(family, verb, args, None, Stdio::piped())
+    cos_call_json_structured_input(family, verb, args, None, Stdio::piped(), None)
 }
 
 fn cos_call_json_structured_input<A>(
@@ -476,12 +500,15 @@ fn cos_call_json_structured_input<A>(
     args: A,
     input: Option<&[u8]>,
     stderr: Stdio,
+    binary: Option<&OsStr>,
 ) -> Result<serde_json::Value, StructuredCosError>
 where
     A: IntoIterator,
     A::Item: AsRef<OsStr>,
 {
-    let bin = std::env::var("CLAW_COS_BIN").unwrap_or_else(|_| "cos".into());
+    let bin = binary.map(OsStr::to_os_string).unwrap_or_else(|| {
+        std::env::var("CLAW_COS_BIN").unwrap_or_else(|_| "cos".into()).into()
+    });
     let mut cmd = Command::new(bin);
     cmd.arg(WIRE_V1_FLAG);
     for a in args {

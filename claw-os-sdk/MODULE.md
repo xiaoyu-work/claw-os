@@ -32,7 +32,7 @@ Rust, Python, Node, and Go bindings.
 | `wire/v1/manifest.schema.json` | Versioned App/MCP service, tool, access, and capability contract |
 | `wire/v1/mcp_call_context.schema.json` | Gateway-authenticated caller identity, task/session correlation, and deadline |
 | `rust/` | Rust public SDK |
-| `rust/src/lib.rs` | Shared CLI wire/error decoder, including bounded stdin for controlled primitive business data |
+| `rust/src/lib.rs` | Shared CLI wire/error decoder, including explicit executable selection and bounded stdin for controlled primitive business data |
 | `python/` | Python public SDK |
 | `node/` | Node public SDK |
 | `go/` | Go public SDK |
@@ -68,6 +68,9 @@ The Rust controlled-primitive stdin transport captures diagnostics by default.
 Its explicit human-terminal variant only inherits an already-connected stderr
 terminal; it never creates a TTY, changes identity, or bypasses the OS bootstrap
 guards. Capture uses it for direct CLI compatibility, never for MCP calls.
+Installed Settings uses the explicit-binary variant for `/usr/local/bin/cos`;
+it does not depend on launcher PATH or a process-wide environment mutation.
+Generic SDK clients still honor `CLAW_COS_BIN` and otherwise resolve `cos` on PATH.
 
 ## Tests
 

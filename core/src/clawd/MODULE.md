@@ -41,7 +41,7 @@ and agent tasks.
 | `tasks.rs` | Task queue, summary/list, cancel, retry, and session continuity |
 | `usage.rs` | Peer-UID-scoped Agent token usage queries |
 | `app_sessions.rs` | App/native/MCP session authority: derives identity and capabilities, plans approvals, issues launch grants, consumes service-bound call tickets |
-| `app_permissions.rs` | Shared Settings permission service: verified declarations, owner/App deny gates, pending restoration, fine-grained revocation; no approval authority |
+| `app_permissions.rs` | Shared Settings permission service: verified declarations, owner/App deny gates, pending durable restoration, fine-grained revocation; no approval authority |
 | `app_services.rs` | Persistent owner/App service manager, lifecycle policy, permission-policy snapshot retirement, capacity/restart control, and single-use call authorization |
 | `../extension_host/broker.rs` | Purpose-bound private proxy: verifies SCM credentials, Host/child ancestry, route class, and nearest child session before normal dispatch |
 | `scheduler.rs` | Proactive-scheduler authority: validates `cos cron` / `cos triggers` requests and derives what a job may carry |
@@ -51,6 +51,7 @@ and agent tasks.
 | `filesystem.rs` | Exact-scope bounded text reads and atomic writes/replacements for App workers; pinned paths, task-owned inverse snapshots, no App dispatch |
 | `capture.rs` | App-bound non-interactive screenshot service; fixed native portal client, owner session, screen plus exact output grants, bounded PNG, pinned non-overwriting persistence |
 | `desktop.rs` | Owner desktop service; Files reveals only its fixed target; Terminal, Store and Settings open only their fixed binaries with an optional directory/package/page under their original independent process-spawn grants |
+| `desktop/settings.rs` | Fixed Settings user-service activation; authenticated owner manager, closed GUI environment, independent lifetime and startup acknowledgement without weakening daemon/worker NoNewPrivileges |
 | `client_identity.rs` | Peer/owner identity and synchronous thread-local filesystem credentials; trusted owner primary/supplementary groups, distinct from extension execution GID, with restoration on every exit |
 | `users.rs` | User Manager provider: status requires `sys.observe:identities`; mutations require `sys.identity:manage`, with exact secret reads for passwords; OS-owned account state and rollback |
 | `system_caps.rs` | System capability derivation |
@@ -64,6 +65,16 @@ argument-bound and mailbox/credential capabilities are refused, not inherited
 when the product gains another tool. Native launch still requires the
 root-owned launcher and Thunderbird parent; consent and AI accounting remain
 in the broker gate.
+
+Settings restores are non-execution receipts in the existing approvals store,
+bound to the exact owner/App/capability and both App and owner/session
+generations. Expired legacy Settings execution-shaped receipts retain policy
+consent only; ordinary grant redemption refuses them. Decisions and revocations
+are committed before success, and receipt/journal failures are explicit.
+The ignored `clawd::desktop::settings::tests::settings_user_service_process_fixture`
+requires root solely for owner-UID dropping; it exercises the installed
+`systemd-run` against a private authenticated session-manager fixture and
+harmless processes, never real Settings, polkit or user grants.
 
 ## Wire Protocol
 

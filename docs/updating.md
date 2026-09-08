@@ -99,6 +99,12 @@ The paired OS launch service accepts only the fixed Settings target under
 identities with their original scopes. User configuration, credentials and
 device/account state are not moved, and Settings Daemon/shared providers stay
 OS-owned. No runtime source download or permission-union migration is added.
+Activation now uses the authenticated owner's independent user systemd service
+manager, with only the fixed executable and validated page arguments. The
+native GUI outlives the request and can present genuine polkit confirmation;
+the daemon and workers retain `NoNewPrivileges`. Missing session bus/manager
+or immediate native failure is an explicit launch error, never a direct-child
+fallback. No system service hardening or host protection is relaxed.
 
 Settings' Applications page now manages owner-scoped **brokered** App
 permissions. Its four permission MCP tools require `sys.permissions:manage`,
@@ -116,10 +122,17 @@ snapshot and restart before their next admitted call, so retrying after trusted
 restoration does not reuse a revoked launcher handle. Other App processes may
 need restart/retry after a change. Restoration
 creates a pending request; the existing polkit approval helper must authorize
-it with duration `forever` (until revoked). This removes only the deny gate:
+it with duration `forever` (until revoked). This is a durable policy receipt,
+not a 30-day execution grant, and its response advertises no execution expiry
+or use budget. Existing human-approved Settings receipts keep their intended
+until-revoked meaning without reapproval. This removes only the deny gate:
 the signed manifest, trust ceiling, launcher authority and exact call scopes
-still apply. Revoked policy and approval expiry/generation checks survive
-daemon restarts. An old approval cannot undo a later revocation.
+still apply. Policy survives process/daemon restarts and remains bound to the
+exact owner/App/capability generation plus owner/session revocation generations.
+An old receipt cannot undo a later revocation and can never be redeemed as
+ordinary execution authority; ordinary execution-grant expiry remains unchanged.
+The native permission client selects `/usr/local/bin/cos` explicitly through
+the shared SDK transport, so sanitized desktop PATH needs no override.
 
 The first version controls fixed broker-mediated observation/device/settings
 permissions. Argument-bound permissions, filesystem mounts, direct network
