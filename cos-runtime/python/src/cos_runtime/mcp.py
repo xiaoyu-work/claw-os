@@ -42,7 +42,7 @@ def serve_manifest_operations(
 
         app.tool(tool_name)(invoke)
 
-    app.run()
+    app.serve()
 
 
 def _load_manifest(path: Path) -> dict[str, Any]:

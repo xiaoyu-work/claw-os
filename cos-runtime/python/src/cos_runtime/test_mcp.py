@@ -1,8 +1,11 @@
+import json
+from unittest import mock
+
 import pytest
 
 from claw_os_sdk.mcp import ManifestError, ToolResult
 
-from .mcp import _operation_argv, _operation_bindings, _tool_result
+from .mcp import _operation_argv, _operation_bindings, _tool_result, serve_manifest_operations
 
 
 def _manifest():
@@ -33,6 +36,9 @@ def _manifest():
     }
     return {
         "id": "sample",
+        "version": "0.1.0",
+        "schema_version": 2,
+        "name": {"en": "Sample"},
         "operations": {"run": operation},
         "mcp": {
             "tools": [
@@ -90,3 +96,14 @@ def test_operation_error_becomes_structured_mcp_error():
 def test_operation_success_stays_structured_value():
     value = {"ok": True, "value": 42}
     assert _tool_result(value) is value
+
+
+def test_operation_service_starts_through_the_sdk_serve_entrypoint(tmp_path):
+    path = tmp_path / "app.json"
+    path.write_text(json.dumps(_manifest()))
+    with mock.patch("claw_os_sdk.mcp.App.serve", autospec=True) as serve:
+        serve_manifest_operations(lambda command, args: {"command": command}, path)
+    serve.assert_called_once()
+    app = serve.call_args.args[0]
+    listing = app._handle_request("tools/list", {}, True)
+    assert [tool["name"] for tool in listing["tools"]] == ["sample.run"]
