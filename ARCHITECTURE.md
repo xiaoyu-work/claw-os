@@ -265,6 +265,10 @@ durable delivery are still pending.
 email/room routing, Markdown/plain payloads and existing grants. The legacy
 person-ID autodetection described by its manifest is not implemented; relocation
 does not add it or an inbound service. Its Python argument case moves with source.
+`gateway-whatsapp` also moves to Messaging Channels, preserving Cloud API
+send/status, the existing Graph version, sender phone-number ID and recipient
+normalization. Grants and credential ownership are unchanged. No webhook
+receiver or delivery confirmation is introduced by the source move.
 The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling
