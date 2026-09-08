@@ -22,12 +22,6 @@ def _load(name):
     ("name", "argv", "expected_args", "expected_kwargs"),
     [
         (
-            "mattermost",
-            ["hello", "--recipient", "town-square", "--username", "bot", "--icon-url", "https://x"],
-            ("town-square", "hello", "bot", "https://x"),
-            {},
-        ),
-        (
             "pushover",
             [
                 "hello",
@@ -140,7 +134,6 @@ def test_list_dispatch_forwards_manifest_options(
 @pytest.mark.parametrize(
     ("name", "argv"),
     [
-        ("mattermost", ["town-square", "hello"]),
         ("teams", ["channel", "hello"]),
         ("ntfy", ["alerts", "hello"]),
         ("webhook", ["https://example.test/hook", "hello"]),
@@ -160,7 +153,6 @@ def test_removed_leading_positionals_are_rejected(name, argv):
 @pytest.mark.parametrize(
     "name",
     [
-        "mattermost",
         "ntfy",
         "teams",
         "webhook",

@@ -65,6 +65,7 @@ There are no sibling-checkout dependencies or runtime download fallbacks.
 | `gateway-googlechat` | Source moved to `clawos-app/products/messaging-channels/apps/gateway/googlechat`; outbound text/cardsV2, thread behavior and existing grants preserved; recipient remains informational and cannot retarget the webhook; Python/Rust contract fixtures follow source ownership |
 | `gateway-larksuite` | Source moved to `clawos-app/products/messaging-channels/apps/gateway/larksuite`; text/rich-post/card operations and existing grants preserved; corrected HMAC to the official timestamp-plus-secret key with an empty message; Python argument case moved with the connector |
 | `gateway-matrix` | Source moved to `clawos-app/products/messaging-channels/apps/gateway/matrix`; room-message send/status, URL escaping, transaction IDs, homeserver selection and existing grants preserved; inbound `/sync` remains unimplemented |
+| `gateway-mattermost` | Source moved to `clawos-app/products/messaging-channels/apps/gateway/mattermost`; outgoing webhook send/status, channel/DM and username/icon overrides plus existing grants preserved; Python parameter cases moved and Rust recipient binding uses pinned source |
 | Other products and connectors | Pending their individual paired migrations |
 
 Moving source does not complete a product redesign milestone or merge legacy

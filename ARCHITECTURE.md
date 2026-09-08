@@ -226,6 +226,11 @@ and grants remain unchanged, with escaped room IDs, per-send transaction IDs
 and pinned shared transport helpers. Homeserver selection and its existing
 default are preserved. No local state is moved; the inbound `/sync` loop remains
 unimplemented, so this is not a bidirectional connector cutover.
+Messaging Channels also owns `gateway-mattermost` send/status. Its recipient
+selects a channel or direct-message handle in the outgoing webhook payload;
+username/icon overrides and existing grants remain unchanged. Shared egress
+and credential handling stay platform-owned. No inbound endpoint or state store
+is added by relocation.
 The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling

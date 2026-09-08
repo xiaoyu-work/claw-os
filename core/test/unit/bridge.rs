@@ -1088,6 +1088,24 @@ fn googlechat_recipient_requires_flag_binding() {
 }
 
 #[test]
+fn mattermost_recipient_requires_flag_binding() {
+    let manifest = Manifest::from_json(
+        &std::fs::read_to_string(app_sources::app_dir("gateway/mattermost").join("app.json"))
+            .unwrap(),
+    )
+    .unwrap();
+    let operation = &manifest.operations["send"];
+    assert!(bind_operation_args(operation, &["destination".into(), "hello".into()]).is_err());
+    let canonical = bind_operation_args(
+        operation,
+        &["hello".into(), "--recipient".into(), "destination".into()],
+    )
+    .unwrap();
+    assert_eq!(canonical.values["text"], "hello");
+    assert_eq!(canonical.values["recipient"], "destination");
+}
+
+#[test]
 fn bundled_removed_aliases_are_rejected() {
     let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -1102,7 +1120,6 @@ fn bundled_removed_aliases_are_rejected() {
         Manifest::from_json(&std::fs::read_to_string(path).unwrap()).unwrap()
     };
     for (app, alias) in [
-        ("mattermost", "recipient"),
         ("teams", "recipient"),
         ("webhook", "target"),
         ("ntfy", "topic"),
