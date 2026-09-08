@@ -38,7 +38,6 @@ desktop/
 ├── randr/                  Multi-monitor control
 ├── initial-setup/          First-run wizard
 │
-├── store/                  App store
 ├── settings/               System settings
 ├── settings-daemon/        Backend for system settings
 ├── player/                 Media player
@@ -58,6 +57,15 @@ desktop/
 ```
 
 ## Building
+
+The complete [Store product](https://github.com/xiaoyu-work/clawos-app/tree/main/products/store)
+is built with `just store-build` from the immutable App pin at
+`build/native-apps/cosmic-store`. It retains its original default native graph,
+Flatpak/PackageKit UI, flathub-stats workspace, translations and resources.
+Native queries share product catalog logic without pkg App dispatch or
+transaction authority. The OS retains fixed Store activation, policy/snapshots,
+package execution and signed desktop-package ownership. This does not merge
+the GUI and MCP catalogs or validate interactive package operations/visuals.
 
 The complete [Terminal product](https://github.com/xiaoyu-work/clawos-app/tree/main/products/terminal)
 is built with `just terminal-build` from the immutable App pin at

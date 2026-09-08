@@ -5,9 +5,10 @@ launcher := '../build/native-apps/cosmic-launcher/justfile'
 editor := '../build/native-apps/cosmic-edit/justfile'
 files := '../build/native-apps/cosmic-files/justfile'
 terminal := '../build/native-apps/cosmic-term/justfile'
+store := '../build/native-apps/cosmic-store/justfile'
 
 prepare-native-apps:
-    if [ "${CLAW_NATIVE_APPS_PREPARED:-0}" = 1 ]; then test -f {{ launcher }} && test -f {{ editor }} && test -f {{ files }} && test -f {{ terminal }}; else python3 ../scripts/app_sources.py --native; fi
+    if [ "${CLAW_NATIVE_APPS_PREPARED:-0}" = 1 ]; then test -f {{ launcher }} && test -f {{ editor }} && test -f {{ files }} && test -f {{ terminal }} && test -f {{ store }}; else python3 ../scripts/app_sources.py --native; fi
 
 launcher-build: prepare-native-apps
     {{ just }} --justfile {{ launcher }} build-release --locked
@@ -20,6 +21,9 @@ files-build: prepare-native-apps
 
 terminal-build: prepare-native-apps
     {{ just }} --justfile {{ terminal }} build-release --locked
+
+store-build: prepare-native-apps
+    {{ just }} --justfile {{ store }} build-release --locked
 
 [default]
 build: prepare-native-apps
@@ -46,7 +50,7 @@ build: prepare-native-apps
     {{ just }} settings/build-release
     {{ make }} -C settings-daemon all
     {{ just }} session/build-release
-    {{ just }} store/build-release
+    {{ just }} store-build
     {{ just }} terminal-build
     {{ make }} -C wallpapers all
     {{ make }} -C workspaces all
@@ -75,7 +79,7 @@ install rootdir="" prefix="/usr/local": build
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} settings/install
     {{ make }} -C settings-daemon install DESTDIR={{rootdir}} prefix={{prefix}}
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} session/install
-    {{ just }} rootdir={{rootdir}} prefix={{prefix}} store/install
+    {{ just }} --justfile {{ store }} rootdir={{rootdir}} prefix={{prefix}} install
     {{ just }} --justfile {{ terminal }} rootdir={{rootdir}} prefix={{prefix}} install
     {{ make }} -C wallpapers install DESTDIR={{rootdir}} prefix={{prefix}}
     {{ make }} -C workspaces install DESTDIR={{rootdir}} prefix={{prefix}}
@@ -117,7 +121,7 @@ clean:
     rm -rf settings/target
     rm -rf settings-daemon/target
     rm -rf session/target
-    {{ just }} store/clean
+    rm -rf ../build/native-apps/cosmic-store/target
     rm -rf ../build/native-apps/cosmic-term/target
     {{ make }} -C wallpapers clean
     rm -rf workspaces/target

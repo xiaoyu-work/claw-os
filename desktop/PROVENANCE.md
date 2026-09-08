@@ -56,7 +56,7 @@ upstream identifiers; rename them before any commercial release.
 | `settings/` | github.com/pop-os/cosmic-settings | `703a934b096b` | GPL-3.0 |
 | `settings-daemon/` | github.com/pop-os/cosmic-settings-daemon | `716da6d6af0b` | GPL-3.0 |
 | `simple-wrapper/` | github.com/pop-os/simple-wrapper | `95db0daff42a` | MPL-2.0 |
-| `store/` | github.com/pop-os/cosmic-store | `2c705e725e31` | GPL-3.0 |
+| [external Store](https://github.com/xiaoyu-work/clawos-app/tree/main/products/store/native) | github.com/pop-os/cosmic-store | `2c705e725e31` | GPL-3.0; pinned through `packaging/apps.lock.json` |
 | [external Terminal](https://github.com/xiaoyu-work/clawos-app/tree/main/products/terminal/native) | github.com/pop-os/cosmic-term | `0a7fd0c26bf2` | GPL-3.0-only; pinned through `packaging/apps.lock.json` |
 | `text/` | github.com/pop-os/cosmic-text | `c24886c2471e` | Apache-2.0 |
 | `theme/` | github.com/pop-os/cosmic-theme | `ce3a63a10638` | MPL-2.0 |

@@ -34,6 +34,7 @@ component crates plus Claw-specific agent bridges and applets.
 | [external Editor](https://github.com/xiaoyu-work/clawos-app/tree/main/products/editor) | Complete native UI/MCP/resources; controlled filesystem/desktop and SDK AI remain OS-provided; build with `just editor-build` |
 | [external Files](https://github.com/xiaoyu-work/clawos-app/tree/main/products/files) | Complete native UI/library/companion and shared business sources; build both executables with `just files-build`; OS keeps authority and index service |
 | [external Terminal](https://github.com/xiaoyu-work/clawos-app/tree/main/products/terminal) | Complete native terminal UI/MCP/resources; `just terminal-build`; OS keeps snapshots, fixed desktop activation and process authority |
+| [external Store](https://github.com/xiaoyu-work/clawos-app/tree/main/products/store) | Complete native Store UI/MCP/resources and flathub-stats workspace; `just store-build`; OS keeps fixed activation, policy and package transaction authority |
 
 ## Dependencies
 

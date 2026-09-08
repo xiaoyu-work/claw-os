@@ -8,6 +8,52 @@ use serde_json::json;
 const APP_ID: &str = "com.example.App";
 
 #[test]
+fn store_launch_is_exact_target_without_other_app_or_transaction_authority() {
+    let store = decision_for_app(Some("cosmic-store"), vec![], "store-launch");
+    assert!(store_caller(&store, "launch", Some("com.clawos.Store")));
+    assert!(!store_caller(&store, "launch", Some("com.clawos.Term")));
+    for action in ["restart", "list", "focus", "close"] {
+        assert!(!store_caller(&store, action, Some("com.clawos.Store")));
+        assert!(authorize_caller(&store, action).is_err());
+    }
+    assert!(authorize_caller(&store, "launch").is_err());
+    assert!(store.require_app("pkg").is_err());
+    for app in ["pkg", "exec", "launcher", "cosmic-term", "cosmic-edit"] {
+        let other = decision_for_app(Some(app), vec![], &format!("store-other-{app}"));
+        assert!(!store_caller(&other, "launch", Some("com.clawos.Store")));
+    }
+    let human = decision_for_app(None, vec![], "store-human");
+    assert!(store_caller(&human, "launch", Some("com.clawos.Store")));
+}
+
+#[test]
+fn store_launch_package_is_data_not_executable_or_option() {
+    assert!(store_launch_args(&[]).unwrap().is_empty());
+    assert_eq!(store_launch_args(&["apt://curl:amd64".into()]).unwrap(), vec!["curl:amd64"]);
+    for uris in [
+        vec!["apt://-oHook=id".into()], vec!["file:///etc/passwd".into()],
+        vec!["apt://../curl".into()], vec!["apt://curl".into(), "apt://wget".into()],
+        vec!["apt://a b".into()], vec![format!("apt://{}", "x".repeat(256))],
+    ] {
+        assert!(store_launch_args(&uris).is_err());
+    }
+}
+
+#[tokio::test]
+async fn store_launch_requires_original_exact_proc_scope_before_desktop_access() {
+    for (index, caps) in [
+        vec![], vec![Cap::new(Verb::SYS_PACKAGE, Scope::wild())],
+        vec![Cap::new(Verb::DESKTOP_LAUNCH, Scope::name("com.clawos.Store"))],
+        vec![Cap::new(Verb::PROC_SPAWN, Scope::name("cosmic-term"))],
+    ].into_iter().enumerate() {
+        let decision = decision_for_app(Some("cosmic-store"), caps, &format!("store-denied-{index}"));
+        let error = open_store(&[], &decision, 1000, 1000, PathBuf::from("/nonexistent"), 1)
+            .await.unwrap_err();
+        assert!(!error.contains("home"), "{error}");
+    }
+}
+
+#[test]
 fn terminal_launch_is_fixed_target_and_cannot_inherit_other_app_grants() {
     let decision = decision_for_app(Some("cosmic-term"), vec![], "terminal-launch");
     assert!(terminal_caller(&decision, "launch", Some("com.clawos.Term")));

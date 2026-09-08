@@ -67,6 +67,12 @@ the remaining Document App and native Files use this one implementation.
 The native executable embeds its product helpers and uses installed OS
 SDK/runtime libraries, not mutable App entrypoints.
 
+Native Store is composed under `build/native-apps/cosmic-store`, including its
+original default-feature graph and flathub-stats workspace. The desktop package
+retains the Store descriptor, executable and resources; pkg remains in the
+Agent package with its own transaction grants. The native read-only catalog
+embeds shared product logic and imports only installed OS support libraries.
+
 It also creates the empty root-owned `/usr/lib/cos/extensions` registry.
 Executable Agent extension packages placed there remain inactive until their
 signed id is selected in user configuration; see

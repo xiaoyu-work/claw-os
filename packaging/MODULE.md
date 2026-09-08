@@ -79,6 +79,10 @@ locked renderer/file-chooser graph is not replaced by the shell toolkit.
 Its Python MCP code is embedded at compilation and imports the packaged
 Agent SDK/runtime, already guaranteed by desktop → base → agent dependencies.
 `deb/claw-os-desktop/apps.list` remains the package-ownership authority.
+The complete native Store source and nested flathub-stats workspace are also
+composed from that pin. Store's descriptor, binary, desktop/metainfo files and
+icon remain desktop-owned; its read-only native queries do not inherit pkg
+transaction grants. Native UI backend/user state is not imported into packages.
 App partition accounting includes nested gateway manifests. Shared gateway
 libraries remain OS-owned, and the canonical argument module is installed in
 `/usr/lib/cos/python` for the packaged legacy App entrypoints.

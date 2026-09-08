@@ -151,9 +151,15 @@ Backup and Recovery owns both `backup-center` and `system-snapshot`, with
 separate data-backup and machine-recovery permissions. The Restic provider,
 credential loading, mount/owner authorization, snapshot index and
 Snapper/Btrfs/LVM execution remain here.
-Store owns the `pkg` CLI/MCP source. Privileged package transactions, audit,
-rollback and installed package state remain OS-owned. The native
-`cosmic-store` UI and replacement of its legacy App forwarding remain pending.
+Store owns the `pkg` CLI/MCP source and complete native `cosmic-store` fork,
+including resources, translations and the nested flathub-stats build helper.
+Its native queries embed the shared product catalog without invoking pkg or
+borrowing package transaction identity. Privileged package transactions, audit,
+rollback and installed state remain OS-owned. Native New Window/MCP activation
+uses a fixed OS target under `proc.spawn:cosmic-store`; human ref reads and data
+cleanup retain policy/snapshot checks and are unavailable in MCP.
+Interactive Flatpak/PackageKit providers and their human policies remain
+unchanged. UI/MCP catalog consolidation and installed-data migration are separate.
 Diagnostics owns `hardware-center`, `crash-doctor` and `netdiag`. Hardware
 observation, sensitive crash inspection and exact-target network diagnostics
 retain separate permissions. Collectors, coredumps, journal access, debugger

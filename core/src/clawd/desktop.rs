@@ -54,6 +54,9 @@ pub async fn control(
             authorize_editor_target(authority, app_id.as_deref(), &uris)?;
             return open_terminal(&uris, authority, uid, gid, home, peer_pid).await;
         }
+        if store_caller(authority, &action, app_id.as_deref()) {
+            return open_store(&uris, authority, uid, gid, home, peer_pid).await;
+        }
         authorize_caller(authority, &action)?;
         authorize_editor_target(authority, app_id.as_deref(), &uris)?;
         if authority.app_is("cosmic-files") {
@@ -180,6 +183,45 @@ fn terminal_caller(authority: &Decision, action: &str, app_id: Option<&str>) -> 
     action == "launch" && app_id == Some("com.clawos.Term")
         && (authority.app_is("cosmic-term")
             || (authority.app_id().is_none() && authority.task_id().is_none()))
+}
+
+fn store_caller(authority: &Decision, action: &str, app_id: Option<&str>) -> bool {
+    action == "launch" && app_id == Some("com.clawos.Store")
+        && (authority.app_is("cosmic-store")
+            || (authority.app_id().is_none() && authority.task_id().is_none()))
+}
+
+fn store_launch_args(uris: &[String]) -> Result<Vec<String>, String> {
+    match uris {
+        [] => Ok(vec![]),
+        [uri] => {
+            let name = uri.strip_prefix("apt://").ok_or("Store requires a package name URI")?;
+            if name.len() > 255 || !regex::Regex::new(
+                r"^[a-z0-9][a-z0-9+.-]*(?::[a-z0-9][a-z0-9-]*)?$",
+            ).expect("static package pattern").is_match(name) {
+                return Err("invalid Store package name".into());
+            }
+            Ok(vec![name.into()])
+        }
+        _ => Err("Store accepts at most one package name".into()),
+    }
+}
+
+async fn open_store(
+    uris: &[String], authority: &Decision, uid: u32, gid: u32,
+    home: PathBuf, peer_pid: u32,
+) -> Result<Value, String> {
+    let args = store_launch_args(uris)?;
+    let _authorized = authority.require(Cap::new(
+        Verb::PROC_SPAWN, Scope::name("cosmic-store"),
+    ))?;
+    let environment = DesktopEnvironment::for_user(uid, gid, home, peer_pid)?;
+    let program = PathBuf::from("/usr/bin/cosmic-store");
+    let status = run_user_launch_command(program.clone(), args, environment, LAUNCH_TIMEOUT).await?;
+    if !status.success() {
+        return Err(format!("native Store launcher failed: {status}"));
+    }
+    Ok(json!({"launched": true, "app_id": "com.clawos.Store", "launcher": program}))
 }
 
 fn terminal_launch_args(uris: &[String]) -> Result<Vec<String>, String> {

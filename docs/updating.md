@@ -84,6 +84,13 @@ existing `proc.spawn:cosmic-term` launch grant; native command/PATH handlers
 share product logic without calling the `exec` App. Native PTYs, history,
 password state and the independent `exec` registry are not moved or unified.
 
+Store's complete native source now follows the same immutable App pin.
+`claw-os-desktop` still owns `/usr/bin/cosmic-store`, its native descriptor and
+`com.clawos.Store` resources. Its paired fixed-target OS launcher preserves
+`proc.spawn:cosmic-store`; the native query surface never receives pkg's
+transaction identity. APT, installed package state, Flatpak/PackageKit human
+policies and separate App grants do not migrate or gain a runtime Git updater.
+
 Updates only ever move forward. An older Claw OS release stays validly signed
 forever, so the signature alone cannot tell a current release from a superseded
 one; see [Downgrade protection](#downgrade-protection) for what stops one being
