@@ -10,7 +10,6 @@ from unittest import mock
 import pytest
 
 from _shared import safe_http
-from test_support import load_local_module
 
 
 class _Response:
@@ -132,15 +131,3 @@ def test_idna_runtime_dependency_is_packaged_and_version_supported():
     assert "python3-idna (>= 3.3)" in control
     assert "python3-idna (<< 4)" in control
     assert "python3-idna" in packages
-
-
-def test_web_normalizes_the_launched_url_before_policy_and_network_use():
-    web = load_local_module(
-        Path(__file__).with_name("web") / "main.py",
-        "claw_test_web_url_canonicalization",
-        clear_modules=("_shared",),
-    )
-    assert (
-        web._normalize_url("https://exam\u00adple.com/path")
-        == "https://example.com/path"
-    )

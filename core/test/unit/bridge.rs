@@ -831,9 +831,12 @@ fn canonical_url_is_materialized_in_child_argv_before_authority() {
     assert_eq!(bound.argv[0], "https://example.com/path");
     let needs = manifest.resolve_needs("fetch", &bound.values).unwrap();
     assert_eq!(needs[0][0].scope, Scope::host("example.com:443"));
+}
 
+#[test]
+fn web_scrape_canonical_urls_are_materialized_in_child_argv() {
     let web = Manifest::from_json(
-        &std::fs::read_to_string(repository.join("apps/web/app.json")).unwrap(),
+        &std::fs::read_to_string(app_sources::app_dir("web").join("app.json")).unwrap(),
     )
     .unwrap();
     let scrape = &web.operations["scrape"];

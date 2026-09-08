@@ -1,8 +1,10 @@
 # Browser (attached) design
 
 The `browser-attached` App drives the user's running, logged-in Chromium tabs.
-Headless and isolated browsing remains the responsibility of `apps/web` and
-`cos-browser`.
+Headless and isolated browsing remains the responsibility of the
+[`web` App](https://github.com/xiaoyu-work/clawos-app/tree/main/products/browser/apps/web)
+and the OS-owned `cos-browser` engine. OS packaging consumes the App from its
+immutable product source pin; it does not merge headless and attached authority.
 
 ## Why this is a separate browser path
 
