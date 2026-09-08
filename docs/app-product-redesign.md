@@ -58,6 +58,7 @@ There are no sibling-checkout dependencies or runtime download fallbacks.
 | `systemd` | Moved to `clawos-app/products/maintenance/apps/systemd`; seven MCP tools and exact-unit observation/control grants preserved without new confirmation; systemctl execution, before/after state and supported inverse-state rollback stay OS-owned |
 | `event-center` | Moved to `clawos-app/products/events-audit/apps/event-center`; three MCP tools, sensitive event scope, bounded queries and PID validation preserved; source watchers, event records and pidfd lifetime remain OS-owned and separate from audit/notifications |
 | `log` | Legacy four-tool JSONL implementation moved to `clawos-app/products/events-audit/apps/log`; file layout and read/write grants preserved without copying data; isolated App logs are not the OS audit trail and typed audit-service integration remains pending |
+| `launcher` | Python five-tool App moved to `clawos-app/products/launcher/apps/launcher`; XDG discovery, exact launch/file grants and recent layout preserved; native UI/build and legacy forwarding replacement plus shared catalog/history remain pending |
 | Other products and connectors | Pending their individual paired migrations |
 
 Moving source does not complete a product redesign milestone or merge legacy

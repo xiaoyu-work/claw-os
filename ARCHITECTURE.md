@@ -181,6 +181,14 @@ JSONL access, not a broker-backed system audit API: the App Host's isolated data
 directory is not the authoritative audit trail. No logs are copied or system
 audit file access expanded. Typed audit-service integration and safe manual-entry
 semantics remain pending; audit integrity and persistence stay OS-owned.
+Launcher owns the Python `launcher` App's five MCP tools, XDG catalog parsing,
+search and existing recent-history logic. Exact AppID/file grants and brokered
+native launching are preserved; desktop session validation and execution remain
+OS-owned. Recent history stays at its existing App data path, not automatically
+shared with the shell. Native `cosmic-launcher` UI/build/resources, its legacy
+`cos app launcher` forwarding and shared catalog/history integration remain
+pending. This source move does not introduce App-to-App calls or complete the
+native Launcher migration.
 The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling
