@@ -256,34 +256,56 @@ fn bundled_conditional_capabilities_are_exact() {
         cap.verb == crate::caps::Verb::FS_READ
             && cap.scope == crate::caps::Scope::path("/workspace/a.md")
     }));
+}
 
-    let network = load(&["network-manager"]);
-    let open_wifi = active(
-        network
-            .resolve_needs(
-                "wifi-connect",
-                &BTreeMap::from([("ssid".to_string(), serde_json::json!("guest"))]),
-            )
-            .unwrap(),
-    );
-    assert!(open_wifi
-        .iter()
-        .all(|cap| cap.verb != crate::caps::Verb::SECRET_READ));
-    let protected_wifi = active(
-        network
-            .resolve_needs(
-                "wifi-connect",
-                &BTreeMap::from([
-                    ("ssid".to_string(), serde_json::json!("home")),
-                    ("credential".to_string(), serde_json::json!("wifi/home")),
-                ]),
-            )
-            .unwrap(),
-    );
-    assert!(protected_wifi.iter().any(|cap| {
-        cap.verb == crate::caps::Verb::SECRET_READ
-            && cap.scope == crate::caps::Scope::name("wifi/home")
-    }));
+#[test]
+fn network_manager_mcp_capabilities_are_exact() {
+    use crate::caps::{Cap, Scope, Verb};
+
+    let network = Manifest::from_json(
+        &std::fs::read_to_string(app_sources::app_dir("network-manager").join("app.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(network.operations.is_empty());
+    for credential in [None, Some("wifi/home")] {
+        let mut args = BTreeMap::from([("ssid".to_string(), serde_json::json!("Cafe"))]);
+        let mut expected = vec![Cap::new(Verb::NET_MANAGE, Scope::name("wifi"))];
+        if let Some(reference) = credential {
+            args.insert("credential".to_string(), serde_json::json!(reference));
+            expected.push(Cap::new(Verb::SECRET_READ, Scope::name(reference)));
+        }
+        let caps = network
+            .resolve_mcp_tool_needs("network-manager.wifi-connect", &args)
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        assert_eq!(caps, expected);
+    }
+    for (tool, arg, verb, scope) in [
+        ("status", None, Verb::SYS_OBSERVE, "network"),
+        ("wifi-list", None, Verb::SYS_OBSERVE, "network"),
+        ("connection-list", None, Verb::SYS_OBSERVE, "network"),
+        ("vpn-list", None, Verb::SYS_OBSERVE, "network"),
+        ("wifi-toggle", Some(("state", "off")), Verb::NET_MANAGE, "wifi"),
+        ("airplane", Some(("state", "on")), Verb::NET_MANAGE, "airplane"),
+        ("wifi-disconnect", Some(("device", "wlan0")), Verb::NET_MANAGE, "wifi"),
+        ("wifi-forget", Some(("connection", "Cafe")), Verb::NET_MANAGE, "wifi"),
+        ("vpn-up", Some(("profile", "work")), Verb::NET_MANAGE, "vpn"),
+        ("vpn-down", Some(("profile", "work")), Verb::NET_MANAGE, "vpn"),
+    ] {
+        let args = arg
+            .into_iter()
+            .map(|(name, value)| (name.to_string(), serde_json::json!(value)))
+            .collect();
+        let caps = network
+            .resolve_mcp_tool_needs(&format!("network-manager.{tool}"), &args)
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        assert_eq!(caps, [Cap::new(verb, Scope::name(scope))], "{tool}");
+    }
 }
 
 #[test]
