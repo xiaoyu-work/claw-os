@@ -108,7 +108,7 @@ execution and offline no-repair checkers remain OS-owned. Observation,
 diagnostic and exact-device mount permissions stay separate.
 Settings owns `accessibility-manager`, `audio-manager` and
 `bluetooth-manager`, `camera-manager`, `display-manager`, `desktop-manager`,
-`location-manager` and `network-manager`;
+`location-manager`, `network-manager` and `power-manager`;
 user-session validation, COSMIC
 Wayland, AT-SPI, PipeWire/WirePlumber, BlueZ and GStreamer execution remain
 OS-owned. Audio observation,
@@ -129,6 +129,9 @@ Network observation, Wi-Fi, VPN and airplane permissions remain separate.
 Optional Wi-Fi secret references require exact read authority; credential
 loading, NetworkManager execution, profile validation and before/after state
 collection remain OS-owned.
+Power status keeps `sys.observe:power`; six machine-wide power actions retain
+the existing `sys.power` Wild grant and exact boolean confirmation.
+UPower/logind execution and serialization stay OS-owned.
 Native Settings and other management Apps await
 separate migrations, without combining their provider authority.
 The remaining Apps
