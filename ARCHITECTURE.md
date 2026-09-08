@@ -170,6 +170,12 @@ confirmation argument. Systemctl execution, serialization and before/after
 state remain OS-owned. Start/stop/enable/disable prepare session inverse-state
 records; restart/reload do not claim reversible rollback. Both Maintenance
 App sources have moved without moving unit files or combining authority.
+Events and Audit owns `event-center`'s three MCP tools, retaining the dedicated
+`sys.events:observe` grant, bounded recent queries and process-exit subscriptions.
+Background udev/systemd/journal watchers, source health, persistent event records
+and pidfd watch lifetime/deduplication remain OS-owned. Event records are not
+merged into audit, context-event or notification stores. The `log` App awaits
+its separate migration.
 The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling

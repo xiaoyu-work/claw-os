@@ -1,7 +1,7 @@
 {
   "version": 1,
   "repository": "https://github.com/xiaoyu-work/clawos-app.git",
-  "revision": "b19dc832555b4042a06e974a20b63e20783c5a6a",
-  "products": ["mail", "calendar", "files", "browser", "terminal", "containers", "backup-recovery", "store", "diagnostics", "storage", "settings", "security", "maintenance"],
-  "apps": ["mail-ai", "email", "gateway-email", "calendar", "fs", "docs", "search", "web", "browser-attached", "exec", "container-manager", "backup-center", "system-snapshot", "pkg", "hardware-center", "crash-doctor", "netdiag", "storage-manager", "accessibility-manager", "audio-manager", "bluetooth-manager", "camera-manager", "display-manager", "desktop-manager", "location-manager", "network-manager", "power-manager", "printer-manager", "user-manager", "security-center", "firewall-manager", "usb-guard", "config-editor", "systemd"]
+  "revision": "9f0073ec205684e07fb4a40e59f5f0e42794f715",
+  "products": ["mail", "calendar", "files", "browser", "terminal", "containers", "backup-recovery", "store", "diagnostics", "storage", "settings", "security", "maintenance", "events-audit"],
+  "apps": ["mail-ai", "email", "gateway-email", "calendar", "fs", "docs", "search", "web", "browser-attached", "exec", "container-manager", "backup-center", "system-snapshot", "pkg", "hardware-center", "crash-doctor", "netdiag", "storage-manager", "accessibility-manager", "audio-manager", "bluetooth-manager", "camera-manager", "display-manager", "desktop-manager", "location-manager", "network-manager", "power-manager", "printer-manager", "user-manager", "security-center", "firewall-manager", "usb-guard", "config-editor", "systemd", "event-center"]
 }

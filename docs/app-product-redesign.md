@@ -56,6 +56,7 @@ There are no sibling-checkout dependencies or runtime download fallbacks.
 | `usb-guard` | Moved to `clawos-app/products/security/apps/usb-guard`; six MCP tools, separate observation/control scopes and conditional deauthorization confirmation preserved; sysfs/udev/UDisks2 execution, protected-storage checks and owner/revision-bound rollback stay OS-owned |
 | `config-editor` | Moved to `clawos-app/products/maintenance/apps/config-editor`; four MCP tools, exact target/source grants and apply/restore confirmation preserved; validators, atomic replacement and durable owner-bound backups stay OS-owned |
 | `systemd` | Moved to `clawos-app/products/maintenance/apps/systemd`; seven MCP tools and exact-unit observation/control grants preserved without new confirmation; systemctl execution, before/after state and supported inverse-state rollback stay OS-owned |
+| `event-center` | Moved to `clawos-app/products/events-audit/apps/event-center`; three MCP tools, sensitive event scope, bounded queries and PID validation preserved; source watchers, event records and pidfd lifetime remain OS-owned and separate from audit/notifications |
 | Other products and connectors | Pending their individual paired migrations |
 
 Moving source does not complete a product redesign milestone or merge legacy
