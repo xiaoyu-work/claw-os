@@ -1,0 +1,78 @@
+[DEFAULT]
+head = "head_mailbase.js"
+dupe-manifest = true
+support-files = [
+  "distribution.ini",
+  "resources/*",
+]
+
+["include:xpcshell_maildir.toml"]
+
+["test_accountManagerUtils.js"]
+
+["test_alertHook.js"]
+tags = ["notifications"]
+
+["test_archive.js"]
+environment = ["MOZ_LOG=IMAP:4"]
+tags = ["archive"]
+
+["test_attachmentChecker.js"]
+
+["test_columns.js"]
+
+["test_darkReader.js"]
+
+["test_devtools_url.js"]
+
+["test_emptyTrash_dbViewWrapper.js"]
+run-sequentially = true  # Avoid bustage.
+
+["test_folderSelectionDataAdapter.js"]
+tags = ["dataadapter"]
+
+["test_linkHelper.js"]
+
+["test_mailGlue_distribution.js"]
+skip-if = [
+  "os == 'win' && msix", # MSIX has a distribution.ini and it's unwritable. Tests fail.
+]
+
+["test_migrateTryStartTLS.js"]
+
+["test_mozIconUtils.js"]
+
+["test_qrExport.js"]
+
+["test_quoteSanitizer.js"]
+
+["test_state_preferenceSlice.js"]
+
+["test_state_store.js"]
+
+["test_state_xulStoreSlice.js"]
+
+["test_treeDataAdapter.js"]
+tags = ["dataadapter"]
+
+["test_treeSelection.js"]
+
+["test_viewWrapper_imapFolder.js"]
+run-sequentially = true  # Avoid bustage.
+
+["test_viewWrapper_logic.js"]
+
+["test_viewWrapper_realFolder.js"]
+run-if = [
+  "os != 'mac'",
+  "debug"
+]
+reason = "osx shippable perma failures"
+
+["test_viewWrapper_virtualFolder.js"]
+requesttimeoutfactor = 2
+tags = ["virtualfolders"]
+
+["test_viewWrapper_virtualFolderCustomTerm.js"]
+run-sequentially = true  # Avoid bustage.
+tags = ["virtualfolders"]

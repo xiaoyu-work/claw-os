@@ -1,0 +1,12 @@
+<defines>
+MODE_CBC -> 20131128
+</defines>
+
+<module_info>
+name -> "CBC"
+</module_info>
+
+<requires>
+block
+mode_pad
+</requires>

@@ -1,0 +1,20 @@
+<defines>
+ELGAMAL -> 20131128
+</defines>
+
+<module_info>
+name -> "ElGamal"
+</module_info>
+
+<requires>
+blinding
+dl_algo
+dl_group
+keypair
+numbertheory
+enc_padding
+</requires>
+
+<header:public>
+elgamal.h
+</header:public>

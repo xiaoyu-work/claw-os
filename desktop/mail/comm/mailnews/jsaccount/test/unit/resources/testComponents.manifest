@@ -1,0 +1,16 @@
+# Any copyright is dedicated to the Public Domain.
+# http://creativecommons.org/publicdomain/zero/1.0/
+
+# Definitions of components used in testing of JsAccount
+
+# nsIMsgMailNewsUrl implementation of a demo base URL
+component {73F98539-A59F-4F6F-9A72-D83A08646C23} testJaFooUrlComponent.js
+contract @mozilla.org/jsaccount/testjafoourl;1 {73F98539-A59F-4F6F-9A72-D83A08646C23}
+
+# nsIMsgFolder implementation
+component {8508ddeb-3eab-4877-a420-297518f62371} testJaBaseMsgFolderComponent.js
+contract @mozilla.org/mail/folder-factory;1?name=testja {8508ddeb-3eab-4877-a420-297518f62371}
+
+# nsIMsgIncomingServer implementation
+component {0eec03cd-da67-4949-ab2d-5fa4bdc68135} testJaBaseIncomingServerComponent.js
+contract @mozilla.org/messenger/server;1?type=testja {0eec03cd-da67-4949-ab2d-5fa4bdc68135}

@@ -1,0 +1,272 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+  <menupopup id="messageIdContext">
+    <menuitem id="messageIdContext-messageIdTarget" disabled=""/>
+    <menuseparator id="messageIdContext-separator"/>
+    <menuitem id="messageIdContext-openMessageForMsgId"
+              label="&OpenMessageForMsgId.label;"
+              accesskey="&OpenMessageForMsgId.accesskey;"
+              oncommand="gMessageHeader.openMessage(event);"/>
+    <menuitem id="messageIdContext-openBrowserWithMsgId"
+              label="&OpenBrowserWithMsgId.label;"
+              accesskey="&OpenBrowserWithMsgId.accesskey;"
+              oncommand="gMessageHeader.openBrowser(event);"/>
+    <menuitem id="messageIdContext-copyMessageId"
+              label="&CopyMessageId.label;"
+              accesskey="&CopyMessageId.accesskey;"
+              oncommand="gMessageHeader.copyMessageId(event);"/>
+  </menupopup>
+
+  <menupopup id="attachmentItemContext"
+             onpopupshowing="return onShowAttachmentItemContextMenu();"
+             onpopuphiding="return onHideAttachmentItemContextMenu();">
+    <menuitem id="context-openAttachment"
+              label="&openAttachmentCmd.label;"
+              accesskey="&openAttachmentCmd.accesskey;"
+              oncommand="HandleMultipleAttachments(this.parentNode.attachments, 'open');"/>
+    <menuitem id="context-saveAttachment"
+              label="&saveAsAttachmentCmd.label;"
+              accesskey="&saveAsAttachmentCmd.accesskey;"
+              oncommand="HandleMultipleAttachments(this.parentNode.attachments, 'saveAs');"/>
+    <menuseparator id="context-menu-separator"/>
+    <menuitem id="context-detachAttachment"
+              label="&detachAttachmentCmd.label;"
+              accesskey="&detachAttachmentCmd.accesskey;"
+              oncommand="HandleMultipleAttachments(this.parentNode.attachments, 'detach');"/>
+    <menuitem id="context-deleteAttachment"
+              label="&deleteAttachmentCmd.label;"
+              accesskey="&deleteAttachmentCmd.accesskey;"
+              oncommand="HandleMultipleAttachments(this.parentNode.attachments, 'delete');"/>
+    <menuseparator id="context-menu-copyurl-separator"/>
+    <menuitem id="context-copyAttachmentUrl"
+              label="&copyLinkCmd.label;"
+              accesskey="&copyLinkCmd.accesskey;"
+              oncommand="HandleMultipleAttachments(this.parentNode.attachments, 'copyUrl');"/>
+    <menuitem id="context-openFolder"
+#ifdef XP_MACOSX
+              label="&detachedAttachmentFolder.showMac.label;"
+              accesskey="&detachedAttachmentFolder.showMac.accesskey;"
+#else
+              label="&detachedAttachmentFolder.show.label;"
+              accesskey="&detachedAttachmentFolder.show.accesskey;"
+#endif
+              oncommand="HandleMultipleAttachments(this.parentNode.attachments, 'openFolder');"/>
+    <menuseparator id="openpgpCtxItemsSeparator"/>
+    <menuitem id="enigmail_ctxImportKey"
+              data-l10n-id="openpgp-ctx-import-key"
+              oncommand="Enigmail.msg.handleAttachmentSel('importKey');"/>
+    <menuitem id="enigmail_ctxDecryptOpen"
+              data-l10n-id="openpgp-ctx-decrypt-open"
+              oncommand="Enigmail.msg.handleAttachmentSel('openAttachment');"/>
+    <menuitem id="enigmail_ctxDecryptSave"
+              data-l10n-id="openpgp-ctx-decrypt-save"
+              oncommand="Enigmail.msg.handleAttachmentSel('saveAttachment');"/>
+    <menuitem id="enigmail_ctxVerifyAtt"
+              data-l10n-id="openpgp-ctx-verify-att"
+              oncommand="Enigmail.msg.handleAttachmentSel('verifySig');"/>
+  </menupopup>
+
+  <menupopup id="attachmentListContext"
+             onpopupshowing="goUpdateAttachmentCommands();">
+    <menuitem id="context-openAllAttachments"
+              label="&openAllAttachmentsCmd.label;"
+              accesskey="&openAllAttachmentsCmd.accesskey;"
+              command="cmd_openAllAttachments"/>
+    <menuitem id="context-saveAllAttachments"
+              label="&saveAllAttachmentsCmd.label;"
+              accesskey="&saveAllAttachmentsCmd.accesskey;"
+              command="cmd_saveAllAttachments"/>
+    <menuseparator id="context-menu-separator-all"/>
+    <menuitem id="context-detachAllAttachments"
+              label="&detachAllAttachmentsCmd.label;"
+              accesskey="&detachAllAttachmentsCmd.accesskey;"
+              command="cmd_detachAllAttachments"/>
+    <menuitem id="context-deleteAllAttachments"
+              label="&deleteAllAttachmentsCmd.label;"
+              accesskey="&deleteAllAttachmentsCmd.accesskey;"
+              command="cmd_deleteAllAttachments"/>
+  </menupopup>
+
+  <menupopup id="attachment-toolbar-context-menu"
+             onpopupshowing="return onShowAttachmentToolbarContextMenu(event);">
+    <menuitem id="context-expandAttachmentBar"
+              type="checkbox"
+              label="&startExpandedCmd.label;"
+              accesskey="&startExpandedCmd.accesskey;"
+              oncommand="Services.prefs.setBoolPref('mailnews.attachments.display.start_expanded', this.getAttribute('checked'));"/>
+  </menupopup>
+
+  <menupopup id="emailAddressPopup"
+             position="after_start"
+             class="no-icon-menupopup">
+    <menuitem id="emailAddressPlaceHolder"
+              class="menuitem-iconic"
+              disabled=""/>
+    <menuseparator/>
+    <menuitem id="addToAddressBookItem"
+              label="&AddDirectlyToAddressBook.label;"
+              accesskey="&AddDirectlyToAddressBook.accesskey;"
+              class="menuitem-iconic"
+              oncommand="gMessageHeader.addContact(event);"/>
+    <menuitem id="editContactItem" label="&EditContact1.label;" hidden="hidden"
+              accesskey="&EditContact1.accesskey;"
+              class="menuitem-iconic"
+              oncommand="gMessageHeader.showContactEdit(event);"/>
+    <menuitem id="viewContactItem" label="&ViewContact.label;" hidden="hidden"
+              accesskey="&ViewContact.accesskey;"
+              class="menuitem-iconic"
+              oncommand="gMessageHeader.showContactEdit(event);"/>
+    <menuitem id="sendMailToItem" label="&SendMessageTo.label;"
+              accesskey="&SendMessageTo.accesskey;"
+              class="menuitem-iconic"
+              oncommand="gMessageHeader.composeMessage(event);"/>
+    <menuitem id="copyEmailAddressItem" label="&CopyEmailAddress.label;"
+              accesskey="&CopyEmailAddress.accesskey;"
+              class="menuitem-iconic"
+              oncommand="gMessageHeader.copyAddress(event)"/>
+    <menuitem id="copyNameAndEmailAddressItem" label="&CopyNameAndEmailAddress.label;"
+              accesskey="&CopyNameAndEmailAddress.accesskey;"
+              class="menuitem-iconic"
+              oncommand="gMessageHeader.copyAddress(event, true);"/>
+    <menuseparator/>
+    <menuitem id="searchKeysOpenPGP" data-l10n-id="openpgp-search-keys-openpgp"
+              class="menuitem-iconic"
+              oncommand="Enigmail.msg.searchKeysOnInternet(event)"/>
+    <menuseparator/>
+    <menuitem id="createFilterFrom" label="&CreateFilterFrom.label;"
+              accesskey="&CreateFilterFrom.accesskey;"
+              class="menuitem-iconic"
+              oncommand="gMessageHeader.createFilter(event);"/>
+  </menupopup>
+
+  <menupopup id="copyPopup" class="no-icon-menupopup">
+    <menuitem id="copyMenuitem"
+              data-l10n-id="text-action-copy"
+              class="menuitem-iconic"
+              oncommand="gMessageHeader.copyString(event);"/>
+    <menuitem id="copyCreateFilterFrom"
+              label="&CreateFilterFrom.label;"
+              accesskey="&CreateFilterFrom.accesskey;"
+              class="menuitem-iconic"
+              oncommand="gMessageHeader.createFilter(event);"/>
+  </menupopup>
+
+  <menupopup id="copyUrlPopup"
+             popupanchor="bottomleft">
+    <menuitem label="&copyLinkCmd.label;"
+              accesskey="&copyLinkCmd.accesskey;"
+              oncommand="gMessageHeader.copyWebsiteUrl(event);"/>
+  </menupopup>
+
+  <menupopup id="listIdPopup"
+             position="after_start"
+             class="no-icon-menupopup"
+             oncommand="gMessageHeader.openListURL(event);">
+    <menuitem id="listIdPlaceHolder"
+              class="menuitem-iconic"
+              disabled=""/>
+    <menuseparator/>
+    <menuitem id="listIdCopy"
+              data-l10n-id="text-action-copy"
+              class="menuitem-iconic"
+              oncommand="gMessageHeader.copyString(event);event.stopPropagation();"/>
+    <menuseparator/>
+    <menuitem id="listIdListHelp" data-l10n-id="list-id-context-list-help"
+              data-header-name="list-help"
+              class="menuitem-iconic"/>
+    <menuitem id="listIdListUnsubscribe" data-l10n-id="list-id-list-unsubscribe"
+              data-header-name="list-unsubscribe"
+              class="menuitem-iconic"/>
+    <menuitem id="listIdListSubscribe" data-l10n-id="list-id-list-subscribe"
+              data-header-name="list-subscribe"
+              class="menuitem-iconic"/>
+    <menuitem id="listIdListPost" data-l10n-id="list-id-list-post"
+              data-header-name="list-post"
+              class="menuitem-iconic"/>
+    <menuitem id="listIdListOwner" data-l10n-id="list-id-list-owner"
+              data-header-name="list-owner"
+              class="menuitem-iconic"/>
+    <menuitem id="listIdListArchive" data-l10n-id="list-id-list-archive"
+              data-header-name="list-archive"
+              class="menuitem-iconic"/>
+    <menuitem id="listIdArchivedAt" data-l10n-id="list-id-archived-at"
+              data-header-name="archived-at"
+              class="menuitem-iconic"/>
+  </menupopup>
+
+  <menupopup id="simpleCopyPopup" class="no-icon-menupopup">
+    <menuitem id="copyMenuitem"
+              data-l10n-id="text-action-copy"
+              class="menuitem-iconic"
+              oncommand="gMessageHeader.copyString(event);"/>
+  </menupopup>
+
+  <menupopup id="newsgroupPopup"
+             position="after_start"
+             class="newsgroupPopup no-icon-menupopup">
+      <menuitem id="newsgroupPlaceHolder"
+                class="menuitem-iconic"
+                disabled=""/>
+      <menuseparator/>
+      <menuitem id="sendMessageToNewsgroupItem"
+                label="&SendMessageTo.label;"
+                accesskey="&SendMessageTo.accesskey;"
+                class="menuitem-iconic"
+                oncommand="gMessageHeader.composeMessage(event);"/>
+      <menuitem id="copyNewsgroupNameItem"
+                label="&CopyNewsgroupName.label;"
+                accesskey="&CopyNewsgroupName.accesskey;"
+                class="menuitem-iconic"
+                oncommand="gMessageHeader.copyAddress(event);"/>
+      <menuitem id="copyNewsgroupURLItem"
+                label="&CopyNewsgroupURL.label;"
+                accesskey="&CopyNewsgroupURL.accesskey;"
+                class="menuitem-iconic"
+                oncommand="gMessageHeader.copyNewsgroupURL(event);"/>
+      <menuseparator id="subscribeToNewsgroupSeparator"/>
+      <menuitem id="subscribeToNewsgroupItem"
+                label="&SubscribeToNewsgroup.label;"
+                accesskey="&SubscribeToNewsgroup.accesskey;"
+                class="menuitem-iconic"
+                oncommand="gMessageHeader.subscribeToNewsgroup(event)"/>
+  </menupopup>
+
+  <menupopup id="remoteContentOptions" value=""
+             onpopupshowing="onRemoteContentOptionsShowing(event);">
+    <menuitem id="remoteContentOptionAllowForMsg"
+              label="&remoteContentOptionsAllowForMsg.label;"
+              accesskey="&remoteContentOptionsAllowForMsg.accesskey;"
+              oncommand="LoadMsgWithRemoteContent();"/>
+    <menuseparator id="remoteContentSettingsMenuSeparator"/>
+    <menuitem id="editRemoteContentSettings"
+#ifdef XP_WIN
+              label="&editRemoteContentSettings.label;"
+              accesskey="&editRemoteContentSettings.accesskey;"
+#else
+              label="&editRemoteContentSettingsUnix.label;"
+              accesskey="&editRemoteContentSettingsUnix.accesskey;"
+#endif
+              oncommand="editRemoteContentSettings();"/>
+    <menuseparator id="remoteContentOriginsMenuSeparator"/>
+    <menuseparator id="remoteContentAllMenuSeparator"/>
+    <menuitem id="remoteContentOptionAllowAll"
+              oncommand="allowRemoteContentForAll(this.parentNode);"/>
+  </menupopup>
+
+  <menupopup id="phishingOptions">
+    <menuitem id="phishingOptionIgnore"
+              label="&phishingOptionIgnore.label;"
+              accesskey="&phishingOptionIgnore.accesskey;"
+              oncommand="IgnorePhishingWarning();"/>
+    <menuitem id="phishingOptionSettings"
+#ifdef XP_WIN
+              label="&phishingOptionSettings.label;"
+              accesskey="&phishingOptionSettings.accesskey;"
+#else
+              label="&phishingOptionSettingsUnix.label;"
+              accesskey="&phishingOptionSettingsUnix.accesskey;"
+#endif
+              oncommand="OpenPhishingSettings();"/>
+  </menupopup>

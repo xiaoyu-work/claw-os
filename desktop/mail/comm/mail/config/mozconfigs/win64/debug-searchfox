@@ -1,0 +1,15 @@
+MOZ_AUTOMATION_BUILD_SYMBOLS=0
+MOZ_AUTOMATION_CHECK=0
+
+. "$topsrcdir/build/mozconfig.win-common"
+. "$topsrcdir/build/mozconfig.common"
+. "$topsrcdir/comm/mail/config/mozconfigs/common"
+. "$topsrcdir/comm/mail/config/mozconfigs/win64/common-win64"
+
+ac_add_options --enable-debug
+
+ac_add_options --enable-clang-plugin
+ac_add_options --enable-mozsearch-plugin
+
+# Disable enforcing that add-ons are signed by the trusted root
+MOZ_REQUIRE_ADDON_SIGNING=0

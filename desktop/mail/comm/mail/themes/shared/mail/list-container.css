@@ -1,0 +1,136 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, you can obtain one at http://mozilla.org/MPL/2.0/. */
+
+:root {
+  @media not (forced-colors) {
+    --list-container-border: transparent;
+    --list-container-background-selected: color-mix(in srgb, var(--layout-background-3) 20%, transparent);
+    --list-container-border-selected: light-dark(var(--color-gray-40), var(--color-gray-60));
+    --list-container-background-selected-current: color-mix(in srgb, var(--layout-background-3) 40%, transparent);
+    --list-container-border-selected-current: light-dark(color-mix(in srgb, var(--layout-border-1) 80%, transparent), var(--layout-border-1));
+    --list-container-background-hover: color-mix(in srgb, var(--selected-item-color) 10%, transparent);
+    --list-container-border-hover: color-mix(in srgb, var(--selected-item-color) 60%, transparent);
+    --list-container-background-selected-focused: color-mix(in srgb, var(--selected-item-color) 7%, transparent);
+    --list-container-border-selected-focused: color-mix(in srgb, var(--selected-item-color) 30%, transparent);
+    --list-container-border-selected-current-focused: var(--selected-item-color);
+    --list-container-background-selected-current-focused: color-mix(in srgb, var(--selected-item-color) 15%, transparent);
+  }
+
+  @media (forced-colors) {
+    --list-container-border: Canvas;
+    --list-container-background-selected: color-mix(in srgb, Canvas 80%, CanvasText);
+    --list-container-border-selected: CanvasText;
+    --list-container-background-selected-current: color-mix(in srgb, Canvas 70%, CanvasText);
+    --list-container-border-selected-current: CanvasText;
+    --list-container-background-hover: SelectedItem;
+    --list-container-border-hover: SelectedItem;
+    --list-container-background-selected-focused: color-mix(in srgb, Canvas 70%, CanvasText);
+    --list-container-border-selected-focused: color-mix(in srgb, CanvasText 30%, SelectedItem);
+    --list-container-border-selected-current-focused: color-mix(in srgb, CanvasText 20%, SelectedItem);
+    --list-container-background-selected-current-focused: SelectedItem;
+  }
+}
+
+:is(ul, ol)[role="tree"] {
+  & .container {
+    display: flex;
+    align-items: center;
+    position: relative;
+    -moz-context-properties: fill;
+    margin-inline: 3px;
+    border: 1px solid var(--list-container-border);
+    border-radius: var(--listbox-border-radius);
+    fill: currentColor;
+    cursor: default;
+    padding-inline-start: var(--indent);
+    outline: none;
+
+    li.selected > & {
+      border-color: var(--list-container-border-selected);
+      background-color: var(--list-container-background-selected);
+    }
+
+    li.selected.current > & {
+      border-color: var(--list-container-border-selected-current);
+      background-color: var(--list-container-background-selected-current);
+    }
+
+    li:not(.selected) > &:hover {
+      border-color: var(--list-container-border-hover);
+      background-color: var(--list-container-background-hover);
+    }
+
+    li:not(.selected) > &:active {
+      background-color: var(--list-container-background-selected-current-focused);
+    }
+
+    li.selected > &:hover {
+      background-color: var(--list-container-background-selected);
+    }
+
+    & .twisty {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      inline-size: var(--list-item-buttons-size);
+      block-size: var(--list-item-buttons-size);
+    }
+
+    li:not(.children) > & .twisty-icon {
+      display: none;
+    }
+
+    li.children.collapsed > & .twisty-icon {
+      transform: rotate(-90deg);
+    }
+
+    li.children.collapsed:dir(rtl) > & .twisty-icon {
+      transform: rotate(90deg);
+    }
+
+    @media (prefers-reduced-motion: no-preference) {
+      & {
+        transition:
+          color var(--transition-duration) var(--transition-timing),
+          background-color var(--transition-duration) var(--transition-timing),
+          border-color var(--transition-duration) var(--transition-timing),
+          fill var(--transition-duration) var(--transition-timing),
+          stroke var(--transition-duration) var(--transition-timing);
+      }
+
+      & .twisty-icon {
+        transition: transform var(--transition-duration) var(--transition-timing);
+      }
+    }
+  }
+
+  &:focus-within li.selected > .container {
+    border-color: var(--list-container-border-selected-focused);
+    background-color: var(--list-container-background-selected-focused);
+
+    @media (forced-colors) {
+      outline: 1px solid SelectedItemText;
+      outline-offset: -2px;
+    }
+  }
+
+  &:focus-within li.selected.current > .container,
+  & li[role="treeitem"].drop-target > .container {
+    border-color: var(--list-container-border-selected-current-focused);
+    background-color: var(--list-container-background-selected-current-focused);
+
+    &:hover:not(:active) {
+      background-color: var(--list-container-background-hover);
+    }
+
+    @media (forced-colors) {
+      color: var(--selected-item-text-color);
+    }
+  }
+
+  & li[role="treeitem"].drag-target > .container {
+    color: color-mix(in srgb, currentColor 50%, transparent);
+    border-style: dashed;
+  }
+}

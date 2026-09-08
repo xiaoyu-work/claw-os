@@ -1,0 +1,101 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "ImapTypes.idl"
+#include "nsISupports.idl"
+#include "MailNewsTypes2.idl"
+#include "nsIImapUrl.idl"
+
+interface nsIFile;
+
+[scriptable, uuid(6ffb6a92-e43a-405f-92ea-92cf81a5e17b)]
+
+/**
+ * nsIImapMessageSink provides a way for the IMAP system to exchange
+ * message-related information with the local folder representation.
+ *
+ * The IMAP system could poke folders directly, but going through this
+ * interface has a couple of benefits:
+ *
+ * 1. It better defines the public coupling between the two systems.
+ * 2. It's easier to wrap with a proxy class so the IMAP system can safely
+ *    call the methods across thread boundaries (see ImapMessageSinkProxy).
+ */
+interface nsIImapMessageSink : nsISupports {
+  /**
+   * Set up for downloading a message to disk.
+   * TODO: what is the sequence of calls after this?
+   */
+  void setupMsgWriteStream(in nsIFile aFile, in boolean aAppendDummyEnvelope);
+
+  /**
+   * Used by the imap protocol code to notify the core backend code about
+   * downloaded imap messages.
+   *
+   * @param aAdoptedMsgLine  a string with a lot of message lines,
+   *                         separated by native line terminators.
+   * @param aUidOfMsg        IMAP UID of the fetched message.
+   * @param aImapUrl         IMAP Url used to fetch the message.
+   */
+  void parseAdoptedMsgLine(in string aAdoptedMsgLine, in ImapUid aUidOfMsg,
+                           in nsIImapUrl aImapUrl);
+
+  /**
+   * Notify the backend that the imap protocol is done downloading a message
+   *
+   * @param aUidOfMsg           IMAP UID of the fetched message.
+   * @param aMarkMsgRead        Set the SEEN flag on the message.
+   * @param aImapUrl            IMAP Url used to fetch the message.
+   * @param aUpdatedMessageSize if this parameter is not -1, the stored size of the message
+   *                            should be set to this value to reflect the actual size of
+   *                            the downloaded message.
+   */
+  void normalEndMsgWriteStream(in ImapUid aUidOfMessage,
+                               in boolean aMarkMsgRead, in nsIImapUrl aImapUrl,
+                               in long aUpdatedMessageSize);
+
+  /**
+   * Notify the backend that a message download has failed.
+   */
+  void abortMsgWriteStream();
+
+  /**
+   *  Notify the message sink that one or more flags or keywords have
+   *  changed.
+   *  For Condstore servers, also update the highestMod Sequence
+   *  @param   aFlags         - The new flags for the message
+   *  @param   aKeywords        keywords for the message
+   *  @param   aMessageUid    - The UID of the message that changed
+   *  @param   aHighestModSeq - The highest mod seq the parser has seen
+   *                            for this folder
+  **/
+  void notifyMessageFlags(in unsigned long aFlags, in ACString aKeywords,
+                          in ImapUid aMessageUid,
+                          in unsigned long long aHighestModSeq);
+
+  /**
+   * The protocol calls this when a message is deleted on the server.
+   */
+  void notifyMessageDeleted(in string aOnlineFolderName,in boolean aDeleteAllMsgs,in string aMsgIdString);
+
+  /**
+   * The protocol uses this to query the database for the size of a
+   * message.
+   */
+  void getMessageSizeFromDB(in string aId, out unsigned long aSize);
+
+  /**
+   * For a message stored in a file, get the message metadata needed to copy
+   * that message to an imap folder
+   *
+   * @param aRunningUrl  message URL
+   * @param aDate        message date
+   * @param aKeywords    message custom keywords (if supported by the server),
+   *                     including messages tags and junk status
+   *
+   * @return             message flags
+   */
+  unsigned long getCurMoveCopyMessageInfo(in nsIImapUrl aRunningUrl,
+                                          out PRTime aDate, out ACString aKeywords);
+};

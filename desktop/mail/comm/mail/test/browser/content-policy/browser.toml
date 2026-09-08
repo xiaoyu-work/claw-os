@@ -1,0 +1,38 @@
+[DEFAULT]
+prefs = [
+  "mail.account.account1.identities=id1",
+  "mail.account.account1.server=server1",
+  "mail.accountmanager.accounts=account1",
+  "mail.accountmanager.defaultaccount=account1",
+  "mail.accountmanager.localfoldersserver=server1",
+  "mail.server.server1.hostname=Local Folders",
+  "mail.server.server1.name=Local Folders",
+  "mail.server.server1.type=none",
+  "mail.server.server1.userName=nobody",
+
+  "mail.provider.suppress_dialog_on_startup=true",
+  "mail.spotlight.firstRunDone=true",
+  "mail.winsearch.firstRunDone=true",
+  "mailnews.start_page.override_url=about:blank",
+  "mailnews.start_page.url=about:blank",
+]
+skip-if = [
+  "debug",
+]
+subsuite = "thunderbird"
+support-files = ["html/**"]
+
+["browser_composeMailto.js"]
+
+["browser_dnsPrefetch.js"]
+
+["browser_exposedInContentTabs.js"]
+
+["browser_generalContentPolicy.js"]
+skip-if = [
+  "headless", # clipboard doesn't work with headless
+]
+
+["browser_jsContentPolicy.js"]
+
+["browser_pluginsPolicy.js"]

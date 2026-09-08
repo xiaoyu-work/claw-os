@@ -1,0 +1,174 @@
+<?xml version="1.0"?>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+<!-- NOTE: This Account Wizard is *only* for Newsgroup accounts. Historically,
+   - it was a generic Account Wizard, hence the generic naming. -->
+
+<?csp default-src chrome:; script-src chrome: 'unsafe-inline'; style-src chrome: 'unsafe-inline' ?>
+
+<!DOCTYPE window [
+<!ENTITY % AccountWizardDTD SYSTEM "chrome://messenger/locale/AccountWizard.dtd">
+%AccountWizardDTD;
+<!ENTITY % newsblogDTD SYSTEM "chrome://messenger-newsblog/locale/am-newsblog.dtd">
+%newsblogDTD;
+]>
+
+<window id="AccountWizard" title="&windowTitle.label;"
+        xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+        xmlns:html="http://www.w3.org/1999/xhtml"
+        onload="onAccountWizardLoad();"
+        style="width: 40em; height: 38em;"
+        lightweightthemes="true">
+  <stringbundle id="bundle_prefs" src="chrome://messenger/locale/prefs.properties"/>
+  <stringbundle id="bundle_messenger" src="chrome://messenger/locale/messenger.properties"/>
+  <linkset>
+    <html:link
+      rel="stylesheet"
+      href="chrome://messenger/skin/accountWizard.css"
+    />
+    <html:link
+      rel="stylesheet"
+      href="chrome://messenger/skin/input-fields.css"
+    />
+    <html:link
+      rel="stylesheet"
+      href="chrome://messenger/skin/shared/grid-layout.css"
+    />
+    <html:link
+      rel="stylesheet"
+      href="chrome://messenger/skin/themeableDialog.css"
+    />
+    <html:link rel="localization" href="toolkit/global/wizard.ftl"/>
+  </linkset>
+
+  <script src="chrome://messenger/content/globalOverlay.js"/>
+  <script src="chrome://global/content/editMenuOverlay.js"/>
+  <script src="chrome://messenger/content/accountUtils.js"/>
+  <script src="chrome://messenger/content/amUtils.js"/>
+  <script src="chrome://messenger/content/AccountWizard.js"/>
+  <script src="chrome://messenger/content/aw-identity.js"/>
+  <script src="chrome://messenger/content/aw-incoming.js"/>
+  <script src="chrome://messenger/content/aw-accname.js"/>
+  <script src="chrome://messenger/content/aw-done.js"/>
+
+  <wizard>
+    <!-- Identity page : Collects user's full name and email address -->
+    <wizardpage id="identitypage" pageid="identitypage"
+                label="&identityTitle.label;">
+      <vbox>
+        <description flex="1">&identityDesc.label;</description>
+        <separator/>
+        <description flex="1">&fullnameDesc.label; &fullnameExample.label;</description>
+        <separator class="thin"/>
+        <hbox align="center" class="input-container">
+          <label id="fullnameLabel" class="awIdentityLabel" value="&fullnameLabel.label;"
+                 accesskey="&fullnameLabel.accesskey;" control="fullName"/>
+          <html:input id="fullName"
+                      type="text"
+                      required="required"
+                      wsm_persist="true"
+                      name="fullName"
+                      class="input-inline"
+                      aria-labelledby="fullnameLabel"
+                      oninput="identityPageValidate();"/>
+        </hbox>
+        <separator/>
+        <vbox>
+          <hbox>
+            <description id="emailDescText" flex="1"/>
+          </hbox>
+          <hbox align="center">
+            <label id="emailFieldLabel"
+                   class="awIdentityLabel"
+                   value="&emailLabel.label;"
+                   accesskey="&emailLabel.accesskey;"
+                   control="email"/>
+            <hbox class="uri-element input-container" align="center" flex="1">
+              <html:input id="email"
+                          type="email"
+                          required="required"
+                          wsm_persist="true"
+                          name="email"
+                          aria-labelledby="emailFieldLabel"
+                          oninput="identityPageValidate();"
+                          class="uri-element input-inline"/>
+            </hbox>
+          </hbox>
+        </vbox>
+      </vbox>
+    </wizardpage>
+
+    <!-- News Server page : Collects the News groups server name -->
+    <wizardpage id="newsserver" pageid="newsserver"
+                label="&incomingTitle.label;">
+      <vbox flex="1">
+        <description>&newsServerNameDesc.label;</description>
+        <separator class="thin"/>
+        <hbox align="center" class="input-container">
+          <label id="newsServerLabel" control="newsServer"
+                 value="&newsServerLabel.label;"
+                 accesskey="&newsServerLabel.accesskey;"
+                 style="width: 8em;"/>
+          <html:input id="newsServer"
+                      type="text"
+                      wsm_persist="true"
+                      class="uri-element input-inline"
+                      aria-labelledby="newsServerLabel"
+                      oninput="incomingPageValidate();"/>
+        </hbox>
+      </vbox>
+    </wizardpage>
+
+    <!-- Account name page : User gets a choice to enter a pretty name for the account -->
+    <!-- Defaults : Mail account -> Email address, Newsgroup account -> Newsgroup server name -->
+    <wizardpage id="accnamepage" pageid="accnamepage"
+                label="&accnameTitle.label;">
+      <vbox flex="1">
+        <description>&accnameDesc.label;</description>
+        <separator class="thin"/>
+        <hbox align="center" class="input-container">
+          <label id="prettyNameLabel" class="label"
+                 value="&accnameLabel.label;"
+                 style="width: 8em;"
+                 accesskey="&accnameLabel.accesskey;"
+                 control="prettyName"/>
+          <html:input id="prettyName"
+                      type="text"
+                      size="40"
+                      wsm_persist="true"
+                      class="input-inline"
+                      aria-labelledby="prettyNameLabel"
+                      oninput="acctNamePageValidate();"/>
+        </hbox>
+      </vbox>
+    </wizardpage>
+
+    <!-- Done page : this page summarizes information collected to create a mail/news account -->
+    <wizardpage id="done" pageid="done"
+                label="&completionTitle.label;">
+      <vbox flex="1">
+        <description>&completionText.label;</description>
+        <separator class="thin"/>
+        <html:div class="grid-two-column-fr grid-items-baseline">
+          <label id="account.name.label" flex="1" class="label" value="&accnameLabel.label;"/>
+          <label id="account.name.text" flex="1" class="label"/>
+          <label id="identity.email.label" flex="1" class="label" value="&emailLabel.label;"/>
+          <label id="identity.email.text" flex="1" class="label"/>
+          <label id="server.username.label" flex="1" class="label" value="&incomingUsername.label;"/>
+          <label id="server.username.text" flex="1" class="label"/>
+          <label id="newsServer.name.label" flex="1" class="label" value="&newsServerNamePrefix.label;"/>
+          <label id="newsServer.name.text" flex="1" class="label"/>
+        </html:div>
+        <separator/>
+        <spacer flex="1"/>
+#ifndef XP_MACOSX
+        <description>&clickFinish.label;</description>
+#else
+        <description>&clickFinish.labelMac;</description>
+#endif
+      </vbox>
+    </wizardpage>
+  </wizard>
+</window>

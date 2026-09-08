@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+<!DOCTYPE html>
+<html
+  xmlns="http://www.w3.org/1999/xhtml"
+  xmlns:xul="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+  xmlns:html="http://www.w3.org/1999/xhtml"
+>
+  <head>
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src chrome:; script-src chrome: moz-src:; style-src chrome: 'unsafe-inline'"
+    />
+    <link
+      rel="stylesheet"
+      media="screen"
+      type="text/css"
+      href="chrome://messenger/skin/messenger.css"
+    />
+    <link
+      rel="stylesheet"
+      media="screen"
+      type="text/css"
+      href="chrome://messenger/skin/primaryToolbar.css"
+    />
+    <link
+      rel="stylesheet"
+      media="screen"
+      type="text/css"
+      href="chrome://messenger/skin/messageHeader.css"
+    />
+    <link
+      rel="stylesheet"
+      media="screen, print"
+      type="text/css"
+      href="chrome://messenger/skin/shared/multimessageview.css"
+    />
+    <link rel="localization" href="toolkit/main-window/findbar.ftl" />
+    <link rel="localization" href="messenger/multimessageview.ftl" />
+    <title data-l10n-id="multi-message-window-title"></title>
+    <script src="chrome://messenger/content/multimessageview.js" />
+  </head>
+  <body>
+    <div id="headingWrapper">
+      <vbox
+        id="header-view-toolbox"
+        xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+      >
+        <hbox id="header-view-toolbar" class="header-buttons-container">
+          <toolbarbutton
+            id="hdrArchiveButton"
+            class="toolbarbutton-1 message-header-view-button hdrArchiveButton"
+            data-l10n-id="multi-message-archive-button"
+          />
+          <toolbarbutton
+            id="hdrTrashButton"
+            class="toolbarbutton-1 message-header-view-button hdrTrashButton"
+            data-l10n-id="multi-message-delete-button"
+          />
+        </hbox>
+      </vbox>
+      <h1 id="heading">
+        <span id="summaryTitle"></span>
+        <span id="summarySubtitle"></span>
+      </h1>
+    </div>
+    <div id="content">
+      <ul id="messageList"></ul>
+      <div id="footer">
+        <span class="info" id="size"></span>
+        <span class="info" id="notice"></span>
+      </div>
+    </div>
+    <template id="threadTemplate">
+      <li>
+        <span class="star"></span>
+        <h2 class="item-header">
+          <span class="left-block">
+            <span class="author link primary"></span>
+            <span class="tags"></span>
+          </span>
+          <span class="date"></span>
+        </h2>
+        <p class="snippet"></p>
+      </li>
+    </template>
+
+    <template id="multiSelectionTemplate">
+      <li>
+        <span class="star"></span>
+        <h2 class="item-header">
+          <span class="left-block">
+            <span class="subject link primary"></span>
+            <span class="count"></span>
+            <span class="tags"></span>
+          </span>
+          <span class="author"></span>
+        </h2>
+        <p class="snippet"></p>
+      </li>
+    </template>
+  </body>
+</html>

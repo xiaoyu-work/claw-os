@@ -1,0 +1,66 @@
+<?xml version="1.0"?>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+<!DOCTYPE html [ <!ENTITY % dtd1 SYSTEM "chrome://calendar/locale/global.dtd"> %dtd1;
+<!ENTITY % dtd3 SYSTEM "chrome://calendar/locale/calendar-event-dialog.dtd" >
+%dtd3; ]>
+<html
+  id="calendar-event-dialog-timezone"
+  xmlns="http://www.w3.org/1999/xhtml"
+  xmlns:xul="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+  xmlns:html="http://www.w3.org/1999/xhtml"
+  windowtype="Calendar:EventDialog:Timezone"
+  lightweightthemes="true"
+  scrolling="false"
+>
+  <head>
+    <title>&timezone.title.label;</title>
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src chrome:; script-src chrome: 'unsafe-inline' moz-src:; style-src chrome: 'unsafe-inline'"
+    />
+    <link rel="stylesheet" href="chrome://messenger/skin/messenger.css" />
+    <link rel="stylesheet" href="chrome://calendar/skin/calendar-event-dialog.css" />
+    <link rel="stylesheet" href="chrome://calendar/skin/shared/calendar-timezone-highlighter.css" />
+    <link rel="stylesheet" href="chrome://calendar/skin/shared/widgets/minimonth.css" />
+    <link rel="stylesheet" href="chrome://calendar/skin/shared/datetimepickers.css" />
+    <link rel="stylesheet" href="chrome://messenger/skin/contextMenu.css" />
+    <link rel="stylesheet" href="chrome://messenger/skin/colors.css" />
+    <link rel="stylesheet" href="chrome://messenger/skin/themeableDialog.css" />
+    <link rel="localization" href="calendar/calendar.ftl" />
+    <script defer="defer" src="chrome://messenger/content/dialogShadowDom.js"></script>
+    <script defer="defer" src="chrome://calendar/content/widgets/calendar-minimonth.js"></script>
+    <script defer="defer" src="chrome://calendar/content/calendar-dialog-utils.js"></script>
+    <script defer="defer" src="chrome://calendar/content/calendar-ui-utils.js"></script>
+    <script defer="defer" src="chrome://calendar/content/widgets/datetimepickers.js"></script>
+    <script
+      defer="defer"
+      src="chrome://calendar/content/calendar-event-dialog-timezone.js"
+    ></script>
+  </head>
+  <html:body xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul">
+    <dialog>
+      <hbox align="center">
+        <spacer flex="1" />
+        <datetimepicker id="timezone-time" disabled="" />
+      </hbox>
+
+      <menulist id="timezone-menulist" oncommand="updateTimezone()">
+        <menupopup id="timezone-menupopup" style="height: 460px" />
+      </menulist>
+
+      <stack id="timezone-stack">
+        <html:img src="chrome://calendar/skin/shared/timezone_map.png" alt="" />
+        <html:img
+          id="highlighter"
+          src="chrome://calendar/skin/shared/timezones.png"
+          alt=""
+          class="timezone-highlight"
+          tzid="+0000"
+        />
+      </stack>
+    </dialog>
+  </html:body>
+</html>

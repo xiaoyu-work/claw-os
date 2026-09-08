@@ -1,0 +1,294 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, you can obtain one at http://mozilla.org/MPL/2.0/. */
+
+dialog {
+  border: 1px solid transparent;
+  border-radius: var(--button-border-radius);
+  background-color: var(--dialog-background-color);
+  color: var(--dialog-text-color);
+  padding: 15px;
+  box-shadow: 0 2px 4px 0 rgba(0, 0, 0, 0.5);
+
+  --dialog-text-color: var(--color-text-base);
+  --dialog-background-color: var(--color-surface-base);
+  --dialog-box-text-color: light-dark(#181920, #f9f9fa);
+  --dialog-box-background-color: light-dark(#fff, #353537);
+  --dialog-box-border-color: light-dark(rgba(0, 0, 0, 0.3), hsla(0, 0%, 70%, 0.4));
+  --dialog-box-border-hover-color: light-dark(rgba(128, 128, 128, 0.8), hsla(0, 0%, 70%, 0.5));
+  --dialog-button-text-color-hover: currentColor;
+  --dialog-button-background-color: color-mix(in srgb, currentColor 13%, transparent);
+  --dialog-button-background-color-hover: color-mix(in srgb, currentColor 17%, transparent);
+  --dialog-button-background-color-active: color-mix(in srgb, currentColor 30%, transparent);
+  --dialog-highlight-color: var(--in-content-primary-button-background, var(--selected-item-color));
+  --dialog-highlight-text-color: var(--in-content-primary-button-text-color, var(--selected-item-text-color));
+  --dialog-primary-background-hover: color-mix(in srgb, var(--dialog-highlight-color) 85%, black);
+  --dialog-primary-background-active: color-mix(in srgb, var(--dialog-highlight-color) 78%, black);
+
+  @media (prefers-contrast) {
+    --dialog-box-text-color: color-mix(in srgb, currentColor 41%, transparent);
+    --dialog-box-background-color: color-mix(in srgb, currentColor 41%, transparent);
+    --dialog-box-border-color: -moz-DialogText;
+    --dialog-box-border-hover-color: SelectedItemText;
+    --dialog-button-text-color-hover: SelectedItemText;
+    --dialog-button-background-color-hover: SelectedItem;
+    --dialog-button-background-color-active: SelectedItem;
+    border-color: WindowText !important;
+  }
+
+  &::backdrop {
+    background: rgba(0, 0, 0, 0.5);
+  }
+
+  &.dialog-critical {
+    box-shadow: 0 2px 20px -8px var(--red-70);
+  }
+
+  /* Global overrides */
+
+  & *[hidden] {
+    display: none !important;
+  }
+
+  & :focus-visible {
+    outline: var(--focus-outline);
+    outline-offset: 1px;
+  }
+
+  /* Typography */
+
+  & h1 {
+    margin-block-start: 0;
+    font-size: 1.17em;
+  }
+
+  & p {
+    margin-block-end: 6px;
+    font-size: 1.1em;
+    line-height: 1.4em;
+  }
+
+  & .tip-caption {
+    opacity: 0.8;
+    font-size: 1em;
+  }
+
+  /* Lists */
+
+  & .radio-list {
+    margin-block: 12px;
+
+    & li {
+      margin-block-end: 12px;
+    }
+  }
+
+  /* Buttons */
+
+  & .button-link {
+    appearance: none;
+    background-color: transparent !important;
+    color: LinkText;
+    border-style: none;
+    padding: 0 3px;
+    margin: 0;
+    font-weight: 600;
+    cursor: pointer;
+    min-block-size: auto;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+
+  & button {
+    &:not([disabled]):hover {
+      background-color: var(--dialog-button-background-color-hover);
+      color: var(--dialog-button-text-color-hover);
+
+      &:active {
+        background-color: var(--dialog-button-background-color-active);
+      }
+    }
+
+    &.primary {
+      background-color: var(--dialog-highlight-color);
+      color: var(--dialog-highlight-text-color) !important;
+
+      &:not([disabled]):hover {
+        background-color: var(--dialog-primary-background-hover);
+
+        &:active {
+          background-color: var(--dialog-primary-background-active);
+        }
+      }
+    }
+
+    &[disabled] {
+      opacity: 0.4;
+    }
+  }
+
+  /* Radio button */
+
+  & input[type="radio"] {
+    appearance: auto;
+  }
+}
+
+.reset-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* General UI */
+
+.dialog-title {
+  display: flex;
+  align-items: center;
+  margin: 0 15px 15px;
+  font-size: 1.4em;
+  font-weight: 500;
+}
+
+.dialog-container {
+  display: flex;
+  align-items: center;
+  margin-block-end: 12px;
+
+  &.vertical {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+.dialog-header-image {
+  -moz-context-properties: fill, stroke;
+  fill: color-mix(in srgb, var(--dialog-highlight-color) 20%, transparent);
+  stroke: var(--dialog-highlight-color);
+  margin-inline-end: 12px;
+  block-size: 32px;
+
+  &.small {
+    block-size: 16px;
+  }
+}
+
+.dialog-description {
+  margin-block: 0.2em;
+  line-height: 1.4em;
+}
+
+/* Warning dialog */
+
+.warning-title {
+  display: flex;
+  align-items: center;
+  margin-block-start: 0;
+  background-color: var(--red-60);
+  color: var(--color-white);
+  border-radius: var(--button-border-radius);
+  padding: 6px;
+}
+
+.warning-icon {
+  fill: color-mix(in srgb, var(--color-white) 20%, transparent);
+  stroke: var(--color-white);
+}
+
+.insecure-section h3 {
+  margin-block-start: 0;
+}
+
+.insecure-section-description {
+  font-size: 1.05rem;
+  line-height: 1.5em;
+}
+
+.dialog-footnote {
+  margin-inline: 6px;
+  font-size: 1.05rem;
+  line-height: 1.4em;
+}
+
+/* Buttons area */
+
+.vertical-buttons-container {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  margin-block-end: 9px;
+  padding: 0;
+}
+
+menu.dialog-menu-container {
+  list-style-type: none;
+  display: flex;
+  align-items: center;
+  margin-block-end: 0;
+  margin-inline: 0;
+  padding: 2px 10px;
+  justify-content: end;
+  background-color: var(--dialog-background-color);
+  position: sticky;
+  inset-block-end: 0;
+  max-inline-size: none;
+
+  &.two-columns {
+    justify-content: space-between;
+  }
+
+  &.menu-in-body {
+    margin-inline: -10px;
+  }
+}
+
+/* Loading states */
+
+@keyframes loading-animation {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-100%);
+  }
+}
+
+@keyframes loading-animation-rtl {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+span.loading-inline {
+  -moz-context-properties: fill;
+  fill: currentColor;
+  display: inline-block;
+  position: relative;
+  overflow: hidden;
+  block-size: 16px;
+  inline-size: 16px;
+  color: var(--selected-item-color);
+  vertical-align: sub;
+
+  &::after {
+    position: absolute;
+    content: "";
+    background-image: url("chrome://messenger/skin/icons/loading.svg");
+    background-position: right center;
+    background-repeat: no-repeat;
+    inline-size: 480px;
+    block-size: 100%;
+    animation: loading-animation 1.05s steps(30) infinite;
+  }
+
+  &:dir(rtl)::after {
+    background-position-x: left;
+    animation: loading-animation-rtl 1.05s steps(30) infinite;
+  }
+}

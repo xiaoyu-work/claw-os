@@ -1,0 +1,675 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+/**
+ * @defgroup msgdb Mailnews message database
+ * This module is the access point to locally-stored databases.
+ *
+ * These databases are stored in .msf files. Each file contains useful cached
+ * information, like the message id or references, as well as the cc header or
+ * tag information. This cached information is encapsulated in nsIMsgDBHdr.
+ *
+ * Also included is threading information, mostly encapsulated in nsIMsgThread.
+ * The final component is the database folder info, which contains information
+ * on the view and basic information also stored in the folder cache such as the
+ * name or most recent update.
+ *
+ * What this module does not do is access individual messages. Access is
+ * strictly controlled by the nsIMsgFolder objects and their backends.
+ * @{
+ */
+#include "nsISupports.idl"
+#include "nsIDBChangeAnnouncer.idl"
+%{C++
+#include "MailNewsTypes.h"
+%}
+
+interface nsIMsgDatabase;
+interface nsIDBChangeListener;
+interface nsIMsgDBHdr;
+interface nsIMsgEnumerator;
+interface nsIMsgThread;
+interface nsIMsgThreadEnumerator;
+interface nsIDBFolderInfo;
+interface nsIMsgOfflineImapOperation;
+interface nsIMsgFolder;
+interface nsIFile;
+interface nsIMsgSearchTerm;
+
+typedef unsigned long nsMsgRetainByPreference;
+
+
+[scriptable, uuid(fe8b7cec-eec8-4bcd-82ff-d8bb23cef3da)]
+
+/**
+ * Settings to define policy for deleting old/stale messages.
+ * Defined per folder, with default settings from nsIMsgIncomingServer.
+ * The nsMsgPurgeService runs periodically to perform the deletion.
+ */
+interface nsIMsgRetentionSettings : nsISupports
+{
+  const unsigned long nsMsgRetainAll = 1;
+  const unsigned long nsMsgRetainByAge = 2;
+  const unsigned long nsMsgRetainByNumHeaders = 3;
+
+  attribute boolean useServerDefaults;
+  attribute nsMsgRetainByPreference retainByPreference;
+  attribute unsigned long daysToKeepHdrs;
+  attribute unsigned long numHeadersToKeep;
+
+  /**
+   * Should retention settings be applied to flagged/starred messages?
+   * If false, flagged messages are never automatically deleted.
+   */
+  attribute boolean applyToFlaggedMessages;
+};
+
+/**
+ * Settings for downloading NNTP messages.
+ */
+[scriptable, uuid(86a9da90-14f1-11d5-a5c0-0060b0fc04b7)]
+interface nsIMsgDownloadSettings : nsISupports
+{
+  attribute boolean useServerDefaults;
+  attribute boolean downloadByDate;
+  attribute boolean downloadUnreadOnly;
+  attribute unsigned long ageLimitOfMsgsToDownload;
+};
+
+typedef long nsMsgDBCommit;
+
+[scriptable, uuid(15431853-e448-45dc-8978-9958bf74d9b7)]
+interface nsMsgDBCommitType : nsISupports
+{
+  const long kLargeCommit = 1;
+  const long kSessionCommit = 2;
+  const long kCompressCommit = 3;
+};
+
+/**
+ * A service to open mail databases and manipulate listeners automatically.
+ *
+ * The contract ID for this component is
+ * <tt>\@mozilla.org/msgDatabase/msgDBService;1</tt>.
+ */
+[scriptable, uuid(4cbbf024-3760-402d-89f3-6ababafeb07d)]
+interface nsIMsgDBService : nsISupports
+{
+  /**
+   * Opens a database for a given folder.
+   *
+   * This method is preferred over nsIMsgDBService::openDBFromFile if the
+   * caller has an actual nsIMsgFolder around. If the database detects that it
+   * is unreadable or out of date (using nsIMsgDatabase::outOfDate) it will
+   * destroy itself and prepare to be rebuilt, unless aLeaveInvalidDB is true.
+   *
+   * If one gets a NS_MSG_ERROR_FOLDER_SUMMARY_MISSING message, then one
+   * should call nsIMsgDBService::createNewDB to create the new database.
+   *
+   * @param aFolder         The folder whose database should be returned.
+   * @param aLeaveInvalidDB Whether or not the database should be deleted if it
+   *                        is invalid.
+   * @return                A new nsIMsgDatabase object representing the folder
+   *                        database that was opened.
+   * @exception NS_ERROR_FILE_NOT_FOUND
+   *                        The file could not be created.
+   * @exception NS_MSG_ERROR_FOLDER_SUMMARY_OUT_OF_DATE
+   *                        The database is present (and was opened), but the
+   *                        summary file is out of date.
+   * @exception NS_MSG_ERROR_FOLDER_SUMMARY_MISSING
+   *                        The database is present, but the summary file is
+   *                        missing.
+   * @see nsIMsgDatabase::Open
+   * @see nsIMsgDBService::createNewDB
+   */
+  nsIMsgDatabase openFolderDB(in nsIMsgFolder aFolder,
+                              in boolean aLeaveInvalidDB);
+
+  /**
+   * Creates a new database for the given folder.
+   *
+   * If the database already exists, it will return the database, emit a
+   * warning, but not fully initialize it. For this reason, it should only be
+   * used when it is known that the database does not exist, such as when
+   * nsIMsgDBService::openFolderDB throws an error.
+   *
+   * @see nsIMsgDBService::openFolderDB
+   */
+  nsIMsgDatabase createNewDB(in nsIMsgFolder aFolder);
+
+  /**
+   * Opens or creates a database for a given .msf file.
+   *
+   * One should prefer openFolderDB() to this, as usually the db file location
+   * is provided by the folder. However there are cases (folder compaction!)
+   * where we want to open/create a db file in a non-default location.
+   *
+   * While you _can_ open a DB which has a null folder, you probably
+   * shouldn't. The resulting db and message headers retrieved from the
+   * database would not know their owning folder, which limits their usefulness.
+   *
+   * Unlike nsIMsgDBService::openFolderDB, there is no corresponding method to
+   * create a new database if opening the database failed. However, this method
+   * will never throw NS_MSG_ERROR_FOLDER_SUMMARY_MISSING, so no corresponding
+   * method is needed.
+   *
+   * @param aFile           The file for which the database should be returned.
+   * @param aFolder         Folder the db corresponds to (may be null)
+   * @param aCreate         Whether or not the file should be created.
+   * @param aLeaveInvalidDB Whether or not the database should be deleted if it
+   *                        is invalid.
+   * @return                A new nsIMsgDatabase object encapsulating the file
+   *                        passed in.
+   * @exception NS_ERROR_FILE_NOT_FOUND
+   *                        The file could not be created.
+   * @see nsIMsgDBService::openFolderDB
+   * @see nsIMsgDatabase::Open
+   */
+  nsIMsgDatabase openDBFromFile(in nsIFile aFile,
+                                in nsIMsgFolder aFolder,
+                                in boolean aCreate,
+                                in boolean aLeaveInvalidDB);
+  /**
+   * Adds the given listener to the listener set for the folder.
+   *
+   * Since the message database will likely be opened and closed many times, by
+   * registering using this method, one will be guaranteed to see all subsequent
+   * modifications. This will also add the listener to the database if it is
+   * already opened.
+   *
+   * @param aFolder         The folder to add a listener to.
+   * @param aListener       The listener to add the folder to.
+   */
+  void registerPendingListener(in nsIMsgFolder aFolder,
+                               in nsIDBChangeListener aListener);
+  /**
+   * Removes the listener from all folder listener sets.
+   *
+   * @param aListener       The listener to remove.
+   * @exception NS_ERROR_FAILURE
+   *                        The listener is not registered.
+   */
+  void unregisterPendingListener(in nsIDBChangeListener aListener);
+
+  /**
+   * Get the db for a folder, if already open.
+   *
+   * @param aFolder   The folder to get the cached (open) db for.
+   *
+   * @returns         null if the db isn't open, otherwise the db.
+   */
+  nsIMsgDatabase cachedDBForFolder(in nsIMsgFolder aFolder);
+
+  /**
+   * Get the db for an absolute path, if already open.
+   *
+   * @param filePath  The location to get the cached (open) db for.
+   *
+   * @returns         null if the db isn't open, otherwise the db.
+   */
+  nsIMsgDatabase cachedDBForFilePath(in nsIFile filePath);
+
+  /**
+   * Close the db for a folder, if already open.
+   *
+   * @param aFolder   The folder to close the cached (open) db for.
+   */
+  void forceFolderDBClosed(in nsIMsgFolder aFolder);
+
+  /// an enumerator to iterate over the open dbs.
+  readonly attribute Array<nsIMsgDatabase> openDBs;
+};
+
+%{ C++
+// Define an struct to describe data for a message entry _without_ using
+// nsIMsgDBHdr. Mork allows detached rows, and we use that feature to
+// carry message data not in the db, but other databases don't support
+// that, so we'd like to stop doing it.
+// A lot of these values are directly from raw RFC5322 headers. In
+// those cases, the data here should be decoded/space-folded/etc.
+struct RawHdr {
+  nsMsgKey key{nsMsgKey_None};
+  nsCString messageId;  // "Message-Id:" value with surrounding '<' and '>'
+                        // stripped. e.g."1234@local.machine.example"
+  nsTArray<nsCString> references; // The Message-Id list from "References:".
+  PRTime date{0};       // From "Date:" header.
+  PRTime dateReceived{0}; // From closest "Received:" header, if available.
+  nsCString subject;
+  nsCString sender;    // AKA nsIMsgDBHdr.author. Usually "From:" header.
+  nsCString recipients; // format?    (can be newsgroups)
+  nsCString ccList;   // format?
+  nsCString bccList;  // format?
+  nsCString replyTo;
+  uint32_t flags{0};
+  nsCString keywords; // should be array?
+  nsMsgPriorityValue priority{nsMsgPriority::notSet};  // 0 = notSet
+  nsCString charset;
+  nsCString accountKey;
+  //uint64_t msgSize{0};
+  //nsCString storeToken;
+  //uint64_t offlineMsgSize{0};
+  //uint32_t numLines{0};
+  //nsCString preview;
+  //nsCString junkscoreorigin;
+  //nsCString junkpercent;
+  //nsCString senderName;
+  //nsCString prevkeywords;
+  //int remoteContentPolicy{0};
+  //int protoThreadFlags{0};
+  //int glodaId{0};
+  //nsCString xGmMsgId;
+  //nsCString xGmThrId;
+  //nsCString xGmLabels;
+  //int pseudoHdr{0};
+  //int enigmail{0};
+  //int notAPhishMessage{0};
+
+  // Extra data (e.g. pref-defined custom headers).
+  struct kv {nsCString k; nsCString v;};
+  nsTArray<kv> extras;
+};
+%}
+[ptr] native RawHdr(RawHdr);
+
+[scriptable, uuid(b64e66f8-4717-423a-be42-482658fb2199)]
+interface nsIMsgDatabase : nsIDBChangeAnnouncer {
+  /**
+   * Open a database directly, without using the database service. Used only
+   * migrating to the new global database.
+   */
+  void openFromFile(in nsIFile aFolderName);
+
+  void close(in boolean aForceCommit);
+
+  void commit(in nsMsgDBCommit commitType);
+  // Force closed is evil, and we should see if we can do without it.
+  // In 4.x, it was mainly used to remove corrupted databases.
+  void forceClosed();
+  void clearCachedHdrs();
+  void resetHdrCacheSize(in unsigned long size);
+
+  readonly attribute nsIDBFolderInfo  dBFolderInfo;
+
+  /// Size of the database file in bytes.
+  readonly attribute long long databaseSize;
+
+  /// Folder this db was opened on.
+  readonly attribute nsIMsgFolder folder;
+
+  /**
+   * This is used when deciding which db's to close to free up memory
+   * and other resources in an LRU manner. It doesn't track every operation
+   * on every object from the db, but high level things like open, commit,
+   * and perhaps some of the list methods. Commit should be a proxy for all
+   * the mutation methods.
+   *
+   * I'm allowing clients to set the last use time as well, so that
+   * nsIMsgFolder.msgDatabase can set the last use time.
+   */
+  attribute PRTime lastUseTime;
+
+  /**
+   * Returns a nsIMsgDBHdr for the corresponding key.
+   * If the requested message is not in the database, this will throw
+   * NS_ERROR_ILLEGAL_VALUE.
+   */
+  nsIMsgDBHdr getMsgHdrForKey(in nsMsgKey key);
+  nsIMsgDBHdr getMsgHdrForMessageID(in string messageID);
+
+  /**
+   * Get a message header for a Gmail message with the given X-GM-MSGID.
+   * @param {string} aGmailMessageID - The ID of the message to find.
+   *
+   * @returns the message, or null if not found (without throwing an error).
+   */
+  nsIMsgDBHdr getMsgHdrForGMMsgID(in string aGmailMessageID);
+
+  /**
+   * Get a message header based on its Exchange Web Services item ID.
+   *
+   * @param itemID - The item ID as provided by EWS.
+   */
+  nsIMsgDBHdr getMsgHdrForEwsItemID(in AUTF8String itemID);
+
+  //Returns whether or not this database contains the given key
+  boolean containsKey(in nsMsgKey key);
+
+
+  /**
+   * Search for messages by their .uidOnServer value.
+   * Returns an nsMsgKey for every UID in the input array.
+   * Any UIDs which are 0 or not found in the database will return
+   * nsMsgKey_None in the corresponding slot in the returned array.
+   */
+  Array<nsMsgKey> getMsgKeysForUIDs(in Array<unsigned long> uids);
+
+  /**
+   * Returns the .uidOnServer for every nsMsgKey in the input array:
+   * - If an input key is found, it's .uidOnServer will be returned (Remember
+   *   that an unset .uidOnServer has a value of 0!).
+   * - If an input key is nsMsgKey_None, 0 will be returned.
+   * - If an input key is not found in the database (other than
+   *   nsMsgKey_None), the whole function will fail and the returned data
+   *   is undefined.
+   */
+  Array<unsigned long> getMsgUIDsForKeys(in Array<nsMsgKey> keys);
+
+  /**
+   * Returns true if db contains a message with .uidOnServer equal to uid.
+   * Passing in a uid of 0 _always_ returns false.
+   */
+  boolean containsUID(in unsigned long uid);
+
+  /**
+   * Find a message by .uidOnServer value.
+   * If uid is 0, or not found in the database, this call will fail.
+   */
+  nsIMsgDBHdr getMsgHdrForUID(in unsigned long uid);
+
+
+  /**
+   * Add a new message to the database, returning the newly created msgHdr.
+   * If notify is set, the usual DB notifications will be issued.
+   */
+  [noscript]
+  nsIMsgDBHdr addMsgHdr(in RawHdr msg, in boolean notify);
+
+  /**
+   * Create a new nsIMsgDBHdr, but don't add it to the database.
+   * The returned nsIMsgDBHdr is a 'detached' header and must be added to
+   * the database by calling attachHdr().
+   * Legacy code relies on being able to create a new header, fill in
+   * its properties, and _then_ attach it to the database.
+   * For new code, better to use addMsgHdr() which does it in one step.
+   *
+   * NOTE: if there is already a header with the given key in the database,
+   * that existing header will be returned, _not_ a new one!
+   * This behaviour is deprecated - use getMsgHdrForKey() instead.
+   */
+  nsIMsgDBHdr createNewHdr();
+
+  /**
+   * @deprecated in favour of createNewHdr().
+   *
+   * This is a version of createNewHdr() to support legacy IMAP/NNTP code
+   * which forces the use of server-assigned IDs as local database keys.
+   * This is being phased out. See
+   * https://bugzilla.mozilla.org/show_bug.cgi?id=1806770
+   */
+  nsIMsgDBHdr createNewHdrWithSpecificMsgKey(in nsMsgKey aKey);
+
+  /**
+   * @deprecated in favour of attachHdr().
+   *
+   * Add newHdr to the database. The key should already be set upon the
+   * header.
+   * If the database already contains another header with the same key,
+   * addNewHdrToDB() will fail.
+   * If notify is true, then any registered nsIDBChangeListener objects
+   * on the database will have their onHdrAdded callback invoked.
+   */
+  void addNewHdrToDB(in nsIMsgDBHdr newHdr, in boolean notify);
+
+  /**
+   * This adds a 'detached' nsIMsgDBHdr to the database, and returns a new
+   * nsIMsgHdr which is 'live' in the database.
+   * NOTE: for the legacy (mork) database, there is no distinction between
+   * 'detached' and 'live' nsIMsgHdr objects - the object passed in is simply
+   * attached to the database and returned as the new nsIMsgHdr.
+   * If notify is true, then any registered nsIDBChangeListener objects
+   * on the database will have their onHdrAdded callback invoked.
+   */
+  nsIMsgDBHdr attachHdr(in nsIMsgDBHdr detachedHdr, in boolean notify);
+
+  /**
+   * Copy existingHdr to create a new one.
+   *
+   * If addHdrToDB is false, the new header will be left detached from the
+   * database. If true, it will immediately be added to the DB and the
+   * onHdrAdded notification will be issued to listeners.
+   *
+   * The new header will be assigned the given key, unless it is
+   * nsMsgKey_None, in which case a new key will be auto-assigned.
+   */
+  nsIMsgDBHdr copyHdrFromExistingHdr(in nsMsgKey key, in nsIMsgDBHdr existingHdr, in boolean addHdrToDB);
+
+  /**
+   * Returns all message keys stored in the database.
+   * Keys are returned in the order as stored in the database.
+   * The caller should sort them if it needs to.
+   */
+  Array<nsMsgKey> listAllKeys();
+
+  nsIMsgEnumerator enumerateMessages();
+  nsIMsgEnumerator reverseEnumerateMessages();
+  nsIMsgThreadEnumerator enumerateThreads();
+
+  /**
+   * Get an enumerator of messages matching the passed-in search terms.
+   *
+   * @param searchTerms  Array of search terms to evaluate.
+   * @param reverse      Start at the end, defaults to false.
+   *
+   * @returns An enumerator to iterate over matching messages.
+   */
+  nsIMsgEnumerator getFilterEnumerator(in Array<nsIMsgSearchTerm> searchTerms,
+                                          [optional] in boolean reverse);
+
+  // count the total and unread msgs, and adjust global count if needed
+  void syncCounts();
+
+  nsIMsgThread getThreadContainingMsgHdr(in nsIMsgDBHdr msgHdr) ;
+
+  /**
+   * Remove the new status from a message.
+   *
+   * @param key - The database reference header for the message.
+   * @param instigator - Reference to original calling object.
+   */
+  void markNotNew(in nsMsgKey key, in nsIDBChangeListener instigator);
+
+  void markMDNNeeded(in nsMsgKey key, in boolean needed,
+                     in nsIDBChangeListener instigator);
+
+  void markMDNSent(in nsMsgKey key, in boolean sent,
+                   in nsIDBChangeListener instigator);
+
+  void markRead(in nsMsgKey key, in boolean read,
+                in nsIDBChangeListener instigator);
+
+  void markMarked(in nsMsgKey key, in boolean marked,
+                  in nsIDBChangeListener instigator);
+
+  void markReplied(in nsMsgKey key, in boolean replied,
+                   in nsIDBChangeListener instigator);
+
+  void markForwarded(in nsMsgKey key, in boolean forwarded,
+                     in nsIDBChangeListener instigator);
+
+  void markRedirected(in nsMsgKey key, in boolean redirected,
+                      in nsIDBChangeListener instigator);
+
+  void markHasAttachments(in nsMsgKey key, in boolean hasAttachments,
+                          in nsIDBChangeListener instigator);
+
+  void markOffline(in nsMsgKey key, in boolean offline,
+                   in nsIDBChangeListener instigator);
+
+  void markImapDeleted(in nsMsgKey key, in boolean deleted,
+                       in nsIDBChangeListener instigator);
+
+  Array<nsMsgKey> markThreadRead(in nsIMsgThread thread,
+                                 in nsIDBChangeListener instigator);
+
+  /// Mark the specified thread ignored.
+  void markThreadIgnored(in nsIMsgThread thread, in nsMsgKey threadKey,
+                         in boolean ignored,
+                         in nsIDBChangeListener instigator);
+
+  /// Mark the specified thread watched.
+  void markThreadWatched(in nsIMsgThread thread, in nsMsgKey threadKey,
+                         in boolean watched,
+                         in nsIDBChangeListener instigator);
+
+  /// Mark the specified subthread ignored.
+  void markKilled(in nsMsgKey key, in boolean killed,
+                  in nsIDBChangeListener instigator);
+
+  /// Is the message read?
+  boolean isRead(in nsMsgKey key);
+  /// Is the message part of an ignored thread?
+  boolean isIgnored(in nsMsgKey key);
+  /// Is the message part of a watched thread?
+  boolean isWatched(in nsMsgKey key);
+  /// Is the message flagged/starred?
+  boolean isMarked(in nsMsgKey key);
+  /// Does the message have attachments?
+  boolean hasAttachments(in nsMsgKey key);
+  /// Has an MDN been sent?
+  boolean isMDNSent(in nsMsgKey key);
+
+  Array<nsMsgKey> markAllRead();
+
+  void deleteMessages(in Array<nsMsgKey> nsMsgKeys,
+                      in nsIDBChangeListener instigator);
+  void deleteMessage(in nsMsgKey key,
+                           in nsIDBChangeListener instigator,
+                           in boolean commit);
+  void deleteHeader(in nsIMsgDBHdr msgHdr, in nsIDBChangeListener instigator,
+                          in boolean commit, in boolean notify);
+
+  void undoDelete(in nsIMsgDBHdr msgHdr);
+
+  void setStringProperty(in nsMsgKey aKey, in string aProperty, in AUTF8String aValue);
+  /**
+   * Set the value of a string property in a message header
+   *
+   * @param msgHdr    Header of the message whose property will be changed
+   * @param aProperty the property to change
+   * @param aValue    new value for the property
+   */
+  void setStringPropertyByHdr(in nsIMsgDBHdr msgHdr, in string aProperty, in AUTF8String aValue);
+
+  /**
+   * Set the value of a uint32 property in a message header.
+   *
+   * @param aMsgHdr   header of the message whose property will be changed
+   * @param aProperty the property to change
+   * @param aValue    new value for the property
+   */
+  void setUint32PropertyByHdr(in nsIMsgDBHdr aMsgHdr,
+                              in string aProperty, in unsigned long aValue);
+
+  /**
+   * Returns the key of the first new message.
+   * If there are no new messages this will be nsMsgKey_None.
+   */
+  readonly attribute nsMsgKey firstNew;
+
+  attribute nsIMsgRetentionSettings msgRetentionSettings;
+  // Purge unwanted message headers and/or bodies. If deleteViaFolder is
+  // true, we'll call nsIMsgFolder::DeleteMessages to delete the messages.
+  // Otherwise, we'll just delete them from the db.
+  void applyRetentionSettings(in nsIMsgRetentionSettings aMsgRetentionSettings,
+                              in boolean aDeleteViaFolder);
+
+  attribute nsIMsgDownloadSettings msgDownloadSettings;
+
+  boolean hasNew();
+  void sortNewKeysIfNeeded();
+  void clearNewList(in boolean notify);
+  void addToNewList(in nsMsgKey key);
+
+  // Used mainly to force the timestamp of a local mail folder db to
+  // match the time stamp of the corresponding berkeley mail folder,
+  // but also useful to tell the summary to mark itself invalid
+  // Also, if a local folder is being reparsed, summary will be invalid
+  // until the reparsing is done.
+  attribute boolean summaryValid;
+
+  Array<nsMsgKey> listAllOfflineMsgs();
+
+  void setAttributeOnPendingHdr(in nsIMsgDBHdr pendingHdr, in string property,
+                                  in string propertyVal);
+
+  void setUint32AttributeOnPendingHdr(in nsIMsgDBHdr pendingHdr, in string property,
+                                  in unsigned long propertyVal);
+
+  /**
+   * Sets a pending 64 bit attribute, which tells the DB that when a message
+   * which looks like the pendingHdr (e.g., same message-id) is added to the
+   * db, set the passed in property and value on the new header. This is
+   * usually because we've copied an imap message to a different folder, and
+   * want to carry forward attributes from the original message to the copy,
+   * but don't have the message hdr for the copy yet so we can't set
+   * attributes directly.
+   *
+   * @param aPendingHdr usually the source of the copy.
+   * @param aProperty name of property to set.
+   * @param aPropertyVal 64 bit value of property to set.
+   */
+  void setUint64AttributeOnPendingHdr(in nsIMsgDBHdr aPendingHdr,
+                                      in string aProperty,
+                                      in unsigned long long aPropertyVal);
+
+  /**
+   * Given a message header with its message-id set, update any pending
+   *  attributes on the header.
+   *
+   * @param aNewHdr a new header that may have pending attributes.
+   */
+  void updatePendingAttributes(in nsIMsgDBHdr aNewHdr);
+
+  attribute nsMsgKey nextPseudoMsgKey;   //for undo-redo of move pop->imap
+  readonly attribute nsMsgKey nextFakeOfflineMsgKey; // for saving "fake" offline msg hdrs
+
+  // when creating a view, the default sort order and view flags
+  // use these for the default.  (this allows news to override, so that
+  // news can be threaded by default)
+  readonly attribute nsMsgViewFlagsTypeValue defaultViewFlags;
+  readonly attribute nsMsgViewSortTypeValue  defaultSortType;
+  readonly attribute nsMsgViewSortOrderValue defaultSortOrder;
+
+  // for msg hdr hash table allocation. controllable by caller to improve folder loading performance.
+  attribute unsigned long msgHdrCacheSize;
+
+  /**
+   * The list of messages currently in the NEW state.
+   */
+  Array<nsMsgKey> getNewList();
+
+  // These are used for caching search hits in a db, to speed up saved search folders.
+
+  /**
+   * Gets cached messages for the given folder.
+   * @returns the cached messages, or null there was no cache yet.
+   */
+  nsIMsgEnumerator getCachedHits(in AUTF8String aSearchFolderUri);
+
+  /**
+   * Update search cache to ensure it contains aNewHits.
+   *
+   * @param aSearchFolderUri the target folder.
+   * @param aNewHits sorted list of new message keys.
+   * @returns list of keys of messages removed from cache.
+   */
+  Array<nsMsgKey> refreshCache(in AUTF8String aSearchFolderUri, in Array<nsMsgKey> aNewHits);
+  void updateHdrInCache(in AUTF8String aSearchFolderUri, in nsIMsgDBHdr aHdr, in boolean aAdd);
+  boolean hdrIsInCache(in AUTF8String aSearchFolderUri, in nsIMsgDBHdr aHdr);
+};
+
+[scriptable, uuid(7f98410c-41b7-4a55-8e0c-02107e7f4c0f)]
+interface nsIMsgOfflineOpsDatabase : nsIMsgDatabase {
+  // Has to be in nsMailDatabase, since local folders can be move destinations.
+
+  nsIMsgOfflineImapOperation getOfflineOpForKey(in nsMsgKey messageKey, in boolean create);
+  void removeOfflineOp(in nsIMsgOfflineImapOperation op);
+  Array<nsMsgKey> listAllOfflineOpIds();
+  Array<nsMsgKey> listAllOfflineDeletes();
+
+  /**
+   * @returns true if there is any offline activity waiting.
+   */
+  boolean hasOfflineActivity();
+};

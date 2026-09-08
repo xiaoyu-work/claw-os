@@ -1,0 +1,120 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "nsISupports.idl"
+#include "nsIMsgFilterHitNotify.idl"
+#include "nsMsgFilterCore.idl"
+
+interface nsIFile;
+interface nsIOutputStream;
+interface nsIMsgFilter;
+interface nsIMsgFolder;
+
+///////////////////////////////////////////////////////////////////////////////
+// The Msg Filter List is an interface designed to make accessing filter lists
+// easier. Clients typically open a filter list and either enumerate the filters,
+// or add new filters, or change the order around...
+//
+///////////////////////////////////////////////////////////////////////////////
+
+typedef long nsMsgFilterFileAttribValue;
+
+[scriptable, uuid(5d0ec03e-7e2f-49e9-b58a-b274c85f279e)]
+interface nsIMsgFilterList : nsISupports {
+
+    const nsMsgFilterFileAttribValue attribNone = 0;
+    const nsMsgFilterFileAttribValue attribVersion = 1;
+    const nsMsgFilterFileAttribValue attribLogging = 2;
+    const nsMsgFilterFileAttribValue attribName = 3;
+    const nsMsgFilterFileAttribValue attribEnabled = 4;
+    const nsMsgFilterFileAttribValue attribDescription = 5;
+    const nsMsgFilterFileAttribValue attribType = 6;
+    const nsMsgFilterFileAttribValue attribScriptFile = 7;
+    const nsMsgFilterFileAttribValue attribAction = 8;
+    const nsMsgFilterFileAttribValue attribActionValue = 9;
+    const nsMsgFilterFileAttribValue attribCondition = 10;
+    const nsMsgFilterFileAttribValue attribCustomId = 11;
+
+    /// Unique text identifier of this filter list.
+    readonly attribute ACString listId;
+    attribute nsIMsgFolder folder;
+    readonly attribute short version;
+    readonly attribute ACString arbitraryHeaders;
+    readonly attribute boolean shouldDownloadAllHeaders;
+    readonly attribute unsigned long filterCount;
+    nsIMsgFilter getFilterAt(in unsigned long filterIndex);
+    nsIMsgFilter getFilterNamed(in AString filterName);
+
+    void setFilterAt(in unsigned long filterIndex, in nsIMsgFilter filter);
+    void removeFilter(in nsIMsgFilter filter);
+    void removeFilterAt(in unsigned long filterIndex);
+
+    void moveFilterAt(in unsigned long filterIndex,
+                      in nsMsgFilterMotionValue motion);
+    void moveFilter(in nsIMsgFilter filter,
+                    in nsMsgFilterMotionValue motion);
+
+    void insertFilterAt(in unsigned long filterIndex, in nsIMsgFilter filter);
+
+    nsIMsgFilter createFilter(in AString name);
+
+    void saveToFile(in nsIOutputStream stream);
+
+    void parseCondition(in nsIMsgFilter aFilter, in AUTF8String condition);
+    // this is temporary so that we can save the filterlist to disk
+    // without knowing where the filters were read from initially
+    // (such as the filter list dialog)
+    attribute nsIFile defaultFile;
+    void saveToDefaultFile();
+
+    void applyFiltersToHdr(in nsMsgFilterTypeType filterType,
+                           in nsIMsgDBHdr msgHdr,
+                           in nsIMsgFolder folder,
+                           in nsIMsgDatabase db,
+                           in ACString headers,  // null-separated list of headers
+                           in nsIMsgFilterHitNotify listener,
+                           in nsIMsgWindow msgWindow);
+
+    // IO routines, used by filter object filing code.
+    void writeIntAttr(in nsMsgFilterFileAttribValue attrib, in long value, in nsIOutputStream stream);
+    void writeStrAttr(in nsMsgFilterFileAttribValue attrib, in string value, in nsIOutputStream stream);
+    void writeWstrAttr(in nsMsgFilterFileAttribValue attrib, in wstring value, in nsIOutputStream stream);
+    void writeBoolAttr(in nsMsgFilterFileAttribValue attrib, in boolean value, in nsIOutputStream stream);
+    boolean matchOrChangeFilterTarget(in AUTF8String oldUri, in AUTF8String newUri, in boolean caseInsensitive);
+
+    /**
+     * Turn filter logging on or off. Turning logging off will close any
+     * currently-open open logfile.
+     */
+    attribute boolean loggingEnabled;
+    /**
+     * The log will be written via logStream. This may be null if
+     * loggingEnabled is false or if there is some problem with the logging.
+     */
+    attribute nsIOutputStream logStream;
+    readonly attribute ACString logURL;
+    void clearLog();
+    void flushLogIfNecessary();
+    /**
+     * Push a message to the filter log file, adding a timestamp.
+     *
+     * @param message  The message text to log.
+     * @param filter   Optional filter object that reports the message.
+     */
+    void logFilterMessage(in AString message, [optional] in nsIMsgFilter filter);
+
+    /**
+     * Returns true if any filters matching `filterType` require the
+     * message body, either for matching or for the resulting action.
+     */
+    boolean doFiltersNeedMessageBody(in nsMsgFilterTypeType filterType);
+};
+
+
+/* these longs are all actually of type nsMsgFilterMotionValue */
+[scriptable, uuid(d067b528-304e-11d3-a0e1-00a0c900d445)]
+interface nsMsgFilterMotion : nsISupports {
+    const long up = 0;
+    const long down = 1;
+};

@@ -1,0 +1,6 @@
+[DEFAULT]
+head = "head.js"
+tags = "addrbook"
+
+["test_addrBookDataAdapter.js"]
+tags = ["dataadapter"]

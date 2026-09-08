@@ -1,0 +1,30 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@import url("chrome://messenger/skin/shared/messageBody.css");
+
+mailattachcount {
+  border: blue;
+}
+
+/* ::::: message text, incl. quotes ::::: */
+
+.moz-text-plain {
+  & pre {
+    margin: inherit;
+    font-family: inherit;
+  }
+
+  &[graphical-quote="false"] blockquote {
+    margin: inherit;
+    border-inline-start: inherit;
+    padding-inline-start: inherit;
+  }
+
+  &[graphical-quote="true"] blockquote {
+    margin: inherit;
+    border-width: 2px;
+    border-color: gray;
+  }
+}

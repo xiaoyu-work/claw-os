@@ -1,0 +1,40 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+with Files("**"):
+    BUG_COMPONENT = ("Thunderbird", "Instant Messaging")
+
+EXTRA_JS_MODULES += [
+    "IMIncomingServer.sys.mjs",
+    "IMProtocolInfo.sys.mjs",
+    "modules/ChatEncryption.sys.mjs",
+    "modules/chatHandler.sys.mjs",
+    "modules/chatIcons.sys.mjs",
+    "modules/chatNotifications.sys.mjs",
+    "modules/GlodaIMSearcher.sys.mjs",
+    "modules/index_im.sys.mjs",
+]
+
+TESTING_JS_MODULES += [
+    "test/TestProtocol.sys.mjs",
+]
+
+JAR_MANIFESTS += ["jar.mn"]
+
+JS_PREFERENCE_FILES += [
+    "all-im.js",
+]
+
+XPCOM_MANIFESTS += [
+    "components.conf",
+]
+
+if CONFIG["ENABLE_TESTS"]:
+    XPCOM_MANIFESTS += [
+        "test/components.conf",
+    ]
+
+BROWSER_CHROME_MANIFESTS += [
+    "test/browser/browser.toml",
+]

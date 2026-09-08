@@ -1,0 +1,11 @@
+<defines>
+MODE_CFB -> 20131128
+</defines>
+
+<module_info>
+name -> "CFB"
+</module_info>
+
+<requires>
+block
+</requires>

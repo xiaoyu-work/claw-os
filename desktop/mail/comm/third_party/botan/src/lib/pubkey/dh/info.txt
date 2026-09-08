@@ -1,0 +1,18 @@
+<defines>
+DIFFIE_HELLMAN -> 20131128
+</defines>
+
+<module_info>
+name -> "Diffie-Hellman"
+</module_info>
+
+<header:public>
+dh.h
+</header:public>
+
+<requires>
+blinding
+dl_algo
+dl_group
+numbertheory
+</requires>

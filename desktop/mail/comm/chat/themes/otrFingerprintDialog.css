@@ -1,0 +1,76 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+:root {
+  --text-color: #36385a;
+  --primary-color: #0a84ff;
+  --warning-color: #ff9400;
+  --error-color: #5a0002;
+}
+
+body {
+  margin: 0;
+}
+
+dialog {
+  inline-size: 100vw;
+  block-size: 100vh;
+}
+
+.label-title {
+  font-weight: bold;
+  margin-block-end: 5px;
+  color: var(--text-color);
+}
+
+.msg-error {
+  color: var(--error-color);
+}
+
+/* Form and input fields */
+
+.form-control {
+  position: relative;
+  margin: 0;
+}
+
+.input-control {
+  display: flex;
+  align-items: stretch;
+}
+
+.input-field {
+  padding-block: 5px;
+  padding-inline: 6px 30px;
+  flex-grow: 1;
+  margin: 2px 4px;
+
+  &:invalid {
+    box-shadow: 0 0 2px 1px var(--warning-color);
+  }
+}
+
+.input-helper {
+  font-family: monospace;
+  font-size: 1em;
+  opacity: 0.7;
+}
+
+/* Icons */
+
+.header-icon {
+  -moz-context-properties: fill, stroke-opacity;
+  fill: currentColor;
+  color: var(--color-primary-default);
+  inline-size: 3.5em;
+  margin: 10px;
+}
+
+.warning-icon {
+  cursor: pointer;
+  -moz-context-properties: fill, stroke-opacity;
+  fill: currentColor;
+  margin-inline: -26px 10px;
+  color: var(--warning-color);
+}

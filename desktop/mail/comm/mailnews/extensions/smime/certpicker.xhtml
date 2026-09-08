@@ -1,0 +1,57 @@
+<?xml version="1.0"?>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+<!DOCTYPE html [ <!ENTITY % amE2EDTD SYSTEM "chrome://messenger/locale/am-smime.dtd">
+%amE2EDTD; ]>
+
+<html
+  xmlns="http://www.w3.org/1999/xhtml"
+  xmlns:xul="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+  xmlns:html="http://www.w3.org/1999/xhtml"
+  scrolling="false"
+>
+  <head>
+    <title>&certPicker.title;</title>
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src chrome:; script-src chrome: 'unsafe-inline' moz-src:; style-src chrome: 'unsafe-inline'"
+    />
+    <link rel="stylesheet" href="chrome://global/skin/global.css" />
+    <script
+      defer="defer"
+      src="chrome://messenger/content/globalOverlay.js"
+    ></script>
+    <script
+      defer="defer"
+      src="chrome://global/content/editMenuOverlay.js"
+    ></script>
+    <script
+      defer="defer"
+      src="chrome://messenger/content/certpicker.js"
+    ></script>
+  </head>
+  <html:body
+    xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+  >
+    <dialog id="certPicker" buttons="accept,cancel">
+      <hbox align="center">
+        <label id="pickerInfo" value="&certPicker.info;" />
+        <!-- The items in this menulist must never be sorted,
+         but remain in the order filled by the application
+    -->
+        <menulist id="nicknames" oncommand="onCertSelected()">
+          <menupopup />
+        </menulist>
+      </hbox>
+      <separator class="thin" />
+      <label value="&certPicker.detailsLabel;" />
+      <html:textarea
+        id="details"
+        readonly="readonly"
+        style="height: 12em"
+      ></html:textarea>
+    </dialog>
+  </html:body>
+</html>

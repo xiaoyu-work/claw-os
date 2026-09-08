@@ -1,0 +1,56 @@
+---
+codespell:
+    description: Check code for common misspellings
+    include:
+        - comm/calendar/docs/
+        - comm/calendar/locales/en-US/
+        - comm/chat/locales/en-US/
+        - comm/docs/
+        - comm/mail/branding/
+        - comm/mail/components/addrbook/docs/
+        - comm/mail/components/inappnotifications/docs/
+        - comm/mail/components/storybook/docs/
+        - comm/mail/base/docs/
+        - comm/mail/installer/windows/docs/
+        - comm/mail/locales/en-US/
+        - comm/mailnews/base/docs/
+        - comm/mailnews/extensions/fts3/
+        - comm/mailnews/db/panorama/docs
+        - comm/python/
+        - comm/taskcluster/comm_taskgraph/
+        - comm/taskcluster/docs/
+        - comm/third_party/
+        - comm/README.md
+    exclude:
+        # Timezones have oddly spelled words that tend to confuse codespell
+        - comm/calendar/locales/en-US/chrome/calendar/timezones.properties
+        - comm/mailnews/extensions/fts3/fts3_porter.c
+    # List of extensions coming from:
+    # tools/lint/{flake8,eslint}.yml
+    # tools/mach_commands.py (clang-format)
+    # + documentation
+    # + localization files
+    extensions:
+        - js
+        - jsm
+        - jxs
+        - mjs
+        - xml
+        - html
+        - xhtml
+        - cpp
+        - c
+        - h
+        - configure
+        - py
+        - properties
+        - rst
+        - md
+        - ftl
+        - rs
+    support-files:
+        - 'tools/lint/spell/**'
+        - 'comm/tools/lint/spell/**'
+    type: external
+    payload: commlint:lint_wrapper
+    wraps: spell:lint

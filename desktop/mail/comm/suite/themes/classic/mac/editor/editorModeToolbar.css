@@ -1,0 +1,76 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@namespace url("http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul");
+
+/* ::::: edit mode toolbar ::::: */
+
+#EditModeToolbar {
+  -moz-box-align: start;
+  min-width: 1px;
+}
+
+#NormalModeButton {
+  list-style-image: url("chrome://editor/skin/icons/editmode-normal.png");
+}
+
+#TagModeButton {
+  list-style-image: url("chrome://editor/skin/icons/editmode-tags.png");
+}
+
+#SourceModeButton {
+  list-style-image: url("chrome://editor/skin/icons/editmode-html.png");
+}
+
+#PreviewModeButton {
+  list-style-image: url("chrome://editor/skin/icons/editmode-preview.png"); 
+}
+
+#EditModeTabs {
+  background-color: rgba(0, 0, 0, 0.1);
+  padding: 0;
+  margin: 0;
+  border-top: 1px solid #888;
+  -moz-box-align: start;
+  font: message-box;
+}
+#EditModeTabs > .tabs-left {
+  -moz-box-flex: 0;
+}
+
+.tab-bottom {
+  -moz-appearance: none;
+  margin: -1px 0 0;
+  padding: 0 0 2px 0;
+  position: relative;
+  border-inline-end: 1px solid rgba(0, 0, 0, 0.19);
+}
+
+.tab-bottom:first-of-type {
+  border-inline-start: 1px solid rgba(0, 0, 0, 0.19);
+}
+
+.tab-bottom > .tab-middle {
+  padding: 1px 2px 0 2px;
+}
+
+.tab-bottom:not([visuallyselected=true]):hover {
+  background-color: rgba(0, 0, 0, 0.1);
+  border-inline-end-color: rgba(0, 0, 0, 0.1);
+}
+
+.tab-bottom[visuallyselected=true] {
+  color: #000;
+  text-shadow: none;
+  border: solid #888;
+  border-width: 0 1px 1px;
+  border-radius: 2px;
+  margin-inline-end: -1px;
+  margin-bottom: 1px;
+  padding: 0;
+}
+
+.tab-bottom[visuallyselected=true] > .tab-middle {
+  -moz-appearance: dialog;
+}

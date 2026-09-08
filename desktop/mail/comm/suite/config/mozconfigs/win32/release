@@ -1,0 +1,24 @@
+TOOLTOOL_DIR=${TOOLTOOL_DIR:-$topsrcdir}
+
+. $TOOLTOOL_DIR/build/mozconfig.win-common
+. $TOOLTOOL_DIR/build/mozconfig.stylo
+. $TOOLTOOL_DIR/build/mozconfig.common
+. $TOOLTOOL_DIR/build/win32/mozconfig.vs-latest
+. $TOOLTOOL_DIR/comm/suite/config/mozconfigs/mozconfig.win.common
+. $TOOLTOOL_DIR/comm/suite/config/mozconfigs/common
+
+ac_add_options --enable-application=comm/suite
+ac_add_options --enable-update-channel=${MOZ_UPDATE_CHANNEL}
+ac_add_options --enable-official-branding
+ac_add_options --enable-jemalloc
+ac_add_options --enable-calendar
+
+# Needed to enable breakpad in application.ini
+export MOZILLA_OFFICIAL=1
+
+# Package js shell
+export MOZ_PACKAGE_JSSHELL=1
+
+# Set up mapi includes (must be done after visual studio setup)
+export INCLUDE=$INCLUDE:/c/Office\ 2010\ Developer\ Resources/Outlook\ 2010\ MAPI\ Headers
+mk_export_correct_style INCLUDE

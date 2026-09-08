@@ -1,0 +1,57 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+# This file requires the following localization files:
+# chrome://lightning/locale/lightning.dtd
+# chrome://calendar/locale/global.dtd
+# chrome://calendar/locale/calendar-event-dialog.dtd
+  <linkset>
+    <html:link rel="localization" href="calendar/preferences.ftl"/>
+    <html:link rel="localization" href="calendar/calendar.ftl"/>
+    <html:link rel="localization" href="calendar/category-dialog.ftl"/>
+    <html:link rel="localization" href="calendar/calendar-alarms.ftl"/>
+  </linkset>
+  <html:template id="paneCalendar"
+                 flex="1"
+                 insertbefore="paneChat">
+
+    <hbox id="calendarPaneCategory"
+          class="subcategory"
+          data-category="paneCalendar">
+      <html:h1 data-l10n-id="calendar-title"></html:h1>
+    </hbox>
+
+#include views.inc.xhtml
+#include general.inc.xhtml
+
+    <hbox id="calendarReminderCategory"
+          class="subcategory"
+          data-category="paneCalendar">
+      <html:h1 data-l10n-id="calendar-title-reminder"></html:h1>
+    </hbox>
+
+#include alarms.inc.xhtml
+
+    <hbox id="calendarNotificationCategory"
+          class="subcategory"
+          data-category="paneCalendar">
+      <html:h1 data-l10n-id="calendar-title-notification"></html:h1>
+    </hbox>
+
+    <html:div data-category="paneCalendar">
+      <html:fieldset data-category="paneCalendar">
+        <calendar-notifications-setting id="calendar-notifications-setting"/>
+        <label data-l10n-id="calendar-notifications-customize-label"
+               class="indent tip-caption"></label>
+      </html:fieldset>
+    </html:div>
+
+    <hbox id="calendarCategoriesCategory"
+          class="subcategory"
+          data-category="paneCalendar">
+      <html:h1 data-l10n-id="calendar-title-category"></html:h1>
+    </hbox>
+
+#include categories.inc.xhtml
+  </html:template>

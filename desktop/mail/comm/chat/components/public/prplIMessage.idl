@@ -1,0 +1,106 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "nsISupports.idl"
+#include "nsIRunnable.idl"
+#include "prplIConversation.idl"
+
+/**
+ * An action that the user may perform in relation to a particular message.
+ */
+[scriptable, uuid(7e470f0e-d948-4d9a-b8dc-4beecf6554b9)]
+interface prplIMessageAction: nsIRunnable
+{
+  /**
+   * The protocol plugins need to provide a localized label suitable
+   * for being shown in the user interface (for example as a context
+   * menu item).
+   */
+  readonly attribute AUTF8String label;
+};
+
+[scriptable, uuid(d6accb66-cdd2-4a91-8854-1156e65d5a43)]
+interface prplIMessage: nsISupports {
+  /**
+   * The uniqueness of the message id is only guaranteed across
+   * messages of a conversation, not across all messages created
+   * during the execution of the application.
+   */
+  readonly attribute unsigned long id;
+  /**
+   * An ID for this message provided by the protocol. Used for finding the
+   * message in the conversation for actions like editing. This is expected to
+   * be absolute per conversation, meaning if two prplIMessages in the same
+   * conversation have identical |remoteId|s they refer to the same message in
+   * the conversation as far as the protocol is concerned.
+   */
+  readonly attribute AUTF8String remoteId;
+  /** The name of the message sender. */
+  readonly attribute AUTF8String who;
+  /** The alias of the message sender (frequently the same as who). */
+  readonly attribute AUTF8String alias;
+  /** The original message, if it was modified, e.g. via OTR. */
+  readonly attribute AUTF8String originalMessage;
+  /** The message that will be sent over the wire. */
+           attribute AUTF8String message;
+  /** An icon to associate with the message sender. */
+  readonly attribute AUTF8String iconURL;
+  /** The time the message was sent, in seconds. */
+  readonly attribute PRTime time;
+  /** The conversation the message was sent to. */
+  readonly attribute prplIConversation conversation;
+
+  /** Outgoing message. */
+  readonly attribute boolean outgoing;
+  /** Incoming message. */
+  readonly attribute boolean incoming;
+  /** System message, i.e. a message from the server or client (not from another user). */
+  readonly attribute boolean system;
+  /** Auto response. */
+  readonly attribute boolean autoResponse;
+  /** Contains your nick, e.g. if you were pinged. */
+  readonly attribute boolean containsNick;
+  /** This message should not be logged. */
+  readonly attribute boolean noLog;
+  /** Error message. */
+  readonly attribute boolean error;
+  /** Delayed message, e.g. it was received from a queue of historical messages on the server. */
+  readonly attribute boolean delayed;
+  /** "Raw" message - don't apply formatting. */
+  readonly attribute boolean noFormat;
+  /** Message contains images. */
+  readonly attribute boolean containsImages;
+  /** Message is a notification. */
+  readonly attribute boolean notification;
+  /** Message should not be auto-linkified. */
+  readonly attribute boolean noLinkification;
+  /** Do not collapse the message. */
+  readonly attribute boolean noCollapse;
+  /** Message is encrypted. */
+  readonly attribute boolean isEncrypted;
+  /** The message should be displayed as an action/emote. */
+  readonly attribute boolean action;
+  /** Message was deleted, this is a placeholder for it */
+  readonly attribute boolean deleted;
+
+  /**
+   * Get an array of actions the user may perform on this message.
+   *
+   * @returns prplIMessageAction[]
+   */
+  Array<prplIMessageAction> getActions();
+
+  /**
+   * Called when the message is first displayed to the user. Only invoked for
+   * the latest message in a conversation.
+   */
+  void whenDisplayed();
+
+  /**
+   * Called when the message has been read by the user, as defined by it being
+   * above the unread marker in the conversation. Only called for the message
+   * immediately above the marker.
+   */
+  void whenRead();
+};

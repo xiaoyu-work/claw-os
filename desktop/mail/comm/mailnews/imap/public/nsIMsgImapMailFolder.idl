@@ -1,0 +1,260 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "ImapTypes.idl"
+#include "nsISupports.idl"
+#include "MailNewsTypes2.idl"
+
+interface nsIMsgFolder;
+interface nsIUTF8StringEnumerator;
+interface nsIUrlListener;
+interface nsIURI;
+interface nsIMsgDBHdr;
+interface nsIMsgWindow;
+interface nsIImapIncomingServer;
+interface nsIMsgParseMailMsgState;
+
+/**
+ * nsIMsgQuota defines the quota for a resource within a quota root.
+ * @see RFC 2087
+ */
+[scriptable, uuid(9db60f97-45c1-45c2-8ab1-395690228f3f)]
+interface nsIMsgQuota : nsISupports {
+  /**
+   * If quota root name not empty, the concatenation of the quota root name
+   * and the resource name separated by a slash , e.g.,
+   * "User Quota / MESSAGE" or with empty quota root name, just resource
+   * name, e.g., "STORAGE".
+   */
+  attribute AUTF8String name;
+
+  /**
+   * Amount of resource in use for this quota root. E.g., number of messages
+   * or storage in KB (1024 octets).
+   */
+
+  attribute unsigned long long usage;
+  /**
+   * Maximum amount of usage permitted by the server for this quota root
+   * resource.
+   */
+  attribute unsigned long long limit;
+};
+
+/**
+ * nsIMsgImapFolderProps is a simple interface which allows the IMAP folder to
+ * update some values that the folder props js code will use to update the
+ *  sharing and quota tabs in the folder properties.
+ */
+[scriptable, uuid(09D99F2C-3E23-4f8c-A536-5C277BAA9585)]
+interface nsIMsgImapFolderProps : nsISupports {
+
+    void setFolderType(in AString folderType);
+    void setFolderTypeDescription(in AString folderTypeDescription);
+    void setFolderPermissions(in AString permissions);
+    void serverDoesntSupportACL();
+
+    /**
+     * Toggles the display of quota information in the Quota tab of the folder properties.
+     * If on, the quota root, usage, and percentage used are displayed.
+     * If off, a status message is displayed. The status message can be set with setQuotaStatus().
+     * @param showData If true, display the quota root, usage information and usage percentage bar.
+     *                 If false, display the status message.
+     */
+    void showQuotaData(in boolean showData);
+
+    /**
+     * Sets the status string displayed in the Quota tab of the folder properties if quota
+     * information is not visible.
+     */
+    void setQuotaStatus(in AString folderQuotaStatus);
+
+    /**
+     * Sets the quota data displayed in the folder properties Quota tab. An
+     * array of quota items is passed in.
+     */
+    void setQuotaData(in Array<nsIMsgQuota> quotaArray);
+};
+
+[scriptable, uuid(fea0f455-7adf-4683-bf2f-c95c3fff03df)]
+interface nsIMsgImapMailFolder : nsISupports {
+  /**
+   * Remove the local version of this folder (used to clean up local folders
+   * which don't correspond to ones on the server).
+   */
+  void removeLocalSelf();
+  void createClientSubfolderInfo(in AUTF8String folderName, in char hierarchyDelimiter,
+                                 in long flags, in boolean suppressNotification);
+  void list();
+  void renameLocal(in AUTF8String newname, in nsIMsgFolder parent);
+  void prepareToRename();
+  void performExpand(in nsIMsgWindow aMsgWindow);
+  void recursiveCloseActiveConnections(in nsIImapIncomingServer aImapServer);
+  void renameClient(in nsIMsgWindow msgWindow, in nsIMsgFolder msgFolder, in AUTF8String oldName, in AUTF8String newName);
+
+  // these are used for offline synchronization
+  void storeImapFlags(in long aFlags, in boolean aAddFlags,
+      in Array<nsMsgKey> aKeysToFlag, in nsIUrlListener aUrlListener);
+  nsIURI setImapFlags(in string uids, in long flags);
+  void replayOfflineMoveCopy(in Array<nsMsgKey> keys, in boolean isMove,
+      in nsIMsgFolder aDstFolder, in nsIUrlListener aUrlListener,
+      in nsIMsgWindow aWindow, in boolean srcFolderOffline);
+  nsIURI playbackOfflineFolderCreate(in AString folderName, in nsIMsgWindow aWindow);
+  /**
+   * This is called by the offline sync code to tell the imap folder to
+   * remember info about the header with this key (messageId and key) because
+   * it's an offline move result header, and we need to generate an
+   * nsIMsgFolderListener.msgKeyChanged notification when we download the
+   * real header from the imap server.
+   *
+   * @param aMsgKey msg key of move result pseudo hdr.
+   */
+  void addMoveResultPseudoKey(in nsMsgKey aMsgKey);
+
+  /**
+   * @returns true if there are pseudo operations waiting.
+   */
+  boolean hasPseudoActivity();
+
+  /**
+   * Select this folder on the imap server without doing a sync of flags or
+   * headers. This is used for offline playback, where we don't want to
+   * download hdrs we don't have, because they may have been offline deleted.
+   *
+   * @param aUrlListener        url listener, can be null
+   * @param aWindow          msg window url is running in, can be null
+   */
+  void liteSelect(in nsIUrlListener aUrlListener, in nsIMsgWindow aWindow);
+
+  void fillInFolderProps(in nsIMsgImapFolderProps aFolderProps);
+  void resetNamespaceReferences();
+  nsIMsgImapMailFolder findOnlineSubFolder(in AUTF8String onlineName);
+  void addFolderRights(in ACString userName, in ACString rights);
+  void refreshFolderRights();
+
+  /**
+   * Mark/unmark the header as pending removal from the offline store. If mark,
+   * this also increases the expungedBytes count on the folder so we know
+   * there's more local disk space to be reclaimed.
+   *
+   * @param aHdr     msg hdr to mark pending removal from offline store.
+   * @param aMark    whether to set or clear the pending removal status.
+   *
+   */
+  void markPendingRemoval(in nsIMsgDBHdr aHdr, in boolean aMark);
+
+  /**
+   * Issue an expunge of this folder to the imap server.
+   *
+   * @param aUrlListener     url listener, can be null
+   * @param aWindow          msg window url is running in, can be null
+   *
+   * @returns                status of attempt to run url.
+   */
+  void expunge(in nsIUrlListener aListener, in nsIMsgWindow aMsgWindow);
+
+  void updateStatus(in nsIUrlListener aListener, in nsIMsgWindow aMsgWindow);
+  void updateFolderWithListener(in nsIMsgWindow aMsgWindow, in nsIUrlListener aListener);
+  // this is used to issue an arbitrary imap command on the passed in msgs.
+  // It assumes the command needs to be run in the selected state.
+  nsIURI issueCommandOnMsgs(in ACString command, in string uids, in nsIMsgWindow aWindow);
+  nsIURI fetchCustomMsgAttribute(in ACString msgAttribute, in string uids, in nsIMsgWindow aWindow);
+  nsIURI storeCustomKeywords(in nsIMsgWindow aMsgWindow,
+                      in ACString aFlagsToAdd,
+                      in ACString aFlagsToSubtract,
+                      in Array<nsMsgKey> aKeysToStore);
+
+  void notifyIfNewMail();
+
+  void initiateAutoSync(in nsIUrlListener aUrlListener);
+
+  /**
+   * Is this folder the [Gmail] (or [Google Mail] in some cases) IMAP folder?
+   */
+  readonly attribute boolean isGmailFolder;
+
+  attribute boolean verifiedAsOnlineFolder;
+  attribute boolean explicitlyVerify;
+  attribute char hierarchyDelimiter;
+  attribute long boxFlags;
+  /**
+   * onlineName is the IMAP name of the mailbox that this folder represents.
+   * It's a path with components separated by hierarchyDelimiter.
+   * For example, "INBOX/bar/wibble", "INBOX.bar.wibble", etc...
+   */
+  attribute AUTF8String onlineName;
+  attribute boolean isNamespace;
+  readonly attribute boolean canOpenFolder;
+  attribute AUTF8String adminUrl;
+  readonly attribute boolean hasAdminUrl;
+  attribute boolean performingBiff;
+  readonly attribute nsIImapIncomingServer imapIncomingServer;
+  readonly attribute boolean shouldUseUtf8FolderName;
+  /**
+   * @{
+   * These are used to access the response to the STATUS or SELECT command.
+   * The counts include deleted messages, or headers we haven't downloaded yet.
+   */
+  readonly attribute long serverTotal;
+  readonly attribute long serverUnseen;
+  readonly attribute long serverRecent;
+  readonly attribute ImapUid serverNextUID;
+  /** @} */
+
+  /**
+   * Return an array of quota items of type nsIMsgQuota defined above.
+   * A not-empty array indicates that the server has provided one or more
+   * sets of quota information on this folder. The array will be empty
+   * - if the server does not supports quotas,
+   * - if there are no resource quotas on this folder, or
+   * - if the folder has yet to be opened (selected) by the user.
+   */
+  Array<nsIMsgQuota> getQuota();
+
+  /**
+   * List all (human) users apart from the current user who have access to
+   * this folder.
+   *
+   * You can find out which rights they have with getRightsForUser().
+   */
+  Array<AUTF8String> getOtherUsersWithAccess();
+
+  /**
+   * Which access rights a certain user has for this folder.
+   *
+   * @return list of flags
+   * e.g. "lrswipcd" for write access and "lrs" for read only access.
+   *
+   * See RFC 2086 (e.g. Cyrus) and RFC 4314 (e.g. dovecot)
+   *
+   * l = locate = visible in folder list
+   * r = read = list mails, get/read mail contents
+   * s = set seen flag = mark read. Does not affect other users.
+   * d (or t) = delete mails
+   * w = write = change (other) flags of existing mails
+   * i = insert = add mails to this folder
+   * p = post = send mail directly to the submission address for folder
+   * c (or k) = create subfolders
+   * (e = expunge = compress)
+   * (x = delete folder)
+   * a = admin = change permissions
+   */
+  ACString getPermissionsForUser(in ACString username);
+
+  /**
+   * Change the number of "pending" messages in a folder,
+   *  messages we know about, but don't have the headers for yet
+   *
+   * @param aDelta amount to change total by.
+   */
+  void changePendingTotal(in long aDelta);
+
+  /**
+   * Change the number of "pending" unread messages in a folder,
+   * unread messages we know about, but don't have the headers for yet
+   *
+   * @param aDelta amount to change the unread count by.
+   */
+  void changePendingUnread(in long aDelta);
+};

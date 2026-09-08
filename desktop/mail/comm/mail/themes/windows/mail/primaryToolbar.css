@@ -1,0 +1,17 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@import url("chrome://messenger/skin/shared/primaryToolbar.css");
+
+.mail-toolbox::after,
+.contentTabToolbox::after {
+  content: "";
+  display: flex;
+  block-size: 1px;
+  border-block-end: 1px solid var(--chrome-content-separator-color);
+}
+
+.mail-toolbox > toolbar:not([type="menubar"]) {
+  padding: 1px;
+}

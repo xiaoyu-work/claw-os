@@ -1,0 +1,50 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "nsIAutoCompleteResult.idl"
+
+interface nsIAbCard;
+interface nsIAbDirectory;
+
+/**
+ * This interface is used to extend the nsIAutoCompleteResult interface to
+ * provide extra facilities for obtaining more details of the results of
+ * an address book search.
+ */
+[scriptable, uuid(c0d35623-f719-4e43-ae24-573e393f87f9)]
+interface nsIAbAutoCompleteResult : nsIAutoCompleteResult {
+  /**
+   * Get the card from the result at the given index
+   */
+  nsIAbCard getCardAt(in long index);
+
+  /**
+   * Gets the email to use for the card within the result at the given index.
+   * This is the email that was matched against for the card where there are
+   * multiple email addresses on a card.
+   *
+   * @param index  Index of the autocomplete result to return the value for.
+   * @result       The email address to use from the card.
+   */
+  AString getEmailToUse(in long index);
+
+  /**
+   * Indicates whether the source that returned this result returned a
+   * complete result for the query. If true, refining the search will not
+   * trigger a new query, instead simply filtering the previous results.
+   * If false, the directory will be present in asyncDirectories.
+   */
+  boolean isCompleteResult(in long index);
+
+  /**
+   * The template used to build the query for this search. Optional.
+   */
+  attribute AString modelQuery;
+
+  /**
+   * Asynchronous address books that were unable to return full results.
+   * This means that they need to be required rather than simply filtered.
+   */
+  attribute Array<nsIAbDirectory> asyncDirectories;
+};

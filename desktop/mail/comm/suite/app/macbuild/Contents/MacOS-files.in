@@ -1,0 +1,11 @@
+/*.app/***
+/certutil
+/seamonkey-bin
+#if defined(MOZ_CRASHREPORTER)
+/minidump-analyzer
+#endif
+/pingsender
+/pk12util
+/ssltunnel
+/xpcshell
+/XUL

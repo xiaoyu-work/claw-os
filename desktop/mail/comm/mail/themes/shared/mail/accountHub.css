@@ -1,0 +1,948 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@import url("chrome://global/skin/menu.css");
+@import url("chrome://global/skin/in-content/common.css");
+@import url("chrome://messenger/skin/widgets.css");
+@import url("chrome://messenger/skin/inContentDialog.css");
+@import url("chrome://messenger/skin/accountHubForms.css");
+
+/* `:root` is needed to make styles work in tests, but will not work for the
+ * application because some elements are within the shadow dom. */
+:root,
+dialog {
+  --hub-button-color: light-dark(var(--color-gray-90), var(--color-gray-05));
+  --hub-button-background: light-dark(var(--color-white), var(--color-gray-90));
+  --hub-account-button-background: light-dark(transparent, var(--color-gray-70));
+  --hub-account-button-background-hover: light-dark(var(--color-ink-10), var(--color-gray-80));
+  --hub-account-button-background-hover-active: light-dark(var(--color-gray-10), var(--color-gray-90));
+  --hub-account-button-border-color: light-dark(var(--color-gray-30), var(--color-gray-60));
+  --hub-account-primary-button-color: var(--color-surface-base);
+  --hub-account-primary-button-background: var(--color-primary-default);
+  --hub-account-primary-button-background-hover: var(--color-primary-hover);
+  --hub-account-primary-button-background-active: var(--color-primary-pressed);
+  --hub-account-primary-button-background-focus: var(--color-primary-hover);
+  --hub-account-primary-button-border: var(--color-primary-hover);
+  --hub-account-primary-button-border-active: var(--color-primary-pressed);
+  --hub-account-secondary-button-color: light-dark(#18181b, #eeeef0);
+  --hub-account-secondary-button-background: var(--color-surface-subtle);
+  /* TODO: Update to use proper defined light-dark varients from colors.css */
+  --hub-account-secondary-button-background-hover: light-dark(var(--color-surface-subtle), var(--color-surface-base));
+  --hub-account-secondary-button-background-active: light-dark(var(--color-surface-border), var(--color-surface-lower));
+  --hub-account-secondary-button-background-focus: light-dark(var(--color-surface-subtle), var(--color-surface-base));
+  --hub-account-secondary-button-border: var(--color-surface-border);
+  --hub-account-secondary-button-border-active: var(--color-surface-border-intense);
+  --hub-account-button-outline-focus: var(--color-primary-hover);
+  --hub-account-button-hover-active-color: light-dark(var(--color-surface-border), var(--color-surface-lower));
+  --hub-border-color: light-dark(var(--color-primary-soft), var(--color-primary-default));
+  --hub-divider-color: var(--color-surface-base);
+  --hub-loader-background: var(--color-surface-base);
+  --hub-loader-color: var(--color-primary-default);
+  --hub-floating-button-line-height: 1.3em;
+  --hub-width: 500px;
+  --hub-manual-config-gap: calc(calc(4 * var(--space-step)) + var(--hub-input-error-message-font-size));
+
+  --hub-input-height: 33px;
+  --hub-input-border-radius: 3px;
+  --hub-input-border-color: color-mix(in srgb, currentColor 50%, transparent);
+  --hub-input-error-message-font-size: 0.846rem;
+  --hub-close-button-color: light-dark(#18181b, #eeeef0);
+  --hub-close-button-hover-background: var(--color-surface-subtle);
+  --hub-close-button-active-background: var(--color-text-muted);
+  --hub-close-button-focus-background: var(--color-surface-subtle);
+  --hub-close-button-focus-outline-color: var(--color-surface-border-intense);
+
+  --success-illustration: var(--hub-success-illustration);
+  /* TODO: apply dark mode styling */
+}
+
+@media (prefers-color-scheme: dark) {
+  :host {
+    --success-illustration: var(--hub-success-illustration-dark);
+  }
+}
+
+@media (prefers-contrast) {
+  dialog {
+    --hub-button-color: currentColor;
+    --hub-button-background: transparent;
+    --hub-account-button-background: transparent;
+    --hub-account-button-background-hover: transparent;
+    --hub-account-button-background-hover-active: transparent;
+    --hub-account-button-border-color: AccentColor;
+  }
+}
+
+/* Dialog container */
+
+.account-hub-dialog {
+  display: grid;
+  inline-size: 800px;
+  min-block-size: 600px;
+  overflow: initial;
+  padding: 0;
+  box-shadow: none;
+
+  &::after {
+    --hub-blur-radius: 15px;
+    content: "";
+    position: absolute;
+    inset-block-end: -2px;
+    inset-inline: calc(2 * var(--hub-blur-radius) + 5px);
+    min-block-size: calc(3 * var(--hub-blur-radius));
+    background: linear-gradient(to right, rgba(159, 244, 240, 1), rgba(76, 177, 249, 1), rgba(168, 85, 247, 1));
+    filter: blur(var(--hub-blur-radius));
+    z-index: -1;
+  }
+
+  &.account-hub-first-run::backdrop {
+    background: rgba(0, 0, 0, 0.75);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    &::after {
+      background: linear-gradient(to right, rgb(11, 140, 134, 1), rgba(28, 99, 149, 1));
+    }
+  }
+
+  &.minimized .account-hub-view {
+    display: none;
+  }
+}
+
+#accountHubPlaceholder:not([hidden]) {
+  position: absolute;
+  z-index: 9;
+  inset-inline-end: 9px;
+  inset-block-end: 9px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 15px;
+  border: 1px solid var(--selected-item-color);
+  border-radius: var(--button-border-radius);
+  color: var(--layout-color-2);
+  background-color: var(--layout-background-1);
+  box-shadow: 0 2px 4px rgba(58, 57, 68, 0.3);
+
+  & span {
+    font-size: 1.15rem;
+    font-weight: 400;
+  }
+
+  &:hover {
+    background-color: var(--layout-background-2);
+    color: var(--selected-item-color);
+
+    &:active {
+      background-color: var(--layout-background-3);
+    }
+  }
+
+  @media (prefers-contrast) {
+    &:hover,
+    &:hover:active {
+      background-color: SelectedItem;
+      color: SelectedItemText;
+    }
+  }
+}
+
+.account-hub-view:not([hidden]) {
+  display: grid;
+  grid-template: "header" min-content "body" 1fr "footer" min-content;
+  text-align: center;
+  z-index: 1;
+}
+
+.account-hub-step {
+  grid-area: body;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: var(--hub-header-body-gap);
+}
+
+.account-hub-form,
+.account-hub-success-container,
+.account-hub-address-book-form {
+  max-block-size: 40vh;
+  display: flex;
+  flex-direction: column;
+  block-size: 100%;
+  overflow-y: auto;
+  justify-content: space-around;
+  padding-block-end: 2px;
+}
+
+.account-hub-address-book-form {
+  justify-content: start;
+}
+
+.account-hub-view:not([hidden]) {
+  max-block-size: 90vh;
+  padding-inline: 20px;
+  padding-block-start: 40px;
+  border-radius: inherit;
+  border: 1px solid var(--hub-border-color);
+  /* Background color to better hide loading of the webp (>=100ms) */
+  background-color: var(--color-surface-base);
+  background-image: light-dark(url("chrome://messenger/skin/images/accounthub-bg-light.webp"), url("chrome://messenger/skin/images/accounthub-bg-dark.webp"));
+  background-position: center center;
+  background-repeat: no-repeat;
+  background-size: cover;
+
+  &.busy {
+    cursor: wait;
+  }
+
+  #loadingOverlay {
+    display: none;
+    opacity: 0;
+  }
+
+  &.spinner #loadingOverlay {
+    display: grid;
+    position: absolute;
+    inset: 0;
+    place-items: center;
+    background-color: var(--hub-loader-background);
+    opacity: 0.8;
+    z-index: 2;
+    border-radius: inherit;
+
+    @media (prefers-reduced-motion: no-preference) {
+      animation: 0.5s linear 0s hub-reveal-loader;
+    }
+  }
+}
+
+@keyframes hub-reveal-loader {
+  0% {
+    display: none;
+    opacity: 0;
+  }
+
+  1% {
+    display: grid;
+    opacity: 0;
+  }
+
+  100% {
+    opacity: 0.8;
+  }
+}
+
+@keyframes hub-loader-loading {
+  from {
+    rotate: 0deg;
+  }
+  to {
+    rotate: 360deg;
+  }
+}
+
+.loader-outside {
+  --hub-loader-width: 8px;
+  --hub-loader-size: 64px;
+  --hub-trail-offset: 360deg;
+
+  position: relative;
+  block-size: var(--hub-loader-size);
+  aspect-ratio: 1;
+  background-image: conic-gradient(from 0deg, transparent 0deg, var(--hub-loader-color) 360deg, transparent var(--hub-trail-offset));
+  border-radius: 50%;
+  pointer-events: none;
+
+  @media (prefers-reduced-motion: no-preference) {
+    animation: 1.1s cubic-bezier(0.61, 0.12, 0, 0.99) 0s infinite hub-loader-loading;
+  }
+
+  &::before {
+    content: "";
+    position: absolute;
+    inset: var(--hub-loader-width);
+    block-size: calc(var(--hub-loader-size) - 2 * var(--hub-loader-width));
+    aspect-ratio: 1;
+    background: var(--hub-loader-background);
+    border-radius: 50%;
+  }
+
+  .loader-inside {
+    position: absolute;
+    inset: 0;
+    aspect-ratio: 1;
+    border-radius: 50%;
+
+    &::before {
+      content: "";
+      position: absolute;
+      block-size: var(--hub-loader-width);
+      aspect-ratio: 1;
+      border-radius: 50%;
+      background: var(--hub-loader-color);
+      inset-block-start: 0;
+      inset-inline: calc(50% - var(--hub-loader-width) / 2);
+    }
+  }
+}
+
+/* Header */
+
+header {
+  position: relative;
+  font-weight: 300;
+  font-size: 1.8rem;
+  line-height: 1em;
+  margin-block: 0;
+  z-index: 3;
+
+  & .sub-view-title {
+    font-size: 1.7rem;
+    font-weight: 400;
+    margin-block: var(--hub-header-margin-block-start) 0;
+    color: var(--color-text-base);
+  }
+
+  & .sub-view-sub-header {
+    font-size: 1rem;
+    font-weight: 700;
+    margin-block: var(--hub-subheader-margin-block-start) 0;
+    color: var(--color-primary-pressed);
+  }
+}
+
+.branding-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: center;
+  gap: 11px;
+
+  h1 {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    margin-block: 0 2px;
+    align-self: center;
+  }
+}
+
+#headerButtonsContainer:not([hidden]) {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  position: absolute;
+  inset-inline-end: -5px;
+  inset-block-start: -25px;
+  z-index: 3;
+}
+
+#welcomeHeader > img {
+  inline-size: 90px;
+  block-size: 90px;
+}
+
+#brandingHeader > img {
+  inline-size: 45px;
+  block-size: 45px;
+}
+
+#brandingHeader .branding-header-name {
+  font-size: 1.3rem;
+  font-weight: 500;
+  padding-block-end: 2px;
+}
+
+#brandingHeader .branding-header-title {
+  font-size: 2.8rem;
+  font-weight: 200;
+  letter-spacing: 1px;
+}
+
+.account-hub-first-run {
+  &#brandingHeader {
+    & h1 {
+      align-self: center;
+    }
+
+    & > img {
+      align-self: center;
+      inline-size: 65px;
+      block-size: 65px;
+    }
+
+    & .branding-header-title {
+      font-size: 3.7rem;
+      font-weight: 300;
+      line-height: 100%;
+    }
+
+    & .branding-header-name {
+      font-size: 1rem;
+      font-weight: 400;
+    }
+  }
+}
+
+#welcomeHeader h1 {
+  font-size: 1.4rem;
+  gap: 12px;
+}
+
+#welcomeHeader h1 > span {
+  font-size: 2.5rem;
+}
+
+#welcomeHeader h1 > span > small {
+  font-size: 1rem;
+  font-weight: 400;
+}
+
+.hub-header {
+  grid-area: header;
+}
+
+/* Body */
+
+.hub-body {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  place-self: center;
+  gap: var(--hub-body-elements-column-gap);
+  inline-size: 100%;
+  max-inline-size: var(--hub-width);
+  text-align: start;
+  margin-inline: 0;
+
+  &.flex-direction-row {
+    flex-direction: row;
+  }
+
+  &.auto-config-body {
+    max-inline-size: 750px;
+  }
+
+  &.manual-form-body {
+    gap: 20px;
+
+    & .form-row {
+      display: grid;
+      grid-template-columns: 115px 1fr;
+      gap: 10px;
+
+      .stacked & {
+        grid-template-columns: 1fr;
+      }
+
+      &.responsive-row {
+        grid-template-columns: auto 1fr;
+
+        .stacked & {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      & .expanded {
+        flex: 1;
+      }
+    }
+  }
+
+  &.manual-config-body {
+    gap: calc(8 * var(--space-step));
+    padding-block: calc(3 * var(--space-step));
+  }
+
+  &.hub-form-grid {
+    gap: 18px;
+    --hub-width: 530px;
+    display: grid;
+    grid-template: repeat(3, auto 1fr) auto / repeat(4, 1fr);
+
+    &.advanced {
+      grid-template-rows: repeat(4, auto 1fr);
+    }
+
+    .stacked & {
+      grid-template: repeat(6, auto 1fr) auto / repeat(2, 1fr);
+
+      &.advanced {
+        grid-template-rows: repeat(11, auto 1fr);
+      }
+    }
+
+    & .input-cell {
+      display: grid;
+      grid-template-rows: subgrid;
+      grid-row: span 2;
+      gap: 3px;
+
+      &.select-row {
+        --account-hub-select-margin: 3px;
+        grid-template-rows: none;
+      }
+
+      &:not(.narrow),
+      .stacked & {
+        grid-column: span 2;
+      }
+
+      &.full:not(.stacked &) {
+        grid-column: span 4;
+      }
+
+      & .toggle-group {
+        grid-row: 2;
+
+        .stacked & {
+          grid-row: span 2;
+        }
+      }
+
+      &.expanded:not(.stacked &) {
+        grid-column: span 3;
+      }
+
+      & .input-field {
+        inline-size: 100%;
+      }
+    }
+
+    &:not(.advanced) .advanced-input,
+    &:not(.advanced) #simpleConfigurationLdap,
+    &.advanced #advancedConfigurationLdap {
+      display: none;
+    }
+
+    & .align-self-end {
+      grid-column: 1 / -1;
+      justify-self: end;
+    }
+  }
+
+  &.email-form-body {
+    position: relative;
+  }
+
+  &.password-form-body,
+  &.email-form-body,
+  &.option-select-body,
+  &.remote-ab-form-body {
+    max-inline-size: 400px;
+  }
+
+  &.account-select-body,
+  &.credentials-confirmation-body {
+    max-inline-size: 500px;
+  }
+
+  &.sync-accounts-form-body {
+    & .sync-accounts-container {
+      inline-size: 100%;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 15px;
+    }
+
+    .stacked & .sync-accounts-container {
+      grid-template-columns: 1fr;
+    }
+
+    .stacked & .sync-type-container {
+      block-size: auto;
+    }
+  }
+
+  &.option-select-body,
+  &.account-select-body {
+    gap: var(--hub-address-book-option-select-gap);
+  }
+
+  &.remote-ab-form-body {
+    gap: var(--hub-address-book-remote-form-gap);
+  }
+}
+
+.hub-body-column {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  border-inline-end: 1px solid var(--hub-account-button-border-color);
+  overflow-y: auto;
+  margin-block: 20px;
+  padding-inline: 20px;
+}
+
+.hub-body-grid {
+  display: flex;
+  gap: 21px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.button-account {
+  inline-size: 170px;
+  min-block-size: 93px;
+  font-size: 1.2rem;
+  font-weight: normal;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  margin: 0;
+  padding: 12px;
+  color: var(--hub-button-color);
+  background-color: var(--hub-account-button-background);
+  border: 1px solid var(--hub-account-button-border-color);
+  box-shadow:
+    0 4px 6px -6px rgba(0, 0, 0, 0.3),
+    inset 0 0 0 transparent;
+}
+
+.button-account:hover {
+  color: var(--hub-button-color) !important;
+  background-color: var(--hub-account-button-background-hover) !important;
+  box-shadow:
+    0 8px 12px -8px rgba(0, 0, 0, 0.3),
+    inset 0 0 0 transparent;
+}
+
+.button-account:hover:active {
+  color: var(--hub-button-color) !important;
+  background-color: var(--hub-account-button-background-hover-active) !important;
+  box-shadow:
+    0 0 0 transparent,
+    inset 0 4px 6px -2px rgba(0, 0, 0, 0.4);
+}
+
+.button-account::before {
+  display: block;
+  content: "";
+  inline-size: 24px;
+  block-size: 24px;
+  -moz-context-properties: fill, stroke;
+  fill: color-mix(in srgb, var(--primary) 10%, transparent);
+  stroke: var(--primary);
+  background-size: 24px;
+  background-repeat: no-repeat;
+  background-position: center;
+}
+
+#emailButton::before {
+  background-image: var(--icon-mail-lg);
+}
+
+#newEmailButton::before {
+  background-image: var(--icon-new-mail);
+}
+
+#calendarButton::before {
+  background-image: var(--icon-calendar-lg);
+}
+
+#addressBookButton::before {
+  background-image: var(--icon-address-book-lg);
+}
+
+#chatButton::before {
+  background-image: var(--icon-chat-lg);
+}
+
+#feedButton::before {
+  background-image: var(--icon-rss);
+}
+
+#newsgroupButton::before {
+  background-image: var(--icon-newsletter);
+}
+
+#importButton::before {
+  background-image: var(--icon-import-lg);
+}
+
+#hubLoader {
+  inline-size: 16px;
+  min-block-size: 16px;
+  vertical-align: middle;
+  content: url("chrome://messenger/skin/icons/spinning.svg");
+  -moz-context-properties: fill;
+  fill: var(--selected-item-color);
+}
+
+#hubSyncButton {
+  align-self: center;
+  position: relative;
+  padding: 9px 12px;
+  font-weight: normal;
+  font-size: 1.2rem;
+  line-height: 1;
+  border: none;
+  color: var(--hub-button-color);
+  background-color: var(--hub-button-background);
+}
+
+#hubSyncButton:hover {
+  color: var(--hub-button-color);
+  background-color: var(--hub-account-button-background-hover);
+}
+
+#hubSyncButton::before {
+  content: var(--icon-account-sync);
+  display: inline-block;
+  margin-inline-end: 12px;
+  vertical-align: middle;
+}
+
+#hubSyncButton::after {
+  content: "";
+  position: absolute;
+  background: var(--color-blue-50);
+  background-image: linear-gradient(127deg, var(--color-teal-50), var(--color-magenta-50));
+  inset: -2px;
+  border-radius: 8px;
+  filter: blur(10px);
+  opacity: 0.6;
+  z-index: -1;
+  transform: scale(0.95) translateY(5px);
+}
+
+#hubSyncButton:hover::after {
+  transform: scale(0.85) translateY(8px);
+  filter: blur(15px);
+}
+
+#hubSyncButton:hover:active::after {
+  transform: scale(1) translateY(0);
+  filter: blur(3px);
+}
+
+.button {
+  &.button-sm {
+    padding: 4px 9px;
+    font-size: 0.8rem;
+    min-inline-size: auto;
+    min-block-size: auto;
+    text-transform: uppercase;
+    font-weight: bold;
+    line-height: var(--hub-floating-button-line-height);
+  }
+
+  &.secondary-button {
+    background-color: var(--hub-account-secondary-button-background);
+    color: var(--hub-account-secondary-button-color);
+    border-color: var(--hub-account-secondary-button-border);
+    box-shadow: 0 6px 3px -4px rgba(0, 0, 0, 0.1);
+    margin-inline-end: 15px;
+
+    &:hover {
+      background-color: var(--hub-account-secondary-button-background-hover);
+      color: var(--hub-account-secondary-button-color);
+      border-color: var(--hub-account-secondary-button-border);
+      box-shadow: 0 4px 2px -3px rgba(0, 0, 0, 0.1);
+
+      &:active {
+        background-color: var(--hub-account-secondary-button-background-active);
+        color: var(--hub-account-secondary-button-color);
+        border-color: var(--hub-account-secondary-button-border-active);
+        box-shadow: none;
+      }
+    }
+
+    &:active {
+      background-color: var(--hub-account-secondary-button-background-active);
+      color: var(--hub-account-secondary-button-color);
+      border-color: var(--hub-account-secondary-button-border-active);
+      box-shadow: none;
+    }
+
+    &:focus-visible {
+      outline: var(--focus-outline);
+      outline-offset: var(--focus-outline-offset);
+    }
+  }
+}
+
+.account-hub-form-small-comment {
+  display: inline-block;
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+  margin-block-end: 1rem;
+}
+
+/* Footer */
+
+.hub-footer {
+  grid-area: footer;
+
+  & .center-column {
+    justify-content: center;
+  }
+
+  & hr {
+    border: none;
+    block-size: 1px;
+    margin-block-start: var(--hub-footer-margin-block);
+    background: linear-gradient(to right, transparent, var(--color-surface-border), transparent);
+    color: transparent;
+  }
+
+  & .footer-button {
+    font-size: 1.1rem;
+    min-inline-size: 128px;
+    padding: 10px 25px;
+    text-align: center;
+  }
+
+  .busy & {
+    z-index: 3;
+  }
+}
+
+.footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 9px;
+  justify-content: center;
+  align-items: center;
+  margin-block: var(--hub-footer-margin-block);
+
+  & li {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+
+    &:not([hidden]) ~ li:not([hidden])::before {
+      content: "";
+      inline-size: 2px;
+      block-size: 2px;
+      border-radius: 2px;
+      background-color: var(--color-text-muted);
+    }
+  }
+
+  & li > a {
+    font-size: 1.1rem;
+    text-decoration: none;
+    letter-spacing: 0.2px;
+    font-weight: 300;
+    color: var(--link-color);
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+}
+
+/* Success page */
+.account-hub-success-container {
+  align-items: center;
+
+  & .account-hub-success-illustration {
+    background-image: var(--success-illustration);
+    background-size: cover;
+    inline-size: var(--hub-success-hub-illustration-width);
+    block-size: var(--hub-success-hub-illustration-height);
+  }
+
+  & .account-hub-success-links-title {
+    font-size: 1.2rem;
+    font-weight: bold;
+    margin-block-start: var(--hub-success-link-title-margin-block-start);
+  }
+
+  & .account-hub-link-container {
+    display: flex;
+    flex-direction: column;
+    font-size: 1.1rem;
+    margin-block-start: var(--hub-success-link-container-margin-block-start);
+
+    & button {
+      text-decoration: underline;
+      font-weight: normal;
+      margin: 0;
+    }
+  }
+}
+
+.account-hub-thundermail-header {
+  margin-block-start: 53px;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(var(--space-base) * 2);
+
+  & button {
+    border-radius: 3px;
+    background: transparent;
+    border: 1px solid var(--color-primary-default);
+    display: inline-flex;
+    padding: calc(var(--space-base) + var(--space-step)) calc(var(--space-base) * 2);
+    align-items: center;
+    gap: var(--space-base);
+    color: var(--color-primary-default);
+    font-size: 1.153rem;
+    font-weight: 500;
+
+    & img {
+      block-size: 20px;
+      inline-size: 20px;
+      content: var(--icon-thundermail-lg);
+    }
+  }
+
+  & .account-hub-thundermail-divider {
+    color: var(--color-text-secondary);
+    text-align: center;
+    font-size: 0.923rem;
+    font-weight: 400;
+    line-height: 100%;
+
+    &::before,
+    &::after {
+      content: "";
+      background: var(--color-surface-border);
+      inline-size: 38px;
+      block-size: 1px;
+      display: inline-block;
+      vertical-align: middle;
+    }
+  }
+}
+
+/* stylelint-disable-next-line media-query-no-invalid */
+@media -moz-pref("mail.accounthub.thundermail.enabled") {
+  .account-hub-thundermail-header {
+    display: flex;
+  }
+}
+
+/* Animations */
+
+@media (prefers-reduced-motion: no-preference) {
+  .button-account {
+    transition:
+      background 220ms ease,
+      box-shadow 200ms ease;
+  }
+
+  #hubSyncButton {
+    transition: background 220ms ease;
+  }
+
+  #hubSyncButton::after {
+    transition:
+      transform 200ms ease,
+      filter 200ms ease;
+  }
+}
+
+/* stylelint-disable-next-line media-query-no-invalid */
+@media not -moz-pref("mail.graph.enabled") {
+  #incomingProtocol::part(option incomingProtocolGraph) {
+    display: none;
+  }
+}

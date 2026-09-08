@@ -1,0 +1,563 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "nsISupports.idl"
+#include "MailNewsTypes2.idl"
+
+interface IOAuth2CustomDetails;
+interface nsIMsgFolder;
+interface nsIMsgFolderCache;
+interface nsIMsgWindow;
+interface nsIMsgProtocolInfo;
+interface nsIMsgFilterList;
+interface nsIMsgRetentionSettings;
+interface nsIMsgDownloadSettings;
+interface nsISpamSettings;
+interface nsIMsgFilterPlugin;
+interface nsIUrlListener;
+interface nsIMsgDBHdr;
+interface nsIFile;
+interface nsIURI;
+interface nsIMsgPluggableStore;
+
+/**
+ * Interface for incoming mail/news host
+ * this is the base interface for all mail server types (imap, pop, nntp, etc)
+ * often you will want to add extra interfaces that give you server-specific
+ * attributes and methods.
+ */
+[scriptable, uuid(aa9a3389-9dac-41f1-9ec5-18287cfaa47c)]
+interface nsIMsgIncomingServer : nsISupports {
+
+  /**
+   * internal pref key - guaranteed to be unique across all servers
+   */
+  attribute ACString key;
+
+  /**
+   * A unique identifier for this server that can be used for the same
+   * server synced across multiple profiles. Auto-generated on first use.
+   */
+  attribute AUTF8String UID;
+
+  /**
+   * pretty name - should be "userid on hostname"
+   * if the pref is not set
+   */
+  attribute AUTF8String prettyName;
+
+  /**
+  * helper function to construct the pretty name in a server type
+  * specific way - e.g., mail for foo@test.com, news on news.mozilla.org
+  */
+  readonly attribute AUTF8String constructedPrettyName;
+
+  /**
+   * hostname of the server
+   */
+  attribute AUTF8String hostname;
+
+  /* port of the server */
+  attribute long port;
+
+  /**
+   * userid to log into the server
+   */
+  attribute AUTF8String username;
+
+  /**
+   * protocol type, i.e. "pop3", "imap", "nntp", "none", etc
+   * used to construct URLs
+   */
+  attribute AUTF8String type;
+
+  /**
+   * The CLIENTID to use for this server.
+   * @see https://tools.ietf.org/html/draft-yu-imap-client-id-01
+   */
+  attribute AUTF8String clientid;
+
+  /**
+   * Whether the CLIENTID feature above is enabled.
+   */
+  attribute boolean clientidEnabled;
+
+  /**
+   * The proper instance of nsIMsgProtocolInfo corresponding to this server type.
+   */
+  readonly attribute nsIMsgProtocolInfo protocolInfo;
+
+  readonly attribute AString accountManagerChrome;
+
+  /**
+   * The schema for the local mail store, such as "mailbox", "imap", or "news"
+   * used to construct URIs. The contractID for the nsIMsgMessageService
+   * implementation that will manage access to messages associated with this
+   * server is constructed using this type.
+   */
+  readonly attribute ACString localStoreType;
+
+  /**
+   * The schema for the nsIMsgDatabase implementation, such as "mailbox" or
+   * "imap", that will be used to construct the database instance used by
+   * message folders associated with this server.
+   */
+  readonly attribute ACString localDatabaseType;
+
+  // Perform specific tasks (reset flags, remove files, etc) for account user/server name changes.
+  void onUserOrHostNameChanged(in AUTF8String oldName, in AUTF8String newName,
+                               in boolean hostnameChanged);
+
+  /// cleartext utf16 version of the password
+  attribute AString password;
+
+  /**
+   * Attempts to get the password first from the password manager, if that
+   * fails it will attempt to get it from the user.
+   *
+   * Native (C++/Rust) consumers may use the method's return value as input to
+   * prefill the password prompt with.
+   *
+   * @param aPromptString The text of the prompt if the user is prompted for
+   *                      password.
+   * @param aPromptTitle  The title of the prompt if the user is prompted.
+   * @return              The obtained password. Could be an empty password.
+   *
+   * @exception NS_ERROR_FAILURE  The password could not be obtained.
+   *
+   * @note NS_MSG_PASSWORD_PROMPT_CANCELLED is a success code that is returned
+   *       if the prompt was presented to the user but the user cancelled the
+   *       prompt.
+   */
+  AString getPasswordWithUI(in AString aPromptString, in AString aPromptTitle);
+
+  /* forget the password in memory and in single signon database */
+  void forgetPassword();
+
+  /**
+   * Forget the password in memory which is cached for the session.
+   *
+   * @param modifyLogin  Only relevant for nsImapIncomingServer override. When
+   *                     true and authentication method is oauth2, the password
+   *                     and user authenticated flag are not cleared.
+   */
+  void forgetSessionPassword(in boolean modifyLogin);
+
+  /* should we download whole messages when biff goes off? */
+  attribute boolean downloadOnBiff;
+
+  /* should we biff the server? */
+  attribute boolean doBiff;
+
+  /* how often to biff */
+  attribute long biffMinutes;
+
+  /* current biff state */
+  attribute unsigned long biffState;
+
+  /* are we running a url as a result of biff going off? (different from user clicking get msg) */
+  attribute boolean performingBiff;
+
+  /* the on-disk path to message storage for this server */
+  attribute nsIFile localPath;
+
+  /// message store to use for the folders under this server.
+  readonly attribute nsIMsgPluggableStore msgStore;
+
+  /* the RDF URI for the root mail folder */
+  readonly attribute AUTF8String serverURI;
+
+  /* the root folder for this server, even if server is deferred */
+  readonly attribute nsIMsgFolder rootFolder;
+
+  /* root folder for this account
+     - if account is deferred, root folder of deferred-to account */
+  readonly attribute nsIMsgFolder rootMsgFolder;
+
+  /* are we already getting new Messages on the current server..
+     This is used to help us prevent multiple get new msg commands from
+     going off at the same time. */
+  attribute boolean serverBusy;
+
+  /**
+   * Is the server using a secure channel (SSL or STARTTLS).
+   */
+  readonly attribute boolean isSecure;
+
+  /**
+   * Authentication mechanism.
+   *
+   * @see nsMsgAuthMethod (in MailNewsTypes2.idl)
+   * Same as "mail.server...authMethod" pref
+   */
+  attribute nsMsgAuthMethodValue authMethod;
+
+  /**
+   * Whether to SSL or STARTTLS or not
+   *
+   * @see nsMsgSocketType (in MailNewsTypes2.idl)
+   * Same as "mail.server...socketType" pref
+   */
+  attribute nsMsgSocketTypeValue socketType;
+
+  /* empty trash on exit */
+  attribute boolean emptyTrashOnExit;
+
+  /**
+   * Get the server's list of filters.
+   *
+   * This SHOULD be the same filter list as the root folder's, if the server
+   * supports per-folder filters. Furthermore, this list SHOULD be used for all
+   * incoming messages.
+   *
+   * Since the returned nsIMsgFilterList is mutable, it is not necessary to call
+   * setFilterList after the filters have been changed.
+   *
+   * @param aMsgWindow  @ref msgwindow "The standard message window"
+   * @return            The list of filters.
+   */
+  nsIMsgFilterList getFilterList(in nsIMsgWindow aMsgWindow);
+
+  /**
+   * Set the server's list of filters.
+   *
+   * Note that this does not persist the filter list. To change the contents
+   * of the existing filters, use getFilterList and mutate the values as
+   * appropriate.
+   *
+   * @param aFilterList The new list of filters.
+   */
+  void setFilterList(in nsIMsgFilterList aFilterList);
+
+  /**
+   * Get user editable filter list. This does not have to be the same as
+   * the filterlist above, typically depending on the users preferences.
+   * The filters in this list are not processed, but only to be edited by
+   * the user.
+   * @see getFilterList
+   *
+   * @param aMsgWindow  @ref msgwindow "The standard message window"
+   * @return            The list of filters.
+   */
+  nsIMsgFilterList getEditableFilterList(in nsIMsgWindow aMsgWindow);
+
+  /**
+   * Set user editable filter list.
+   * This does not persist the filterlist, @see setFilterList
+   * @see getEditableFilterList
+   * @see setFilterList
+   *
+   * @param aFilterList The new list of filters.
+   */
+  void setEditableFilterList(in nsIMsgFilterList aFilterList);
+
+  /* we use this to set the default local path.  we use this when migrating prefs */
+  void setDefaultLocalPath(in nsIFile aDefaultLocalPath);
+
+  /**
+   * Verify that we can logon
+   *
+   * @param  aUrlListener - gets called back with success or failure.
+   * @param aMsgWindow         nsIMsgWindow to use for notification callbacks.
+   * @return - the url that we run.
+   */
+  nsIURI verifyLogon(in nsIUrlListener aUrlListener, in nsIMsgWindow aMsgWindow);
+
+  /* do a biff */
+  void performBiff(in nsIMsgWindow aMsgWindow);
+
+  /* get new messages */
+  void getNewMessages(in nsIMsgFolder aFolder, in nsIMsgWindow aMsgWindow,
+                      in nsIUrlListener aUrlListener);
+  /* this checks if a server needs a password to do biff */
+  readonly attribute boolean serverRequiresPasswordForBiff;
+
+  /* this gets called when the server is expanded in the folder pane */
+  void performExpand(in nsIMsgWindow aMsgWindow);
+
+  /* Write out all known folder data to folderCache */
+  void writeToFolderCache(in nsIMsgFolderCache folderCache);
+
+  /* close any server connections */
+  void closeCachedConnections();
+
+  /* ... */
+  void shutdown();
+
+  /**
+   * Get or set the value as determined by the preference tree.
+   *
+   * These methods MUST NOT fail if the preference is not set, and therefore
+   * they MUST have a default value. This default value is provided in practice
+   * by use of a default preference tree. The standard format for the pref
+   * branches are <tt>mail.server.<i>key</i>.</tt> for per-server preferences,
+   * such that the preference is <tt>mail.server.<i>key</i>.<i>attr</i></tt>.
+   *
+   * The attributes are passed in as strings for ease of access by the C++
+   * consumers of this method.
+   *
+   * @param attr  The value for which the preference should be accessed.
+   * @param value The value of the preference to set.
+   * @return      The value of the preference.
+   * @{
+   */
+  boolean getBoolValue(in string attr);
+  void setBoolValue(in string attr, in boolean value);
+
+  AUTF8String getStringValue(in string attr);
+  void setStringValue(in string attr, in AUTF8String value);
+
+  long getIntValue(in string attr);
+  void setIntValue(in string attr, in long value);
+  /** @} */
+
+  /**
+   * Get or set the value as determined by the preference tree.
+   *
+   * These methods MUST NOT fail if the preference is not set, and therefore
+   * they MUST have a default value. This default value is provided in practice
+   * by use of a default preference tree. The standard format for the pref
+   * branches are <tt>mail.server.<i>key</i>.</tt> for per-server preferences,
+   * such that the preference is <tt>mail.server.<i>key</i>.<i>attr</i></tt>.
+   *
+   * The attributes are passed in as strings for ease of access by the C++
+   * consumers of this method.
+   *
+   * There are two preference names on here for legacy reasons, where the first
+   * is the name which will be using a (preferred) relative preference and the
+   * second a deprecated absolute preference. Implementations that do not have
+   * to worry about supporting legacy preferences can safely ignore this second
+   * parameter. Callers must still provide a valid value, though.
+   *
+   * @param relpref The name of the relative file preference.
+   * @param absref  The name of the absolute file preference.
+   * @param aValue  The value of the preference to set.
+   * @return        The value of the preference.
+   * @{
+   */
+  nsIFile getFileValue(in string relpref, in string abspref);
+  void setFileValue(in string relpref, in string abspref, in nsIFile aValue);
+  /** @} */
+
+  /**
+   * this is really dangerous. this destroys all pref values
+   * do not call this unless you know what you're doing!
+   */
+  void clearAllValues();
+
+  /**
+   * This is also very dangerous. This will low-level remove the files
+   * associated with this server on disk. It does not notify any listeners.
+   */
+  void removeFiles();
+
+  attribute boolean valid;
+
+  AString toString();
+
+  /* used for comparing nsIMsgIncomingServers */
+  boolean equals(in nsIMsgIncomingServer server);
+
+  /* check to this if the server supports filters */
+  readonly attribute boolean canHaveFilters;
+
+  attribute boolean loginAtStartUp;
+
+  attribute boolean limitOfflineMessageSize;
+  attribute long maxMessageSize;
+
+  /**
+   * Where offline downloads are supported, this determines
+   * if new folders are marked for offline use or not.
+   * Reflects the `offline_download` server pref.
+   */
+  attribute boolean offlineDownload;
+
+  /**
+   * Where offline downloads and autosync are supported, this
+   * determines if this server will use autosync or not.
+   * Reflects the `autosync_offline_stores` server pref.
+   */
+  attribute boolean autoSyncOfflineStores;
+
+  /**
+   * Where autosync is being used, this is the maximum age of
+   * messages to download for offline use.
+   * -1 = no limit.
+   * Reflects the `autosync_max_age_days` server pref.
+   */
+  attribute long autoSyncMaxAgeDays;
+
+  attribute nsIMsgRetentionSettings retentionSettings;
+
+  /* check if this server can be a default server */
+  readonly attribute boolean canBeDefaultServer;
+
+  /* check if this server allows search operations */
+  readonly attribute boolean canSearchMessages;
+
+  /**
+   * Settings for NNTP downloads.
+   */
+  attribute nsIMsgDownloadSettings downloadSettings;
+
+  /*
+   * Offline support level. Does this server allow the user to perform
+   * operations while the network is offline (e.g. copy/move/delete of
+   * messages or folders)? These operations are queued up and relayed
+   * to the remote server when the network comes back online.
+   *
+   * supportLevel == 0  --> No.
+   * supportLevel >= 10 --> Yes.
+   *
+   * NOTE: This is confusing and has overloaded meanings. See Bug 1992042
+   * for an attempt to sort things out.
+   */
+  readonly attribute long offlineSupportLevel;
+
+  /**
+   * Hide this server/account from the UI - used for smart mailboxes.
+   * The server can be retrieved from the account manager by name using the
+   * various Find methods, but nsIMsgAccountManager's GetAccounts and
+   * GetAllServers methods won't return the server/account.
+   */
+  attribute boolean hidden;
+
+  /**
+   * If the server supports Fcc/Sent/etc, default prefs can point to
+   * the server. Otherwise, copies and folders prefs should point to
+   * Local Folders.
+   *
+   * By default this value is set to true via global pref 'allows_specialfolders_usage'
+   * (mailnews.js). For Nntp, the value is overridden to be false.
+   * If ISPs want to modify this value, they should do that in their rdf file
+   * by using this attribute. Please look at mozilla/mailnews/base/ispdata/aol.rdf for
+   * usage example.
+   */
+  attribute boolean defaultCopiesAndFoldersPrefsToServer;
+
+  /* can this server allows sub folder creation */
+  attribute boolean canCreateFoldersOnServer;
+
+  /* can this server allows message filing ? */
+  attribute boolean canFileMessagesOnServer;
+
+  /* used for setting up the filter UI */
+  readonly attribute nsMsgSearchScopeValue filterScope;
+
+  /* used for setting up the search UI */
+  readonly attribute nsMsgSearchScopeValue searchScope;
+
+  /**
+   * If the password for the server is available either via authentication
+   * in the current session or from password manager stored entries, return
+   * false. Otherwise, return true. If password is obtained from password
+   * manager, set the password member variable.
+   */
+  readonly attribute boolean passwordPromptRequired;
+
+  /**
+   * for mail, this configures both the MDN filter, and the server-side
+   * spam filter filters, if needed.
+   *
+   * If we have set up to filter return receipts into
+   * our Sent folder, this utility method creates
+   * a filter to do that, and adds it to our filterList
+   * if it doesn't exist.  If it does, it will enable it.
+   *
+   * this is not used by news filters (yet).
+   */
+  void configureTemporaryFilters(in nsIMsgFilterList filterList);
+
+  /**
+   * If Sent folder pref is changed we need to clear the temporary
+   * return receipt filter so that the new return receipt filter can
+   * be recreated (by ConfigureTemporaryReturnReceiptsFilter()).
+   */
+  void clearTemporaryReturnReceiptsFilter();
+
+  /**
+   * spam settings
+   */
+  readonly attribute nsISpamSettings spamSettings;
+  readonly attribute nsIMsgFilterPlugin spamFilterPlugin;
+
+  nsIMsgFolder getMsgFolderFromURI(in nsIMsgFolder aFolderResource, in AUTF8String aURI);
+
+  /// Indicates if any other server has deferred storage to this account.
+  readonly attribute boolean isDeferredTo;
+
+  const long keepDups = 0;
+  const long deleteDups = 1;
+  const long moveDupsToTrash = 2;
+  const long markDupsRead = 3;
+
+  attribute long incomingDuplicateAction;
+
+  // check if new hdr is a duplicate of a recently arrived header
+  boolean isNewHdrDuplicate(in nsIMsgDBHdr aNewHdr);
+};
+
+%{C++
+/*
+ * Following values for offline support have been used by
+ * various files. If you are modifying any of the values
+ * below, please do take care of the following files.
+ * - mozilla/mailnews/base/src/nsMsgAccountManagerDS.cpp
+ * - mozilla/mailnews/base/util/nsMsgIncomingServer.cpp
+ * - mozilla/mailnews/imap/src/nsImapIncomingServer.cpp
+ * - mozilla/mailnews/local/src/nsPop3IncomingServer.cpp
+ * - mozilla/mailnews/news/src/nsNntpIncomingServer.cpp
+ * - mozilla/mailnews/base/content/msgAccountCentral.js
+ * - mozilla/modules/libpref/src/init/mailnews.js
+ * - ns/modules/libpref/src/init/mailnews-ns.js
+ * - ns/mailnews/base/ispdata/aol.rdf
+ * - ns/mailnews/base/ispdata/nswebmail.rdf
+ */
+#define OFFLINE_SUPPORT_LEVEL_NONE 0
+#define OFFLINE_SUPPORT_LEVEL_REGULAR 10
+#define OFFLINE_SUPPORT_LEVEL_EXTENDED 20
+#define OFFLINE_SUPPORT_LEVEL_UNDEFINED -1
+
+// Value when no port setting is found
+#define PORT_NOT_SET -1
+
+/* some useful macros to implement nsIMsgIncomingServer accessors */
+#define NS_IMPL_SERVERPREF_STR(_class, _postfix, _prefname) \
+NS_IMETHODIMP                              \
+_class::Get##_postfix(nsACString& retval)  \
+{                                          \
+  return GetStringValue(_prefname, retval);  \
+}                                          \
+NS_IMETHODIMP                              \
+_class::Set##_postfix(const nsACString& chvalue) \
+{                                          \
+  return SetStringValue(_prefname, chvalue); \
+}
+
+#define NS_IMPL_SERVERPREF_BOOL(_class, _postfix, _prefname)\
+NS_IMETHODIMP                                               \
+_class::Get##_postfix(bool *retval)                         \
+{                                                           \
+  return GetBoolValue(_prefname, retval);                   \
+}                                                           \
+NS_IMETHODIMP                                               \
+_class::Set##_postfix(bool bvalue)                          \
+{                                                           \
+  return SetBoolValue(_prefname, bvalue);                   \
+}
+
+#define NS_IMPL_SERVERPREF_INT(_class, _postfix, _prefname)\
+NS_IMETHODIMP                                              \
+_class::Get##_postfix(int32_t *retval)                     \
+{                                                          \
+  return GetIntValue(_prefname, retval);                   \
+}                                                          \
+NS_IMETHODIMP                                              \
+_class::Set##_postfix(int32_t ivalue)                      \
+{                                                          \
+  return SetIntValue(_prefname, ivalue);                   \
+}
+
+%}

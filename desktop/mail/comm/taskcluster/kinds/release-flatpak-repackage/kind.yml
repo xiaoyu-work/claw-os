@@ -1,0 +1,100 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+---
+loader: taskgraph.loader.transform:loader
+
+transforms:
+    - gecko_taskgraph.transforms.release:run_on_releases
+    - gecko_taskgraph.transforms.release_deps:transforms
+    - comm_taskgraph.transforms.release_flatpak_repackage:transforms
+    - comm_taskgraph.transforms.packaging_l10n:transforms
+    - gecko_taskgraph.transforms.task:transforms
+
+kind-dependencies:
+    - post-beetmover-dummy
+    - shippable-l10n-pre
+
+task-defaults:
+    run-on-repo-type: [hg]
+    description: Generates flatpak by repackaging the existing .tar.xz
+    run-on-projects: []  # to make sure this never runs as part of CI
+    run-on-releases: [beta, release, esr153]
+    shipping-phase: promote
+    scopes: []
+    package-locales-file: comm/mail/locales/onchange-locales
+    desktop-locales-file: comm/mail/locales/shipped-locales
+    dependencies:
+        shippable-l10n-pre: shippable-l10n-pre-shippable-l10n-pre/opt
+    fetches:
+        shippable-l10n-pre:
+            - strings_all.tar.zst
+    treeherder:
+        platform: linux64-shippable/opt
+        kind: build
+        tier: 2
+    worker-type: b-linux
+    worker:
+        implementation: docker-worker
+        os: linux
+        max-run-time: 7200
+        docker-image: {in-tree: tb-flatpak}
+        artifacts:
+            - name: public/build
+              type: directory
+              path: /home/worker/artifacts/
+        command:
+            - /bin/bash
+            - -cx
+            - ./repack.sh
+        env:
+            VERSION: "{release_config[version]}"
+            BUILD_NUMBER: "{release_config[build_number]}"
+            CANDIDATES_DIR:
+                by-release-level:
+                    staging:
+                        https://ftp.stage.mozaws.net/pub/{task[shipping-product]}/candidates
+                    production:
+                        https://archive.mozilla.org/pub/{task[shipping-product]}/candidates
+            LC_ALL: C.UTF-8
+            LANG: C.UTF-8
+            FLATPAK_BRANCH:
+                by-project:
+                    comm-(release|esr.*): stable
+                    default: beta
+            APP_ID:
+                by-project:
+                    comm-esr.*: org.mozilla.thunderbird_esr
+                    default: org.mozilla.thunderbird
+            APP_NAME:
+                by-project:
+                    comm-esr.*: Thunderbird ESR
+                    default: Thunderbird
+            CHANNEL_DESCRIPTION:
+                by-project:
+                    comm-esr.*: |
+                        <p>
+                        The official Extended Support Release channel is intended for users who want all available new features on an annual basis and stability/security fixes on a monthly basis.
+                        </p>
+                    default: ''
+            VERSION_FLAG:
+                by-project:
+                    comm-esr.*: "--esr"
+                    comm-beta: "--beta"
+                    default: ''
+            MANIFEST_URL: "{config_params[comm_head_repository]}/file/{config_params[comm_head_rev]}/taskcluster/docker/tb-flatpak/repack.sh"
+            RELEASE_NOTES_URL:
+                by-project:
+                    comm-esr.*: "https://www.thunderbird.net/en-US/thunderbird/{config_params[app_version]}esr/releasenotes/"
+                    comm-beta: "https://www.thunderbird.net/en-US/thunderbird/{config_params[app_version]}beta/releasenotes/"
+                    default: "https://www.thunderbird.net/en-US/thunderbird/{config_params[app_version]}/releasenotes/"
+        chain-of-trust: true
+
+tasks:
+    thunderbird:
+        shipping-product: thunderbird
+        attributes:
+            build_platform: linux64-shippable
+            build_type: opt
+        treeherder:
+            symbol: Flatpak(r)

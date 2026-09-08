@@ -1,0 +1,1172 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@namespace xul "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
+
+form {
+  --hub-input-bg-color: light-dark(var(--color-surface-base), #18181b);
+  --hub-select-color: light-dark(var(--color-text-base), currentColor);
+  --hub-floating-button-inset-block-end: 168px;
+  --hub-menulist-color: var(--color-text-base);
+  --hub-menulist-background-color: var(--color-surface-subtle);
+  --hub-menulist-background-color-hover-focus-open: var(--color-surface-base);
+  --hub-menulist-border-color: var(--color-surface-border);
+  --hub-menulist-border-color-hover-focus-open: var(--color-surface-border-intense);
+  --hub-menulist-outline-offset-color: var(--color-primary-default);
+  --hub-menulist-label-color: var(--color-text-base);
+  --hub-menupopup-border-color: var(--color-surface-border);
+  --hub-menuitem-color-selected: var(--color-surface-base);
+  --hub-menuitem-background-color-selected: var(--color-primary-default);
+  --hub-form-input-line-height: 1em;
+  --hub-form-label-font-size: 1rem;
+  --hub-form-label-line-height: 1.5rem;
+  --hub-form-label-padding: var(--space-step);
+  --hub-form-label-height: calc(var(--hub-form-label-line-height) + 2 * var(--hub-form-label-padding));
+  --hub-form-input-block-padding: 12px;
+  --hub-config-confirm-space-small: calc(var(--space-step) * 2);
+  --hub-config-confirm-space-medium: calc(var(--space-step) * 3);
+  --hub-config-confirm-space-large: calc(var(--space-step) * 4);
+
+  grid-row: header / footer;
+
+  input[type="checkbox"]:not(.toggle-checkbox) {
+    box-sizing: border-box;
+    inline-size: 16px;
+    block-size: 16px;
+    border: 1px solid var(--color-surface-border-intense);
+    border-radius: 4px;
+    appearance: none;
+    background-color: var(--color-surface-lower);
+
+    &:disabled {
+      border: 1px solid var(--color-surface-border);
+      background-color: var(--color-surface-subtle);
+
+      & + .checkbox-label {
+        color: var(--color-text-muted);
+      }
+    }
+
+    &:checked {
+      -moz-context-properties: fill, fill-opacity, stroke, stroke-opacity;
+      content: url("chrome://messenger/skin/overrides/check.svg");
+      background-color: var(--color-primary-default);
+      border-color: var(--color-primary-hover);
+      fill: var(--color-surface-base);
+
+      &:disabled {
+        background-color: var(--color-surface-border);
+        border-color: var(--color-surface-border);
+        fill: var(--color-text-muted);
+      }
+    }
+  }
+
+  .checkbox-label {
+    color: var(--color-text-base);
+  }
+
+  .toggle-group .toggle-label {
+    font-size: 1rem;
+    font-weight: 500;
+    color: var(--color-primary-hover);
+  }
+
+  label {
+    font-size: var(--hub-form-label-font-size);
+    line-height: var(--hub-form-label-line-height);
+    font-weight: 600;
+    color: var(--hub-menulist-label-color);
+
+    &.animated {
+      position: absolute;
+      background-color: var(--hub-input-bg-color);
+      border-radius: 3px;
+      transform-origin: left center;
+      color: var(--color-text-secondary);
+      padding: var(--hub-form-label-padding);
+      margin-inline-start: 7px;
+      font-weight: 400;
+      cursor: text;
+
+      @media (prefers-reduced-motion: no-preference) {
+        transition:
+          transform 200ms,
+          color 200ms,
+          font-weight 200ms,
+          background-color 200ms;
+      }
+    }
+  }
+
+  label:has(+ .input-control input:required)::after,
+  input:required + label::after {
+    content: "*";
+    color: var(--color-text-critical);
+  }
+
+  .selected-option {
+    padding-block: 13px;
+    padding-inline: 10px;
+    background: var(--color-surface-subtle);
+    border: 1px solid var(--color-surface-border);
+    margin-block: 4px;
+    border-radius: 2px;
+    color: var(--hub-select-color);
+    font-weight: 400;
+  }
+
+  .input-textarea {
+    resize: vertical;
+  }
+
+  .input-field,
+  .input-textarea {
+    flex: 1;
+    font-size: 1.2rem;
+    line-height: var(--hub-form-input-line-height);
+    margin-inline: 0;
+    padding-block: var(--hub-form-input-block-padding);
+    padding-inline: 9px 30px;
+    border: 1px solid var(--color-surface-border);
+    border-radius: var(--button-border-radius);
+    background-color: var(--hub-input-bg-color);
+    font-weight: 300;
+    max-inline-size: 100%;
+
+    &[type="password"] {
+      padding-inline-end: 9px;
+    }
+
+    &[type="url"] {
+      margin-block: 4px;
+    }
+
+    &::placeholder {
+      font-weight: 300;
+      color: var(--color-text-secondary);
+    }
+
+    &.animated {
+      &::placeholder {
+        color: transparent;
+      }
+    }
+
+    &:focus {
+      border-color: var(--selected-item-color);
+    }
+
+    &:focus-visible {
+      outline: none;
+    }
+
+    &:focus + label.animated,
+    &:not(:placeholder-shown) + label.animated {
+      transform: translateY(-102%);
+      font-weight: 600;
+      cursor: default;
+      background-color: var(--color-surface-base);
+    }
+
+    &.number-input {
+      padding-inline-end: 0;
+
+      &::-moz-number-spin-box {
+        block-size: 100%;
+        padding-block: var(--hub-form-input-block-padding);
+        inline-size: 22px;
+        border-inline-start: 1px solid var(--color-surface-border);
+        border-inline-end: 0;
+        border-start-end-radius: var(--hub-input-border-radius);
+        border-end-end-radius: var(--hub-input-border-radius);
+        background: var(--color-surface-subtle);
+        cursor: pointer;
+        position: relative;
+        z-index: 2;
+      }
+
+      &::-moz-number-spin-up,
+      &::-moz-number-spin-down {
+        appearance: none;
+        padding: calc(var(--hub-form-input-block-padding) / 2);
+        -moz-context-properties: stroke;
+        stroke: currentColor;
+        cursor: pointer;
+      }
+
+      &::-moz-number-spin-up {
+        border-block-end: 1px solid var(--color-surface-border);
+        content: var(--icon-nav-up-sm);
+      }
+
+      &::-moz-number-spin-down {
+        border-block-start: 1px solid var(--color-surface-subtle);
+        content: var(--icon-nav-down-sm);
+      }
+    }
+  }
+
+  .menulist {
+    margin-inline: 0;
+    padding-inline-start: 6px;
+    padding-block: 12px;
+    line-height: 1.5;
+    border: 1px solid var(--hub-menulist-border-color);
+    border-radius: var(--hub-input-border-radius);
+    background-color: var(--hub-menulist-background-color);
+
+    &:hover,
+    &[open="true"]:not([disabled]),
+    &:focus-visible {
+      border-color: var(--hub-menulist-border-color-hover-focus-open);
+      background-color: var(--hub-menulist-background-color-hover-focus-open);
+    }
+
+    &:focus-visible {
+      outline: 2px solid var(--hub-menulist-outline-offset-color);
+      outline-offset: var(--focus-outline-offset);
+
+      /* Needed to override toolkit style */
+      &[open="true"] {
+        outline: none;
+      }
+    }
+  }
+
+  .menulist,
+  .input-field {
+    & ~ .input-error-message {
+      color: light-dark(var(--color-critical-default), var(--color-critical-pressed));
+      display: none;
+      position: absolute;
+      inset-block-end: calc(-1 * var(--hub-form-input-line-height) - var(--space-step));
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      overflow: hidden;
+      inline-size: -moz-available;
+      font-size: var(--hub-input-error-message-font-size);
+
+      &.security-warning {
+        white-space: normal;
+        position: relative;
+        font-size: 1rem;
+        inset-block-end: 0;
+        margin-block: 2px -15px;
+
+        & .more-info-link {
+          color: light-dark(var(--color-critical-default), var(--color-critical-pressed));
+          text-decoration: underline;
+        }
+      }
+
+      & span {
+        font-weight: 600;
+      }
+    }
+
+    &:user-invalid,
+    &.manual-input:invalid,
+    &.warning {
+      border-color: light-dark(var(--color-critical-default), var(--color-critical-pressed));
+      outline: 1px solid light-dark(var(--color-critical-default), var(--color-critical-pressed));
+      outline-offset: 0;
+
+      &:focus {
+        border-color: light-dark(var(--color-critical-default), var(--color-critical-pressed));
+      }
+
+      & ~ label {
+        color: light-dark(var(--color-critical-default), var(--color-critical-pressed));
+      }
+
+      & ~ .input-error-message {
+        display: inline;
+      }
+    }
+  }
+
+  select.menulist {
+    font-weight: 400;
+    inline-size: 100%;
+    padding-inline-end: 48px;
+  }
+
+  .manual-config-server-header {
+    color: var(--color-primary-pressed);
+    font-size: 1.154rem;
+    margin-block: 0;
+    font-weight: 500;
+  }
+
+  .manual-config-server-fields {
+    display: flex;
+    flex-direction: column;
+    min-inline-size: unset;
+    border: none;
+    padding-block: 0;
+    padding-inline: 0;
+    margin-inline: 0;
+    gap: var(--hub-manual-config-gap);
+  }
+}
+
+div:has(legend) {
+  display: flex;
+}
+
+.input-control {
+  display: flex;
+  align-items: center;
+  position: relative;
+
+  &:has(label.animated) {
+    padding-block-start: calc(var(--hub-form-label-height) - var(--hub-form-input-block-padding));
+  }
+
+  /* Hide the helper text if there is a visible error message, as it will
+   * errantly visually overlap otherwise. Use 'visibility' to avoid
+   * element collapse and incorrect spacing. */
+  &:has(:is(:user-invalid, .manual-input:invalid, .warning) ~ .input-error-message) + .account-hub-form-small-comment {
+    visibility: hidden;
+  }
+
+  &:has(.security-warning) {
+    flex-wrap: wrap;
+  }
+}
+
+.input-control.vertical {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.form-icon {
+  inline-size: 16px;
+  block-size: 16px;
+
+  input:is(:user-invalid, :invalid) ~ & {
+    display: none;
+  }
+
+  &.input-warning,
+  &.input-success {
+    position: absolute;
+    inset-inline-end: 0;
+    padding-inline-end: 10px;
+
+    .number-input ~ & {
+      padding-inline-end: 30px;
+    }
+  }
+}
+
+.notification-bar {
+  padding: 6px 12px;
+  margin-block-start: var(--hub-notification-bar-margin-block-start);
+  margin-inline: auto;
+  inline-size: var(--hub-width);
+  text-align: start;
+  border: 1px solid;
+  border-radius: 3px;
+
+  &[aria-disabled="true"] {
+    pointer-events: none;
+  }
+
+  &[open=""] #emailFormNotificationToggle {
+    span:first-of-type {
+      display: none;
+    }
+
+    span:last-of-type {
+      display: flex;
+    }
+  }
+
+  #emailFormNotificationToggle {
+    span:first-of-type {
+      display: flex;
+    }
+
+    span:last-of-type {
+      display: none;
+    }
+  }
+
+  .notification-title-container {
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+
+    span {
+      font-size: 1.1rem;
+      padding-inline-start: 5px;
+      margin-inline-start: auto;
+    }
+
+    #emailFormNotificationToggle {
+      text-decoration: underline;
+      white-space: nowrap;
+    }
+
+    &:has(#emailFormNotificationToggle:not([hidden])) .notification-title {
+      text-align: start;
+    }
+  }
+
+  .notification-title {
+    font-size: 1.1rem;
+    font-weight: 700;
+    inline-size: 100%;
+    text-align: center;
+    margin-block: 0;
+  }
+
+  .notification-text {
+    margin-block-start: var(--hub-notification-text-margin-block-start);
+    font-size: 1rem;
+    display: inline-block;
+  }
+
+  .form-icon {
+    margin-inline: 0 10px;
+    cursor: pointer;
+    display: none;
+  }
+
+  &.error .icon-danger,
+  &.success .icon-success,
+  &.warning .icon-warning,
+  &.info .icon-info {
+    display: inline-block;
+    stroke: currentColor;
+  }
+
+  &.error a,
+  &.success a,
+  &.warning a,
+  &.info a {
+    color: inherit;
+  }
+
+  &.error {
+    background-color: var(--color-critical-soft);
+    color: light-dark(var(--color-critical-pressed-light), var(--color-text-base-dark));
+    border-color: var(--color-critical-default);
+  }
+
+  &.warning {
+    background-color: var(--color-warning-soft);
+    color: var(--color-text-warning);
+    border-color: var(--color-warning-default);
+  }
+
+  &.success {
+    background-color: var(--color-success-soft);
+    color: light-dark(var(--color-success-pressed-light), var(--color-text-success-dark));
+    border-color: light-dark(var(--color-success-default-light), var(--color-text-success-dark));
+  }
+
+  &.info {
+    background-color: var(--color-primary-soft);
+    color: light-dark(var(--color-primary-pressed-light), var(--color-primary-default-dark));
+    border-color: var(--color-primary-default);
+  }
+}
+
+.input-warning {
+  display: none;
+
+  input:user-invalid ~ &,
+  .manual-input:invalid ~ & {
+    display: inline-block;
+  }
+}
+
+.input-success {
+  display: none;
+
+  /* Optional fields need to have placeholder="" or an actual placeholder so the
+   * validity checkmark doesn't show in their empty state. If we ever get the
+   * :blank pseudo class, we can use that instead. */
+  input:user-valid:not(:optional:placeholder-shown) ~ &,
+  input:valid:not(:placeholder-shown) ~ & {
+    display: inline-block;
+  }
+}
+
+.config-form-data {
+  display: grid;
+  align-items: start;
+  grid-template-columns: 2fr 60%;
+  column-gap: 20px;
+
+  & .form-options {
+    display: flex;
+    flex-direction: column;
+    justify-content: stretch;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    gap: 10px;
+  }
+
+  & .config-option {
+    background-color: light-dark(rgba(254, 255, 255, 0.5), rgba(26, 32, 44, 0.5));
+    display: flex;
+    flex-direction: column;
+    border-radius: 10px;
+    cursor: pointer;
+    overflow: hidden;
+    font-size: 1.2rem;
+    line-height: normal;
+    border: 1px solid transparent;
+
+    & .badge:not(.experimental) {
+      display: none;
+    }
+
+    &.recommended-protocol .badge:not(.experimental) {
+      display: initial;
+    }
+
+    & .config-title {
+      color: light-dark(var(--color-primary-default), #feffff);
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      padding-block: var(--hub-config-option-padding-block) 2px;
+      padding-inline: var(--hub-config-option-padding-inline);
+      font-weight: bold;
+
+      & .config-title-text {
+        flex: 1;
+        line-height: 1;
+      }
+
+      & input[type="radio"] {
+        appearance: none;
+        background-color: transparent;
+        margin-inline-end: 8px;
+        inline-size: 15px;
+        block-size: 15px;
+        border: 1px solid var(--color-surface-border-intense);
+        border-radius: 50%;
+        display: grid;
+        place-content: center;
+
+        &::before {
+          content: "";
+          inline-size: 5px;
+          block-size: 5px;
+          border-radius: 50%;
+          transform: scale(0);
+          box-shadow: inset 1em 1em var(--color-surface-base);
+        }
+
+        &:checked::before {
+          transform: scale(1);
+        }
+      }
+    }
+
+    & .config-text {
+      color: var(--color-text-base);
+      font-weight: 400;
+      padding-block: 2px var(--hub-config-option-padding-block);
+      padding-inline: var(--hub-config-option-padding-inline);
+      font-size: 1.1rem;
+    }
+
+    &.selected {
+      border-color: var(--color-primary-default);
+
+      & .config-title {
+        background-color: var(--color-primary-default);
+        color: var(--color-surface-base);
+        padding-block: var(--hub-config-option-padding-block);
+      }
+
+      & .config-text {
+        color: light-dark(#15427c, var(--color-text-base));
+        background-color: var(--color-surface-base);
+        padding-block: var(--hub-config-option-padding-block);
+      }
+
+      & input[type="radio"]:checked {
+        border-width: 2px;
+        border-color: var(--color-surface-base);
+      }
+
+      @media (prefers-color-scheme: light) {
+        & .badge:not(.experimental) {
+          background-color: var(--color-surface-base);
+          color: var(--color-primary-default);
+        }
+      }
+    }
+  }
+}
+
+.form-selection {
+  position: sticky;
+  inset-block-start: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--hub-config-confirm-space-large);
+  background-color: var(--color-surface-base);
+  padding: var(--hub-config-confirm-space-medium);
+  border: 1px solid var(--color-primary-default);
+  border-radius: 10px;
+
+  &.credentials-confirmation {
+    inline-size: fit-content;
+    min-inline-size: 380px;
+    margin-inline: auto;
+  }
+
+  &.config-selection {
+    gap: 0;
+    &.single {
+      gap: var(--hub-config-confirm-space-medium);
+    }
+
+    &.is-showing-shared-config .shared-config-item,
+    &:not(.is-showing-shared-config) .config-common {
+      display: none;
+    }
+  }
+
+  & .selection-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: auto;
+    gap: var(--hub-config-confirm-space-medium);
+
+    & .config-column {
+      display: flex;
+      flex-direction: column;
+      gap: var(--hub-config-confirm-space-medium);
+
+      .credentials-confirmation & {
+        gap: var(--hub-config-confirm-space-large);
+        padding-block: 15px;
+      }
+    }
+
+    .credentials-confirmation & {
+      padding-inline: 15px;
+    }
+
+    .single & {
+      display: block;
+    }
+  }
+
+  & .config-common {
+    display: flex;
+    flex-direction: column;
+    gap: var(--hub-config-confirm-space-medium);
+    & .config-header {
+      margin-block-start: calc(var(--space-step) * 7);
+    }
+  }
+
+  & .config-row {
+    display: flex;
+    flex-direction: row;
+    gap: var(--hub-config-confirm-space-large);
+  }
+
+  & .config-item-icon {
+    block-size: 16px;
+    inline-size: 16px;
+    -moz-context-properties: fill, stroke, stroke-opacity;
+    fill: light-dark(
+      color-mix(in srgb, var(--color-text-secondary-light) 20%, transparent),
+      color-mix(in srgb, var(--color-surface-deep-dark) 20%, transparent)
+    );
+    stroke: var(--color-text-secondary);
+
+    .config-protocols & {
+      block-size: 30px;
+      inline-size: 30px;
+    }
+  }
+
+  & .config-header,
+  & .config-detail {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+  }
+
+  & .config-header {
+    background-color: var(--color-primary-soft);
+    padding: var(--space-step) var(--hub-config-confirm-space-small);
+    gap: var(--hub-config-confirm-space-small);
+    border-radius: var(--button-border-radius);
+
+    & .header-title {
+      color: var(--color-text-base);
+      font-weight: 500;
+      font-size: 1.2rem;
+      display: inline-block;
+      margin: 0;
+    }
+
+    & .header-data {
+      font-size: 1rem;
+      color: var(--color-text-secondary);
+      text-transform: uppercase;
+      margin: 0;
+    }
+  }
+
+  & .config-detail {
+    gap: var(--hub-config-confirm-space-medium);
+
+    .config-protocols & {
+      padding-block: 0;
+    }
+
+    & .config-item-data {
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      align-items: baseline;
+      gap: 2px;
+
+      & p {
+        line-height: normal;
+        margin: 0;
+
+        &.title {
+          text-transform: uppercase;
+          color: var(--color-text-secondary);
+          font-weight: 500;
+          font-size: 0.8rem;
+          display: inline-block;
+          vertical-align: bottom;
+        }
+
+        &.data {
+          color: var(--color-text-base);
+          font-weight: 400;
+          font-size: 1rem;
+          text-wrap: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+      }
+
+      & .info {
+        font-size: 0.8rem;
+        line-height: 1;
+      }
+    }
+
+    .config-selection & {
+      gap: var(--hub-config-confirm-space-small);
+      padding-inline-start: var(--hub-config-confirm-space-large);
+
+      & .config-item-data {
+        flex-wrap: nowrap;
+        flex-direction: row;
+        gap: var(--hub-config-confirm-space-small);
+        inline-size: 100%;
+        justify-content: flex-start;
+
+        .config-row & {
+          flex-wrap: wrap;
+        }
+
+        & .title {
+          /* Ensure labels don't get truncated */
+          overflow: visible;
+          font-size: 0.9rem;
+        }
+      }
+    }
+  }
+
+  & .owl-exchange-section {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 6px;
+
+    background-color: var(--color-warning-soft);
+    border: 1px solid var(--color-text-warning);
+    color: var(--color-text-warning);
+    font-size: 0.9rem;
+    border-radius: 5px;
+
+    & p {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      margin-block: 0;
+    }
+
+    & .install-addon-button {
+      align-self: end;
+    }
+  }
+}
+
+.sync-type-container {
+  inline-size: 100%;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--color-surface-border);
+  border-radius: 8px;
+  block-size: 240px;
+  font-size: 1.1rem;
+  margin: 0;
+  padding: 0;
+  background-color: var(--color-surface-base);
+  overflow: hidden;
+  min-inline-size: 0;
+
+  & .sync-title {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: var(--hub-sync-list-title-gap);
+    padding: var(--hub-sync-list-title-padding);
+    font-weight: bold;
+    background-color: var(--color-surface-lower);
+    border-block-end: 1px solid var(--color-surface-border);
+    border-radius: 8px 8px 0 0;
+
+    & .sync-details {
+      display: flex;
+      flex-direction: column;
+      gap: var(--hub-sync-list-details-gap);
+      flex-grow: 1;
+
+      & .title {
+        color: var(--color-text-base);
+        text-transform: capitalize;
+        margin-block: 0;
+        font-size: 1rem;
+      }
+
+      & .subtitle {
+        font-size: 0.9rem;
+        color: var(--color-primary-default);
+      }
+    }
+
+    & .sync-icon {
+      inline-size: var(--hub-sync-list-icon-size);
+      block-size: var(--hub-sync-list-icon-size);
+
+      &.calendar {
+        content: var(--hub-sync-list-calendar-icon);
+      }
+
+      &.address-book {
+        content: var(--hub-sync-list-addressbook-icon);
+      }
+    }
+  }
+
+  & .sync-input-container {
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    overflow-y: auto;
+  }
+
+  & .select-all {
+    line-height: var(--hub-floating-button-line-height);
+    align-self: end;
+    margin-inline: 0;
+    margin-block: 0 -20px;
+    z-index: 1;
+  }
+
+  & .sync-option {
+    padding: var(--hub-sync-list-option-padding);
+    gap: var(--hub-sync-list-option-gap);
+    line-height: normal;
+
+    &:nth-child(even) {
+      background-color: var(--color-surface-lower);
+    }
+
+    & span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: var(--color-text-base);
+      font-weight: 400;
+    }
+
+    &:has(input:disabled) {
+      pointer-events: none;
+
+      & span {
+        color: var(--color-text-muted);
+      }
+    }
+  }
+}
+
+.custom-action-container {
+  grid-column: 1 / -1;
+  text-align: end;
+  margin-block-start: calc(var(--space-step) * 6);
+  padding-block-end: var(--hub-config-confirm-space-medium);
+
+  .credentials-confirmation & {
+    padding-block-end: var(--hub-config-confirm-space-small);
+  }
+
+  & .button.link-button {
+    min-block-size: 0;
+    font-size: 0.9rem;
+  }
+}
+
+.email-input-container {
+  display: flex;
+  flex-direction: column;
+}
+
+.visibility-hidden {
+  visibility: hidden;
+}
+
+.align-self-end {
+  align-self: end;
+}
+
+.remember-button-container {
+  align-self: start;
+  margin-block-start: calc(-1 * var(--hub-body-elements-column-gap));
+}
+
+#accountHubFooterMenu {
+  background-color: transparent;
+}
+
+/* Address book styles */
+
+button.account-hub-option-button {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  column-gap: var(--hub-address-book-option-select-gap);
+  row-gap: 1px;
+  padding: var(--hub-address-book-option-padding);
+  margin: 0;
+  border: none;
+  background-color: var(--color-surface-base);
+  inline-size: 100%;
+  box-shadow:
+    0 12px 10px -10px rgba(0, 79, 155, 0.25),
+    0 0 5px 0 rgba(23, 95, 182, 0.1);
+  overflow: hidden;
+  flex-shrink: 0;
+
+  &.three-column {
+    grid-template-columns: auto 1fr auto;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    transition:
+      background-color 220ms ease,
+      box-shadow 220ms ease;
+  }
+
+  &:enabled {
+    &:hover,
+    &:hover:active {
+      background-color: var(--color-primary-soft);
+
+      & .option-icon {
+        background-color: var(--color-primary-pressed);
+      }
+    }
+
+    &:hover {
+      box-shadow:
+        0 25px 10px -20px rgba(0, 79, 155, 0.35),
+        0 0 5px 0 rgba(23, 95, 182, 0.2);
+    }
+
+    &:hover:active {
+      box-shadow:
+        0 5px 5px -5px rgba(0, 79, 155, 0.35),
+        0 0 5px 0 rgba(23, 95, 182, 0.2);
+    }
+  }
+
+  &:disabled {
+    background-color: var(--color-surface-border);
+
+    & .option-title.account-title,
+    & .option-data.account-data {
+      color: var(--color-text-secondary);
+    }
+
+    & .account-address-book-count {
+      background-color: var(--color-text-secondary);
+    }
+
+    & .mail-lock-icon {
+      stroke: var(--color-text-secondary);
+      fill: color-mix(in srgb, var(--color-text-secondary) 20%, transparent);
+    }
+  }
+
+  & img {
+    grid-column: 1;
+    grid-row: 1 / span 2;
+    -moz-context-properties: fill, stroke;
+    fill: light-dark(color-mix(in srgb, #feffff 20%, transparent), color-mix(in srgb, #1a202c 20%, transparent));
+    stroke: var(--color-surface-base);
+    align-self: center;
+    line-height: 0;
+
+    .fetching & {
+      stroke: var(--color-primary-default);
+      background-color: transparent !important;
+      box-shadow: none !important;
+    }
+
+    &.address-book-option-icon {
+      padding: 6px;
+      background-color: var(--color-primary-default);
+      box-shadow:
+        0 3px 4px -2px rgba(25, 81, 143, 0.5),
+        0 -2px 0 0 rgb(0, 0, 0, 0.25) inset;
+      border-radius: 5px;
+    }
+
+    @media (prefers-reduced-motion: no-preference) {
+      transition: background-color 220ms ease;
+
+      .fetching & {
+        animation: spinning-animation 1.5s ease infinite;
+      }
+    }
+
+    &.sync-icon {
+      content: var(--icon-sync-lg);
+    }
+
+    &.remote-address-book-icon {
+      content: var(--icon-address-book-remote-lg);
+    }
+
+    &.local-address-book-icon {
+      content: var(--icon-address-book-new-lg);
+    }
+
+    &.ldap-address-book-icon {
+      content: var(--addons-manager-site-permissions);
+    }
+
+    &.mail-lock-icon {
+      stroke: var(--color-primary-default);
+      fill: color-mix(in srgb, var(--color-primary-default) 20%, transparent);
+      content: var(--icon-mail-lock-lg);
+    }
+  }
+
+  & .option-title {
+    grid-column: 2;
+    grid-row: 1;
+    font-size: 1.54rem;
+    color: var(--color-primary-hover);
+    font-weight: 400;
+    text-align: start;
+    text-overflow: ellipsis;
+
+    &.account-title {
+      font-size: 1.15rem;
+      color: var(--color-text-secondary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+  }
+
+  & .option-data {
+    grid-column: 2;
+    grid-row: 2;
+    font-size: 1rem;
+    font-weight: 500;
+    color: var(--color-text-secondary);
+    text-align: start;
+
+    &.account-data {
+      color: var(--color-primary-hover);
+    }
+  }
+
+  & .account-address-book-count {
+    grid-column: 3;
+    grid-row: 1;
+    padding-block: 3px;
+    padding-inline: 6px;
+    font-weight: 700;
+    font-size: 1rem;
+    background-color: var(--color-primary-hover);
+    border-radius: 3px;
+    color: var(--color-primary-soft);
+  }
+}
+
+.select-all-button {
+  display: flex;
+  align-items: center;
+  user-select: none;
+
+  & input[type="checkbox"] {
+    content: var(--icon-checkbox) !important;
+    background: none;
+    color: currentColor;
+    fill: currentColor;
+    stroke: currentColor;
+    fill-opacity: 0;
+    stroke-opacity: 0;
+    -moz-context-properties: fill, fill-opacity, stroke, stroke-opacity;
+    border: none;
+
+    &:checked {
+      fill-opacity: 1;
+      background: none;
+    }
+
+    &:indeterminate {
+      stroke-opacity: 1;
+      background: none;
+    }
+  }
+}
+
+@keyframes spinning-animation {
+  0% {
+    transform: rotate(0);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+#advancedConfigurationLdap,
+#simpleConfigurationLdap {
+  padding-block-end: 9px;
+}
+
+.confirmation-question {
+  text-align: center;
+  margin-block: 0;
+}

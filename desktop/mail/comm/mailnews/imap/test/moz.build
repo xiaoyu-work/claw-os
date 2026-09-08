@@ -1,0 +1,26 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+XPCSHELL_TESTS_MANIFESTS += [
+    "unit/xpcshell-maildir.toml",
+    "unit/xpcshell-mbox.toml",
+]
+
+LOCAL_INCLUDES += [
+    "../../base/src",
+    "../src",
+    "/xpcom/tests",
+]
+
+USE_LIBS += [
+    "msgbsutl_s",
+    "msgimap_s",
+    "nspr",
+    "xpcomglue_s",
+    "xul",
+]
+
+OS_LIBS += CONFIG["MOZ_ZLIB_LIBS"]
+
+TEST_DIRS += ["gtest"]

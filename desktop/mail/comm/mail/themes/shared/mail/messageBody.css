@@ -1,0 +1,254 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+/* ===== messageBody.css =================================================
+  == Styles for the body of a mail message.
+  ======================================================================= */
+@import url("chrome://messenger/skin/messageQuotes.css");
+@import url("chrome://messenger/skin/colors.css");
+
+@namespace url("http://www.w3.org/1999/xhtml");
+
+/* Override overflow: hidden in some messages. */
+:root {
+  overflow: auto !important;
+
+  /* stylelint-disable-next-line media-query-no-invalid */
+  @media (prefers-color-scheme: dark) and -moz-pref("mail.dark-reader.enabled") {
+    color-scheme: dark;
+  }
+}
+
+mailattachcount {
+  display: none;
+}
+
+/* :::: message header ::::: */
+
+@media screen {
+  .moz-main-header,
+  .moz-main-header + br,
+  .moz-print-only {
+    display: none;
+  }
+}
+
+.moz-header-part1 {
+  background-color: #efefef;
+}
+
+.moz-header-part2,
+.moz-header-part3 {
+  background-color: #dedede;
+}
+
+/* stylelint-disable-next-line media-query-no-invalid */
+@media (prefers-color-scheme: dark) and -moz-pref("mail.dark-reader.enabled") {
+  .moz-header-part1 {
+    background-color: var(--color-gray-70);
+  }
+
+  .moz-header-part2,
+  .moz-header-part3 {
+    background-color: var(--color-gray-80);
+  }
+}
+
+.moz-header-display-name {
+  display: inline;
+  font-weight: bold;
+  white-space: pre;
+}
+
+/* ::::: message text, incl. quotes ::::: */
+
+.moz-text-flowed blockquote,
+.moz-text-plain blockquote {
+  margin: 0;
+}
+
+.moz-text-plain {
+  & pre {
+    margin: 0;
+    font-family: inherit;
+  }
+
+  &[wrap="true"] {
+    white-space: pre-wrap;
+  }
+
+  &[wrap="false"] {
+    white-space: pre;
+  }
+
+  &[wrap="flow"] .moz-txt-sig {
+    white-space: pre-wrap;
+  }
+
+  &[graphical-quote="false"] blockquote {
+    border-style: none;
+    padding: 0;
+  }
+
+  &[graphical-quote="true"] .moz-txt-citetags {
+    display: none;
+  }
+}
+
+.moz-txt-underscore {
+  text-decoration: underline;
+}
+
+.moz-txt-formfeed {
+  display: block;
+  block-size: 100vh;
+}
+
+/* stylelint-disable-next-line media-query-no-invalid */
+@media (prefers-color-scheme: dark) and -moz-pref("mail.dark-reader.enabled") {
+  html {
+    background-color: var(--color-gray-90);
+    color: var(--color-text-base-dark);
+  }
+}
+
+/* Ignore named pages when printing. */
+@media print {
+  * {
+    page: auto !important;
+  }
+}
+
+/* ::::: images ::::: */
+
+img {
+  &[shrinktofit] {
+    /* width of the document, minus the margin of the body (8px in the UA
+    stylesheet), minus the scrollbar */
+    max-inline-size: calc(100svi - 16px - env(scrollbar-inline-size)) !important;
+
+    &[overflowing] {
+      cursor: zoom-in;
+      object-fit: scale-down;
+    }
+  }
+
+  &[overflowing]:not([shrinktofit]) {
+    cursor: zoom-out;
+    /* Unbound the sizing of the image so it is displayed at full size. */
+    block-size: auto !important;
+    inline-size: auto !important;
+    max-inline-size: none !important;
+  }
+}
+
+.moz-attached-image-container {
+  text-align: center;
+}
+
+/* ::::: vcard ::::: */
+
+.moz-vcard-table {
+  margin-block-start: 10px;
+  border-radius: 3px;
+  box-shadow: 0 1px 3px hsla(0, 0%, 50%, 0.6);
+}
+
+.moz-vcard-property {
+  font-size: 80%;
+  color: gray;
+}
+
+.moz-vcard-badge {
+  margin-block-start: 2px;
+  block-size: 32px;
+  inline-size: 32px;
+  background-image: url("chrome://messenger/skin/addressbook/icons/contact-generic.svg");
+  background-size: 100% 100%;
+  background-color: transparent;
+  display: block;
+  opacity: 0.7;
+  cursor: pointer;
+
+  &:hover {
+    opacity: 0.8;
+
+    &:active {
+      opacity: 1;
+    }
+  }
+
+  &:focus {
+    outline: none;
+  }
+}
+
+/* Old style feeds, pre Tb3.0 */
+#_mailrssiframe {
+  position: fixed;
+  display: block;
+  inset-block-start: 0;
+  inset-inline-start: 0;
+  inline-size: 100%;
+  block-size: 100%;
+  border: none;
+}
+
+/* Attachment display styling (for inline attachments and printing) */
+.moz-mime-attachment-header {
+  border-style: none;
+  border-block-start: 1px solid GrayText;
+  padding-block: 0.625em 0.2em;
+
+  &.moz-print-only {
+    margin-block-start: 1em;
+  }
+}
+
+.moz-mime-attachment-header-name {
+  color: GrayText;
+  font-size: 80%;
+  font-family: Arial, sans-serif;
+}
+
+.moz-mime-attachment-wrap {
+  padding: 0 1em;
+}
+
+.moz-mime-attachment-table {
+  inline-size: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+
+  & tr + tr > td {
+    border-block-start: 1px solid GrayText;
+    padding-block-start: 0.25em;
+  }
+}
+
+.moz-mime-attachment-file {
+  word-wrap: break-word;
+}
+
+.moz-mime-attachment-size {
+  vertical-align: top;
+  inline-size: 10ch;
+  text-align: end;
+}
+
+.moz-mime-attachment-file,
+.moz-mime-attachment-size {
+  padding: 0 0 0.25em;
+}
+
+/* ::::: links ::::: */
+/* stylelint-disable-next-line media-query-no-invalid */
+@media (prefers-color-scheme: dark) and -moz-pref("mail.dark-reader.enabled") {
+  a:link {
+    color: var(--color-text-highlight-dark);
+  }
+  a:visited {
+    color: VisitedText;
+  }
+}

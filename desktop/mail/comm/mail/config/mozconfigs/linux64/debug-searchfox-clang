@@ -1,0 +1,14 @@
+MOZ_AUTOMATION_BUILD_SYMBOLS=0
+MOZ_AUTOMATION_CHECK=0
+
+. "$topsrcdir/build/unix/mozconfig.linux"
+. "$topsrcdir/comm/mail/config/mozconfigs/common"
+
+ac_add_options --enable-debug
+
+# Add the static checker
+ac_add_options --enable-clang-plugin
+ac_add_options --enable-mozsearch-plugin
+
+# Disable enforcing that add-ons are signed by the trusted root
+MOZ_REQUIRE_ADDON_SIGNING=0

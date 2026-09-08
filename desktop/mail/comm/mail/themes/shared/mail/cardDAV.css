@@ -1,0 +1,93 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, you can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#carddav-statusArea {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  padding: 3px 4px;
+  color: var(--color-text-base);
+
+  &[status="error"] {
+    background-color: #ffe900;
+    border-color: #f2d00f;
+    color: var(--color-ink-90);
+  }
+
+  &[status="loading"] {
+    background-color: rgba(0, 0, 0, 0.05);
+    border-color: rgba(0, 0, 0, 0.1);
+  }
+}
+
+#carddav-statusContainer {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  /* center align */
+  max-inline-size: max-content;
+  margin-inline: auto;
+
+  & > #carddav-statusImage {
+    flex: 0 0 auto;
+  }
+
+  & > #carddav-statusMessage {
+    flex: 1 1 auto;
+  }
+}
+
+#carddav-statusImage {
+  -moz-context-properties: fill;
+  fill: currentColor;
+  inline-size: 16px;
+  block-size: 16px;
+
+  &:not([src]) {
+    display: none;
+  }
+}
+
+#carddav-resultsArea {
+  margin-block: 6px;
+}
+
+#carddav-availableBooksHeader {
+  font-weight: 600;
+}
+
+#carddav-availableBooks {
+  overflow: auto;
+  flex: 1 1 0;
+}
+
+#carddav-properties-table {
+  display: grid;
+  grid-template-columns: min-content auto;
+  align-items: baseline;
+}
+
+.input-container {
+  display: flex;
+
+  & > * {
+    flex: 1;
+  }
+}
+
+#carddav-refreshActive-cell {
+  /* This shouldn't be necessary, but there's no good combination of checkbox
+   * and label that play nicely with the align-items: baseline above. */
+  align-self: center;
+}
+
+#carddav-refreshInterval-cell {
+  display: flex;
+  align-items: baseline;
+}
+
+#carddav-refreshInterval {
+  flex: 1;
+  margin: 2px 4px;
+}

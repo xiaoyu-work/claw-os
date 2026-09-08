@@ -1,0 +1,41 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "nsISupports.idl"
+#include "MailNewsTypes2.idl"
+
+interface nsIDBChangeListener;
+interface nsIMsgDBHdr;
+
+[scriptable, uuid(22baf00b-939d-42c3-ac51-21d99dfa1f05)]
+interface nsIDBChangeAnnouncer  : nsISupports {
+  void addListener(in nsIDBChangeListener listener);
+  void removeListener(in nsIDBChangeListener listener);
+
+  void notifyHdrChangeAll(in nsIMsgDBHdr aHdrChanged,
+                          in unsigned long aOldFlags,
+                          in unsigned long aNewFlags,
+                          in nsIDBChangeListener instigator);
+
+  void notifyHdrAddedAll(in nsIMsgDBHdr aHdrAdded,
+                         in nsMsgKey parentKey,
+                         in long flags,
+                         in nsIDBChangeListener instigator);
+
+  void notifyHdrDeletedAll(in nsIMsgDBHdr aHdrDeleted,
+                           in nsMsgKey parentKey,
+                           in long flags,
+                           in nsIDBChangeListener instigator);
+
+  void notifyParentChangedAll(in nsMsgKey keyReparented,
+                              in nsMsgKey oldParent,
+                              in nsMsgKey newParent,
+                              in nsIDBChangeListener instigator);
+
+  void notifyReadChanged(in nsIDBChangeListener instigator);
+
+  void notifyJunkScoreChanged(in nsIDBChangeListener aInstigator);
+
+  void notifyAnnouncerGoingAway();
+};

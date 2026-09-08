@@ -1,0 +1,33 @@
+[DEFAULT]
+head = "head.js"
+prefs = [
+  "mail.account.account1.identities=id1",
+  "mail.account.account1.server=server1",
+  "mail.accountmanager.accounts=account1",
+  "mail.accountmanager.defaultaccount=account1",
+  "mail.accountmanager.localfoldersserver=server1",
+  "mail.server.server1.hostname=Local Folders",
+  "mail.server.server1.name=Local Folders",
+  "mail.server.server1.type=none",
+  "mail.server.server1.userName=nobody",
+
+  "mail.notification.loglevel=Debug",
+  "mail.provider.suppress_dialog_on_startup=true",
+  "mail.spotlight.firstRunDone=true",
+  "mail.winsearch.firstRunDone=true",
+  "mailnews.database.global.indexer.enabled=false",
+  "mailnews.start_page.override_url=about:blank",
+  "mailnews.start_page.url=about:blank",
+]
+subsuite = "thunderbird"
+tags = ["notifications"]
+
+["browser_collection.js"]
+
+["browser_notification.js"]
+
+["browser_sounds.js"]
+support-files = [
+  "bell.oga",
+  "complete.oga",
+]

@@ -1,0 +1,18 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+/* make findbar appear above content */
+#appcontent {
+  -moz-box-direction: reverse;
+}
+
+/* style findbar for being on top */
+#FindToolbar {
+  border-top-color: ThreeDHighlight;
+  border-top-width: 1px;
+  border-bottom: 1px solid;
+  border-bottom-color: ThreeDShadow;
+  padding-top: 1px;
+  padding-bottom: 0px;
+}

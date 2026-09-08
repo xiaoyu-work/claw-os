@@ -1,0 +1,24 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+# =========================================================
+# = MAPI support (Windows only)
+# =========================================================
+
+option("--disable-mapi", help="Disable MAPI support", when=target_is_windows)
+
+
+@depends_if("--enable-mapi", when=target_is_windows)
+def mapi_support(arg):
+    return True
+
+
+set_config("MOZ_MAPI_SUPPORT", mapi_support)
+set_define("MOZ_MAPI_SUPPORT", mapi_support)
+
+# =========================================================
+# = OpenPGP integration
+# =========================================================
+
+include("../third_party/openpgp.configure")

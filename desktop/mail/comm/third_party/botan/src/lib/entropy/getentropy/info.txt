@@ -1,0 +1,16 @@
+<internal_defines>
+ENTROPY_SRC_GETENTROPY -> 20170327
+</internal_defines>
+
+<module_info>
+name -> "getentropy"
+brief -> "Wrapper for BSD's getentropy system call"
+</module_info>
+
+<header:internal>
+getentropy.h
+</header:internal>
+
+<os_features>
+getentropy
+</os_features>

@@ -1,0 +1,189 @@
+<?xml version="1.0"?>
+
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+<?xml-stylesheet href="chrome://editor/skin/editor.css" type="text/css"?>
+<?xml-stylesheet href="chrome://editor/skin/editorPrimaryToolbar.css" type="text/css"?>
+<?xul-overlay href="chrome://editor/content/editorOverlay.xul"?>
+<?xul-overlay href="chrome://editor/content/editingOverlay.xul"?>
+<?xul-overlay href="chrome://communicator/content/charsetOverlay.xul"?>
+<?xul-overlay href="chrome://communicator/content/utilityOverlay.xul"?>
+<?xul-overlay href="chrome://communicator/content/tasksOverlay.xul"?>
+<?xul-overlay href="chrome://communicator/content/contentAreaContextOverlay.xul"?>
+<?xul-overlay href="chrome://communicator/content/sidebar/sidebarOverlay.xul"?>
+<?xul-overlay href="chrome://debugQA/content/debugQAEditorOverlay.xul"?>
+
+<!DOCTYPE window [
+<!ENTITY % debugQAEditorOverlayDTD SYSTEM "chrome://debugqa/locale/debugQAEditorOverlay.dtd">
+%debugQAEditorOverlayDTD;
+<!ENTITY % editorDTD SYSTEM "chrome://editor/locale/editor.dtd">
+%editorDTD;
+<!ENTITY % editorOverlayDTD SYSTEM "chrome://editor/locale/editorOverlay.dtd">
+%editorOverlayDTD;
+]>
+
+<!-- NOTE: If we don't have "title" set, text editor doesn't work! -->
+<window id="editorWindow"
+        xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+        onload="TextEditorOnLoad()"
+        onunload="EditorShutdown()"
+        onclose="return Async.promiseSpinningly(EditorCanClose());"
+        onfocus="EditorOnFocus()"
+        contenttitlesetting="true"
+        title=""
+        titlemodifier="&textEditorWindow.titlemodifier;"
+        titlemenuseparator="&editorWindow.titlemodifiermenuseparator;"
+        toggletoolbar="true"
+        lightweightthemes="true"
+        lightweightthemesfooter="status-bar"
+        windowtype="composer:text"
+        macanimationtype="document"
+        drawtitle="true"
+        width="640" height="480"
+        screenX="10" screenY="10"
+        persist="screenX screenY width height sizemode">
+
+  <script src="chrome://editor/content/editor.js"/>
+  <script src="chrome://editor/content/ComposerCommands.js"/>
+  <script src="chrome://communicator/content/contentAreaClick.js"/>
+  <script src="chrome://global/content/printUtils.js"/>
+  <script src="chrome://global/content/nsDragAndDrop.js"/>
+
+  <commandset id="editorCommands">
+    <commandset id="commonEditorMenuItems"/>
+    <commandset id="composerEditMenuItems"/>
+    <commandset id="composerSaveMenuItems"/>
+    <commandset id="composerMenuItems"/>
+    <commandset id="tasksCommands"/>
+  </commandset>
+
+  <!-- broadcaster nodes are appended here from the overlays -->
+  <broadcasterset id="mainBroadcasterSet"/>
+
+  <!-- keys are appended from the overlay -->
+  <keyset id="editorKeys">
+    <keyset id="tasksKeys"/>
+    <key id="showHideSidebar"/>
+  </keyset>
+
+  <popupset id="contentAreaContextSet"/>
+  <popupset id="editorPopupSet"/>
+
+  <vbox id="titlebar"/>
+
+  <toolbox id="EditorToolbox"
+           mode="full"
+           defaultmode="full">
+    <toolbar id="toolbar-menubar"
+             type="menubar"
+             class="chromeclass-menubar"
+             persist="collapsed"
+             grippytooltiptext="&menuBar.tooltip;"
+             customizable="true"
+             defaultset="menubar-items"
+             mode="icons"
+             iconsize="small"
+             defaultmode="icons"
+             defaulticonsize="small"
+             context="toolbar-context-menu">
+      <toolbaritem id="menubar-items"
+                   class="menubar-items"
+                   align="center">
+    <menubar id="main-menubar" class="chromeclass-menubar">
+      <menu id="menu_File"/>
+      <menu id="menu_Edit"/>
+
+      <menu id="menu_View">
+        <!-- id pulls in "Show Sidebar" item from sidebarOverlay -->
+        <menupopup id="menu_View_Popup">
+          <menu id="menu_Toolbars">
+            <menupopup id="view_toolbars_popup"
+                       onpopupshowing="onViewToolbarsPopupShowing(event);"
+                       oncommand="onViewToolbarCommand(event);">
+              <menuitem id="menu_showTaskbar"/>
+            </menupopup>
+          </menu>
+          <menuseparator id="viewSep1"/>
+          <menu id="charsetMenu"
+                onpopupshowing="EditorUpdateCharsetMenu(event.target);"
+                oncommand="EditorSetCharacterSet(event);"/>
+        </menupopup>
+      </menu>
+
+      <menu id="insertMenuPlainText"
+            label="&insertMenu.label;"
+            accesskey="&insertMenu.accesskey;">
+        <menupopup id="insertMenuPlainTextPopup">
+          <menuitem id="insertPlainTextChars"
+                    accesskey="&insertCharsCmd.accesskey;"
+                    command="cmd_insertChars"/>
+        </menupopup>
+      </menu>
+
+      <!-- tasks and window menus filled from tasksOverlay -->
+      <menu id="tasksMenu"/>
+      <menu id="windowMenu"/>
+
+      <!-- help menu filled from globalOverlay -->
+      <menu id="menu_Help"/>
+
+      <spacer flex="1"/>
+    </menubar>
+      </toolbaritem>
+    </toolbar>
+
+
+     <!-- toolbar filled out from editorOverlay -->
+    <toolbar id="EditToolbar"
+             class="chromeclass-toolbar toolbar-primary"
+             persist="collapsed"
+             grippytooltiptext="&compositionToolbar.tooltip;"
+             toolbarname="&compositionToolbarCmd.label;"
+             accesskey="&compositionToolbarCmd.accesskey;"
+             customizable="true"
+             defaultset="newButton,openButton,saveButton,print-button,separator,spellingButton,spring,throbber-box"
+             context="toolbar-context-menu">
+      <toolbarbutton id="newButton"/>
+      <toolbarbutton id="openButton"/>
+      <toolbarbutton id="saveButton"/>
+      <toolbarbutton id="cutButton"/>
+      <toolbarbutton id="copyButton"/>
+      <toolbarbutton id="pasteButton"/>
+      <toolbarbutton id="print-button"/>
+      <toolbarbutton id="findButton"/>
+      <toolbarbutton id="spellingButton"/>
+      <toolbaritem id="throbber-box"/>
+    </toolbar>
+
+    <toolbarset id="customToolbars" context="toolbar-context-menu"/>
+
+    <toolbarpalette id="EditToolbarPalette"/>
+  </toolbox>
+
+  <hbox id="sidebar-parent" flex="1">
+    <!-- From sidebarOverlay.xul -->
+    <vbox id="sidebar-box" class="chromeclass-extrachrome" hidden="true"/>
+    <splitter id="sidebar-splitter" class="chromeclass-extrachrome" hidden="true"/>
+    <vbox id="appcontent" flex="1">
+      <findbar id="FindToolbar" browserid="content-frame"/>
+      <editor editortype="text"
+              type="content"
+              primary="true"
+              id="content-frame"
+              src="about:blank" flex="1"
+              context="contentAreaContextMenu"/>
+    </vbox> <!-- appcontent -->
+  </hbox><!-- sidebar-parent -->
+
+  <statusbar id="status-bar"
+             class="chromeclass-status">
+    <statusbarpanel id="component-bar"/>
+    <statusbarpanel id="statusText"
+                    label="&statusText.label;"
+                    flex="1"
+                    crop="right"/>
+    <statusbarpanel id="offline-status" class="statusbarpanel-iconic"/>
+  </statusbar>
+</window>

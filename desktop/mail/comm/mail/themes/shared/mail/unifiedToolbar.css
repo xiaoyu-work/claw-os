@@ -1,0 +1,275 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@import url("chrome://messenger/skin/shared/unifiedToolbarShared.css");
+@import url("chrome://messenger/skin/shared/serverMenuItems.css");
+
+:root {
+  --unified-toolbar-padding: 4px;
+  --unified-drag-space: 30px;
+  --unified-customization-padding: 30px;
+  /* minimal possible toolbar height */
+  --unified-toolbar-minimal-height: 30px;
+  /* button border + button padding */
+  --unified-toolbar-button-spacing-height: calc(2px + var(--button-padding) * 2);
+  /* 1lh for the text */
+  --unified-toolbar-content-min-height: calc(1lh + var(--unified-toolbar-button-spacing-height));
+  /* searchbar field height + border + block padding */
+  --unified-toolbar-searchbar-height: calc(1.45lh + 4px);
+
+  &[uidensity="compact"] {
+    --unified-toolbar-padding: 1px;
+    --unified-drag-space: 15px;
+    --unified-toolbar-minimal-height: 24px;
+  }
+
+  &[uidensity="touch"] {
+    --unified-toolbar-padding: 7px;
+  }
+
+  &[sizemode="fullscreen"],
+  &:not([customtitlebar]) {
+    --unified-drag-space: 3px;
+  }
+
+  & .icons-above-text {
+    /* icon plus gap is 19px, 1lh for the text */
+    --unified-toolbar-content-min-height: calc(19px + 1lh + var(--unified-toolbar-button-spacing-height));
+  }
+
+  & .icons-only {
+    /* icon size is 16px */
+    --unified-toolbar-content-min-height: calc(16px + var(--unified-toolbar-button-spacing-height));
+  }
+}
+
+unified-toolbar {
+  display: block;
+  border-block-end: 1px solid rgba(0, 0, 0, 0.15);
+}
+
+#unifiedToolbarContainer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  -moz-window-dragging: drag;
+  inline-size: 100vw;
+
+  /* minheight for the macOS titlebar */
+  .customizingUnifiedToolbar & {
+    min-block-size: 22px;
+  }
+
+  & .titlebar-buttonbox-container {
+    flex: 0 0 auto;
+
+    @media (-moz-platform: windows) or (-moz-platform: linux) {
+      align-self: stretch;
+    }
+  }
+
+  @media (-moz-gtk-csd-reversed-placement) {
+    flex-direction: row-reverse;
+  }
+}
+
+#unifiedToolbar {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  padding-block: var(--unified-toolbar-padding);
+  min-inline-size: 0;
+  overflow: hidden;
+
+  & .button:is(.toolbar-button, .unified-toolbar-button) {
+    margin-block: 0;
+  }
+}
+
+#unifiedToolbarContent {
+  flex: 1 1 auto;
+  min-block-size: max(var(--unified-toolbar-minimal-height), var(--unified-toolbar-searchbar-height), var(--unified-toolbar-content-min-height));
+  margin: 0;
+  /* Padding needed for the children's focus ring. */
+  padding-block: 3px;
+  padding-inline: var(--unified-drag-space) 3px;
+
+  & li {
+    -moz-window-dragging: no-drag;
+  }
+
+  & .unified-toolbar-button[disabled] {
+    opacity: 0.4;
+  }
+
+  & .spacer {
+    -moz-window-dragging: drag;
+  }
+
+  @media (-moz-windows-accent-color-in-titlebar) {
+    & .search-bar {
+      --focus-outline-color: var(--windows-accent-outline-color);
+      --search-outline-offset: var(--focus-outline-offset);
+    }
+  }
+}
+
+unified-toolbar-customization {
+  display: none;
+}
+
+/* customizing unified toolbar */
+
+/* TODO this approach will have issues with spaces toolbar paddings */
+
+/* we still need the space to be taken up for correct alignment of window decorations */
+.customizingUnifiedToolbar {
+  & #unifiedToolbar {
+    visibility: hidden;
+  }
+
+  & #unifiedToolbar > *,
+  & :is(#messengerBody, #spacesToolbar, #toolbar-menubar, #tabs-toolbar, shortcuts-container, account-hub-container) {
+    display: none;
+  }
+
+  & unified-toolbar-customization {
+    display: flex;
+    block-size: 100%;
+    background-color: color-mix(in srgb, var(--layout-background-0) 50%, var(--color-black));
+    color: var(--layout-color-1);
+    flex: 1;
+    overflow: hidden;
+    padding: var(--unified-customization-padding);
+  }
+}
+
+#customizationHeading {
+  align-self: center;
+  font-size: 1.2rem;
+  font-weight: 600;
+  color: var(--layout-color-2);
+  margin-block: 0.5em;
+}
+
+#unifiedToolbarCustomizationContainer {
+  background-color: var(--layout-background-3);
+  border-radius: 6px;
+  flex-grow: 1;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+  --customization-footer-padding: 12px;
+  box-shadow:
+    0 2px 12px -3px rgba(0, 0, 0, 0.5),
+    0 2px 24px -6px rgba(0, 0, 0, 0.5);
+
+  & div[role="tabpanel"] {
+    flex-grow: 1;
+  }
+}
+
+#customizationFooter {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+  user-select: none;
+  background: var(--layout-background-1);
+  border-radius: 0 0 6px 6px;
+  /* We need at least 1rem of padding to ensure the
+   * #unifiedToolbarCustomizationUnsavedChanges can be displayed in it */
+  padding-block: max(calc(var(--customization-footer-padding) * 2), 1rem);
+  padding-inline: var(--customization-footer-padding);
+
+  & div:last-child {
+    text-align: end;
+  }
+}
+
+#buttonStyleContainer {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+#unifiedToolbarCustomizationUnsavedChanges {
+  position: fixed;
+  inset-block-end: calc((var(--customization-footer-padding) * 2 - 1em) / 2 + var(--unified-customization-padding));
+  inset-inline-end: calc(var(--customization-footer-padding) + var(--unified-customization-padding));
+}
+
+#customizationTabs {
+  display: flex;
+  flex-wrap: nowrap;
+  max-inline-size: 100vw;
+  background-color: var(--tabs-toolbar-background-color);
+  box-shadow: var(--tabs-toolbar-box-shadow);
+  padding-block-start: 3px;
+  padding-inline: 6px;
+}
+
+unified-toolbar-customization-pane:not([hidden]) {
+  flex-grow: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--layout-background-1);
+}
+
+unified-toolbar-tab {
+  min-inline-size: 28px;
+  overflow-x: hidden;
+  display: block;
+
+  &::part(icon) {
+    -moz-context-properties: fill, stroke;
+    fill: color-mix(in srgb, currentColor 20%, transparent);
+    stroke: currentColor;
+    content: var(--webextension-toolbar-image, var(--icon-extension));
+    max-inline-size: 16px;
+    max-block-size: 16px;
+  }
+}
+
+#unified-toolbar-customization-tab-mail::part(icon) {
+  content: var(--icon-mail);
+}
+
+#unified-toolbar-customization-tab-calendar::part(icon) {
+  content: var(--icon-calendar);
+}
+
+#unified-toolbar-customization-tab-tasks::part(icon) {
+  content: var(--icon-tasks);
+}
+
+#unified-toolbar-customization-tab-addressbook::part(icon) {
+  content: var(--icon-address-book);
+}
+
+#unified-toolbar-customization-tab-chat::part(icon) {
+  content: var(--icon-chat);
+}
+
+#unified-toolbar-customization-tab-settings::part(icon) {
+  content: var(--icon-settings);
+}
+
+:is(.live-content, .button-appmenu, #spacesPinnedButton):-moz-window-inactive {
+  opacity: 0.6;
+}
+
+/* Get messages popup */
+
+#toolbarGetMessagesContext .menu-icon {
+  -moz-context-properties: fill, stroke;
+  fill: color-mix(in srgb, currentColor 20%, transparent);
+  stroke: currentColor;
+}
+
+#toolbarContextGetAllNewMessages {
+  --menuitem-icon: var(--icon-cloud-download);
+}

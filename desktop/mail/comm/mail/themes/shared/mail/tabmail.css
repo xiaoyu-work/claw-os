@@ -1,0 +1,479 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+:root {
+  --tabs-toolbar-background-color: light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.15));
+  --tabs-toolbar-box-shadow: inset 0 3px 9px -6px rgba(0, 0, 0, 0.5);
+
+  @media (prefers-contrast) {
+    --tabs-toolbar-background-color: transparent;
+    --tabs-toolbar-box-shadow: none;
+  }
+}
+
+#tabmail {
+  overflow: hidden;
+
+  :root[lwtheme] & {
+    text-shadow: none;
+  }
+}
+
+#tabmail-tabs {
+  /* Overriding tabbox.css */
+  border: 0;
+  /* Make sure the drop indicator stays inside the parent boundaries */
+  position: relative;
+
+  & .tabmail-tab:first-child .tab-close-button,
+  &[closebuttons="activetab"] .tabmail-tab:not([selected="true"]) .tab-close-button {
+    display: none;
+  }
+}
+
+#tabs-toolbar {
+  appearance: none;
+  --tabs-top-border-width: 1px;
+  background-image: linear-gradient(to top, var(--chrome-content-separator-color) 0, var(--tabs-toolbar-background-color) 1px);
+  box-shadow: var(--tabs-toolbar-box-shadow);
+  color-scheme: light dark;
+  padding-block-start: 3px;
+  padding-inline: 3px;
+}
+
+#tabpanelcontainer {
+  min-block-size: 0;
+}
+
+.tab-stack {
+  min-block-size: inherit;
+}
+
+.tabmail-tab {
+  appearance: none;
+  align-items: stretch;
+  flex: 100 100;
+  color-scheme: light dark;
+  background-color: transparent;
+  border-radius: 4px 4px 0 0;
+  border-width: 0;
+  color: var(--toolbar-text-color);
+  margin: 0;
+  margin-inline-end: 1px;
+  padding: 0;
+  max-inline-size: var(--tab-max-width);
+  min-inline-size: var(--tab-min-width);
+  inline-size: 0;
+  overflow: hidden;
+
+  /* The selected tab should appear above adjacent tabs and the highlight
+     of #tabs-toolbar */
+  &[selected="true"] {
+    -moz-user-focus: ignore;
+    position: relative;
+    z-index: 2;
+    box-shadow: 0 2px 8px -5px var(--color-black);
+  }
+
+  :root[lwtheme] & {
+    color: inherit;
+
+    &[visuallyselected="true"] {
+      color: var(--lwt-tab-text, var(--toolbar-text-color, inherit));
+    }
+  }
+
+  :root:not([lwtheme]) &:not([selected]) {
+    color: inherit;
+  }
+}
+
+.tab-content {
+  padding-inline: 9px;
+  display: flex;
+  align-items: center;
+  min-inline-size: 0;
+
+  & > :is(.tab-throbber, .tab-icon-image, .tab-close-button) {
+    flex: 0 0 auto;
+  }
+
+  & > .tab-label-container {
+    flex: 1 1 auto;
+    overflow: hidden;
+
+    &[textoverflow] {
+      mask-image: linear-gradient(to left, transparent, black 2em);
+
+      &:-moz-locale-dir(rtl) {
+        mask-image: linear-gradient(to right, transparent, black 2em);
+      }
+    }
+  }
+}
+
+.tab-throbber,
+.tab-icon-image,
+button.tab-close-button {
+  margin-block: 1px 0;
+}
+
+.tab-throbber,
+.tab-icon-image {
+  block-size: 16px;
+  inline-size: 16px;
+  margin-inline-end: 6px;
+  -moz-context-properties: fill, stroke, stroke-opacity;
+  fill: color-mix(in srgb, currentColor 20%, transparent);
+  stroke: currentColor;
+}
+
+.tab-icon-image:not([src]) {
+  content: var(--icon-file);
+}
+
+.tab-throbber:not([busy]):not([thinking]),
+.tab-throbber[busy] + .tab-icon-image,
+.tab-throbber[thinking] + .tab-icon-image,
+.tab-throbber[busy][thinking] + .tab-icon-image {
+  display: none;
+}
+
+.tab-throbber {
+  list-style-image: none;
+
+  &[busy] {
+    background-image: url("chrome://messenger/skin/icons/hourglass.svg");
+    background-position: center;
+    background-repeat: no-repeat;
+    opacity: 0.8;
+
+    @media (prefers-reduced-motion: no-preference) {
+      &[busy] {
+        position: relative;
+        overflow: hidden;
+        background-image: none;
+
+        &::before {
+          content: "";
+          position: absolute;
+          background-image: var(--icon-loading);
+          background-position: left center;
+          background-repeat: no-repeat;
+          inline-size: 480px;
+          block-size: 100%;
+          animation: tab-throbber-animation 1.05s steps(30) infinite;
+          opacity: 0.7;
+        }
+
+        &:-moz-locale-dir(rtl)::before {
+          animation-name: tab-throbber-animation-rtl;
+        }
+      }
+    }
+  }
+}
+
+@keyframes tab-throbber-animation {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-100%);
+  }
+}
+
+@keyframes tab-throbber-animation-rtl {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.tab-label {
+  white-space: nowrap;
+  margin-inline: 0;
+}
+
+button.tab-close-button {
+  margin-inline: 1px -2px;
+  padding: 2px;
+
+  &:hover {
+    background-color: color-mix(in srgb, transparent 80%, CurrentColor);
+
+    &:active {
+      background-color: color-mix(in srgb, transparent 70%, CurrentColor);
+    }
+  }
+}
+
+.tab-close-icon {
+  inline-size: 16px;
+  block-size: 16px;
+  -moz-context-properties: fill, fill-opacity;
+  fill: currentColor;
+  fill-opacity: var(--toolbarbutton-icon-fill-opacity);
+}
+
+.tab-line {
+  block-size: 2px;
+  margin-block-start: 3px;
+  margin-inline: 3px;
+  border-radius: 3px;
+
+  &[selected="true"] {
+    background-color: var(--tabline-color);
+  }
+}
+
+.tab-background {
+  background-clip: padding-box;
+
+  &[selected="true"] {
+    background-color: var(--toolbar-background-color);
+    background-repeat: repeat-x;
+  }
+}
+
+/*
+ * LightweightThemeConsumer will set the current lightweight theme's header
+ * image to the lwt-header-image variable, used in each of the following rulesets.
+ */
+
+/* Lightweight theme on tabs */
+:root[lwtheme] .tabmail-tab .tab-background[selected="true"] {
+  background-attachment: scroll, scroll, fixed;
+  background-color: transparent;
+  background-image:
+    linear-gradient(var(--lwt-selected-tab-background-color, transparent), var(--lwt-selected-tab-background-color, transparent)),
+    linear-gradient(var(--toolbar-background-color), var(--toolbar-background-color)), var(--lwt-header-image, none);
+  background-position:
+    0 0,
+    0 0,
+    right top;
+  background-repeat: repeat-x, repeat-x, no-repeat;
+  background-size:
+    auto 100%,
+    auto 100%,
+    auto auto;
+}
+
+/* Tab hover */
+
+.tabmail-tab:hover .tab-background:not([selected="true"]) {
+  background-color: light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.05));
+}
+
+.tab-line:not([selected="true"]) {
+  opacity: 0;
+  transform: scaleX(0);
+  transition:
+    transform 250ms var(--animation-easing-function),
+    opacity 250ms var(--animation-easing-function);
+}
+
+.tabmail-tab:hover .tab-line:not([selected="true"]) {
+  opacity: 1;
+  transform: none;
+  background-color: light-dark(rgba(0, 0, 0, 0.2), rgba(255, 255, 255, 0.15));
+}
+
+/**
+ * Tab Scrollbox Arrow Buttons
+ */
+
+#tabmail-arrowscrollbox {
+  min-block-size: var(--tab-min-height);
+
+  &::part(scrollbox) {
+    contain: inline-size;
+  }
+
+  &::part(scrollbutton-up),
+  &::part(scrollbutton-down) {
+    fill: var(--toolbarbutton-icon-fill, currentColor);
+    fill-opacity: var(--toolbarbutton-icon-fill-opacity);
+  }
+
+  /* Tab Overflow */
+  &:not([scrolledtostart])::part(overflow-start-indicator),
+  &:not([scrolledtoend])::part(overflow-end-indicator) {
+    inline-size: 18px;
+    background-image: url("chrome://messenger/skin/icons/overflow-indicator.png");
+    background-size: 17px 100%;
+    background-repeat: no-repeat;
+    border-inline-start: 1px solid;
+    border-image: linear-gradient(
+      rgba(255, 255, 255, 0.2),
+      rgba(255, 255, 255, 0.2) calc(100% - var(--tabs-tabbar-border-size)),
+      transparent calc(100% - var(--tabs-tabbar-border-size))
+    );
+    border-image-slice: 1;
+    margin-block-end: var(--tabs-tabbar-border-size);
+    pointer-events: none;
+    position: relative;
+    z-index: 3; /* the selected tab's z-index + 1 */
+  }
+
+  &:-moz-locale-dir(rtl)::part(overflow-start-indicator),
+  &:-moz-locale-dir(ltr)::part(overflow-end-indicator) {
+    transform: scaleX(-1);
+  }
+
+  &:not([scrolledtostart])::part(overflow-start-indicator) {
+    margin-inline: -1px -17px;
+  }
+
+  &:not([scrolledtoend])::part(overflow-end-indicator) {
+    margin-inline: -17px -1px;
+  }
+
+  &[scrolledtostart]::part(overflow-start-indicator),
+  &[scrolledtoend]::part(overflow-end-indicator) {
+    opacity: 0;
+  }
+
+  &::part(overflow-start-indicator),
+  &::part(overflow-end-indicator) {
+    transition: opacity 150ms ease;
+  }
+}
+
+/**
+ * All Tabs Button
+ */
+
+#alltabs-button {
+  list-style-image: var(--icon-nav-down-sm);
+
+  & .toolbarbutton-icon {
+    inline-size: 16px;
+    block-size: 16px;
+  }
+
+  & > .toolbarbutton-text {
+    display: none;
+  }
+}
+
+/* All Tabs Menupopup */
+
+.alltabs-item {
+  &[selected] {
+    font-weight: bold;
+  }
+
+  & > .menu-icon[srcset="null"] {
+    content: var(--icon-folder);
+    -moz-context-properties: fill, stroke;
+    fill: color-mix(in srgb, currentColor 20%, transparent);
+    stroke: currentColor;
+  }
+
+  &[busy] > .menu-icon {
+    content: url("chrome://messenger/skin/icons/hourglass.svg");
+    -moz-context-properties: fill, stroke;
+    fill: var(--selected-item-color);
+    stroke: currentColor;
+
+    @media (prefers-reduced-motion: no-preference) {
+      content: var(--icon-loading);
+      animation: alltabs-throbber-animation 1.05s steps(30) infinite;
+      object-fit: cover;
+      object-position: 0 0;
+    }
+  }
+}
+
+@keyframes alltabs-throbber-animation {
+  100% {
+    object-position: -480px 0;
+  }
+}
+
+/* Content Tabs */
+.chromeTabInstance[tabtoolbar="false"] .contentTabToolbox,
+.contentTabInstance[tabtoolbar="false"] .contentTabToolbox {
+  display: none;
+}
+
+.contentTabAddress {
+  display: flex;
+  align-items: center;
+
+  & > .contentTabSecurity {
+    flex: 0 0 auto;
+  }
+
+  & > .contentTabUrlInput {
+    flex: 1 1 auto;
+  }
+}
+
+.contentTabSecurity {
+  block-size: 16px;
+  inline-size: 16px;
+  -moz-context-properties: fill;
+  fill: currentColor;
+  /* Position within the input. */
+  position: relative;
+  /* Make sure we take up no width in the flow. */
+  margin-inline-end: -16px;
+  /* Move within the input. Input has a margin of 3px and border of 1px, so this
+   * is 5px within. */
+  inset-inline-start: 9px;
+
+  &.secure-connection-icon {
+    fill: #12bc00;
+  }
+
+  &[src] + .contentTabUrlInput {
+    /* 5px before the icon + 16px width + 4px after. */
+    padding-inline-start: 25px;
+  }
+
+  &:not([src]) {
+    display: none;
+
+    & + .contentTabUrlInput {
+      padding-inline-start: 4px;
+    }
+  }
+}
+
+.nav-button {
+  appearance: none;
+  list-style-image: var(--icon-nav-back);
+  border: 1px solid transparent;
+  border-radius: 2px;
+  margin: 5px 2px;
+  margin-inline-start: 2px;
+  -moz-context-properties: stroke;
+  stroke: currentColor;
+
+  &[disabled] {
+    color: inherit;
+
+    & > .toolbarbutton-icon {
+      opacity: 0.4;
+    }
+  }
+
+  &:not([disabled]):hover {
+    background-color: var(--toolbarbutton-background-color-hover);
+    cursor: pointer;
+  }
+
+  & > .toolbarbutton-text {
+    display: none;
+  }
+}
+
+.back-btn:-moz-locale-dir(rtl),
+.forward-btn:-moz-locale-dir(ltr) {
+  list-style-image: var(--icon-nav-forward);
+}

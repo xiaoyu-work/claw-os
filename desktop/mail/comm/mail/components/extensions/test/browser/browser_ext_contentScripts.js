@@ -1,0 +1,1094 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, you can obtain one at http://mozilla.org/MPL/2.0/. */
+
+"use strict";
+
+/**
+ * This test is using opening tabs and popups and tests content script and css
+ * injection in web pages and into about:blank.
+ */
+
+const CONTENT_PAGE =
+  "http://mochi.test:8888/browser/comm/mail/components/extensions/test/browser/data/content.html";
+const CONTENT_VALUES = {
+  backgroundColor: "rgba(0, 0, 0, 0)",
+  color: "rgb(0, 0, 0)",
+  foo: null,
+  textContent: "\n  This is text.\n  This is a link with text.\n  \n\n\n",
+};
+const ABOUTBLANK_VALUES = {
+  backgroundColor: "rgba(0, 0, 0, 0)",
+  color: "rgb(0, 0, 0)",
+  foo: null,
+  textContent: "",
+};
+const CONTENT_TASKS = [
+  "openContentTab",
+  "updateMailTabBrowser",
+  "createWebExtensionTab",
+  "createWebExtensionPopup",
+];
+const ABOUTBLANK_TASKS = [
+  "openContentTab",
+  // TODO: Investigate why we cannot load about:blank in the mail tab via
+  //       tabs.update(). Even if we include about:blank in `isContentTab` in
+  //       ext-tabs.js, the resulting tab does not receive a browser and many
+  //       assumptions in the API fail.
+  //"updateMailTabBrowser",
+  "createWebExtensionTab",
+  "createWebExtensionPopup",
+];
+
+const {
+  Management: {
+    global: { tabTracker, windowTracker },
+  },
+} = ChromeUtils.importESModule("resource://gre/modules/Extension.sys.mjs");
+
+/**
+ * WebExtension manifest overrides.
+ *
+ * @typedef {object} ManifestOverrides
+ * @property {number} manifest_version - Manifest version (2 or 3).
+ * @property {string[]} [permissions] - Extension permissions.
+ * @property {string[]} [host_permissions] - Host permissions (MV3).
+ */
+
+/**
+ * Test configuration.
+ *
+ * @typedef {object} TestConfig
+ * @property {string} url - The url to open in the test tab.
+ * @property {string} tabConfig - Determines how the tab is created, one of:
+ *   "openContentTab": Use window.openContentTab() to create the tab.
+ *   "createWebExtensionTab": Use browser.tabs.create() to create the tab.
+ *   "updateMailTabBrowser": Use browser.tabs.update() to load a page into a mail tab.
+ *   "createWebExtensionPopup": Use browser.windows.create() to create a popup window.
+ * @property {object} [values] - Expected content values.
+ * @property {string} [values.backgroundColor] - CSS background color of the body element.
+ * @property {string} [values.color] - CSS color of the body element.
+ * @property {string} [values.foo] - Value of the "foo" attribute of the body element.
+ * @property {string} [values.textContent] - Text content of the body element.
+ */
+
+/**
+ * Test extension object returned by ExtensionTestUtils.loadExtension().
+ *
+ * @typedef {object} Extension
+ * @see mochitest/tests/SimpleTest/ExtensionTestUtils.js
+ */
+
+/**
+ * @callback CreateExtensionFn
+ *
+ * Creates an extension to be used in a test, with custom manifest overrides.
+ *
+ * @param {ManifestOverrides} manifest
+ * @returns {Extension}
+ */
+
+/**
+ * Helper function for the initial ping-pong communication with the background
+ * script to open the requested tab and wait for it to load.
+ *
+ * @param {Extension} extension
+ * @param {ManifestOverrides} manifest
+ * @param {TestConfig} testConfig
+ *
+ * @returns {Promise<NativeTab>} Resolves to the loaded tab.
+ */
+async function getInitialTabLoaded(extension, manifest, testConfig) {
+  info(
+    `Preparing manifest version ${manifest.manifest_version} sub test for ${testConfig.tabConfig} with url ${testConfig.url}`
+  );
+  await extension.awaitMessage("get test config");
+  // Create the content tab, if requested by the testConfig. Otherwise the
+  // extension will create one after it has received the configuration.
+  if (testConfig.tabConfig == "openContentTab") {
+    window.openContentTab(testConfig.url);
+  }
+  extension.sendMessage(testConfig);
+
+  const id = await extension.awaitMessage("load tab");
+  const tab = tabTracker.getTab(id);
+  await awaitBrowserLoaded(tab.browser, url => url.endsWith(testConfig.url));
+  extension.sendMessage();
+
+  return tab;
+}
+
+/**
+ * Helper function used by the test extension to make common functions available
+ * in the background.
+ */
+function getBackgoundHelperFunctions() {
+  return () => {
+    window.getTestTab = async config => {
+      // Do we need to create a tab, or was it created via openContentTab()?
+      switch (config.tabConfig) {
+        case "openContentTab":
+          return browser.tabs.query({ active: true }).then(tabs => tabs[0]);
+
+        case "createWebExtensionTab":
+          return browser.tabs.create({ url: config.url });
+
+        case "updateMailTabBrowser":
+          return browser.tabs
+            .query({ active: true })
+            .then(tabs => browser.tabs.update(tabs[0].id, { url: config.url }));
+
+        case "createWebExtensionPopup":
+          return browser.windows
+            .create({
+              url: config.url,
+              type: "popup",
+            })
+            .then(win => win.tabs[0]);
+      }
+      browser.test.fail(`Unknown tab config: ${config.tabConfig}`);
+      return null;
+    };
+  };
+}
+
+/**
+ * Test handler to insert and remove CSS. Depends heavily on the used test
+ * extension.
+ *
+ * @param {CreateExtensionFn} createExtensionFn
+ * @param {ManifestOverrides} manifest
+ * @param {TestConfig} testConfig
+ */
+async function test_verifyInsertRemoveCSS(
+  createExtensionFn,
+  manifest,
+  testConfig
+) {
+  const extension = await createExtensionFn(manifest);
+  await extension.startup();
+
+  const tab = await getInitialTabLoaded(extension, manifest, testConfig);
+
+  await extension.awaitMessage("code insertCSS()");
+  await checkContent(tab.browser, { backgroundColor: "rgb(0, 255, 0)" });
+  extension.sendMessage();
+
+  await extension.awaitMessage("code removeCSS()");
+  await checkContent(tab.browser, testConfig.values);
+  extension.sendMessage();
+
+  await extension.awaitMessage("file insertCSS()");
+  await checkContent(tab.browser, { backgroundColor: "rgb(0, 128, 0)" });
+  extension.sendMessage();
+
+  await extension.awaitMessage("file removeCSS()");
+  await checkContent(tab.browser, testConfig.values);
+  extension.sendMessage();
+
+  await extension.awaitFinish("finished");
+  await extension.unload();
+}
+
+/**
+ * Test handler to execute content scripts. Depends heavily on the used test
+ * extension.
+ *
+ * @param {CreateExtensionFn} createExtensionFn
+ * @param {ManifestOverrides} manifest
+ * @param {TestConfig} testConfig
+ */
+async function test_verifyExecuteScript(
+  createExtensionFn,
+  manifest,
+  testConfig
+) {
+  const extension = await createExtensionFn(manifest);
+  await extension.startup();
+
+  const tab = await getInitialTabLoaded(extension, manifest, testConfig);
+
+  await extension.awaitMessage("code executeScript()");
+  await extension.awaitMessage("expected code injection");
+  await checkContent(tab.browser, { foo: "bar" });
+  extension.sendMessage();
+
+  await extension.awaitMessage("file executeScript()");
+  await extension.awaitMessage("expected file injection");
+  await checkContent(tab.browser, {
+    foo: "bar",
+    textContent: "Hey look, the script ran!",
+  });
+  extension.sendMessage();
+
+  await extension.awaitFinish("finished");
+  await extension.unload();
+}
+
+/**
+ * Test handler to verify that the messenger namespace is accessible in content
+ * scripts. Depends heavily on the used test extension.
+ *
+ * @param {CreateExtensionFn} createExtensionFn
+ * @param {ManifestOverrides} manifest
+ * @param {TestConfig} testConfig
+ */
+async function test_verifyAliasInjection(
+  createExtensionFn,
+  manifest,
+  testConfig
+) {
+  const extension = await createExtensionFn(manifest);
+  await extension.startup();
+
+  const tab = await getInitialTabLoaded(extension, manifest, testConfig);
+
+  await extension.awaitMessage("code executeScript()");
+  await extension.awaitMessage("expected code injection");
+  await checkContent(tab.browser, { textContent: "content_scripts@mochitest" });
+  extension.sendMessage();
+
+  await extension.awaitFinish("finished");
+  await extension.unload();
+}
+
+/**
+ * Test handler to verify that the content scripts fail without the required
+ * permissions. Depends heavily on the used test extension.
+ *
+ * @param {CreateExtensionFn} createExtensionFn
+ * @param {ManifestOverrides} manifest
+ * @param {TestConfig} testConfig
+ */
+async function test_verifyNoPermissions(
+  createExtensionFn,
+  manifest,
+  testConfig
+) {
+  const extension = await createExtensionFn(manifest);
+  await extension.startup();
+
+  const tab = await getInitialTabLoaded(extension, manifest, testConfig);
+
+  await extension.awaitMessage("ready");
+  await checkContent(tab.browser, testConfig.values);
+  extension.sendMessage();
+
+  await extension.awaitFinish("finished");
+  await extension.unload();
+}
+
+/** Tests browser.tabs.insertCSS and browser.tabs.removeCSS. */
+add_task(async function testInsertRemoveCSS() {
+  /**
+   * @type {CreateExtensionFn}
+   */
+  const createExtensionFn = async (manifest = {}) =>
+    ExtensionTestUtils.loadExtension({
+      files: {
+        "helper.js": getBackgoundHelperFunctions(),
+        "background.js": async () => {
+          const [config] = await window.sendMessage("get test config");
+          const tab = await window.getTestTab(config);
+          await window.sendMessage("load tab", tab.id);
+
+          await browser.tabs.insertCSS(tab.id, {
+            code: "body { background-color: lime; }",
+            matchAboutBlank: config.matchAboutBlank,
+          });
+          await window.sendMessage("code insertCSS()");
+
+          await browser.tabs.removeCSS(tab.id, {
+            code: "body { background-color: lime; }",
+            matchAboutBlank: config.matchAboutBlank,
+          });
+          await window.sendMessage("code removeCSS()");
+
+          await browser.tabs.insertCSS(tab.id, {
+            file: "test.css",
+            matchAboutBlank: config.matchAboutBlank,
+          });
+          await window.sendMessage("file insertCSS()");
+
+          await browser.tabs.removeCSS(tab.id, {
+            file: "test.css",
+            matchAboutBlank: config.matchAboutBlank,
+          });
+          await window.sendMessage("file removeCSS()");
+
+          if (config.tabConfig != "updateMailTabBrowser") {
+            await browser.tabs.remove(tab.id);
+          }
+          browser.test.notifyPass("finished");
+        },
+        "test.css": "body { background-color: green; }",
+        "utils.js": await getUtilsJS(),
+      },
+      manifest: {
+        ...manifest,
+        background: { scripts: ["utils.js", "helper.js", "background.js"] },
+      },
+    });
+
+  for (const task of CONTENT_TASKS) {
+    await test_verifyInsertRemoveCSS(
+      createExtensionFn,
+      {
+        manifest_version: 2,
+        permissions: ["*://mochi.test/*"],
+      },
+      {
+        tabConfig: task,
+        url: CONTENT_PAGE,
+        values: CONTENT_VALUES,
+      }
+    );
+  }
+
+  for (const task of ABOUTBLANK_TASKS) {
+    await test_verifyInsertRemoveCSS(
+      createExtensionFn,
+      {
+        manifest_version: 2,
+        permissions: ["*://*/*"], // about:blank requires broad host permissions
+      },
+      {
+        tabConfig: task,
+        url: "about:blank",
+        values: ABOUTBLANK_VALUES,
+        matchAboutBlank: true,
+      }
+    );
+  }
+});
+
+/** Tests browser.scripting.insertCSS and browser.scripting.removeCSS. */
+add_task(async function testInsertRemoveCSSViaScriptingAPI() {
+  /**
+   * @type {CreateExtensionFn}
+   */
+  const createExtensionFn = async (manifest = {}) =>
+    ExtensionTestUtils.loadExtension({
+      files: {
+        "helper.js": getBackgoundHelperFunctions(),
+        "background.js": async () => {
+          const [config] = await window.sendMessage("get test config");
+          const tab = await window.getTestTab(config);
+          await window.sendMessage("load tab", tab.id);
+
+          await browser.scripting.insertCSS({
+            target: { tabId: tab.id },
+            css: "body { background-color: lime; }",
+          });
+          await window.sendMessage("code insertCSS()");
+
+          await browser.scripting.removeCSS({
+            target: { tabId: tab.id },
+            css: "body { background-color: lime; }",
+          });
+          await window.sendMessage("code removeCSS()");
+
+          await browser.scripting.insertCSS({
+            target: { tabId: tab.id },
+            files: ["test.css"],
+          });
+          await window.sendMessage("file insertCSS()");
+
+          await browser.scripting.removeCSS({
+            target: { tabId: tab.id },
+            files: ["test.css"],
+          });
+          await window.sendMessage("file removeCSS()");
+
+          if (config.tabConfig != "updateMailTabBrowser") {
+            await browser.tabs.remove(tab.id);
+          }
+          browser.test.notifyPass("finished");
+        },
+        "test.css": "body { background-color: green; }",
+        "utils.js": await getUtilsJS(),
+      },
+      manifest: {
+        ...manifest,
+        background: { scripts: ["utils.js", "helper.js", "background.js"] },
+      },
+    });
+
+  for (const task of CONTENT_TASKS) {
+    await test_verifyInsertRemoveCSS(
+      createExtensionFn,
+      {
+        manifest_version: 2,
+        permissions: ["*://mochi.test/*", "scripting"],
+      },
+      {
+        tabConfig: task,
+        url: CONTENT_PAGE,
+        values: CONTENT_VALUES,
+      }
+    );
+    await test_verifyInsertRemoveCSS(
+      createExtensionFn,
+      {
+        manifest_version: 3,
+        permissions: ["scripting"],
+        host_permissions: ["*://mochi.test/*"],
+      },
+      {
+        tabConfig: task,
+        url: CONTENT_PAGE,
+        values: CONTENT_VALUES,
+      }
+    );
+  }
+
+  for (const task of ABOUTBLANK_TASKS) {
+    await test_verifyInsertRemoveCSS(
+      createExtensionFn,
+      {
+        manifest_version: 2,
+        permissions: ["*://*/*", "scripting"], // about:blank requires broad host permissions
+      },
+      {
+        tabConfig: task,
+        url: "about:blank",
+        values: ABOUTBLANK_VALUES,
+      }
+    );
+    await test_verifyInsertRemoveCSS(
+      createExtensionFn,
+      {
+        manifest_version: 3,
+        permissions: ["scripting"],
+        host_permissions: ["*://*/*"], // about:blank requires broad host permissions
+      },
+      {
+        tabConfig: task,
+        url: "about:blank",
+        values: ABOUTBLANK_VALUES,
+      }
+    );
+  }
+});
+
+/** Tests browser.tabs.insertCSS fails without the host permission. */
+add_task(async function testInsertRemoveCSSNoPermissions() {
+  /**
+   * @type {CreateExtensionFn}
+   */
+  const createExtensionFn = async (manifest = {}) =>
+    ExtensionTestUtils.loadExtension({
+      files: {
+        "helper.js": getBackgoundHelperFunctions(),
+        "background.js": async () => {
+          const [config] = await window.sendMessage("get test config");
+          const tab = await window.getTestTab(config);
+          await window.sendMessage("load tab", tab.id);
+
+          await browser.test.assertRejects(
+            browser.tabs.insertCSS(tab.id, {
+              code: "body { background-color: darkred; }",
+              matchAboutBlank: config.matchAboutBlank,
+            }),
+            /Missing host permission for the tab/,
+            "insertCSS without permission should throw"
+          );
+
+          await browser.test.assertRejects(
+            browser.tabs.insertCSS(tab.id, {
+              file: "test.css",
+              matchAboutBlank: config.matchAboutBlank,
+            }),
+            /Missing host permission for the tab/,
+            "insertCSS without permission should throw"
+          );
+
+          await browser.test.assertRejects(
+            browser.tabs.insertCSS(tab.id, {
+              file: "test.css",
+              matchAboutBlank: config.matchAboutBlank,
+            }),
+            /Missing host permission for the tab/,
+            "insertCSS without permission should throw"
+          );
+          await window.sendMessage("ready");
+
+          if (config.tabConfig != "updateMailTabBrowser") {
+            await browser.tabs.remove(tab.id);
+          }
+          browser.test.notifyPass("finished");
+        },
+        "test.css": "body { background-color: red; }",
+        "utils.js": await getUtilsJS(),
+      },
+      manifest: {
+        ...manifest,
+        background: { scripts: ["utils.js", "helper.js", "background.js"] },
+      },
+    });
+
+  for (const task of CONTENT_TASKS) {
+    await test_verifyNoPermissions(
+      createExtensionFn,
+      {
+        manifest_version: 2,
+      },
+      {
+        tabConfig: task,
+        url: CONTENT_PAGE,
+        values: CONTENT_VALUES,
+      }
+    );
+  }
+
+  for (const task of ABOUTBLANK_TASKS) {
+    await test_verifyNoPermissions(
+      createExtensionFn,
+      {
+        manifest_version: 2,
+      },
+      {
+        tabConfig: task,
+        url: "about:blank",
+        values: ABOUTBLANK_VALUES,
+        matchAboutBlank: true,
+      }
+    );
+  }
+});
+
+/** Tests browser.tabs.executeScript. */
+add_task(async function testExecuteScript() {
+  /**
+   * @type {CreateExtensionFn}
+   */
+  const createExtensionFn = async (manifest = {}) =>
+    ExtensionTestUtils.loadExtension({
+      files: {
+        "helper.js": getBackgoundHelperFunctions(),
+        "background.js": async () => {
+          const [config] = await window.sendMessage("get test config");
+          const tab = await window.getTestTab(config);
+          await window.sendMessage("load tab", tab.id);
+
+          await browser.tabs.executeScript(tab.id, {
+            code: `document.body.setAttribute("foo", "bar"); browser.test.sendMessage("expected code injection"); `,
+            matchAboutBlank: config.matchAboutBlank,
+          });
+          await window.sendMessage("code executeScript()");
+
+          await browser.tabs.executeScript(tab.id, {
+            file: "test.js",
+            matchAboutBlank: config.matchAboutBlank,
+          });
+          await window.sendMessage("file executeScript()");
+
+          if (config.tabConfig != "updateMailTabBrowser") {
+            await browser.tabs.remove(tab.id);
+          }
+          browser.test.notifyPass("finished");
+        },
+        "test.js": () => {
+          document.body.textContent = "Hey look, the script ran!";
+          browser.test.sendMessage("expected file injection");
+        },
+        "utils.js": await getUtilsJS(),
+      },
+      manifest: {
+        ...manifest,
+        background: { scripts: ["utils.js", "helper.js", "background.js"] },
+      },
+    });
+
+  for (const task of CONTENT_TASKS) {
+    await test_verifyExecuteScript(
+      createExtensionFn,
+      {
+        manifest_version: 2,
+        permissions: ["*://mochi.test/*"],
+      },
+      {
+        tabConfig: task,
+        url: CONTENT_PAGE,
+      }
+    );
+  }
+
+  for (const task of ABOUTBLANK_TASKS) {
+    await test_verifyExecuteScript(
+      createExtensionFn,
+      {
+        manifest_version: 2,
+        permissions: ["*://*/*"], // about:blank requires broad host permissions
+      },
+      {
+        tabConfig: task,
+        url: "about:blank",
+        matchAboutBlank: true,
+      }
+    );
+  }
+});
+
+/** Tests browser.scripting.executeScript. */
+add_task(async function testExecuteScriptViaScriptingAPI() {
+  /**
+   * @type {CreateExtensionFn}
+   */
+  const createExtensionFn = async (manifest = {}) =>
+    ExtensionTestUtils.loadExtension({
+      files: {
+        "helper.js": getBackgoundHelperFunctions(),
+        "background.js": async () => {
+          const [config] = await window.sendMessage("get test config");
+          const tab = await window.getTestTab(config);
+          await window.sendMessage("load tab", tab.id);
+
+          await browser.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: () => {
+              document.body.setAttribute("foo", "bar");
+              browser.test.sendMessage("expected code injection");
+            },
+          });
+          await window.sendMessage("code executeScript()");
+
+          await browser.scripting.executeScript({
+            target: { tabId: tab.id },
+            files: ["test.js"],
+          });
+          await window.sendMessage("file executeScript()");
+
+          if (config.tabConfig != "updateMailTabBrowser") {
+            await browser.tabs.remove(tab.id);
+          }
+          browser.test.notifyPass("finished");
+        },
+        "test.js": () => {
+          document.body.textContent = "Hey look, the script ran!";
+          browser.test.sendMessage("expected file injection");
+        },
+        "utils.js": await getUtilsJS(),
+      },
+      manifest: {
+        ...manifest,
+        background: { scripts: ["utils.js", "helper.js", "background.js"] },
+      },
+    });
+
+  for (const task of CONTENT_TASKS) {
+    await test_verifyExecuteScript(
+      createExtensionFn,
+      {
+        manifest_version: 2,
+        permissions: ["*://mochi.test/*", "scripting"],
+      },
+      {
+        tabConfig: task,
+        url: CONTENT_PAGE,
+      }
+    );
+    await test_verifyExecuteScript(
+      createExtensionFn,
+      {
+        manifest_version: 3,
+        permissions: ["scripting"],
+        host_permissions: ["*://mochi.test/*"],
+      },
+      {
+        tabConfig: task,
+        url: CONTENT_PAGE,
+      }
+    );
+  }
+
+  for (const task of ABOUTBLANK_TASKS) {
+    await test_verifyExecuteScript(
+      createExtensionFn,
+      {
+        manifest_version: 2,
+        permissions: ["*://*/*", "scripting"], // about:blank requires broad host permissions
+      },
+      {
+        tabConfig: task,
+        url: "about:blank",
+      }
+    );
+    await test_verifyExecuteScript(
+      createExtensionFn,
+      {
+        manifest_version: 3,
+        permissions: ["scripting"],
+        host_permissions: ["*://*/*"], // about:blank requires broad host permissions
+      },
+      {
+        tabConfig: task,
+        url: "about:blank",
+      }
+    );
+  }
+});
+
+/** Tests browser.tabs.executeScript fails without the host permission. */
+add_task(async function testExecuteScriptNoPermissions() {
+  /**
+   * @type {CreateExtensionFn}
+   */
+  const createExtensionFn = async (manifest = {}) =>
+    ExtensionTestUtils.loadExtension({
+      files: {
+        "helper.js": getBackgoundHelperFunctions(),
+        "background.js": async () => {
+          const [config] = await window.sendMessage("get test config");
+          const tab = await window.getTestTab(config);
+          await window.sendMessage("load tab", tab.id);
+
+          await browser.test.assertRejects(
+            browser.tabs.executeScript(tab.id, {
+              code: `document.body.setAttribute("foo", "bar"); browser.test.sendMessage("unexpected code injection"); `,
+              matchAboutBlank: config.matchAboutBlank,
+            }),
+            /Missing host permission for the tab/,
+            "executeScript without permission should throw"
+          );
+
+          await browser.test.assertRejects(
+            browser.tabs.executeScript(tab.id, {
+              file: "test.js",
+              matchAboutBlank: config.matchAboutBlank,
+            }),
+            /Missing host permission for the tab/,
+            "executeScript without permission should throw"
+          );
+
+          await browser.test.assertRejects(
+            browser.tabs.executeScript(tab.id, {
+              file: "test.js",
+              matchAboutBlank: config.matchAboutBlank,
+            }),
+            /Missing host permission for the tab/,
+            "executeScript without permission should throw"
+          );
+          await window.sendMessage("ready");
+
+          if (config.tabConfig != "updateMailTabBrowser") {
+            await browser.tabs.remove(tab.id);
+          }
+          browser.test.notifyPass("finished");
+        },
+        "test.js": () => {
+          document.body.textContent = "Hey look, the script ran!";
+          browser.test.sendMessage("unexpected file injection");
+        },
+        "utils.js": await getUtilsJS(),
+      },
+      manifest: {
+        ...manifest,
+        background: { scripts: ["utils.js", "helper.js", "background.js"] },
+      },
+    });
+
+  for (const task of CONTENT_TASKS) {
+    await test_verifyNoPermissions(
+      createExtensionFn,
+      {
+        manifest_version: 2,
+      },
+      {
+        tabConfig: task,
+        url: CONTENT_PAGE,
+        values: CONTENT_VALUES,
+      }
+    );
+  }
+
+  for (const task of ABOUTBLANK_TASKS) {
+    await test_verifyNoPermissions(
+      createExtensionFn,
+      {
+        manifest_version: 2,
+      },
+      {
+        tabConfig: task,
+        url: "about:blank",
+        values: ABOUTBLANK_VALUES,
+        matchAboutBlank: true,
+      }
+    );
+  }
+});
+
+/**
+ * Tests the messenger alias is available after browser.tabs.executeScript().
+ */
+add_task(async function testExecuteScriptAlias() {
+  /**
+   * @type {CreateExtensionFn}
+   */
+  const createExtensionFn = async (manifest = {}) =>
+    ExtensionTestUtils.loadExtension({
+      files: {
+        "helper.js": getBackgoundHelperFunctions(),
+        "background.js": async () => {
+          const [config] = await window.sendMessage("get test config");
+          const tab = await window.getTestTab(config);
+          await window.sendMessage("load tab", tab.id);
+
+          await browser.tabs.executeScript(tab.id, {
+            code: `document.body.textContent = messenger.runtime.getManifest().browser_specific_settings.gecko.id; browser.test.sendMessage("expected code injection");`,
+            matchAboutBlank: config.matchAboutBlank,
+          });
+          await window.sendMessage("code executeScript()");
+
+          if (config.tabConfig != "updateMailTabBrowser") {
+            await browser.tabs.remove(tab.id);
+          }
+          browser.test.notifyPass("finished");
+        },
+        "utils.js": await getUtilsJS(),
+      },
+      manifest: {
+        ...manifest,
+        browser_specific_settings: {
+          gecko: { id: "content_scripts@mochitest" },
+        },
+        background: { scripts: ["utils.js", "helper.js", "background.js"] },
+      },
+    });
+
+  for (const task of CONTENT_TASKS) {
+    await test_verifyAliasInjection(
+      createExtensionFn,
+      {
+        manifest_version: 2,
+        permissions: ["*://mochi.test/*"],
+      },
+      {
+        tabConfig: task,
+        url: CONTENT_PAGE,
+      }
+    );
+  }
+
+  for (const task of ABOUTBLANK_TASKS) {
+    await test_verifyAliasInjection(
+      createExtensionFn,
+      {
+        manifest_version: 2,
+        permissions: ["*://*/*", "scripting"], // about:blank requires broad host permissions
+      },
+      {
+        tabConfig: task,
+        url: "about:blank",
+        matchAboutBlank: true,
+      }
+    );
+  }
+});
+
+/**
+ * Tests messenger alias is available after browser.scripting.executeScript().
+ */
+add_task(async function testExecuteScriptAliasViaScriptingAPI() {
+  /**
+   * @type {CreateExtensionFn}
+   */
+  const createExtensionFn = async (manifest = {}) =>
+    ExtensionTestUtils.loadExtension({
+      files: {
+        "helper.js": getBackgoundHelperFunctions(),
+        "background.js": async () => {
+          const [config] = await window.sendMessage("get test config");
+          const tab = await window.getTestTab(config);
+          await window.sendMessage("load tab", tab.id);
+
+          await browser.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: () => {
+              const id =
+                // eslint-disable-next-line no-undef
+                messenger.runtime.getManifest().browser_specific_settings.gecko
+                  .id;
+              document.body.textContent = id;
+              browser.test.sendMessage("expected code injection");
+            },
+          });
+          await window.sendMessage("code executeScript()");
+
+          if (config.tabConfig != "updateMailTabBrowser") {
+            await browser.tabs.remove(tab.id);
+          }
+          browser.test.notifyPass("finished");
+        },
+        "utils.js": await getUtilsJS(),
+      },
+      manifest: {
+        ...manifest,
+        browser_specific_settings: {
+          gecko: { id: "content_scripts@mochitest" },
+        },
+        background: { scripts: ["utils.js", "helper.js", "background.js"] },
+      },
+    });
+
+  for (const task of CONTENT_TASKS) {
+    await test_verifyAliasInjection(
+      createExtensionFn,
+      {
+        manifest_version: 2,
+        permissions: ["*://mochi.test/*", "scripting"],
+      },
+      {
+        tabConfig: task,
+        url: CONTENT_PAGE,
+      }
+    );
+    await test_verifyAliasInjection(
+      createExtensionFn,
+      {
+        manifest_version: 3,
+        permissions: ["scripting"],
+        host_permissions: ["*://mochi.test/*"],
+      },
+      {
+        tabConfig: task,
+        url: CONTENT_PAGE,
+      }
+    );
+  }
+
+  for (const task of ABOUTBLANK_TASKS) {
+    await test_verifyAliasInjection(
+      createExtensionFn,
+      {
+        manifest_version: 2,
+        permissions: ["*://*/*", "scripting"], // about:blank requires broad host permissions
+      },
+      {
+        tabConfig: task,
+        url: "about:blank",
+      }
+    );
+    await test_verifyAliasInjection(
+      createExtensionFn,
+      {
+        manifest_version: 3,
+        permissions: ["scripting"],
+        host_permissions: ["*://*/*"], // about:blank requires broad host permissions
+      },
+      {
+        tabConfig: task,
+        url: "about:blank",
+      }
+    );
+  }
+});
+
+/**
+ * Tests browser.tabs.executeScript fails as expected after Bug 2011234 when
+ * injecting into an extension page (moz-extension://*).
+ */
+add_task(async function testExecuteScriptFailInMozExtension() {
+  // Make sure the restriction is enabled while running this test,
+  // TODO(Bug 2015559): Remove this once pref flip along with letting the
+  // restriction to be riding the release train (presumably v153).
+  await SpecialPowers.pushPrefEnv({
+    set: [
+      ["extensions.webextensions.allow_executeScript_in_moz_extension", false],
+    ],
+  });
+
+  /**
+   * @type {CreateExtensionFn}
+   */
+  const createExtensionFn = async (manifest = {}) =>
+    ExtensionTestUtils.loadExtension({
+      files: {
+        "helper.js": getBackgoundHelperFunctions(),
+        "background.js": async () => {
+          const [config] = await window.sendMessage("get test config");
+          const tab = await window.getTestTab(config);
+          await window.sendMessage("load tab", tab.id);
+
+          await browser.test.assertRejects(
+            browser.tabs.executeScript(tab.id, {
+              code: `document.body.setAttribute("foo", "bar"); browser.test.sendMessage("unexpected code injection"); `,
+              matchAboutBlank: config.matchAboutBlank,
+            }),
+            /Missing host permission for the tab/,
+            "executeScript without permission should throw"
+          );
+
+          await browser.test.assertRejects(
+            browser.tabs.executeScript(tab.id, {
+              file: "test.js",
+              matchAboutBlank: config.matchAboutBlank,
+            }),
+            /Missing host permission for the tab/,
+            "executeScript without permission should throw"
+          );
+
+          await browser.test.assertRejects(
+            browser.tabs.executeScript(tab.id, {
+              file: "test.js",
+              matchAboutBlank: config.matchAboutBlank,
+            }),
+            /Missing host permission for the tab/,
+            "executeScript without permission should throw"
+          );
+          await window.sendMessage("ready");
+
+          if (config.tabConfig != "updateMailTabBrowser") {
+            await browser.tabs.remove(tab.id);
+          }
+          browser.test.notifyPass("finished");
+        },
+        "test.js": () => {
+          document.body.textContent = "Hey look, the script ran!";
+          browser.test.sendMessage("expected file injection");
+        },
+        "content.html": `<!DOCTYPE html>
+          <html>
+            <head>
+              <meta charset="utf-8"/>
+              <title>A test document</title>
+            </head>
+            <body>
+              <p>This is text.</p>
+            </body>
+          </html>`,
+        "utils.js": await getUtilsJS(),
+      },
+      manifest: {
+        ...manifest,
+        background: { scripts: ["utils.js", "helper.js", "background.js"] },
+      },
+    });
+
+  for (const task of CONTENT_TASKS) {
+    // moz-extension urls are not loaded by Thunderbird itself, so we only test
+    // tabs created by WebExtensions.
+    if (task == "openContentTab") {
+      continue;
+    }
+
+    await test_verifyNoPermissions(
+      createExtensionFn,
+      {
+        manifest_version: 2,
+        permissions: ["*://*/*"], // be broad to make sure this is not causing the failure
+      },
+      {
+        tabConfig: task,
+        url: "content.html",
+        values: {
+          backgroundColor: "rgba(0, 0, 0, 0)",
+          color: "rgb(0, 0, 0)",
+          foo: null,
+          textContent:
+            "\n              This is text.\n            \n          ",
+        },
+      }
+    );
+  }
+});

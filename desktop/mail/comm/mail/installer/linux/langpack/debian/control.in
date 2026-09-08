@@ -1,0 +1,10 @@
+Source: ${PKG_NAME}
+Maintainer: Thunderbird Build & Release Team <tb-builds@thunderbird.net>
+Priority: optional
+Section: mail
+Build-Depends: debhelper (>= 9)
+
+Package: ${PKG_NAME}
+Architecture: ${ARCH_NAME}
+Depends: ${DEPENDS}
+Description: ${DESCRIPTION}

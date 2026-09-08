@@ -1,0 +1,23 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+chat.jar:
+% skin chat classic/1.0 %skin/classic/chat/
+  skin/classic/chat/chat.svg
+  skin/classic/chat/chat-left.svg
+  skin/classic/chat/conv.css
+  skin/classic/chat/imtooltip.css
+  skin/classic/chat/mobile.svg
+  skin/classic/chat/otrFingerprintDialog.css
+  skin/classic/chat/typed.svg
+  skin/classic/chat/typing.svg
+  skin/classic/chat/unknown.svg
+  skin/classic/chat/otr-connection-encrypted.svg (icons/otr-connection-encrypted.svg)
+  skin/classic/chat/otr-connection-finished.svg  (icons/otr-connection-finished.svg)
+  skin/classic/chat/prpl-generic/icon.png        (icons/prpl-generic.png)
+  skin/classic/chat/prpl-generic/icon32.png      (icons/prpl-generic-32.png)
+  skin/classic/chat/prpl-generic/icon48.png      (icons/prpl-generic-48.png)
+  skin/classic/chat/prpl-unknown/icon.png        (icons/prpl-unknown.png)
+  skin/classic/chat/prpl-unknown/icon32.png      (icons/prpl-unknown-32.png)
+  skin/classic/chat/prpl-unknown/icon48.png      (icons/prpl-unknown-48.png)

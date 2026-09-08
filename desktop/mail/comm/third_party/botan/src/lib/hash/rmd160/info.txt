@@ -1,0 +1,11 @@
+<defines>
+RIPEMD_160 -> 20131128
+</defines>
+
+<module_info>
+name -> "RIPEMD-160"
+</module_info>
+
+<requires>
+mdx_hash
+</requires>

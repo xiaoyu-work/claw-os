@@ -1,0 +1,118 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+/* ===== toolbar.css ====================================================
+  == Styles used by XUL grippytoolbar in addition to general toolbar styles.
+  ======================================================================= */
+
+@namespace url("http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul");
+
+/* Restore Windows Classic fallbacks removed by bug 1343196 */
+
+@media (-moz-windows-classic) {
+
+  /* ::::: toolbox ::::: */
+
+  toolbox {
+    background-color: -moz-Dialog;
+    border-top: 1px solid;
+    border-top-color: ThreeDShadow;
+  }
+
+  /* ::::: toolbar & menubar ::::: */
+
+  toolbar {
+    border-top: 1px solid ThreeDHighlight;
+    border-bottom: 1px solid ThreeDShadow;
+  }
+
+  toolbar:first-child, menubar {
+    border-bottom: 1px solid ThreeDShadow;
+    border-top: 0px !important;
+  }
+
+/* ::::: lightweight theme ::::: */
+ 
+  menubar:-moz-lwtheme,
+  toolbox:-moz-lwtheme,
+  toolbar:-moz-lwtheme {
+    background: none;
+    border-color: transparent;
+  }
+
+  /* ::::: toolbar decorations ::::: */
+
+  toolbarseparator {
+    padding: 2px;
+    border-left: 1px solid;
+    border-right: 1px solid;
+    border-left-color  : ThreeDShadow;
+    border-right-color : ThreeDHighlight;
+  }
+}
+
+/* End restore Windows Classic fallbacks removed by bug 1343196 */
+
+@media (-moz-menubar-drag) {
+  toolbar[type="menubar"]:not([autohide="true"]):not([xpfe="false"]):not(:-moz-lwtheme) {
+    -moz-binding: url("chrome://communicator/content/bindings/toolbar-xpfe.xml#grippytoolbar-drag");
+  }
+}
+
+/* ::::: toolbar & menubar ::::: */
+
+.toolbar-holder {
+  border-left: 1px solid ThreeDHighlight;
+}
+
+toolbaritem > menubar,
+toolbar > menubar {
+  border-bottom: 0px none;
+}
+
+/* ::::: toolbargrippy ::::: */
+
+toolbargrippy {
+  -moz-box-orient: vertical;
+  -moz-box-align: center;
+  border-right: 1px solid ThreeDShadow;
+  width: 10px;
+  padding: 2px 1px;
+  list-style-image: url("chrome://communicator/skin/toolbar/tbgrip-arrow.png");
+}
+
+toolbargrippy:hover {
+  background-color: ThreeDHighlight;
+}
+
+.toolbargrippy-texture {
+  margin-top: 2px;
+  width: 6px;
+  background: url("chrome://communicator/skin/toolbar/tbgrip-texture.png");
+}
+
+/* ::::: collapsed tray and grippies ::::: */
+
+toolbargrippy[tbgrippy-collapsed="true"] {
+  -moz-box-orient: horizontal;
+  border-left: 1px solid ThreeDHighlight;
+  border-top: 1px solid ThreeDHighlight;
+  border-right: 1px solid ThreeDShadow;
+  border-bottom: 1px solid ThreeDShadow;
+  width: 40px;
+  height: 10px;
+  padding: 1px 2px;
+  list-style-image: url("chrome://communicator/skin/toolbar/tbgrip-arrow-clps.png");
+}
+
+toolbargrippy[tbgrippy-collapsed="true"] > .toolbargrippy-texture {
+  margin-top: 0;
+  margin-inline-start: 2px;
+  width: 0px;
+  height: 6px;
+}
+
+.collapsed-tray-spacer {
+  border-bottom: 1px solid ThreeDShadow;
+}

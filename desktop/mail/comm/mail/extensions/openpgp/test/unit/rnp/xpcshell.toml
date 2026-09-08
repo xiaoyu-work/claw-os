@@ -1,0 +1,21 @@
+[DEFAULT]
+support-files = [
+  "../../../../../test/browser/openpgp/data/keys/*",
+  "../../../../../../mailnews/test/data/*",
+  "data/*",
+]
+tags = ["openpgp"]
+
+["test_alias.js"]
+
+["test_badKeys.js"]
+
+["test_encryptAndOrSign.js"]
+
+["test_revocation.js"]
+
+["test_secretKeys.js"]
+
+["test_strip.js"]
+
+["test_uid.js"]

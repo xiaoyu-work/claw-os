@@ -1,0 +1,127 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: black;
+}
+
+p {
+  font-family: sans-serif;
+  margin: 0;
+  padding: 0;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+p.message {
+  margin: 0;
+  padding: 4px 15px 6px 15px;
+  border-block-end: 1px solid black;
+  border-block-start: 1px solid rgba(255, 255, 255, 0.3);
+  background: -moz-linear-gradient(top, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.07) 30px);
+}
+
+p.context:not(:hover) {
+  opacity: 0.5;
+  color: rgba(255, 255, 255, 1);
+}
+
+span.message-style,
+p.event-messages {
+  font-size: 90%;
+}
+
+p.event-messages {
+  margin: 5px 0 5px 0;
+  text-align: center;
+  opacity: 0.4;
+  transition-property: opacity;
+  transition-duration: 0.3s;
+}
+
+p.event-messages:hover {
+  opacity: 1;
+}
+
+.message-style {
+  display: block;
+}
+
+.pseudo {
+  margin-block-end: 3px;
+  font-weight: bold;
+  color: white;
+  display: block;
+}
+
+.nick > .message-style {
+  font-weight: bold;
+}
+
+.action > .message-style {
+  font-style: italic;
+}
+
+.action > .message-style::before {
+  content: "*** ";
+}
+
+a,
+a:hover {
+  color: rgba(255, 255, 255, 0.6);
+}
+
+a:active {
+  color: rgba(255, 255, 255, 1);
+}
+
+a:visited {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+#Chat {
+  white-space: normal;
+}
+
+p *:any-link img {
+  margin-block-end: 1px;
+  border-block-end: solid 1px;
+}
+
+.ib-nick {
+  color: white !important;
+  border-radius: 3px;
+  padding: 0 0.25em;
+}
+
+.ib-nick[left] {
+  color: white !important;
+  background-color: black;
+  opacity: 0.4;
+  transition-property: opacity;
+  transition-duration: 0.3s;
+}
+
+.ib-nick[left]:hover {
+  opacity: 1;
+}
+
+.ib-sender.message-encrypted {
+  position: relative;
+}
+
+.ib-sender.message-encrypted::after {
+  position: relative;
+  display: inline-block;
+  content: "";
+  inline-size: 11px;
+  block-size: 11px;
+  opacity: 0.5;
+  background: url("chrome://messenger/skin/icons/connection-secure.svg") no-repeat center;
+  background-size: contain;
+  margin-inline-start: 4px;
+  -moz-context-properties: fill;
+  fill: currentColor;
+}

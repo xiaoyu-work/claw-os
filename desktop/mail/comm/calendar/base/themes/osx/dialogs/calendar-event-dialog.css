@@ -1,0 +1,27 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#item-categories > menupopup > menuitem:not([checked]) .menu-icon {
+  visibility: hidden;
+}
+
+/*--------------------------------------------------------------------
+ *   Event dialog keep duration button
+ *-------------------------------------------------------------------*/
+
+#timezone-endtime {
+  margin-inline-start: 15px;
+}
+
+hbox > #link-image-top {
+  margin-block: 1.2em -1.2em;
+}
+
+vbox > #link-image-bottom {
+  margin-block: -1.2em 1.2em;
+}
+
+#percent-complete-textbox {
+  padding: 2px;
+}

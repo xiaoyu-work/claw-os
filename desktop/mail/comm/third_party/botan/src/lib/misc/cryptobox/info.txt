@@ -1,0 +1,24 @@
+<defines>
+CRYPTO_BOX -> 20131128
+</defines>
+
+<module_info>
+name -> "Crypto Box"
+brief -> "High-Level API for password-based encryption (deprecated)"
+lifecycle -> "Deprecated"
+</module_info>
+
+<requires>
+base64
+ctr
+hmac
+modes
+pbkdf2
+pem
+serpent
+sha2_64
+</requires>
+
+<header:public>
+cryptobox.h
+</header:public>

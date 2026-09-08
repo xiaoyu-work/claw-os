@@ -1,0 +1,156 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+/* ===== messengercompose.css ===========================================
+  == Styles for the main Messenger Compose window.
+  ======================================================================= */
+
+@import url("chrome://messenger/skin/messenger.css");
+@import url("chrome://messenger/skin/shared/messengercompose.css");
+
+@namespace html url("http://www.w3.org/1999/xhtml");
+
+:root[lwtheme] #mail-menubar {
+  color: inherit;
+}
+
+#compose-toolbox {
+  border-block-end: 1px solid var(--chrome-content-separator-color);
+}
+
+:root:not([lwtheme]) #composeToolbar2 {
+  appearance: none;
+}
+
+/* ::::: special toolbar colors ::::: */
+
+#subjectLabel {
+  margin-block-end: 0;
+  margin-inline-end: 6px;
+}
+
+/* ::::: autocomplete icons ::::: */
+
+.autocomplete-richlistitem[type$="-abook"] > .ac-site-icon {
+  display: flex;
+  margin: 1px 5px;
+}
+
+#composeContentBox {
+  background-color: -moz-dialog;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2) inset;
+
+  &:-moz-window-inactive {
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1) inset;
+  }
+}
+
+#MsgHeadersToolbar {
+  appearance: none !important;
+  text-shadow: none;
+  padding-block-start: 7px;
+}
+
+.address-container {
+  padding-block: 1px;
+}
+
+.address-label-container {
+  padding-block-start: 6px;
+}
+
+#msgIdentity,
+.address-container {
+  min-block-size: 30px;
+}
+
+#msgSubject {
+  min-block-size: 28px;
+}
+
+.address-pill {
+  padding-block: 2px;
+
+  & label {
+    margin-block: 0;
+  }
+}
+
+.pill-indicator {
+  margin-block-start: -2px;
+}
+
+#identityLabel-box {
+  margin-block-start: 1px;
+}
+
+#msgIdentity {
+  margin-block: 2px 0;
+  padding-block: 4px;
+  padding-inline: 2px 20px;
+
+  &::part(label-box) {
+    background: none;
+    padding-inline-end: initial;
+  }
+
+  &::part(text-input) {
+    appearance: none;
+    padding-block: 1px 2px;
+    padding-inline: 3px 12px;
+    background-color: transparent;
+    color: inherit;
+  }
+
+  &[editable="true"]::part(dropmarker) {
+    margin-inline-end: 0;
+    inline-size: 12px;
+  }
+
+  &[open="true"] {
+    color: FieldText;
+
+    :root[lwt-tree] & {
+      color: inherit;
+    }
+  }
+}
+
+/* ::::: format toolbar ::::: */
+
+#FormatToolbar {
+  background-color: inherit;
+  color: inherit;
+  margin-inline: 3px;
+  padding-block: 4px;
+}
+
+toolbarbutton.formatting-button {
+  margin: 1px;
+}
+
+/* ::::: address book sidebar ::::: */
+
+#contactsBrowser {
+  background-color: Window;
+}
+
+menuitem[name="context_convertCloud"] > .menu-icon {
+  /* Ensure that the provider icons are visible even if the Gnome theme says
+     menus shouldn't have icons. */
+  visibility: visible !important;
+}
+
+/* Styles for the default system dark theme */
+
+:root[lwt-tree] {
+  & #MsgHeadersToolbar {
+    background-image: none;
+  }
+
+  & #FormatToolbar {
+    color: inherit;
+    background-image: none;
+  }
+}

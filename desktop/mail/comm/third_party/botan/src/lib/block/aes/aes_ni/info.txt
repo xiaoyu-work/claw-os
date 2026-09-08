@@ -1,0 +1,19 @@
+<internal_defines>
+AES_NI -> 20131128
+</internal_defines>
+
+<module_info>
+name -> "AES-NI"
+brief -> "AES using AES-NI and SIMD instructions"
+</module_info>
+
+<requires>
+cpuid
+simd_4x32
+</requires>
+
+<isa>
+sse2
+ssse3
+aesni
+</isa>

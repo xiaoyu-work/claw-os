@@ -1,0 +1,244 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+use std::collections::{BTreeMap, HashMap};
+use yaml_rust2::{Yaml, yaml::Hash as YamlHash};
+
+use super::{OaSchema, get_map_in, get_node_in, get_seq_in, get_str_in, parse_schema};
+
+/// An OpenAPI path.
+///
+/// For the generic description of this OpenAPI concept, see the [OpenAPI
+/// Specification].
+///
+/// [OpenAPI Specification]: https://spec.openapis.org/oas/latest.html#path-item-object
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct OaPath {
+    pub description: Option<String>,
+    pub operations: HashMap<String, OaOperation>,
+}
+
+/// An OpenAPI Operation (request).
+///
+/// For the generic description of this OpenAPI concept, see the [OpenAPI
+/// Specification].
+///
+/// [OpenAPI Specification]: https://spec.openapis.org/oas/latest.html#operation-object
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct OaOperation {
+    /// A short summary of what the operation does.
+    pub summary: Option<String>,
+
+    /// A longer-form summary of what the operation does.
+    ///
+    /// May be in [CommonMark Markdown](https://spec.commonmark.org/current/).
+    pub description: Option<String>,
+
+    /// A link to any external documentation.
+    ///
+    /// This field is technically a [structured OpenAPI object], but we only
+    /// store the url, since the only additional info in this instance is always
+    /// the useless description "Find more info here".
+    ///
+    /// [structured OpenAPI object]: https://spec.openapis.org/oas/latest.html#external-documentation-object
+    pub external_docs: Option<String>,
+
+    /// A Microsoft extension for indicating the operation response is [paginated].
+    ///
+    /// This field contains some structured data, but because it's always
+    /// identical, it's represented here as a `bool`.
+    ///
+    /// [paginated]: https://learn.microsoft.com/en-us/graph/paging
+    pub pageable: bool,
+
+    /// Applicable parameters for the operation.
+    pub parameters: Option<Vec<OaParameter>>,
+
+    /// The body of the operation request.
+    pub body: Option<OaBody>,
+
+    /// The responses to the operation request.
+    pub responses: HashMap<String, Option<OaBody>>,
+}
+
+/// An OpenAPI HTTP request parameter.
+///
+/// For the generic description of this OpenAPI concept, see the [OpenAPI
+/// Specification].
+///
+/// [OpenAPI Specification]: https://spec.openapis.org/oas/latest.html#parameter-object
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct OaParameter {
+    pub name: Option<String>,
+    pub r#in: Option<String>,
+    pub description: Option<String>,
+    pub style: Option<String>,
+    pub schema: Option<OaSchema>,
+}
+
+/// An OpenAPI HTTP request body.
+///
+/// Can also represent a response body.
+///
+/// For the generic description of this OpenAPI concept, see the [OpenAPI
+/// Specification].
+///
+/// [OpenAPI Specification]:
+///     https://spec.openapis.org/oas/latest.html#request-body-object
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct OaBody {
+    pub application_type: Option<String>,
+    pub description: Option<String>,
+    pub schema: OaSchema,
+}
+
+/// Parse the given yaml text as an OpenAPI path.
+pub(super) fn parse_path(node: &Yaml, parameters: &BTreeMap<String, OaParameter>) -> OaPath {
+    let map = node
+        .as_hash()
+        .expect("all paths should be compound YAML objects");
+
+    let description = get_str_in(map, "description").map(|s| s.to_string());
+    let operations = map
+        .iter()
+        .filter_map(|(key, node)| {
+            let key = key.as_str().expect("keys are `str`s");
+            if matches!(key, "description" | "parameters" | "x-ms-docs-grouped-path") {
+                return None;
+            }
+            let map = node
+                .as_hash()
+                .unwrap_or_else(|| panic!("expected operation, got: {node:?}"));
+            let method = key.into();
+            let summary = get_str_in(map, "summary");
+            let description = get_str_in(map, "description");
+            let external_docs = get_external_docs(map);
+            let pageable = map.contains_key(&Yaml::from_str("x-ms-pageable"));
+            let body = get_request_body(map);
+            let responses = get_responses(map);
+            let parameters = get_parameters(map, parameters);
+            Some((
+                method,
+                OaOperation {
+                    summary,
+                    description,
+                    external_docs,
+                    pageable,
+                    parameters,
+                    body,
+                    responses,
+                },
+            ))
+        })
+        .collect();
+
+    OaPath {
+        description,
+        operations,
+    }
+}
+
+fn get_external_docs(map: &YamlHash) -> Option<String> {
+    let map = get_map_in(map, "externalDocs")?;
+    Some(
+        get_str_in(map, "url")
+            .expect("external docs should have url")
+            .to_string(),
+    )
+}
+
+fn get_request_body(map: &YamlHash) -> Option<OaBody> {
+    let map = get_map_in(map, "requestBody")?;
+    get_body(map)
+}
+
+fn get_body(map: &YamlHash) -> Option<OaBody> {
+    if let Some(reference) = get_str_in(map, "$ref") {
+        return Some(OaBody {
+            application_type: None,
+            description: None,
+            schema: OaSchema::Ref { reference },
+        });
+    }
+    let content = get_map_in(map, "content")?;
+    let (application_type, application) = content
+        .iter()
+        .next()
+        .expect("content should have an application type");
+    let application_type = application_type.as_str().map(str::to_string);
+    let application = application
+        .as_hash()
+        .expect("application should be a compound YAML type");
+    let schema = get_node_in(application, "schema").expect("application/json should have schema");
+    let schema = parse_schema(schema);
+
+    let description = get_str_in(map, "description");
+
+    Some(OaBody {
+        application_type,
+        description,
+        schema,
+    })
+}
+
+fn get_responses(map: &YamlHash) -> HashMap<String, Option<OaBody>> {
+    let responses = get_map_in(map, "responses").expect("requests should have responses");
+    responses
+        .iter()
+        .map(|(k, v)| {
+            let method = k.as_str().expect("response keys should be strings");
+            let map = v
+                .as_hash()
+                .expect("response values should be compound YAML objects");
+            let body = get_body(map);
+            (method.to_string(), body)
+        })
+        .collect()
+}
+
+fn get_parameters(
+    map: &YamlHash,
+    shared_parameters: &BTreeMap<String, OaParameter>,
+) -> Option<Vec<OaParameter>> {
+    let parameters = get_seq_in(map, "parameters")?;
+    Some(
+        parameters
+            .iter()
+            .map(|node| {
+                let map = node
+                    .as_hash()
+                    .expect("parameters should be compound YAML objects");
+                if let Some(reference) = get_str_in(map, "$ref") {
+                    let key = reference
+                        .rsplit('/')
+                        .next()
+                        .expect("parameter references should have a final component");
+                    return shared_parameters
+                        .get(key)
+                        .cloned()
+                        .unwrap_or_else(|| panic!("unknown parameter reference: {reference}"));
+                }
+                parse_parameter_map(map)
+            })
+            .collect(),
+    )
+}
+
+pub(super) fn parse_parameter(node: &Yaml) -> OaParameter {
+    let map = node
+        .as_hash()
+        .expect("all parameters should be compound YAML objects");
+    parse_parameter_map(map)
+}
+
+fn parse_parameter_map(map: &YamlHash) -> OaParameter {
+    let schema = get_node_in(map, "schema").map(parse_schema);
+    OaParameter {
+        name: get_str_in(map, "name"),
+        r#in: get_str_in(map, "in"),
+        description: get_str_in(map, "description"),
+        style: get_str_in(map, "style"),
+        schema,
+    }
+}

@@ -1,0 +1,35 @@
+<defines>
+PUBLIC_KEY_CRYPTO -> 20131128
+</defines>
+
+<module_info>
+name -> "Public Key Algorithms"
+brief -> "Implementations of public key schemes"
+</module_info>
+
+<header:public>
+pk_algs.h
+pk_keys.h
+pk_ops_fwd.h
+pk_ops.h
+pkcs8.h
+pubkey.h
+x509_key.h
+</header:public>
+
+<header:internal>
+pk_ops_impl.h
+workfactor.h
+</header:internal>
+
+<requires>
+asn1
+bigint
+enc_padding
+kdf
+pem
+numbertheory
+rng
+hash
+hex
+</requires>

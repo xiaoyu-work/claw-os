@@ -1,0 +1,65 @@
+<?xml version="1.0"?>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+<!DOCTYPE html [ <!ENTITY % dtd1 SYSTEM "chrome://calendar/locale/global.dtd"> %dtd1; ]>
+<html
+  id="calendar-error-prompt"
+  xmlns="http://www.w3.org/1999/xhtml"
+  xmlns:xul="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+  xmlns:html="http://www.w3.org/1999/xhtml"
+  lightweightthemes="true"
+  scrolling="false"
+>
+  <head>
+    <title data-l10n-id="calendar-error-prompt-title"></title>
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src chrome:; script-src chrome: 'unsafe-inline' moz-src:; style-src chrome: 'unsafe-inline'"
+    />
+    <link rel="stylesheet" href="chrome://messenger/skin/messenger.css" />
+    <link rel="stylesheet" href="chrome://messenger/skin/colors.css" />
+    <link rel="stylesheet" href="chrome://messenger/skin/themeableDialog.css" />
+    <link rel="localization" href="calendar/calendar.ftl" />
+    <script defer="defer" src="chrome://messenger/content/globalOverlay.js"></script>
+    <script defer="defer" src="chrome://global/content/editMenuOverlay.js"></script>
+    <script defer="defer" src="chrome://messenger/content/dialogShadowDom.js"></script>
+    <script defer="defer" src="chrome://calendar/content/calendar-error-prompt.js"></script>
+  </head>
+  <html:body xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul">
+    <dialog buttons="accept" style="width: 500px">
+      <html:textarea
+        id="general-text"
+        class="plain"
+        readonly="readonly"
+        rows="3"
+        style="resize: none"
+      ></html:textarea>
+      <hbox>
+        <button
+          id="details-button"
+          data-l10n-id="calendar-error-detail"
+          oncommand="toggleDetails()"
+        />
+        <spacer flex="1" />
+      </hbox>
+      <vbox id="details-box" collapsed="collapsed" persist="collapsed">
+        <hbox>
+          <label data-l10n-id="calendar-error-code" />
+          <label id="error-code" value="" />
+        </hbox>
+        <vbox>
+          <label data-l10n-id="calendar-error-description" control="error-description" />
+          <html:textarea
+            id="error-description"
+            class="plain"
+            readonly="readonly"
+            rows="5"
+            style="resize: none"
+          ></html:textarea>
+        </vbox>
+      </vbox>
+    </dialog>
+  </html:body>
+</html>

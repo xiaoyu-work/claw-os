@@ -1,0 +1,89 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@namespace html url("http://www.w3.org/1999/xhtml");
+
+:root[lwtheme] {
+  background-color: var(--lwt-accent-color);
+  color: var(--lwt-text-color);
+}
+
+:root[canDisable] #calendar-properties-table {
+  margin-inline-start: 20px;
+}
+
+body {
+  overflow: auto;
+}
+
+#calendar-properties-table th,
+#calendar-properties-table td {
+  min-block-size: 26px;
+}
+
+#calendar-properties-table th {
+  text-align: start;
+  font-weight: normal;
+}
+
+#calendar-properties-table td {
+  inline-size: 100%;
+}
+
+#calendar-properties-table html|input[type="number"].size3 {
+  inline-size: calc(3ch + 55px);
+}
+
+#calendar-email-identity-row > td,
+#calendar-refreshInterval-row > td {
+  display: flex;
+}
+
+#calendar-refreshInterval-menulist,
+#email-identity-menulist {
+  flex: 1;
+}
+
+#calendar-notifications {
+  margin-inline-start: 24px;
+}
+
+#calendar-notifications-title {
+  font-size: 1.1em;
+  font-weight: 600;
+}
+
+calendar-notifications-setting {
+  display: block;
+}
+
+calendar-notifications-setting .add-button {
+  list-style-image: var(--icon-add);
+  -moz-context-properties: stroke;
+  stroke: currentColor;
+}
+
+calendar-notifications-setting .add-button .button-icon {
+  margin-inline-end: 6px;
+}
+
+calendar-notifications-setting .remove-button {
+  inline-size: 26px;
+  min-inline-size: 0;
+  padding: 0 4px;
+  list-style-image: var(--icon-trash);
+  -moz-context-properties: fill, stroke;
+  fill: color-mix(in srgb, currentColor 20%, transparent);
+  stroke: currentColor;
+  background: none;
+  border: none;
+}
+
+calendar-notifications-setting .calendar-notifications-row:last-child {
+  margin-block-end: 20px;
+}
+
+#global-notifications-row {
+  inline-size: 100%;
+}

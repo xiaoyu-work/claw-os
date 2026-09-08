@@ -1,0 +1,18 @@
+<internal_defines>
+SHACAL2_X86 -> 20170814
+</internal_defines>
+
+<module_info>
+name -> "SHACAL-2 X86"
+brief -> "SHACAL-2 using SSE instructions on x86"
+</module_info>
+
+<requires>
+cpuid
+</requires>
+
+<isa>
+sha
+sse2
+ssse3
+</isa>

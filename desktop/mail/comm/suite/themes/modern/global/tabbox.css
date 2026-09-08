@@ -1,0 +1,123 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+/* ===== tabbox.css =================================================
+  == Styles used by XUL tab-related elements.
+  ======================================================================= */
+
+@namespace url("http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul");
+
+/* ::::: tabs ::::: */
+
+tabs {
+  -moz-box-align: end;
+}
+
+.tabs-left,
+.tabs-right {
+  border-bottom: 1px solid #000000;
+}
+
+/* ::::: tabpanels ::::: */
+
+tabpanels {
+  border-right: 1px solid #000000;
+  border-left: 1px solid #000000;
+  border-bottom: 1px solid #000000;
+  padding: 5px;
+  background-color: #C7D0D9;
+}
+
+/* ::::: tab ::::: */
+
+tab {
+  margin: 0px;
+  border: 1px solid #000000;
+  border-bottom-width: 1px;
+  border-top-left-radius: 3px;
+  border-top-right-radius: 3px;
+  padding: 1px 3px;
+  /*background-color: #8C9DAF;*/
+  background-color: #9CABBA;
+  color: #000000;
+  font: menu;
+}
+
+.tab-text {
+  margin: 0px !important;
+}
+
+.tab-image {
+  list-style-image: inherit;
+}
+
+/* ..... active state ..... */
+
+tab:hover:active {
+  border-top-color: #8190A5;
+  border-right-color: #8190A5;
+  border-left-color: #8190A5;
+  background-color: #8B9AAD;
+  color: #FFFFFF;
+}
+
+/* ..... selected state ..... */
+
+tab[selected="true"],
+tab[selected="true"]:hover:active {
+  border-top-color: #000000;
+  border-right-color: #000000;
+  border-bottom-color: transparent;
+  border-left-color: #000000;
+  background-color: #C7D0D9;
+  color: #000000;
+}
+
+/* ::::: tab-bottom ::::::::::
+   :: Tabs that are attached to the bottom of a panel, but not necessarily
+   :: a tabpanels.
+   ::::: */
+
+.tab-bottom {
+  border-top-color: #000000;
+  border-bottom-color: #000000;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 3px;
+  border-bottom-left-radius: 3px;
+}
+
+.tab-bottom:hover:active {
+  border-top-color: #000000;
+  border-bottom-color: transparent;
+}
+   
+.tab-bottom[selected="true"] {
+  border-top-color: transparent !important;
+  border-bottom-color: #000000 !important;
+}
+
+tab:focus {
+  border-top-color: #000000;
+  border-left-color: #000000;
+  border-right-color: #000000;
+  border-bottom-color: #8190A5;
+}
+
+.tab-bottom > .tab-text {
+  font: message-box;
+  font-weight: bold;
+}
+   
+/* ::::: tabs-bottom ::::: */
+
+.tabs-bottom {
+  -moz-box-align: start;
+}
+
+.tabs-bottom > .tabs-left,
+.tabs-bottom > .tabs-right {
+  border-top: 1px solid #000000;
+  border-bottom: none;
+}

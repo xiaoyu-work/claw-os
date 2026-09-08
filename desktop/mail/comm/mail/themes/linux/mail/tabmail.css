@@ -1,0 +1,87 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@import url("chrome://messenger/skin/shared/tabmail.css");
+
+/**
+ * Tabmail Tabs
+ */
+
+#tabs-toolbar {
+  -moz-window-dragging: drag;
+  padding-block-end: 0;
+}
+
+#tabpanelcontainer {
+  appearance: none;
+
+  :root[lwtheme] & {
+    color: inherit;
+  }
+}
+
+tabpanels {
+  appearance: none;
+  background-color: transparent;
+}
+
+/**
+ * Tab
+ */
+
+.tabmail-tab .tab-label-container {
+  /* tabmail-tab focus ring */
+  border: 1px dotted transparent;
+  margin: -1px !important; /* let the border not consume any space, like outline */
+}
+
+.tabmail-tab[selected]:focus .tab-label-container {
+  border-color: -moz-DialogText;
+}
+
+/**
+ * Tab Scrollbox Arrow Buttons
+ */
+
+#tabmail-arrowscrollbox {
+  &::part(scrollbutton-up),
+  &::part(scrollbutton-down) {
+    appearance: none;
+    padding: 3px !important;
+    border-style: none !important;
+  }
+
+  &:not([scrolledtostart])::part(scrollbutton-up):hover,
+  &:not([scrolledtoend])::part(scrollbutton-down):hover {
+    background: var(--toolbarbutton-background-color-active);
+  }
+
+  &[scrolledtostart="true"]::part(scrollbutton-up),
+  &[scrolledtoend="true"]::part(scrollbutton-down) {
+    --toolbarbutton-icon-fill-opacity: 0.4;
+  }
+}
+
+/**
+ * All Tabs Menupopup
+ */
+
+.tabs-alltabs-button {
+  min-inline-size: 24px;
+  padding-inline: 1px;
+
+  & > .toolbarbutton-icon {
+    margin-inline-end: 0;
+  }
+}
+
+.alltabs-item > .menu-icon {
+  visibility: visible !important;
+}
+
+/* Content Tabs */
+.contentTabAddress {
+  block-size: 32px;
+  padding-inline: 10px;
+}

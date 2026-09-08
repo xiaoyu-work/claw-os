@@ -1,0 +1,37 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@namespace url("http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul");
+
+/* File Field Widget */
+filefield {
+  margin: 2px 4px;
+  border: 1px solid #5D616E;
+}
+
+.fileFieldContentBox {
+  background-color: #C7D0D9;
+}
+
+filefield[disabled="true"] {
+  border-color: #98A5B2;
+}
+
+.fileFieldIcon[disabled="true"] {
+ opacity: 0.4;
+}
+
+.fileFieldIcon {
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  margin-bottom: 1px;
+  margin-inline-start: 1px;
+  margin-inline-end: 4px;
+}
+
+.fileFieldLabel {
+  border: none;
+  margin: 0px;
+}

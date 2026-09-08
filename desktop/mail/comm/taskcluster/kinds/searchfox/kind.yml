@@ -1,0 +1,155 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+---
+loader: taskgraph.loader.transform:loader
+
+kind-dependencies:
+    - toolchain
+    - fetch
+
+transforms:
+    - gecko_taskgraph.transforms.build:transforms
+    - gecko_taskgraph.transforms.build_attrs:transforms
+    - gecko_taskgraph.transforms.build_lints:transforms
+    - gecko_taskgraph.transforms.job:transforms
+    - gecko_taskgraph.transforms.task:transforms
+
+task-defaults:
+    run-on-repo-type: [hg]
+    index:
+        product: thunderbird
+    treeherder:
+        symbol: Searchfox(idx)
+        kind: build
+        tier: 2
+    run-on-projects: []
+    optimization: null
+    use-python: default
+
+tasks:
+    linux64-searchfox/debug:
+        description: "Linux64 Debug Searchfox"
+        index:
+            job-name: linux64-searchfox-debug
+        treeherder:
+            platform: linux64/debug
+        worker-type: b-linux
+        worker:
+            max-run-time: 36000
+            env:
+                PERFHERDER_EXTRA_OPTIONS: searchfox
+                MOZSEARCH_PLATFORM: "linux"
+        run:
+            using: mozharness
+            comm-checkout: true
+            actions: [build]
+            config-paths:
+                - comm/testing/mozharness/configs
+            config:
+                - builds/taskcluster_base_thunderbird.py
+                - builds/releng_sub_linux_configs/64_searchfox_and_debug.py
+            script: "mozharness/scripts/fx_desktop_build.py"
+            tooltool-downloads: public
+            keep-artifacts: false
+        fetches:
+            toolchain:
+                - linux64-cbindgen
+                - linux64-clang
+                - linux64-dump_syms
+                - linux64-libotr
+                - linux64-nasm
+                - linux64-node
+                - linux64-pkgconf
+                - linux64-rust
+                - sysroot-wasm32-wasi
+                - sysroot-x86_64-linux-gnu
+
+    macosx64-searchfox/debug:
+        description: "MacOS X x64 Debug Cross-compile Searchfox"
+        index:
+            job-name: macosx64-searchfox-debug
+        treeherder:
+            platform: osx-cross/debug
+        worker-type: b-linux
+        worker:
+            max-run-time: 36000
+            env:
+                PERFHERDER_EXTRA_OPTIONS: searchfox
+                MOZSEARCH_PLATFORM: "macosx"
+        run:
+            using: mozharness
+            comm-checkout: true
+            actions: [build]
+            config-paths:
+                - comm/testing/mozharness/configs
+            config:
+                - builds/taskcluster_base_thunderbird.py
+                - builds/releng_base_mac_64_cross_builds.py
+            script: "mozharness/scripts/fx_desktop_build.py"
+            custom-build-variant-cfg: cross-debug-searchfox
+            keep-artifacts: false
+        fetches:
+            toolchain:
+                - linux64-cbindgen
+                - linux64-cctools-port
+                - linux64-clang
+                - linux64-dump_syms
+                - linux64-hfsplus
+                - linux64-libdmg
+                - linux64-nasm
+                - linux64-node
+                - linux64-rust-cross
+                - macosx64-x64-libotr
+                - macosx64-sdk
+                - sysroot-wasm32-wasi
+                - sysroot-x86_64-linux-gnu
+
+    win64-searchfox/debug:
+        description: "Win64 Searchfox Debug (clang)"
+        index:
+            job-name: win64-searchfox-debug
+        treeherder:
+            platform: windows2012-64/debug
+        worker-type: b-linux
+        worker:
+            max-run-time: 36000
+            env:
+                PERFHERDER_EXTRA_OPTIONS: searchfox
+                MOZSEARCH_PLATFORM: "windows"
+        run:
+            using: mozharness
+            comm-checkout: true
+            options: [append-env-variables-from-configs]
+            actions: [build]
+            config-paths:
+                - comm/testing/mozharness/configs
+            script: mozharness/scripts/fx_desktop_build.py
+            config:
+                - builds/taskcluster_base_thunderbird.py
+                - builds/releng_base_linux_64_builds.py
+                - builds/taskcluster_sub_win64/searchfox_debug.py
+            tooltool-downloads: internal
+            extra-config:
+                mozconfig_platform: win64
+        fetches:
+            toolchain:
+                - linux64-7zz
+                - linux64-cbindgen
+                - linux64-clang
+                - linux64-dump_syms
+                - linux64-nasm
+                - linux64-node
+                - linux64-rust-cross
+                - linux64-rust-size
+                - linux64-upx
+                - linux64-winchecksec
+                - linux64-wine
+                - nsis
+                - sysroot-wasm32-wasi
+                - sysroot-x86_64-linux-gnu
+                - vs
+                - win64-libotr
+                - winappsdk-x86_64-pc-windows-msvc
+            fetch:
+                - windows-rs

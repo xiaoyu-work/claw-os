@@ -1,0 +1,18 @@
+[package]
+name = "xpcom_async_glue"
+version = "0.1.0"
+edition = "2024"
+rust-version.workspace = true
+
+[lib]
+name = "xpcom_async_glue"
+
+[dependencies]
+mozilla-central-workspace-hack = { version = "0.1", features = [], optional = true }
+xpcom = { path = "../../../xpcom/rust/xpcom" }
+nserror = { path = "../../../xpcom/rust/nserror" }
+thin-vec = { version = "0.2.12", features = ["gecko-ffi"] }
+cstr = "0.2"
+
+[lints]
+workspace = true

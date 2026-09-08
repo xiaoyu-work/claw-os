@@ -1,0 +1,24 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+          <radiogroup id="booleanAndGroup" orient="horizontal" value="and"
+                      oncommand="booleanChanged(event);">
+            <radio value="and" data-l10n-id="search-match-all" flex="1"/>
+            <radio value="or" data-l10n-id="search-match-any" flex="1"/>
+            <radio value="matchAll" id="matchAllItem" data-l10n-id="search-match-all-msgs" flex="1"/>
+          </radiogroup>
+
+          <hbox id="searchTermBox" style="flex: 1 1 0;">
+            <hbox id="searchterms" class="themeable-brighttext"/>
+            <richlistbox id="searchTermList" flex="1">
+              <treecols hidden="hidden">
+                <treecol style="flex: 1 auto"/>
+                <treecol style="flex: 1 auto"/>
+                <treecol style="flex: 3 auto"/>
+                <treecol class="filler"/>
+              </treecols>
+            </richlistbox>
+
+          </hbox>
+        </vbox>

@@ -1,0 +1,22 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@import url(chrome://calendar/skin/shared/widgets/calendar-widgets.css);
+
+#task-tree-filtergroup {
+  padding-inline-start: 12px;
+}
+
+#calendar-list-pane #calendar-list richlistitem {
+  padding-inline-start: 14px;
+  padding-block: 2px;
+}
+
+.toolbarbutton-icon-begin {
+  margin-inline-end: 5px;
+}
+
+.toolbarbutton-icon-end {
+  margin-inline-start: 5px;
+}

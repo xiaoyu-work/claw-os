@@ -1,0 +1,27 @@
+<defines>
+NUMBERTHEORY -> 20201108
+</defines>
+
+<module_info>
+name -> "Number Theory"
+brief -> "Number theoretical higher level algorithms for big integer math"
+</module_info>
+
+<header:public>
+numthry.h
+reducer.h
+</header:public>
+
+<header:internal>
+barrett.h
+mod_inv.h
+monty.h
+monty_exp.h
+primality.h
+</header:internal>
+
+<requires>
+bigint
+hash
+rng
+</requires>

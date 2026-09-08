@@ -1,0 +1,79 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+---
+loader: taskgraph.loader.transform:loader
+
+kind-dependencies:
+    - fetch
+    - toolchain
+
+transforms:
+    - comm_taskgraph.transforms.repo_update
+    - gecko_taskgraph.transforms.release_notifications
+    - gecko_taskgraph.transforms.job
+    - gecko_taskgraph.transforms.task
+
+tasks:
+    tb-rust-vendor:
+        name: Thunderbird vendored Rust sync
+        description: Check third_party/rust in comm-central matches mozilla-central
+        run-on-projects: []  # Only run via cron
+        priority: high
+        index:
+            product: thunderbird
+            job-name: tb-rust-vendor
+            type: generic
+        treeherder:
+            kind: other
+            platform: updatebot/all
+            symbol: rust
+            tier: 1
+        worker-type: b-linux
+        worker:
+            docker-image: {in-tree: tb-updatebot}
+            max-run-time: 3600
+            env:
+                REVIEWERS: "#thunderbird-reviewers"
+            taskcluster-proxy: true
+            artifacts:
+                - type: file
+                  name: public/hg_diff.patch
+                  path: /builds/worker/hg_diff.patch
+                - type: file
+                  name: public/phab_rev_id.txt
+                  path: /builds/worker/phab_rev_id.txt
+                - type: file
+                  name: public/checksums.json
+                  path: /builds/worker/checksums.json
+        ssh-key-secret:
+            by-level:
+                "3": project/comm/thunderbird/releng/build/level-3/tbirdtry
+                default: null
+        phab-token-secret:
+            by-level:
+                "3": project/comm/thunderbird/releng/build/level-3/arc-phabricator-token
+                default: null
+        routes:
+            by-level:
+                "3":
+                    - notify.matrix-room.!TWztIhgqLawNpRBZTC:mozilla.org.on-defined
+                    - notify.matrix-room.!TWztIhgqLawNpRBZTC:mozilla.org.on-resolved
+                default:
+                    - notify.email.{owner}.on-defined
+                    - notify.email.{owner}.on-resolved
+        scopes:
+            by-level:
+                "3":
+                    - notify:matrix-room:!TWztIhgqLawNpRBZTC:mozilla.org
+                default:
+                    - notify:email:{owner}
+        run:
+            using: run-task
+            comm-checkout: true
+            cwd: '/builds/worker'
+            command: runme.sh
+        fetches:
+            toolchain:
+                - linux64-rust
+                - linux64-cargo-vet

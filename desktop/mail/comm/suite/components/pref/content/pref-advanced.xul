@@ -1,0 +1,174 @@
+<?xml version="1.0"?>
+
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+<!DOCTYPE overlay [
+  <!ENTITY % brandDTD SYSTEM "chrome://branding/locale/brand.dtd"> %brandDTD;
+  <!ENTITY % prefAdvancedDTD SYSTEM "chrome://communicator/locale/pref/pref-advanced.dtd"> %prefAdvancedDTD;
+]>
+
+<overlay xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul">
+  <prefpane id="advanced_pane"
+            label="&pref.advanced.title;"
+            script="chrome://communicator/content/pref/pref-advanced.js">
+
+    <preferences id="advanced_preferences">
+      <preference id="shell.checkDefaultClient"
+                  name="shell.checkDefaultClient"
+                  type="bool"/>
+      <preference id="pref.browser.disable_button.default_browser"
+                  name="pref.browser.disable_button.default_browser"
+                  type="bool"
+                  readonly="true"/>
+      <preference id="system.windows.lock_ui.defaultMailClient"
+                  name="system.windows.lock_ui.defaultMailClient"
+                  type="bool"
+                  readonly="true"/>
+      <preference id="system.windows.lock_ui.defaultNewsClient"
+                  name="system.windows.lock_ui.defaultNewsClient"
+                  type="bool"
+                  readonly="true"/>
+      <preference id="system.windows.lock_ui.defaultFeedClient"
+                  name="system.windows.lock_ui.defaultFeedClient"
+                  type="bool"
+                  readonly="true"/>
+      <preference id="network.protocol-handler.external.mailto"
+                  name="network.protocol-handler.external.mailto"
+                  type="bool"
+                  inverted="true"/>
+      <preference id="network.protocol-handler.external.news"
+                  name="network.protocol-handler.external.news"
+                  type="bool"
+                  inverted="true"/>
+      <preference id="network.protocol-handler.external.snews"
+                  name="network.protocol-handler.external.snews"
+                  type="bool"
+                  inverted="true"/>
+      <preference id="network.protocol-handler.external.nntp"
+                  name="network.protocol-handler.external.nntp"
+                  type="bool"
+                  inverted="true"/>
+      <preference id="print.use_native_print_dialog"
+                  name="print.use_native_print_dialog"
+                  type="bool"/>
+      <preference id="print.use_global_printsettings"
+                  name="print.use_global_printsettings"
+                  type="bool"/>
+      <preference id="devtools.debugger.remote-enabled"
+                  name="devtools.debugger.remote-enabled"
+                  type="bool"/>
+      <preference id="devtools.debugger.force-local"
+                  name="devtools.debugger.force-local"
+                  inverted="true"
+                  type="bool"/>
+      <preference id="devtools.debugger.prompt-connection"
+                  name="devtools.debugger.prompt-connection"
+                  type="bool"/>
+      <preference id="devtools.debugger.remote-port"
+                  name="devtools.debugger.remote-port"
+                  type="int"/>
+    </preferences>
+
+    <groupbox id="defaultClientGroup" hidden="true">
+      <caption label="&prefCheckDefault.caption;"/>
+      <checkbox id="checkDefaultClient"
+                label="&prefCheckDefaultClient.label;"
+                accesskey="&prefCheckDefaultClient.accesskey;"
+                preference="shell.checkDefaultClient"/>
+      <vbox>
+        <separator class="thin"/>
+
+        <description>&defaultClientFor.description;</description>
+        <hbox class="indent" align="center">
+          <button id="setDefaultBrowser"
+                  label="&setDefaultBrowser.label;"
+                  accesskey="&setDefaultBrowser.accesskey;"
+                  oncommand="onSetDefault(this, 'BROWSER');"
+                  preference="pref.browser.disable_button.default_browser"/>
+          <button id="setDefaultMail"
+                  label="&setDefaultMail.label;"
+                  accesskey="&setDefaultMail.accesskey;"
+                  oncommand="onSetDefault(this, 'MAIL');"
+                  preference="system.windows.lock_ui.defaultMailClient"/>
+          <button id="setDefaultNews"
+                  label="&setDefaultNews.label;"
+                  accesskey="&setDefaultNews.accesskey;"
+                  oncommand="onSetDefault(this, 'NEWS');"
+                  preference="system.windows.lock_ui.defaultNewsClient"/>
+          <button id="setDefaultRss"
+                  label="&setDefaultFeed.label;"
+                  accesskey="&setDefaultFeed.accesskey;"
+                  oncommand="onSetDefault(this, 'RSS');"
+                  preference="system.windows.lock_ui.defaultFeedClient"/>
+        </hbox>
+      </vbox>
+
+      <separator class="thin"/>
+
+      <description>&useInternalSettings.description;</description>
+      <hbox class="indent" align="center">
+        <checkbox id="useInternalMail"
+                  label="&useInternalMail.label;"
+                  accesskey="&useInternalMail.accesskey;"
+                  preference="network.protocol-handler.external.mailto"/>
+        <checkbox id="useInternalNews"
+                  label="&useInternalNews.label;"
+                  accesskey="&useInternalNews.accesskey;"
+                  oncommand="onNewsChange(this.checked);"
+                  preference="network.protocol-handler.external.news"/>
+      </hbox>
+    </groupbox>
+
+    <groupbox id="printing">
+      <caption label="&printing.label;"/>
+      <checkbox id="nglayoutUseNativePrintDialog"
+                label="&useNativePrintDialog.label;"
+                accesskey="&useNativePrintDialog.accesskey;"
+                preference="print.use_native_print_dialog"/>
+      <checkbox id="printUseGlobalPrintSettings"
+                label="&useGlobalPrintSettings.label;"
+                accesskey="&useGlobalPrintSettings.accesskey;"
+                preference="print.use_global_printsettings"/>
+    </groupbox>
+
+    <groupbox id="crashReports" hidden="true">
+      <caption id="crashReportsCaption" label="&crashReports.caption;"/>
+      <checkbox id="submitCrashes"
+                label="&submitCrashes.label;"
+                accesskey="&submitCrashes.accesskey;"
+                oncommand="updateSubmitCrashes(this.checked);"/>
+    </groupbox>
+
+    <groupbox id="devTools">
+      <caption id="devToolsCaption" label="&devTools.caption;"/>
+      <checkbox id="allowDebugger"
+                label="&allowDebugger.label;"
+                accesskey="&allowDebugger.accesskey;"
+                preference="devtools.debugger.remote-enabled"/>
+      <checkbox id="allowRemoteConnections"
+                label="&allowRemoteConnections.label;"
+                accesskey="&allowRemoteConnections.accesskey;"
+                preference="devtools.debugger.force-local"/>
+      <checkbox id="connectionPrompt"
+                label="&connectionPrompt.label;"
+                accesskey="&connectionPrompt.accesskey;"
+                preference="devtools.debugger.prompt-connection"/>
+
+      <hbox align="center">
+        <label id="remoteDebuggerPortBefore"
+               value="&remoteDebuggerPort.label;"
+               accesskey="&remoteDebuggerPort.accesskey;"
+               control="remoteDebuggerPort"/>
+        <textbox id="remoteDebuggerPort"
+                 type="number"
+                 min="0"
+                 max="65535"
+                 size="5"
+                 preference="devtools.debugger.remote-port"
+                 aria-labelledby="remoteDebuggerPortBefore remoteDebuggerPort"/>
+      </hbox>
+    </groupbox>
+  </prefpane>
+</overlay>

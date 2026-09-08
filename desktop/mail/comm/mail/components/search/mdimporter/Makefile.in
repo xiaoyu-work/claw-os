@@ -1,0 +1,26 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+# This directory is producing a framework as a target. The output of this
+# framework will be located here.
+FRAMEWORK_DIR := $(DIST)/package/thunderbird.mdimporter
+
+STRING_FILES := $(srcdir)/English.lproj/InfoPlist.strings $(srcdir)/English.lproj/schema.strings
+STRING_DEST := $(FRAMEWORK_DIR)/Contents/Resources/English.lproj
+INSTALL_TARGETS += STRING
+
+SCHEMA_FILES := $(srcdir)/schema.xml
+SCHEMA_DEST := $(FRAMEWORK_DIR)/Contents/Resources
+INSTALL_TARGETS += SCHEMA
+
+PLIST_FILES := $(srcdir)/Info.plist
+PLIST_DEST := $(FRAMEWORK_DIR)/Contents
+INSTALL_TARGETS += PLIST
+
+CFLAGS += -mmacosx-version-min=$(MACOSX_DEPLOYMENT_TARGET)
+# We don't need mozglue
+WRAP_LDFLAGS :=
+
+include $(topsrcdir)/config/rules.mk
+

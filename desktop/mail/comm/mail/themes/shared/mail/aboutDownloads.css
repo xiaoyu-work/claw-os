@@ -1,0 +1,132 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@namespace html url("http://www.w3.org/1999/xhtml");
+
+body {
+  color: var(--color-text-base);
+  background: var(--color-surface-base);
+  text-shadow: none;
+}
+
+#downloadTopBox {
+  background-color: var(--toolbar-background-color);
+  padding: 10px 18px;
+  border-block-end: 1px solid var(--chrome-content-separator-color);
+}
+
+#downloadBottomBox {
+  padding: 15px 18px;
+
+  :root[lwtheme] & {
+    text-shadow: none;
+  }
+}
+
+#msgDownloadsRichListBox {
+  margin-block: 0;
+
+  & > .download {
+    min-block-size: 5em;
+    border-block-end: 1px solid hsla(0, 0%, 50%, 0.3);
+    border-radius: 3px;
+  }
+
+  & > .download > vbox {
+    display: flex;
+    flex-direction: column;
+  }
+
+  :root:not([lwt-tree]) & > .download[selected] {
+    color: var(--selected-item-text-color);
+    background-color: var(--selected-item-color);
+    --button-text-color-hover: var(--selected-item-text-color);
+  }
+}
+
+#clearDownloads {
+  margin-inline-start: 0;
+  padding: 0 12px;
+  border-radius: 3px;
+  font-weight: 400;
+}
+
+#searchBox {
+  inline-size: 22em;
+  margin-inline-end: 0;
+  --input-text-max-width: none;
+}
+
+.fileTypeIcon {
+  margin-inline: 8px;
+  /* explicitly size the icon, so size doesn't vary on hidpi systems */
+  block-size: 32px;
+  inline-size: 32px;
+}
+
+.sender,
+.fileName {
+  margin-block: 3px;
+  font-weight: 600;
+}
+
+.sender[value=""] {
+  display: none;
+}
+
+.size,
+.startDate {
+  opacity: 0.7;
+  margin-block: 3px;
+}
+
+.downloadButton {
+  align-items: center;
+  background: transparent !important;
+  min-inline-size: 0;
+  block-size: unset;
+  margin: 0;
+  border: none !important;
+  outline: none !important;
+  color: inherit;
+  padding: 0 12px;
+
+  & > .button-box {
+    appearance: none;
+    padding: 8px;
+
+    & > .button-icon {
+      inline-size: 16px;
+      block-size: 16px;
+      margin: 0;
+      -moz-context-properties: fill;
+      fill: currentColor;
+    }
+
+    & > .button-text {
+      display: none;
+    }
+  }
+
+  &:hover > .button-box {
+    background-color: var(--button-hover-background-color);
+    border-radius: 50%;
+  }
+
+  &:hover:active > .button-box {
+    background-color: var(--button-active-background-color);
+  }
+
+  @media (-moz-platform: linux), (-moz-platform: windows) {
+    & > .button-box > .button-icon {
+      list-style-image: url("chrome://global/skin/icons/folder.svg");
+    }
+  }
+
+  @media (-moz-platform: macos) {
+    & > .button-box > .button-icon {
+      list-style-image: url("chrome://global/skin/icons/search-glass.svg");
+    }
+  }
+}

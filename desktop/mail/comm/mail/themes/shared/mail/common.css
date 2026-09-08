@@ -1,0 +1,187 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@import url("chrome://global/skin/in-content/common-shared.css");
+@import url("chrome://messenger/skin/layout.css");
+
+:host,
+:root {
+  --button-height: 2.2em;
+  --border-color: color-mix(in srgb, currentColor 46%, transparent);
+  --button-border-radius: 3px;
+  --button-border-color-hover: color-mix(in srgb, currentColor 17%, transparent);
+  --in-content-deemphasized-text: color-mix(in srgb, currentColor 60%, transparent);
+  --size-sidebar: auto;
+  --menu-item-margin: 0 3px;
+  --panel-border-radius: 9px;
+
+  @media not (forced-colors) {
+    --background-color-box-info: light-dark(var(--layout-background-1), var(--layout-background-2));
+    --border-color-box-info: light-dark(var(--layout-border-0), transparent);
+    --color-accent-primary-selected-unfocused: light-dark(var(--color-gray-20), rgba(249, 249, 250, 0.05));
+    --color-accent-primary-selected: var(--selected-item-color);
+    --text-color-accent-primary-selected: var(--selected-item-text-color);
+    --in-content-focus-outline-color: AccentColor;
+    --in-content-accent-color: AccentColor;
+  }
+
+  @media (forced-colors) {
+    --background-color-box-info: transparent;
+    --border-color-box-info: currentColor;
+    --border-color: -moz-DialogText;
+    --in-content-accent-color: SelectedItem;
+  }
+}
+
+:root {
+  -moz-box-collapse: legacy;
+  background-color: var(--layout-background-0);
+
+  &:not(.system-font-size) {
+    font: message-box;
+  }
+}
+
+h1 {
+  font-size: 2em;
+}
+
+h2 {
+  font-size: 1.5em;
+}
+
+body table {
+  font-size: 1em;
+}
+
+#categories {
+  & > .category {
+    margin-inline: 6px;
+    border-color: transparent !important;
+
+    &[selected] {
+      font-weight: 500;
+    }
+  }
+
+  @media not (forced-colors) {
+    & > .category[selected] {
+      background-color: var(--button-background-color) !important;
+      color: unset;
+    }
+  }
+}
+
+.category-name {
+  font-size: 1.1rem;
+}
+
+.sidebar-footer-list {
+  margin-inline: 0;
+}
+
+.sidebar-footer-link {
+  border-color: transparent !important;
+}
+
+.sidebar-footer-icon {
+  margin: 10px;
+}
+
+.sidebar-footer-label {
+  margin: 0;
+  font-size: 1rem;
+}
+
+@media (max-width: 830px) {
+  .sidebar-footer-list {
+    align-items: normal;
+  }
+
+  .sidebar-footer-link {
+    inline-size: auto;
+    block-size: 36px;
+  }
+
+  .sidebar-footer-label,
+  .category:not(.category-no-icon) > .category-name,
+  .category-icon + .category-name {
+    display: flex;
+  }
+
+  #categories:not(moz-page-nav),
+  #categories > .category {
+    inline-size: auto;
+  }
+}
+
+menulist > menupopup {
+  --panel-padding: 4px 0;
+
+  & menuseparator {
+    margin: 4px 8px;
+  }
+}
+
+menupopup {
+  --panel-padding: 4px 0;
+
+  & > :is(menu, menuitem) {
+    margin: var(--menu-item-margin);
+    min-block-size: 24px;
+    padding: 3px 6px;
+    border-radius: 3px;
+
+    &:not([disabled])[_moz-menuactive="true"] {
+      color: inherit;
+      background-color: var(--panel-background-color-dimmed);
+    }
+  }
+
+  @media (-moz-windows-mica-popups) {
+    & menupopup {
+      --panel-border-color: var(--border-color);
+    }
+  }
+}
+
+tab[selected] {
+  color: inherit;
+  background-color: var(--panel-background-color-dimmed);
+  border-block-end-color: var(--selected-item-color);
+}
+
+input[type="search"] {
+  padding-inline: 30px 6px;
+  background-image: var(--icon-search);
+  -moz-context-properties: fill, stroke;
+  fill: color-mix(in srgb, currentColor 20%, transparent);
+  stroke: currentColor;
+  background-position: 8px center;
+  background-repeat: no-repeat;
+
+  &:-moz-locale-dir(rtl) {
+    background-position: calc(100% - 8px);
+  }
+}
+
+input::-moz-search-clear-button {
+  inline-size: 28px;
+  block-size: 28px;
+  margin-block: auto;
+  padding: 0;
+  background-image: var(--icon-close);
+  background-size: 16px;
+  -moz-context-properties: fill, stroke;
+  fill: color-mix(in srgb, currentColor 20%, transparent);
+  stroke: currentColor;
+}
+
+:host(dialog[subdialog]) .dialog-button-box > button {
+  min-block-size: var(--button-height);
+  padding-block: initial;
+  padding-inline: 15px;
+  border-color: transparent;
+  border-radius: var(--button-border-radius);
+}

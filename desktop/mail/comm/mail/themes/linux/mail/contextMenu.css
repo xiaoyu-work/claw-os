@@ -1,0 +1,24 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, you can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@import url("chrome://messenger/skin/shared/contextMenu.css");
+
+menupopup {
+  & > menuitem:is([type="checkbox"], [type="radio"]) .menu-icon {
+    appearance: none;
+    display: flex;
+    visibility: hidden;
+  }
+
+  menuitem[checked] > .menu-icon {
+    content: var(--menuitem-icon);
+    visibility: inherit;
+  }
+
+  &.webextension-menupopup > menu:not([icon], .menu-iconic),
+  &.webextension-menupopup > menuitem:not([checked], [icon], .menuitem-iconic),
+  menubar > menu &:not([needsgutter]) > :is(menu:not(.menu-iconic), menuitem:not(.menuitem-iconic)) {
+    padding-inline-start: calc(24px + 0.5em);
+  }
+}

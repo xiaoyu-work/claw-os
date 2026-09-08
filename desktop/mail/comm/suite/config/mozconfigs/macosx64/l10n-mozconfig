@@ -1,0 +1,16 @@
+TOOLTOOL_DIR=${TOOLTOOL_DIR:-$topsrcdir}
+
+. $TOOLTOOL_DIR/build/macosx/mozconfig.common
+. $TOOLTOOL_DIR/build/mozconfig.stylo
+. $TOOLTOOL_DIR/comm/suite/config/mozconfigs/common
+
+ac_add_options --with-l10n-base=../../l10n
+ac_add_options --enable-application=comm/suite
+ac_add_options --enable-update-channel=${MOZ_UPDATE_CHANNEL}
+ac_add_options --disable-install-strip
+
+# Build lightning locales
+ac_add_options --enable-calendar
+
+# Needed to enable breakpad in application.ini
+export MOZILLA_OFFICIAL=1

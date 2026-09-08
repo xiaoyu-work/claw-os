@@ -1,0 +1,208 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, you can obtain one at http://mozilla.org/MPL/2.0/.
+[
+  {
+    "namespace": "manifest",
+    "types": [
+      {
+        "$extend": "OptionalPermission",
+        "choices": [
+          {
+            "type": "string",
+            "enum": ["messagesModify", "sensitiveDataUpload"]
+          }
+        ]
+      },
+      {
+        "id": "ComposeScript",
+        "type": "object",
+        "description": "A script and/or CSS to inject into compose windows via the manifest.",
+        "properties": {
+          "js": {
+            "type": "array",
+            "optional": true,
+            "description": "The list of JavaScript files to inject.",
+            "items": { "$ref": "ExtensionURL" }
+          },
+          "css": {
+            "type": "array",
+            "optional": true,
+            "description": "The list of CSS files to inject.",
+            "items": { "$ref": "ExtensionURL" }
+          }
+        },
+        "additionalProperties": { "$ref": "UnrecognizedProperty" }
+      },
+      {
+        "id": "MessageDisplayScript",
+        "type": "object",
+        "description": "A script and/or CSS to inject into message display pages via the manifest.",
+        "properties": {
+          "js": {
+            "type": "array",
+            "optional": true,
+            "description": "The list of JavaScript files to inject.",
+            "items": { "$ref": "ExtensionURL" }
+          },
+          "css": {
+            "type": "array",
+            "optional": true,
+            "description": "The list of CSS files to inject.",
+            "items": { "$ref": "ExtensionURL" }
+          },
+          "run_at": {
+            "type": "string",
+            "optional": true,
+            "default": "document_idle",
+            "enum": ["document_start", "document_end", "document_idle"],
+            "description": "Determines when the files specified in css and js are injected. The states directly correspond to <code>Document.readyState</code>: <var>loading</var>, <var>interactive</var> and <var>complete</var>."
+          }
+        },
+        "additionalProperties": { "$ref": "UnrecognizedProperty" }
+      },
+      {
+        "$extend": "WebExtensionManifest",
+        "properties": {
+          "compose_scripts": {
+            "type": "array",
+            "optional": true,
+            "description": "Scripts and CSS to inject into compose windows.",
+            "items": { "$ref": "ComposeScript" }
+          },
+          "message_display_scripts": {
+            "type": "array",
+            "optional": true,
+            "description": "Scripts and CSS to inject into message display pages.",
+            "items": { "$ref": "MessageDisplayScript" }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "namespace": "composeScripts",
+    "description": "The composeScripts API allows to register and unregister scripts for the message compose window.",
+    "permissions": ["compose"],
+    "max_manifest_version": 2,
+    "types": [
+      {
+        "id": "RegisteredComposeScriptOptions",
+        "type": "object",
+        "description": "Details of a compose script registered programmatically.",
+        "properties": {
+          "css": {
+            "type": "array",
+            "optional": true,
+            "description": "The list of CSS files to inject.",
+            "items": {
+              "$ref": "extensionTypes.ExtensionFileOrCode"
+            }
+          },
+          "js": {
+            "type": "array",
+            "optional": true,
+            "description": "The list of JavaScript files to inject.",
+            "items": {
+              "$ref": "extensionTypes.ExtensionFileOrCode"
+            }
+          }
+        }
+      },
+      {
+        "id": "RegisteredComposeScript",
+        "type": "object",
+        "description": "An object that represents a compose script registered programmatically.",
+        "functions": [
+          {
+            "name": "unregister",
+            "type": "function",
+            "description": "Unregister a compose script registered programmatically.",
+            "async": true,
+            "parameters": []
+          }
+        ]
+      }
+    ],
+    "functions": [
+      {
+        "name": "register",
+        "type": "function",
+        "description": "Register a compose script programmatically.",
+        "async": true,
+        "parameters": [
+          {
+            "name": "composeScriptOptions",
+            "$ref": "RegisteredComposeScriptOptions"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "namespace": "messageDisplayScripts",
+    "description": "The messageDisplayScripts API allows to register and unregister scripts for the message display window.",
+    "permissions": ["messagesModify"],
+    "max_manifest_version": 2,
+    "types": [
+      {
+        "id": "RegisteredMessageDisplayScriptOptions",
+        "type": "object",
+        "description": "Details of a message display script registered programmatically",
+        "properties": {
+          "css": {
+            "type": "array",
+            "optional": true,
+            "description": "The list of CSS files to inject",
+            "items": {
+              "$ref": "extensionTypes.ExtensionFileOrCode"
+            }
+          },
+          "js": {
+            "type": "array",
+            "optional": true,
+            "description": "The list of JavaScript files to inject",
+            "items": {
+              "$ref": "extensionTypes.ExtensionFileOrCode"
+            }
+          },
+          "runAt": {
+            "type": "string",
+            "optional": true,
+            "default": "document_idle",
+            "enum": ["document_start", "document_end", "document_idle"],
+            "description": "Determines when the files specified in css and js are injected. The states directly correspond to <code>Document.readyState</code>: <var>loading</var>, <var>interactive</var> and <var>complete</var>"
+          }
+        }
+      },
+      {
+        "id": "RegisteredMessageDisplayScript",
+        "type": "object",
+        "description": "An object that represents a message display script registered programmatically",
+        "functions": [
+          {
+            "name": "unregister",
+            "type": "function",
+            "description": "Unregister a message display script registered programmatically",
+            "async": true,
+            "parameters": []
+          }
+        ]
+      }
+    ],
+    "functions": [
+      {
+        "name": "register",
+        "type": "function",
+        "description": "Register a message display script programmatically.",
+        "async": true,
+        "parameters": [
+          {
+            "name": "messageDisplayScriptOptions",
+            "$ref": "RegisteredMessageDisplayScriptOptions"
+          }
+        ]
+      }
+    ]
+  }
+]

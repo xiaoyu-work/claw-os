@@ -1,0 +1,274 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+
+#include "nsISupports.idl"
+#include "nsIObserver.idl"
+
+interface prplIAccountBuddy;
+interface imIAccount;
+interface imIOutgoingMessage;
+interface imIMessage;
+interface nsIURI;
+interface prplIChatRoomFieldValues;
+
+/**
+ * This interface represents a conversation as implemented by a protocol. It
+ * contains the properties and methods shared between direct (IM) and multi
+ * user (chat) conversations.
+ */
+[scriptable, uuid(f71c58d6-2c47-4468-934b-b1c61462c01a)]
+interface prplIConversation: nsISupports {
+
+  /**
+   * Indicate if this conversation implements prplIConvIM or prplIConvChat. If
+   * this ever changes at runtime, the conversation should emit a
+   * "chat-update-type" notification. */
+  readonly attribute boolean isChat;
+
+  /* The account used for this conversation */
+  readonly attribute imIAccount account;
+
+  /* The name of the conversation, typically in English */
+  readonly attribute AUTF8String name;
+
+  /* A name that can be used to check for duplicates and is the basis
+     for the directory name for log storage. */
+  readonly attribute AUTF8String normalizedName;
+
+  /* The title of the conversation, typically localized */
+  readonly attribute AUTF8String title;
+
+  /* The time and date of the conversation's creation, in microseconds */
+  readonly attribute PRTime startDate;
+  /* Unique identifier of the conversation */
+  /* Setable only once by purpleCoreService while calling addConversation. */
+           attribute unsigned long id;
+
+  /** URI of the icon for the conversation */
+  readonly attribute AUTF8String convIconFilename;
+
+  /**
+   * The user can not enable encryption for this room (another participant may
+   * be able to enable encryption however)
+   */
+  const short ENCRYPTION_NOT_SUPPORTED = 0;
+  /**
+   * Encryption can be initialized in this conversation.
+   */
+  const short ENCRYPTION_AVAILABLE = 1;
+  /**
+   * New messages in this conversation are end-to-end encrypted.
+   */
+  const short ENCRYPTION_ENABLED = 2;
+  /**
+   * Indicates that the encryption with the other side should be trusted, for
+   * example because the user has verified their public keys. Implies
+   * ENCRYPTION_ENABLED.
+   */
+  const short ENCRYPTION_TRUSTED = 3;
+
+  /**
+   * State of encryption for this conversation, as available via the protocol.
+   * update-conv-encryption is observed when this changes.
+   */
+  readonly attribute short encryptionState;
+
+  /**
+   * When encryptionState is ENCRYPTION_AVAILABLE this tries to initialize
+   * encryption for all new messages in the conversation.
+   */
+  void initializeEncryption();
+
+  /**
+   * Send a message in the conversation. Protocols should consider resetting
+   * the typing state with this call, similar to |sendTyping("")|.
+   */
+  void sendMsg(in AUTF8String aMsg, in boolean aAction, in boolean aNotice);
+
+  /**
+   * Preprocess messages before they are sent (eg. split long messages).
+   *
+   * @returns the potentially modified message(s).
+   */
+  Array<AString> prepareForSending(in imIOutgoingMessage aMsg);
+
+  /**
+   * Postprocess messages before they are displayed (eg. escaping). The
+   * implementation can set aMsg.displayMessage, otherwise the originalMessage
+   * is used.
+   */
+  void prepareForDisplaying(in imIMessage aMsg);
+
+  /**
+   * Send information about the current typing state to the server.
+   *
+   * @param aString should contain the content currently in the text field.
+   * @returns the number of characters that can still be typed.
+   */
+  long sendTyping(in AUTF8String aString);
+  const long NO_TYPING_LIMIT = 2147483647; // max int = 2 ^ 31 - 1
+
+  /**
+   * Un-initialize the conversation.
+   *
+   * This will be called by purpleCoreService::RemoveConversation
+   * when the conversation is closed or by purpleCoreService::Quit
+   * while exiting.
+   */
+  void unInit();
+
+  /**
+   * Called when the conversation is closed from the UI.
+   */
+  void close();
+
+  /**
+   * Method to add or remove an observer.
+   */
+  void addObserver(in nsIObserver aObserver);
+  void removeObserver(in nsIObserver aObserver);
+
+  /**
+   * Observers will all receive new-text and update-text notifications.
+   * aSubject will contain the message (prplIMessage). For update-text the
+   * update applies to any message with the same |remoteId| in the same
+   * conversation.
+   * The remove-text notification has no subject, but a remote ID as data.
+   * It indicates that the message should be removed from the conversation.
+   * Neither update-text nor remove-text affect unread counts.
+   */
+};
+
+[scriptable, uuid(c0b5b647-b0ec-4dc6-9e53-31a762a30a6e)]
+interface prplIConvIM: prplIConversation {
+
+  /* The buddy at the remote end of the conversation */
+  readonly attribute prplIAccountBuddy buddy;
+
+  /* The remote buddy is not currently typing */
+  const short NOT_TYPING = 0;
+
+  /* The remote buddy is currently typing */
+  const short TYPING = 1;
+
+  /* The remote buddy started typing, but has stopped typing */
+  const short TYPED = 2;
+
+  /* The typing state of the remote buddy.
+     The value is NOT_TYPING, TYPING or TYPED. */
+  readonly attribute short typingState;
+};
+
+/** This represents a participant in a chat room */
+[scriptable, uuid(b0e9177b-40f6-420b-9918-04bbbb9ce44f)]
+interface prplIConvChatBuddy: nsISupports {
+
+  /* The name of the buddy */
+  readonly attribute AUTF8String name;
+
+  /* The alias (FIXME: can this be non-null if buddy is null?) */
+  readonly attribute AUTF8String alias;
+
+  /* Indicates if this chat buddy corresponds to a buddy in our buddy list */
+  readonly attribute boolean buddy;
+
+  /** URI of the user icon for the buddy */
+  readonly attribute AUTF8String buddyIconFilename;
+
+  /* The role of the participant in the room. */
+
+  /* Voiced users can send messages to the room. */
+  readonly attribute boolean voiced;
+  /* Moderators can manage other participants. */
+  readonly attribute boolean moderator;
+  /* Admins have additional powers. */
+  readonly attribute boolean admin;
+  /* Founders have complete control of a room. */
+  readonly attribute boolean founder;
+
+  /* Whether the participant is currently typing. */
+  readonly attribute boolean typing;
+
+  /** Whether we can verify the identity of this participant. */
+  readonly attribute boolean canVerifyIdentity;
+
+  /**
+   * True if we trust the encryption with this participant in E2EE chats. Can
+   * only be true if |canVerifyIdentity| is true.
+   */
+  readonly attribute boolean identityVerified;
+
+  /**
+   * Initialize identity verification with this participant.
+   * @returns {Promise<imISessionVerification>}
+   */
+  Promise verifyIdentity();
+};
+
+[scriptable, uuid(72c17398-639f-4141-a19c-78cbdeb39fba)]
+interface prplIConvChat: prplIConversation {
+
+  /**
+   * Get the prplIConvChatBuddy of a participant.
+   *
+   * @param aName the participant's nick in the conversation exists
+   * @returns prplIConvChatBuddy if the participant exists, otherwise null
+   */
+  prplIConvChatBuddy getParticipant(in AUTF8String aName);
+
+  /**
+   * Get the list of people participating in this chat.
+   *
+   * @returns an array of prplIConvChatBuddy objects.
+   */
+  Array<prplIConvChatBuddy> getParticipants();
+
+  /**
+   * Normalize the name of a chat buddy. This will be suitable for calling
+   * createConversation to start a private conversation or calling
+   * requestBuddyInfo.
+   *
+   * @returns the normalized chat buddy name.
+   */
+  AUTF8String getNormalizedChatBuddyName(in AUTF8String aChatBuddyName);
+
+  /* The topic of this chat room */
+           attribute AUTF8String topic;
+
+  /* The name/nick of the person who set the topic */
+  readonly attribute AUTF8String topicSetter;
+
+  /* Whether the protocol plugin can set a topic. Doesn't check that
+     the user has the necessary rights in the current conversation. */
+  readonly attribute boolean topicSettable;
+
+  /* The nick seen by other people in the room */
+  readonly attribute AUTF8String nick;
+
+  /* This is true when we left the chat but kept the conversation open */
+  readonly attribute boolean left;
+
+  /* This is true if we are in the process of joining the channel */
+  readonly attribute boolean joining;
+
+  /* This stores the data required to join the chat with joinChat().
+     If null, the chat will not be rejoined automatically when the
+     account reconnects after a disconnect.
+     Should be set to null by the prpl if the user parts the chat. */
+  readonly attribute prplIChatRoomFieldValues chatRoomFields;
+
+  /* Observers will receive chat-buddy-add, chat-buddy-update,
+     chat-buddy-remove and chat-update-topic notifications.
+
+     aSubject will be of type:
+       nsISimpleEnumerator of prplIConvChatBuddy for chat-buddy-add,
+       nsISimpleEnumerator of nsISupportsString for chat-buddy-remove,
+       prplIConvChatBuddy for chat-buddy-update,
+       null for chat-update-topic.
+
+     aData will contain the old nick for chat-buddy-update if the name
+     has changed.
+   */
+};

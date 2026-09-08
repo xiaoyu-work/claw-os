@@ -1,0 +1,138 @@
+<?xml version="1.0"?>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+<!DOCTYPE html>
+<html
+  xmlns="http://www.w3.org/1999/xhtml"
+  xmlns:xul="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+  xmlns:html="http://www.w3.org/1999/xhtml"
+  id="PermissionsDialog"
+  class="windowDialog"
+  scrolling="false"
+>
+  <head>
+    <title data-l10n-id="permissions-dialog-title"></title>
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src chrome:; script-src chrome: 'unsafe-inline' moz-src:"
+    />
+    <link rel="stylesheet" href="chrome://global/skin/global.css" />
+    <link rel="stylesheet" href="chrome://messenger/skin/variables.css" />
+    <link rel="stylesheet" href="chrome://messenger/skin/input-fields.css" />
+    <link rel="localization" href="messenger/preferences/permissions.ftl" />
+    <script
+      defer="defer"
+      src="chrome://messenger/content/globalOverlay.js"
+    ></script>
+    <script
+      defer="defer"
+      src="chrome://global/content/editMenuOverlay.js"
+    ></script>
+    <script defer="defer" src="chrome://global/content/treeUtils.js"></script>
+    <script
+      defer="defer"
+      src="chrome://messenger/content/preferences/permissions.js"
+    ></script>
+  </head>
+  <html:body
+    xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+  >
+    <vbox class="contentPane largeDialogContainer" flex="1">
+      <description id="permissionsText" control="url" />
+      <separator class="thin" />
+      <label id="urlLabel" control="url" data-l10n-id="website-address-label" />
+      <hbox align="start" class="input-container">
+        <html:input
+          id="url"
+          type="text"
+          oninput="gPermissionManager.onHostInput(event.target)"
+          onkeypress="gPermissionManager.onHostKeyPress(event)"
+        />
+      </hbox>
+      <hbox pack="end">
+        <button
+          id="btnBlock"
+          disabled=""
+          data-l10n-id="block-button"
+          oncommand="
+            gPermissionManager.addPermission(
+              Ci.nsIPermissionManager.DENY_ACTION
+            )
+          "
+        />
+        <button
+          id="btnSession"
+          disabled=""
+          data-l10n-id="allow-session-button"
+          oncommand="
+            gPermissionManager.addPermission(
+              Ci.nsICookiePermission.ACCESS_SESSION
+            )
+          "
+        />
+        <button
+          id="btnAllow"
+          disabled=""
+          data-l10n-id="allow-button"
+          default="true"
+          oncommand="
+            gPermissionManager.addPermission(
+              Ci.nsIPermissionManager.ALLOW_ACTION
+            )
+          "
+        />
+      </hbox>
+      <separator class="thin" />
+      <tree
+        id="permissionsTree"
+        hidecolumnpicker="true"
+        onkeypress="gPermissionManager.onPermissionKeyPress(event)"
+        onselect="gPermissionManager.onPermissionSelected()"
+      >
+        <treecols>
+          <treecol
+            id="siteCol"
+            data-l10n-id="treehead-sitename-label"
+            data-field-name="origin"
+            persist="width"
+          />
+          <splitter class="tree-splitter" />
+          <treecol
+            id="statusCol"
+            data-l10n-id="treehead-status-label"
+            data-field-name="capability"
+            persist="width"
+          />
+        </treecols>
+        <treechildren />
+      </tree>
+      <hbox class="actionButtons">
+        <button
+          id="removePermission"
+          disabled=""
+          data-l10n-id="remove-site-button"
+          oncommand="gPermissionManager.onPermissionDeleted()"
+        />
+        <button
+          id="removeAllPermissions"
+          data-l10n-id="remove-all-site-button"
+          oncommand="gPermissionManager.onAllPermissionsDeleted()"
+        />
+      </hbox>
+      <hbox class="actionButtons" pack="end">
+        <button
+          id="closeButton"
+          oncommand="window.close()"
+          data-l10n-id="cancel-button"
+        />
+        <button
+          id="btnApplyChanges"
+          oncommand="gPermissionManager.onApplyChanges()"
+          data-l10n-id="save-button"
+        />
+      </hbox>
+    </vbox>
+  </html:body>
+</html>

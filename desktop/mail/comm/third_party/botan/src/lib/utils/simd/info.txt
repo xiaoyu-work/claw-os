@@ -1,0 +1,5 @@
+<module_info>
+name -> "SIMD"
+brief -> "Wrappers for SIMD operations"
+type -> "Virtual"
+</module_info>

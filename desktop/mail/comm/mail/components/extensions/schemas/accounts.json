@@ -1,0 +1,404 @@
+[
+  {
+    "namespace": "manifest",
+    "types": [
+      {
+        "$extend": "OptionalPermission",
+        "choices": [
+          {
+            "type": "string",
+            "enum": ["accountsRead"]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "namespace": "accounts",
+    "description": "The accounts API provides access to the user's server accounts.",
+    "permissions": ["accountsRead"],
+    "types": [
+      {
+        "id": "MailAccount",
+        "description": "An object describing a mail account, as returned for example by the $(ref:accounts.list) and $(ref:accounts.get) methods.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "MailAccountId",
+            "description": "A unique identifier for this account."
+          },
+          "name": {
+            "type": "string",
+            "description": "The human-friendly name of this account."
+          },
+          "type": {
+            "choices": [
+              {
+                "$ref": "accounts.NativeMailAccountType"
+              },
+              {
+                "$ref": "accounts.ExtensionMailAccountType"
+              }
+            ],
+            "description": "What sort of account this is. Either one of the natively supported account types, or an account type added by an extension."
+          },
+          "folders": {
+            "max_manifest_version": 2,
+            "description": "The folders for this account. The property may be <var>null</var>, if inclusion of folders had not been requested.",
+            "choices": [
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "folders.MailFolder"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rootFolder": {
+            "$ref": "folders.MailFolder",
+            "description": "The root folder associated with this account."
+          },
+          "identities": {
+            "type": "array",
+            "description": "The identities associated with this account. The default identity is listed first, others in no particular order.",
+            "items": {
+              "$ref": "identities.MailIdentity"
+            }
+          }
+        }
+      },
+      {
+        "id": "MailAccountId",
+        "type": "string",
+        "description": "A unique id representing a $(ref:accounts.MailAccount)."
+      },
+      {
+        "id": "NativeMailAccountType",
+        "description": "The type of an account natively supported by Thunderbird.",
+        "choices": [
+          {
+            "max_manifest_version": 2,
+            "type": "string",
+            "enum": ["ews", "imap", "nntp", "none", "pop3", "rss"]
+          },
+          {
+            "min_manifest_version": 3,
+            "type": "string",
+            "enum": ["ews", "imap", "local", "nntp", "pop3", "rss"]
+          }
+        ]
+      },
+      {
+        "id": "ExtensionMailAccountType",
+        "description": "The type of an account which was added by an extension. For the time being there is no guarantee for account types added by extensions to always work as expected.",
+        "type": "string",
+        "pattern": "^extension:.*$"
+      }
+    ],
+    "functions": [
+      {
+        "name": "list",
+        "type": "function",
+        "min_manifest_version": 3,
+        "description": "Returns all mail accounts. They will be returned in the same order as used in Thunderbird's folder pane.",
+        "async": "callback",
+        "parameters": [
+          {
+            "name": "includeSubFolders",
+            "optional": true,
+            "default": false,
+            "type": "boolean",
+            "description": "Specifies whether the $(ref:folders.MailFolder) in the <var>rootFolder</var> property of each found $(ref:accounts.MailAccount) should populate its <var>subFolders</var> property, and include all (nested!) subfolders. Defaults to <var>false</var>."
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "accounts.MailAccount"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "list",
+        "type": "function",
+        "max_manifest_version": 2,
+        "description": "Returns all mail accounts. They will be returned in the same order as used in Thunderbird's folder pane.",
+        "async": "callback",
+        "parameters": [
+          {
+            "name": "includeSubFolders",
+            "optional": true,
+            "default": true,
+            "type": "boolean",
+            "description": "Specifies whether the $(ref:folders.MailFolder) in the <var>rootFolder</var> property of each found $(ref:accounts.MailAccount) should populate its <var>subFolders</var> property, and include all (nested!) subfolders. This also affects the deprecated <var>folders</var> property of each found $(ref:accounts.MailAccount). Defaults to <var>true</var>."
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "accounts.MailAccount"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "get",
+        "type": "function",
+        "min_manifest_version": 3,
+        "description": "Returns details of the requested account, or <var>null</var> if it doesn't exist.",
+        "async": "callback",
+        "parameters": [
+          {
+            "name": "accountId",
+            "$ref": "MailAccountId"
+          },
+          {
+            "name": "includeSubFolders",
+            "optional": true,
+            "default": false,
+            "type": "boolean",
+            "description": "Specifies whether the $(ref:folders.MailFolder) in the <var>rootFolder</var> property of the returned $(ref:accounts.MailAccount) should populate its <var>subFolders</var> property, and include all (nested!) subfolders. Defaults to <var>false</var>."
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "choices": [
+                  {
+                    "$ref": "accounts.MailAccount"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "get",
+        "type": "function",
+        "max_manifest_version": 2,
+        "description": "Returns details of the requested account, or <var>null</var> if it doesn't exist.",
+        "async": "callback",
+        "parameters": [
+          {
+            "name": "accountId",
+            "$ref": "MailAccountId"
+          },
+          {
+            "name": "includeSubFolders",
+            "optional": true,
+            "default": true,
+            "type": "boolean",
+            "description": "Specifies whether the $(ref:folders.MailFolder) in the <var>rootFolder</var> property of the returned $(ref:accounts.MailAccount) should populate its <var>subFolders</var> property, and include all (nested!) subfolders. This also affects the deprecated <var>folders</var> property of the returned $(ref:accounts.MailAccount). Defaults to <var>true</var>."
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "choices": [
+                  {
+                    "$ref": "accounts.MailAccount"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "getDefault",
+        "type": "function",
+        "min_manifest_version": 3,
+        "description": "Returns the default account, or <var>null</var> if it is not defined.",
+        "async": "callback",
+        "parameters": [
+          {
+            "name": "includeSubFolders",
+            "description": "Specifies whether the $(ref:folders.MailFolder) in the <var>rootFolder</var> property of the default $(ref:accounts.MailAccount) should populate its <var>subFolders</var> property, and include all (nested!) subfolders. Defaults to <var>false</var>",
+            "optional": true,
+            "default": false,
+            "type": "boolean"
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "choices": [
+                  {
+                    "$ref": "accounts.MailAccount"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "getDefault",
+        "type": "function",
+        "max_manifest_version": 2,
+        "description": "Returns the default account, or <var>null</var> if it is not defined.",
+        "async": "callback",
+        "parameters": [
+          {
+            "name": "includeSubFolders",
+            "description": "Specifies whether the $(ref:folders.MailFolder) in the <var>rootFolder</var> property of the default $(ref:accounts.MailAccount) should populate its <var>subFolders</var> property, and include all (nested!) subfolders. This also affects the deprecated <var>folders</var> property of the default $(ref:accounts.MailAccount). Defaults to <var>true</var>",
+            "optional": true,
+            "default": true,
+            "type": "boolean"
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "choices": [
+                  {
+                    "$ref": "accounts.MailAccount"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "setDefaultIdentity",
+        "type": "function",
+        "description": "Sets the default identity for an account.",
+        "async": true,
+        "max_manifest_version": 2,
+        "deprecated": "Deprecated since Thunderbird 91 and removed in Manifest V3: accounts.setDefaultIdentity() is now available as identities.setDefault.",
+        "parameters": [
+          {
+            "name": "accountId",
+            "$ref": "MailAccountId"
+          },
+          {
+            "name": "identityId",
+            "type": "string"
+          }
+        ]
+      },
+      {
+        "name": "getDefaultIdentity",
+        "type": "function",
+        "description": "Returns the default identity for an account, or <var>null</var> if it is not defined.",
+        "async": "callback",
+        "max_manifest_version": 2,
+        "deprecated": "Deprecated since Thunderbird 91 and removed in Manifest V3: accounts.getDefaultIdentity() is now available as identities.getDefault.",
+        "parameters": [
+          {
+            "name": "accountId",
+            "$ref": "MailAccountId"
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "choices": [
+                  {
+                    "$ref": "identities.MailIdentity"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "events": [
+      {
+        "name": "onCreated",
+        "type": "function",
+        "description": "Fired when a new account has been created.",
+        "parameters": [
+          {
+            "name": "accountId",
+            "$ref": "MailAccountId"
+          },
+          {
+            "name": "account",
+            "$ref": "MailAccount"
+          }
+        ]
+      },
+      {
+        "name": "onDeleted",
+        "type": "function",
+        "description": "Fired when an account has been removed.",
+        "parameters": [
+          {
+            "name": "accountId",
+            "$ref": "MailAccountId"
+          }
+        ]
+      },
+      {
+        "name": "onUpdated",
+        "type": "function",
+        "description": "Fired when a property of an account has been modified. Folders and identities of accounts are not monitored by this event, use the dedicated folder and identity events instead. A changed <var>defaultIdentity</var> is reported only after a different identity has been assigned as default identity, but not after a property of the default identity has been changed.",
+        "parameters": [
+          {
+            "name": "accountId",
+            "$ref": "MailAccountId"
+          },
+          {
+            "name": "changedValues",
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "The human-friendly name of this account."
+              },
+              "defaultIdentity": {
+                "$ref": "identities.MailIdentity",
+                "description": "The default identity of this account."
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }
+]

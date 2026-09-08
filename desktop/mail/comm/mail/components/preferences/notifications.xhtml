@@ -1,0 +1,89 @@
+<?xml version="1.0"?>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+<!DOCTYPE html>
+<html
+  xmlns="http://www.w3.org/1999/xhtml"
+  xmlns:xul="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+  xmlns:html="http://www.w3.org/1999/xhtml"
+  type="child"
+  scrolling="false"
+>
+  <head>
+    <title data-l10n-id="notifications-dialog-title"></title>
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src chrome:; script-src chrome: 'unsafe-inline' moz-src:"
+    />
+    <link rel="stylesheet" href="chrome://global/skin/global.css" />
+    <link rel="stylesheet" href="chrome://messenger/skin/icons.css" />
+    <link rel="stylesheet" href="chrome://messenger/skin/input-fields.css" />
+    <link rel="localization" href="messenger/preferences/notifications.ftl" />
+    <script
+      defer="defer"
+      src="chrome://global/content/preferencesBindings.js"
+    ></script>
+    <script
+      defer="defer"
+      src="chrome://messenger/content/preferences/notifications.js"
+    ></script>
+  </head>
+  <html:body
+    xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+  >
+    <dialog id="NotificationsDialog">
+      <description data-l10n-id="customize-alert-description" />
+
+      <checkbox
+        id="subject"
+        class="indent"
+        data-l10n-id="subject-checkbox"
+        preference="mail.biff.alert.show_subject"
+      />
+      <checkbox
+        id="sender"
+        class="indent"
+        data-l10n-id="sender-checkbox"
+        preference="mail.biff.alert.show_sender"
+      />
+      <checkbox
+        id="previewText"
+        class="indent"
+        data-l10n-id="preview-text-checkbox"
+        preference="mail.biff.alert.show_preview"
+      />
+
+      <separator />
+
+      <description
+        id="enabledActionsDescription"
+        data-l10n-id="enabled-actions-description"
+      />
+      <vbox id="enabledActions"></vbox>
+
+      <hbox align="center">
+        <label
+          id="totalOpenTimeBefore"
+          control="totalOpenTime"
+          data-l10n-id="open-time-label-before"
+        />
+        <html:input
+          id="totalOpenTime"
+          type="number"
+          class="size3"
+          min="1"
+          max="3600"
+          preference="alerts.totalOpenTime"
+        />
+        <label
+          id="totalOpenTimeEnd"
+          data-l10n-id="open-time-label-after"
+          class="startSpacing"
+        />
+      </hbox>
+      <separator />
+    </dialog>
+  </html:body>
+</html>

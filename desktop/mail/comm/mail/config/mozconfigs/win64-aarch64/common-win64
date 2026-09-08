@@ -1,0 +1,9 @@
+# This file is used by all AArch64 Win64 builds
+
+ac_add_options --target=aarch64-pc-windows-msvc
+
+. $topsrcdir/build/mozconfig.clang-cl
+
+if test -n "$USE_ARTIFACT"; then
+ac_add_options --disable-mapi
+fi

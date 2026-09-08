@@ -1,0 +1,26 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+---
+task-defaults:
+    run-on-repo-type: [hg]
+    always-target: true
+    platform: linux64/debug
+    worker-type: t-linux-docker-amd
+    attributes:
+        code-review: true
+    worker:
+        docker-image: {in-tree: static-analysis-build}
+        max-run-time: 5400
+    treeherder:
+        kind: other
+        tier: 2
+    run:
+        using: run-task
+        tooltool-downloads: public
+        comm-checkout: true
+    fetches:
+        toolchain:
+            - linux64-cbindgen
+            - linux64-nasm
+            - linux64-node

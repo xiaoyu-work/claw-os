@@ -1,0 +1,29 @@
+Directory ./botan contains a copy of the Botan library, which has been obtained
+from https://github.com/randombit/botan
+
+For licensing information, please refer to the included documentation.
+
+[tag 3.11.1]
+
+Updating:
+- cd $topsrcdir/comm
+- ../mach vendor -r <tag_name> third_party/botan/moz.yaml
+- Review the changes
+- Commit the changes
+
+The tag information in this file is automatically updated. The moz.yaml file
+is automatically updated. If upstream changes require updating moz.build, that
+must be done with a manual step.
+
+The following files were removed from the source distribution:
+.github/
+.gitignore
+.clang-format
+src/examples
+src/tests
+
+The following files were added to the source's root by MZLA Technologies:
+moz.build
+botan.mozbuild
+botan_configure.py
+Makefile.in

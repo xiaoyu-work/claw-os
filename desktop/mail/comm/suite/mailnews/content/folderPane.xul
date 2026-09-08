@@ -1,0 +1,169 @@
+<?xml version="1.0"?>
+
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+<?xml-stylesheet href="chrome://messenger/skin/folderPane.css" type="text/css"?>
+<?xml-stylesheet href="chrome://messenger/skin/folderPaneExtras.css" type="text/css"?>
+
+<!DOCTYPE overlay [
+  <!ENTITY % folderpaneDTD SYSTEM "chrome://messenger/locale/folderpane.dtd">
+  %folderpaneDTD;
+  <!ENTITY % msgViewPickerDTD SYSTEM "chrome://messenger/locale/msgViewPickerOverlay.dtd">
+  %msgViewPickerDTD;
+]>
+
+<overlay xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul">
+
+  <tree id="folderTree"
+        class="plain focusring window-focusborder"
+        flex="1"
+        treelines="true"
+        persist="mode"
+        mode="all"
+        keepcurrentinview="true"
+        context="folderPaneContext"
+        focusring="false"
+        disableKeyNavigation="true"
+        ondragstart="gFolderTreeView._onDragStart(event);"
+        ondragover="gFolderTreeView._onDragOver(event);"
+        ondrop="gFolderTreeView._onDragDrop(event);"
+        ondblclick="gFolderTreeView.onDoubleClick(event);"
+        onkeypress="gFolderTreeView.onKeyPress(event);"
+        onselect="FolderPaneSelectionChange();">
+    <treecols id="folderPaneCols">
+      <treecol id="folderNameCol"
+                   flex="5"
+                   label="&nameColumn.label;"
+                   crop="center"
+                   persist="width"
+                   ignoreincolumnpicker="true"
+                   primary="true"
+                   sortActive="true"
+                   sortDirection="ascending"/>
+      <splitter class="tree-splitter"/>
+      <treecol id="folderUnreadCol"
+                   hidden="true"
+                   persist="hidden width"
+                   flex="1"
+                   label="&unreadColumn.label;"
+                   selectable="false"/>
+      <splitter class="tree-splitter"/>
+      <treecol id="folderTotalCol"
+                   hidden="true"
+                   persist="hidden width"
+                   flex="1"
+                   label="&totalColumn.label;"
+                   selectable="false"/>
+      <splitter class="tree-splitter"/>
+      <treecol id="folderSizeCol"
+                   hidden="true"
+                   persist="hidden width"
+                   flex="1"
+                   label="&folderSizeColumn.label;"
+                   selectable="false"/>
+    </treecols>
+  </tree>
+
+  <toolbarpalette id="MailToolbarPalette">
+    <toolbaritem id="folder-location-container"
+                 title="&folderLocationToolbarItem.title;"
+                 align="center"
+                 context="folderPaneContext"
+                 class="toolbaritem-noline chromeclass-toolbar-additional">
+      <image id="locationIcon" class="folderMenuItem"/>
+      <menulist id="locationFolders"
+                class="folderMenuItem"
+                label=" "
+                crop="center">
+        <menupopup id="folderLocationPopup"
+                   class="menulist-menupopup"
+                   type="folder"
+                   flex="1"
+                   mode="notDeferred"
+                   showFileHereLabel="true"
+                   oncommand="gFolderTreeView.selectFolder(event.target._folder, true);"/>
+      </menulist>
+    </toolbaritem>
+    <toolbaritem id="mailviews-container"
+                 title="&mailViewsToolbarItem.title;"
+                 observes="mailDisableViewsSearch"
+                 align="center"
+                 class="toolbaritem-noline chromeclass-toolbar-additional">
+      <label id="viewPickerLabel"
+             value="&viewPicker.label;"
+             accesskey="&viewPicker.accesskey;"
+             control="viewPicker">
+        <observes element="mailviews-container" attribute="disabled"/>
+      </label>
+      <menulist id="viewPicker"
+                oncommand="ViewChangeByMenuitem(event.target);">
+        <menupopup id="viewPickerPopup"
+                   onpopupshowing="RefreshViewPopup(this);">
+          <menuitem id="viewPickerAll"
+                    class="menuitem-iconic"
+                    label="&viewAll.label;"
+                    type="radio"
+                    name="viewmessages"
+                    value="0"/>
+          <menuitem id="viewPickerUnread"
+                    class="menuitem-iconic"
+                    label="&viewUnread.label;"
+                    type="radio"
+                    name="viewmessages"
+                    value="1"/>
+          <menuitem id="viewPickerNotDeleted"
+                    class="menuitem-iconic"
+                    label="&viewNotDeleted.label;"
+                    type="radio"
+                    name="viewmessages"
+                    value="3"/>
+          <menuseparator id="afterViewPickerUnreadSeparator"/>
+          <menu id="viewPickerTags"
+                class="menu-iconic"
+                label="&viewTags.label;">
+            <menupopup id="viewPickerTagsPopup"
+                       class="menulist-menupopup"
+                       onpopupshowing="RefreshTagsPopup(this);"/>
+          </menu>
+          <menu id="viewPickerCustomViews"
+                class="menu-iconic"
+                label="&viewCustomViews.label;">
+            <menupopup id="viewPickerCustomViewsPopup"
+                       class="menulist-menupopup"
+                       onpopupshowing="RefreshCustomViewsPopup(this);"/>
+          </menu>
+          <menuseparator id="afterViewPickerCustomViewsSeparator"/>
+          <menuitem id="viewPickerVirtualFolder"
+                    class="menuitem-iconic"
+                    label="&viewVirtualFolder.label;"
+                    value="7"/>
+          <menuitem id="viewPickerCustomize"
+                    class="menuitem-iconic"
+                    label="&viewCustomizeView.label;"
+                    value="8"/>
+        </menupopup>
+        <observes element="mailviews-container" attribute="disabled"/>
+      </menulist>
+    </toolbaritem>
+    <toolbaritem id="search-container"
+                 title="&searchToolbarItem.title;"
+                 observes="mailDisableViewsSearch"
+                 align="center"
+                 flex="1"
+                 class="toolbaritem-noline chromeclass-toolbar-additional">
+      <textbox id="searchInput"
+               flex="1"
+               type="search"
+               aria-controls="threadTree"
+               placeholder="&searchSubjectOrAddress.placeholder;"
+               clickSelectsAll="true"
+               onkeypress="if (event.keyCode == KeyEvent.DOM_VK_RETURN) this.select();"
+               oncommand="onEnterInSearchBar();">
+        <observes element="search-container" attribute="disabled"/>
+      </textbox>
+    </toolbaritem>
+  </toolbarpalette>
+</overlay>

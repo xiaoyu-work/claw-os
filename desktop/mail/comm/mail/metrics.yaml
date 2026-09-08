@@ -1,0 +1,711 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+# Adding a new metric? We have docs for that!
+# https://firefox-source-docs.mozilla.org/toolkit/components/glean/user/new_definitions_file.html
+
+---
+$schema: moz://mozilla.org/schemas/glean/metrics/2-0-0
+$tags:
+  - 'Thunderbird :: General'
+
+mail:
+  account_count:
+    type: labeled_string
+    description:
+      Count of how many accounts were set up, keyed by account type.
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1615981
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1899602
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1903006
+    data_sensitivity:
+      - technical
+    notification_emails:
+      - telemetry-client-dev@thunderbird.net
+    expires: never
+
+  failed_email_account_setup:
+    type: labeled_counter
+    description:
+       How many times email accounts setup failed, keyed by account config source.
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1615987
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1644311
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1899602
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1903006
+    data_sensitivity:
+      - technical
+    notification_emails:
+      - telemetry-client-dev@thunderbird.net
+    expires: never
+
+  successful_email_account_setup:
+    type: labeled_counter
+    description:
+      How many times email accounts setup succeeded, keyed by account config source.
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1615987
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1644311
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1899602
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1903006
+    data_sensitivity:
+      - technical
+    notification_emails:
+      - telemetry-client-dev@thunderbird.net
+    expires: never
+
+  websearch_usage:
+    type: labeled_counter
+    description:
+      How many times search the web was used, keyed by search engine name.
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1584889
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1899602
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1903006
+    data_sensitivity:
+      - technical
+    notification_emails:
+      - telemetry-client-dev@thunderbird.net
+    expires: never
+
+  ui_interaction:
+    type: event
+    description:
+      Records a count of interactions with various UI widgets.
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1736739
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1868480
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1899602
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1736739
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1868480
+    data_sensitivity:
+      - interaction
+    notification_emails:
+      - telemetry-client-dev@thunderbird.net
+    expires: never
+    extra_keys:
+      id:
+        description: Telemetry id of the widget interacted with.
+        type: string
+      source:
+        description: >
+          The source of the interaction, e.g. "addressbook", "calendar",
+          "chat", "keyboard", "message_compose", "message_display",
+          "toolbox"
+        type: string
+
+  ui_configuration_folder_tree_modes:
+    type: string_list
+    description:
+      Configuration of the folder tree; which modes are shown.
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1800775
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1899602
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1800775#c3
+    data_sensitivity:
+      - technical
+    notification_emails:
+      - telemetry-client-dev@thunderbird.net
+    expires: never
+
+  ui_configuration_pane_visibility:
+    type: labeled_boolean
+    description:
+      Configuration of the folder and message panes. Whether they are
+      set to be shown or not.
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1800775
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1899602
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1800775#c3
+    data_sensitivity:
+      - technical
+    notification_emails:
+      - telemetry-client-dev@thunderbird.net
+    expires: never
+    labels:
+      - folderPane
+      - messagePane
+
+  ui_configuration_message_header:
+    type: labeled_string
+    description: >
+      Configuration of the message header display. Customization state;
+      expected values are "true" or "false".
+      For buttonStyle values are "default", "only-icons", "only-text".
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1800775
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1899602
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1800775#c3
+    data_sensitivity:
+      - technical
+    notification_emails:
+      - telemetry-client-dev@thunderbird.net
+    expires: never
+    labels:
+      - showAvatar
+      - showBigAvatar
+      - showFullAddress
+      - hideLabels
+      - subjectLarge
+      - buttonStyle
+
+  preferences_boolean:
+    type: labeled_boolean
+    lifetime: application
+    description: Values of boolean preferences.
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1757993
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1899602
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1757993#c6
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1942206#c2
+    data_sensitivity:
+      - technical
+    notification_emails:
+      - telemetry-client-dev@thunderbird.net
+    expires: never
+    labels:
+      - app.update.service.enabled
+      - browser.cache.disk.smart_size.enabled
+      - browser.crashReports.unsubmittedCheck.autoSubmit2
+      - browser.display.use_system_colors
+      - browser.safebrowsing.enabled
+      - datareporting.healthreport.uploadEnabled
+      - extensions.hasExperimentsInstalled
+      - extensions.hasExtensionsInstalled
+      - general.autoScroll
+      - general.smoothScroll
+      - intl.regional_prefs.use_os_locales
+      - layers.acceleration.disabled
+      - layout.css.always_underline_links
+      - ldap_2.autoComplete.useDirectory
+      - mail.accounthub.addressbook.enabled
+      - mail.biff.alert.show_preview
+      - mail.biff.alert.show_sender
+      - mail.biff.alert.show_subject
+      - mail.biff.play_sound
+      - mail.biff.show_alert
+      - mail.biff.show_tray_icon
+      - mail.biff.use_system_alert
+      - mail.chat.enabled
+      - mail.chat.play_sound
+      - mail.chat.show_desktop_notifications
+      - mail.close_message_window.on_delete
+      - mail.collect_email_address_outgoing
+      - mail.compose.attachment_reminder
+      - mail.compose.autosave
+      - mail.compose.big_attachments.notify
+      - mail.compose.default_to_paragraph
+      - mail.dark-reader.enabled
+      - mail.dark-reader.show-toggle
+      - mail.delete_matches_sort_order
+      - mail.display_glyph
+      - mail.e2ee.auto_disable
+      - mail.e2ee.auto_enable
+      - mail.e2ee.notify_on_auto_disable
+      - mail.enable_autocomplete
+      - mail.fixed_width_messages
+      - mail.forward_add_extension
+      - mail.inappnotifications.isFlatpak
+      - mail.inappnotifications.isSnap
+      - mail.inappnotifications.pkceUpgradeForYahooAol
+      - mail.mdn.report.enabled
+      - mail.minimizeToTray
+      - mail.operate_on_msgs_in_collapsed_threads
+      - mail.phishing.detection.enabled
+      - mail.prompt_purge_threshold
+      - mail.purge.ask
+      - mail.receipt.request_return_receipt_on
+      - mail.shell.checkDefaultClient
+      - mail.showCondensedAddresses
+      - mail.spam.logging.enabled
+      - mail.spam.manualMark
+      - mail.spam.markAsReadOnSpam
+      - mail.spellcheck.inline
+      - mail.SpellCheckBeforeSend
+      - mail.thread.conversation.enabled
+      - mail.threadpane.table.horizontal_scroll
+      - mail.useLocalizedFolderNames
+      - mail.warn_on_send_accel_key
+      - mailnews.database.global.indexer.enabled
+      - mailnews.downloadToTempFile
+      - mailnews.mark_message_read.auto
+      - mailnews.mark_message_read.delay
+      - mailnews.message_display.disable_remote_image
+      - mailnews.oauth.usePrivateBrowser
+      - mailnews.oauth.useExternalBrowser
+      - mailnews.scroll_to_new_message
+      - mailnews.sendformat.auto_downgrade
+      - mailnews.start_page.enabled
+      - messenger.options.getAttentionOnNewMessages
+      - messenger.status.awayWhenIdle
+      - messenger.status.reportIdle
+      - msgcompose.default_colors
+      - network.cookie.blockFutureCookies
+      - network.proxy.share_proxy_settings
+      - network.proxy.socks_remote_dns
+      - offline.autoDetect
+      - places.history.enabled
+      - privacy.clearOnShutdown.cache
+      - privacy.donottrackheader.enabled
+      - privacy.globalprivacycontrol.enabled
+      - purple.conversations.im.send_typing
+      - purple.logging.log_chats
+      - purple.logging.log_ims
+      - searchintegration.enable
+      - signon.autologin.proxy
+      - widget.gtk.overlay-scrollbars.enabled
+
+  preferences_integer:
+    type: labeled_string
+    lifetime: application
+    description: Values of integer preferences.
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1800775
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1899602
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1800775#c3
+    data_sensitivity:
+      - technical
+    notification_emails:
+      - telemetry-client-dev@thunderbird.net
+    expires: never
+    labels:
+      - mail.addressDisplayFormat
+      - mail.biff.alert.preview_length
+      - mail.pane_config.dynamic
+      - mail.ui.display.dateformat.default
+      - mail.ui.display.dateformat.thisweek
+      - mail.ui.display.dateformat.today
+
+  account_preferences:
+    type: object
+    description:
+      Values of basic account preferences.
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1930400
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1930400
+    data_sensitivity:
+      - technical
+    notification_emails:
+      - telemetry-client-dev@thunderbird.net
+    expires: never
+    structure:
+      type: array
+      items:
+        type: object
+        properties:
+          protocol:
+            type: string
+          socket_type:
+            type: number
+          auth_method:
+            type: number
+          store_type:
+            type: string
+          login_at_startup:
+            type: boolean
+          check_new_mail:
+            type: boolean
+          check_time:
+            type: number
+          delete_model:
+            type: number
+          use_idle:
+            type: boolean
+          cleanup_inbox_on_exit:
+            type: boolean
+          empty_trash_on_exit:
+            type: boolean
+          download_on_biff:
+            type: boolean
+          headers_only:
+            type: boolean
+          leave_on_server:
+            type: boolean
+          delete_by_age_from_server:
+            type: boolean
+          num_days_to_leave_on_server:
+            type: number
+          notify_max_articles:
+            type: number
+          always_authenticate:
+            type: boolean
+
+  mails_read:
+    type: counter
+    description: How many emails were read by the user.
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1615990
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1899602
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1903006
+    data_sensitivity:
+      - technical
+    notification_emails:
+      - telemetry-client-dev@thunderbird.net
+    expires: never
+
+  secure_mail_loaded:
+    type: event
+    description: >
+      Triggers when different kinds of secure emails are loaded.
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1615994
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1899602
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1867271
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1615994#c22
+    data_sensitivity:
+      - technical
+    notification_emails:
+      - telemetry-client-dev@thunderbird.net
+    expires: never
+    extra_keys:
+      security:
+        description: Security technology. "OpenPGP" or "S/MIME".
+        type: string
+      is_signed:
+        description: Whether the email was digitally signed.
+        type: boolean
+      is_encrypted:
+        description: Whether the email was encrypted.
+        type: boolean
+
+  folder_opened:
+    type: labeled_counter
+    description: >
+      How many times folders of each type are opened.
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1800775
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1899602
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1800775#c3
+    data_sensitivity:
+      - technical
+    notification_emails:
+      - telemetry-client-dev@thunderbird.net
+    expires: never
+    labels:
+      - Inbox
+      - Drafts
+      - Trash
+      - SentMail
+      - Templates
+      - Junk
+      - Archive
+      - Queue
+      - Virtual
+      - Other
+
+  oauth2_provider_count:
+    type: labeled_string
+    description: >
+      A count of incoming mail accounts using OAuth2 for authentication, keyed
+      by OAuth2 issuer.
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1799726
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1899602
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1799726#c6
+    data_sensitivity:
+      - technical
+    notification_emails:
+      - telemetry-client-dev@thunderbird.net
+    expires: never
+
+  folder_total_messages:
+    type: labeled_string
+    description: How many messages each type of folder has.
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1615983
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1899602
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1615983#c7
+    data_sensitivity:
+      - technical
+    notification_emails:
+      - telemetry-client-dev@thunderbird.net
+    expires: never
+    labels:
+      - Inbox
+      - Drafts
+      - Trash
+      - SentMail
+      - Templates
+      - Junk
+      - Archive
+      - Queue
+      - Virtual
+      - Other
+      - Total
+
+  folder_size_on_disk:
+    type: labeled_string
+    description: How many bytes each type of folder takes on disk.
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1615983
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1899602
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1615983#c7
+    data_sensitivity:
+      - technical
+    notification_emails:
+      - telemetry-client-dev@thunderbird.net
+    expires: never
+    labels:
+      - Inbox
+      - Drafts
+      - Trash
+      - SentMail
+      - Templates
+      - Junk
+      - Archive
+      - Queue
+      - Virtual
+      - Other
+      - Total
+
+  compact_result:
+    type: labeled_counter
+    description: >
+      Counts the number of folder compactions that happen and how they ended.
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1926152
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1926152#c7
+    notification_emails:
+      - telemetry-client-dev@thunderbird.net
+    expires: never
+
+  compact_duration:
+    type: timing_distribution
+    time_unit: millisecond
+    description: >
+      Counts how long each folder compaction takes.
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1926152
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1926152#c7
+    notification_emails:
+      - telemetry-client-dev@thunderbird.net
+    expires: never
+
+  compact_space_recovered:
+    type: memory_distribution
+    memory_unit: byte
+    description: >
+      Number of bytes recovered by compaction.
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1926152
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1940674
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1926152#c7
+    notification_emails:
+      - telemetry-client-dev@thunderbird.net
+    expires: never
+
+  mbox_read_errors:
+    type: labeled_counter
+    description: >
+      Counts mbox read failures by type.
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1926810
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1926810#c14
+    notification_emails:
+      - telemetry-client-dev@thunderbird.net
+    expires: never
+
+  oauth2_authentication:
+    type: event
+    description: >
+      Records each time the OAuth authentication window is displayed,
+      including the provider's name, the reason for showing the window, and if
+      the authentication was successful.
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1935921
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1935921
+    data_sensitivity:
+      - interaction
+    notification_emails:
+      - telemetry-client-dev@thunderbird.net
+    expires: never
+    extra_keys:
+      issuer:
+        description: >
+          The name of the authentication issuer. Only issuers listed in
+          OAuth2Providers.sys.mjs are recorded.
+        type: string
+      reason:
+        description: The reason for showing the authentication window.
+        type: string
+      result:
+        description: If the authentication succeeded or was cancelled.
+        type: string
+      where:
+        description: >
+          Where the authentication was shown. Possible values are "internal",
+          for a window inside Thunderbird, or "external" for a browser.
+        type: string
+
+  import:
+    type: event
+    description: >
+      Records each time about:import is used to import a profile, calendar
+      entries, or address book entries.
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1942711
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1942711
+    data_sensitivity:
+      - interaction
+    notification_emails:
+      - telemetry-client-dev@thunderbird.net
+    expires: never
+    extra_keys:
+      importer:
+        description: >
+          Which import module was used to import the data. For profiles, this
+          also includes where the profile was imported from - the other
+          application's profile files, an arbitrary directory, or zip file.
+        type: string
+      types:
+        description: >
+          The types of data imported. For profiles, these are the options
+          selected in the UI. For other data, this is the format of the file
+          that was imported.
+        type: string
+      result:
+        description: Success or failure.
+        type: string
+
+  notification_enabled_actions:
+    type: string_list
+    description:
+      The enabled actions on the new mail notification, in order.
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1955165
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1955165
+    data_sensitivity:
+      - technical
+    notification_emails:
+      - telemetry-client-dev@thunderbird.net
+    expires: never
+
+  notification_used_actions:
+    type: labeled_counter
+    description: >
+       A count of how many times each new mail notification action is used.
+       Labels identify the actions, as defined in MailNotificationManager.sys.mjs.
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1955165
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1955165
+    data_sensitivity:
+      - interaction
+    notification_emails:
+      - telemetry-client-dev@thunderbird.net
+    expires: never
+
+  certificate_exception_added:
+    type: event
+    description: >
+      Tracks each time a TLS certificate exception is created, what the problem
+      with the certificate is, and what code is using the certificate.
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1983982
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1983982#c4
+    data_sensitivity:
+      - interaction
+    notification_emails:
+      - telemetry-client-dev@thunderbird.net
+    expires: never
+    extra_keys:
+      error_category:
+        description: >
+          The reported certificate error that required an exception, e.g.
+          MOZILLA_PKIX_ERROR_SELF_SIGNED_CERT.
+          From nsITransportSecurityInfo.errorCodeString.
+        type: string
+      protocol:
+        description: >
+          The protocol trying to use the certificate, e.g. "imap" or "caldav".
+        type: string
+      port:
+        description: The network port in use.
+        type: string
+      ui:
+        description: Identifies the code handling the certificate exception.
+        type: string
+
+  account_hub_loaded:
+    type: event
+    description: >
+      Tracks each time an account hub view was loaded.
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1983678
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1983678#c4
+    data_sensitivity:
+      - technical
+    notification_emails:
+      - telemetry-client-dev@thunderbird.net
+    expires: never
+    extra_keys:
+      view_name:
+        description: Name of the view or subview.
+        type: string
+
+  account_hub_error:
+    type: labeled_counter
+    description:
+      Tracks account hub error counts, keyed by data-l10n-id.
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1983827
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1983827#c3
+    data_sensitivity:
+      - technical
+    notification_emails:
+      - telemetry-client-dev@thunderbird.net
+    expires: never
+
+  account_hub_finished:
+    type: event
+    description: >
+      Tracks each time account setup is finished
+    bugs:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1983842
+    data_reviews:
+      - https://bugzilla.mozilla.org/show_bug.cgi?id=1983842#cXXX
+    data_sensitivity:
+      - technical
+    notification_emails:
+      - telemetry-client-dev@thunderbird.net
+    expires: never
+    extra_keys:
+      account_type:
+        description: Type of mail account set up.
+        type: string
+      address_books:
+        description: Number of address books to sync found.
+        type: quantity
+        unit: items
+      calendars:
+        description: Number of calendars to sync found.
+        type: quantity
+        unit: items

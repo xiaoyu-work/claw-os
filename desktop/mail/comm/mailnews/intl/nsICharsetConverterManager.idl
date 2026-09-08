@@ -1,0 +1,51 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "nsISupports.idl"
+
+%{C++
+#include "mozilla/Encoding.h"
+
+#define NS_CHARSETCONVERTERMANAGER_CONTRACTID "@mozilla.org/charset-converter-manager;1"
+%}
+
+[scriptable, uuid(a0550d46-8d9c-47dd-acc7-c083620dff12)]
+interface nsICharsetConverterManager : nsISupports
+{
+    /**
+     * Do alias resolution.
+     * @throws if aCharset is an unknown charset or not to be used in untrusted
+     *   web content.
+     */
+    ACString getCharsetAlias(in string aCharset);
+
+    /**
+     * Get the language group for the given charset.
+     *
+     * @param aCharset name of the character encoding, e.g. 'iso-8859-15'.
+     * @throws if aCharset is an unknown charset.
+     * @return the language code for the character encoding.
+     */
+    AUTF8String getCharsetLangGroup(in string aCharset);
+
+    /**
+     * Check if the encoding for a charset known to mozilla::Encoding is not on
+     * the list of legacy single-byte encodings in the spec or x-user-defined.
+     * Does not throw.
+     *
+     * @returns false if the character set is unknown or legacy single-byte.
+     */
+    boolean isMultiByteCharset(in string aCharset);
+
+    /**
+     * Decoding of UTF-7 in message headers and bodies.
+     */
+    AString utf7ToUnicode(in ACString aMutf7);
+
+    /**
+     * Support for Modified UTF-7 (MUTF-7) used by IMAP.
+     */
+    AString mutf7ToUnicode(in ACString aMutf7);
+    ACString unicodeToMutf7(in AString aUnicode);
+};

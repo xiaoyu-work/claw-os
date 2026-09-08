@@ -1,0 +1,28 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+with Files("**"):
+    BUG_COMPONENT = ("Mailnews Core", "MIME")
+
+DIRS += [
+    "public",
+    "src",
+    "emitters",
+    "cthandlers",
+]
+
+TEST_DIRS += ["test"]
+
+if CONFIG["FUZZING_INTERFACES"]:
+    DIRS += ["fuzz"]
+
+EXTRA_JS_MODULES.jsmime += [
+    "jsmime/jsmime.mjs",
+]
+
+TESTING_JS_MODULES.jsmime += [
+    "jsmime/test/unit/mock_date.js",
+]
+
+XPCSHELL_TESTS_MANIFESTS += ["jsmime/test/unit/xpcshell.toml"]

@@ -1,0 +1,647 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, you can obtain one at http://mozilla.org/MPL/2.0/. */
+
+:root {
+  --tree-card-inline: 8px;
+  --thread-child-start: 20px;
+  --thread-card-content-gap: 3px;
+  --thread-card-button-padding: 1px 3px;
+  --thread-line-height: 100%;
+  --read-status-new: var(--icon-sparkle-star-sm);
+  --read-status-icon: var(--icon-dot);
+  --read-status-size: 16px;
+  --inset-inline-start: 0;
+
+  &[uidensity="compact"] {
+    --tree-card-inline: 5px;
+    --thread-child-start: 8px;
+    --thread-card-content-gap: 1px;
+    --thread-card-button-padding: 0 3px;
+    --read-status-new: var(--icon-sparkle-star-xs);
+    --read-status-size: 12px;
+  }
+
+  &[uidensity="touch"] {
+    --thread-child-start: 22px;
+    --thread-card-content-gap: 6px;
+    --thread-card-button-padding: 2px 3px;
+  }
+
+  @media not (prefers-contrast) {
+    --read-status-fill: transparent;
+    --read-status-stroke: transparent;
+    --new-subject-color: light-dark(var(--color-blue-60), var(--color-blue-40));
+    --thread-line-color: light-dark(var(--color-ink-40), var(--color-ink-50));
+    --new-color: light-dark(var(--color-blue-60), var(--color-blue-40));
+    /* Spam Colors */
+    --tree-card-border-hover-spam: light-dark(var(--color-red-30), var(--color-red-80));
+    --thread-card-focus-spam: light-dark(var(--color-red-70), var(--color-red-40));
+    --tree-card-background-current-spam: light-dark(
+      color-mix(in srgb, var(--layout-background-0) 98%, var(--color-red-50)),
+      color-mix(in srgb, var(--layout-background-0) 88%, var(--color-red-90))
+    );
+    --tree-card-background-selected-spam: light-dark(
+      color-mix(in srgb, var(--layout-background-0) 95%, var(--color-red-50)),
+      color-mix(in srgb, var(--layout-background-0) 85%, var(--color-red-90))
+    );
+    --tree-card-background-selected-current-spam: light-dark(
+      color-mix(in srgb, var(--layout-background-0) 90%, var(--color-red-50)),
+      color-mix(in srgb, var(--layout-background-0) 80%, var(--color-red-90))
+    );
+    --tree-card-border-selected-spam: light-dark(var(--color-red-50), var(--color-red-70));
+  }
+
+  @media (prefers-contrast) {
+    --read-status-fill: transparent;
+    --read-status-stroke: transparent;
+    --new-subject-color: AccentColor;
+    --thread-line-color: CanvasText;
+    --new-color: SelectedItem;
+    /* Spam Colors */
+    --focus-outline-spam: light-dark(var(--color-red-70), var(--color-red-40));
+    --tree-card-border-hover-spam: var(--color-red-50);
+    --thread-card-focus-spam: light-dark(var(--color-red-70), var(--color-red-40));
+    --tree-card-background-current-spam: color-mix(in srgb, Canvas 80%, var(--color-red-50));
+    --tree-card-background-selected-spam: color-mix(in srgb, Canvas 70%, var(--color-red-50));
+    --tree-card-background-selected-current-spam: light-dark(var(--color-red-70), var(--color-red-40));
+    --tree-card-border-selected-spam: color-mix(in srgb, CanvasText 30%, var(--color-red-50));
+  }
+}
+
+#threadTree[rows="thread-card"] {
+  padding-block: 2px;
+
+  /* Default Card */
+  & .card-layout {
+    outline-color: transparent;
+
+    /* Unread Message */
+    &[data-properties~="unread"] {
+      --read-status-fill: var(--color-green-40);
+      --read-status-stroke: var(--color-green-60);
+
+      & .card-container :is(.sender, .subject) {
+        font-weight: bold;
+      }
+
+      /* New Message */
+      &[data-properties~="new"] {
+        --read-status-icon: var(--read-status-new);
+        --read-status-fill: var(--color-yellow-30);
+        --read-status-stroke: var(--color-amber-50);
+
+        & .subject {
+          color: var(--new-subject-color);
+        }
+      }
+    }
+
+    &[data-properties~="hasUnread"] {
+      & .replies-icon,
+      & .thread-replies {
+        font-weight: bold;
+        color: var(--unread-color);
+        fill: color-mix(in srgb, currentColor 20%, transparent);
+        stroke: currentColor;
+      }
+
+      & button.twisty {
+        background-color: var(--layout-background-2);
+        border-color: var(--layout-background-4);
+
+        &::before {
+          position: absolute;
+          inset-inline-start: -3px;
+          inset-block-start: -3px;
+          content: var(--icon-dot-xs);
+          -moz-context-properties: fill, stroke;
+          fill: var(--color-green-50);
+          stroke: var(--color-green-60);
+          overflow: visible;
+          line-height: 0;
+        }
+
+        & .thread-replies {
+          color: var(--unread-color);
+        }
+      }
+
+      &.collapsed button.twisty {
+        border-color: var(--selected-item-color);
+
+        @media (prefers-contrast) {
+          border-color: SelectedItemText;
+
+          & .replies-icon,
+          & .thread-replies {
+            color: inherit;
+          }
+        }
+      }
+
+      /* hasNew shouldn't affect any style unless we also have hasUnread. */
+      &[data-properties~="hasNew"] {
+        & .replies-icon,
+        & .thread-replies {
+          color: var(--new-color);
+        }
+
+        & button.twisty::before {
+          content: var(--icon-sparkle-star-xs);
+          fill: var(--color-yellow-30);
+          stroke: var(--color-amber-50);
+        }
+
+        & .thread-replies {
+          color: var(--new-color);
+        }
+      }
+    }
+
+    &[data-properties~="replied"] {
+      & .state.replied {
+        display: inline-flex;
+      }
+
+      & :is(.subject-line img, .replied) {
+        visibility: initial;
+        content: var(--icon-reply-col);
+        fill: var(--color-purple-50);
+      }
+
+      &[data-properties~="forwarded"] .subject-line img {
+        visibility: initial;
+        content: var(--icon-reply-forward-col);
+        fill: var(--color-blue-50);
+        stroke: var(--color-purple-50);
+      }
+
+      &[data-properties~="redirected"] .subject-line img {
+        visibility: initial;
+        content: var(--icon-reply-redirect-col);
+        fill: var(--color-orange-50);
+        stroke: var(--color-purple-50);
+      }
+
+      &[data-properties~="forwarded"][data-properties~="redirected"] .subject-line img {
+        visibility: initial;
+        content: var(--icon-reply-forward-redirect-col);
+        fill: var(--color-blue-50);
+        stroke: var(--color-purple-50);
+      }
+    }
+
+    &[data-properties~="forwarded"] {
+      & .state.forwarded {
+        display: inline-flex;
+      }
+
+      & :is(.subject-line img, .forwarded) {
+        visibility: initial;
+        display: initial;
+        content: var(--icon-forward-col);
+        fill: var(--color-blue-50);
+      }
+
+      &[data-properties~="redirected"].subject-line img {
+        visibility: initial;
+        content: var(--icon-forward-redirect-col);
+        fill: var(--color-blue-50);
+        stroke: var(--color-orange-50);
+      }
+    }
+
+    &[data-properties~="redirected"] {
+      & .state.redirected {
+        display: inline-flex;
+      }
+
+      & :is(.subject-line img, .redirected) {
+        visibility: initial;
+        display: initial;
+        content: var(--icon-redirect-col);
+        fill: var(--color-orange-50);
+      }
+    }
+
+    & td {
+      & button {
+        min-block-size: 16px;
+        min-inline-size: 16px;
+        opacity: 0.7;
+
+        &:hover {
+          opacity: 1;
+        }
+
+        &.twisty {
+          inline-size: auto;
+          block-size: auto;
+          min-inline-size: 12px;
+          min-block-size: 13px;
+          padding: 0;
+          border: 1px solid transparent;
+          position: relative;
+          overflow: visible;
+          border-radius: var(--button-border-radius);
+
+          &::before {
+            position: absolute;
+            inset-inline-start: -3px;
+            inset-block-start: -3px;
+            -moz-context-properties: fill, stroke;
+            z-index: 10;
+          }
+
+          &:hover {
+            background-color: var(--layout-background-2);
+            border-color: var(--layout-background-4);
+          }
+
+          .children &.thread-card-button {
+            display: flex;
+            align-items: center;
+            justify-content: space-around;
+            font-size: 0.9rem;
+            padding: var(--thread-card-button-padding);
+          }
+
+          & img {
+            display: inline-block;
+          }
+
+          & .replies-icon {
+            block-size: 12px;
+            inline-size: 12px;
+            margin: 1px;
+            content: var(--icon-replies-xs);
+          }
+
+          & .thread-replies {
+            margin: 0 2px;
+          }
+
+          & .twisty-icon {
+            block-size: 10px;
+            inline-size: 10px;
+          }
+        }
+      }
+
+      & .card-container {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        box-sizing: border-box;
+        position: relative;
+        overflow: visible;
+        isolation: isolate;
+
+        & .thread-card-column {
+          display: flex;
+          flex-direction: column;
+          gap: var(--thread-pane-container-gap);
+          box-sizing: border-box;
+          position: relative;
+          padding-block: var(--thread-pane-container-gap);
+        }
+
+        & .thread-card-row {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: var(--thread-card-content-gap);
+          padding: 0;
+          margin: 0;
+          line-height: 1.5;
+          position: relative;
+          isolation: isolate;
+        }
+
+        & .thread-card-dynamic-row {
+          display: grid;
+          grid-template:
+            "subject subject" max-content
+            "button info" minmax(auto, 1fr)
+            / auto 1fr;
+          gap: var(--thread-card-content-gap);
+          align-items: center;
+          padding: 0;
+          margin: 0;
+          line-height: 1.5;
+          position: relative;
+          isolation: isolate;
+        }
+
+        & .state,
+        & .sort-header-details {
+          display: none;
+        }
+
+        & .read-status {
+          content: var(--read-status-icon);
+          block-size: var(--read-status-size);
+          inline-size: var(--read-status-size);
+          -moz-context-properties: fill, stroke;
+          fill: var(--read-status-fill);
+          stroke: var(--read-status-stroke);
+        }
+
+        & .thread-card-button {
+          grid-area: button;
+        }
+
+        & .thread-card-subject-container {
+          grid-area: subject;
+          padding-inline-start: 3px;
+        }
+
+        & .thread-card-icon-info {
+          grid-area: info;
+          display: flex;
+          margin-inline-start: auto;
+          align-items: center;
+          justify-content: space-between;
+          gap: 6px;
+        }
+
+        .is-unified & .account-indicator {
+          display: inline-flex;
+        }
+
+        & :is(.sender, .subject) {
+          flex: 1 1 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        & .sender {
+          font-weight: 600;
+          font-size: 0.95rem;
+          padding-inline-start: 3px;
+        }
+
+        & .date {
+          flex: 0 0 auto;
+          white-space: nowrap;
+          font-size: 0.95rem;
+          opacity: 0.85;
+        }
+
+        & .tree-button-more {
+          --button-padding: 0;
+          color: inherit;
+          opacity: 0.5;
+          background-image: var(--icon-kebab);
+          -moz-context-properties: fill, stroke;
+          fill: currentColor;
+          stroke: currentColor;
+
+          &:hover,
+          &:focus {
+            background-color: color-mix(in srgb, currentColor 10%, transparent);
+            border-color: transparent;
+            opacity: 1;
+          }
+
+          &:active {
+            background-color: color-mix(in srgb, currentColor 30%, transparent);
+            border-color: transparent;
+            opacity: 1;
+          }
+        }
+
+        & .is-outgoing [data-properties~="outgoing"] & > .sender {
+          background-position-x: 0;
+          background-position-y: center;
+          background-repeat: no-repeat;
+          background-image: var(--icon-nav-forward);
+          -moz-context-properties: stroke, fill-opacity;
+          stroke: currentColor;
+          fill-opacity: 0.3;
+          padding-inline-start: 18px;
+
+          &:dir(rtl) {
+            background-image: var(--icon-nav-back);
+            background-position-x: 100%;
+          }
+        }
+      }
+    }
+
+    @media (prefers-contrast) {
+      &.current.selected .card-container {
+        --thread-pane-flag-fill: SelectedItemText;
+        --thread-pane-flag-stroke: SelectedItemText;
+        --thread-pane-spam-fill: SelectedItemText;
+        --thread-pane-spam-stroke: SelectedItemText;
+        --new-subject-color: SelectedItemText;
+      }
+    }
+
+    & [data-properties~="dummy"] > td > .card-container > &:first-child {
+      display: none;
+    }
+  }
+
+  /* 2 Rows cards variation */
+  &.cards-row-compact td .card-container {
+    & .thread-card-dynamic-row {
+      grid-template:
+        "button subject info" max-content
+        / auto 1fr auto;
+    }
+
+    & .thread-card-subject-container {
+      padding-inline-start: 0;
+    }
+
+    & button.twisty::before {
+      inset-inline-start: -2px;
+      inset-block-start: -2px;
+      inline-size: 12px;
+      block-size: 12px;
+    }
+
+    & .replies-icon,
+    & .thread-replies {
+      display: none;
+    }
+  }
+
+  /* Thread Children */
+  & .card-layout[data-properties~="thread-children"] {
+    & td {
+      --circle-size: 12px;
+      padding-inline-start: calc(var(--thread-child-start) + var(--circle-size));
+
+      &::after {
+        position: absolute;
+        content: var(--icon-dot-xs);
+        block-size: var(--circle-size);
+        inline-size: var(--circle-size);
+        inset-block: calc(50% - var(--circle-size) / 2);
+        inset-inline-start: calc((var(--tree-card-inline) * 2) - var(--circle-size) / 2);
+        -moz-context-properties: fill, stroke;
+        fill: var(--tree-pane-background);
+        stroke: var(--thread-line-color);
+        line-height: 0;
+      }
+
+      &::before {
+        display: block;
+        content: "";
+        position: absolute;
+        block-size: var(--thread-line-height);
+        --line-width: 1px;
+        inline-size: var(--line-width);
+        border-inline-start: var(--line-width) dashed var(--thread-line-color);
+        inset-inline-start: calc((var(--tree-card-inline) * 2) - var(--line-width) / 2);
+        inset-block: 0;
+      }
+    }
+
+    &:has(+ tr:not([data-properties~="thread-children"])),
+    &:last-child {
+      --thread-line-height: 50%;
+    }
+  }
+
+  /* Grouped By Sort Headers */
+  tr.collapsed[data-properties~="dummy"] + tr[data-properties~="dummy"] {
+    & .card-container::after {
+      content: "";
+      display: block;
+      position: absolute;
+      block-size: 0;
+      inline-size: 100%;
+      border-block-start: 1px solid light-dark(var(--color-gray-20), var(--color-gray-80));
+      margin-block-start: -3px;
+      opacity: 0;
+    }
+
+    @media (prefers-reduced-motion: no-preference) {
+      & .card-container::after {
+        transition: opacity 200ms ease;
+      }
+    }
+  }
+
+  tr.collapsed[data-properties~="dummy"]:not(:hover, :focus, :focus-within, .current, .selected) {
+    & + tr[data-properties~="dummy"]:not(:hover, :focus, :focus-within, .current, .selected) {
+      & .card-container::after {
+        opacity: 1;
+      }
+    }
+  }
+
+  /* Grouped By Sort */
+  &[data-show-grouped-by-sort~="true"] {
+    & button.twisty :is(.replies-icon, .thread-replies) {
+      display: none;
+    }
+
+    /* Sort Headers */
+    & .card-layout[data-properties~="dummy"] {
+      --inset-inline-start: 0;
+
+      & .read-status,
+      & .thread-card-column:first-of-type,
+      & .thread-card-row:first-of-type,
+      & .thread-card-icon-info {
+        display: none;
+      }
+
+      &:not(:hover, :focus, :focus-within, .current, .selected) {
+        --tree-card-background: var(--tree-pane-background);
+        --tree-card-border: var(--tree-pane-background);
+      }
+
+      & .subject {
+        font-size: 1.1rem;
+        font-weight: 400;
+        color: var(--layout-color-2);
+      }
+
+      & .sort-header-details {
+        grid-area: sort;
+        display: inline-block;
+        font-weight: 500;
+        color: var(--layout-color-2);
+
+        & > span {
+          font-weight: 700;
+        }
+      }
+
+      & .card-container {
+        padding-inline-start: var(--tree-card-content-inline);
+        grid-template-columns: 1fr;
+
+        & .thread-card-dynamic-row {
+          grid-template:
+            "subject subject" max-content
+            "sort button" minmax(auto, 1fr)
+            / 1fr auto;
+        }
+
+        & .thread-card-subject-container {
+          padding-inline-start: 0;
+        }
+      }
+
+      &:is(:hover, :focus, :focus-within, .current, .selected, .current.selected) {
+        --inset-inline-start: -6px;
+      }
+    }
+
+    & .card-layout[data-properties~="thread-children"] {
+      & td {
+        padding-inline-start: var(--tree-card-inline);
+
+        &::before,
+        &::after {
+          display: none;
+        }
+
+        & .card-container .sender {
+          padding-inline-start: 0;
+        }
+      }
+    }
+  }
+
+  /* Spam */
+  & .card-layout[data-properties~="junk"] {
+    --tree-focus-outline: var(--focus-outline-spam);
+    --tree-card-border-hover: var(--tree-card-border-hover-spam);
+    --tree-card-background-current: var(--tree-card-background-current-spam);
+    --tree-card-background-selected: var(--tree-card-background-selected-spam);
+    --tree-card-background-selected-current: var(--tree-card-background-selected-current-spam);
+    --tree-card-border-selected: var(--tree-card-border-selected-spam);
+    --tree-card-border-focus: var(--tree-card-border-selected-spam);
+    --thread-card-focus: var(--thread-card-focus-spam);
+  }
+
+  /* Unfocused */
+  &:not(:focus, :focus-within) .card-layout,
+  &:not(:focus, :focus-within) .card-layout[data-properties~="junk"] {
+    &.current {
+      --tree-card-background: var(--tree-card-background-current-unfocused);
+    }
+
+    &.selected {
+      --tree-card-background: var(--tree-card-background-selected-unfocused);
+      --tree-card-border: var(--tree-card-border-selected-unfocused);
+    }
+
+    &.selected.current {
+      --tree-card-background: var(--tree-card-background-selected-current-unfocused);
+
+      &:hover {
+        --tree-card-background: var(--tree-card-background-selected-current-unfocused-hover);
+      }
+    }
+  }
+}

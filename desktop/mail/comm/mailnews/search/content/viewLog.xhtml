@@ -1,0 +1,72 @@
+<?xml version="1.0"?>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+<!DOCTYPE html SYSTEM "chrome://messenger/locale/viewLog.dtd">
+<html
+  id="viewLogWindow"
+  xmlns="http://www.w3.org/1999/xhtml"
+  xmlns:xul="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+  xmlns:html="http://www.w3.org/1999/xhtml"
+  windowtype="mailnews:filterlog"
+  style="min-width: 40em; min-height: 25em"
+  persist="screenX screenY width height"
+  scrolling="false"
+>
+  <head>
+    <title>&viewLog.title;</title>
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src chrome:; script-src chrome: 'unsafe-inline' moz-src:; style-src chrome: 'unsafe-inline'"
+    />
+    <link rel="stylesheet" href="chrome://messenger/skin/messenger.css" />
+    <link rel="stylesheet" href="chrome://messenger/skin/colors.css" />
+    <script
+      defer="defer"
+      src="chrome://messenger/content/dialogShadowDom.js"
+    ></script>
+    <script defer="defer" src="chrome://messenger/content/viewLog.js"></script>
+  </head>
+  <html:body
+    xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+  >
+    <dialog
+      style="min-width: 40em; min-height: 25em"
+      buttons="accept"
+      buttonlabelaccept="&closeLog.label;"
+      buttonaccesskeyaccept="&closeLog.accesskey;"
+    >
+      <vbox flex="1">
+        <description>&viewLogInfo.text;</description>
+        <hbox>
+          <checkbox
+            id="logFilters"
+            label="&enableLog.label;"
+            accesskey="&enableLog.accesskey;"
+            oncommand="toggleLogFilters()"
+          />
+          <spacer flex="1" />
+          <button
+            label="&clearLog.label;"
+            accesskey="&clearLog.accesskey;"
+            oncommand="clearLog()"
+          />
+        </hbox>
+        <separator class="thin" />
+        <hbox flex="1">
+          <browser
+            id="logView"
+            class="inset"
+            type="content"
+            disablehistory="true"
+            disablesecurity="true"
+            src="about:blank"
+            autofind="false"
+            flex="1"
+          />
+        </hbox>
+      </vbox>
+    </dialog>
+  </html:body>
+</html>

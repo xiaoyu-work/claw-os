@@ -1,0 +1,176 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+import { html } from "lit";
+import "mail/themes/shared/mail/variables.css";
+import "mail/themes/shared/mail/widgets.css";
+import "mail/themes/shared/mail/spacings.css";
+import "mail/themes/shared/mail/icons.css";
+
+export default {
+  title: "Design System/Widgets",
+  tags: ["autodocs"],
+};
+
+export const Widgets = () => html`
+  <h1>
+    Each of these widgets shown off is based on CSS classes provided by
+    <code>chrome://messenger/skin/widgets.css</code>
+  </h1>
+`;
+
+export const Button = () => html`<button class="button">Button</button>`;
+
+export const IconButton = () => html`
+  <button class="button icon-button" style="background-image: var(--icon-add);">
+    New
+  </button>
+`;
+
+export const IconOnlyButton = () => html`
+  <button
+    class="button icon-button icon-only"
+    style="background-image: var(--icon-add);"
+  ></button>
+`;
+
+export const IconOnlyRoundButton = () => html`
+  <button
+    class="button button-round icon-button icon-only"
+    style="background-image: var(--icon-add);"
+  ></button>
+`;
+
+export const PrimaryButton = () => html`
+  <button class="button button-primary">Primary Button</button>
+  <button
+    class="button button-primary icon-button"
+    style="background-image: var(--icon-add);"
+  >
+    Primary Button
+  </button>
+`;
+
+export const DestructiveButton = () => html`
+  <button class="button button-destructive">Destructive</button>
+  <button
+    class="button button-destructive icon-button"
+    style="background-image: var(--icon-trash);"
+  >
+    Destructive
+  </button>
+`;
+
+export const FlatButton = () => html`
+  <button class="button button-flat">Flat button</button>
+  <button
+    class="button button-flat icon-button"
+    style="background-image: var(--icon-add);"
+  >
+    Flat button
+  </button>
+  <button
+    class="button button-flat icon-button icon-only"
+    style="background-image: var(--icon-add);"
+  ></button>
+`;
+
+export const ModalCloseFlatButton = () => html`
+  <button
+    class="button button-flat button-round icon-button icon-only modal-close-button"
+    style="background-image: var(--icon-close-lg);"
+  ></button>
+`;
+
+export const LinkButton = () => html`
+  <button class="button link-button">Link</button>
+`;
+
+export const LinkButtonSmall = () => html`
+  <button class="button link-button link-button-sm">Link</button>
+`;
+
+export const CheckButton = () => html`
+  <button class="button check-button">Check button</button>
+  <button class="button check-button" aria-pressed="true">Check button</button>
+  <button
+    class="button check-button icon-button"
+    style="background-image: var(--icon-add);"
+  >
+    Check button
+  </button>
+  <button
+    class="button check-button icon-button"
+    aria-pressed="true"
+    style="background-image: var(--icon-add);"
+  >
+    Check button
+  </button>
+  <button
+    class="button check-button icon-button icon-only"
+    style="background-image: var(--icon-add);"
+  ></button>
+  <button
+    class="button check-button icon-button icon-only"
+    style="background-image: var(--icon-add);"
+    aria-pressed="true"
+  ></button>
+`;
+
+export const ButtonGroup = () => html`
+  <div class="button-group">
+    <button class="button">First button</button>
+    <button class="button">Second</button>
+    <button class="button">One more</button>
+  </div>
+  <div class="button-group">
+    <button
+      class="button icon-button icon-only"
+      style="background-image: var(--icon-add);"
+    ></button>
+    <button
+      class="button icon-button icon-only"
+      style="background-image: var(--icon-star);"
+    ></button>
+    <button
+      class="button icon-button icon-only"
+      style="background-image: var(--icon-trash);"
+    ></button>
+  </div>
+`;
+
+export const Select = () => html`
+  <select class="select">
+    <option selected disabled>Select something</option>
+    <option value="1">Option</option>
+    <option value="B">Another one</option>
+  </select>
+`;
+
+export const Badge = () => html`
+  <p>
+    <span class="badge" role="presentation">Recommended</span>
+    <span class="badge inverted" role="presentation">Recommended</span><br />
+    <span class="badge beta" role="presentation">Beta</span>
+    <span class="badge beta inverted" role="presentation">Beta</span><br />
+    <span class="badge experimental" role="presentation">Experimental</span>
+    <span class="badge experimental inverted" role="presentation"
+      >Experimental</span
+    ><br />
+    <span class="badge alpha" role="presentation">Alpha</span>
+    <span class="badge alpha inverted" role="presentation">Alpha</span>
+  </p>
+  <p style="background: var(--color-surface-base-dark); color-scheme: dark">
+    <span class="badge" role="presentation">Recommended</span>
+    <span class="badge inverted" role="presentation">Recommended</span><br />
+    <span class="badge beta" role="presentation">Beta</span>
+    <span class="badge beta inverted" role="presentation">Beta</span><br />
+    <span class="badge experimental" role="presentation">Experimental</span>
+    <span class="badge experimental inverted" role="presentation"
+      >Experimental</span
+    ><br />
+    <span class="badge alpha" role="presentation">Alpha</span>
+    <span class="badge alpha inverted" role="presentation">Alpha</span>
+  </p>
+`;

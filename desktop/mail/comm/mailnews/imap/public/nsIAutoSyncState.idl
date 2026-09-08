@@ -1,0 +1,152 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "nsISupports.idl"
+
+interface nsIMsgFolder;
+interface nsIMsgDBHdr;
+
+[scriptable, uuid(7512f927-b8f0-48c4-b101-03e859e61281)]
+interface nsIAutoSyncState : nsISupports {
+
+  /**
+   * Auto-Sync states.
+   *
+   * ***WARNING***: If you change these, be sure to update stateStrings in
+   * nsAutoSyncState.cpp. If you do not, out-of-bounds memory accesses may
+   * happen.
+   */
+
+  /**
+   * Initial state.  Returned to after new message bodies downloaded or if
+   * it is determined that no body fetches are actually needed. The next state
+   * is typically stStatusIssued but a transition directly to stUpdateNeeded
+   * may also occur.
+   */
+  const long stCompletedIdle = 0;
+
+  /**
+   * STATUS issued (URL "folderstatus"). Will check to see if new messages
+   * are present. If new messages are detected, the next state is
+   * stUpdateIssued; otherwise, a return to stCompleteIdle occurs. The previous
+   * state is always stCompleteIdle.
+   */
+  const long stStatusIssued = 1;
+
+  /**
+   * Occurs when imap APPEND and sometimes COPY or MOVE imap commands add
+   * messages that may not be detected in autosync stStatusIssued state. These
+   * are the "pending" messages referred to in the autosync code.
+   * stUpdateIssued state (URL "select") will occur next.
+   * The previous state is always stCompleteIdle, skipping stStatusIssued.
+   */
+  const long stUpdateNeeded = 2;
+
+  /**
+   * Update issued (URL "select"). Will figure out if there are any bodies to
+   * download after new headers are fetched and, if so, move to state
+   * stReadyToDownload. Otherwise, returns to stCompleteIdle.
+   */
+  const long stUpdateIssued = 3;
+
+  /**
+   * Preparing to download the next group of message bodies then move to
+   * stDownloadInProgress
+   */
+  const long stReadyToDownload = 4;
+
+  /**
+   * Fetch bodies issued (URL "fetch"). Group of message bodies download in
+   * progress. If more are needed, next state is stReadyToDownload; otherwise,
+   * when all are received, the next state is stCompleteIdle.
+   */
+  const long stDownloadInProgress = 5;
+
+  /**
+   * Puts the download queue offset to its previous position.
+   */
+  void rollback();
+
+  /**
+   * Clears the download queue. Resets the offsets.
+   */
+  void resetDownloadQ();
+
+  /**
+   * Rollbacks the offset to the previous position and
+   * changes the state to ready-to-download.
+   */
+  void tryCurrentGroupAgain(in unsigned long aRetryCount);
+
+  /**
+   * Resets the retry counter.
+   */
+  void resetRetryCounter();
+
+  /**
+   * Update the folder to find new message headers to download
+   */
+  void updateFolder();
+
+  /**
+   * Downloads the bodies of the given messages from the server.
+   */
+  void downloadMessagesForOffline(in Array<nsIMsgDBHdr> aMessageList);
+
+  /**
+   * Returns an array containing the nsIMsgDBHdrs of the messages that will
+   * be downloaded next.
+   *
+   * @param aSuggestedGroupSizeLimit suggested size per group in bytes
+   * @param aActualGroupSize total size of the messages in bytes in the group
+   */
+  Array<nsIMsgDBHdr> getNextGroupOfMessages(in unsigned long aSuggestedGroupSizeLimit,
+                                            out unsigned long aActualGroupSize);
+
+  /**
+   * Iterates through the existing headers of the folder to find
+   * the messages not downloaded yet.
+   *
+   * @param aNumberOfHeadersToProcess number of headers to be processed
+   *                                  at this pass
+   *
+   * @return the number of headers left to process
+   */
+  unsigned long processExistingHeaders(in unsigned long aNumberOfHeadersToProcess);
+
+  /**
+   * Tests whether the download queue is empty.
+   */
+  boolean isDownloadQEmpty();
+
+  /**
+   * Last time the existing headers are completely processed.
+   */
+  [noscript]readonly attribute PRTime lastSyncTime;
+
+  /**
+   * Last time the owner folder is updated.
+   */
+  [noscript]attribute PRTime lastUpdateTime;
+
+  /**
+   * Download operation state.
+   */
+  attribute long state;
+
+  /**
+   * Number of messages waiting to be downloaded.
+   */
+  readonly attribute long pendingMessageCount;
+
+  /**
+   * Total number of messages in the download queue.
+   */
+  readonly attribute long totalMessageCount;
+
+  /**
+   * The folder this auto-sync object is related to.
+   */
+  readonly attribute nsIMsgFolder ownerFolder;
+};

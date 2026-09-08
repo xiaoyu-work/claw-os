@@ -1,0 +1,199 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+---
+# Each stanza here describes a particular test suite or sub-suite.  These are
+# processed through the transformations described in kind.yml to produce a
+# bunch of tasks.  See the schema in `taskcluster/gecko_taskgraph/transforms/tests.py`
+# for a description of the fields used here.
+
+# Note that these are in lexical order, as enforced by the task loader.
+
+# Adding a new test type or running tests on a new platform? Be sure to review
+# https://wiki.mozilla.org/Sheriffing/Job_Visibility_Policy
+
+xpcshell:
+    description: "xpcshell test run"
+    suite:
+        category: xpcshell
+        name: xpcshell
+    target:
+        by-test-platform:
+            windows11-64.*:
+                by-variant:
+                    msix: target.installer.msix
+                    default: null
+            default: null
+    treeherder-symbol: X(X)
+    variants:
+        - msix
+    run-on-projects:
+        by-variant:
+            msix:
+                by-test-platform:
+                    windows11-64.*: built-projects
+                    default: []
+            default: built-projects
+    tier:
+        by-test-platform:
+            .*-asan.*: 2
+            .*-ccov.*: 2
+            .*-tsan.*: 2
+            macosx1100.*: 2
+            windows11.*: 1
+            default: default
+    chunks:
+        by-test-platform:
+            .*-ccov.*/.*: 10
+            .*-tsan.*/opt: 10
+            default: 5
+    timeoutfactor:
+        by-test-platform:
+            linux.*64-asan-qr/opt: 2
+            linux1804-64-ccov-qr/opt: 4
+            linux.*64-ccov/opt: 4
+            linux.*64-tsan-qr/opt: 3
+            linux.*64/debug: 2
+            macosx1015-64.*: 6
+            macosx1470-64/debug: 6
+            macosx1470-64.*/opt: 4
+            windows.*/debug: 2
+            windows11-64-25h2-asan/opt: 2
+            windows11-64-25h2-ccov/opt: 3
+            default: 1
+    instance-size: default
+    max-run-time:
+        by-variant:
+            msix: 7200
+            default:
+                by-test-platform:
+                    .*-ccov(-qr)?/.*: 7200
+                    .*-tsan.*/opt: 7200
+                    windows.*/opt: 5400
+                    default: 2700
+    allow-software-gl-layers: false
+    mozharness:
+        script: desktop_unittest.py
+        config:
+            by-test-platform:
+                windows.*:
+                    - unittests/win_unittest.py
+                    - unittests/thunderbird_extra.py
+                macosx.*64.*:
+                    - unittests/mac_unittest.py
+                    - unittests/thunderbird_extra.py
+                linux.*:
+                    - unittests/linux_unittest.py
+                    - remove_executables.py
+                    - unittests/thunderbird_extra.py
+        extra-options:
+            by-test-platform:
+                windows1.*:
+                    - --threads=2
+                default: []
+        requires-signed-builds:
+            by-test-platform:
+                windows1.-64.*-asan/opt: false
+                windows.*: true
+                default: false
+    fetches:
+        toolchain:
+            by-test-platform:
+                linux.*:
+                    - linux64-fix-stacks
+                    - linux64-node
+                    - linux64-minidump-stackwalk
+                macosx.*:
+                    - macosx64-fix-stacks
+                    - macosx64-node
+                    - macosx64-minidump-stackwalk
+                win.*64.*:
+                    - win32-fix-stacks
+                    - win64-node
+                    - win32-minidump-stackwalk
+                win.*32.*:
+                    - win32-fix-stacks
+                    - win32-node
+                    - win32-minidump-stackwalk
+                default: []
+
+mochitest-thunderbird:
+    description: "Mochitest browser-chrome-thunderbird run"
+    suite:
+        category: mochitest
+        name:
+            by-variant:
+                a11y-checks: mochitest-browser-chrome-thunderbird-a11y
+                default: mochitest-browser-chrome-thunderbird
+    try-name: mochitest-browser-chrome-thunderbird
+    target:
+        by-test-platform:
+            windows11-64.*:
+                by-variant:
+                    msix: target.installer.msix
+                    default: null
+            default: null
+    treeherder-symbol: M(bct)
+    built-projects-only: true
+    loopback-video: true
+    max-run-time:
+        by-variant:
+            msix: 5400
+            default:
+                by-test-platform:
+                    linux.*64-ccov.*/.*: 9000
+                    linux.*64-tsan.*/opt: 9000
+                    macosx.*64-ccov.*/.*: 10800
+                    windows.*-ccov.*/.*: 10800
+                    default: 3600
+    variants:
+        - msix
+        - a11y-checks
+    run-on-projects:
+        by-variant:
+            msix:
+                by-test-platform:
+                    windows11-64.*: built-projects
+                    default: []
+            a11y-checks:
+                by-test-platform:
+                    linux.*64/opt: built-projects
+                    default: []
+            default: built-projects
+    tier:
+        by-test-platform:
+            .*-asan.*: 2
+            .*-ccov.*: 2
+            .*-tsan.*: 2
+            macosx1100.*: 2
+            windows11.*: 1
+            default: default
+    chunks:
+        by-test-platform:
+            linux.*64-asan.*/opt: 16
+            linux.*64-tsan.*/opt: 15
+            windows1.-64.*-asan.*/opt: 9
+            windows1.*-ccov.*/.*: 9
+            .*/debug: 11
+            default: 7
+    mozharness:
+        script: desktop_unittest.py
+        mochitest-flavor: browser
+        chunked: true
+        config:
+            by-test-platform:
+                windows.*:
+                    - unittests/win_unittest.py
+                    - unittests/thunderbird_extra.py
+                macosx.*64.*:
+                    - unittests/mac_unittest.py
+                    - unittests/thunderbird_extra.py
+                linux.*:
+                    - unittests/linux_unittest.py
+                    - remove_executables.py
+                    - unittests/thunderbird_extra.py
+    instance-size:
+        by-test-platform:
+            linux.*64-tsan.*/opt: xlarge-noscratch  # runs out of memory on default/m3.large
+            default: default
+    allow-software-gl-layers: false

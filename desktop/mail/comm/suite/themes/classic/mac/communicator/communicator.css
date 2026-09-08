@@ -1,0 +1,285 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+/* ==== communicator.css ====================================================
+   == Styles shared everywhere throughout the Communicator suite.
+   ========================================================================== */
+
+@import url("chrome://global/skin/global.css");
+@import url("chrome://communicator/content/communicator.css");
+@import url("chrome://communicator/skin/brand.css");
+@import url("chrome://communicator/skin/button.css");
+@import url("chrome://communicator/skin/toolbar.css");
+
+@namespace url("http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul");
+
+.wizard-box {
+  padding: 20px 44px 10px;
+}
+
+#titlebar:not(:-moz-lwtheme) {
+  display: none;
+}
+
+#titlebar {
+  height: 22px;
+  -moz-window-dragging: drag;
+}
+
+#titlebar-spacer {
+  pointer-events: none;
+}
+
+/* On OS X, window controls are always at the left side of the window */
+#titlebar-buttonbox-container:-moz-locale-dir(ltr) {
+  -moz-box-ordinal-group: 0;
+  -moz-box-align: start;
+}
+
+#titlebar-buttonbox-container:-moz-lwtheme {
+  margin-top: 3px;
+}
+
+#titlebar-buttonbox {
+  -moz-appearance: -moz-window-button-box;
+  margin-left: 7px;
+}
+
+/* ::::: toolbar-primary ::::: */
+
+.toolbar-primary {
+  -moz-binding: url("chrome://communicator/content/bindings/toolbar-xpfe.xml#grippytoolbar-primary");
+}
+
+#throbber-box {
+  -moz-window-dragging: drag;
+}
+
+/* ::::: grippies ::::: */
+
+grippy {
+  display: none;
+}
+
+/* ::::: autocomplete ::::: */
+
+.autocomplete-history-popup {
+  max-height: 285px; /* 15 rows */
+}
+
+.autocomplete-history-dropmarker {
+  -moz-appearance: none;
+  border: none;
+  background-color: transparent;
+  margin: 0px;
+  padding: 0px;
+  list-style-image: url("chrome://communicator/skin/icons/autocomplete-dropmarker.png");
+}
+
+/* ::::: online/offline icons ::::: */
+
+#offline-status[offline="true"] {
+  list-style-image: url("chrome://communicator/skin/icons/offline.png");
+}
+
+#offline-status {
+  list-style-image: url("chrome://communicator/skin/icons/online.png");
+}
+
+/* ::::: security button icons ::::: */
+
+#security-button {
+  list-style-image: url("chrome://communicator/skin/icons/lock-insecure.png");
+}
+
+#security-button[level="high"] {
+  list-style-image: url("chrome://communicator/skin/icons/lock-secure.png");
+}
+
+#security-button[level="broken"] {
+  list-style-image: url("chrome://communicator/skin/icons/lock-broken.png");
+}
+
+/* ::::: spell checker ::::: */
+
+.spell-suggestion {
+  font-weight: bold;
+}
+
+/* ::::: error messages ::::: */
+
+description.error {
+  color: #FF0000;
+}
+
+/* ::::: directional button icons ::::: */
+
+.up {
+  min-width: 0px;
+  list-style-image: url("chrome://global/skin/arrow/arrow-up.gif");
+}
+
+.up[disabled="true"] {
+  list-style-image: url("chrome://global/skin/arrow/arrow-up-dis.gif");
+}
+
+.down {
+  min-width: 0px;
+  list-style-image: url("chrome://global/skin/arrow/arrow-dn.gif");
+}
+
+.down[disabled="true"] {
+  list-style-image: url("chrome://global/skin/arrow/arrow-dn-dis.gif");
+}
+
+.sidebarTree {
+  border: none;
+  margin: 0px !important;
+}
+
+/* ::::: toolbar print button ::::: */
+#print-button {
+ list-style-image: url("chrome://communicator/skin/icons/communicatoricons.png");
+  -moz-image-region: rect(0 29px 29px 0);
+}
+
+#print-button:hover:active,
+#print-button[open] {
+  -moz-image-region: rect(0 59px 29px 30px);
+}
+
+#print-button[disabled="true"] {
+  -moz-image-region: rect(0 89px 29px 60px) !important;
+}
+
+toolbar[iconsize="small"] > toolbarpaletteitem > #print-button,
+toolbar[iconsize="small"] > #print-button {
+  list-style-image: url("chrome://communicator/skin/icons/communicatoricons-small.png");
+  -moz-image-region: rect(0 19px 19px 0);
+}
+
+toolbar[iconsize="small"] > #print-button:hover:active,
+toolbar[iconsize="small"] > #print-button[open] {
+  -moz-image-region: rect(0 39px 19px 20px);
+}
+
+toolbar[iconsize="small"] > #print-button[disabled="true"] {
+  -moz-image-region: rect(0 59px 19px 40px) !important;
+}
+
+/* ::::: lightweight themes ::::: */
+
+toolbar textbox:-moz-lwtheme:not([focused="true"]) {
+  opacity: 0.9;
+}
+
+treecols:-moz-lwtheme {
+  text-shadow: none;
+}
+
+/* ::::: notification bars ::::: */
+
+.messageImage[value="refresh-blocked"] {
+  list-style-image: url("chrome://communicator/skin/icons/application.png");
+}
+
+.messageImage[value="plugin-crashed"] {
+  list-style-image: url("chrome://mozapps/skin/plugins/pluginGeneric-16.png");
+}
+
+.messageImage[value="geolocation"] {
+  list-style-image: url("chrome://communicator/skin/icons/geo.png");
+}
+
+.messageImage[value="persistent-storage"] {
+  list-style-image: url("chrome://communicator/skin/icons/persistent-storage.svg");
+  width: 16px;
+  height: 16px;
+}
+
+.messageImage[value="webNotifications"] {
+  list-style-image: url("chrome://communicator/skin/icons/notification-16.png");
+}
+
+.messageImage[value="indexedDB-permissions-prompt"],
+.messageImage[value="indexedDB-quota-prompt"] {
+  list-style-image: url("chrome://global/skin/icons/question-16.png");
+}
+
+.messageImage[value="addon-install-blocked"],
+.messageImage[value="addon-install-cancelled"],
+.messageImage[value="addon-install-complete"],
+.messageImage[value="addon-install-disabled"],
+.messageImage[value="addon-install-failed"],
+.messageImage[value="addon-install-started"],
+.messageImage[value="lwtheme-install-request"],
+.messageImage[value="lwtheme-install-notification"] {
+  list-style-image: url("chrome://mozapps/skin/extensions/extensionGeneric-16.png");
+}
+
+.messageImage[value="popup-blocked"] {
+  list-style-image: url("chrome://navigator/skin/icons/popup-blocked.png");
+}
+
+.messageImage[value="blocked-badware-page"] {
+  list-style-image: url("chrome://global/skin/icons/blacklist_favicon.png");
+}
+
+/* ::::: dialog header ::::: */
+
+dialogheader {
+  margin: 0 5px 5px;
+  padding: 5px 8px;
+}
+
+.dialogheader-title {
+  margin: 0 !important;
+  font-size: larger;
+  font-weight: bold;
+  display: none;
+}
+
+.dialogheader-description {
+  font-weight: bold !important;
+}
+
+/* ::::: statusbar ::::: */
+
+statusbar {
+  min-width: 1px; /* DON'T DELETE!
+  Prevents hiding of scrollbars in browser when window is made smaller.*/
+  min-height: 15px !important;
+  margin: 0px !important;
+  /* need to use padding-inline-end when/if bug 631729 gets fixed: */
+  padding: 0px 16px 1px 1px;
+  -moz-appearance: statusbar;
+  text-shadow: rgba(255, 255, 255, 0.4) 0 1px;
+}
+
+statusbar:-moz-lwtheme {
+  -moz-appearance: none;
+  background: none;
+  border-style: none;
+  text-shadow: inherit;
+}
+
+statusbarpanel {
+  -moz-box-align: center;
+  -moz-box-pack: center;
+  padding: 0 4px;
+}
+
+.statusbarpanel-iconic {
+  padding: 0px;
+}
+
+.statusbarpanel-backgroundbox {
+  -moz-box-align: stretch;
+  padding: 0px;
+}
+
+.statusbarpanel-backgroundbox > .statusbarpanel-contentbox {
+  padding: 0px 1px;
+  -moz-box-align: center;
+}

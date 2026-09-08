@@ -1,0 +1,68 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+/* ===== profile.css ====================================================
+  == Styles for Profile Manager window and dialogs.
+  ======================================================================= */
+
+@import url("chrome://global/skin/global.css");
+
+@namespace url("http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul");
+
+/* ::::: Profile Selection dialog ::::: */
+
+treechildren::-moz-tree-image {
+  margin-inline-end: 2px;
+  list-style-image: url("chrome://communicator/skin/profile/profile.png");
+}
+
+treechildren::-moz-tree-image(rowMigrate-no) {
+  list-style-image: url("chrome://communicator/skin/profile/migrate.png");
+}
+
+/* Override global.css */
+hbox.wizard-box {
+  padding: 10px 10px 10px 10px;
+}
+
+#header {
+  -moz-box-orient: vertical;
+  margin-top: -7px;
+  margin-bottom: 5px;
+  margin-inline-start: -7px;
+  margin-inline-end: -5px;
+  border-left: none;
+  border-right: none;
+  border-top: none;
+  border-bottom-width: 1px;
+  border-bottom-color: #000000;
+  padding-top: 12px;
+  padding-bottom: 12px;
+  padding-inline-start: 25px;
+  padding-inline-end: 5px;
+  background-color: #90A1B3;
+  color: #000000;
+}
+
+#header > .dialogheader-title {
+  font: inherit;
+  font-weight: bold;
+}
+
+#header > .dialogheader-description {
+  margin-inline-start: 12px !important;
+}
+
+#intro,
+#label {
+  width: 17em;
+}
+
+#managebuttons > button {
+  min-width: 8em;
+}
+
+#finishtext {
+  margin-top: -20px;
+}

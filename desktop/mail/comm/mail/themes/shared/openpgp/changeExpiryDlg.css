@@ -1,0 +1,30 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+html {
+  inline-size: 700px;
+  min-inline-size: 700px;
+  max-inline-size: 700px;
+}
+
+fieldset {
+  margin-inline: 20px;
+  margin-block: 4px;
+
+  & > div {
+    display: flex;
+    align-items: center;
+  }
+}
+
+.selected-keys-properties {
+  display: grid;
+  grid-template-columns: min-content auto;
+  gap: 3px 9px;
+  margin: 6px;
+
+  .key-property-title {
+    font-weight: bold;
+  }
+}

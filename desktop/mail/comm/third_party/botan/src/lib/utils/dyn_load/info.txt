@@ -1,0 +1,23 @@
+<internal_defines>
+DYNAMIC_LOADER -> 20160310
+</internal_defines>
+
+<module_info>
+name -> "Dynamic Loader"
+brief -> "Helper class to represent a dynamically loaded library"
+</module_info>
+
+load_on dep
+
+<os_features>
+posix1
+win32
+</os_features>
+
+<libs>
+android -> dl
+linux -> dl
+solaris -> dl
+macos -> dl
+hurd -> dl
+</libs>

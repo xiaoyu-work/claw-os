@@ -1,0 +1,22 @@
+<internal_defines>
+SERPENT_AVX512 -> 20230101
+</internal_defines>
+
+<module_info>
+name -> "Serpent AVX512"
+brief -> "Serpent using AVX512 instructions"
+</module_info>
+
+<isa>
+avx512
+</isa>
+
+<requires>
+cpuid
+simd_avx512
+</requires>
+
+<cc>
+# MSVC miscompiles this code
+!msvc
+</cc>

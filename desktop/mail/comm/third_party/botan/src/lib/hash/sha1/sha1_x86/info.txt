@@ -1,0 +1,20 @@
+<internal_defines>
+SHA1_X86_SHA_NI -> 20170518
+</internal_defines>
+
+<module_info>
+name -> "SHA-1 SIMD"
+brief -> "SHA-1 using SIMD instructions on x86"
+</module_info>
+
+<isa>
+sha
+sse2
+ssse3
+sse41
+</isa>
+
+<requires>
+cpuid
+simd_4x32
+</requires>

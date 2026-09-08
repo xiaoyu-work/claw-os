@@ -1,0 +1,115 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "nsISupports.idl"
+
+interface imIAccount;
+interface nsIDOMWindow;
+interface nsIWebProgress;
+
+/**
+ * This interface is for use in the browser-request notification, to
+ * let protocol plugins open a browser window. This is an unfortunate
+ * necessity for protocols that require an OAuth authentication.
+ */
+[scriptable, uuid(b89dbb38-0de4-11e0-b3d0-0002e304243c)]
+interface prplIRequestBrowser: nsISupports {
+  readonly attribute AUTF8String promptText;
+  readonly attribute AUTF8String url;
+  void cancelled();
+  void loaded(in nsIDOMWindow aWindow,
+              in nsIWebProgress aWebProgress);
+};
+
+/**
+ * This interface is used for buddy authorization requests, when the
+ * user needs to confirm if a remote contact should be allowed to see
+ * his presence information.  It is implemented by the aSubject
+ * parameter of the buddy-authorization-request and
+ * buddy-authorization-request-canceled notifications.
+ */
+[scriptable, uuid(a55c1e24-17cc-4ddc-8c64-3bc315a3c3b1)]
+interface prplIBuddyRequest: nsISupports {
+  readonly attribute imIAccount account;
+  readonly attribute AUTF8String userName;
+  void grant();
+  void deny();
+};
+
+/**
+ * This is used with chat room invitation requests, so the user can accept or
+ * reject an invitation. It is implemented by the aSubject parameter of the
+ * conv-authorization-request notification.
+ */
+[scriptable, uuid(44ac9606-711b-40f6-9031-94a9c60c938d)]
+interface prplIChatRequest: nsISupports {
+   readonly attribute imIAccount account;
+   readonly attribute AUTF8String conversationName;
+   /**
+    * Resolves when the request is completed, with a boolean indicating if it
+    * was granted. Rejected if the request is cancelled.
+    *
+    * @type {Promise<boolean>}
+    */
+   readonly attribute Promise completePromise;
+   readonly attribute boolean canDeny;
+   void grant();
+   void deny();
+};
+
+/**
+ * Verification information for an encryption session (for example prplISession).
+ * Used to present a verification flow to the user.
+ */
+[scriptable, uuid(48c1748d-ba51-44c0-aa3c-e979d4d4bdf3)]
+interface imISessionVerification: nsISupports {
+   /**
+    * Challenge mode where a text string is presented to the user and they have
+    * to confirm it matches with the other user/device's.
+    */
+   const short CHALLENGE_TEXT = 1;
+   /** Verification mode */
+   readonly attribute short challengeType;
+   /** Challenge string to present to the user for CHALLENGE_TEXT */
+   readonly attribute AUTF8String challenge;
+   /**
+    * Optional description of the challenge contents. For example text
+    * representation of emoji.
+    */
+   readonly attribute AUTF8String challengeDescription;
+   /**
+    * User readable name for the entity the verification is about (so the
+    * user/device on the other side of the flow).
+    */
+   readonly attribute AUTF8String subject;
+   /**
+    * resolves with the result from the challenge, rejects if the action was
+    * cancelled.
+    *
+    * @type {Promise<boolean>}
+    */
+   readonly attribute Promise completePromise;
+   /**
+    * Submit result of the challenge, completing the verification on this side.
+    */
+   void submitResponse(in boolean challengeMatches);
+   /**
+    * Cancel the verification.
+    */
+   void cancel();
+};
+
+/**
+ * Incoming verification request, sent to the UI via buddy-verification-request
+ * notification. Can be canelled with buddy-verification-request-cancelled.
+ */
+[scriptable, uuid(c46d426f-6e99-4713-b0aa-0b404db5a40d)]
+interface imIIncomingSessionVerification: imISessionVerification {
+   readonly attribute imIAccount account;
+   /**
+    * Method to accept the verification. Resolves once |challenge| is
+    * populated.
+    */
+   Promise verify();
+};

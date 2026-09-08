@@ -1,0 +1,37 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@import url("chrome://messenger/skin/shared/searchBox.css");
+
+.searchBox,
+.themeableSearchBox {
+  margin-block: 3px 2px;
+  font: icon;
+  font-size: inherit;
+  padding: 1px 4px;
+}
+
+.searchBox:not(.gloda-search),
+.themeableSearchBox:not(.contentTabUrlInput) {
+  background-image: url("chrome://global/skin/icons/search-textbox.svg");
+  background-repeat: no-repeat;
+  background-position: 5px center;
+  padding-inline-start: 21px;
+  -moz-context-properties: fill, fill-opacity;
+  fill: currentColor;
+  fill-opacity: 0.8;
+}
+
+.gloda-search,
+#peopleSearchInput {
+  margin-block: 2px 3px;
+}
+
+.remote-gloda-search-container {
+  padding-block: 1px;
+}
+
+.autocomplete-richlistitem[type^="gloda-"] {
+  padding-inline-start: 13px;
+}

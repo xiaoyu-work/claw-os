@@ -1,0 +1,51 @@
+[DEFAULT]
+head = "head.js"
+support-files = ["data/*"]
+prefs = ["mail.graph.enabled=true"]
+
+["test_client.js"]
+
+["test_delete_model_trash_path.js"]
+
+["test_ewsAttachmentSaves.js"]
+
+["test_ewsCustomHeaderFilters.js"]
+
+["test_ewsFilters.js"]
+
+["test_ewsFolder.js"]
+
+["test_exchange_service.js"]
+
+["test_folderNamesEws.js"]
+tags = ["foldernames"]
+
+["test_folderNamesEws_preffedOff.js"]
+prefs = ["mail.useLocalizedFolderNames=false"]
+tags = ["foldernames"]
+
+["test_folder_operations.js"]
+
+["test_folder_sync.js"]
+
+["test_getMessage.js"]
+
+["test_item_operations.js"]
+
+["test_item_operations_exchange_2010.js"]
+
+["test_saveDraft.js"]
+
+["test_save_to_file.js"]
+
+["test_send.js"]
+
+["test_server_version.js"]
+
+["test_syncFolderHierarchy.js"]
+
+["test_syncMessagesForFolder.js"]
+
+["test_undo.js"]
+
+["test_verifyLogon.js"]

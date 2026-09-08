@@ -1,0 +1,104 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@import url("chrome://messenger/skin/shared/tabmail.css");
+
+tabmail > tabbox > tabpanels {
+  appearance: none !important;
+}
+
+/**
+ * Tab
+ */
+
+.tabmail-tab,
+.tabs-newtab-button {
+  font: message-box;
+  font-size: inherit;
+  border: none;
+}
+
+.tabmail-tab {
+  &[type="glodaSearch"] .tab-icon-image {
+    transform: scaleX(-1);
+  }
+
+  &:not(:hover) .tab-icon-image:not([selected="true"]) {
+    opacity: 0.9;
+  }
+
+  &:focus .tab-label-container {
+    outline: var(--focus-outline);
+  }
+}
+
+.tab-label-container:not([selected="true"]) {
+  opacity: 0.7;
+}
+
+.tab-label {
+  margin-block: 1px 0;
+}
+
+/**
+ * Tab Scrollbox Arrow Buttons
+ */
+
+#tabmail-arrowscrollbox {
+  &::part(scrollbutton-up),
+  &::part(scrollbutton-down) {
+    padding: 0 4px !important;
+    margin: 0 0 var(--tabs-tabbar-border-size) !important;
+  }
+
+  &:not([scrolledtostart])::part(scrollbutton-up):hover,
+  &:not([scrolledtoend])::part(scrollbutton-down):hover {
+    background-image: linear-gradient(transparent, rgba(0, 0, 0, 0.15));
+  }
+
+  &:not([scrolledtostart])::part(scrollbutton-up):hover:active,
+  &:not([scrolledtoend])::part(scrollbutton-down):hover:active {
+    background-image: linear-gradient(transparent, rgba(0, 0, 0, 0.3));
+  }
+
+  #tabs-toolbar[brighttext] &:not([scrolledtostart])::part(scrollbutton-up):hover,
+  #tabs-toolbar[brighttext] &:not([scrolledtoend])::part(scrollbutton-down):hover {
+    background-image: linear-gradient(rgba(255, 255, 255, 0.25), rgba(255, 255, 255, 0.25));
+  }
+
+  #tabs-toolbar[brighttext] &:not([scrolledtostart])::part(scrollbutton-up):hover:active,
+  #tabs-toolbar[brighttext] &:not([scrolledtoend])::part(scrollbutton-down):hover:active {
+    background-image: linear-gradient(rgba(255, 255, 255, 0.35), rgba(255, 255, 255, 0.35));
+  }
+
+  &[scrolledtostart]::part(scrollbutton-up),
+  &[scrolledtoend]::part(scrollbutton-down) {
+    --toolbarbutton-icon-fill-opacity: 0.5;
+    background-image: none;
+  }
+
+  /* Tab Overflow */
+  &:not([scrolledtostart])::part(arrowscrollbox-overflow-start-indicator),
+  &:not([scrolledtoend])::part(arrowscrollbox-overflow-end-indicator) {
+    margin-block-end: 0;
+  }
+}
+
+/**
+ * All Tabs Buttons
+ */
+
+.tabs-alltabs-box {
+  margin: 0;
+}
+
+/* Content Tabs */
+.contentTabAddress {
+  block-size: 31px;
+  padding-inline: 10px;
+}
+
+.contentTabUrlbarInput {
+  background-image: none;
+}

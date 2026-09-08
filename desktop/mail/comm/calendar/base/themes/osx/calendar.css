@@ -1,0 +1,69 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@import url(chrome://calendar/skin/shared/calendar.css);
+
+:root[lwtheme] #calendarContent {
+  text-shadow: none;
+}
+
+/* Calendar list rules */
+#calendar-panel {
+  padding-block-end: 5px;
+}
+
+/* iMIP notification bar */
+#imip-bar > image {
+  margin-inline-end: 8px;
+}
+
+#calsidebar_splitter {
+  border-inline-end: 1px solid var(--sidebar-border);
+  /* make only the splitter border visible */
+  margin-inline-start: -2px;
+}
+
+/* Calendar sidebar background in calendar and task mode. */
+#calSidebar {
+  border-inline-end: 1px solid #8b8b8b;
+  margin-inline-end: -3px !important;
+}
+
+/* Today pane button in status bar */
+#calendar-status-todaypane-button,
+#calendar-status-todaypane-button[checked] {
+  padding: 0 2px !important;
+}
+
+#calendar-status-todaypane-button > stack > .toolbarbutton-day-text {
+  margin-block-start: 5px;
+  margin-inline-end: 0;
+}
+
+/* shift the today pane button label up by one pixel to center it */
+#calendar-status-todaypane-button > .toolbarbutton-text {
+  margin: 0 6px 1px !important;
+}
+
+.calendar-splitter[orient="vertical"] {
+  border-block-end: 1px solid var(--sidebar-border);
+  min-block-size: 0;
+  block-size: 5px;
+  background-color: transparent;
+  margin-block-start: -5px;
+  position: relative;
+  z-index: 10;
+}
+
+.calendar-sidebar-splitter {
+  background-image: none;
+  min-inline-size: 3px;
+  inline-size: 3px;
+}
+
+#today-splitter {
+  border-inline-start: 1px solid var(--sidebar-border);
+  margin-inline-end: -4px;
+  position: relative;
+}

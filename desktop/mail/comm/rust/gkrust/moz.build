@@ -1,0 +1,14 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+include("/toolkit/library/rust/moz.build")
+
+if CONFIG["MOZ_CRASHREPORTER"]:
+    RUST_TEST_FEATURES.remove("gkrust-shared/crashreporter")
+RUST_TEST_FEATURES.remove("crashreporter/mock")
+
+# Defined in /toolkit/library/rust/moz.build
+RUST_TESTS.clear()
+
+RUST_TESTS.extend(["gkrust"])

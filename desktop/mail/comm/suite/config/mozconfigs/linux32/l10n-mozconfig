@@ -1,0 +1,4 @@
+TOOLTOOL_DIR=${TOOLTOOL_DIR:-$topsrcdir}
+
+. $TOOLTOOL_DIR/build/unix/mozconfig.linux32
+. $TOOLTOOL_DIR/comm/suite/config/mozconfigs/mozconfig.linux.l10n.common

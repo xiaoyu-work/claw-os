@@ -1,0 +1,24 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+dropmarker {
+  -moz-box-align: center;
+  -moz-box-pack: center;
+  border: 3px solid;
+  border-top-color: #BBC4D1;
+  border-right-color: #99A7B7;
+  border-bottom-color: #99A7B7;
+  border-left-color: #BBC4D1;
+  border-radius: 2px;
+  padding-top: 3px;
+  padding-bottom: 2px;
+  background-color: #A6B3C0;
+  list-style-image: url("chrome://global/skin/menulist/mlist-arrow.png");
+}
+
+dropmarker[disabled="true"] {
+  border-color: #727D8E !important;
+  background-color: #B7BFCB !important;
+  list-style-image: url("chrome://global/skin/menulist/mlist-dis-arrow.png") !important;
+}

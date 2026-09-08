@@ -1,0 +1,20 @@
+<defines>
+PSK_DB -> 20171119
+</defines>
+
+<module_info>
+name -> "PSK Database"
+brief -> "Interface for a generic pre-shared key database"
+</module_info>
+
+<requires>
+aes
+hmac
+base64
+sha2_32
+nist_keywrap
+</requires>
+
+<header:public>
+psk_db.h
+</header:public>

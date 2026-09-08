@@ -1,0 +1,350 @@
+/*
+* SEED
+* (C) 1999-2007,2020 Jack Lloyd
+*
+* Botan is released under the Simplified BSD License (see license.txt)
+*/
+
+#include <botan/internal/seed.h>
+
+#include <botan/internal/loadstor.h>
+#include <botan/internal/prefetch.h>
+
+#if defined(BOTAN_HAS_CPUID)
+   #include <botan/internal/cpuid.h>
+#endif
+
+namespace Botan {
+
+namespace {
+
+alignas(256) const uint8_t SEED_S0[256] = {
+   0xA9, 0x85, 0xD6, 0xD3, 0x54, 0x1D, 0xAC, 0x25, 0x5D, 0x43, 0x18, 0x1E, 0x51, 0xFC, 0xCA, 0x63, 0x28, 0x44, 0x20,
+   0x9D, 0xE0, 0xE2, 0xC8, 0x17, 0xA5, 0x8F, 0x03, 0x7B, 0xBB, 0x13, 0xD2, 0xEE, 0x70, 0x8C, 0x3F, 0xA8, 0x32, 0xDD,
+   0xF6, 0x74, 0xEC, 0x95, 0x0B, 0x57, 0x5C, 0x5B, 0xBD, 0x01, 0x24, 0x1C, 0x73, 0x98, 0x10, 0xCC, 0xF2, 0xD9, 0x2C,
+   0xE7, 0x72, 0x83, 0x9B, 0xD1, 0x86, 0xC9, 0x60, 0x50, 0xA3, 0xEB, 0x0D, 0xB6, 0x9E, 0x4F, 0xB7, 0x5A, 0xC6, 0x78,
+   0xA6, 0x12, 0xAF, 0xD5, 0x61, 0xC3, 0xB4, 0x41, 0x52, 0x7D, 0x8D, 0x08, 0x1F, 0x99, 0x00, 0x19, 0x04, 0x53, 0xF7,
+   0xE1, 0xFD, 0x76, 0x2F, 0x27, 0xB0, 0x8B, 0x0E, 0xAB, 0xA2, 0x6E, 0x93, 0x4D, 0x69, 0x7C, 0x09, 0x0A, 0xBF, 0xEF,
+   0xF3, 0xC5, 0x87, 0x14, 0xFE, 0x64, 0xDE, 0x2E, 0x4B, 0x1A, 0x06, 0x21, 0x6B, 0x66, 0x02, 0xF5, 0x92, 0x8A, 0x0C,
+   0xB3, 0x7E, 0xD0, 0x7A, 0x47, 0x96, 0xE5, 0x26, 0x80, 0xAD, 0xDF, 0xA1, 0x30, 0x37, 0xAE, 0x36, 0x15, 0x22, 0x38,
+   0xF4, 0xA7, 0x45, 0x4C, 0x81, 0xE9, 0x84, 0x97, 0x35, 0xCB, 0xCE, 0x3C, 0x71, 0x11, 0xC7, 0x89, 0x75, 0xFB, 0xDA,
+   0xF8, 0x94, 0x59, 0x82, 0xC4, 0xFF, 0x49, 0x39, 0x67, 0xC0, 0xCF, 0xD7, 0xB8, 0x0F, 0x8E, 0x42, 0x23, 0x91, 0x6C,
+   0xDB, 0xA4, 0x34, 0xF1, 0x48, 0xC2, 0x6F, 0x3D, 0x2D, 0x40, 0xBE, 0x3E, 0xBC, 0xC1, 0xAA, 0xBA, 0x4E, 0x55, 0x3B,
+   0xDC, 0x68, 0x7F, 0x9C, 0xD8, 0x4A, 0x56, 0x77, 0xA0, 0xED, 0x46, 0xB5, 0x2B, 0x65, 0xFA, 0xE3, 0xB9, 0xB1, 0x9F,
+   0x5E, 0xF9, 0xE6, 0xB2, 0x31, 0xEA, 0x6D, 0x5F, 0xE4, 0xF0, 0xCD, 0x88, 0x16, 0x3A, 0x58, 0xD4, 0x62, 0x29, 0x07,
+   0x33, 0xE8, 0x1B, 0x05, 0x79, 0x90, 0x6A, 0x2A, 0x9A,
+};
+
+alignas(256) const uint8_t SEED_S1[256] = {
+   0x38, 0xE8, 0x2D, 0xA6, 0xCF, 0xDE, 0xB3, 0xB8, 0xAF, 0x60, 0x55, 0xC7, 0x44, 0x6F, 0x6B, 0x5B, 0xC3, 0x62, 0x33,
+   0xB5, 0x29, 0xA0, 0xE2, 0xA7, 0xD3, 0x91, 0x11, 0x06, 0x1C, 0xBC, 0x36, 0x4B, 0xEF, 0x88, 0x6C, 0xA8, 0x17, 0xC4,
+   0x16, 0xF4, 0xC2, 0x45, 0xE1, 0xD6, 0x3F, 0x3D, 0x8E, 0x98, 0x28, 0x4E, 0xF6, 0x3E, 0xA5, 0xF9, 0x0D, 0xDF, 0xD8,
+   0x2B, 0x66, 0x7A, 0x27, 0x2F, 0xF1, 0x72, 0x42, 0xD4, 0x41, 0xC0, 0x73, 0x67, 0xAC, 0x8B, 0xF7, 0xAD, 0x80, 0x1F,
+   0xCA, 0x2C, 0xAA, 0x34, 0xD2, 0x0B, 0xEE, 0xE9, 0x5D, 0x94, 0x18, 0xF8, 0x57, 0xAE, 0x08, 0xC5, 0x13, 0xCD, 0x86,
+   0xB9, 0xFF, 0x7D, 0xC1, 0x31, 0xF5, 0x8A, 0x6A, 0xB1, 0xD1, 0x20, 0xD7, 0x02, 0x22, 0x04, 0x68, 0x71, 0x07, 0xDB,
+   0x9D, 0x99, 0x61, 0xBE, 0xE6, 0x59, 0xDD, 0x51, 0x90, 0xDC, 0x9A, 0xA3, 0xAB, 0xD0, 0x81, 0x0F, 0x47, 0x1A, 0xE3,
+   0xEC, 0x8D, 0xBF, 0x96, 0x7B, 0x5C, 0xA2, 0xA1, 0x63, 0x23, 0x4D, 0xC8, 0x9E, 0x9C, 0x3A, 0x0C, 0x2E, 0xBA, 0x6E,
+   0x9F, 0x5A, 0xF2, 0x92, 0xF3, 0x49, 0x78, 0xCC, 0x15, 0xFB, 0x70, 0x75, 0x7F, 0x35, 0x10, 0x03, 0x64, 0x6D, 0xC6,
+   0x74, 0xD5, 0xB4, 0xEA, 0x09, 0x76, 0x19, 0xFE, 0x40, 0x12, 0xE0, 0xBD, 0x05, 0xFA, 0x01, 0xF0, 0x2A, 0x5E, 0xA9,
+   0x56, 0x43, 0x85, 0x14, 0x89, 0x9B, 0xB0, 0xE5, 0x48, 0x79, 0x97, 0xFC, 0x1E, 0x82, 0x21, 0x8C, 0x1B, 0x5F, 0x77,
+   0x54, 0xB2, 0x1D, 0x25, 0x4F, 0x00, 0x46, 0xED, 0x58, 0x52, 0xEB, 0x7E, 0xDA, 0xC9, 0xFD, 0x30, 0x95, 0x65, 0x3C,
+   0xB6, 0xE4, 0xBB, 0x7C, 0x0E, 0x50, 0x39, 0x26, 0x32, 0x84, 0x69, 0x93, 0x37, 0xE7, 0x24, 0xA4, 0xCB, 0x53, 0x0A,
+   0x87, 0xD9, 0x4C, 0x83, 0x8F, 0xCE, 0x3B, 0x4A, 0xB7,
+};
+
+/*
+* SEED G Function
+*/
+BOTAN_FORCE_INLINE uint32_t SEED_G(uint32_t X) {
+   const uint32_t M = 0x01010101;
+   const uint32_t s0 = M * SEED_S0[get_byte<3>(X)];
+   const uint32_t s1 = M * SEED_S1[get_byte<2>(X)];
+   const uint32_t s2 = M * SEED_S0[get_byte<1>(X)];
+   const uint32_t s3 = M * SEED_S1[get_byte<0>(X)];
+
+   const uint32_t M0 = 0x3FCFF3FC;
+   const uint32_t M1 = 0xFC3FCFF3;
+   const uint32_t M2 = 0xF3FC3FCF;
+   const uint32_t M3 = 0xCFF3FC3F;
+
+   return (s0 & M0) ^ (s1 & M1) ^ (s2 & M2) ^ (s3 & M3);
+}
+
+}  // namespace
+
+/*
+* SEED Encryption
+*/
+void SEED::encrypt_n(const uint8_t in[], uint8_t out[], size_t blocks) const {
+   assert_key_material_set();
+
+#if defined(BOTAN_HAS_SEED_AVX512_GFNI)
+   if(CPUID::has(CPUID::Feature::AVX512, CPUID::Feature::GFNI)) {
+      return avx512_gfni_encrypt(in, out, blocks);
+   }
+#endif
+
+#if defined(BOTAN_HAS_SEED_HWAES)
+   if(CPUID::has(CPUID::Feature::HW_AES)) {
+      return hwaes_encrypt(in, out, blocks);
+   }
+#endif
+
+   prefetch_arrays(SEED_S0, SEED_S1);
+
+   while(blocks >= 2) {
+      uint32_t B00 = load_be<uint32_t>(in, 0);
+      uint32_t B01 = load_be<uint32_t>(in, 1);
+      uint32_t B02 = load_be<uint32_t>(in, 2);
+      uint32_t B03 = load_be<uint32_t>(in, 3);
+      uint32_t B10 = load_be<uint32_t>(in, 4);
+      uint32_t B11 = load_be<uint32_t>(in, 5);
+      uint32_t B12 = load_be<uint32_t>(in, 6);
+      uint32_t B13 = load_be<uint32_t>(in, 7);
+
+      for(size_t j = 0; j != 16; j += 2) {
+         uint32_t T00 = B02 ^ m_K[2 * j];
+         uint32_t T10 = B12 ^ m_K[2 * j];
+         uint32_t T01 = SEED_G(B02 ^ B03 ^ m_K[2 * j + 1]);
+         uint32_t T11 = SEED_G(B12 ^ B13 ^ m_K[2 * j + 1]);
+         T00 = SEED_G(T01 + T00);
+         T10 = SEED_G(T11 + T10);
+         T01 = SEED_G(T01 + T00);
+         T11 = SEED_G(T11 + T10);
+         B01 ^= T01;
+         B11 ^= T11;
+         B00 ^= T00 + T01;
+         B10 ^= T10 + T11;
+
+         T00 = B00 ^ m_K[2 * j + 2];
+         T10 = B10 ^ m_K[2 * j + 2];
+         T01 = SEED_G(B00 ^ B01 ^ m_K[2 * j + 3]);
+         T11 = SEED_G(B10 ^ B11 ^ m_K[2 * j + 3]);
+         T10 = SEED_G(T11 + T10);
+         T00 = SEED_G(T01 + T00);
+         T01 = SEED_G(T01 + T00);
+         T11 = SEED_G(T11 + T10);
+         B03 ^= T01;
+         B13 ^= T11;
+         B02 ^= T00 + T01;
+         B12 ^= T10 + T11;
+      }
+
+      store_be(out, B02, B03, B00, B01, B12, B13, B10, B11);
+
+      in += 2 * BLOCK_SIZE;
+      out += 2 * BLOCK_SIZE;
+
+      blocks -= 2;
+   }
+
+   for(size_t i = 0; i != blocks; ++i) {
+      uint32_t B0 = load_be<uint32_t>(in, 0);
+      uint32_t B1 = load_be<uint32_t>(in, 1);
+      uint32_t B2 = load_be<uint32_t>(in, 2);
+      uint32_t B3 = load_be<uint32_t>(in, 3);
+
+      for(size_t j = 0; j != 16; j += 2) {
+         uint32_t T0 = B2 ^ m_K[2 * j];
+         uint32_t T1 = SEED_G(B2 ^ B3 ^ m_K[2 * j + 1]);
+         T0 = SEED_G(T1 + T0);
+         T1 = SEED_G(T1 + T0);
+         B1 ^= T1;
+         B0 ^= T0 + T1;
+
+         T0 = B0 ^ m_K[2 * j + 2];
+         T1 = SEED_G(B0 ^ B1 ^ m_K[2 * j + 3]);
+         T0 = SEED_G(T1 + T0);
+         T1 = SEED_G(T1 + T0);
+         B3 ^= T1;
+         B2 ^= T0 + T1;
+      }
+
+      store_be(out, B2, B3, B0, B1);
+
+      in += BLOCK_SIZE;
+      out += BLOCK_SIZE;
+   }
+}
+
+/*
+* SEED Decryption
+*/
+void SEED::decrypt_n(const uint8_t in[], uint8_t out[], size_t blocks) const {
+   assert_key_material_set();
+
+#if defined(BOTAN_HAS_SEED_AVX512_GFNI)
+   if(CPUID::has(CPUID::Feature::AVX512, CPUID::Feature::GFNI)) {
+      return avx512_gfni_decrypt(in, out, blocks);
+   }
+#endif
+
+#if defined(BOTAN_HAS_SEED_HWAES)
+   if(CPUID::has(CPUID::Feature::HW_AES)) {
+      return hwaes_decrypt(in, out, blocks);
+   }
+#endif
+
+   prefetch_arrays(SEED_S0, SEED_S1);
+
+   while(blocks >= 2) {
+      uint32_t B00 = load_be<uint32_t>(in, 0);
+      uint32_t B01 = load_be<uint32_t>(in, 1);
+      uint32_t B02 = load_be<uint32_t>(in, 2);
+      uint32_t B03 = load_be<uint32_t>(in, 3);
+      uint32_t B10 = load_be<uint32_t>(in, 4);
+      uint32_t B11 = load_be<uint32_t>(in, 5);
+      uint32_t B12 = load_be<uint32_t>(in, 6);
+      uint32_t B13 = load_be<uint32_t>(in, 7);
+
+      for(size_t j = 0; j != 16; j += 2) {
+         uint32_t T00 = B02 ^ m_K[30 - 2 * j];
+         uint32_t T10 = B12 ^ m_K[30 - 2 * j];
+         uint32_t T01 = SEED_G(B02 ^ B03 ^ m_K[31 - 2 * j]);
+         uint32_t T11 = SEED_G(B12 ^ B13 ^ m_K[31 - 2 * j]);
+         T00 = SEED_G(T01 + T00);
+         T10 = SEED_G(T11 + T10);
+         T01 = SEED_G(T01 + T00);
+         T11 = SEED_G(T11 + T10);
+         B01 ^= T01;
+         B11 ^= T11;
+         B00 ^= T00 + T01;
+         B10 ^= T10 + T11;
+
+         T00 = B00 ^ m_K[28 - 2 * j];
+         T10 = B10 ^ m_K[28 - 2 * j];
+         T01 = SEED_G(B00 ^ B01 ^ m_K[29 - 2 * j]);
+         T11 = SEED_G(B10 ^ B11 ^ m_K[29 - 2 * j]);
+         T00 = SEED_G(T01 + T00);
+         T10 = SEED_G(T11 + T10);
+         T01 = SEED_G(T01 + T00);
+         T11 = SEED_G(T11 + T10);
+         B03 ^= T01;
+         B13 ^= T11;
+         B02 ^= T00 + T01;
+         B12 ^= T10 + T11;
+      }
+
+      store_be(out, B02, B03, B00, B01, B12, B13, B10, B11);
+
+      in += 2 * BLOCK_SIZE;
+      out += 2 * BLOCK_SIZE;
+      blocks -= 2;
+   }
+
+   for(size_t i = 0; i != blocks; ++i) {
+      uint32_t B0 = load_be<uint32_t>(in, 0);
+      uint32_t B1 = load_be<uint32_t>(in, 1);
+      uint32_t B2 = load_be<uint32_t>(in, 2);
+      uint32_t B3 = load_be<uint32_t>(in, 3);
+
+      for(size_t j = 0; j != 16; j += 2) {
+         uint32_t T0 = B2 ^ m_K[30 - 2 * j];
+         uint32_t T1 = SEED_G(B2 ^ B3 ^ m_K[31 - 2 * j]);
+         T0 = SEED_G(T1 + T0);
+         T1 = SEED_G(T1 + T0);
+         B1 ^= T1;
+         B0 ^= T0 + T1;
+
+         T0 = B0 ^ m_K[28 - 2 * j];
+         T1 = SEED_G(B0 ^ B1 ^ m_K[29 - 2 * j]);
+         T0 = SEED_G(T1 + T0);
+         T1 = SEED_G(T1 + T0);
+         B3 ^= T1;
+         B2 ^= T0 + T1;
+      }
+
+      store_be(out, B2, B3, B0, B1);
+
+      in += BLOCK_SIZE;
+      out += BLOCK_SIZE;
+   }
+}
+
+bool SEED::has_keying_material() const {
+   return !m_K.empty();
+}
+
+/*
+* SEED Key Schedule
+*/
+void SEED::key_schedule(std::span<const uint8_t> key) {
+   const uint32_t RC[16] = {0x9E3779B9,
+                            0x3C6EF373,
+                            0x78DDE6E6,
+                            0xF1BBCDCC,
+                            0xE3779B99,
+                            0xC6EF3733,
+                            0x8DDE6E67,
+                            0x1BBCDCCF,
+                            0x3779B99E,
+                            0x6EF3733C,
+                            0xDDE6E678,
+                            0xBBCDCCF1,
+                            0x779B99E3,
+                            0xEF3733C6,
+                            0xDE6E678D,
+                            0xBCDCCF1B};
+
+   secure_vector<uint32_t> WK(4);
+
+   for(size_t i = 0; i != 4; ++i) {
+      WK[i] = load_be<uint32_t>(key.data(), i);
+   }
+
+   m_K.resize(32);
+
+   for(size_t i = 0; i != 16; i += 2) {
+      m_K[2 * i] = SEED_G(WK[0] + WK[2] - RC[i]);
+      m_K[2 * i + 1] = SEED_G(WK[1] - WK[3] + RC[i]) ^ m_K[2 * i];
+
+      uint32_t T = (WK[0] & 0xFF) << 24;
+      WK[0] = (WK[0] >> 8) | (get_byte<3>(WK[1]) << 24);
+      WK[1] = (WK[1] >> 8) | T;
+
+      m_K[2 * i + 2] = SEED_G(WK[0] + WK[2] - RC[i + 1]);
+      m_K[2 * i + 3] = SEED_G(WK[1] - WK[3] + RC[i + 1]) ^ m_K[2 * i + 2];
+
+      T = get_byte<0>(WK[3]);
+      WK[3] = (WK[3] << 8) | get_byte<0>(WK[2]);
+      WK[2] = (WK[2] << 8) | T;
+   }
+}
+
+void SEED::clear() {
+   zap(m_K);
+}
+
+size_t SEED::parallelism() const {
+#if defined(BOTAN_HAS_SEED_AVX512_GFNI)
+   if(CPUID::has(CPUID::Feature::AVX512, CPUID::Feature::GFNI)) {
+      return 16;
+   }
+#endif
+
+#if defined(BOTAN_HAS_SEED_HWAES)
+   if(CPUID::has(CPUID::Feature::HW_AES)) {
+      return 4;
+   }
+#endif
+
+   return 1;
+}
+
+std::string SEED::provider() const {
+#if defined(BOTAN_HAS_SEED_AVX512_GFNI)
+   if(auto feat = CPUID::check(CPUID::Feature::AVX512, CPUID::Feature::GFNI)) {
+      return *feat;
+   }
+#endif
+
+#if defined(BOTAN_HAS_SEED_HWAES)
+   if(auto feat = CPUID::check(CPUID::Feature::HW_AES)) {
+      return *feat;
+   }
+#endif
+
+   return "base";
+}
+
+}  // namespace Botan

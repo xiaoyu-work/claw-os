@@ -1,0 +1,21 @@
+<defines>
+ECDSA -> 20131128
+</defines>
+
+<module_info>
+name -> "ECDSA"
+</module_info>
+
+<requires>
+asn1
+ec_group
+ecc_key
+keypair
+numbertheory
+rng
+sha2_32
+</requires>
+
+<header:public>
+ecdsa.h
+</header:public>

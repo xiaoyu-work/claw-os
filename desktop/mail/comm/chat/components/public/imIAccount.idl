@@ -1,0 +1,347 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "nsISupports.idl"
+#include "prplIConversation.idl"
+#include "imIUserStatusInfo.idl"
+
+interface imITag;
+interface imIBuddy;
+interface prplIAccountBuddy;
+interface imIAccount;
+interface prplIAccount;
+interface prplIProtocol;
+interface nsIScriptError;
+interface nsITransportSecurityInfo;
+
+/*
+ * Used to join chat rooms.
+ */
+
+[scriptable, uuid(7e91accd-f04c-4787-9954-c7db4fb235fb)]
+interface prplIChatRoomFieldValues: nsISupports {
+  AUTF8String getValue(in AUTF8String aIdentifier);
+  void setValue(in AUTF8String aIdentifier, in AUTF8String aValue);
+};
+
+[scriptable, uuid(19dff981-b125-4a70-bc1a-efc783d07137)]
+interface prplIChatRoomField: nsISupports {
+  readonly attribute AUTF8String label;
+  readonly attribute AUTF8String identifier;
+  readonly attribute boolean required;
+
+  const short TYPE_TEXT = 0;
+  const short TYPE_PASSWORD = 1;
+  const short TYPE_INT = 2;
+
+  readonly attribute short type;
+  readonly attribute long min;
+  readonly attribute long max;
+};
+
+/*
+ * Information about a chat room and the fields required to join it.
+ */
+[scriptable, uuid(017d5951-fdd0-4f26-b697-fcc138cd2861)]
+interface prplIRoomInfo: nsISupports {
+  readonly attribute AUTF8String name;
+  readonly attribute AUTF8String topic;
+
+  const long NO_PARTICIPANT_COUNT = -1;
+
+  readonly attribute long participantCount;
+  readonly attribute prplIChatRoomFieldValues chatRoomFieldValues;
+};
+
+/*
+ * Callback passed to an account's requestRoomInfo function.
+ */
+[scriptable, function, uuid(43102a36-883a-421d-a6ac-126aafee5a28)]
+interface prplIRoomInfoCallback: nsISupports {
+  /* aRooms is an array of chatroom names. This will be called
+   * multiple times as batches of chat rooms are received. The number of rooms
+   * in each batch is left for the prplIAccount implementation to decide.
+   * aCompleted will be true when aRooms is the last batch.
+   */
+  void onRoomInfoAvailable(in Array<AString> aRooms, in boolean aCompleted);
+};
+
+/**
+ * Encryption session of the prplIAccount. Usually every logged in device that
+ * can encrypt will have its own session.
+ */
+[scriptable, uuid(0254d011-44b3-40a1-8589-d2fd4a18a421)]
+interface prplISession: nsISupports {
+   /** ID of this session as displayed to the user. */
+   readonly attribute AUTF8String id;
+   /** Whether this session is trusted. */
+   readonly attribute boolean trusted;
+   /** Indicates that this is the session we're currently using */
+   readonly attribute boolean currentSession;
+   /**
+    * Verify the identity of this session.
+    *
+    * @returns {Promise<imISessionVerification>}
+    */
+   Promise verify();
+};
+
+/*
+ * This interface should be implemented by the protocol plugin.
+ */
+[scriptable, uuid(3ce02a3c-f38b-4a1e-9050-a19bea1cb6c1)]
+interface prplIAccount: nsISupports {
+  readonly attribute imIAccount imAccount;
+
+  // observe should only be called by the imIAccount
+  // implementation to report user status changes that affect this account.
+  void observe(in nsISupports aObj, in string aEvent,
+               [optional] in wstring aData);
+
+  // This should only be called by the AccountsService
+  // implementation, never directly.  It will call
+  // ContactsService.accountBuddyRemoved on each buddy of the
+  // account and close all prplIConversation instances of the account.
+  void remove();
+
+  /* Uninitialize the prplIAccount instance. This is typically done
+     automatically at shutdown (by the core service) or as part of
+     the 'remove' method. */
+  void unInit();
+
+  void connect();
+  void disconnect();
+
+  prplIConversation createConversation(in AUTF8String aName);
+
+  // Used when the user wants to add a buddy to the buddy list
+  void addBuddy(in imITag aTag, in AUTF8String aName);
+
+  // Used while loading the buddy list at startup.
+  prplIAccountBuddy loadBuddy(in imIBuddy aBuddy, in imITag aTag);
+
+  /* Request more info on a buddy (typically a chat buddy).
+   * The result (if any) will be provided by user-info-received
+   * notifications dispatched through the observer service:
+   *  - aSubject will be an nsISimpleEnumerator of prplITooltipInfo.
+   *  - aData will be aBuddyName.
+   * If multiple user-info-received are sent, subsequent notifications
+   * will update any previous data.
+   */
+  void requestBuddyInfo(in AUTF8String aBuddyName);
+
+
+  /*
+   * True if the protocol can join chat rooms.
+   */
+  readonly attribute boolean canJoinChat;
+  /*
+   * An array of form fields to display when joining a chat room.
+   */
+  Array<prplIChatRoomField> getChatRoomFields();
+  /*
+   * Provide chat room field values to display in the join chat UI by default.
+   */
+  prplIChatRoomFieldValues getChatRoomDefaultFieldValues();
+  /*
+   * Parse a single string to chat room field values.
+   *
+   * Used by the autojoin and /join command.
+   */
+  prplIChatRoomFieldValues getChatRoomFieldValuesFromString(in AUTF8String aString);
+
+  /* Request information on available chat rooms, whose names are returned
+   * via the callback.
+   */
+  void requestRoomInfo(in prplIRoomInfoCallback aCallback);
+  prplIRoomInfo getRoomInfo(in AUTF8String aRoomName);
+  readonly attribute boolean isRoomInfoStale;
+
+  /*
+   * Create a new chat conversation if it doesn't already exist.
+   */
+  void joinChat(in prplIChatRoomFieldValues aComponents);
+
+  // A name that can be used to check for duplicates and is the basis
+  // for the directory name for log storage.
+  readonly attribute AUTF8String normalizedName;
+  // Request that the account normalizes a name. Use this only when an object
+  // providing a normalizedName doesn't exist yet or isn't accessible.
+  AUTF8String normalize(in AUTF8String aName);
+
+  // protocol specific options: those functions set the protocol
+  // specific options for the prplIAccount
+  void setBool(in string aName, in boolean aVal);
+  void setInt(in string aName, in long aVal);
+  void setString(in string aName, in AUTF8String aVal);
+
+  /* When a connection error occurred, this value indicates the type of error */
+  readonly attribute short connectionErrorReason;
+
+  /**
+   * When a certificate error occurs, the host/port that caused a
+   * SSL/certificate error when connecting to it. This is only valid when
+   * connectionErrorReason is one of ERROR_CERT_*
+   */
+  readonly attribute AUTF8String connectionTarget;
+  /**
+   * When a certificate error occurs, the nsITransportSecurityInfo error of
+   * the socket. This should only be set when connectionTarget is set.
+   */
+  readonly attribute nsITransportSecurityInfo securityInfo;
+
+  /* Possible connection error reasons:
+     ERROR_NETWORK_ERROR and ERROR_ENCRYPTION_ERROR are not fatal and
+     should enable the automatic reconnection feature. */
+  const short NO_ERROR = -1;
+  const short ERROR_NETWORK_ERROR = 0;
+  const short ERROR_INVALID_USERNAME = 1;
+  const short ERROR_AUTHENTICATION_FAILED = 2;
+  const short ERROR_AUTHENTICATION_IMPOSSIBLE = 3;
+  const short ERROR_NO_SSL_SUPPORT = 4;
+  const short ERROR_ENCRYPTION_ERROR = 5;
+  const short ERROR_NAME_IN_USE = 6;
+  const short ERROR_INVALID_SETTINGS = 7;
+  const short ERROR_CERT_NOT_PROVIDED = 8;
+  const short ERROR_CERT_UNTRUSTED = 9;
+  const short ERROR_CERT_EXPIRED = 10;
+  const short ERROR_CERT_NOT_ACTIVATED = 11;
+  const short ERROR_CERT_HOSTNAME_MISMATCH = 12;
+  const short ERROR_CERT_FINGERPRINT_MISMATCH = 13;
+  const short ERROR_CERT_SELF_SIGNED = 14;
+  const short ERROR_CERT_OTHER_ERROR = 15;
+  const short ERROR_OTHER_ERROR = 16;
+
+  /**
+   * Get a list of active encryption sessions for the account.
+   * The protocol sends a "account-sessions-changed" notification when
+   * the trust state of a session changes, or entries are added or removed.
+   */
+  Array<prplISession> getSessions();
+
+  /**
+   * Information as to the state of encryption capabilities of this account. For
+   * example Matrix surfaces the secret storage, key backup and cross-signing
+   * status info here.
+   * The protocol sends a "account-encryption-status-changed" notification when
+   * this chanes.
+   */
+  readonly attribute Array<AUTF8String> encryptionStatus;
+};
+
+
+[scriptable, uuid(488959b4-992e-4626-ae96-beaf6adc4a77)]
+interface imIDebugMessage: nsISupports {
+  const short LEVEL_DEBUG   = 1;
+  const short LEVEL_LOG     = 2;
+  const short LEVEL_WARNING = 3;
+  const short LEVEL_ERROR   = 4;
+  readonly attribute short logLevel; // One of the above constants.
+  readonly attribute nsIScriptError message;
+};
+
+/* This interface should be implemented by the im core. It inherits
+from prplIAccount and in most cases will forward the calls for the
+inherited members to a prplIAccount account instance implemented by
+the protocol plugin. */
+[scriptable, uuid(20a85b44-e220-4f23-85bf-f8523d1a2b08)]
+interface imIAccount: prplIAccount {
+  /* Check if autologin is enabled for this account, connect it now. */
+  void checkAutoLogin();
+
+  /* Cancel the timer that automatically reconnects the account if it was
+     disconnected because of a non fatal error. */
+  void cancelReconnection();
+
+  readonly attribute AUTF8String name;
+  readonly attribute AUTF8String id;
+  readonly attribute unsigned long numericId;
+  readonly attribute prplIProtocol protocol;
+  readonly attribute prplIAccount prplAccount;
+
+  // Save account specific preferences to disk.
+  void save();
+
+  attribute boolean autoLogin;
+
+  /* This is the value when the preference firstConnectionState is not set.
+     It indicates that the account has already been successfully connected at
+     least once with the current parameters. */
+  const short FIRST_CONNECTION_OK = 0;
+  /* Set when the account has never had a successful connection
+     with the current parameters */
+  const short FIRST_CONNECTION_UNKNOWN = 1;
+  /* Set when the account is trying to connect for the first time
+     with the current parameters (removed after a successsful connection) */
+  const short FIRST_CONNECTION_PENDING = 2;
+  /* Set at startup when the previous state was pending */
+  const short FIRST_CONNECTION_CRASHED = 4;
+
+  attribute short firstConnectionState;
+
+  /* Passwords are stored in the toolkit Password Manager.
+   * Warning: Don't attempt to access passwords during startup before
+   * Services.login.initializationPromise has resolved.
+   */
+  attribute AUTF8String password;
+
+  attribute AUTF8String alias;
+
+  /* While an account is connecting, this attribute contains a message
+     indicating the current step of the connection */
+  readonly attribute AUTF8String connectionStateMsg;
+
+  /* Number of the reconnection attempt
+   *  0 means that no automatic reconnection currently pending
+   *  n means the nth reconnection attempt is pending
+   */
+  readonly attribute unsigned short reconnectAttempt;
+
+  /* Time stamp of the next reconnection attempt */
+  readonly attribute long long timeOfNextReconnect;
+
+  /* Time stamp of the last connection (value not reliable if not connected) */
+  readonly attribute long long timeOfLastConnect;
+
+  /* Additional possible connection error reasons:
+   * (Use a big enough number that it can't conflict with error
+   *  codes used in prplIAccount).
+   */
+  const short ERROR_UNKNOWN_PRPL = 42;
+  const short ERROR_CRASHED = 43;
+  const short ERROR_MISSING_PASSWORD = 44;
+
+  /* A message describing the connection error */
+  readonly attribute AUTF8String connectionErrorMessage;
+
+  /* Info about the connection state and flags */
+  const short STATE_DISCONNECTED = 0;
+  const short STATE_CONNECTED = 1;
+  const short STATE_CONNECTING = 2;
+  const short STATE_DISCONNECTING = 3;
+
+  readonly attribute short connectionState;
+
+  /* The following 4 properties use the above connectionState value. */
+  readonly attribute boolean disconnected;
+  readonly attribute boolean connected;
+  readonly attribute boolean connecting;
+  readonly attribute boolean disconnecting;
+
+  void logDebugMessage(in nsIScriptError aMessage, in short aLevel);
+
+  /* Get an array of the 50 most recent debug messages. */
+  Array<imIDebugMessage> getDebugMessages();
+
+  /* The imIUserStatusInfo instance this account should observe for
+     status changes. When this is null (the default value), the
+     account will observe the global status. */
+  attribute imIUserStatusInfo observedStatusInfo;
+  // Same as above, but never null (it fallbacks to the global status info).
+  attribute imIUserStatusInfo statusInfo;
+
+  // imIAccount also implements an observe method but this
+  // observe should only be called by the prplIAccount
+  // implementations to report connection status changes.
+};

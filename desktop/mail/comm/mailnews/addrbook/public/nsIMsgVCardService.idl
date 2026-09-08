@@ -1,0 +1,27 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "nsISupports.idl"
+
+interface nsIAbCard;
+
+[scriptable, uuid(8b6ae917-676d-4f1f-bbad-2ecc9be0d9b1)]
+interface nsIMsgVCardService : nsISupports {
+
+  /**
+   * Translates a vCard string into a nsIAbCard.
+   *
+   * @param vCardStr - The string containing the vCard data.
+   * @return - A card containing the translated vCard data.
+   */
+  nsIAbCard vCardToAbCard(in AString vCardStr);
+
+  /**
+   * Translates a nsIAbCard into a vCard.
+   *
+   * @param abCard - A card to be translated.
+   * @return - The string containing the vCard data.
+   */
+  AString abCardToVCard(in nsIAbCard abCard);
+};

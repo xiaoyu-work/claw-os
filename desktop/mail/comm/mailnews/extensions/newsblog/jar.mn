@@ -1,0 +1,13 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+newsblog.jar:
+% content messenger-newsblog %content/messenger-newsblog/
+   content/messenger-newsblog/newsblogOverlay.js                (newsblogOverlay.js)
+   content/messenger-newsblog/feed-subscriptions.js             (feed-subscriptions.js)
+   content/messenger-newsblog/feed-subscriptions.xhtml          (feed-subscriptions.xhtml)
+   content/messenger-newsblog/am-newsblog.js                    (am-newsblog.js)
+   content/messenger-newsblog/am-newsblog.xhtml                 (am-newsblog.xhtml)
+   content/messenger-newsblog/feedAccountWizard.js              (feedAccountWizard.js)
+   content/messenger-newsblog/feedAccountWizard.xhtml           (feedAccountWizard.xhtml)

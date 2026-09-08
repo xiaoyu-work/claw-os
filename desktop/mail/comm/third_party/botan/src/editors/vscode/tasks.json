@@ -1,0 +1,182 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Configure",
+            "detail": "Default ./configure.py invocation. Run your own if you want.",
+            "group": "build",
+            "type": "shell",
+            "linux": {
+                "command": "./configure.py --compiler-cache=ccache --build-tool=ninja --without-documentation --debug-mode --build-targets=\"static,tests,cli,bogo_shim\""
+            },
+            "osx": {
+                "command": "./configure.py --compiler-cache=ccache --build-tool=ninja --without-documentation --debug-mode --build-targets=\"static,tests,cli\""
+            },
+            "windows": {
+                "command": "./configure.py --compiler-cache=sccache.exe --build-tool=ninja --link-method=hardlink --without-documentation --debug-mode --build-targets=\"static,tests,cli\"",
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "close": false
+            }
+        },
+        {
+            "label": "Build All",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "type": "shell",
+            "dependsOn": "Configure",
+            "linux": {
+                "command": "ninja",
+                "problemMatcher": "$gcc"
+            },
+            "osx": {
+                "command": "ninja",
+                "problemMatcher": "$gcc"
+            },
+            "windows": {
+                "command": "ninja",
+                "problemMatcher": "$msCompile"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "close": false
+            }
+        },
+        {
+            "label": "Build Unittests",
+            "group": "build",
+            "type": "shell",
+            "dependsOn": "Configure",
+            "linux": {
+                "command": "ninja tests",
+                "problemMatcher": "$gcc"
+            },
+            "osx": {
+                "command": "ninja tests",
+                "problemMatcher": "$gcc"
+            },
+            "windows": {
+                "command": "ninja tests",
+                "problemMatcher": "$msCompile"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "close": false
+            },
+        },
+        {
+            "label": "Build BoGo Shim",
+            "group": "build",
+            "type": "shell",
+            "dependsOn": "Configure",
+            "linux": {
+                "command": "ninja bogo_shim",
+                "problemMatcher": "$gcc"
+            },
+            "osx": {
+                "command": "ninja bogo_shim",
+                "problemMatcher": "$gcc"
+            },
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "close": true
+            },
+        },
+        {
+            "label": "Run Unittests",
+            "detail": "opportunistically runs the currently open unit test file or all unit tests",
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
+            "type": "shell",
+            "command": "${workspaceFolder}/src/editors/vscode/scripts/test.py ${relativeFile}",
+            "dependsOn": "Build Unittests",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "close": false
+            },
+            "problemMatcher": [
+                {
+                    "owner": "cpp",
+                    "pattern": {
+                        "regexp": "^Failure \\d+: (.+Internal error: False assertion .*) @(.*):(.*)$",
+                        "message": 1,
+                        "file": 2,
+                        "line": 3,
+                        "column": 0,
+                        "endColumn": 0
+                    }
+                },
+                {
+                    "owner": "cpp",
+                    "pattern": {
+                        "regexp": "Failure \\d+: (.*) \\(at ([^:]+):(\\d+)\\)",
+                        "message": 1,
+                        "file": 2,
+                        "line": 3,
+                        "column": 0,
+                        "endColumn": 0
+                    }
+                },
+                {
+                    "owner": "cpp",
+                    "pattern": {
+                        "regexp": "Failure \\d+: (.*)",
+                        "message": 1,
+                        "file": 0,
+                        "line": 0,
+                        "column": 0,
+                        "endColumn": 0
+                    }
+                }
+            ]
+        },
+        {
+            "label": "Run BoGo Tests",
+            "group": "test",
+            "type": "shell",
+            "command": "${workspaceFolder}/src/editors/vscode/scripts/bogo.py",
+            "dependsOn": "Build BoGo Shim",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "close": false
+            },
+            "problemMatcher": {
+                "owner": "cpp",
+                "pattern": [
+                    {
+                        "regexp": "^FAILED \\(([^\\)]+)\\)$",
+                        "kind": "file",
+                        "file": 1
+                    },
+                    {
+                        "regexp": "^(.*)stdout:$",
+                        "message": 1
+                    }
+                ]
+            }
+        },
+        {
+            "label": "List Unittests",
+            "detail": "Lists all available unit tests",
+            "group": "test",
+            "type": "shell",
+            "command": "${workspaceFolder}/src/editors/vscode/scripts/test.py --list ${relativeFile}",
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "close": false
+            }
+        },
+    ]
+}

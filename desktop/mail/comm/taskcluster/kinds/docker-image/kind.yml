@@ -1,0 +1,67 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+---
+loader: comm_taskgraph.loader.merge:loader
+reference-base-path: taskcluster/kinds
+
+kind-dependencies:
+    - packages
+
+reference-tasks:
+    - android-build
+    - debian8-i386-packages
+    - debian8-i386-raw
+    - debian8-packages
+    - debian8-raw
+    - debian10-arm64-packages
+    - debian10-arm64-raw
+    - deb12-toolchain-build
+    - debian12-amd64-build
+    - debian12-base
+    - debian12-packages
+    - debian12-raw
+    - debian12-repackage
+    - debian13-raw
+    - debian13-base
+    - debian13-amd64-build
+    - fetch
+    - fetch-more
+    - funsize-update-generator
+    - image_builder
+    - image_builder_arm64
+    - index-task
+    - lint
+    - push-to-try
+    - static-analysis-build
+    - ubuntu1804-base
+    - ubuntu1804-build-python
+    - ubuntu1804-i386-packages
+    - ubuntu1804-i386-raw
+    - ubuntu1804-packages
+    - ubuntu1804-raw
+    - ubuntu1804-test
+    - ubuntu1804-test-base
+    - ubuntu2004-base
+    - ubuntu2004-packages
+    - ubuntu2004-raw
+    - ubuntu2204-raw
+    - ubuntu2204-packages
+    - ubuntu2204-base
+    - ubuntu2404-base
+    - ubuntu2404-build-python
+    - ubuntu2404-i386-packages
+    - ubuntu2404-i386-raw
+    - ubuntu2404-packages
+    - ubuntu2404-raw
+    - ubuntu2404-test
+    - ubuntu2404-test-base
+    - update-verify
+
+transforms:
+    - gecko_taskgraph.transforms.docker_image:transforms
+    - gecko_taskgraph.transforms.cached_tasks:transforms
+    - gecko_taskgraph.transforms.task:transforms
+
+tasks-from:
+    - docker-image.yml

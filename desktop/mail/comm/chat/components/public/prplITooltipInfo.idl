@@ -1,0 +1,29 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "nsISupports.idl"
+
+/*
+ * This interface provides access to the content of a
+ * PurpleNotifyUserInfoEntry structure.
+ */
+
+[scriptable, uuid(e4c1def4-d1fe-4449-b195-51f137d1f215)]
+interface prplITooltipInfo: nsISupports {
+  const short pair          = 0;
+  const short sectionBreak  = 1;
+  const short sectionHeader = 2;
+  const short status        = 3;
+  const short icon          = 4;
+
+  readonly attribute short type;
+
+  /*
+   * When type == status, the label holds the statusType (a short
+   * converted to a string), while the value holds the statusText.
+   * When type == icon, the value holds the user icon URI.
+   */
+  readonly attribute AUTF8String label;
+  readonly attribute AUTF8String value;
+};

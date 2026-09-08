@@ -1,0 +1,32 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#item-calendar > menupopup > menuitem .menu-icon {
+  margin-inline-end: 6px;
+}
+
+#item-categories > menupopup > menuitem:not([checked]) .menu-icon {
+  visibility: hidden;
+}
+
+/*--------------------------------------------------------------------
+ *   Event dialog keep duration button
+ *-------------------------------------------------------------------*/
+
+#keepduration-button {
+  min-inline-size: 18px;
+}
+
+#timezone-endtime {
+  margin-inline-start: 16px;
+}
+
+#percent-complete-textbox {
+  padding: 2px;
+}
+
+#smileyPopup > menuitem,
+#paragraphPopup > menuitem {
+  padding-inline-start: 14px;
+}

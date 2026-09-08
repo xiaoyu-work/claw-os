@@ -1,0 +1,16 @@
+---
+yamllint:
+    description: YAML linter
+    include:
+        - comm/mail/config
+        - comm/taskcluster
+        - comm/.cron.yml
+        - comm/.gecko_rev.yml
+        - comm/.taskcluster.yml
+    extensions: ['yml', 'yaml']
+    support-files:
+        - '**/.yamllint'
+        - 'tools/lint/yamllint_/**'
+    type: external
+    payload: commlint:lint_wrapper
+    wraps: yamllint_:lint

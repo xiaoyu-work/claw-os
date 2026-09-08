@@ -1,0 +1,54 @@
+<?xml version="1.0"?>
+
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+<overlay id="debugQANavigatorOverlay"
+         xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul">
+
+  <script>
+  <![CDATA[
+    // Setting the build id is optional.
+    try {
+      if (Services.prefs.getBoolPref("debugQA.show.buildId"))
+        window.addEventListener("load", debugQABuildIDOnLoad, true);
+    } catch (e) {}
+
+    // Set the title modifer to include the build id.
+    function debugQABuildIDOnLoad() {
+      window.removeEventListener("load", debugQABuildIDOnLoad, true);
+
+      var appInfo = Cc["@mozilla.org/xre/app-info;1"]
+                      .getService(Ci.nsIXULAppInfo);
+
+      var bundle = document.getElementById("debugQANavigatorBundle");
+
+      var titlemodifier =
+          document.documentElement.getAttribute("titlemodifier") ||
+          document.documentElement.getAttribute("titledefault");
+
+      titlemodifier = bundle.getFormattedString("titlemodifier",
+                                                [titlemodifier,
+                                                 appInfo.appBuildID]);
+
+      // On mac, with contenttitlesetting="true", the titlemodifier is removed
+      // and replaced with a titledefault attribute that holds the value of the
+      // titlemodifier attribute. We don't use titledefault, but let's remove
+      // it since we're adding back the titlemodifier.
+      document.documentElement.removeAttribute("titledefault");
+
+      // Set the new title modifier
+      document.documentElement.setAttribute("titlemodifier", titlemodifier);
+
+      // Now set the title of the window
+      document.title = titlemodifier;
+    }
+  ]]>
+  </script>
+
+  <stringbundleset id="stringbundleset">
+    <stringbundle id="debugQANavigatorBundle"
+                  src="chrome://debugQA/locale/debugQANavigatorOverlay.properties"/>
+  </stringbundleset>
+</overlay>

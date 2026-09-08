@@ -1,0 +1,36 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@import url(chrome://calendar/skin/shared/calendar.css);
+
+#calsidebar_splitter {
+  border-inline-start: 1px solid var(--sidebar-border);
+  /* make only the splitter border visible */
+  margin-inline-end: -5px;
+}
+
+/* Calendar list rules */
+#calendar-panel {
+  padding-block-end: 5px;
+}
+
+/* Today pane button in status bar */
+#calendar-status-todaypane-button,
+#calendar-status-todaypane-button[checked] {
+  padding: 0 2px !important;
+}
+
+#calendar-status-todaypane-button[hideLabel] > stack {
+  margin-block-start: -2px;
+  margin-inline-start: 5px;
+}
+
+#calendar-status-todaypane-button > stack > .toolbarbutton-day-text {
+  margin-block-start: 5px;
+}
+
+/* shift the today pane button label up by one pixel to center it */
+#calendar-status-todaypane-button > .toolbarbutton-text {
+  margin: 0 0 1px !important;
+}

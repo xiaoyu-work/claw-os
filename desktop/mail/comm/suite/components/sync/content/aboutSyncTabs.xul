@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+<?xml-stylesheet href="chrome://communicator/skin/" type="text/css"?>
+<?xml-stylesheet href="chrome://communicator/skin/aboutSyncTabs.css" type="text/css"?>
+<?xml-stylesheet href="chrome://communicator/content/aboutSyncTabs.css" type="text/css"?>
+
+<!DOCTYPE window [
+  <!ENTITY % aboutSyncTabsDTD SYSTEM "chrome://communicator/locale/aboutSyncTabs.dtd">
+  %aboutSyncTabsDTD;
+]>
+
+<window id="tabs-display"
+        xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+        xmlns:html="http://www.w3.org/1999/xhtml"
+        title="&tabs.otherComputers.label;">
+
+  <script src="chrome://communicator/content/aboutSyncTabs.js"/>
+  <script src="chrome://communicator/content/utilityOverlay.js"/>
+
+  <html:head>
+    <html:link rel="icon" href="chrome://communicator/skin/sync/sync-16.png"/>
+  </html:head>
+
+  <popupset id="contextmenus">
+    <menupopup id="tabListContext">
+      <menuitem id="openSingleTab"
+                label="&tabs.context.openTab.label;"
+                accesskey="&tabs.context.openTab.accesskey;"
+                showFor="single"/>
+      <menuitem id="bookmarkSingleTab"
+                label="&tabs.context.bookmarkSingleTab.label;"
+                accesskey="&tabs.context.bookmarkSingleTab.accesskey;"
+                showFor="single"/>
+      <menuitem id="openSelectedTabs"
+                label="&tabs.context.openMultipleTabs.label;"
+                accesskey="&tabs.context.openMultipleTabs.accesskey;"
+                showFor="multiple"/>
+      <menuitem id="bookmarkSelectedTabs"
+                label="&tabs.context.bookmarkMultipleTabs.label;"
+                accesskey="&tabs.context.bookmarkMultipleTabs.accesskey;"
+                showFor="multiple"/>
+      <menuseparator/>
+      <menuitem id="buildList"
+                label="&tabs.context.refreshList.label;"
+                accesskey="&tabs.context.refreshList.accesskey;"
+                showFor="all"/>
+    </menupopup>
+  </popupset>
+  <richlistbox id="tabsList"
+               context="tabListContext"
+               seltype="multiple"
+               class="plain"
+               align="center"
+               flex="1">
+    <hbox id="headers" align="center">
+      <label id="tabsListHeading"
+             value="&tabs.otherComputers.label;"/>
+      <spacer flex="1"/>
+      <textbox id="filterTabs"
+               type="search"
+               aria-controls="tabsList"
+               emptytext="&tabs.searchText.label;"/>
+    </hbox>
+  </richlistbox>
+</window>

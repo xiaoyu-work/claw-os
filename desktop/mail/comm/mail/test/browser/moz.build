@@ -1,0 +1,68 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, you can obtain one at http://mozilla.org/MPL/2.0/.
+
+with Files("**"):
+    BUG_COMPONENT = ("Thunderbird", "Testing Infrastructure")
+
+BROWSER_CHROME_MANIFESTS += [
+    "account/browser-clear.toml",
+    "account/browser.toml",
+    "attachment/browser.toml",
+    "cloudfile/browser.toml",
+    "composition/browser1.toml",
+    "composition/browser2.toml",
+    "composition/browser3.toml",
+    "composition/browser4.toml",
+    "composition/browser5.toml",
+    "composition/browser6.toml",
+    "content-policy/browser.toml",
+    "content-tabs/browser.toml",
+    "cookies/browser.toml",
+    "downloads/browser.toml",
+    "folder-display/browser.toml",
+    "folder-pane/browser-noAccounts.toml",
+    "folder-pane/browser.toml",
+    "folder-tree-modes/browser.toml",
+    "folder-widget/browser.toml",
+    "global-search-bar/browser.toml",
+    "global-ui/browser.toml",
+    "im/browser.toml",
+    "junk-commands/browser.toml",
+    "keyboard/browser.toml",
+    "message-header/browser.toml",
+    "message-reader/browser.toml",
+    "message-window/browser.toml",
+    "multiple-identities/browser.toml",
+    "notification/browser.toml",
+    "openpgp/browser.toml",
+    "openpgp/composition/browser.toml",
+    "quick-filter-bar/browser.toml",
+    "search-window/browser.toml",
+    "session-store/browser.toml",
+    "smime/browser.toml",
+    "tabmail/browser.toml",
+    "update/browser.toml",
+    "utils/browser.toml",
+]
+
+DIRS += [
+    "shared-modules",
+]
+
+TEST_HARNESS_FILES.testing.mochitest.fakeserver += [
+    "../../../mailnews/test/fakeserver/Auth.sys.mjs",
+    "../../../mailnews/test/fakeserver/EwsServer.sys.mjs",
+    "../../../mailnews/test/fakeserver/Imapd.sys.mjs",
+    "../../../mailnews/test/fakeserver/Maild.sys.mjs",
+    "../../../mailnews/test/fakeserver/Nntpd.sys.mjs",
+    "../../../mailnews/test/fakeserver/Pop3d.sys.mjs",
+    "../../../mailnews/test/fakeserver/Smtpd.sys.mjs",
+]
+
+TEST_HARNESS_FILES.testing.mochitest.resources += [
+    "../../../mailnews/test/resources/logHelper.js",
+    "../../../mailnews/test/resources/MessageGenerator.sys.mjs",
+    "../../../mailnews/test/resources/MessageInjection.sys.mjs",
+    "../../../mailnews/test/resources/SmimeUtils.sys.mjs",
+]

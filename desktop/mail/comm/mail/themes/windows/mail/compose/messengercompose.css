@@ -1,0 +1,165 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+/* ===== messengercompose.css ===========================================
+  == Styles for the main Messenger Compose window.
+  ======================================================================= */
+
+@import url("chrome://messenger/skin/messenger.css");
+@import url("chrome://messenger/skin/shared/messengercompose.css");
+
+@namespace html url("http://www.w3.org/1999/xhtml");
+
+/* ::::: special toolbar colors ::::: */
+
+#composeContentBox {
+  appearance: none;
+  color: -moz-dialogtext;
+  background-color: -moz-Dialog;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2) inset;
+  border-block-start-width: 0;
+
+  &:-moz-window-inactive {
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1) inset;
+  }
+}
+
+#MsgHeadersToolbar {
+  text-shadow: none;
+  padding-block: 4px 2px;
+}
+
+#subjectLabel {
+  margin-block-end: 0;
+}
+
+@media (prefers-contrast) {
+  #msgSubject,
+  #msgIdentity,
+  .address-container {
+    --toolbarbutton-hover-bordercolor: ThreeDShadow;
+
+    &:hover {
+      --toolbarbutton-hover-bordercolor: ThreeDDarkShadow;
+    }
+  }
+
+  #MsgHeadersToolbar {
+    & .address-pill {
+      box-shadow: inset 0 0 0 1px ThreeDShadow;
+
+      &:where(:hover, :focus):not(.editing) {
+        box-shadow: inset 0 0 0 1px SelectedItem;
+      }
+
+      &[selected] {
+        color: SelectedItemText;
+        background-color: SelectedItem;
+        box-shadow:
+          inset 0 0 0 1px SelectedItem,
+          inset 0 0 0 2em SelectedItem;
+
+        &:where(:hover, :focus):not(.editing) {
+          box-shadow:
+            inset 0 0 0 1px SelectedItemText,
+            inset 0 0 0 2em SelectedItem;
+          text-shadow: none;
+        }
+      }
+
+      &:not([selected]) .pill-indicator {
+        fill: ThreeDShadow;
+      }
+
+      &:not([selected], .editing):hover .pill-indicator {
+        fill: SelectedItem;
+      }
+    }
+  }
+}
+
+#identityLabel-box {
+  margin-block-start: 1px;
+}
+
+#msgIdentity {
+  box-shadow: none;
+
+  &:-moz-focusring:not([open="true"])::part(label-box) {
+    outline: none;
+  }
+
+  @media (prefers-contrast) {
+    &::part(label-box) {
+      background-color: transparent !important;
+      color: inherit !important;
+    }
+  }
+
+  &::part(text-input) {
+    background-color: inherit;
+    color: inherit;
+    margin-block: 2px;
+  }
+}
+
+.address-label-container {
+  padding-block-start: 5px;
+}
+
+.address-container {
+  padding-block: 0;
+}
+
+#msgIdentity,
+.address-container {
+  min-block-size: 28px;
+}
+
+#msgSubject {
+  min-block-size: 26px;
+  margin-block-start: 0;
+  padding-inline-start: 5px;
+}
+
+/* ::::: format toolbar ::::: */
+
+#FormatToolbar {
+  margin-block-end: 2px;
+}
+
+#FontFaceSelect {
+  max-inline-size: 35ch;
+}
+
+toolbarbutton.formatting-button {
+  margin: 1px;
+}
+
+/* ::::: address book sidebar ::::: */
+
+#compose-toolbox {
+  border-block-end: 1px solid var(--chrome-content-separator-color);
+}
+
+#compose-toolbox > toolbar:not([type="menubar"]) {
+  padding: 2px 1px;
+
+  :root[lwtheme] & {
+    text-shadow: none;
+  }
+}
+
+/* ::::: autocomplete icons ::::: */
+
+.ac-site-icon {
+  display: flex;
+  margin: 1px 5px;
+}
+
+/* ::::: address book sidebar ::::: */
+
+#contactsBrowser {
+  background-color: -moz-Dialog;
+}

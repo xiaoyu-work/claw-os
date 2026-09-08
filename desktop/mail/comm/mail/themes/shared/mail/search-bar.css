@@ -1,0 +1,107 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+/* Primary CSS file inside the search-bar shadowRoot */
+
+@import url("chrome://messenger/skin/widgets.css");
+
+:host {
+  --search-padding: 6px;
+  --search-button-show: flex;
+  --search-buttons-padding: 28px;
+}
+
+form {
+  position: relative;
+  min-block-size: max(1.2em, calc(1.2em + 2 * var(--search-padding)));
+  block-size: 100%;
+  color: var(--search-bar-color);
+}
+
+input {
+  position: absolute;
+  inset: 0;
+  inline-size: 100%;
+  block-size: 100%;
+  font-size: 1rem;
+  color: var(--search-bar-color);
+  border: 1px solid var(--search-bar-border-color);
+  border-radius: var(--button-border-radius);
+  padding-inline: var(--search-padding) var(--search-buttons-padding);
+  background-color: var(--search-bar-background);
+
+  &:focus-visible {
+    outline-style: solid;
+    outline-width: 2px;
+    outline-color: var(--focus-outline-color);
+    outline-offset: var(--search-outline-offset);
+    background-color: var(--search-bar-focus-background);
+  }
+
+  &::-moz-search-clear-button {
+    inline-size: 22px;
+    block-size: 22px;
+    margin-block: auto;
+    padding: 0;
+    background-image: var(--icon-close);
+    background-size: 16px;
+    -moz-context-properties: fill, stroke;
+    fill: color-mix(in srgb, currentColor 20%, transparent);
+    stroke: currentColor;
+  }
+
+  &::-moz-search-clear-button:hover {
+    background-color: color-mix(in srgb, currentColor 10%, transparent);
+  }
+
+  &::-moz-search-clear-button:active {
+    background-color: color-mix(in srgb, currentColor 30%, transparent);
+  }
+}
+
+.button {
+  position: absolute;
+  inset-inline-end: 0;
+  inset-block: 0;
+  color: inherit;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-around;
+
+  &.button-flat.icon-button {
+    padding: 4px;
+    margin: 0;
+
+    &:focus-visible {
+      outline-offset: -1px;
+
+      @media (-moz-windows-accent-color-in-titlebar) {
+        outline-offset: -4px;
+      }
+    }
+  }
+}
+
+#search-button {
+  display: var(--search-button-show);
+}
+
+div {
+  display: none;
+  position: absolute;
+  pointer-events: none;
+  color: var(--search-field-placeholder);
+  inset-inline-start: 1ch;
+  inset-inline-end: var(--search-buttons-padding);
+  flex-direction: column;
+  justify-content: space-around;
+  text-overflow: clip;
+  overflow: hidden;
+  white-space: nowrap;
+  inset-block: 0;
+
+  input:placeholder-shown + & {
+    display: flex;
+  }
+}

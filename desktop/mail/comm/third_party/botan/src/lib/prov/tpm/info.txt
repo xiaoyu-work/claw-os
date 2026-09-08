@@ -1,0 +1,26 @@
+<defines>
+TPM -> 20151126
+</defines>
+
+<module_info>
+name -> "TPM v1 Support (deprecated)"
+brief -> "Wrappers and Utilities to interact with TPM v1"
+lifecycle -> "Deprecated"
+</module_info>
+
+load_on vendor
+
+<libs>
+all -> tspi
+</libs>
+
+<requires>
+uuid
+hash_id
+rsa
+rng
+</requires>
+
+<header:public>
+tpm.h
+</header:public>

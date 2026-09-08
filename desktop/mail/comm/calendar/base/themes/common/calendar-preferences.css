@@ -1,0 +1,75 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@namespace html url("http://www.w3.org/1999/xhtml");
+
+#defaults-task-table,
+#alarm-defaults-table,
+#dayAndWeekViewsTable {
+  border-spacing: 0;
+}
+
+#defaults-task-table html|td,
+#alarm-defaults-table html|td,
+#dayAndWeekViewsTable html|td {
+  padding: 0;
+}
+
+#default_task_start,
+#default_task_due {
+  inline-size: calc(100% - 16px); /* 16px is the sum of the element margins. */
+}
+
+#defaultsnoozelength {
+  margin-inline: 10px;
+}
+
+#alarm-sound-table {
+  display: inline-table;
+}
+
+#eventdefalarm,
+#tododefalarm {
+  margin-inline-start: 12px;
+}
+
+#eventdefalarm,
+#tododefalarm,
+#alarmSoundFileField {
+  inline-size: calc(100% - 8px); /* 8px is the sum of the element margins. */
+}
+
+#alarm-sound-buttons-box,
+#calendar\.prefs\.alarm\.sound\.useDefault {
+  inline-size: 100%;
+}
+
+.defaultTimeBox {
+  inline-size: 100%;
+  margin-inline-start: 8px;
+}
+
+#eventdefalarmunit,
+#tododefalarmunit {
+  margin-inline-end: 4px;
+}
+
+.dayOffCheckbox {
+  flex-direction: row-reverse;
+  margin-block-start: -5px;
+  margin-inline-end: -5px;
+  padding-inline-start: 6px;
+}
+
+.dayOffCheckbox > .checkbox-check {
+  margin-inline-start: 10px;
+}
+
+#daystarthour {
+  margin-inline-end: 18px;
+}
+
+#categorieslist {
+  block-size: 210px;
+}

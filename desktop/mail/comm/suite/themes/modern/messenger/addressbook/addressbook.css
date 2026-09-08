@@ -1,0 +1,200 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+/* ===== addressbook.css ================================================
+  == Styles for the main Address Book window.
+  ======================================================================= */
+
+@import url("chrome://messenger/skin/messenger.css");
+
+@namespace url("http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul");
+@namespace html url("http://www.w3.org/1999/xhtml");
+
+/* ::::: primary toolbar masthead ::::: */
+
+#ab-bar2 > .toolbar-holder > .toolbar-primary-icon {
+  background-image: url("chrome://messenger/skin/addressbook/icons/mast-ab.png");
+}
+
+/* ::::: primary toolbar buttons ::::: */
+
+#button-newcard {
+  list-style-image: url("chrome://messenger/skin/icons/btn1.png");
+  -moz-image-region: rect(476px 49px 509px 0);
+}
+
+#button-newcard:hover {
+  -moz-image-region: rect(476px 99px 509px 50px);
+} 
+
+#button-newcard:hover:active {
+  -moz-image-region: rect(476px 149px 509px 100px);
+}
+
+#button-newcard[disabled] {
+  -moz-image-region: rect(476px 199px 509px 150px) !important;
+} 
+
+#button-newlist {
+  list-style-image: url("chrome://messenger/skin/icons/btn1.png");
+  -moz-image-region: rect(510px 49px 543px 0);
+}
+
+#button-newlist:hover {
+  -moz-image-region: rect(510px 99px 543px 50px);
+} 
+
+#button-newlist:hover:active {
+  -moz-image-region: rect(510px 149px 543px 100px);
+}
+
+#button-newlist[disabled] {
+  -moz-image-region: rect(510px 199px 543px 150px) !important;
+} 
+
+#button-editcard {
+  list-style-image: url("chrome://messenger/skin/icons/btn1.png");
+  -moz-image-region: rect(442px 49px 475px 0);
+}
+
+#button-editcard:hover {
+  -moz-image-region: rect(442px 99px 475px 50px);
+} 
+
+#button-editcard:hover:active {
+  -moz-image-region: rect(442px 149px 475px 100px);
+}
+
+#button-editcard[disabled] {
+  -moz-image-region: rect(442px 199px 475px 150px) !important;
+} 
+
+#button-newmessage {
+  list-style-image: url("chrome://messenger/skin/icons/btn1.png");
+  -moz-image-region: rect(170px 49px 203px 0);
+}
+
+
+#button-newmessage:hover {
+  -moz-image-region: rect(170px 99px 203px 50px);
+} 
+
+#button-newmessage:hover:active {
+  -moz-image-region: rect(170px 149px 203px 100px);
+} 
+
+#button-newmessage[disabled] {
+  -moz-image-region: rect(170px 199px 203px 150px) !important;
+} 
+
+#button-abdelete {
+  list-style-image: url("chrome://messenger/skin/icons/btn1.png");
+  -moz-image-region: rect(408px 49px 441px 0);
+}
+
+#button-abdelete:hover {
+  -moz-image-region: rect(408px 99px 441px 50px);
+} 
+
+#button-abdelete:hover:active {
+  -moz-image-region: rect(408px 149px 441px 100px);
+}
+
+#button-abdelete[disabled] {
+  -moz-image-region: rect(408px 199px 441px 150px) !important;
+} 
+
+#blankResultsPaneMessage {
+  font-style: italic;
+}
+
+#localResultsOnlyMessage {
+  font-style: italic;
+  text-align: center;
+}
+
+/* ::::: Card View pane ::::: */
+
+#CardViewBox {
+  -moz-user-focus: ignore;
+  min-width: 150px;
+  background-color: #EFEFEF;
+  overflow: auto;
+}
+
+#CardViewInnerBox {
+  margin-top: 2px;
+  margin-bottom: 2px;
+  padding: 0 8px;
+}
+
+#CardTitle {
+  margin: 0px;
+  border-bottom: 2px solid black;
+  min-width: 120px;
+  font-size: 150%;
+  font-weight: bold;
+  color: #000000;
+}
+ 
+.cardViewColumn {
+  margin-inline-end: 10px;
+}
+
+.cardViewGroup {
+  margin-top: 8px;
+  padding-bottom: 5px;
+  min-width: 50px;
+}
+
+.CardViewHeading {
+  margin: 0px 0px 1px;
+  padding-top: 1px;
+  padding-bottom: 1px;
+  padding-inline-start: 5px;
+  padding-inline-end: 1px;
+  min-width: 30px;
+  background-color: #8E9EAA;
+  color: #ffffff;
+  font-weight: bold;
+}
+
+#cvPhoto {
+  list-style-image: url("chrome://messenger/skin/addressbook/icons/contact-generic.png");
+}
+
+#cvBuddyIcon {
+  padding-inline-start: 20px;
+  padding-top: 2px;
+}
+
+.CardViewText,
+.CardViewLink {
+  margin: 0px;
+  padding-inline-end: 2px;
+  padding-inline-start: 20px;
+  min-width: 30px;
+  color: #000000;
+}
+
+.CardViewLink {
+  color: blue;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+#cvHomeMapIt, #cvWorkMapIt {
+  margin-inline-start: 3px;
+  margin-bottom: -1px;
+}
+
+html|a {
+  border: none !important;
+  padding-inline-end: 2px;
+  padding-inline-start: 0px;
+}
+
+html|p {
+  border: none !important;
+}

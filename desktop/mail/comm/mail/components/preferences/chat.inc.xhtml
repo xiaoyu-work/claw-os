@@ -1,0 +1,198 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+  <script src="chrome://messenger/content/preferences/chat.js"/>
+  <script src="chrome://messenger/content/preferences/messagestyle.js"/>
+
+  <stringbundle id="themesBundle"
+                src="chrome://messenger/locale/preferences/messagestyle.properties"/>
+  <html:template id="paneChat">
+    <hbox id="chatPaneCategory"
+          class="subcategory"
+          data-category="paneChat">
+      <html:h1 data-l10n-id="chat-pane-header"/>
+    </hbox>
+
+    <html:div data-category="paneChat">
+    <html:fieldset data-category="paneChat">
+      <html:legend data-l10n-id="chat-status-title"></html:legend>
+        <!-- Startup -->
+        <hbox align="center">
+          <label id="chatStartupAction"
+                 data-l10n-id="startup-label"
+                 control="messengerStartupAction"/>
+          <hbox>
+            <menulist id="messengerStartupAction" preference="messenger.startup.action">
+              <menupopup>
+                <menuitem data-l10n-id="offline-label" value="0"/>
+                <menuitem data-l10n-id="auto-connect-label" value="1"/>
+              </menupopup>
+            </menulist>
+          </hbox>
+        </hbox>
+        <separator/>
+
+        <!-- Status -->
+        <hbox align="center">
+          <checkbox id="reportIdle" data-l10n-id="idle-label"
+                    preference="messenger.status.reportIdle"/>
+          <html:input id="timeBeforeAway" type="number"
+                      class="size2 idle-reporting-enabled"
+                      min="1" max="720"
+                      preference="messenger.status.timeBeforeIdle"/>
+          <label data-l10n-id="idle-time-label" control="timeBeforeAway"/>
+        </hbox>
+        <vbox class="indent">
+          <hbox>
+            <checkbox id="autoAway"
+                      data-l10n-id="away-message-label"
+                      class="idle-reporting-enabled"
+                      preference="messenger.status.awayWhenIdle"/>
+            <spacer flex="1"/>
+          </hbox>
+          <html:input id="defaultIdleAwayMessage"
+                      type="text"
+                      class="idle-reporting-enabled indent"
+                      preference="messenger.status.defaultIdleAwayMessage"/>
+        </vbox>
+    </html:fieldset>
+    </html:div>
+
+    <html:div data-category="paneChat">
+    <html:fieldset data-category="paneChat">
+      <html:legend data-l10n-id="chat-notifications-title"></html:legend>
+      <hbox>
+        <checkbox id="sendTyping"
+                  data-l10n-id="send-typing-label"
+                  preference="purple.conversations.im.send_typing"/>
+        <spacer flex="1"/>
+      </hbox>
+
+      <separator/>
+
+      <hbox>
+        <label data-l10n-id="notification-label"/>
+      </hbox>
+      <hbox>
+        <checkbox id="desktopChatNotifications"
+                  data-l10n-id="show-notification-label"
+                  preference="mail.chat.show_desktop_notifications"/>
+        <hbox>
+          <menulist id="chatNotificationInfo" preference="mail.chat.notification_info">
+            <menupopup>
+              <menuitem data-l10n-id="notification-all" value="0"/>
+              <menuitem data-l10n-id="notification-name" value="1"/>
+              <menuitem data-l10n-id="notification-empty" value="2"/>
+            </menupopup>
+          </menulist>
+        </hbox>
+      </hbox>
+      <checkbox id="getAttention"
+                preference="messenger.options.getAttentionOnNewMessages"
+                data-l10n-id="notification-type-label"/>
+      <hbox align="center">
+        <checkbox id="chatNotification"
+                  data-l10n-id="chat-play-sound-label"
+                  preference="mail.chat.play_sound"/>
+        <spacer flex="1"/>
+        <button is="highlightable-button" id="playChatSound"
+                data-l10n-id="chat-play-button"
+                oncommand="gChatPane.previewSound();"/>
+      </hbox>
+      <radiogroup id="chatSoundType"
+                  class="indent"
+                  orient="vertical"
+                  preference="mail.chat.play_sound.type"
+                  aria-labelledby="chatNotification">
+        <hbox>
+          <radio id="chatSoundSystemSound"
+                 data-l10n-id="chat-system-sound-label"
+                 value="0"/>
+          <spacer flex="1"/>
+        </hbox>
+        <hbox>
+          <radio id="chatSoundCustom"
+                 data-l10n-id="chat-custom-sound-label"
+                 value="1"/>
+          <spacer flex="1"/>
+        </hbox>
+        <hbox align="center" class="input-container">
+          <html:input id="chatSoundUrlLocation"
+                      type="text"
+                      class="input-filefield indent"
+                      readonly="readonly"
+                      preference="mail.chat.play_sound.url"
+                      preference-editable="true"
+                      aria-labelledby="chatSoundCustom"/>
+          <button is="highlightable-button" id="browseForChatSound"
+                  data-l10n-id="chat-browse-sound-button"
+                  oncommand="gChatPane.browseForSoundFile();"/>
+        </hbox>
+      </radiogroup>
+    </html:fieldset>
+    </html:div>
+
+    <hbox id="chatPaneStylingCategory"
+          class="subcategory"
+          data-category="paneChat">
+      <html:h1 data-l10n-id="chat-pane-styling-header"/>
+    </hbox>
+
+    <html:div data-category="paneChat">
+    <html:fieldset data-category="paneChat">
+      <separator/>
+      <hbox align="center">
+        <label data-l10n-id="theme-label" control="messagestyle-themename"/>
+        <hbox flex="1">
+          <menulist id="messagestyle-themename"
+                    flex="1" crop="end"
+                    preference="messenger.options.messagesStyle.theme"
+                    onselect="previewObserver.currentThemeChanged();">
+            <menupopup id="theme-menupopup">
+              <menuitem id="mail-menuitem"
+                        data-l10n-id="style-mail"
+                        value="mail"/>
+              <menuitem id="bubbles-menuitem"
+                        data-l10n-id="style-bubbles"
+                        value="bubbles"/>
+              <menuitem id="dark-menuitem"
+                        data-l10n-id="style-dark"
+                        value="dark"/>
+              <menuitem id="papersheets-menuitem"
+                        data-l10n-id="style-paper"
+                        value="papersheets"/>
+              <menuitem id="simple-menuitem"
+                        data-l10n-id="style-simple"
+                        value="simple"/>
+            </menupopup>
+          </menulist>
+        </hbox>
+      </hbox>
+      <separator class="thin"/>
+      <hbox align="start">
+      <label data-l10n-id="preview-label"/>
+      <tooltip id="aHTMLTooltip" page="true"/>
+      <vbox id="previewBox" flex="1">
+        <vbox id="noPreviewScreen" flex="1" align="center" pack="center">
+          <hbox id="noPreviewBox" align="start">
+            <vbox id="noPreviewInnerBox" flex="1">
+              <label id="noPreviewTitle" data-l10n-id="no-preview-label"/>
+              <description id="noAccountDesc"
+                           data-l10n-id="no-preview-description"/>
+            </vbox>
+          </hbox>
+        </vbox>
+      </vbox>
+      </hbox>
+      <hbox align="center">
+        <label data-l10n-id="chat-variant-label" control="themevariant"/>
+        <hbox>
+          <menulist id="themevariant"
+                    preference="messenger.options.messagesStyle.variant"
+                    onselect="previewObserver.currentVariantChanged();"/>
+        </hbox>
+      </hbox>
+    </html:fieldset>
+    </html:div>
+
+  </html:template>

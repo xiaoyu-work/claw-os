@@ -1,0 +1,32 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<script type="text/javascript">
+async function installAddon(url) {
+  // Only available for https://example.com hosts (extensions.webapi.testing = true), or
+  // http://example.com hosts (extensions.webapi.testing.http = true).
+  try {
+    await navigator.mozAddonManager.createInstall({url})
+    .then(install => install.install());
+  } catch {
+    // Canceled.
+  }
+  document.dispatchEvent(new CustomEvent("mozAddonManagerDone"));
+}
+</script>
+</head>
+<body>
+<p>
+<a id="policytest" href="policytest_v0.1.xpi">policytest@mozilla.com</a>
+</p>
+<p>
+<a id="policytest_mozAddonManager" onclick="installAddon('https://example.com/browser/comm/mail/components/enterprisepolicies/tests/browser/policytest_v0.1.xpi');return false;">policytest@mozilla.com</a>
+</p>
+<p>
+<a id="policytest_otherdomain" href="http://example.org:80/browser/comm/mail/components/enterprisepolicies/tests/browser/policytest_v0.1.xpi">policytest@mozilla.com</a>
+</p>
+
+</body>
+</html>

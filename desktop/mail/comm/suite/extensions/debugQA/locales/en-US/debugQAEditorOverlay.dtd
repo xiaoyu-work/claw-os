@@ -1,0 +1,27 @@
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+<!-- WARNING! This file contains UTF-8 encoded characters!
+   - If this ==> … <== doesn't look like an ellipsis (three dots in a row),
+   - your editor isn't using UTF-8 encoding and may munge up the document!
+  -->
+
+<!-- Debug menu items -->
+<!ENTITY debugMenu.label "Debug">
+<!ENTITY newEditorTestPage.label "Composer with Test Page">
+<!ENTITY textEditorCmd.label "Plaintext Editor">
+<!ENTITY outputTextCmd.label "Output Text">
+<!ENTITY outputHTMLCmd.label "Output HTML">
+<!ENTITY insertTextCmd.label "Insert Text">
+<!ENTITY testSelectionCmd.label "Test Selection">
+<!ENTITY testDocumentCmd.label "Test Document">
+<!-- Unused after bug 1792764 but kept for 2.53 branch. -->
+<!ENTITY executeJSTransactionViaTxmgr.label "Execute JS Transaction Via Transaction Manager">
+<!ENTITY executeJSTransactionViaEditor.label "Execute JS Transaction Via Editor">
+<!ENTITY setFocusCmd.label "Set Focus">
+
+<!-- Text editor values -->
+<!ENTITY textEditorWindow.titlemodifier "Text Editor">
+
+<!ENTITY statusText.label "Done loading page">

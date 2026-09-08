@@ -1,0 +1,20 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+comm.jar:
+   content/communicator/customizeToolbar.css                        (../customizeToolbar.css)
+   content/communicator/customizeToolbar.js                         (../customizeToolbar.js)
+*  content/communicator/customizeToolbar.xhtml                      (../customizeToolbar.xhtml)
+   content/communicator/bindings/datetimepicker.xml                 (datetimepicker.xml)
+   content/communicator/bindings/findbar.xml                        (findbar.xml)
+   content/communicator/bindings/general.xml                        (general.xml)
+   content/communicator/bindings/generalBindings.xml                (generalBindings.xml)
+   content/communicator/bindings/notification.xml                   (notification.xml)
+   content/communicator/bindings/numberbox.xml                      (numberbox.xml)
+   content/communicator/bindings/preferences.xml                    (preferences.xml)
+   content/communicator/bindings/spinbuttons.xml                    (spinbuttons.xml)
+*  content/communicator/bindings/textbox.xml                        (textbox.xml)
+   content/communicator/bindings/toolbar.xml                        (toolbar.xml)
+   content/communicator/bindings/toolbar-xpfe.xml                   (toolbar-xpfe.xml)
+*  content/communicator/bindings/prefwindow.xml                     (prefwindow.xml)

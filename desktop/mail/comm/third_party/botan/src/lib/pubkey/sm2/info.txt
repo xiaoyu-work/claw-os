@@ -1,0 +1,22 @@
+<defines>
+SM2 -> 20180801
+</defines>
+
+<module_info>
+name -> "SM2"
+</module_info>
+
+<requires>
+asn1
+ec_group
+ecc_key
+keypair
+numbertheory
+rng
+sm3
+kdf2
+</requires>
+
+<header:public>
+sm2.h
+</header:public>

@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+<!DOCTYPE overlay SYSTEM "chrome://communicator/locale/safeBrowsing.dtd">
+
+<overlay id="safeBrowsingOverlay"
+         xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul">
+
+  <script src="chrome://navigator/content/safeBrowsingOverlay.js"/>
+
+  <broadcasterset id="navBroadcasters">
+    <broadcaster id="safeBrowsingBroadcaster" disabled="true"/>
+  </broadcasterset>
+
+  <menupopup id="helpPopup">
+    <menuitem id="reportPhishing"
+              label="&reportDeceptiveSite.label;"
+              accesskey="&reportDeceptiveSite.accesskey;"
+              insertbefore="menu_HelpAboutSeparator"
+              observes="safeBrowsingBroadcaster"
+              oncommand="openUILink(gSafeBrowsing.getReportURL('Phish'), event);"
+              onclick="checkForMiddleClick(this, event);"/>
+    <menuitem id="reportPhishingError"
+              label="&notADeceptiveSite.label;"
+              accesskey="&notADeceptiveSite.accesskey;"
+              insertbefore="menu_HelpAboutSeparator"
+              observes="safeBrowsingBroadcaster"
+              oncommand="openUILinkIn(gSafeBrowsing.getReportURL('PhishMistake'), 'tabfocused');"/>
+  </menupopup>
+</overlay>

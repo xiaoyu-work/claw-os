@@ -1,0 +1,16 @@
+<defines>
+COMPRESSION -> 20141117
+</defines>
+
+<module_info>
+name -> "Compression"
+brief -> "Wrappers for compression algorithms"
+</module_info>
+
+<header:internal>
+compress_utils.h
+</header:internal>
+
+<header:public>
+compression.h
+</header:public>

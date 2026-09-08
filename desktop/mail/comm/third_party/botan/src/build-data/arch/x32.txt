@@ -1,0 +1,20 @@
+
+family x86
+
+<isa_extensions>
+aesni
+avx2
+bmi2
+gfni
+rdrand
+rdseed
+sha
+sse2
+sse41
+ssse3
+avx512
+vaes
+sha512
+sm3
+sm4
+</isa_extensions>

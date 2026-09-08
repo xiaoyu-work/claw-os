@@ -1,0 +1,20 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@import url("chrome://messenger/skin/shared/input-fields.css");
+@namespace html url("http://www.w3.org/1999/xhtml");
+
+html|input {
+  &[type="number"] {
+    padding-inline-end: 0;
+  }
+
+  &.input-filefield {
+    background: center left 2px / 16px no-repeat;
+
+    &:-moz-locale-dir(rtl) {
+      background-position-x: right 2px;
+    }
+  }
+}

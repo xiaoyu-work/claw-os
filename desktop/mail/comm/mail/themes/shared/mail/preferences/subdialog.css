@@ -1,0 +1,83 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, you can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@namespace html url("http://www.w3.org/1999/xhtml");
+@namespace xul url("http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul");
+
+body > xul|dialog,
+xul|window > :is(xul|dialog, xul|hbox, xul|vbox) {
+  /* This allows the focus ring to display fully when scrolling is enabled. */
+  padding: 0 4px 4px;
+  font-size: 1.1rem;
+}
+
+.dialogOverlay {
+  visibility: hidden;
+  z-index: 1;
+
+  &[topmost="true"] {
+    background-color: rgba(0, 0, 0, 0.5);
+  }
+}
+
+.dialogBox {
+  appearance: none;
+  background-color: var(--color-surface-base);
+  color: var(--color-text-base);
+  /* `transparent` will use the dialogText color in high-contrast themes and
+     when page colors are disabled */
+  border: 1px solid transparent;
+  border-radius: var(--panel-border-radius);
+  box-shadow: 0 2px 4px 0 rgba(0, 0, 0, 0.5);
+  display: flex;
+  margin: 0;
+  padding: 0;
+
+  &[resizable="true"] {
+    resize: both;
+    overflow: hidden;
+    min-block-size: 20em;
+    min-inline-size: 66ch;
+  }
+}
+
+.dialogTitleBar {
+  padding-block: 6px 0;
+}
+
+.dialogTitle {
+  line-height: 26px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.close-icon {
+  display: none;
+}
+
+.dialogFrame {
+  margin: 10px;
+  flex: 1;
+  /* Default dialog dimensions */
+  block-size: 12em;
+  min-inline-size: 40ch;
+}
+
+.contentPane {
+  padding: 0 4px 4px;
+
+  &.doScroll {
+    margin-inline: -4px;
+  }
+}
+
+.largeDialogContainer.doScroll {
+  overflow-y: auto;
+  flex: 1;
+  min-block-size: 100vh;
+}
+
+#selectOffline {
+  background-color: var(--color-surface-base);
+}

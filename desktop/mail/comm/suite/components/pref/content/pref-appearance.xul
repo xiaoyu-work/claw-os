@@ -1,0 +1,103 @@
+<?xml version="1.0"?>
+
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+<!DOCTYPE overlay [
+  <!ENTITY % brandDTD SYSTEM "chrome://branding/locale/brand.dtd"> %brandDTD;
+  <!ENTITY % prefAppearanceDTD SYSTEM "chrome://communicator/locale/pref/pref-appearance.dtd"> %prefAppearanceDTD;
+]>
+
+<overlay xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul">
+  <prefpane id="appearance_pane"
+            label="&pref.appearance.title;"
+            script="chrome://communicator/content/pref/pref-appearance.js">
+
+    <preferences id="appearance_preferences">
+      <preference id="general.startup.browser"
+                  name="general.startup.browser"
+                  type="bool"/>
+      <preference id="browser.chrome.toolbar_style"
+                  name="browser.chrome.toolbar_style"
+                  type="int"/>
+      <preference id="browser.chrome.toolbar_tips"
+                  name="browser.chrome.toolbar_tips"
+                  type="bool"/>
+      <preference id="browser.toolbars.grippyhidden"
+                  name="browser.toolbars.grippyhidden"
+                  type="bool"/>
+      <preference id="intl.regional_prefs.use_os_locales"
+                  name="intl.regional_prefs.use_os_locales"
+                  type="bool"/>
+    </preferences>
+
+    <hbox>
+      <groupbox id="generalStartupPreferences" align="start" flex="1">
+        <caption label="&onStartLegend.label;"/>
+
+        <checkbox id="generalStartupBrowser"
+                  label="&navCheck.label;"
+                  accesskey="&navCheck.accesskey;"
+                  preference="general.startup.browser"/>
+      </groupbox>
+
+      <groupbox id="toolbarStyleBox" align="start" flex="1">
+        <caption label="&showToolsLegend.label;"/>
+
+        <radiogroup id="toolbarStyle"
+                    preference="browser.chrome.toolbar_style">
+          <radio value="2"
+                 label="&picsNtextRadio.label;"
+                 accesskey="&picsNtextRadio.accesskey;"/>
+          <radio value="0"
+                 label="&picsOnlyRadio.label;"
+                 accesskey="&picsOnlyRadio.accesskey;"/>
+          <radio value="1"
+                 label="&textonlyRadio.label;"
+                 accesskey="&textonlyRadio.accesskey;"/>
+        </radiogroup>
+      </groupbox>
+    </hbox>
+
+    <vbox class="box-padded" align="start">
+      <checkbox id="showHideTooltips"
+                label="&showHideTooltips.label;"
+                accesskey="&showHideTooltips.accesskey;"
+                preference="browser.chrome.toolbar_tips"/>
+    </vbox>
+#ifndef XP_MACOSX
+    <vbox class="box-padded"
+          align="start">
+      <checkbox id="showHideGrippies"
+                label="&showHideGrippies.label;"
+                accesskey="&showHideGrippies.accesskey;"
+                preference="browser.toolbars.grippyhidden"/>
+    </vbox>
+#endif
+    <groupbox id="switchLocaleBox" align="start">
+      <caption label="&pref.locales.title;"/>
+      <description>&selectLocale.label;</description>
+
+      <menulist id="switchLocales"
+                onselect="SelectLocale(this);"/>
+
+    </groupbox>
+
+    <groupbox id="dateTimeFormatting" align="start">
+      <caption label="&dateTimeFormatting.label;"/>
+      <radiogroup id="formatLocale"
+                  preference="intl.regional_prefs.use_os_locales"
+                  orient="vertical">
+        <radio id="appLocale"
+               value="false"/>
+               <!-- label and accesskey will be set dynamically -->
+        <radio id="rsLocale"
+               value="true"/>
+               <!-- label and accesskey will be set dynamically -->
+      </radiogroup>
+    </groupbox>
+
+    <description>&restartOnLocaleChange.label;</description>
+  </prefpane>
+</overlay>

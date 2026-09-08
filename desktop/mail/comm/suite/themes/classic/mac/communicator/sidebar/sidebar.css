@@ -1,0 +1,164 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+/* ===== sidebar.css ====================================================
+  == Styles used by the Sidebar panel and Sidebar tabs.
+  ======================================================================= */
+
+@namespace url("http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul");
+  
+#sidebar-box {
+  border-left: 1px solid ThreeDShadow;
+  border-right: 1px solid ThreeDHighlight;
+  background-color: AppWorkspace;
+}
+
+#sidebar-box:-moz-lwtheme {
+  background-color: transparent;
+}
+
+/* ::::: sidebar header ::::: */
+
+.sidebarheader-main {
+  -moz-appearance: toolbar;
+  background-color: InactiveCaption;
+  color: CaptionText;
+  padding-top: 1px;
+  padding-bottom: 1px;
+  padding-inline-start: 6px;
+  padding-inline-end: 2px;
+  overflow-x: hidden;
+}
+
+.sidebarheader-main:-moz-lwtheme {
+  -moz-appearance: none;
+  background-color: transparent;
+  color: inherit;
+}
+
+#sidebar-panel-picker:not(:-moz-lwtheme) {
+  /* would override hover/active styles, so let lwtheme do it in its own way */
+  color: inherit;
+}
+
+#sidebar-panel-picker > .toolbarbutton-dropmarker {
+  padding: 0 2px;
+  list-style-image: url("chrome://global/skin/arrow/arrow-dn.png");
+}
+
+.sidebar-header-text {
+  font-weight: bold;
+}
+
+/* ..... close button ..... */
+
+#sidebar-close-button {
+  padding-top: 1px;
+  padding-bottom: 1px;
+  padding-inline-start: 4px;
+  padding-inline-end: 3px;
+  list-style-image: url("chrome://communicator/skin/icons/close-button.png");
+}
+
+/* ::::: sidebar panel ::::: */
+
+.sidebar-iframe-no-panels,
+.loadarea {
+  background-color: -moz-Field;
+  color: -moz-FieldText;
+}
+
+.iframe-panel, .browser-sidebar {
+  border-left: 1px solid ThreeDHighlight;
+  border-bottom: 1px solid ThreeDShadow;
+  border-right: 1px solid ThreeDShadow;
+}  
+
+/* ::::: loading info ::::: */
+
+.text-panel-loading {
+  margin: 5px 0px;
+}
+
+.text-panel-loading[loading="false"] {
+  margin-inline-start: 11px;
+}
+
+.image-panel-loading {
+  margin: 5px;
+  list-style-image: url("chrome://communicator/skin/icons/loading.png");
+}
+
+/* ::::: sidebar tabs ::::: */
+
+.box-texttab {
+  -moz-binding: url("chrome://communicator/skin/sidebar/sidebarBindings.xml#sbtab");
+  -moz-box-align: center;
+  cursor: pointer;
+  background-color: -moz-Dialog;
+  color: -moz-DialogText;
+}
+
+.box-texttab:-moz-lwtheme {
+  text-shadow: none;
+}
+
+.box-texttab,
+.box-texttab[selected="true"],
+.box-texttab[selected="true"]:hover,
+.box-texttab[selected="true"]:hover:active {
+  border: 1px solid;
+  border-color: ThreeDHighlight ThreeDShadow ThreeDShadow ThreeDHighlight;
+  padding-top: 2px;
+  padding-bottom: 2px;
+  padding-inline-start: 0px;
+  padding-inline-end: 1px;
+}
+
+.box-texttab:hover {
+  border-right-color: ThreeDDarkShadow;
+  border-bottom-color: ThreeDDarkShadow;
+}
+
+.box-texttab:hover:active {
+  border-color: ThreeDShadow;
+}
+
+.sbtab-label {
+  margin: 0px !important;
+}
+
+.sbtab-twisty {
+  margin: 0px 7px;
+  list-style-image: url("chrome://communicator/skin/sidebar/sbtab-twisty.png");
+}
+
+.sbtab-texture {
+  margin: 2px 0px;
+  width: 12px;
+  height: 12px;
+}
+
+.box-texttab[selected="true"] {
+  font-weight: bold;
+  cursor: default;
+}
+
+.sbtab-twisty[selected="true"] {
+  list-style-image: url("chrome://communicator/skin/sidebar/sbtab-twisty-open.png");
+}
+
+/* ::::: sidebar navigation buttons ::::: */
+
+.sidebar-nav-button {
+  padding: 5px 0px;
+}
+
+.tab-fwd {
+  list-style-image: url("chrome://global/skin/arrow/arrow-up.png");
+}
+
+.tab-back {
+  list-style-image: url("chrome://global/skin/arrow/arrow-dn.png");
+}

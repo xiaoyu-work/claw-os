@@ -1,0 +1,371 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+import { IMServices } from "resource:///modules/IMServices.sys.mjs";
+
+const lazy = {};
+
+ChromeUtils.defineLazyGetter(
+  lazy,
+  "l10n",
+  () => new Localization(["chat/xmpp.ftl"], true)
+);
+
+// Get conversation object.
+function getConv(aConv) {
+  return aConv.wrappedJSObject;
+}
+
+// Get account object.
+function getAccount(aConv) {
+  return getConv(aConv)._account;
+}
+
+function getMUC(aConv) {
+  const conv = getConv(aConv);
+  if (conv.left) {
+    conv.writeMessage(
+      conv.name,
+      lazy.l10n.formatValueSync(
+        "conversation-error-command-failed-not-in-room"
+      ),
+      { system: true }
+    );
+    return null;
+  }
+  return conv;
+}
+
+// Trims the string and splits it in two parts on the first space
+// if there is one. Returns the non-empty parts in an array.
+function splitInput(aString) {
+  const params = aString.trim();
+  if (!params) {
+    return [];
+  }
+
+  const splitParams = [];
+  const offset = params.indexOf(" ");
+  if (offset != -1) {
+    splitParams.push(params.slice(0, offset));
+    splitParams.push(params.slice(offset + 1).trimLeft());
+  } else {
+    splitParams.push(params);
+  }
+  return splitParams;
+}
+
+// Trims the string and splits it in two parts (The first part is a nickname
+// and the second part is the rest of string) based on nicknames of current
+// participants. Returns the non-empty parts in an array.
+function splitByNick(aString, aConv) {
+  const params = aString.trim();
+  if (!params) {
+    return [];
+  }
+
+  // Match trimmed-string with the longest prefix of participant's nickname.
+  let nickName = "";
+  for (const participant of aConv._participants.keys()) {
+    if (
+      params.startsWith(participant + " ") &&
+      participant.length > nickName.length
+    ) {
+      nickName = participant;
+    }
+  }
+  if (!nickName) {
+    const offset = params.indexOf(" ");
+    const expectedNickName = offset != -1 ? params.slice(0, offset) : params;
+    aConv.writeMessage(
+      aConv.name,
+      lazy.l10n.formatValueSync("conversation-error-nick-not-in-room", {
+        nick: expectedNickName,
+      }),
+      { system: true }
+    );
+    return [];
+  }
+
+  const splitParams = [];
+  splitParams.push(nickName);
+
+  const msg = params.substring(nickName.length);
+  if (msg) {
+    splitParams.push(msg.trimLeft());
+  }
+  return splitParams;
+}
+
+// Splits aMsg in two entries and checks the first entry is a valid jid, then
+// passes it to aConv.invite().
+// Returns false if aMsg is empty, otherwise returns true.
+function invite(aMsg, aConv) {
+  const params = splitInput(aMsg);
+  if (!params.length) {
+    return false;
+  }
+
+  // Check user's jid is valid.
+  const account = getAccount(aConv);
+  const jid = account._parseJID(params[0]);
+  if (!jid) {
+    aConv.writeMessage(
+      aConv.name,
+      lazy.l10n.formatValueSync("conversation-error-invalid-jid", {
+        jabberIdentifier: params[0],
+      }),
+      { system: true }
+    );
+    return true;
+  }
+
+  aConv.invite(...params);
+  return true;
+}
+
+export var commands = [
+  {
+    name: "join",
+    get helpString() {
+      return lazy.l10n.formatValueSync("command-join3", {
+        commandName: "join",
+      });
+    },
+    run(aMsg, aConv, aReturnedConv) {
+      const account = getAccount(aConv);
+      let params = aMsg.trim();
+      let conv;
+
+      if (!params) {
+        conv = getConv(aConv);
+        if (!conv.isChat) {
+          return false;
+        }
+        if (!conv.left) {
+          return true;
+        }
+
+        // Rejoin the current conversation. If the conversation was explicitly
+        // parted by the user, chatRoomFields will have been deleted.
+        // Otherwise, make use of it.
+        if (conv.chatRoomFields) {
+          account.joinChat(conv.chatRoomFields);
+          return true;
+        }
+
+        params = conv.name;
+      }
+      const chatRoomFields = account.getChatRoomFieldValuesFromString(params);
+      conv = account.joinChat(chatRoomFields);
+
+      if (aReturnedConv) {
+        aReturnedConv.value = conv;
+      }
+      return true;
+    },
+  },
+  {
+    name: "part",
+    get helpString() {
+      return lazy.l10n.formatValueSync("command-part2", {
+        commandName: "part",
+      });
+    },
+    usageContext: IMServices.cmd.COMMAND_CONTEXT.CHAT,
+    run(aMsg, aConv) {
+      const conv = getConv(aConv);
+      if (!conv.left) {
+        conv.part(aMsg);
+      }
+      return true;
+    },
+  },
+  {
+    name: "topic",
+    get helpString() {
+      return lazy.l10n.formatValueSync("command-topic", {
+        commandName: "topic",
+      });
+    },
+    usageContext: IMServices.cmd.COMMAND_CONTEXT.CHAT,
+    run(aMsg, aConv) {
+      const conv = getMUC(aConv);
+      if (!conv) {
+        return true;
+      }
+      conv.topic = aMsg;
+      return true;
+    },
+  },
+  {
+    name: "ban",
+    get helpString() {
+      return lazy.l10n.formatValueSync("command-ban", { commandName: "ban" });
+    },
+    usageContext: IMServices.cmd.COMMAND_CONTEXT.CHAT,
+    run(aMsg, aConv) {
+      const params = splitInput(aMsg);
+      if (!params.length) {
+        return false;
+      }
+
+      const conv = getMUC(aConv);
+      if (conv) {
+        conv.ban(...params);
+      }
+      return true;
+    },
+  },
+  {
+    name: "kick",
+    get helpString() {
+      return lazy.l10n.formatValueSync("command-kick", { commandName: "kick" });
+    },
+    usageContext: IMServices.cmd.COMMAND_CONTEXT.CHAT,
+    run(aMsg, aConv) {
+      const conv = getMUC(aConv);
+      if (!conv) {
+        return true;
+      }
+
+      const params = splitByNick(aMsg, conv);
+      if (!params.length) {
+        return false;
+      }
+      conv.kick(...params);
+      return true;
+    },
+  },
+  {
+    name: "invite",
+    get helpString() {
+      return lazy.l10n.formatValueSync("command-invite", {
+        commandName: "invite",
+      });
+    },
+    usageContext: IMServices.cmd.COMMAND_CONTEXT.CHAT,
+    run(aMsg, aConv) {
+      const conv = getMUC(aConv);
+      if (!conv) {
+        return true;
+      }
+
+      return invite(aMsg, conv);
+    },
+  },
+  {
+    name: "inviteto",
+    get helpString() {
+      return lazy.l10n.formatValueSync("command-inviteto", {
+        commandName: "inviteto",
+      });
+    },
+    usageContext: IMServices.cmd.COMMAND_CONTEXT.IM,
+    run: (aMsg, aConv) => invite(aMsg, getConv(aConv)),
+  },
+  {
+    name: "me",
+    get helpString() {
+      return lazy.l10n.formatValueSync("command-me", { commandName: "me" });
+    },
+    usageContext: IMServices.cmd.COMMAND_CONTEXT.CHAT,
+    run(aMsg, aConv) {
+      const params = aMsg.trim();
+      if (!params) {
+        return false;
+      }
+
+      const conv = getConv(aConv);
+      conv.sendMsg(params, true);
+
+      return true;
+    },
+  },
+  {
+    name: "nick",
+    get helpString() {
+      return lazy.l10n.formatValueSync("command-nick", { commandName: "nick" });
+    },
+    usageContext: IMServices.cmd.COMMAND_CONTEXT.CHAT,
+    run(aMsg, aConv) {
+      const params = aMsg.trim().split(/\s+/);
+      if (!params[0]) {
+        return false;
+      }
+
+      const conv = getMUC(aConv);
+      if (conv) {
+        conv.setNick(params[0]);
+      }
+      return true;
+    },
+  },
+  {
+    name: "msg",
+    get helpString() {
+      return lazy.l10n.formatValueSync("command-msg", { commandName: "msg" });
+    },
+    usageContext: IMServices.cmd.COMMAND_CONTEXT.CHAT,
+    run(aMsg, aConv, aReturnedConv) {
+      const conv = getMUC(aConv);
+      if (!conv) {
+        return true;
+      }
+
+      const params = splitByNick(aMsg, conv);
+      if (params.length != 2) {
+        return false;
+      }
+      const [nickName, msg] = params;
+
+      const account = getAccount(aConv);
+      const privateConv = account.createConversation(
+        conv.name + "/" + nickName
+      );
+      if (!privateConv) {
+        return true;
+      }
+      privateConv.sendMsg(msg.trim());
+
+      if (aReturnedConv) {
+        aReturnedConv.value = privateConv;
+      }
+      return true;
+    },
+  },
+  {
+    name: "version",
+    get helpString() {
+      return lazy.l10n.formatValueSync("command-version", {
+        commandName: "version",
+      });
+    },
+    usageContext: IMServices.cmd.COMMAND_CONTEXT.IM,
+    run(aMsg, aConv) {
+      const conv = getConv(aConv);
+      if (conv.left) {
+        return true;
+      }
+
+      // We do not have user's resource.
+      if (!conv._targetResource) {
+        conv.writeMessage(
+          conv.name,
+          lazy.l10n.formatValueSync(
+            "conversation-error-resource-not-available",
+            { recipient: conv.shortName }
+          ),
+          {
+            system: true,
+          }
+        );
+        return true;
+      }
+
+      conv.getVersion();
+      return true;
+    },
+  },
+];

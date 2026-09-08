@@ -1,0 +1,584 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "nsISupports.idl"
+#include "nsIStreamListener.idl"
+
+interface nsIMsgFolder;
+interface nsIMsgCopyServiceListener;
+interface nsIMsgDBHdr;
+interface nsIMsgWindow;
+interface nsIOutputStream;
+interface nsIInputStream;
+interface nsIMsgDatabase;
+interface nsITransaction;
+interface nsIStoreScanListener;
+interface nsIStoreCompactListener;
+interface nsIFile;
+
+/**
+ * Pluggable message store interface. Each incoming server can have a different
+ * message store.
+ * All methods are synchronous unless otherwise specified.
+ *
+ * A single store holds messages for any number of folders.
+ *
+ * Messages in a store are given a `storeToken`, a unique ID which callers
+ * use to reference individual messages.
+ * `storeToken`s are:
+ * - Arbitrary. They are strings assigned when a message is added to
+ *   the store.
+ * - Unique to the folder the message is in (not unique over the whole
+ *   store!).
+ * - Opaque. Callers shouldn't make any assumptions about format.
+ * - Constant. Mostly. They may change during a compaction operation.
+ * In practice:
+ * - For mbox, `storeToken` is the offset of a message within the
+ *   mbox file.
+ * - For maildir, it's the filename of the message.
+ */
+[scriptable, uuid(F732CE58-E540-4dc4-B803-9456056EBEFC)]
+interface nsIMsgPluggableStore : nsISupports {
+  /**
+   * Examines the store and adds subfolders for the existing folders in the
+   * profile directory. aParentFolder->AddSubfolder is the normal way
+   * to register the subfolders. This method is expected to be synchronous.
+   * This shouldn't be confused with server folder discovery, which is allowed
+   * to be asynchronous.
+   *
+   * @param aParentFolder folder whose existing children we want to discover.
+   *                      This will be the root folder for the server object.
+   * @param aDeep true if we should discover all descendants. Would we ever
+   *              not want to do this?
+   */
+  void discoverSubFolders(in nsIMsgFolder aParentFolder, in boolean aDeep);
+
+  /**
+   * Find child folders which the store thinks exists directly beneath parent.
+   * The children do _not_ need to exist as nsIMsgFolder objects - the whole
+   * purpose of this function is to provide a way to build up the
+   * nsIMsgFolder hierarchy from the store.
+   * It just returns a list of child folder names.
+   *
+   * @param parent - The folder to look in.
+   * @returns the names of any direct children of the parent.
+   */
+  Array<AUTF8String> discoverChildFolders(in nsIMsgFolder parent);
+
+  /**
+   * Creates storage for a new, empty folder.
+   *
+   * @param aParent parent folder
+   * @param aFolderName leaf name of folder.
+   * @return newly created folder.
+   * @exception NS_MSG_FOLDER_EXISTS If the child exists.
+   * @exception NS_MSG_CANT_CREATE_FOLDER for other errors.
+   */
+  nsIMsgFolder createFolder(in nsIMsgFolder aParent, in AUTF8String aFolderName);
+
+  /**
+   * Ensure the local store for a folder exists.
+   */
+  void ensureLocalStore(in nsIMsgFolder folder);
+
+  /**
+   * Delete storage for a folder and its subfolders, if any.
+   * This is a real delete, not a move to the trash folder.
+   *
+   * @param aFolder folder to delete
+   */
+  void deleteFolder(in nsIMsgFolder aFolder);
+
+  /**
+   * Rename storage for an existing folder.
+   *
+   * @param aFolder folder to rename
+   * @param aNewName name to give new folder
+   * @return the renamed folder object
+   */
+  nsIMsgFolder renameFolder(in nsIMsgFolder aFolder, in AUTF8String aNewName);
+
+  /**
+   * Tells if the store has the requested amount of space available in the
+   * specified folder.
+   *
+   * @param aFolder folder we want to add messages to.
+   * @param aSpaceRequested How many bytes we're trying to add to the store.
+   *
+   * The function returns an exception if there is not enough space to
+   * indicate the reason of the shortage:
+   * NS_ERROR_FILE_TOO_BIG   = the store cannot grow further due to internal limits
+   * NS_ERROR_FILE_NO_DEVICE_SPACE = there is not enough space on the disk
+   */
+  boolean hasSpaceAvailable(in nsIMsgFolder aFolder,
+                            in long long aSpaceRequested);
+
+  /**
+   * Move/Copy a folder to a new parent folder. This method is asynchronous.
+   * The store needs to use the aListener to notify the core code of the
+   * completion of the operation. And it must send the appropriate
+   * nsIMsgFolderNotificationService notifications.
+   *
+   * @param aSrcFolder folder to move/copy
+   * @param aDstFolder parent dest folder
+   * @param aIsMoveFolder true if move, false if copy. If move, source folder
+   *                      is deleted when copy completes.
+   * @param aMsgWindow used to display progress, may be null
+   * @param aListener - used to get notification when copy is done.
+   * @param aNewName  Optional new name for the target folder.
+   *                  If rename is not needed, set this to empty string.
+   */
+  void copyFolder(in nsIMsgFolder aSrcFolder, in nsIMsgFolder aDstFolder,
+                  in boolean aIsMoveFolder, in nsIMsgWindow aMsgWindow,
+                  in nsIMsgCopyServiceListener aListener,
+                  in AUTF8String aNewName);
+
+  /**
+   * getNewMsgOutputStream() returns a new stream for writing raw message
+   * data into the given folder.
+   * NOTE: Each folder can have only one write stream active at a time.
+   * If this function is called on a folder with an outstanding write stream,
+   * the old stream will be closed and rolled back and a new one created.
+   *
+   * The caller then writes the message to the stream as usual, then calls
+   * either finishNewMessage() or discardNewMessage() when done.
+   *
+   * @param folder - The target nsIMsgFolder.
+   * @returns a stream that a raw message can be written to.
+   */
+  nsIOutputStream getNewMsgOutputStream(in nsIMsgFolder folder);
+
+  /**
+   * finishNewMessage() concludes writing of a message, committing to
+   * the store all the data which was written to the stream.
+   *
+   * @param folder - The target nsIMsgFolder.
+   * @param stream - The stream obtained by getNewMsgOutputStream().
+   * @return a storeToken string which can used to retrieve the message
+   *         data back from the store (via getMsgInputStream()).
+   */
+  AUTF8String finishNewMessage(in nsIMsgFolder folder, in nsIOutputStream stream);
+
+  /**
+   * discardNewMessage() concludes a write by throwing away any message
+   * data that was written to the stream.
+   *
+   * @param folder - The target nsIMsgFolder.
+   * @param stream - The stream obtained by getNewMsgOutputStream().
+   */
+  void discardNewMessage(in nsIMsgFolder folder, in nsIOutputStream stream);
+
+  /**
+   * Get an input stream that we can read the contents of a message from.
+   *
+   * NOTE: see also nsIMsgFolder.getMsgInputStream(). That usually passes
+   * straight through to here, but the IMAP folder implementation supports
+   * the gmail hack where messages can appear in multiple folders while only
+   * storing one offline copy.
+   *
+   * @param aMsgFolder Folder containing the message
+   * @param aMsgToken token that identifies message. This is store-dependent,
+   *                  and must be set as a string property "storeToken" on the
+   *                  message hdr by the store when the message is added
+   *                  to the store.
+   * @param aMaxAllowedSize An optional maximum number of bytes that
+   *                        will be returned by the stream.
+   *                        If parameter is zero, stream all available data.
+   */
+  nsIInputStream getMsgInputStream(in nsIMsgFolder aFolder,
+                                   in ACString aMsgToken,
+                                   in unsigned long aMaxAllowedSize);
+
+  /**
+   *  @deprecated - use deleteStoreMessages() instead.
+   *
+   * Delete the passed in messages. These message should all be in the
+   * same folder.
+   * @param aHdrArray array of nsIMsgDBHdr's.
+   */
+  void deleteMessages(in Array<nsIMsgDBHdr> aHdrArray);
+
+  /**
+   * Remove messages from the store.
+   *
+   * NOTE: for mbox this means attempting to in-place edit the
+   * X-Mozilla-Status header to set the nsMsgMessageFlags::Expunged
+   * flag. The message will remain in place until the next compaction.
+   * If there is no X-Mozilla-Status, or there is not space to replace
+   * existing value, this routine will return success, even though it
+   * did nothing. That's OK. There's nothing else that can be done
+   * such cases (and remember, the caller will also be recording the
+   * deletion in the database).
+   *
+   * @param folder - The folder containing the messages.
+   * @param storeTokens - The messages to remove.
+   */
+  void deleteStoreMessages(in nsIMsgFolder folder, in Array<AUTF8String> storeTokens);
+
+  /**
+   * This allows the store to handle a msg move/copy if it wants. This lets
+   * it optimize move/copies within the same store. E.g., for maildir, a
+   * msg move mostly entails moving the file containing the message, and
+   * updating the db.
+   * If the store does the copy, it must return the appropriate undo action,
+   * which can be store dependent. And it must send the appropriate
+   * nsIMsgFolderNotificationService notifications.
+   * If the store does not perform the copy, it returns false and the caller
+   * has to handle the copy itself (by streaming messages).
+   * This function is synchronous.
+   *
+   * @param isMove true if this is a move, false if it is a copy.
+   * @param aHdrArray array of nsIMsgDBHdr's, all in the same folder
+   * @param aDstFolder folder to move/copy the messages to.
+   * @param aDstHdrs array of nsIMsgDBHdr's in the destination folder.
+   * @param[out,optional] aUndoAction transaction to provide undo, if
+   * the store does the copy itself.
+   * @return true if messages were copied, false if the core code should
+   *         do the copy.
+   */
+  boolean copyMessages(in boolean isMove,
+                       in Array<nsIMsgDBHdr> aHdrArray,
+                       in nsIMsgFolder aDstFolder,
+                       out Array<nsIMsgDBHdr> aDstHdrs,
+                       out nsITransaction aUndoAction);
+
+  /**
+   * Does this store require compaction? For example, maildir doesn't require
+   * compaction at all. Berkeley mailbox does. A sqlite store probably doesn't.
+   * This is a static property of the store. It doesn't mean that any particular
+   * folder has space that can be reclaimed via compaction. Right now, the core
+   * code keeps track of the size of messages deleted, which it can use in
+   * conjunction with this store attribute.
+   */
+  readonly attribute boolean supportsCompaction;
+
+  /**
+   * Start an asynchronous compaction operation on the given folder's store.
+   * It will go through all the messages in the store, asking the
+   * caller-provided nsIStoreCompactListener object to decide which messages
+   * should be kept and which should be discarded.
+   *
+   * The compaction is an entirely store-based operation, and is decoupled
+   * from the folder and database.
+   * The expectation is that a higher-level folder compaction module can
+   * use asyncCompact() to avoid getting bogged down in all the low-level
+   * store details.
+   * The nsIStoreCompactListener provided by the caller is responsible for
+   * coordinating between the two layers.
+   *
+   * If the call to asyncCompact() returns a failure code, the operation will
+   * not start, and no nsIStoreCompactListener callbacks will be invoked.
+   *
+   * If asyncCompact() returns a success code, the operation will start and
+   * the nsIStoreCompactListener callbacks will be invoked.
+   * It's guaranteed that no listener callbacks will be invoked until
+   * the initial asyncCompact() call has returned.
+   *
+   * Once running, the compact operation iterates through each message
+   * in the store.
+   * For each message, it asks the nsIStoreCompactListener if the message
+   * should be kept or not.
+   * If no, the message will be removed from the store.
+   * If yes, the message will be left (mostly) untouched.
+   * "mostly" untouched, because:
+   *   a) Messages MAY end up with a new storeToken (their unique ID within
+   *      the store).
+   *   b) If `patchXMozillaHeaders` is true, X-Mozilla-* headers may be
+   *      added or modified during compaction.
+   *
+   * The nsIStoreCompactListener callbacks are called in this order:
+   *
+   * First:
+   * .onCompactionBegin() - at the start of the operation.
+   *
+   * Then, for each message:
+   *     .onRetentionQuery() - to ask if message should be kept or not.
+   *     If the message was kept:
+   *         .onMessageRetained() - gives the new storeToken and size.
+   *
+   * Then:
+   * .onCompactionComplete() - once complete. This is where the higher-level
+   *                           layer (the caller) should finalise its own
+   *                           changes (to the database, say).
+   *                           The listener can return an error here to abort the
+   *                           whole thing.
+   * And finally:
+   * .onFinalSummary() - to give the final status and byte savings.
+   *
+   * If any callbacks return an error, the whole operation will be rolled back
+   * and .onFinalSummary() will be called with the failure code.
+   *
+   * asyncCompact() keeps a reference to compactListener, releasing it after the
+   * .onCompactionComplete() callback has been invoked.
+   *
+   * @param folder - The folder to compact (used purely to find the location of
+   *                 the data within the store. The folder is not touched in any
+   *                 other way).
+   * @param compactListener - Callbacks to direct the compaction.
+   * @param patchXMozillaHeaders - If true, X-Mozilla-* headers will be patched
+   *                               or added in kept messages.
+   */
+  void asyncCompact(in nsIMsgFolder folder,
+                    in nsIStoreCompactListener compactListener,
+                    in boolean patchXMozillaHeaders);
+
+  /**
+   * Is the summary file for the passed folder valid? For Berkeley Mailboxes,
+   * for local mail folders, this checks the timestamp and size of the local
+   * mail folder against values stored in the db. For other stores, this may
+   * be a noop, though other stores could certainly become invalid. For
+   * Berkeley Mailboxes, this is to deal with the case of other apps altering
+   * mailboxes from outside mailnews code, and this is certainly possible
+   * with other stores.
+   *
+   * @param aFolder Folder to check if summary is valid for.
+   * @param aDB DB to check validity of.
+   *
+   * @return return true if the summary file is valid, false otherwise.
+   */
+  boolean isSummaryFileValid(in nsIMsgFolder aFolder, in nsIMsgDatabase aDB);
+
+  /**
+   * Marks the summary file for aFolder as valid or invalid. This method
+   * may not be required, since it's really used by Berkeley Mailbox code
+   * to fix the timestamp and size for a folder.
+   *
+   * @param aFolder folder whose summary file should be marked (in)valid.
+   * @param aDB db to mark valid (may not be the folder's db in odd cases
+   *            like folder compaction.
+   * @param aValid whether to mark it valid or invalid.
+   */
+  void setSummaryFileValid(in nsIMsgFolder aFolder, in nsIMsgDatabase aDB,
+                           in boolean aValid);
+
+  /**
+   * Asynchronously read every message in the folder in turn.
+   * scanListener is a nsIStreamListener augmented to handle multiple messages.
+   * See nsIStoreScanListener below for the listener callback sequence.
+   *
+   * If asyncScan() succeeds, a reference-counter pointer to the scanListener
+   * will be held until the scan is completed. The refcount is guaranteed
+   * to last until the final onStopScan() callback returns.
+   * If asyncScan() fails, no listener callbacks will be called.
+   * No listener callbacks will be invoked before asyncScan() returns.
+   * Later, if any errors occur, or if any listener callbacks return failures,
+   * then the onStopScan() callback will be invoked with the failure code.
+   */
+  void asyncScan(in nsIMsgFolder folder, in nsIStoreScanListener scanListener);
+
+  /**
+   * changeFlags() attempts to stash message flags with messages in the store.
+   * This relies on in-place editing of X-Mozilla-Status and X-Mozilla-Status2
+   * headers. If those headers are not present, this function will do nothing.
+   * There are provided methods to read these values back from the store - you
+   * have to parse the messages headers.
+   *
+   * Historical background:
+   * This dates back to when the database was considered a mere throwaway
+   * cache, to save us trawling through the whole mbox file to display a list
+   * of messages. This would hold the "true" flag state (and the database was
+   * just a convenience copy).
+   * We could drop this cumbersome feature entirely, but it's still used for
+   * "repair folder" i.e. rebuilding the database from the store.
+   *
+   * Maildir has a convention where flags and keywords are encoded in the
+   * filename of the stored message. In theory this function could stash
+   * flags like that rather than by editing the message headers.
+   * We'd also have to supply methods to retrieve them.
+   * It's currently a moot point - our maildir implementation doesn't
+   * add such metadata to its filenames.
+   *
+   * @param folder - The folder containing the messages.
+   * @param storeTokens - Array listing the messages to be affected.
+   * @param newFlags - The flag values to install in the messages.
+   *
+   * The `storeTokens` and `newFlags` arrays must be of identical size.
+   */
+  void changeFlags(in nsIMsgFolder folder, in Array<AUTF8String> storeTokens, in Array<unsigned long> newFlags);
+
+  /**
+   * Attempts to set/clear keywords on the given messages, by in-place
+   * editing of the X-Mozilla-Keys header.
+   * If a message doesn't have a X-Mozilla-Keys header, or there aren't
+   * enough placeholder spaces to hold the keywords, this will have no
+   * effect.
+   *
+   * @param aHdrArray array of nsIMsgDBHdr's
+   * @param aKeywords keywords to set/clear
+   * @param aAdd true to add the keyword(s), false to remove.
+   */
+  void changeKeywords(in Array<nsIMsgDBHdr> aHdrArray, in ACString aKeywords,
+                      in boolean aAdd);
+
+  /**
+   * Calculates total size of all messages in the given folder, in bytes.
+   * It should be enough for progress reporting when scanning through
+   * messages, but don't rely on this being either byte-accurate or instant!
+   * For example, for mbox, it'll just be the size of the mbox file, which
+   * is very quick, but includes "From " lines and "From "-escape characters.
+   * For maildir, it'll be a total of file sizes, which is accurate, but
+   * potentially slow(ish) for large numbers of messages.
+   * And it doesn't account for various storage overheads - For example,
+   * block-granularity allocations by filesystems.
+   */
+  int64_t estimateFolderSize(in nsIMsgFolder folder);
+
+  /**
+   * Identifies a specific type of store. Please use this only for legacy
+   * bug fixes, and not as a method to change behavior!
+   *
+   * Typical values: "mbox", "maildir"
+   */
+  readonly attribute ACString storeType;
+};
+
+/**
+  * nsIStoreScanListener is an nsIStreamListener augmented to handle
+  * streaming out multiple messages from a msgStore.
+  * The sequence of callbacks for a listener (l) is:
+  *  l.onStartScan()
+  *  for each message:
+  *    l.onStartMessage()
+  *    l.onStartRequest()
+  *    while data remaining in message:
+  *      l.onDataAvailable()
+  *    l.onStopRequest()
+  *  l.onStopScan()
+  *
+  * If any of these return an error, the scan will be aborted,
+  * with calls to onStopRequest() (if within a message) and onStopScan().
+  */
+[scriptable, uuid(00D3344A-6EFB-4D18-8A5A-D9C004E62FDF)]
+interface nsIStoreScanListener : nsIStreamListener
+{
+  /**
+   * This is called before the first message.
+   */
+  void onStartScan();
+
+  /**
+   * Called just before onStartRequest, to communicate details of
+   * the message within the msgStore.
+   * After this, the standard nsIStreamListener callbacks are called to
+   * transfer this single message.
+   *
+   * The values passed out via this callback are:
+   * storeToken - The token used to refer to the message in the store.
+   * envAddr - The envelope sender, if known (else empty string).
+   * envDate - The envelope timestamp, if known (else 0).
+   *
+   * Traditionally, envAddr and envDate are stored in the "From " line of
+   * mbox files. Other store types may not supply this data.
+   * It's not critical but can be useful filler data in edge cases.
+   * For example, if a malformed message has no "Date:" header, using the
+   * date it was received/written into the mbox is better than nothing.
+   */
+  void onStartMessage(in AUTF8String storeToken, in AUTF8String envAddr, in PRTime envDate);
+
+  /**
+   * Called when the scan operation as a whole is complete.
+   */
+  void onStopScan(in nsresult status);
+};
+
+/**
+ * Callbacks used by store compaction operation, initiated via
+ * nsIMsgPluggableStore.asyncCompact().
+ * See asyncCompact() for an overview of how these callbacks are called.
+ * If any of these callbacks return an error (other than
+ * .onFinalSummary()), the store will be rolled back to its
+ * original state.
+ */
+[scriptable, uuid(d97f29f6-d9b7-11ee-88d9-4b3c6085612e)]
+interface nsIStoreCompactListener : nsISupports
+{
+  /**
+   * Called at the beginning of the store compaction operation.
+   */
+  void onCompactionBegin();
+
+  /**
+   * This is invoked for each message in the store.
+   * To keep the message, return true.
+   * To discard the message, return false.
+   *
+   * Message flags and keywords are returned via the msgFlags and
+   * msgKeywords output params for X-Mozilla-* header patching.
+   * If asyncCompact() was invoked with patchXMozillaHeaders=false,
+   * then msgFlags and msgKeywords will be ignored.
+   * The caller to asyncCompact() sets patchXMozillaHeaders, so is
+   * also responsible for supplying a suitably-aware
+   * nsIStoreCompactListener.
+   *
+   * @param storeToken - The identity of the message within the store.
+   * @param msgFlags - Flags to use for X-Mozilla-Status/Status2 patching.
+   * @param msgKeywords - Keywords to use for X-Mozilla-Keys patching.
+   * @returns true if the message should be kept.
+   */
+  boolean onRetentionQuery(in AUTF8String storeToken,
+                           out unsigned long msgFlags,
+                           out AUTF8String msgKeywords);
+
+  /**
+   * If onRetentionQuery() returned true, then onMessageRetained() will be
+   * called with the new storeToken and message size.
+   * The storeToken may change if the message has been shifted around within
+   * the store.
+   * The message size might have changed due to X-Mozilla-* header patching.
+   *
+   * @param oldToken - The old storeToken as seen by onRetentionQuery().
+   * @param newToken - The storeToken for the message after compaction.
+   * @param newSize - The size of the message, in bytes.
+   */
+  void onMessageRetained(in AUTF8String oldToken,
+                         in AUTF8String newToken,
+                         in long long newSize);
+
+  /**
+   * This will be called when the compaction operation has completed it's
+   * work, but before the new store data is actually made active (committed).
+   * In the case of mbox, this means a new mbox file has been built, is
+   * sitting in a temporary location on the same filesystem, and is ready
+   * to be installed via a file rename (which is about the most atomic
+   * operation we've got).
+   * It's a chance for the listener to commit its own data (e.g. install an
+   * updated database file to match the compacted mbox).
+   * As soon as this callback returns, the lower level commit will be
+   * performed (e.g. rename the new mbox into the live location).
+   * We want to minimise the delay between the two commits as much as possible to
+   * reduce the likelihood of, say, losing power after the callback has updated
+   * the database, but before the new mbox can be made live.
+   *
+   * If the listener needs to perform any other notifications or GUI updates
+   * or anything that is not effectively instant, save them until the
+   * .onFinalSummary() call.
+   *
+   * If an error code is returned here, the low level commit will be rolled
+   * back instead of committed. For mbox, that means the original file will
+   * be restored.
+   *
+   * @param status - The result of the compaction.
+   */
+  void onCompactionComplete(in nsresult status);
+
+  /**
+   * Provides the final summary of the compaction.
+   *
+   * The space recovered by the compaction is given by oldSize-newSize.
+   * But keep in mind that patching X-Mozilla-* headers means that sometimes
+   * compaction can _increase_ the size of the store!
+   *
+   * oldSize and newSize are only valid if status is OK, otherwise they
+   * should be considered undefined.
+   *
+   * Any error returned by onFinalSummary() will be ignored.
+   *
+   * @param status - The result of the compaction.
+   * @param oldSize - The size of the store before compaction, in bytes.
+   * @param newSize - The size of the store after compaction, in bytes.
+   */
+  void onFinalSummary(in nsresult status,
+                      in long long oldSize,
+                      in long long newSize);
+};

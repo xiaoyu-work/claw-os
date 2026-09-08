@@ -1,0 +1,12 @@
+<internal_defines>
+PCURVES_NUMSP512D1 -> 20240723
+</internal_defines>
+
+<module_info>
+name -> "PCurve numsp512d1"
+brief -> "numsp512d1"
+</module_info>
+
+<requires>
+pcurves_impl
+</requires>

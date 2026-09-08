@@ -1,0 +1,41 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+comm.jar:
+% content navigator %content/navigator/
+% content navigator-region %content/navigator-region/
+   content/navigator/browser-places.js
+   content/navigator/content.js
+   content/navigator/fullScreen.js
+   content/navigator/hiddenWindow.xul
+   content/navigator/linkToolbarHandler.js
+   content/navigator/linkToolbarItem.js
+   content/navigator/linkToolbarOverlay.js
+   content/navigator/linkToolbarOverlay.xul
+   content/navigator/mailNavigatorOverlay.js
+*  content/navigator/mailNavigatorOverlay.xul
+   content/navigator/metadata.js
+   content/navigator/metadata.xul
+   content/navigator/navigator.css
+   content/navigator/navigator.js
+   content/navigator/navigator.xul
+   content/navigator/navigatorDD.js
+*  content/navigator/navigatorOverlay.xul
+   content/navigator/nsBrowserContentListener.js
+   content/navigator/nsBrowserStatusHandler.js
+   content/navigator/sessionHistoryUI.js
+   content/navigator/safeBrowsingOverlay.js
+   content/navigator/safeBrowsingOverlay.xul
+   content/navigator/tabbrowser.xml
+   content/navigator/urlbarBindings.xml
+   content/navigator/webDeveloperOverlay.js
+   content/navigator/webDeveloperOverlay.xul
+
+   content/navigator/pageinfo/feeds.js                              (pageinfo/feeds.js)
+   content/navigator/pageinfo/feeds.xml                             (pageinfo/feeds.xml)
+   content/navigator/pageinfo/pageInfo.css                          (pageinfo/pageInfo.css)
+   content/navigator/pageinfo/pageInfo.js                           (pageinfo/pageInfo.js)
+   content/navigator/pageinfo/pageInfo.xul                          (pageinfo/pageInfo.xul)
+   content/navigator/pageinfo/permissions.js                        (pageinfo/permissions.js)
+   content/navigator/pageinfo/security.js                           (pageinfo/security.js)

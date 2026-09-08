@@ -1,0 +1,46 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "comi18n.h"
+
+#include "nsServiceManagerUtils.h"
+#include "nsIMimeConverter.h"
+#include "mozilla/Components.h"
+#include "mozilla/Encoding.h"
+#include "mozilla/EncodingDetector.h"
+
+using namespace mozilla;
+
+////////////////////////////////////////////////////////////////////////////////
+// BEGIN PUBLIC INTERFACE
+extern "C" {
+
+void MIME_DecodeMimeHeader(const char* header, const char* default_charset,
+                           bool override_charset, bool eatContinuations,
+                           nsACString& result) {
+  nsCOMPtr<nsIMimeConverter> mimeConverter =
+      mozilla::components::MimeConverter::Service();
+  if (!mimeConverter) {
+    result.Truncate();
+    return;
+  }
+  mimeConverter->DecodeMimeHeaderToUTF8(nsDependentCString(header),
+                                        default_charset, override_charset,
+                                        eatContinuations, result);
+}
+
+nsresult MIME_detect_charset(const char* aBuf, int32_t aLength,
+                             nsACString& aCharset) {
+  mozilla::UniquePtr<mozilla::EncodingDetector> detector =
+      mozilla::EncodingDetector::Create(true);
+  mozilla::Span<const uint8_t> src =
+      mozilla::AsBytes(mozilla::Span(aBuf, aLength));
+  (void)detector->Feed(src, true);
+  auto encoding = detector->Guess(nullptr, true);
+  encoding->Name(aCharset);
+  return NS_OK;
+}
+
+} /* end of extern "C" */
+// END PUBLIC INTERFACE

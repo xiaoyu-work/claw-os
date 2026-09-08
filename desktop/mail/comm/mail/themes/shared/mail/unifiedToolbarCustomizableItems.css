@@ -1,0 +1,215 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+/* Icon definitions for customizable item previews.
+ * CustomizableItemsDetails.mjs contains the definitions for the root class
+ * names. */
+
+.preview-icon {
+  [is="customizable-element"] & {
+    content: var(--icon-extension);
+  }
+
+  .spacer & {
+    content: var(--icon-flexible-space);
+  }
+
+  .search-bar & {
+    content: var(--icon-search);
+  }
+
+  .write-message & {
+    content: var(--icon-new-mail);
+  }
+
+  .move-to & {
+    content: var(--icon-file);
+  }
+
+  .unifinder & {
+    content: var(--icon-search);
+  }
+
+  .folder-location & {
+    content: var(--icon-folder);
+  }
+
+  .edit-event & {
+    content: var(--icon-pencil);
+  }
+
+  .get-messages & {
+    content: var(--icon-cloud-download);
+  }
+
+  .reply & {
+    content: var(--icon-reply);
+  }
+
+  .reply-all & {
+    content: var(--icon-reply-all);
+  }
+
+  .reply-to-list & {
+    content: var(--icon-reply-list);
+  }
+
+  .redirect & {
+    content: var(--icon-redirect);
+  }
+
+  .archive & {
+    content: var(--icon-archive);
+  }
+
+  .conversation & {
+    content: var(--icon-conversation);
+  }
+
+  .previous-unread & {
+    content: var(--icon-nav-up-unread);
+  }
+
+  .previous & {
+    content: var(--icon-nav-up);
+  }
+
+  .next-unread & {
+    content: var(--icon-nav-down-unread);
+  }
+
+  .next & {
+    content: var(--icon-nav-down);
+  }
+
+  .junk & {
+    content: var(--icon-spam);
+  }
+
+  .delete & {
+    content: var(--icon-trash);
+  }
+
+  .compact & {
+    content: var(--icon-folder-compact-sm);
+  }
+
+  .add-as-event & {
+    content: var(--icon-new-event);
+  }
+
+  .add-as-task & {
+    content: var(--icon-new-task);
+  }
+
+  .tag-message & {
+    content: var(--icon-tag);
+  }
+
+  .forward-inline & {
+    content: var(--icon-forward);
+  }
+
+  .forward-attachment & {
+    /* TODO separate icon for forwarding as attachment */
+    content: var(--icon-forward);
+  }
+
+  .mark-as & {
+    content: var(--icon-unread);
+  }
+
+  .view-picker & {
+    content: var(--icon-eye);
+  }
+
+  .address-book & {
+    content: var(--icon-address-book);
+  }
+
+  .chat & {
+    content: var(--icon-chat);
+  }
+
+  .add-ons-and-themes & {
+    content: var(--icon-extension);
+  }
+
+  .calendar & {
+    content: var(--icon-calendar);
+  }
+
+  .tasks & {
+    content: var(--icon-tasks);
+  }
+
+  .mail & {
+    content: var(--icon-mail);
+  }
+
+  .print & {
+    content: var(--icon-print);
+  }
+
+  .quick-filter-bar & {
+    content: var(--icon-filter);
+  }
+
+  .synchronize & {
+    content: var(--icon-sync);
+  }
+
+  .new-event & {
+    content: var(--icon-new-event);
+  }
+
+  .new-task & {
+    content: var(--icon-new-task);
+  }
+
+  .delete-event & {
+    content: var(--icon-trash);
+  }
+
+  .print-event & {
+    content: var(--icon-print);
+  }
+
+  .go-to-today & {
+    content: var(--icon-calendar-today);
+  }
+
+  .go-back & {
+    content: var(--icon-nav-back);
+  }
+
+  .go-forward & {
+    content: var(--icon-nav-forward);
+  }
+
+  .stop & {
+    content: var(--icon-close);
+  }
+
+  .throbber & {
+    content: var(--icon-loading);
+    object-fit: cover;
+  }
+
+  .create-contact & {
+    content: var(--icon-new-contact);
+  }
+
+  .create-address-book & {
+    content: var(--icon-new-address-book);
+  }
+
+  .create-list & {
+    content: var(--icon-new-user-list);
+  }
+
+  .import-contacts & {
+    content: var(--icon-import);
+  }
+}

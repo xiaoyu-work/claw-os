@@ -1,0 +1,204 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "nsISupports.idl"
+#include "nsIURL.idl"
+
+interface nsIFile;
+interface nsIUrlListener;
+interface nsIMsgIncomingServer;
+interface nsIMsgWindow;
+interface nsILoadGroup;
+interface nsIMsgSearchSession;
+interface nsICacheEntry;
+interface nsIMimeHeaders;
+interface nsIStreamListener;
+interface nsIMsgFolder;
+interface nsIMsgDBHdr;
+interface nsIDocShell;
+interface nsITransportSecurityInfo;
+
+[scriptable, builtinclass, uuid(995455ba-5bb4-4643-8d70-2b877a2e1320)]
+interface nsIMsgMailNewsUrl : nsIURL {
+  [noscript,notxpcom,nostdcall]
+  nsresult setFileNameInternal(in ACString aFileName);
+
+  [noscript,notxpcom,nostdcall]
+  nsresult setSpecInternal(in ACString aSpec);
+
+  [noscript,notxpcom,nostdcall]
+  nsresult setPortInternal(in long aPort);
+
+  [noscript,notxpcom,nostdcall]
+  nsresult setQueryInternal(in ACString aQuery);
+
+  [noscript,notxpcom,nostdcall]
+  nsresult setUsernameInternal(in ACString aUsername);
+
+  ///////////////////////////////////////////////////////////////////////////////
+  // Eventually we'd like to push this type of functionality up into nsIURI.
+  // The idea is to allow the "application" (the part of the code which wants to
+  // run a url in order to perform some action) to register itself as a listener
+  // on url. As a url listener, the app will be informed when the url begins to run
+  // and when the url is finished.
+  ////////////////////////////////////////////////////////////////////////////////
+  void RegisterListener(in nsIUrlListener aUrlListener);
+  void UnRegisterListener(in nsIUrlListener aUrlListener);
+
+  readonly attribute nsIURI baseURI;
+
+  // if you really want to know what the current state of the url is (running or not
+  // running) you should look into becoming a urlListener...
+  void SetUrlState(in boolean runningUrl, in nsresult aStatusCode);
+  void GetUrlState(out boolean runningUrl);
+
+  readonly attribute nsIMsgIncomingServer server;
+
+  /**
+   * Transport-level security information (if any), in the case of a security
+   * error having occurred.
+   * This value should be considered undefined if an NSS error has not
+   * occurred. Read it as: "the secInfo that was being used when a failure
+   * occurred", not: "the secInfo that failed".
+   * Seems a bit ugly adding more state here, but the idea is that a
+   * nsIUrlListener.OnStopRunningUrl() needs to be able to access a bad
+   * certificate, so as to have the option of adding an exemption (See
+   * Bug 1590473).
+   */
+  attribute nsITransportSecurityInfo failedSecInfo;
+
+  /**
+   * The folder associated with this url.
+   *
+   * @exception NS_ERROR_FAILURE    May be thrown if the url does not
+   *                                relate to a folder, e.g. standalone
+   *                                .eml messages.
+   */
+  attribute nsIMsgFolder folder;
+
+  /**
+   * The maximum progress for this URL. This might be a count, or it might
+   * be a number of bytes. A value of -1 indicates that this is unknown.
+   */
+  attribute long long maxProgress;
+
+  attribute nsIMsgWindow msgWindow;
+
+  // current mime headers if reading message
+  attribute nsIMimeHeaders mimeHeaders;
+
+  // the load group is computed from the msgWindow
+  readonly attribute nsILoadGroup loadGroup;
+
+  // search session, if we're running a search.
+  attribute nsIMsgSearchSession searchSession;
+  attribute boolean updatingFolder;
+  attribute boolean msgIsInLocalCache;
+  attribute boolean suppressErrorMsgs; // used to avoid displaying biff error messages
+
+  /**
+   * Set after an error occurred.
+   * It is not translated and contains no parameters.
+   * It is unique to each different kind of error, i.e. the same
+   * error has the same code, but a different error has a different code.
+   * This allows to recover from specific errors programmatically,
+   * or to keep error statistics.
+   * If the error comes from a server, the implementer should make
+   * efforts to pass on comparable server error identifiers and include
+   * them here, e.g. as suffixes. Example: "imap-sasl-S474", where-as "S474"
+   * comes from the server and "imap-sasl-" is the prefix for where the
+   * server reports appears.
+   */
+  attribute ACString errorCode;
+  /**
+   * Set after an error occurred.
+   * An error message that can be displayed directly
+   * to the end user without further processing.
+   * It must have been translated.
+   * It may contain contain values as part of the message.
+   */
+  attribute AString errorMessage;
+
+  /**
+   * To be used in error situations, e.g. to give the URI to an error page
+   * that describes the problem.
+   */
+  attribute AUTF8String seeOtherURI;
+
+  attribute nsICacheEntry memCacheEntry;
+
+  const unsigned long eCopy     = 0;
+  const unsigned long eMove     = 1;
+  const unsigned long eDisplay  = 2;
+  boolean IsUrlType(in unsigned long type);
+  nsIStreamListener getSaveAsListener(in boolean addDummyEnvelope, in nsIFile aFile);
+
+  /**
+   * Loads the URI in a docshell. This will give priority to loading the
+   * URI in the passed-in docshell. If it can't be loaded there
+   * however, the URL dispatcher will go through its normal process of content
+   * loading.
+   *
+   * @param docshell     The docshell that will consume the load.
+   *
+   * @param aLoadFlags   Flags to modify load behaviour. Flags are defined in
+   *                     nsIWebNavigation. Normally only LOAD_FLAGS_NONE or
+   *                     LOAD_FLAGS_IS_LINK is needed, but there are eleven
+   *                     other allowed sets of flags. See nsDocShellLoadTypes.h
+   */
+   void loadURI(in nsIDocShell docshell,
+                in unsigned long aLoadFlags);
+
+};
+
+//////////////////////////////////////////////////////////////////////////////////
+// This is a very small interface which I'm grouping with the mailnewsUrl interface.
+// Several url types (mailbox, imap, nntp) have similar properties because they can
+// represent mail messages. For instance, these urls can be have URI
+// equivalents which represent a message.
+// We want to provide the app the ability to get the URI for the
+// url. This URI to URL mapping doesn't exist for all mailnews urls...hence I'm
+// grouping it into a separate interface...
+//////////////////////////////////////////////////////////////////////////////////
+
+[scriptable, uuid(388a37ec-2e1a-4a4f-9d8b-189bedf1bda2)]
+interface nsIMsgMessageUrl : nsISupports {
+  // get and set the RDF URI associated with the url. Note, not all urls have
+  // had uri's set on them so be prepared to handle cases where this string is empty.
+  attribute AUTF8String uri;
+  // used by imap, pop and nntp in order to implement save message to disk
+  attribute nsIFile messageFile;
+  attribute boolean AddDummyEnvelope;
+  attribute boolean canonicalLineEnding;
+  attribute AUTF8String originalSpec;
+
+  // This is used when creating a principal for the URL with a "normalized" spec
+  // that doesn't contain all the bits in the query part that mailnews URLs have.
+  // We need this to implement nsIURIWithSpecialOrigin, since mailnews URLs
+  // have ORIGIN_IS_FULL_SPEC.
+  readonly attribute AUTF8String normalizedSpec;
+
+  /**
+   *  A message db header for that message.
+   *
+   *  @note This attribute is not guaranteed to be set, so callers that
+   *  actually require an nsIMsgDBHdr will need to use the uri attribute
+   *  on this interface to get the appropriate nsIMsgMessageService and
+   *  then get the header from there.
+   */
+  readonly attribute nsIMsgDBHdr messageHeader;
+};
+
+//////////////////////////////////////////////////////////////////////////////////
+// This is a very small interface which I'm grouping with the mailnewsUrl interface.
+// I want to isolate out all the I18N specific information that may be associated with
+// any given mailnews url. This gives I18N their own "sandbox" of routines they can add
+// and tweak as they see fit. For now it contains mostly charset information.
+//////////////////////////////////////////////////////////////////////////////////
+
+[scriptable, uuid(D71E0785-2862-11d4-98C1-001083010E9B)]
+interface nsIMsgI18NUrl : nsISupports {
+  // when true the user wants us to auto-detect the character set.
+  attribute boolean autodetectCharset;
+};

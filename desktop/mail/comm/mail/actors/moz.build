@@ -1,0 +1,29 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, you can obtain one at http://mozilla.org/MPL/2.0/.
+
+EXTRA_JS_MODULES += [
+    "../../../browser/modules/FaviconLoader.sys.mjs",
+]
+
+with Files("**"):
+    BUG_COMPONENT = ("Thunderbird", "General")
+
+FINAL_TARGET_FILES.actors += [
+    "../../../browser/actors/ContextMenuChild.sys.mjs",
+    "../../../browser/actors/LinkHandlerChild.sys.mjs",
+    "BrowserProcessChild.sys.mjs",
+    "ChatActionChild.sys.mjs",
+    "ChatActionParent.sys.mjs",
+    "ContextMenuParent.sys.mjs",
+    "LinkClickHandlerChild.sys.mjs",
+    "LinkClickHandlerParent.sys.mjs",
+    "LinkHandlerParent.sys.mjs",
+    "MailLinkChild.sys.mjs",
+    "MailLinkParent.sys.mjs",
+    "MessageScrollChild.sys.mjs",
+    "MessageScrollParent.sys.mjs",
+    "PromptParent.sys.mjs",
+    "VCardChild.sys.mjs",
+    "VCardParent.sys.mjs",
+]

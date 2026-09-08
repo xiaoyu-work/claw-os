@@ -1,0 +1,20 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+---
+loader: taskgraph.loader.transform:loader
+
+transforms:
+    - taskgraph.transforms.from_deps
+    - gecko_taskgraph.transforms.name_sanity
+    - comm_taskgraph.transforms.l10n_source_signing
+    - gecko_taskgraph.transforms.signing
+    - gecko_taskgraph.transforms.task
+
+kind-dependencies:
+    - shippable-l10n-pre
+
+tasks:
+    shippable-l10n-pre-signing:
+        from-deps: {}
+        shipping-phase: promote

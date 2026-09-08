@@ -1,0 +1,17 @@
+<internal_defines>
+SQLITE3 -> 20171118
+</internal_defines>
+
+<module_info>
+name -> "SQLite 3"
+</module_info>
+
+load_on vendor
+
+<libs>
+all -> sqlite3
+</libs>
+
+<header:public>
+sqlite3.h
+</header:public>

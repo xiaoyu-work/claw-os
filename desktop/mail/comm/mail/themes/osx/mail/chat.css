@@ -1,0 +1,113 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@import url("chrome://messenger/skin/shared/chat.css");
+
+.convUnreadTargetedCount {
+  padding: 2px 7px;
+}
+
+.conv-counter[value^="-"] {
+  margin-block-end: 1px;
+  /* The 6px padding-end from .conv-counter is split into a 1px margin-end
+     (to avoid the border) and 5px padding-end (as regular padding). */
+  margin-inline-end: 1px;
+  padding-block: 1px 0;
+  padding-inline-end: 5px;
+}
+
+.conv-nicklist > richlistitem > label {
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.4);
+}
+
+.conv-nicklist-header,
+.conv-logs-header-label {
+  padding-block: 2px;
+  border-block-end: 1px solid ThreeDShadow;
+  background-color: -moz-Dialog;
+  margin-inline-end: -1px;
+}
+
+.conv-nicklist-header-label {
+  margin-inline: 3px 2px !important;
+  margin-block: 1px 0 !important;
+}
+
+.conv-nicklist,
+#logTree {
+  appearance: none;
+  inline-size: 250px;
+  border: 0;
+}
+
+#nicklist > richlistitem[inactive][selected] > label {
+  color: -moz-DialogText !important;
+}
+
+richlistitem[is="chat-group-richlistitem"] .twisty {
+  margin-inline-end: 3px;
+}
+
+#chatPanel {
+  :root[lwtheme] & {
+    color: -moz-DialogText;
+    text-shadow: none;
+  }
+
+  :root:not([lwt-tree]) & {
+    background-color: -moz-OddTreeRow;
+
+    @media (prefers-contrast) {
+      background-color: Field;
+    }
+  }
+}
+
+#contactlistbox {
+  background: transparent;
+  appearance: none;
+}
+
+.convUnreadCount,
+.contactDisplayName,
+.convDisplayName,
+.contactStatusText,
+.convStatusText {
+  margin-block-start: 3px;
+}
+
+#statusTypeIcon {
+  border-start-end-radius: 0;
+  border-end-end-radius: 0;
+
+  & > .toolbarbutton-text {
+    display: none;
+  }
+}
+
+.statusMessageToolbarItem {
+  margin-inline-start: -3px;
+  margin-block-end: 2px;
+  padding-block-end: 3px;
+}
+
+/* Adaptation of #folderpane_splitter */
+#listSplitter,
+#contextSplitter {
+  min-inline-size: 5px;
+}
+
+.conv-status-container {
+  border-block-end-color: #8b8b8b;
+}
+
+.startChatBubble > .button-box > .button-icon,
+.closeConversationButton > .button-box > .button-icon {
+  margin-inline-start: 0;
+}
+
+/* Set a background color to avoid lightweight theme backgrounds */
+#contextPane {
+  background-color: Field;
+}

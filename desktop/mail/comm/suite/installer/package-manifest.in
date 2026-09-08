@@ -1,0 +1,493 @@
+; Package file for the SeaMonkey build.
+;
+; Packaging manifest is used to copy files from dist/bin
+; to the staging directory.
+; Some other files are built in the staging directory directly,
+; so they will be implicitly packaged too.
+;
+; File format:
+;
+; [] designates a toplevel component. Example: [xpcom]
+; - in front of a file specifies it to be removed from the destination
+; * wildcard support to recursively copy the entire directory
+; ; file comment
+;
+
+; Due to Apple macOS packaging requirements, files that are in the same
+; directory on other platforms must be located in different directories on
+; macOS. The following defines allow specifying the macOS bundle
+; location which also work on other platforms.
+;
+; @BINPATH@
+; Equals Contents/MacOS/ on macOS and is the path to the main binary on other
+; platforms.
+;
+; @RESPATH@
+; Equals Contents/Resources/ on macOS and is equivalent to @BINPATH@ on other
+; platforms.
+
+#filter substitution
+
+#ifdef XP_UNIX
+#ifndef XP_MACOSX
+#define UNIX_BUT_NOT_MAC
+#endif
+#endif
+
+#ifdef XP_MACOSX
+; Mac bundle stuff
+@APPNAME@/Contents/Info.plist
+@APPNAME@/Contents/PkgInfo
+@RESPATH@/seamonkey.icns
+@RESPATH@/@LPROJ_ROOT@.lproj/*
+#endif
+
+[@AB_CD@]
+@RESPATH@/defaults/messenger/mailViews.dat
+@RESPATH@/defaults/profile/bookmarks.html
+@RESPATH@/defaults/profile/chrome/*
+@RESPATH@/defaults/profile/mimeTypes.rdf
+@RESPATH@/defaults/profile/panels.rdf
+@RESPATH@/dictionaries/*
+@RESPATH@/hyphenation/*
+#ifdef MOZ_BUNDLED_FONTS
+@RESPATH@/fonts/*
+#endif
+@RESPATH@/@PREF_DIR@/suite-l10n.js
+#ifdef HAVE_MAKENSISU
+@BINPATH@/uninstall/helper.exe
+#endif
+#ifdef MOZ_UPDATER
+@RESPATH@/updater.ini
+#endif
+
+#ifdef PKG_LOCALE_MANIFEST
+#include @PKG_LOCALE_MANIFEST@
+#endif
+
+[xpcom]
+@RESPATH@/dependentlibs.list
+#ifdef MOZ_SHARED_MOZGLUE
+@BINPATH@/@DLL_PREFIX@mozglue@DLL_SUFFIX@
+#endif
+#ifndef MOZ_STATIC_JS
+@BINPATH@/@DLL_PREFIX@mozjs@DLL_SUFFIX@
+#endif
+#ifndef MOZ_SYSTEM_NSPR
+#ifndef MOZ_FOLD_LIBS
+@BINPATH@/@DLL_PREFIX@nspr4@DLL_SUFFIX@
+@BINPATH@/@DLL_PREFIX@plc4@DLL_SUFFIX@
+@BINPATH@/@DLL_PREFIX@plds4@DLL_SUFFIX@
+#endif
+#endif
+#ifdef XP_MACOSX
+@BINPATH@/XUL
+#else
+@BINPATH@/@DLL_PREFIX@xul@DLL_SUFFIX@
+#endif
+#ifdef XP_MACOSX
+@BINPATH@/@MOZ_CHILD_PROCESS_NAME@.app/
+#else
+@BINPATH@/@MOZ_CHILD_PROCESS_NAME@
+#endif
+; ANGLE GLES-on-D3D rendering library
+#ifdef MOZ_ANGLE_RENDERER
+@BINPATH@/libEGL.dll
+@BINPATH@/libGLESv2.dll
+#ifdef MOZ_D3DCOMPILER_VISTA_DLL
+@BINPATH@/@MOZ_D3DCOMPILER_VISTA_DLL@
+#endif
+#endif # MOZ_ANGLE_RENDERER
+
+#ifdef XP_WIN
+#if MOZ_PACKAGE_MSVC_DLLS
+@BINPATH@/@MSVC_C_RUNTIME_DLL@
+@BINPATH@/@MSVC_CXX_RUNTIME_DLL@
+@BINPATH@/api-ms-win-*.dll
+@BINPATH@/ucrtbase.dll
+#endif
+#endif
+
+[browser]
+; [Base Browser Files]
+#ifdef XP_WIN
+@BINPATH@/@MOZ_APP_NAME@.exe
+#else
+@BINPATH@/@MOZ_APP_NAME@-bin
+@BINPATH@/@MOZ_APP_NAME@
+#endif
+@RESPATH@/application.ini
+@RESPATH@/platform.ini
+#ifdef MOZ_UPDATER
+# update-settings.ini has been removed on macOS.
+#ifndef XP_MACOSX
+@RESPATH@/update-settings.ini
+#endif
+#endif
+#ifndef MOZ_FOLD_LIBS
+@BINPATH@/@DLL_PREFIX@mozsqlite3@DLL_SUFFIX@
+#endif
+@BINPATH@/@DLL_PREFIX@lgpllibs@DLL_SUFFIX@
+@BINPATH@/@DLL_PREFIX@gkcodecs@DLL_SUFFIX@
+#ifdef MOZ_FFVPX
+@BINPATH@/@DLL_PREFIX@mozavutil@DLL_SUFFIX@
+@BINPATH@/@DLL_PREFIX@mozavcodec@DLL_SUFFIX@
+#endif
+#ifdef MOZ_GTK
+@BINPATH@/glxtest
+@BINPATH@/@DLL_PREFIX@mozgtk@DLL_SUFFIX@
+#ifdef MOZ_WAYLAND
+@BINPATH@/vaapitest
+@BINPATH@/@DLL_PREFIX@mozwayland@DLL_SUFFIX@
+#endif
+#endif
+@RESPATH@/license.txt
+@RESPATH@/blocklist.xml
+
+; [Components]
+#ifdef ACCESSIBILITY
+#ifdef XP_WIN
+@BINPATH@/AccessibleMarshal.dll
+#endif
+#endif
+@RESPATH@/components/extensions.manifest
+@RESPATH@/components/SuiteBrowser.manifest
+@RESPATH@/components/SuiteComponents.manifest
+@RESPATH@/components/SuiteFeeds.manifest
+@RESPATH@/components/SuiteSidebar.manifest
+; JavaScript components
+@RESPATH@/components/cryptoComponents.manifest
+@RESPATH@/components/FeedConverter.js
+@RESPATH@/components/FeedWriter.js
+@RESPATH@/components/jsconsole-clhandler.js
+@RESPATH@/components/jsconsole-clhandler.manifest
+@RESPATH@/components/nsAbout.js
+@RESPATH@/components/nsBrowserContentHandler.js
+@RESPATH@/components/nsComposerCmdLineHandler.js
+@RESPATH@/components/nsComposerCmdLineHandler.manifest
+@RESPATH@/components/nsGopherProtocolStubHandler.js
+@RESPATH@/components/nsPlacesAutoComplete.js
+@RESPATH@/components/nsPlacesAutoComplete.manifest
+@RESPATH@/components/nsSessionStartup.js
+@RESPATH@/components/nsSessionStartup.manifest
+@RESPATH@/components/nsSessionStore.js
+@RESPATH@/components/nsSidebar.js
+@RESPATH@/components/nsSuiteGlue.js
+@RESPATH@/components/nsSetDefault.js
+@RESPATH@/components/nsSetDefault.manifest
+@RESPATH@/components/nsTypeAheadFind.js
+#ifdef MOZ_UPDATER
+@RESPATH@/components/nsUpdateService.manifest
+#endif
+@RESPATH@/components/ProcessSingleton.manifest
+@RESPATH@/components/Push.manifest
+@RESPATH@/components/servicesComponents.manifest
+@RESPATH@/components/servicesSettings.manifest
+@RESPATH@/components/SuiteProfileMigrator.js
+@RESPATH@/components/SuiteProfileMigrator.manifest
+#if defined(ENABLE_TESTS) && defined(MOZ_DEBUG)
+@RESPATH@/components/TestInterfaceJS.js
+@RESPATH@/components/TestInterfaceJS.manifest
+@RESPATH@/components/TestInterfaceJSMaplike.js
+#endif
+@RESPATH@/components/WebContentConverter.js
+
+; Modules
+@RESPATH@/modules/*
+
+; [Extensions]
+@RESPATH@/components/extensions-toolkit.manifest
+
+; [Browser Chrome Files]
+; Browser: Hack to get built_in_addons.json packaged
+@RESPATH@/chrome/browser@JAREXT@
+@RESPATH@/chrome/browser.manifest
+@RESPATH@/chrome/comm@JAREXT@
+@RESPATH@/chrome/comm.manifest
+@RESPATH@/chrome/toolkit@JAREXT@
+@RESPATH@/chrome/toolkit.manifest
+
+; [DevTools Startup Files]
+@RESPATH@/chrome/devtools-startup@JAREXT@
+@RESPATH@/chrome/devtools-startup.manifest
+
+; DevTools
+@RESPATH@/chrome/devtools@JAREXT@
+@RESPATH@/chrome/devtools.manifest
+@RESPATH@/@PREF_DIR@/debugger.js
+
+; classic theme
+@RESPATH@/chrome/classic@JAREXT@
+@RESPATH@/chrome/classic.manifest
+@RESPATH@/extensions/{972ce4c6-7e08-4474-a285-3208198ce6fd}.xpi
+
+; modern theme
+@RESPATH@/extensions/modern@themes.mozilla.org.xpi
+
+; shell icons
+#ifdef MOZ_GTK
+@RESPATH@/chrome/icons/default/bookmarkproperties.png
+@RESPATH@/chrome/icons/default/bookmarkproperties16.png
+@RESPATH@/chrome/icons/default/bookmarkproperties48.png
+@RESPATH@/chrome/icons/default/chatzilla-window.png
+@RESPATH@/chrome/icons/default/chatzilla-window16.png
+@RESPATH@/chrome/icons/default/chatzilla-window48.png
+@RESPATH@/chrome/icons/default/default16.png
+@RESPATH@/chrome/icons/default/default22.png
+@RESPATH@/chrome/icons/default/default24.png
+@RESPATH@/chrome/icons/default/default32.png
+@RESPATH@/chrome/icons/default/default48.png
+@RESPATH@/chrome/icons/default/default64.png
+@RESPATH@/chrome/icons/default/default128.png
+@RESPATH@/chrome/icons/default/default256.png
+@RESPATH@/chrome/icons/default/downloadManager.png
+@RESPATH@/chrome/icons/default/downloadManager16.png
+@RESPATH@/chrome/icons/default/downloadManager48.png
+@RESPATH@/chrome/icons/default/editorWindow.png
+@RESPATH@/chrome/icons/default/editorWindow16.png
+@RESPATH@/chrome/icons/default/editorWindow48.png
+@RESPATH@/chrome/icons/default/findBookmarkWindow.png
+@RESPATH@/chrome/icons/default/findBookmarkWindow16.png
+@RESPATH@/chrome/icons/default/findBookmarkWindow48.png
+@RESPATH@/chrome/icons/default/findHistoryWindow.png
+@RESPATH@/chrome/icons/default/findHistoryWindow16.png
+@RESPATH@/chrome/icons/default/findHistoryWindow48.png
+@RESPATH@/chrome/icons/default/history-window.png
+@RESPATH@/chrome/icons/default/history-window16.png
+@RESPATH@/chrome/icons/default/history-window48.png
+@RESPATH@/chrome/icons/default/JSConsoleWindow.png
+@RESPATH@/chrome/icons/default/JSConsoleWindow16.png
+@RESPATH@/chrome/icons/default/JSConsoleWindow48.png
+@RESPATH@/chrome/icons/default/places.png
+@RESPATH@/chrome/icons/default/places16.png
+@RESPATH@/chrome/icons/default/places48.png
+#ifdef MOZ_UPDATER
+@RESPATH@/icons/updater.png
+#endif
+#elifdef XP_WIN
+@RESPATH@/chrome/icons/default/bookmarkproperties.ico
+@RESPATH@/chrome/icons/default/chatzilla-window.ico
+@RESPATH@/chrome/icons/default/downloadManager.ico
+@RESPATH@/chrome/icons/default/editorWindow.ico
+@RESPATH@/chrome/icons/default/findBookmarkWindow.ico
+@RESPATH@/chrome/icons/default/findHistoryWindow.ico
+@RESPATH@/chrome/icons/default/gif-file.ico
+@RESPATH@/chrome/icons/default/history-window.ico
+@RESPATH@/chrome/icons/default/html-file.ico
+@RESPATH@/chrome/icons/default/image-file.ico
+@RESPATH@/chrome/icons/default/jpeg-file.ico
+@RESPATH@/chrome/icons/default/JSConsoleWindow.ico
+@RESPATH@/chrome/icons/default/main-window.ico
+@RESPATH@/chrome/icons/default/places.ico
+@RESPATH@/chrome/icons/default/script-file.ico
+@RESPATH@/chrome/icons/default/xml-file.ico
+@RESPATH@/chrome/icons/default/xul-file.ico
+#endif
+
+; [Default Preferences]
+; All the browser/general pref files must be part of base to prevent migration bugs
+@RESPATH@/@PREF_DIR@/suite-prefs.js
+@RESPATH@/@PREF_DIR@/composer.js
+@RESPATH@/greprefs.js
+@RESPATH@/defaults/autoconfig/prefcalls.js
+@RESPATH@/defaults/permissions
+@RESPATH@/defaults/settings/blocklists
+@RESPATH@/defaults/settings/main
+; Warning: changing the path to channel-prefs.js can cause bugs. (Bug 756325)
+@RESPATH@/defaults/pref/channel-prefs.js
+
+; [Layout Engine Resources]
+; Layout debug extension.
+#ifdef ENABLE_TESTS
+#ifdef MOZ_DEBUG
+@RESPATH@/chrome/layoutdebug@JAREXT@
+@RESPATH@/chrome/layoutdebug.manifest
+#endif
+#endif
+; Style Sheets, Graphics and other Resources used by the layout engine.
+@RESPATH@/res/contenteditable.css
+@RESPATH@/res/designmode.css
+@RESPATH@/res/EditorOverride.css
+@RESPATH@/res/grabber.gif
+@RESPATH@/res/language.properties
+@RESPATH@/res/svg.css
+@RESPATH@/res/table-add-column-after-active.gif
+@RESPATH@/res/table-add-column-after-hover.gif
+@RESPATH@/res/table-add-column-after.gif
+@RESPATH@/res/table-add-column-before-active.gif
+@RESPATH@/res/table-add-column-before-hover.gif
+@RESPATH@/res/table-add-column-before.gif
+@RESPATH@/res/table-add-row-after-active.gif
+@RESPATH@/res/table-add-row-after-hover.gif
+@RESPATH@/res/table-add-row-after.gif
+@RESPATH@/res/table-add-row-before-active.gif
+@RESPATH@/res/table-add-row-before-hover.gif
+@RESPATH@/res/table-add-row-before.gif
+@RESPATH@/res/table-remove-column-active.gif
+@RESPATH@/res/table-remove-column-hover.gif
+@RESPATH@/res/table-remove-column.gif
+@RESPATH@/res/table-remove-row-active.gif
+@RESPATH@/res/table-remove-row-hover.gif
+@RESPATH@/res/table-remove-row.gif
+#ifdef XP_MACOSX
+@RESPATH@/res/cursors/*
+#endif
+@RESPATH@/res/fonts/*
+@RESPATH@/res/dtd/*
+#ifdef XP_MACOSX
+@RESPATH@/res/MainMenu.nib/
+#endif
+
+; Content-accessible resources.
+@RESPATH@/contentaccessible/*
+
+; [Personal Security Manager]
+;
+; NSS libraries are signed in the staging directory,
+; meaning their .chk files are created there directly.
+;
+#ifndef MOZ_SYSTEM_NSS
+#if defined(XP_LINUX) && !defined(ANDROID)
+@BINPATH@/@DLL_PREFIX@freeblpriv3@DLL_SUFFIX@
+#else
+@BINPATH@/@DLL_PREFIX@freebl3@DLL_SUFFIX@
+#endif
+@BINPATH@/@DLL_PREFIX@nss3@DLL_SUFFIX@
+#ifndef MOZ_FOLD_LIBS
+@BINPATH@/@DLL_PREFIX@nssutil3@DLL_SUFFIX@
+@BINPATH@/@DLL_PREFIX@smime3@DLL_SUFFIX@
+@BINPATH@/@DLL_PREFIX@ssl3@DLL_SUFFIX@
+#endif
+@BINPATH@/@DLL_PREFIX@softokn3@DLL_SUFFIX@
+#endif
+@RESPATH@/chrome/pippki@JAREXT@
+@RESPATH@/chrome/pippki.manifest
+
+; For process sandboxing
+#if defined(MOZ_SANDBOX)
+#if defined(XP_LINUX)
+@BINPATH@/@DLL_PREFIX@mozsandbox@DLL_SUFFIX@
+#endif
+#endif
+
+; for Solaris SPARC
+#ifdef SOLARIS
+bin/libfreebl_32fpu_3.so
+bin/libfreebl_32int_3.so
+bin/libfreebl_32int64_3.so
+#endif
+
+; [MAN pages]
+#ifdef UNIX_BUT_NOT_MAC
+man/*
+#endif
+
+; [Updater]
+;
+#ifdef MOZ_UPDATER
+#ifdef XP_MACOSX
+@BINPATH@/updater.app/
+#else
+@BINPATH@/updater@BIN_SUFFIX@
+#endif
+#endif
+
+; [Crash Reporter]
+;
+#ifdef MOZ_CRASHREPORTER
+#ifdef XP_MACOSX
+@BINPATH@/crashreporter.app/
+#else
+@BINPATH@/crashreporter@BIN_SUFFIX@
+#endif
+#ifdef MOZ_CRASHREPORTER_INJECTOR
+@BINPATH@/breakpadinjector.dll
+#endif
+#endif
+
+; [ Ping Sender ]
+;
+@BINPATH@/pingsender@BIN_SUFFIX@
+
+[mail]
+; MailNews components
+
+; MailNews JS components
+
+; MailNews chrome
+@RESPATH@/chrome/messenger@JAREXT@
+@RESPATH@/chrome/messenger.manifest
+@RESPATH@/chrome/newsblog@JAREXT@
+@RESPATH@/chrome/newsblog.manifest
+#ifdef MOZ_GTK
+@RESPATH@/chrome/icons/default/abcardWindow.png
+@RESPATH@/chrome/icons/default/abcardWindow16.png
+@RESPATH@/chrome/icons/default/abcardWindow48.png
+@RESPATH@/chrome/icons/default/ablistWindow.png
+@RESPATH@/chrome/icons/default/ablistWindow16.png
+@RESPATH@/chrome/icons/default/ablistWindow48.png
+@RESPATH@/chrome/icons/default/addressbookWindow.png
+@RESPATH@/chrome/icons/default/addressbookWindow16.png
+@RESPATH@/chrome/icons/default/addressbookWindow48.png
+@RESPATH@/chrome/icons/default/messengerWindow.png
+@RESPATH@/chrome/icons/default/messengerWindow16.png
+@RESPATH@/chrome/icons/default/messengerWindow48.png
+@RESPATH@/chrome/icons/default/msgcomposeWindow.png
+@RESPATH@/chrome/icons/default/msgcomposeWindow16.png
+@RESPATH@/chrome/icons/default/msgcomposeWindow48.png
+#elifdef XP_WIN
+@RESPATH@/chrome/icons/default/abcardWindow.ico
+@RESPATH@/chrome/icons/default/ablistWindow.ico
+@RESPATH@/chrome/icons/default/addressbookWindow.ico
+@RESPATH@/chrome/icons/default/messengerWindow.ico
+@RESPATH@/chrome/icons/default/msgcomposeWindow.ico
+@RESPATH@/chrome/icons/default/calendar-alarm-dialog.ico
+@RESPATH@/chrome/icons/default/calendar-event-dialog.ico
+@RESPATH@/chrome/icons/default/calendar-event-summary-dialog.ico
+@RESPATH@/chrome/icons/default/calendar-task-dialog.ico
+@RESPATH@/chrome/icons/default/calendar-task-summary-dialog.ico
+#endif
+
+; [MailNews Default Preferences]
+@RESPATH@/@PREF_DIR@/mailnews.js
+@RESPATH@/@PREF_DIR@/mdn.js
+; @RESPATH@/@PREF_DIR@/e2e-prefs.js
+
+#ifdef MOZ_MAPI_SUPPORT
+@BINPATH@/MapiProxy.dll
+@BINPATH@/mozMapi32.dll
+#endif
+
+@RESPATH@/isp/*
+
+; Gloda
+@RESPATH@/chrome/gloda@JAREXT@
+@RESPATH@/chrome/gloda.manifest
+
+; Address Sanitizer
+#ifdef LLVM_SYMBOLIZER
+@BINPATH@/@LLVM_SYMBOLIZER@
+#endif
+
+#ifdef MOZ_CLANG_RT_ASAN_LIB
+@BINPATH@/@MOZ_CLANG_RT_ASAN_LIB@
+#endif
+
+[chatzilla]
+#ifdef MOZ_IRC
+@RESPATH@/chrome/chatzilla@JAREXT@
+@RESPATH@/chrome/chatzilla.manifest
+@RESPATH@/components/chatzilla-service.js
+@RESPATH@/components/chatzilla-service.manifest
+#endif
+
+[debugqa]
+#ifdef MOZ_PACKAGE_DEBUGQA
+@RESPATH@/extensions/debugQA@mozilla.org.xpi
+#endif
+
+[calendar]
+@RESPATH@/chrome/calendar@JAREXT@
+@RESPATH@/chrome/calendar.manifest
+
+@RESPATH@/@PREF_DIR@/calendar.js

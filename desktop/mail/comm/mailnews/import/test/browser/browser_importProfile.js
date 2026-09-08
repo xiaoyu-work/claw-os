@@ -1,0 +1,500 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+
+requestLongerTimeout(2);
+
+const { MockFilePicker } = ChromeUtils.importESModule(
+  "resource://testing-common/MockFilePicker.sys.mjs"
+);
+
+function checkSteps(importDocument, currentStep, totalSteps) {
+  const stepNav = importDocument.getElementById("stepNav");
+  is(stepNav.childElementCount, totalSteps, "Expected amount of steps");
+  ok(
+    stepNav
+      .querySelector(`*:nth-child(${currentStep})`)
+      ?.classList.contains("current"),
+    `Expected step ${currentStep} is active`
+  );
+}
+
+function checkVisiblePane(importDocument, activePaneId, activeStepId) {
+  const panes = importDocument.querySelectorAll(".tabPane");
+  for (const pane of panes) {
+    if (pane.id === activePaneId) {
+      ok(BrowserTestUtils.isVisible(pane), `Pane ${activePaneId} is visible`);
+      const steps = pane.querySelectorAll("section[id]");
+      for (const step of steps) {
+        if (step.id === activeStepId) {
+          ok(
+            BrowserTestUtils.isVisible(step),
+            `Step ${activeStepId} is visible`
+          );
+        } else {
+          ok(BrowserTestUtils.isHidden(step), `Step ${step.id} is hidden`);
+        }
+      }
+    } else {
+      ok(BrowserTestUtils.isHidden(pane), `Pane ${pane.id} is not visible`);
+    }
+  }
+}
+
+add_setup(() => {
+  MockFilePicker.init(window.browsingContext);
+  registerCleanupFunction(() => {
+    MockFilePicker.cleanup();
+  });
+});
+
+add_task(async function testProfileImport() {
+  Services.fog.testResetFOG();
+
+  const profileDir = await IOUtils.createUniqueDirectory(
+    PathUtils.tempDir,
+    "profile-tmp"
+  );
+  await IOUtils.writeUTF8(
+    PathUtils.join(profileDir, "prefs.js"),
+    [
+      ["mail.smtpserver.smtp1.username", "smtp-user-1"],
+      ["mail.smtpservers", "smtp1"],
+      ["mail.identity.id1.smtpServer", "smtp1"],
+      ["mail.server.server2.type", "none"],
+      ["mail.server.server6.type", "imap"],
+      ["mail.account.account1.server", "server2"],
+      ["mail.account.account2.server", "server6"],
+      ["mail.account.account2.identities", "id1"],
+      ["mail.accountmanager.accounts", "account2,account1"],
+    ]
+      .map(
+        ([name, value]) =>
+          `user_pref(${JSON.stringify(name)}, ${JSON.stringify(value)});`
+      )
+      .join("\n")
+  );
+
+  const badProfileDir = await IOUtils.createUniqueDirectory(
+    PathUtils.tempDir,
+    "profile-bad"
+  );
+
+  registerCleanupFunction(async () => {
+    await IOUtils.remove(profileDir, {
+      recursive: true,
+    });
+    await IOUtils.remove(badProfileDir, {
+      recursive: true,
+    });
+  });
+
+  const tab = await new Promise(resolve => {
+    const newTab = window.openTab("contentTab", {
+      url: "about:import",
+      onLoad() {
+        resolve(newTab);
+      },
+    });
+  });
+  const importDocument = tab.browser.contentDocument;
+
+  ok(
+    BrowserTestUtils.isHidden(importDocument.getElementById("exportDocs")),
+    "Export docs link is hidden"
+  );
+  ok(
+    BrowserTestUtils.isVisible(importDocument.getElementById("importDocs")),
+    "Import docs link is visible"
+  );
+
+  checkSteps(importDocument, 1, 4);
+  checkVisiblePane(importDocument, "tabPane-start", "start-sources");
+  ok(
+    importDocument.querySelector('#start-sources input[value="Thunderbird"]')
+      .checked,
+    "Thunderbird profile is selected by default"
+  );
+  ok(
+    BrowserTestUtils.isHidden(importDocument.getElementById("startBackButton")),
+    "Back button is hidden in first step"
+  );
+  importDocument
+    .querySelector("#tabPane-start .continue")
+    .scrollIntoView({ block: "end", behavior: "instant" });
+  importDocument.querySelector("#tabPane-start .continue").click();
+  const appPane = importDocument.getElementById("tabPane-app");
+  await BrowserTestUtils.waitForMutationCondition(
+    appPane,
+    {
+      attributes: true,
+    },
+    () => BrowserTestUtils.isVisible(appPane)
+  );
+
+  checkSteps(importDocument, 2, 4);
+  checkVisiblePane(importDocument, "tabPane-app", "app-profiles");
+  ok(
+    BrowserTestUtils.isVisible(
+      importDocument.getElementById("profileBackButton")
+    ),
+    "Back button is visible"
+  );
+
+  // Try to import from a source that doesn't contain a profile.
+
+  MockFilePicker.setFiles([await IOUtils.getFile(badProfileDir)]);
+  importDocument
+    .querySelector('#filePickerList [value="file-picker-dir"]')
+    .scrollIntoView({ block: "end", behavior: "instant" });
+  importDocument
+    .querySelector('#filePickerList [value="file-picker-dir"]')
+    .click();
+  importDocument
+    .getElementById("profileNextButton")
+    .scrollIntoView({ block: "end", behavior: "instant" });
+  importDocument.getElementById("profileNextButton").click();
+  const itemsStep = importDocument.getElementById("app-items");
+  await BrowserTestUtils.waitForMutationCondition(
+    itemsStep,
+    {
+      attributes: true,
+    },
+    () => BrowserTestUtils.isVisible(itemsStep)
+  );
+
+  checkSteps(importDocument, 3, 4);
+  checkVisiblePane(importDocument, "tabPane-app", "app-items");
+
+  Assert.ok(
+    BrowserTestUtils.isVisible(
+      importDocument.getElementById("appSourceInvalid")
+    ),
+    "invalid source message should be visible"
+  );
+  Assert.ok(
+    BrowserTestUtils.isHidden(importDocument.getElementById("appSourceItems")),
+    "item selection should be hidden"
+  );
+  Assert.ok(
+    importDocument.getElementById("profileNextButton").disabled,
+    "forward button should be disabled"
+  );
+
+  // Go back, and try to import from a source that does contain a profile.
+
+  importDocument
+    .getElementById("profileBackButton")
+    .scrollIntoView({ block: "end", behavior: "instant" });
+  importDocument.getElementById("profileBackButton").click();
+
+  const profilesStep = importDocument.getElementById("app-profiles");
+  await BrowserTestUtils.waitForMutationCondition(
+    profilesStep,
+    { attributes: true },
+    () => BrowserTestUtils.isVisible(profilesStep)
+  );
+
+  MockFilePicker.setFiles([await IOUtils.getFile(profileDir)]);
+  importDocument
+    .querySelector('#filePickerList [value="file-picker-dir"]')
+    .scrollIntoView({ block: "end", behavior: "instant" });
+  importDocument
+    .querySelector('#filePickerList [value="file-picker-dir"]')
+    .click();
+  importDocument
+    .getElementById("profileNextButton")
+    .scrollIntoView({ block: "end", behavior: "instant" });
+  importDocument.getElementById("profileNextButton").click();
+  await BrowserTestUtils.waitForMutationCondition(
+    itemsStep,
+    {
+      attributes: true,
+    },
+    () => BrowserTestUtils.isVisible(itemsStep)
+  );
+
+  checkSteps(importDocument, 3, 4);
+  checkVisiblePane(importDocument, "tabPane-app", "app-items");
+
+  Assert.ok(
+    BrowserTestUtils.isHidden(
+      importDocument.getElementById("appSourceInvalid")
+    ),
+    "invalid source message should be hidden"
+  );
+  Assert.ok(
+    BrowserTestUtils.isVisible(importDocument.getElementById("appSourceItems")),
+    "item selection should be visible"
+  );
+  Assert.ok(
+    !importDocument.getElementById("profileNextButton").disabled,
+    "forward button should not be disabled"
+  );
+
+  importDocument
+    .getElementById("profileNextButton")
+    .scrollIntoView({ block: "end", behavior: "instant" });
+  importDocument.getElementById("profileNextButton").click();
+  const summaryStep = importDocument.getElementById("app-summary");
+  await BrowserTestUtils.waitForMutationCondition(
+    summaryStep,
+    {
+      attributes: true,
+    },
+    () => BrowserTestUtils.isVisible(summaryStep)
+  );
+
+  checkSteps(importDocument, 4, 4);
+  checkVisiblePane(importDocument, "tabPane-app", "app-summary");
+  ok(
+    BrowserTestUtils.isHidden(
+      importDocument.getElementById("profileNextButton")
+    ),
+    "Can't advance from summary step"
+  );
+
+  importDocument
+    .getElementById("appStartImport")
+    .scrollIntoView({ block: "end", behavior: "instant" });
+  importDocument.getElementById("appStartImport").click();
+
+  const progressPane = importDocument.querySelector(
+    "#app-summary .progressPane"
+  );
+  await BrowserTestUtils.waitForMutationCondition(
+    appPane,
+    {
+      attributes: true,
+    },
+    () => BrowserTestUtils.isVisible(progressPane)
+  );
+  ok(
+    BrowserTestUtils.isHidden(importDocument.getElementById("appStartImport")),
+    "Import button is hidden while import is in progress"
+  );
+
+  const finish = importDocument.querySelector("#app-summary .progressFinish");
+  await BrowserTestUtils.waitForMutationCondition(
+    appPane,
+    {
+      attributes: true,
+    },
+    () => BrowserTestUtils.isVisible(finish)
+  );
+  ok(
+    BrowserTestUtils.isVisible(progressPane),
+    "When import succeeds and finish is shown, progress is still displayed"
+  );
+
+  // We close the tab ourselves instead of hitting the finish button, since
+  // restarting Thunderbird within the test is a headache.
+  document.getElementById("tabmail").closeTab(tab);
+
+  const gleanEvents = Glean.mail.import.testGetValue();
+  Assert.equal(
+    gleanEvents.length,
+    1,
+    "the import should have been recorded in telemetry"
+  );
+  Assert.deepEqual(
+    gleanEvents[0].extra,
+    {
+      importer: "Thunderbird,directory",
+      types: "accounts,addressBooks,calendars,mailMessages",
+      result: "succeeded",
+    },
+    "the telemetry data should be correct"
+  );
+});
+
+add_task(async function testImportLargeZIP() {
+  const profileDir = await IOUtils.createUniqueDirectory(
+    PathUtils.tempDir,
+    "profile-tmp"
+  );
+  const profileZip = PathUtils.join(profileDir, "profile.zip");
+  registerCleanupFunction(async () => {
+    await IOUtils.remove(profileDir, {
+      recursive: true,
+    });
+  });
+  // Create a sparse file just over 2 GB. The importer rejects files based on
+  // fileSize metadata, so we don't need to actually write 2 GB of bytes.
+  const zipNsFile = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsIFile);
+  zipNsFile.initWithPath(profileZip);
+  const fos = Cc["@mozilla.org/network/file-output-stream;1"].createInstance(
+    Ci.nsIFileOutputStream
+  );
+  const PR_WRONLY = 0x2;
+  const PR_CREATE_FILE = 0x08;
+  const PR_TRUNCATE = 0x20;
+  fos.init(zipNsFile, PR_WRONLY | PR_CREATE_FILE | PR_TRUNCATE, 0o644, 0);
+  fos
+    .QueryInterface(Ci.nsISeekableStream)
+    .seek(Ci.nsISeekableStream.NS_SEEK_SET, 2 * 1024 * 1024 * 1024);
+  fos.write("\x00", 1);
+  fos.close();
+  const filePath = Services.io
+    .newURI(PathUtils.toFileURI(profileZip))
+    .QueryInterface(Ci.nsIFileURL);
+  MockFilePicker.setFiles([filePath.file]);
+
+  const tab = await new Promise(resolve => {
+    const newTab = window.openTab("contentTab", {
+      url: "about:import",
+      onLoad() {
+        resolve(newTab);
+      },
+    });
+  });
+  const importDocument = tab.browser.contentDocument;
+
+  checkSteps(importDocument, 1, 4);
+  checkVisiblePane(importDocument, "tabPane-start", "start-sources");
+  ok(
+    importDocument.querySelector('#start-sources input[value="Thunderbird"]')
+      .checked,
+    "Thunderbird profile is selected by default"
+  );
+  ok(
+    BrowserTestUtils.isHidden(importDocument.getElementById("startBackButton")),
+    "Back button is hidden in first step"
+  );
+  importDocument
+    .querySelector("#tabPane-start .continue")
+    .scrollIntoView({ block: "end", behavior: "instant" });
+  importDocument.querySelector("#tabPane-start .continue").click();
+  const appPane = importDocument.getElementById("tabPane-app");
+  await BrowserTestUtils.waitForMutationCondition(
+    appPane,
+    {
+      attributes: true,
+    },
+    () => BrowserTestUtils.isVisible(appPane)
+  );
+
+  checkSteps(importDocument, 2, 4);
+  checkVisiblePane(importDocument, "tabPane-app", "app-profiles");
+  ok(
+    BrowserTestUtils.isVisible(
+      importDocument.getElementById("profileBackButton")
+    ),
+    "Back button is visible"
+  );
+  importDocument
+    .getElementById("appFilePickerZip")
+    .scrollIntoView({ block: "end", behavior: "instant" });
+  importDocument.getElementById("appFilePickerZip").click();
+  importDocument
+    .getElementById("profileNextButton")
+    .scrollIntoView({ block: "end", behavior: "instant" });
+  importDocument.getElementById("profileNextButton").click();
+
+  const notificationBox = importDocument.getElementById("errorNotifications");
+  await BrowserTestUtils.waitForMutationCondition(
+    notificationBox,
+    {
+      childList: true,
+    },
+    () => notificationBox.childElementCount > 0
+  );
+
+  document.getElementById("tabmail").closeTab(tab);
+});
+
+/**
+ * Open the second pane for each of the options listed in the first pane.
+ * This loads the each importer's module and calls `getSourceProfiles()`
+ * which, if nothing else, proves the module loads and the function works
+ * without error.
+ */
+add_task(async function testImportModules() {
+  const tab = await new Promise(resolve => {
+    const newTab = window.openTab("contentTab", {
+      url: "about:import",
+      onLoad() {
+        resolve(newTab);
+      },
+    });
+  });
+  const importDocument = tab.browser.contentDocument;
+
+  checkVisiblePane(importDocument, "tabPane-start", "start-sources");
+  const sources = importDocument.querySelectorAll("#start-sources input");
+  for (const source of sources) {
+    if (source.value == "Outlook") {
+      // We can't load the Outlook importer in a CI test, because it will
+      // trigger the MAPI code, display an error message from Windows, and
+      // never return.
+      continue;
+    }
+
+    info(`Opening ${source.value} pane.`);
+    const sourceSelector = `#start-sources input[value="${source.value}"]`;
+    importDocument
+      .querySelector(sourceSelector)
+      .scrollIntoView({ block: "end", behavior: "instant" });
+    importDocument.querySelector(sourceSelector).click();
+    importDocument
+      .querySelector("#tabPane-start .continue")
+      .scrollIntoView({ block: "end", behavior: "instant" });
+    importDocument.querySelector("#tabPane-start .continue").click();
+
+    if (source.value != "file") {
+      const appPane = importDocument.getElementById("tabPane-app");
+      await BrowserTestUtils.waitForMutationCondition(
+        appPane,
+        { attributes: true },
+        () => BrowserTestUtils.isVisible(appPane)
+      );
+      checkVisiblePane(importDocument, "tabPane-app", "app-profiles");
+      Assert.ok(
+        BrowserTestUtils.isVisible(
+          importDocument.getElementById("profileBackButton")
+        ),
+        "Back button is visible"
+      );
+      importDocument
+        .getElementById("profileBackButton")
+        .scrollIntoView({ block: "end", behavior: "instant" });
+      importDocument.getElementById("profileBackButton").click();
+      const startPane = importDocument.getElementById("tabPane-start");
+      await BrowserTestUtils.waitForMutationCondition(
+        startPane,
+        { attributes: true },
+        () => BrowserTestUtils.isVisible(startPane)
+      );
+    } else {
+      const startFile = importDocument.getElementById("start-file");
+      await BrowserTestUtils.waitForMutationCondition(
+        startFile,
+        { attributes: true },
+        () => BrowserTestUtils.isVisible(startFile)
+      );
+      checkVisiblePane(importDocument, "tabPane-start", "start-file");
+      Assert.ok(
+        BrowserTestUtils.isVisible(
+          importDocument.getElementById("startBackButton")
+        ),
+        "Back button is visible"
+      );
+      importDocument
+        .getElementById("startBackButton")
+        .scrollIntoView({ block: "end", behavior: "instant" });
+      importDocument.getElementById("startBackButton").click();
+      const sourcesStep = importDocument.getElementById("start-sources");
+      await BrowserTestUtils.waitForMutationCondition(
+        sourcesStep,
+        { attributes: true },
+        () => BrowserTestUtils.isVisible(sourcesStep)
+      );
+    }
+
+    checkVisiblePane(importDocument, "tabPane-start", "start-sources");
+  }
+
+  document.getElementById("tabmail").closeTab(tab);
+});

@@ -1,0 +1,11 @@
+<defines>
+KDF1_18033 -> 20160128
+</defines>
+
+<module_info>
+name -> "KDF1 (ISO 18033-2)"
+</module_info>
+
+<requires>
+hash
+</requires>

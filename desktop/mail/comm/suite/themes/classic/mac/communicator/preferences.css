@@ -1,0 +1,77 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+/* Styles used by all preference windows and panes of SeaMonkey */
+
+@namespace url("http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul");
+
+/* ::::: Main Window ::::: */
+
+prefwindow {
+  -moz-appearance: dialog;
+  background-color: #FFFFFF;
+  color: -moz-DialogText;
+  font: message-box;
+  padding-top: 8px;
+  padding-bottom: 0px;
+  padding-inline-start: 8px;
+  padding-inline-end: 10px;
+  font: -moz-dialog;
+}
+
+prefwindow[type="child"] {
+  padding-top: 18px;
+  padding-bottom: 15px;
+  padding-inline-start: 18px;
+  padding-inline-end: 20px;
+}
+
+prefpane {
+  padding: 12px 12px 0 12px;
+}
+
+prefwindow[type="child"] > prefpane {
+  padding: 0;
+}
+
+.prefWindow-dlgbuttons {
+  margin: 0 12px 12px;
+  padding-top: 0 !important;
+}
+
+.paneSelector {
+  font: message-box;
+  padding: 1px 4px;
+  -moz-appearance: toolbar;
+  margin: 0;
+}
+
+radio[pane] {
+  border: solid transparent;
+  border-width: 0 2px;
+  padding: 5px 4px 3px;
+  margin: 0;
+  -moz-appearance: none;
+  text-shadow: rgba(255, 255, 255, 0.4) 0 1px;
+}
+
+radio[pane]:active:hover {
+  text-shadow: none;
+}
+
+radio[pane]:active:hover > .paneButtonIcon {
+  filter: brightness(0.55);
+}
+
+radio[pane][selected="true"] {
+  border-image: url("chrome://communicator/skin/icons/panebutton-active.png") 0 2 fill repeat stretch;
+}
+
+radio[pane][selected="true"]:-moz-window-inactive {
+  border-image: url("chrome://communicator/skin/icons/panebutton-inactive.png") 0 2 fill repeat stretch;
+}
+
+.paneButtonLabel {
+  margin: 0 !important;
+}

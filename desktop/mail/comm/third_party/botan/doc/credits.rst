@@ -1,0 +1,205 @@
+
+Credits
+========================================
+
+This is at least a partial credits-file of people that have contributed
+to botan. It is sorted by name and formatted to allow easy grepping
+and beautification by scripts. The fields are name (N), email (E),
+web-address (W), PGP key ID and fingerprint (P), description (D),
+snail-mail address (S), and Bitcoin address (B).
+
+.. highlight:: none
+
+::
+
+  N: Fabian Albert
+  E: fabian.albert@rohde-schwarz.com
+  W: https://www.rohde-schwarz.com/cybersecurity
+  D: SLH-DSA, Ed/X448, HSS/LMS, ML-KEM, ML-DSA, Classic McEliece, TLS-Anvil tests
+  S: Bochum, Germany
+
+  N: Alexander Bluhm
+  W: https://www.genua.de/
+  P: 1E3B BEA4 6C20 EA00 2FFC  DE4D C5F4 83AD DEE8 6380
+  D: improve support for OpenBSD
+  S: Kirchheim, Germany
+
+  N: Michael Boric
+  E: michael.boric@rohde-schwarz.com
+  W: https://www.rohde-schwarz.com/cybersecurity
+  D: Kyber, Dilithium
+  S: Cologne, Germany
+
+  N: Charles Brockman
+  W: http://www.securitygenetics.com/
+  D: documentation editing
+  S: Oregon, USA
+
+  N: Erwan Chaussy
+  D: Base32, Base64 matching Base32 implementation
+  S: France
+
+  N: Simon Cogliani
+  E: simon.cogliani@tanker.io
+  P: EA73 D0AF 5A81 A61A 8931  C2CA C9AB F2E4 3820 4F25
+  D: Getting keystream of ChaCha
+  S: Paris, France
+
+  N: Martin Doering
+  E: doering@cdc.informatik.tu-darmstadt.de
+  D: GF(p) arithmetic
+
+  N: Olivier de Gaalon
+  D: SQLite encryption codec (src/contrib/sqlite)
+
+  N: Matthias Gierlings
+  E: matthias.gierlings@hackmanit.de
+  W: https://www.hackmanit.de/
+  P: 39E0 D270 19A4 B356 05D0 29AE 1BD3 49CF 744A 02FF
+  D: GMAC, Extended Hash-Based Signatures (XMSS)
+  S: Bochum, Germany
+
+  N: Manuel Glaser
+  E: manuel.glaser@rohde-schwarz.com
+  W: https://www.rohde-schwarz.com/cybersecurity
+  D: Kyber, Dilithium
+  S: Cologne, Germany
+
+  N: Matthew Gregan
+  D: Binary file I/O support, allocator fixes
+
+  N: Hany Greiss
+  D: Windows porting
+
+  N: Manuel Hartl
+  E: hartl@flexsecure.de
+  W: http://www.flexsecure.de/
+  D: ECDSA, ECDH
+
+  N: Yves Jerschow
+  E: yves.jerschow@uni-duesseldorf.de
+  D: Optimizations for memory load/store and HMAC
+  D: Support for IPv4 addresses in X.509 alternative names
+  S: Germany
+
+  N: Matt Johnston
+  D: Allocator fixes and optimizations, decompressor fixes
+
+  N: Peter J. Jones
+  E: pjones@pmade.org
+  D: Bzip2 compression module
+  S: Colorado, USA
+
+  N: Justin Karneges
+  D: Qt support modules (mutexes and types), X.509 API design
+
+  N: Kagan Can Sit
+  E: kagancansit@hotmail.com
+  W: https://kagancansit.github.io
+  D: C++20 modernization, performance optimizations, code quality improvements
+  S: Turkey
+
+  N: Rostyslav Khudolii
+  E: rhudoliy@gmail.com
+  D: SRP6 FFI
+  S: Ukraine/Denmark
+
+  N: Vojtech Kral
+  E: vojtech@kral.hk
+  D: LZMA compression module
+  S: Czech Republic
+
+  N: Matej Kenda
+  E: matej.kenda@topit.si
+  D: Locking in Algo_Registry for Windows OS
+  S: Slovenia
+
+  N: René Fischer (formerly Korthaus)
+  E: rene.fischer@rohde-schwarz.com
+  W: https://www.rohde-schwarz.com/cybersecurity
+  P: C196 FF9D 3DDC A5E7 F98C E745 9AD0 F9FA 587E 74D6
+  D: CI, Ninja build system, ECGDSA, ECKCDSA
+  S: Bochum, Germany
+
+  N: Adam Langley
+  E: agl@imperialviolet.org
+  D: Curve25519
+
+  N: Jack Lloyd
+  E: jack@randombit.net
+  W: https://www.randombit.net/
+  P: 3F69 2E64 6D92 3BBE E7AE  9258 5C0F 96E8 4EC1 6D6B
+  D: Original designer/author, maintainer 2001-current
+  S: Vermont, USA
+
+  N: Philippe Lieser
+  E: philippe.lieser@rohde-schwarz.com
+  W: https://www.rohde-schwarz.com/cybersecurity
+  D: CI, BSI module policy, HSS/LMS, various minor contributions
+  S: Saarland, Germany
+
+  N: Joel Low
+  D: DLL symbol visibility and Windows DLL support in general
+  D: Threaded_Fork
+
+  N: Christoph Ludwig
+  E: ludwig@fh-worms.de
+  D: GP(p) arithmetic
+
+  N: Vaclav Ovsik
+  E: vaclav.ovsik@i.cz
+  D: Perl XS module (src/contrib/perl-xs)
+
+  N: Luca Piccarreta
+  E: luca.piccarreta@gmail.com
+  D: x86/amd64 assembler, BigInt optimizations, Win32 mutex module
+  S: Italy
+
+  N: Hannes Rantzsch
+  W: https://www.nexenio.com
+  D: TLS 1.3, Kyber, Dilithium
+  S: Berlin, Germany
+
+  N: Amos Treiber
+  E: amos.treiber@rohde-schwarz.com
+  W: https://www.rohde-schwarz.com/cybersecurity
+  D: SLH-DSA, TPM 2.0, FrodoKEM, Classic McEliece, ML-KEM, ML-DSA
+  S: Cologne, Germany
+
+  N: Daniel Seither
+  E: post@tiwoc.de
+  D: iOS support, improved Android support, improved MSVC support
+
+  N: Falko Strenzke
+  E: fstrenzke@cryptosource.de
+  W: http://www.cryptosource.de
+  D: McEliece, GF(p) arithmetic, CVC, Shanks-Tonelli algorithm
+  S: Darmstadt, Germany
+
+  N: René Meusel
+  E: rene.meusel@rohde-schwarz.com
+  W: https://www.rohde-schwarz.com/cybersecurity
+  D: TLS 1.3, ML-KEM, ML-DSA, SLH-DSA, FrodoKEM, TPM 2.0, CI
+  S: Berlin, Germany
+
+  N: Daniel Neus
+  E: daniel.neus@rohde-schwarz.com
+  W: https://www.rohde-schwarz.com/cybersecurity
+  D: CI, PKCS#11, RdSeed, BSI module policy
+  S: Bochum, Germany
+
+  N: Simon Warta
+  E: simon@kullo.net
+  D: Build system
+  S: Germany
+
+  N: Philipp Weber
+  E: philipp.weber@rohde-schwarz.com
+  W: https://www.rohde-schwarz.com/cybersecurity
+  D: KDF1-18033, ECIES
+  S: Saarland, Germany
+
+  N: Daniel Wyatt (on behalf of Ribose Inc)
+  E: daniel.wyatt@ribose.com
+  W: https://www.ribose.com/
+  D: SM3, Streebog, various minor contributions

@@ -1,0 +1,702 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@import url("chrome://messenger/skin/messenger.css");
+@import url("chrome://messenger/skin/colors.css");
+@import url("chrome://messenger/skin/layout.css");
+@import url("chrome://messenger/skin/widgets.css");
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  block-size: 100%;
+  overflow-y: auto;
+}
+
+#body {
+  --dateColor: light-dark(var(--color-gray-20), var(--color-gray-60));
+  --dateTextColor: light-dark(var(--color-gray-90), var(--color-white));
+  --barColor: var(--selected-item-color);
+  --barHlColor: var(--linkColor);
+  --dateHLColor: var(--selected-item-color);
+  --panelHoverColor: inherit;
+  --linkColor: light-dark(var(--color-blue-70), var(--color-blue-30));
+
+  @media (prefers-contrast) {
+    --panelHoverColor: SelectedItemText;
+    --linkColor: -moz-NativehyperlinkText;
+  }
+}
+
+#gloda-facet-view {
+  display: flex;
+  background-color: var(--layout-background-0);
+  color: var(--layout-color-0);
+  align-items: stretch;
+}
+
+.facets-sidebar {
+  inline-size: 20em;
+  max-inline-size: 20em;
+  padding: 4px;
+  padding-inline-start: 1em;
+  background-color: var(--layout-background-1);
+  color: var(--layout-color-1);
+}
+
+#main-column {
+  flex: 1;
+  padding-inline-start: 1em;
+  min-block-size: 100vh;
+}
+
+#header {
+  max-inline-size: 60em;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-block-start: 2em;
+}
+
+#data-column {
+  margin-block-start: 1em;
+  margin-inline-end: 1em;
+  max-inline-size: 60em;
+  display: flex;
+  flex-direction: column;
+}
+
+.popup-menu {
+  position: absolute;
+  display: block;
+  z-index: 100;
+  overflow: hidden;
+  padding: 3px;
+  color: var(--color-text-base);
+  border: 1px solid var(--color-surface-border-intense);
+  border-radius: 8px;
+  background-color: var(--color-surface-subtle);
+  box-shadow: 0 0 4px hsla(210, 4%, 10%, 0.2);
+
+  &[variety="remainder"] .undo {
+    display: none;
+  }
+
+  &:is([variety="include"], [variety="exclude"]) :is(.top, .bottom) {
+    display: none;
+  }
+
+  &[variety="invisible"] {
+    display: none;
+  }
+}
+
+.popup-menuitem {
+  font: menu;
+  padding: 4px 10px;
+  border-radius: 3px;
+
+  &:is(:hover, :focus) {
+    background-color: var(--selected-item-color);
+    color: var(--selected-item-text-color);
+  }
+
+  &:focus {
+    cursor: pointer;
+  }
+}
+
+/* ===== Query Explanation ===== */
+
+#query-explanation {
+  padding-inline-start: 0;
+  font-size: small;
+}
+
+.explanation-fulltext-label,
+.explanation-query-label {
+  font-size: medium;
+  font-weight: bold;
+}
+
+.explanation-fulltext-label,
+.explanation-fulltext-term {
+  margin: 0 0.1em;
+}
+
+.explanation-fulltext-criteria {
+  color: var(--layout-color-3);
+  margin: 0 0.1em;
+}
+
+.explanation-query-label,
+.explanation-query-involves,
+.explanation-query-tagged {
+  margin-inline-end: 0.5ex;
+}
+
+/* ===== Facets ===== */
+
+h1,
+h2,
+h3 {
+  cursor: default;
+}
+
+.facetious {
+  display: list-item; /* take the whole column width */
+  list-style: none;
+  padding: 2px;
+
+  &[uninitialized] {
+    display: none !important;
+  }
+}
+
+.facet-included-header[state="empty"],
+.facet-excluded-header[state="empty"],
+.facet-remaindered-header[needed="false"] {
+  display: none;
+}
+
+.facet-included-header[state="empty"] + .facet-included,
+.facet-excluded-header[state="empty"] + .facet-excluded,
+.facet-remaindered:empty {
+  display: none;
+}
+
+.date-wrapper {
+  position: relative;
+  block-size: 80px;
+  display: block;
+  margin-inline-end: 1em;
+  padding-block: 0.5em 1em;
+  padding-inline: 2em 0;
+}
+
+.gloda-timeline-button {
+  margin-inline-start: 8px;
+
+  &[checked] {
+    background: var(--toolbarbutton-background-color-active);
+    border-color: var(--toolbarbutton-active-bordercolor);
+    box-shadow: var(--toolbarbutton-active-boxshadow);
+  }
+
+  & > img {
+    /* Icon is squashed. */
+    inline-size: 14px;
+    block-size: 10px;
+    margin-inline-end: 2px;
+    -moz-context-properties: fill;
+    fill: currentColor;
+  }
+}
+
+.facet-date-zoom-out {
+  position: absolute;
+  inset-block-start: -18px;
+  inset-inline-start: 0;
+  inline-size: 24px !important;
+  block-size: 24px !important;
+  background-position: center center;
+  background-repeat: no-repeat;
+  border: 1px solid transparent;
+  border-radius: var(--button-border-radius);
+
+  .facetious[type="date"][zoomedout="false"] & {
+    background-image: url("chrome://messenger/skin/icons/zoomout.svg");
+    cursor: pointer;
+    -moz-context-properties: fill;
+    fill: currentColor;
+
+    &:-moz-locale-dir(rtl) {
+      transform: scaleX(-1);
+    }
+
+    &:hover {
+      fill: var(--selected-item-text-color);
+      background-color: var(--selected-item-color);
+      border-color: Field;
+    }
+  }
+}
+
+.date-vis-frame {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-start: 0;
+}
+
+/* === Boolean Facet === */
+
+#facet-fromMe,
+#facet-toMe,
+#facet-star,
+#facet-attachmentTypes {
+  display: inline-block; /* override the general .facetious list-item style */
+}
+
+/* special case: hide these two facets when they don't match */
+#facet-star[disabled],
+#facet-attachmentTypes[disabled] {
+  display: none;
+}
+
+.facet-checkbox-bubble {
+  display: inline-flex;
+  padding: 2px;
+  padding-inline-end: 6px;
+  border-radius: var(--button-border-radius);
+  cursor: pointer;
+
+  & > input {
+    display: none;
+  }
+
+  facet-boolean[disabled] > &,
+  facet-boolean-filtered[disabled] > & {
+    cursor: default;
+  }
+
+  facet-boolean:not([disabled]):hover > &,
+  facet-boolean-filtered:not([disabled]):hover > &,
+  facet-boolean[checked]:not([disabled]) > &,
+  facet-boolean-filtered[checked]:not([disabled]) > & {
+    background-color: var(--selected-item-color);
+    color: var(--selected-item-text-color);
+  }
+}
+
+facet-boolean[disabled] {
+  opacity: 0.6;
+}
+
+.facet-checkbox-label,
+.facet-checkbox-count {
+  margin: 3px;
+}
+
+.facet-checkbox-count {
+  .facetious:not(:hover) > & {
+    color: var(--layout-color-3);
+  }
+
+  &:empty {
+    display: none;
+  }
+
+  &::before {
+    content: "(";
+  }
+
+  &::after {
+    content: ")";
+  }
+}
+
+/* === Boolean Filtered === */
+
+.facet-filter-list {
+  display: block;
+
+  facet-boolean-filtered:not([checked]) > & {
+    display: none;
+  }
+}
+
+/* === Discrete Facet === */
+
+.facet-content {
+  max-block-size: 32em;
+  overflow: auto;
+}
+
+.facet-more {
+  display: none;
+  margin: 1px;
+  margin-block-start: 0.5em;
+  cursor: pointer;
+
+  &[needed="true"] {
+    display: inline-block;
+  }
+}
+
+.barry {
+  margin: 0;
+  padding: 0;
+  border-block-start: 1px solid var(--layout-color-3);
+}
+
+.bar {
+  position: relative;
+  cursor: pointer;
+  border-block-end: 1px solid var(--layout-color-3);
+
+  &[selected="true"] {
+    background-color: var(--selected-item-color);
+    color: var(--selected-item-text-color);
+  }
+
+  &:is(:hover, :focus) {
+    background-color: var(--selected-item-color);
+    outline: none;
+
+    & > :is(.bar-link, .bar-count) {
+      color: var(--selected-item-text-color);
+    }
+  }
+}
+
+.bar-link {
+  text-decoration: none;
+  display: block;
+  color: var(--linkColor);
+  padding-block: 0.3em;
+  padding-inline: 0.5em 4em;
+  position: relative;
+  z-index: 2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+
+  .facet-excluded > .bar > & {
+    text-decoration: line-through; /* strike the names of excluded facets */
+  }
+
+  .bar[selected="true"] > & {
+    color: var(--selected-item-text-color);
+  }
+}
+
+.bar-count {
+  position: absolute;
+  display: block;
+  inset-inline-end: 0;
+  margin-inline-end: 8px;
+  line-height: 1.6em;
+  color: var(--layout-color-3);
+
+  .bar[selected="true"] > & {
+    color: var(--selected-item-text-color);
+  }
+}
+
+/* ===== Results ===== */
+
+.results-message-header {
+  display: none; /* $('.results-message-header').show() is run if there are results */
+  border-block-end: 2px solid hsla(0, 0%, 60%, 0.25);
+  padding: 4px 2px;
+  padding-inline-end: 0;
+  margin-block-end: 0.5em;
+
+  #results[state="some"] & {
+    display: flex;
+    align-items: center;
+  }
+}
+
+.results-message-count {
+  font-weight: 600;
+  font-size: 1rem;
+  margin: 0;
+}
+
+.results-message-showall-button {
+  appearance: none !important;
+  color: var(--linkColor);
+  cursor: pointer;
+  padding: 4px;
+  padding-inline-end: 20px;
+  margin-inline-end: 2px;
+  border-radius: var(--button-border-radius);
+  -moz-context-properties: fill;
+  fill: currentColor;
+  background-image: url("chrome://messenger/skin/icons/new-window.svg");
+  background-position: right 4px center;
+  background-size: 11px;
+  background-repeat: no-repeat;
+
+  &:-moz-locale-dir(rtl) {
+    background-position-x: left 4px;
+  }
+
+  &:is(:hover, :focus) {
+    background-color: var(--selected-item-color);
+    color: var(--selected-item-text-color);
+  }
+}
+
+.results-message-sort-bar {
+  flex: 1;
+  display: flex;
+  justify-content: end;
+}
+
+#sortby {
+  appearance: none;
+  min-block-size: 24px;
+  color: inherit;
+  margin: 1px 5px;
+  padding-block: 0;
+  padding-inline: 4px 20px;
+  border: 1px solid var(--button-border-color);
+  border-radius: var(--button-border-radius);
+  background-color: var(--button-background-color);
+  background-image: var(--icon-nav-down-sm);
+  background-position: right 4px center;
+  background-repeat: no-repeat;
+  background-size: auto 12px;
+  -moz-context-properties: fill;
+  fill: currentColor;
+
+  &:-moz-locale-dir(rtl) {
+    background-position-x: left 4px;
+  }
+
+  &:is(:hover, :focus) {
+    background-color: var(--button-hover-background-color);
+    cursor: pointer;
+  }
+}
+
+/* ===== Messages ===== */
+
+.message {
+  display: block;
+  font-family: sans-serif;
+  font-size: small;
+  padding: 3px 5px;
+  border: 1px solid transparent;
+  border-block-end-color: lightgrey;
+  border-radius: var(--button-border-radius);
+  color: var(--layout-color-1);
+  overflow: hidden;
+
+  &:not(:first-child) {
+    border-block-start-style: none;
+  }
+
+  &:last-child {
+    border-block-end-color: transparent;
+  }
+
+  &:hover {
+    border-color: lightgrey;
+    box-shadow:
+      0 0 1px lightgrey inset,
+      0 0 1px lightgrey inset,
+      0 0 1px lightgrey inset;
+
+    & .message-subject {
+      color: var(--selected-item-color);
+    }
+  }
+
+  & .message-subject:is(:hover, :focus) {
+    background-color: var(--selected-item-color);
+    color: var(--selected-item-text-color);
+  }
+
+  &:focus,
+  &[unread="true"]:focus {
+    border: 1px dotted lightgrey;
+    padding: 1em 0;
+  }
+}
+
+.message-header {
+  margin-block-end: 0.5em;
+}
+
+.message-meta {
+  float: inline-end;
+  padding-inline-start: 2em;
+  text-align: end;
+  max-inline-size: 20em;
+  max-block-size: 10em;
+  overflow: hidden;
+  color: var(--layout-color-3);
+}
+
+.message-attachments {
+  text-align: end;
+  overflow: hidden;
+}
+
+.message-attachment {
+  max-inline-size: 20em;
+  text-align: start;
+  display: inline-block;
+  white-space: nowrap;
+  padding-inline-start: 1ex;
+
+  &::after {
+    content: ", ";
+  }
+  &:last-child::after {
+    content: "";
+  }
+}
+
+.message-attachment-icon {
+  display: inline-block;
+  inline-size: 16px;
+  block-size: 16px;
+  background: url("chrome://messenger/skin/icons/attach.svg") transparent no-repeat center;
+  -moz-context-properties: fill;
+  fill: currentColor;
+}
+
+.message-line {
+  position: relative;
+}
+
+.message-addresses-group {
+  text-align: end;
+}
+
+.message-star[starred="true"] {
+  display: inline-block;
+  inline-size: 12px !important;
+  block-size: 12px;
+  background-image: url("chrome://messenger/skin/icons/flagged.svg");
+  background-size: contain;
+  -moz-context-properties: fill, fill-opacity, stroke, stroke-opacity;
+  fill: #f4bc44;
+  fill-opacity: 1;
+  stroke: #f4bc44;
+  stroke-opacity: 1;
+}
+
+.message-addresses-group {
+  padding-inline-start: 1em;
+}
+
+.message-subject-group {
+  padding-inline-start: 2px; /* to line up the subjects with the "Top N messages out of M" */
+}
+
+.message-author,
+.message-recipients {
+  text-align: end;
+  display: inline;
+  color: var(--layout-color-1);
+}
+
+.message-subject {
+  color: var(--linkColor);
+  font-size: medium;
+
+  &:hover {
+    cursor: pointer;
+  }
+}
+
+.message-body {
+  color: var(--layout-color-1);
+  margin-inline-start: 1em;
+  font-family: monospace;
+  font-size: medium;
+  white-space: pre-wrap;
+}
+
+.message-body-fulltext-match {
+  color: var(--selected-item-text-color);
+  background-color: var(--selected-item-color);
+  border-radius: var(--button-border-radius);
+}
+
+.message-recipients-group {
+  margin-inline-start: 0.5em;
+  font-size: small;
+}
+
+.message-tag {
+  display: inline-block; /* to avoid splitting 'To' and 'Do' e.g. */
+  margin-inline-start: 3px;
+  padding: 0 0.5ex;
+  border-radius: 3px;
+  border: 1px solid color-mix(in srgb, currentColor 50%, transparent);
+}
+
+.show-more {
+  display: none; /* $('.show-more').show() is run if there are results */
+  float: inline-end;
+  margin-block: 5px 2em;
+  margin-inline-end: 1em;
+  cursor: pointer;
+  align-self: flex-end;
+}
+
+:is(.loading, .empty) {
+  div& {
+    margin: 0 auto;
+    text-align: center;
+  }
+
+  span& {
+    color: var(--layout-color-2);
+    background-color: var(--layout-background-2);
+    border: 1px outset var(--layout-border-2);
+    border-radius: var(--button-border-radius);
+  }
+
+  img& {
+    margin: 0 1ex;
+    padding: 0;
+    border: none;
+    vertical-align: middle;
+  }
+}
+
+.empty {
+  div& {
+    display: none;
+  }
+
+  span& {
+    background-color: inherit;
+    border: none;
+    font-size: large;
+    color: var(--color-blue-70);
+    -moz-context-properties: fill;
+    fill: currentColor;
+  }
+
+  img&:-moz-locale-dir(rtl) {
+    transform: scaleX(-1);
+  }
+}
+
+img.loading {
+  -moz-context-properties: fill;
+  fill: var(--selected-item-color);
+}
+
+#facet-date {
+  max-block-size: 104px;
+  padding-block: 2px;
+  overflow: visible;
+  /* Put facet-date at the top */
+  order: -1;
+
+  &[hide="true"] {
+    max-block-size: 0;
+    padding-block: 0;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  #facet-date,
+  .results-message-showall-button {
+    transition: all 200ms ease;
+  }
+}

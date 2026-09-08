@@ -1,0 +1,867 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+## Window controls
+
+messenger-window-minimize-button =
+    .tooltiptext = Minimize
+messenger-window-maximize-button =
+    .tooltiptext = Maximize
+messenger-window-restore-down-button =
+    .tooltiptext = Restore Down
+messenger-window-close-button =
+    .tooltiptext = Close
+
+# Variables:
+# $count (Number) - Number of unread messages.
+unread-messages-os-tooltip =
+  { $count ->
+     [one] 1 unread message
+    *[other] { $count } unread messages
+  }
+
+about-rights-notification-text = { -brand-short-name } is free and open source software, built by a community of thousands from all over the world.
+
+## Content tabs
+
+open-windows-warning-confirmation-title = Confirm
+
+# Variables:
+#   $count - number of messages to open
+open-windows-warning-confirmation = {
+    $count ->
+       [one] Opening { $count } message may be slow. Continue?
+      *[other] Opening { $count } messages may be slow. Continue?
+    }
+
+open-tabs-warning-confirmation-title = Confirm
+
+# Variables:
+#   $count - number of messages to open
+open-tabs-warning-confirmation = {
+    $count ->
+       [one] Opening { $count } message may be slow. Continue?
+      *[other] Opening { $count } messages may be slow. Continue?
+    }
+
+content-tab-page-loading-icon =
+    .alt = The page is loading
+content-tab-security-high-icon =
+    .alt = The connection is secure
+content-tab-security-broken-icon =
+    .alt = The connection is not secure
+
+# Back
+
+# Variables
+#   $shortcut (String) - A keyboard shortcut for the Go Back command.
+content-tab-menu-back =
+    .tooltiptext = Go back one page ({ $shortcut })
+    .aria-label = Back
+    .accesskey = B
+
+# This menuitem is only visible on macOS
+content-tab-menu-back-mac =
+    .label = Back
+    .accesskey = B
+
+# Forward
+
+# Variables
+#   $shortcut (String) - A keyboard shortcut for the Go Forward command.
+content-tab-menu-forward =
+    .tooltiptext = Go forward one page ({ $shortcut })
+    .aria-label = Forward
+    .accesskey = F
+
+# This menuitem is only visible on macOS
+content-tab-menu-forward-mac =
+    .label = Forward
+    .accesskey = F
+
+# Reload
+
+content-tab-menu-reload =
+    .tooltiptext = Reload page
+    .aria-label = Reload
+    .accesskey = R
+
+# This menuitem is only visible on macOS
+content-tab-menu-reload-mac =
+    .tooltiptext = Reload page
+    .label = Reload
+    .accesskey = R
+
+# Stop
+
+content-tab-menu-stop =
+    .tooltiptext = Stop page loading
+    .aria-label = Stop
+    .accesskey = S
+
+# This menuitem is only visible on macOS
+content-tab-menu-stop-mac =
+    .tooltiptext = Stop page loading
+    .label = Stop
+    .accesskey = S
+
+## Toolbar
+
+addons-and-themes-toolbarbutton =
+    .label = Add-ons and Themes
+    .tooltiptext = Manage your add-ons
+
+quick-filter-toolbarbutton =
+    .label = Quick Filter
+    .tooltiptext = Filter messages
+
+redirect-msg-button =
+    .label = Redirect
+    .tooltiptext = Redirect selected message
+
+## Folder Pane
+
+folder-pane-toolbar =
+    .toolbarname = Folder Pane Toolbar
+    .accesskey = F
+
+folder-pane-toolbar-options-button =
+    .tooltiptext = Folder Pane Options
+
+folder-pane-header-label = Folders
+
+## Folder Toolbar Header Popup
+
+folder-toolbar-hide-toolbar-toolbarbutton =
+    .label = Hide Toolbar
+    .accesskey = H
+
+show-all-folders-label =
+    .label = All Folders
+    .accesskey = A
+
+show-unread-folders-label =
+    .label = Unread Folders
+    .accesskey = n
+
+show-favorite-folders-label =
+    .label = Favorite Folders
+    .accesskey = F
+
+show-smart-folders-label =
+    .label = Unified Folders
+    .accesskey = U
+
+show-recent-folders-label =
+    .label = Recent Folders
+    .accesskey = R
+
+show-tags-folders-label =
+    .label = Tags
+    .accesskey = T
+
+folder-toolbar-toggle-folder-compact-view =
+    .label = Compact View
+    .accesskey = C
+
+## Folder names
+
+# Gmail's "All Mail" folder. Please make sure this is the same string used in the Gmail web UI for your language.
+folder-name-all-mail = All Mail
+
+folder-name-spam = Spam
+
+## File Menu
+
+menu-file-save-as-file =
+    .label = File…
+    .accesskey = F
+
+# Variables:
+#   $count - number of messages to get
+menu-file-get-next-n-news-msgs = {
+    $count ->
+        [one] Get Next { $count } News Message
+        *[other] Get Next { $count } News Messages
+    }
+
+# Variables:
+# $count (Number) - One or more than one folder selected for compacting
+menu-file-compact =
+  .label =
+    { $count ->
+      [1] Compact Folder
+     *[other] Compact Folders
+    }
+  .accesskey = F
+
+# One or more servers selected for compacting all their folders. Only this or
+# menu-file-compact string will appear at a time, not both.
+menu-file-compact-all =
+  .label = Compact All Folders
+  .accesskey = F
+
+## Edit Menu
+
+menu-edit-delete-folder =
+    .label = Delete Folder
+    .accesskey = D
+
+menu-edit-unsubscribe-newsgroup =
+    .label = Unsubscribe Newsgroup
+    .accesskey = b
+
+# Variables:
+# $count (Number) - Number of selected messages.
+menu-edit-delete-messages =
+    .label =
+        { $count ->
+            [one] Delete Message
+           *[other] Delete Selected Messages
+        }
+    .accesskey = D
+
+# Variables:
+# $count (Number) - Number of selected messages.
+menu-edit-undelete-messages =
+    .label =
+        { $count ->
+            [one] Undelete Message
+           *[other] Undelete Selected Messages
+        }
+    .accesskey = d
+
+menu-edit-properties =
+    .label = Properties
+    .accesskey = o
+
+menu-edit-folder-properties =
+    .label = Folder Properties
+    .accesskey = o
+
+menu-edit-newsgroup-properties =
+    .label = Newsgroup Properties
+    .accesskey = o
+
+## Message Menu
+
+redirect-msg-menuitem =
+    .label = Redirect
+    .accesskey = D
+
+## Shared Menu Items
+
+menu-move-again =
+    .label = Move Again
+
+move-to-folder-again-key =
+    .key = m
+
+# Variables:
+# $folderName (String) - The name of the folder to which the message(s) will be moved.
+# Note: The access key should be a letter that occurs before $folderName in the translated string.
+menu-move-to-folder-again =
+    .label = Move to "{ $folderName }" Again
+    .accesskey = t
+
+# Variables:
+# $folderName (String) - The name of the folder to which the message(s) will be copied.
+# Note: The access key should be a letter that occurs before $folderName in the translated string.
+menu-copy-to-folder-again =
+    .label = Copy to "{ $folderName }" Again
+    .accesskey = t
+
+menu-move-to =
+    .label = Move To
+    .accesskey = M
+
+menu-copy-to =
+    .label = Copy To
+    .accesskey = C
+
+menu-move-copy-recent-destinations =
+    .label = Recent Destinations
+    .accesskey = R
+
+menu-move-copy-favorites =
+    .label = Favorites
+    .accesskey = F
+
+menu-move-copy-no-recent =
+    .label = (No recent destinations)
+
+menu-move-copy-no-favorites =
+    .label = (No favorites)
+
+## AppMenu
+
+appmenu-save-as-file =
+    .label = File…
+
+appmenu-settings =
+    .label = Settings
+
+appmenu-addons-and-themes =
+    .label = Add-ons and Themes
+
+## Context menu
+
+context-menu-mark-read =
+    .aria-label = Mark as Read
+    .tooltiptext = Mark as Read
+
+context-menu-mark-unread =
+    .aria-label = Mark as Unread
+    .tooltiptext = Mark as Unread
+
+context-menu-mark-reply =
+    .aria-label = Reply
+    .tooltiptext = Reply
+
+context-menu-archive =
+    .aria-label = Archive
+    .tooltiptext = Archive
+
+context-menu-mark-spam =
+    .aria-label = Mark as Spam
+    .tooltiptext = Mark as Spam
+
+context-menu-mark-not-spam =
+    .aria-label = Mark as not Spam
+    .tooltiptext = Mark as not Spam
+
+mail-context-menu-open =
+    .label = Open
+    .accesskey = O
+
+mail-context-menu-reply =
+    .label = Reply
+    .accesskey = R
+
+mail-context-menu-forward-redirect =
+    .label = Forward and Redirect
+    .accesskey = F
+
+mail-context-menu-forward-forward =
+    .label = Forward
+    .accesskey = F
+
+mail-context-menu-forward-inline =
+    .label = Inline
+    .accesskey = I
+
+# Variables:
+# $count (Number) - Number of selected messages.
+mail-context-menu-forward-as-attachment =
+    .label =
+        { $count ->
+            [one] As Attachment
+           *[other] As Attachments
+        }
+    .accesskey = A
+
+mail-context-menu-organize =
+    .label = Organize
+    .accesskey = g
+
+mail-context-menu-threads =
+    .label = Threads
+    .accesskey = T
+
+context-menu-redirect-msg =
+    .label = Redirect
+
+# This menu item is for canceling an NNTP message
+context-menu-cancel-msg =
+    .label = Cancel Message
+
+# Variables:
+# $count (Number) - Number of selected messages.
+mail-context-messages-delete =
+    .label =
+        { $count ->
+            [one] Delete Message
+           *[other] Delete Selected Messages
+        }
+    .tooltiptext =
+        { mail-context-messages-delete.label }
+
+# Variables:
+# $count (Number) - Number of selected messages.
+mail-context-messages-undelete =
+    .label =
+        { $count ->
+            [one] Undelete Message
+           *[other] Undelete Selected Messages
+        }
+    .tooltiptext =
+        { mail-context-messages-undelete.label }
+
+context-menu-decrypt-to-folder2 =
+    .label = Create Decrypted Copy In
+    .accesskey = y
+
+## Message header pane
+
+other-action-redirect-msg =
+    .label = Redirect
+
+other-action-copy-message-link =
+    .label = Copy Message Link
+
+other-action-copy-news-link =
+    .label = Copy News Link
+
+message-header-msg-flagged =
+    .title = Starred
+    .aria-label = Starred
+
+message-header-delete =
+    .label = Delete
+    .tooltiptext = Delete this message
+
+message-header-undelete =
+    .label = Undelete
+    .tooltiptext = Undelete this message
+
+# Variables:
+# $address (String) - The email address of the recipient this picture belongs to.
+message-header-recipient-avatar =
+    .alt = Profile picture of { $address }.
+
+## Message header customize panel
+
+message-header-customize-panel-title = Message Header Settings
+
+message-header-customize-button-style =
+    .value = Button style
+    .accesskey = B
+
+message-header-button-style-default =
+    .label = Icons and text
+
+message-header-button-style-text =
+    .label = Text
+
+message-header-button-style-icons =
+    .label = Icons
+
+message-header-show-sender-full-address =
+    .label = Always show sender’s full address
+    .accesskey = f
+
+message-header-show-sender-full-address-description = The email address will be shown underneath the display name.
+
+message-header-show-recipient-avatar =
+    .label = Show sender’s profile picture
+    .accesskey = p
+
+message-header-show-big-avatar =
+    .label = Larger profile picture
+    .accesskey = g
+
+message-header-hide-label-column =
+    .label = Hide labels column
+    .accesskey = l
+
+message-header-large-subject =
+    .label = Large subject
+    .accesskey = s
+
+message-header-all-headers =
+    .label = Show all headers
+    .accesskey = a
+
+message-header-dark-message-toggle =
+    .label = Show the dark message mode toggle
+    .accesskey = d
+
+## Action Button Context Menu
+
+toolbar-context-menu-manage-extension =
+    .label = Manage Extension
+    .accesskey = E
+toolbar-context-menu-remove-extension =
+    .label = Remove Extension
+    .accesskey = v
+
+## Add-on removal warning
+
+# Variables:
+#  $name (String): The name of the add-on that will be removed.
+addon-removal-title = Remove { $name }?
+addon-removal-confirmation-button = Remove
+# Variables:
+#  $name (String): The name of the add-on that will be removed.
+addon-removal-confirmation-message = Remove { $name } as well as its configuration and data from { -brand-short-name }?
+
+caret-browsing-prompt-title = Caret Browsing
+caret-browsing-prompt-text = Pressing F7 turns Caret Browsing on or off. This feature places a moveable cursor within some content, allowing you to select text with the keyboard. Do you want to turn Caret Browsing on?
+caret-browsing-prompt-check-text = Do not ask again.
+
+repair-text-encoding-button =
+  .label = Repair Text Encoding
+  .tooltiptext = Guess correct text encoding from message content
+
+## no-reply handling
+
+no-reply-title = Reply Not Supported
+# Variables:
+# $email (String) - Email address the reply will be sent to. Example: "noreply@example.com"
+no-reply-message = The reply address ({ $email }) does not appear to be a monitored address. Messages to this address will likely not be read by anyone.
+no-reply-reply-anyway-button = Reply Anyway
+
+## error messages
+
+# Variables:
+# $failures (Number) - Number of messages that could not be decrypted.
+# $total (Number) - Total number of messages that were attempted to be decrypted.
+decrypt-and-copy-failures-multiple =
+    { $failures ->
+      [one] { $failures } of { $total } messages could not be decrypted and was not copied.
+      *[other] { $failures } of { $total } messages could not be decrypted and were not copied.
+    }
+
+## Spaces toolbar
+
+spaces-toolbar-element =
+    .toolbarname = Spaces Toolbar
+    .aria-label = Spaces Toolbar
+    .aria-description = Vertical toolbar for switching between different spaces. Use the arrow keys to navigate the available buttons.
+
+spaces-toolbar-button-mail2 =
+    .title = Mail
+
+spaces-toolbar-button-address-book2 =
+    .title = Address Book
+
+spaces-toolbar-button-calendar2 =
+    .title = Calendar
+
+spaces-toolbar-button-tasks2 =
+    .title = Tasks
+
+spaces-toolbar-button-chat2 =
+    .title = Chat
+
+spaces-toolbar-button-overflow =
+    .title = More spaces…
+
+spaces-toolbar-button-settings2 =
+    .title = Settings
+
+spaces-toolbar-button-hide =
+    .title = Hide Spaces Toolbar
+
+spaces-toolbar-button-show =
+    .title = Show Spaces Toolbar
+
+spaces-context-new-tab-item =
+    .label = Open in new tab
+
+spaces-context-new-window-item =
+    .label = Open in new window
+
+# Variables:
+# $tabName (String) - The name of the tab this item will switch to.
+spaces-context-switch-tab-item =
+    .label = Switch to { $tabName }
+
+settings-context-open-settings-item2 =
+    .label = Settings
+
+settings-context-open-account-settings-item2 =
+    .label = Account Settings
+
+settings-context-open-addons-item2 =
+    .label = Add-ons and Themes
+
+## Spaces toolbar pinned tab menupopup
+
+spaces-toolbar-pinned-tab-button =
+    .tooltiptext = Spaces Menu
+
+spaces-pinned-button-menuitem-mail2 =
+    .label = { spaces-toolbar-button-mail2.title }
+
+spaces-pinned-button-menuitem-address-book2 =
+    .label = { spaces-toolbar-button-address-book2.title }
+
+spaces-pinned-button-menuitem-calendar2 =
+    .label = { spaces-toolbar-button-calendar2.title }
+
+spaces-pinned-button-menuitem-tasks2 =
+    .label = { spaces-toolbar-button-tasks2.title }
+
+spaces-pinned-button-menuitem-chat2 =
+    .label = { spaces-toolbar-button-chat2.title }
+
+spaces-pinned-button-menuitem-settings2 =
+    .label = { spaces-toolbar-button-settings2.title }
+
+spaces-pinned-button-menuitem-show =
+    .label = { spaces-toolbar-button-show.title }
+
+# Variables:
+# $count (Number) - Number of unread messages.
+chat-button-unread-messages = { $count }
+    .title = { $count ->
+        [one] One unread message
+        *[other] { $count } unread messages
+    }
+
+## Spaces toolbar customize panel
+
+menuitem-customize-label =
+    .label = Customize…
+
+spaces-customize-panel-title = Spaces Toolbar Settings
+
+spaces-customize-background-color = Background color
+
+spaces-customize-icon-color = Button color
+
+# The background color used on the buttons of the spaces toolbar when they are
+# `current`, meaning the related space/tab is active and visible.
+spaces-customize-accent-background-color = Selected button background color
+
+# The icon color used on the buttons of the spaces toolbar when they are
+# `current`, meaning the related space/tab is active and visible.
+spaces-customize-accent-text-color = Selected button color
+
+spaces-customize-button-restore = Restore Defaults
+    .accesskey = R
+
+customize-panel-button-save = Done
+    .accesskey = D
+
+## Quick Filter Bar
+
+# The label to display for the "View... Toolbars..." menu item that controls
+# whether the quick filter bar is visible.
+quick-filter-bar-toggle =
+  .label = Quick Filter Bar
+  .accesskey = Q
+
+# This is the key used to show the quick filter bar.
+# This should match quick-filter-bar-search-shortcut in about3Pane.ftl.
+quick-filter-bar-show =
+  .key = k
+
+## OpenPGP
+
+openpgp-forget = Forget OpenPGP passphrases
+
+## Quota panel.
+
+# Variables:
+#   $percent (Number) - Usage percentage of the assigned IMAP quota.
+#   $usage (String) - Current quota usage (may include unit)
+#   $limit (String) - Current quota limit (may include unit)
+quota-panel-percent-used = { $percent }% full
+  .title = IMAP quota: { $usage } used of { $limit } total
+
+## Sort menu.
+
+sort-by-spam-status =
+  .label = Spam Status
+  .accesskey = S
+
+## Message menu.
+
+menu-mark-as-spam =
+  .label = As Spam
+  .accesskey = S
+
+mark-as-junk-key =
+  .key = j
+
+menu-mark-not-spam =
+  .label = As Not Spam
+  .accesskey = N
+
+mark-not-junk-key =
+  .key = j
+
+menu-recalculate-spam-score =
+  .label = Run Spam Controls
+  .accesskey = C
+
+menu-run-spam-on-folder =
+  .label = Run Spam Controls on Folder
+  .accesskey = C
+
+menu-delete-spam =
+  .label = Delete Mail Marked as Spam in Folder
+  .accesskey = D
+
+## Folder pane context.
+
+folder-context-empty-spam =
+  .label = Empty Spam
+  .accesskey = E
+
+## Thread pane.
+
+column-status-spam =
+  .label = Spam Status
+  .tooltiptext = Sort by spam status
+
+## Message header.
+
+header-spam-button =
+  .label = Spam
+  .tooltiptext = Mark this message as spam
+
+## Actions for the New Mail Notification
+
+mark-as-read-action = Mark as Read
+delete-action = Delete
+mark-as-starred-action = Mark as Starred
+mark-as-spam-action = Mark as Spam
+archive-action = Archive
+
+## Message list.
+
+message-priority-lowest = Lowest
+message-priority-low = Low
+# Normal priority is often blank, depending on the consumers of these strings.
+message-priority-normal = Normal
+message-priority-high = High
+message-priority-highest = Highest
+
+message-flag-replied = Replied
+message-flag-forwarded = Forwarded
+message-flag-redirected = Redirected
+message-flag-new = New
+message-flag-read = Read
+message-flag-starred = Starred
+
+# Grouped By Date thread pane titles
+message-group-today = Today
+message-group-yesterday = Yesterday
+message-group-last-seven-days = Last 7 Days
+message-group-last-fourteen-days = Last 14 Days
+message-group-older = Older
+message-group-future-date = Future
+
+# Different Grouped By Sort thread pane titles
+message-group-untagged = Untagged Messages
+message-group-no-status = No Status
+message-group-no-priority = No Priority
+message-group-no-attachments = No Attachments
+message-group-attachments = Attachments
+message-group-not-starred = Not Starred
+message-group-starred = Starred
+
+# For multiple authors, add this abbreviation to the first author to indicate
+# there are more; for the From column in the threadpane message list.
+and-others = et al.
+
+menuitem-label-spam-score-origin =
+  .label = Spam Score Origin
+
+menuitem-label-spam-percentage =
+  .label = Spam Percent
+
+menuitem-label-spam-status =
+  .label = Spam Status
+
+## Prompts
+
+# Variables:
+# $folder (String) - The name of the selected folder.
+prompt-empty-folder-title = Empty { $folder }?
+
+# Variables:
+# $folder (String) - The name of the selected folder.
+prompt-empty-folder-message = Delete all messages and subfolders in the { $folder } folder?
+
+prompt-dont-ask-again = Do not ask again.
+
+## Spam commands
+
+# Variables:
+# $percentage (Number) - The percentage of completion of the spam analysis.
+spam-analysis-percentage = Spam analysis { NUMBER($percentage, maximumSignificantDigits: 2, style: "percent") } completed
+
+spam-processing-message = Processing spam messages
+
+## Ignore threads
+
+# Variables:
+#    $count - the number of threads that were selected
+#    $subject - the message thread title (subject)
+ignored-theads-feedback = {
+    $count ->
+        [one] Replies to the thread "{ $subject }" will not be shown.
+        *[other] Replies to the { $count } threads that were selected will not be shown.
+    }
+
+# Variables:
+#    $count - the number of threads that were selected
+#    $subject - the message thread title (subject)
+ignored-subtheads-feedback = {
+    $count ->
+        [one] Replies to the subthread "{ $subject }" will not be shown.
+        *[other] Replies to the { $count } subthreads that were selected will not be shown.
+    }
+
+## Attachments
+
+# Variables:
+#    $count - the number of attachments
+attachment-view-attachment-count = {
+    $count ->
+        [one] { $count } attachment
+        *[other] { $count } attachments
+    }
+
+## Remote content blocking
+
+# Variables:
+#    $origin - origin of the remote content to allow
+allow-remote-content-resource =
+    .label = Allow remote content from { $origin }
+
+# Variables:
+#    $count - the number of origins to allow
+remote-content-option-allow-all =
+    .label = {
+        $count ->
+            [one] Allow remote content from the { $count } origin listed above
+            *[other] Allow remote content from all { $count } origins listed above
+        }
+
+## Tags
+
+tags-label-1 = Important
+tags-label-2 = Work
+tags-label-3 = Personal
+tags-label-4 = To Do
+tags-label-5 = Later
+
+tags-add-new =
+    .label = New Tag…
+    .accesskey = N
+
+tags-manage =
+    .label = Manage Tags…
+    .accesskey = M
+
+tags-remove-all =
+    .label = Remove All Tags
+    .accesskey = 0
+
+# Variables:
+#   $accesskey (String) - The single-digit keyboard shortcut (1-9) assigned to the tag.
+#   $name (String) - The default or user-defined name of the tag (e.g., Important, Work).
+tags-format-with-accesskey =
+    .label = { $accesskey } { $name }
+    .accesskey = { $accesskey }
+
+# Variables:
+#   $name (String) - The default or user-defined name of the tag.
+tags-format-without-accesskey =
+    .label = { $name }

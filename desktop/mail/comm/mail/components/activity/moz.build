@@ -1,0 +1,36 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+with Files("**"):
+    BUG_COMPONENT = ("Thunderbird", "General")
+
+XPIDL_SOURCES += [
+    "nsIActivity.idl",
+    "nsIActivityManager.idl",
+    "nsIActivityManagerUI.idl",
+]
+
+XPIDL_MODULE = "activity"
+
+EXTRA_JS_MODULES.activity += [
+    "modules/activityModules.sys.mjs",
+    "modules/alertHook.sys.mjs",
+    "modules/autosync.sys.mjs",
+    "modules/glodaIndexer.sys.mjs",
+    "modules/moveCopy.sys.mjs",
+    "modules/pop3Download.sys.mjs",
+    "modules/sendLater.sys.mjs",
+]
+
+EXTRA_JS_MODULES += [
+    "Activity.sys.mjs",
+    "ActivityManager.sys.mjs",
+    "ActivityManagerUI.sys.mjs",
+]
+
+JAR_MANIFESTS += ["jar.mn"]
+
+XPCOM_MANIFESTS += [
+    "components.conf",
+]

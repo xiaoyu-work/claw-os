@@ -1,0 +1,37 @@
+
+default_compiler xcode
+
+soname_pattern_base  "lib{libname}.dylib"
+soname_pattern_abi   "lib{libname}.{abi_rev}.dylib"
+soname_pattern_patch "lib{libname}.{abi_rev}.{version_minor}.{version_patch}.dylib"
+
+doc_dir doc
+
+<target_features>
+posix1
+posix_mlock
+arc4random
+getentropy
+dev_random
+clock_gettime
+ccrandom
+
+sysctlbyname
+
+commoncrypto
+apple_keychain
+
+atomics
+sockets
+system_clock
+threads
+thread_local
+filesystem
+sandbox_proc
+</target_features>
+
+<aliases>
+darwin
+macosx
+osx
+</aliases>

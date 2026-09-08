@@ -1,0 +1,65 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@import url("chrome://messenger/skin/shared/themeableDialog.css");
+
+@namespace html url("http://www.w3.org/1999/xhtml");
+
+:root[lwtheme] {
+  appearance: none;
+}
+
+button > .button-box {
+  appearance: none;
+  padding-block: 4px;
+}
+
+#resetColor > .button-box {
+  padding-block: 0;
+}
+
+.button-menu-dropmarker {
+  appearance: none;
+  padding: 0;
+  border: none;
+  background-color: transparent;
+  content: var(--icon-nav-down-sm);
+  -moz-context-properties: stroke;
+  stroke: currentColor;
+}
+
+html|input {
+  padding: 4px;
+}
+
+menulist[is="menulist-editable"][editable="true"] {
+  appearance: none;
+  margin-inline-end: 4px;
+  padding: 0;
+
+  &::part(text-input) {
+    padding: 5px 4px;
+    margin-block: -2px;
+    margin-inline: -7px 7px;
+  }
+
+  &::part(dropmarker) {
+    inline-size: initial;
+    margin-inline-end: 3px;
+  }
+}
+
+menulist menupopup menu,
+menulist menupopup menuitem,
+button menupopup menu,
+button menupopup menuitem {
+  appearance: none;
+  padding: 5px 8px;
+}
+
+menupopup > menu::after {
+  block-size: 1em;
+  margin-inline-end: 3px;
+  transform: scale(0.7);
+}

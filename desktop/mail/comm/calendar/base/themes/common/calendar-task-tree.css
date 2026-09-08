@@ -1,0 +1,152 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+.calendar-task-tree {
+  appearance: none;
+  margin: 0;
+  border: none;
+}
+
+/* align the treechildren text */
+.calendar-task-tree > treechildren::-moz-tree-cell-text {
+  margin-block: 1px;
+}
+
+tree > treechildren::-moz-tree-cell-text(selected) {
+  color: inherit;
+}
+
+tree > treechildren::-moz-tree-cell-text(selected, focus) {
+  color: var(--selected-item-text-color);
+}
+
+.calendar-task-tree > treechildren::-moz-tree-cell-text(inprogress) {
+  color: green !important;
+}
+
+@media (prefers-color-scheme: dark) {
+  .calendar-task-tree > treechildren::-moz-tree-cell-text(inprogress) {
+    color: var(--color-green-50) !important;
+  }
+}
+
+.calendar-task-tree > treechildren::-moz-tree-row(inprogress, selected, focus) {
+  background-color: green !important;
+}
+
+@media (prefers-color-scheme: dark) {
+  .calendar-task-tree > treechildren::-moz-tree-row(inprogress, selected, focus) {
+    background-color: var(--color-green-50) !important;
+  }
+}
+
+.calendar-task-tree > treechildren::-moz-tree-cell-text(overdue) {
+  color: var(--color-red-50) !important;
+}
+
+@media (prefers-color-scheme: dark) {
+  .calendar-task-tree > treechildren::-moz-tree-cell-text(overdue) {
+    color: var(--color-red-40) !important;
+  }
+}
+
+.calendar-task-tree > treechildren::-moz-tree-row(overdue, selected, focus) {
+  background-color: var(--color-red-50) !important;
+}
+
+@media (prefers-color-scheme: dark) {
+  .calendar-task-tree > treechildren::-moz-tree-row(overdue, selected, focus) {
+    background-color: var(--color-red-40) !important;
+  }
+}
+
+.calendar-task-tree
+  > treechildren::-moz-tree-image(calendar-task-tree-col-priority, selected, focus),
+.calendar-task-tree
+  > treechildren::-moz-tree-image(calendar-task-tree-col-completed, selected, focus),
+.calendar-task-tree > treechildren::-moz-tree-image(inprogress, selected, focus),
+.calendar-task-tree > treechildren::-moz-tree-image(overdue, selected, focus),
+.calendar-task-tree > treechildren::-moz-tree-cell-text(inprogress, selected, focus),
+.calendar-task-tree > treechildren::-moz-tree-cell-text(overdue, selected, focus) {
+  color: var(--selected-item-text-color) !important;
+}
+
+.calendar-task-tree > treechildren::-moz-tree-cell-text(completed) {
+  text-decoration: line-through;
+  font-style: italic;
+}
+
+.calendar-task-tree > treechildren::-moz-tree-cell-text(duetoday) {
+  font-weight: bold;
+}
+
+.calendar-task-tree-col-priority {
+  -moz-context-properties: stroke;
+  stroke: currentColor;
+}
+
+.calendar-task-tree > treechildren::-moz-tree-image(calendar-task-tree-col-priority) {
+  margin-inline-start: -2px;
+  -moz-context-properties: stroke;
+  stroke: transparent;
+}
+
+.calendar-task-tree > treechildren::-moz-tree-image(calendar-task-tree-col-priority, highpriority) {
+  list-style-image: var(--icon-priority);
+  stroke: red;
+}
+
+@media (prefers-color-scheme: dark) {
+  .calendar-task-tree
+    > treechildren::-moz-tree-image(calendar-task-tree-col-priority, highpriority) {
+    stroke: var(--color-red-40);
+  }
+}
+
+.calendar-task-tree > treechildren::-moz-tree-image(calendar-task-tree-col-priority, lowpriority) {
+  list-style-image: var(--icon-priority-low);
+  stroke: blue;
+}
+
+@media (prefers-color-scheme: dark) {
+  .calendar-task-tree
+    > treechildren::-moz-tree-image(calendar-task-tree-col-priority, lowpriority) {
+    stroke: var(--color-white);
+  }
+}
+
+.calendar-task-tree > treechildren::-moz-tree-image(calendar-task-tree-col-priority, selected) {
+  stroke: currentColor !important;
+}
+
+treecol.calendar-task-tree-col-percentcomplete {
+  text-align: end;
+}
+
+.calendar-task-tree-col-completed > .treecol-icon,
+.calendar-task-tree > treechildren::-moz-tree-image(calendar-task-tree-col-completed) {
+  inline-size: 14px;
+  block-size: 14px;
+  -moz-context-properties: fill, fill-opacity, stroke, stroke-opacity;
+  fill: currentColor;
+  stroke: currentColor;
+  stroke-opacity: 0;
+}
+
+.calendar-task-tree-col-completed > .treecol-icon {
+  fill-opacity: 1;
+}
+
+.calendar-task-tree > treechildren::-moz-tree-image(calendar-task-tree-col-completed) {
+  list-style-image: var(--icon-checkbox);
+  fill-opacity: 0;
+}
+
+.calendar-task-tree > treechildren::-moz-tree-image(calendar-task-tree-col-completed, completed) {
+  fill-opacity: 1;
+}
+
+.calendar-task-tree > treechildren::-moz-tree-image(calendar-task-tree-col-completed, repeating) {
+  fill-opacity: 0.6;
+}

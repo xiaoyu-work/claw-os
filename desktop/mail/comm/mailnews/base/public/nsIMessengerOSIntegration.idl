@@ -1,0 +1,35 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "nsISupports.idl"
+
+/**
+ * Common interfaces to integrate with different platforms, how they are
+ * implemented depends on the specific platform.
+ */
+[scriptable, uuid(d9e45fee-1dd1-11b2-938c-9147855ed837)]
+interface nsIMessengerOSIntegration : nsISupports {
+  /**
+   * Update the unread count.
+   * @param unreadCount - The number of unread messages.
+   * @param unreadTooltip - The tooltip for the unread count.
+   */
+  void updateUnreadCount(in unsigned long unreadCount,
+                         in AString unreadTooltip);
+
+  /**
+   * Use this to do necessary clean up on exit, e.g. reset the badge/tray icon.
+   */
+  void onExit();
+
+  /**
+   * Is the OS in Do Not Disturb mode?
+   * - Windows: true for Priority Only and Alarms Only modes.
+   * - Mac: true if in `com.apple.notificationcenterui` `doNotDisturb` is true
+   *   or the time is between `dndStart` and `dndEnd`.
+   * - Linux: true if `org.freedesktop.Notifications.Inhibited` is true or
+   *   `org.gnome.desktop.notifications.show-banners` is false.
+   */
+  readonly attribute boolean isInDoNotDisturbMode;
+};

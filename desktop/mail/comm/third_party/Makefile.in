@@ -1,0 +1,31 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+
+include $(topsrcdir)/config/config.mk
+include $(topsrcdir)/config/rules.mk
+
+print-%: ; @echo $* is $($*)
+origin-%: ; @echo $* origin $(origin $*)
+
+ifdef TB_LIBOTR_PREBUILT
+
+ifeq (WINNT,$(OS_ARCH))
+OTR_LIBS := libotr.dll libssp-0.dll
+endif
+
+ifeq (Darwin,$(OS_ARCH))
+OTR_LIBS := libotr.dylib
+endif
+
+ifeq (Linux,$(OS_ARCH))
+OTR_LIBS := libotr.so
+endif
+
+OTR_LIB_PATHS := $(foreach otrlib,$(OTR_LIBS),$(TB_LIBOTR_PREBUILT)/$(otrlib))
+
+libs:: $(OTR_LIB_PATHS)
+	$(NSINSTALL) -t -m 755 $(OTR_LIB_PATHS) $(DIST)/bin
+
+endif   ## TB_LIBOTR_PREBUILT

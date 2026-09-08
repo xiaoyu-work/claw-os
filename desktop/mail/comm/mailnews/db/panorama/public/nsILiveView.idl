@@ -1,0 +1,133 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "nsISupports.idl"
+
+interface nsILiveViewListener;
+interface nsIVariant;
+
+[scriptable, builtinclass, uuid(f13755f5-9a54-4503-9531-1f5bcb2f84c7)]
+interface nsILiveView : nsISupports {
+  /**
+   * Initialization functions.
+   * Once a LiveView is initialised with one of these functions, or a database
+   * call is made on an uninitialised LiveView, these cannot be called again.
+   */
+  void initWithFolder(in unsigned long long folderId);
+  void initWithFolders(in Array<unsigned long long> folderIds);
+  // `tag` is the tag's identifier (nsIMsgTag.key).
+  void initWithTag(in AUTF8String tag);
+  // `conversationId` is a message's thread id (nsIMsgDBHdr.threadId)
+  void initWithConversation(in unsigned long long conversationId);
+
+  cenum SortColumn : 8 {
+    DATE = 1,
+    SUBJECT = 2,
+    SENDER = 3,
+    RECIPIENTS = 4,
+    READ_FLAG = 5,
+    MARKED_FLAG = 6,
+  };
+
+  /**
+   * Which property the messages are sorted by.
+   */
+  attribute nsILiveView_SortColumn sortColumn;
+
+  /**
+   * If the messages are sorted in descending order.
+   */
+  attribute boolean sortDescending;
+
+  cenum Grouping : 8 {
+    UNTHREADED = 1,
+    THREADED = 2,
+    GROUPED_BY_SORT = 3,
+  };
+
+  /**
+   * How messages should be grouped (or not grouped) for display.
+   */
+  attribute nsILiveView_Grouping grouping;
+
+  const unsigned long DATE_GROUP_FUTURE = 9999;
+  const unsigned long DATE_GROUP_TODAY = 9998;
+  const unsigned long DATE_GROUP_YESTERDAY = 9997;
+  const unsigned long DATE_GROUP_LAST_SEVEN_DAYS = 9996;
+  const unsigned long DATE_GROUP_LAST_FOURTEEN_DAYS = 9995;
+
+  /**
+   * Get the total number of messages in the database matching this live view.
+   */
+  [implicit_jscontext]
+  Promise countMessages();
+
+  /**
+   * Get the number of unread messages in the database matching this live view.
+   */
+  [implicit_jscontext]
+  Promise countUnreadMessages();
+
+  /**
+   * Get the messages matching this live view from the database. Messages will
+   * be sorted and grouped based on `sortColumn`, `sortDescending` and
+   * `grouping`. Returns a promise resolving to an array of plain JS objects
+   * containing the message properties.
+   */
+  [implicit_jscontext]
+  Promise selectMessages();
+
+  /**
+   * Get the messages matching this live view and the specified group. Returns
+   * a promise resolving to an array of plain JS objects. Though the argument
+   * is a string, JS type coercion means an integer group identifier can be
+   * used, e.g. for date groups.
+   */
+  [implicit_jscontext]
+  Promise selectMessagesInGroup(in AUTF8String group);
+
+  /**
+   * Register as the one and only listener for this live view.
+   */
+  [implicit_jscontext]
+  void setListener(in nsILiveViewListener listener);
+
+  /**
+   * Clean up this live view's listener, if it exists. If `listener` is passed,
+   * the view's listener will not be removed if the two don't match.
+   */
+  void clearListener([optional] in nsILiveViewListener listener);
+
+  /**
+   * Access to the database query clause for testing purposes only. If you are
+   * not a test, you'll get NS_ERROR_NOT_AVAILABLE instead.
+   */
+  readonly attribute AUTF8String sqlClauseForTests;
+
+  /**
+   * Access to the database query parameters for testing purposes only. If you
+   * are not a test, you'll get NS_ERROR_NOT_AVAILABLE instead.
+   */
+  readonly attribute Array<nsIVariant> sqlParamsForTests;
+};
+
+[scriptable, uuid(94bc7a80-60af-4ffc-b7a6-6a799b66f9b6)]
+interface nsILiveViewListener : nsISupports {
+  /**
+   * A message matching the live view's filters was added to the database.
+   */
+  void onMessageAdded(in jsval message);
+
+  /**
+   * A message matching the live view's filters was removed from the database.
+   */
+  void onMessageRemoved(in jsval message);
+
+  /**
+   * Partial results from a `selectMessages` or `selectMessagesInGroup` query.
+   */
+  void onSelectedChunk(in jsval messages,
+                       in unsigned long startIndex,
+                       in unsigned long endIndex);
+};

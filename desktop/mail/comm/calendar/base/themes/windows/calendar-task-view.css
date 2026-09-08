@@ -1,0 +1,52 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@import url(chrome://calendar/skin/shared/calendar-task-view.css);
+
+#calendar-task-details-container {
+  padding-block-start: 0;
+}
+
+#task-text-filter-field {
+  margin-block: 5px;
+}
+
+#task-text-filter-field .textbox-search-icons {
+  margin-block-end: -1px;
+}
+
+/* ::::: task actions toolbar ::::: */
+
+#calendar-add-task-button[disabled] {
+  fill-opacity: 0.4;
+}
+
+#view-task-edit-field,
+#task-text-filter-field {
+  inline-size: 15em;
+}
+
+#calendar-task-box #calendar-task-view-splitter {
+  border-width: 0;
+  border-block-end: 1px solid var(--sidebar-border);
+  min-block-size: 0;
+  block-size: 5px;
+  background-color: transparent;
+  margin-block-start: -5px;
+  position: relative;
+  z-index: 10;
+}
+
+#task-addition-box {
+  block-size: 1.5em;
+  min-block-size: 35px;
+}
+
+@media not (prefers-color-scheme: dark) {
+  @media not (prefers-contrast) {
+    #task-addition-box {
+      background-color: #f8f8f8;
+    }
+  }
+}

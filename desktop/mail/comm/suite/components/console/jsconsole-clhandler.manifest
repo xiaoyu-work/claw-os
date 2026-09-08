@@ -1,0 +1,3 @@
+component {afeee354-8c99-4725-adb1-8502218c5c3c} jsconsole-clhandler.js
+contract @mozilla.org/suite/console-clh;1 {afeee354-8c99-4725-adb1-8502218c5c3c}
+category command-line-handler t-jsconsole @mozilla.org/suite/console-clh;1

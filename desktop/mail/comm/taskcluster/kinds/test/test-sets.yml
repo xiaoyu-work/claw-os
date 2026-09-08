@@ -1,0 +1,25 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+---
+# Each key in this file specifies a set of tests to run.  Different test sets
+# may, for example, be bound to different test platforms.
+#
+# Note that set does not depend on the tree; tree-dependent job selection
+# should be performed in the target task selection phase of task-graph
+# generation.
+#
+# A test set has a name, and a list of tests that it contains.
+#
+
+gtest-tests:
+    - gtest
+
+marionette-tests:
+    - marionette
+
+mochitest-tests:
+    - mochitest-thunderbird
+
+xpcshell-tests:
+    - xpcshell

@@ -1,0 +1,22 @@
+<internal_defines>
+THREAD_UTILS -> 20190922
+</internal_defines>
+
+<module_info>
+name -> "Thread Utilities"
+</module_info>
+
+<header:internal>
+rwlock.h
+barrier.h
+semaphore.h
+thread_pool.h
+</header:internal>
+
+<os_features>
+threads
+</os_features>
+
+<requires>
+os_utils
+</requires>

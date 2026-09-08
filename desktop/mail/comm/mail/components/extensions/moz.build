@@ -1,0 +1,44 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+EXTRA_COMPONENTS += [
+    "extensions-mail.manifest",
+]
+
+EXTRA_JS_MODULES += [
+    "ExtensionAccounts.sys.mjs",
+    "ExtensionBrowsingData.sys.mjs",
+    "ExtensionMailTabs.sys.mjs",
+    "ExtensionMessages.sys.mjs",
+    "ExtensionPopups.sys.mjs",
+    "ExtensionSpaces.sys.mjs",
+    "ExtensionToolbarButtons.sys.mjs",
+    "ExtensionUtilities.sys.mjs",
+    "MailExtensionShortcuts.sys.mjs",
+    "MessagesSendTracker.sys.mjs",
+]
+
+with Files("**"):
+    BUG_COMPONENT = ("Thunderbird", "Add-Ons: Extensions API")
+
+JAR_MANIFESTS += ["jar.mn"]
+
+TESTING_JS_MODULES += [
+    "test/AppUiTestDelegate.sys.mjs",
+]
+
+BROWSER_CHROME_MANIFESTS += [
+    "test/browser/browser1.toml",
+    "test/browser/browser2.toml",
+    "test/browser/browser3.toml",
+    "test/browser/browser4.toml",
+    "test/browser/browser5.toml",
+    "test/browser/browser6.toml",
+]
+XPCSHELL_TESTS_MANIFESTS += [
+    "test/xpcshell/xpcshell-ews.toml",
+    "test/xpcshell/xpcshell-imap.toml",
+    "test/xpcshell/xpcshell-local.toml",
+    "test/xpcshell/xpcshell-nntp.toml",
+]

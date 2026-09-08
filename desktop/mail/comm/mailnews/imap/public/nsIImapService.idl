@@ -1,0 +1,270 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+////////////////////////////////////////////////////////////////////////////////////////
+// The IMAP Service is an interfaced designed to make building and running imap urls
+// easier. Clients typically go to the imap service and ask it do things such as:
+// get new mail, etc....
+//
+// Oh and in case you couldn't tell by the name, the imap service is a service! and you
+// should go through the service manager to obtain an instance of it.
+////////////////////////////////////////////////////////////////////////////////////////
+
+#include "ImapTypes.idl"
+#include "nsISupports.idl"
+#include "nsIImapUrl.idl"
+
+interface nsIImapMessageSink;
+interface nsIUrlListener;
+interface nsIURI;
+interface nsIFile;
+interface nsIMsgFolder;
+interface nsIMsgWindow;
+interface nsIMsgMailNewsUrl;
+interface nsIImapIncomingServer;
+interface nsICacheStorage;
+
+/**
+ * Most of the nsIImapService methods are friendly front ends for composing and
+ * issuing "imap://" protocol operations. Usually a nsImapUrl will be returned.
+ * This url object is stateful and tracks the issued request.
+ */
+[scriptable, uuid(aba44b3d-7a0f-4987-8794-96d2de66d966)]
+interface nsIImapService : nsISupports
+{
+  nsIURI selectFolder(in nsIMsgFolder aImapMailFolder,
+                      in nsIUrlListener aUrlListener,
+                      in nsIMsgWindow   aMsgWindow);
+
+  /**
+   * Select the folder on the imap server without doing a sync of flags or
+   * headers. This is used for offline playback, where we don't want to
+   * download hdrs we don't have, because they may have been offline deleted.
+   *
+   * @param aImapMailFolder     the folder to select
+   * @param aUrlListener        url listener, can be null
+   * @param aMsgWindow          msg window url is running in, can be null
+   *
+   * @returns the url created to run the lite select in.
+   */
+  nsIURI liteSelectFolder(in nsIMsgFolder aImapMailFolder,
+                          in nsIUrlListener aUrlListener,
+                          in nsIMsgWindow aMsgWindow);
+
+  void noop(in nsIMsgFolder aImapMailFolder,
+            in nsIUrlListener aUrlListener,
+            out nsIURI aURL);
+
+  void getHeaders(in nsIMsgFolder aImapMailFolder,
+                  in nsIUrlListener aUrlListener,
+                  out nsIURI aURL,
+                  in ACString aMessageIdentifierList,
+                  in boolean aMessageIdsAreUID);
+
+  nsIURI getBodyStart(in nsIMsgFolder aImapMailFolder,
+                      in nsIUrlListener aUrlListener,
+                      in ACString aMessageIdentifierList,
+                      in long numBytes);
+
+  /**
+   * Issue an EXPUNGE on the target folder.
+   *
+   * @param aImapMailFolder     the folder to expunge
+   * @param aUrlListener        url listener, can be null
+   * @param aMsgWindow          msg window url is running in, can be null
+   */
+  void expunge(in nsIMsgFolder aImapMailFolder,
+               in nsIUrlListener aUrlListener,
+               in nsIMsgWindow aMsgWindow);
+
+  /**
+   * Issue a STATUS on the target folder.
+   *
+   * @param aImapMailFolder     the folder to expunge
+   * @param aUrlListener        url listener, can be null
+   *
+   * @returns the url created to run the status.
+   */
+  nsIURI updateFolderStatus(in nsIMsgFolder aImapMailFolder,
+                            in nsIUrlListener aUrlListener);
+
+  /**
+   * Verify that we can login.
+   *
+   * @param aImapMailFolder - any old imap folder - we just need it to
+   *                          set url sinks.
+   * @param aMsgWindow    - nsIMsgWindow to use for notification callbacks.
+   * @return - the url that we run.
+   */
+  nsIURI verifyLogon(in nsIMsgFolder aImapMailFolder,
+                     in nsIUrlListener aUrlListener,
+                     in nsIMsgWindow aMsgWindow);
+
+  void biff(in nsIMsgFolder aImapMailFolder,
+            in nsIUrlListener aUrlListener,
+            out nsIURI aURL,
+            in ImapUid aUidHighWater);
+
+  void deleteMessages(in nsIMsgFolder aImapMailFolder,
+                      in nsIUrlListener aUrlListener,
+                      out nsIURI aURL,
+                      in ACString aMessageIdentifierList,
+                      in boolean aMessageIdsAreUID);
+
+  void deleteAllMessages(in nsIMsgFolder aImapMailFolder,
+                         in nsIUrlListener aUrlListener);
+
+  void addMessageFlags(in nsIMsgFolder aImapMailFolder,
+                       in nsIUrlListener aUrlListener,
+                       in ACString aMessageIdentifierList,
+                       in imapMessageFlagsType aFlags,
+                       in boolean aMessageIdsAreUID);
+
+  void subtractMessageFlags(in nsIMsgFolder aImapMailFolder,
+                            in nsIUrlListener aUrlListener,
+                            in ACString aMessageIdentifierList,
+                            in imapMessageFlagsType aFlags,
+                            in boolean aMessageIdsAreUID);
+
+  void setMessageFlags(in nsIMsgFolder aImapMailFolder,
+                       in nsIUrlListener aUrlListener,
+                       out nsIURI aURL,
+                       in ACString aMessageIdentifierList,
+                       in imapMessageFlagsType aFlags,
+                       in boolean aMessageIdsAreUID);
+
+  void discoverAllFolders(in nsIMsgFolder aImapMailFolder,
+                          in nsIUrlListener aUrlListener,
+                          in nsIMsgWindow aMsgWindow);
+
+  void discoverAllAndSubscribedFolders(in nsIMsgFolder aImapMailFolder,
+                                       in nsIUrlListener aUrlListener,
+                                       in nsIMsgWindow aMsgWindow);
+
+  void discoverChildren(in nsIMsgFolder aImapMailFolder,
+                        in nsIUrlListener aUrlListener,
+                        in ACString folderPath);
+
+  void onlineMessageCopy(in nsIMsgFolder aSrcFolder,
+                         in ACString aMessageIds,
+                         in nsIMsgFolder aDstFolder,
+                         in boolean aIdsAreUids,
+                         in boolean aIsMove,
+                         in nsIUrlListener aUrlListener,
+                         out nsIURI aURL,
+                         in nsISupports aCopyState,
+                         in nsIMsgWindow aWindow);
+
+
+  void appendMessageFromFile(in nsIFile aFile,
+                             in nsIMsgFolder aDstFolder,
+                             in ACString aMessageId,
+                             in boolean idsAreUids,
+                             in boolean aInSelectedState,
+                             in nsIUrlListener aUrlListener,
+                             in nsISupports aCopyState,
+                             in nsIMsgWindow aMsgWindow);
+
+  void downloadMessagesForOffline(in ACString aMessageIds, in nsIMsgFolder aSrcFolder,
+                      in nsIUrlListener aListener, in nsIMsgWindow   aMsgWindow);
+
+  void moveFolder(in nsIMsgFolder aSrcFolder,
+                  in nsIMsgFolder aDstFolder,
+                  in nsIUrlListener aUrlListener,
+                  in nsIMsgWindow msgWindow);
+
+  void renameLeaf(in nsIMsgFolder aSrcFolder,
+                  in AUTF8String aLeafName,
+                  in nsIUrlListener aUrlListener,
+                  in nsIMsgWindow msgWindow);
+
+  void deleteFolder(in nsIMsgFolder aFolder,
+                    in nsIUrlListener aUrlListener,
+                    in nsIMsgWindow aMsgWindow);
+
+  nsIURI createFolder(in nsIMsgFolder aParentFolder,
+                      in AUTF8String aLeafName,
+                      in nsIUrlListener aUrlListener);
+
+  void listFolder(in nsIMsgFolder aMailFolder,
+                    in nsIUrlListener aUrlListener);
+
+  nsIURI subscribeFolder(in nsIMsgFolder aMailFolder,
+                         in AUTF8String mailboxName,
+                         in nsIUrlListener aUrlListener);
+
+  nsIURI unsubscribeFolder(in nsIMsgFolder aMailFolder,
+                           in AUTF8String mailboxName,
+                           in nsIUrlListener aUrlListener);
+
+  // this method will first check if the folder exists but is
+  // not subscribed to, in which case it will subscribe to the folder.
+  // otherwise, it will try to create the folder. It will try to do this
+  // with one url.
+  void ensureFolderExists(in nsIMsgFolder aParentFolder,
+                          in AUTF8String aLeafName,
+                          in nsIMsgWindow aMsgWindow,
+                          in nsIUrlListener aUrlListener);
+
+
+  nsIURI getFolderAdminUrl(in nsIMsgFolder aMailFolder,
+                           in nsIMsgWindow   aMsgWindow,
+                           in nsIUrlListener aUrlListener);
+
+  nsIURI issueCommandOnMsgs(in nsIMsgFolder aMailFolder,
+                            in nsIMsgWindow aMsgWindow,
+                            in ACString aCommand,
+                            in ACString aMessageIdentifierList);
+
+  nsIURI fetchCustomMsgAttribute(in nsIMsgFolder aMailFolder,
+                                 in nsIMsgWindow aMsgWindow,
+                                 in ACString aAttribute,
+                                 in ACString aMessageIdentifierList);
+
+  /**
+   * Stores custom keywords (tags) for a list of messages on the IMAP server.
+   *
+   * @note Keyword Sanitization & Restrictions
+   * To prevent server parse errors and local state desynchronization, the
+   * keywords provided in flagsToAdd and flagsToSubtract are strictly sanitized.
+   * Any keyword containing invalid characters is silently dropped from the
+   * network request.
+   *
+   * A keyword is deemed invalid if it contains any of the following:
+   * 1. Non-ASCII characters (>= 0x7F) or control characters / spaces (<= 0x20).
+   * 2. RFC 3501 wildcards and quoted-specials: % * " \
+   * 3. Symmetrical Enclosures: ( ) [ ] { }
+   * Note: While '[' and '}' are technically valid atom-chars under RFC 3501,
+   * they are strictly filtered here to prevent UX confusion and to defend
+   * against poorly written IMAP server parsers that trip on unescaped brackets.
+   * 4. Internal URI Delimiters: < > ;
+   * Restricted because Thunderbird uses nsIURI to route IMAP commands internally.
+   * '<' and '>' are Unsafe URI characters (RFC 3986), and '>' specifically
+   * breaks Thunderbird's hardcoded IMAP URL parser. The ';' is restricted as it
+   * is the reserved delimiter for internal URL parameters (e.g., ;SECTION=TEXT).
+   * 5. The '&' character: Restricted because its role as the MUTF-7 shift
+   * character causes parsing crashes on certain strict IMAP servers.
+   *
+   * @param aMailFolder            The IMAP folder containing the messages.
+   * @param aMsgWindow             The message window for status/error reporting.
+   * @param flagsToAdd             Space-separated string of keywords to add.
+   * @param flagsToSubtract        Space-separated string of keywords to remove.
+   * @param aMessageIdentifierList Comma-separated list of message UIDs.
+   *
+   * @return nsIURI                The internal IMAP URL generated for this command.
+   */
+  nsIURI storeCustomKeywords(in nsIMsgFolder aMailFolder,
+                             in nsIMsgWindow aMsgWindow,
+                             in ACString flagsToAdd,
+                             in ACString flagsToSubtract,
+                             in ACString aMessageIdentifierList);
+
+  void getListOfFoldersOnServer(in nsIImapIncomingServer aServer, in nsIMsgWindow aMsgWindow);
+  void getListOfFoldersWithPath(in nsIImapIncomingServer aServer, in nsIMsgWindow aMsgWindow, in ACString folderPath);
+
+  nsISupports playbackAllOfflineOperations(in nsIMsgWindow aMsgWindow, in nsIUrlListener aListener);
+  void downloadAllOffineImapFolders(in nsIMsgWindow aMsgWindow, in nsIUrlListener aListener);
+
+  readonly attribute nsICacheStorage cacheStorage;
+};

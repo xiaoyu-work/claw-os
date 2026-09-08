@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+<!DOCTYPE overlay SYSTEM "chrome://messenger/locale/mailOverlay.dtd">
+<overlay id="mailOverlay.xul"
+         xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul">
+
+  <script src="chrome://messenger/content/mailOverlay.js"/>
+
+  <!-- generic commands -->
+  <commandset id="tasksCommands">
+    <command id="cmd_newMessage" oncommand="goOpenNewMessage();"/>
+    <command id="cmd_newCard" oncommand="openNewCardDialog()"/>
+  </commandset>
+  <menuitem id="menu_newCard" label="&newContactCmd.label;"
+            accesskey="&newContactCmd.accesskey;" command="cmd_newCard"/>
+  <menuitem id="menu_newMessage" label="&newMessageCmd.label;" accesskey="&newMessageCmd.accesskey;" key="key_newMessage" command="cmd_newMessage"/>
+  <keyset id="tasksKeys">
+#ifdef XP_MACOSX
+    <key id="key_newMessage" key="&newMessageCmd.key;"
+         modifiers="accel,shift" command="cmd_newMessage"/>
+#else
+    <key id="key_newMessage" key="&newMessageCmd.key;"
+         modifiers="accel" command="cmd_newMessage"/>
+#endif
+  </keyset>
+</overlay>

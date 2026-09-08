@@ -1,0 +1,351 @@
+<?xml version="1.0"?>
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+#filter substitution
+#define SEARCH_WINDOW
+
+<!DOCTYPE html [
+  <!ENTITY % messengerDTD SYSTEM "chrome://messenger/locale/messenger.dtd" >
+  %messengerDTD;
+]>
+<html id="searchMailWindow" xmlns="http://www.w3.org/1999/xhtml"
+      xmlns:xul="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+      xmlns:html="http://www.w3.org/1999/xhtml"
+      windowtype="mailnews:search"
+      scrolling="false"
+      style="min-width:52em; min-height:34em;"
+      lightweightthemes="true"
+      persist="screenX screenY width height sizemode">
+<head>
+  <title data-l10n-id="search-dialog-title"></title>
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src chrome:; script-src chrome: 'unsafe-inline' moz-src:; style-src chrome: 'unsafe-inline'"
+  />
+  <link rel="stylesheet" href="chrome://messenger/skin/searchDialog.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/folderPane.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/tagColors.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/input-fields.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/themeableDialog.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/colors.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/folderMenus.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/contextMenu.css" />
+  <link rel="localization" href="messenger/messenger.ftl" />
+  <link rel="localization" href="messenger/searchWidgets.ftl" />
+  <link rel="localization" href="messenger/searchDialog.ftl" />
+  <script defer="defer" src="chrome://messenger/content/globalOverlay.js"></script>
+  <script defer="defer" src="chrome://global/content/editMenuOverlay.js"></script>
+  <script defer="defer" src="chrome://messenger/content/searchWidgets.js"></script>
+  <script defer="defer" src="chrome://messenger/content/mailWindow.js"></script>
+  <script defer="defer" src="chrome://communicator/content/utilityOverlay.js"></script>
+  <script defer="defer" src="chrome://messenger-newsblog/content/newsblogOverlay.js"></script>
+  <script defer="defer" src="chrome://messenger/content/searchTerm.js"></script>
+  <script defer="defer" src="chrome://messenger/content/dateFormat.js"></script>
+  <script defer="defer" src="chrome://messenger/content/messenger.js"></script>
+  <script defer="defer" src="chrome://messenger/content/SearchDialog.js"></script>
+</head>
+<html:body xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul">
+  <stringbundle id="bundle_messenger" src="chrome://messenger/locale/messenger.properties"/>
+  <stringbundle id="bundle_brand" src="chrome://branding/locale/brand.properties"/>
+
+  <commands id="commands">
+    <commandset id="mailSearchItems"
+                commandupdater="true"
+                events="mail-search"
+                oncommandupdate="goUpdateSearchItems(this)">
+      <command id="cmd_open" oncommand="goDoCommand('cmd_open')" disabled=""/>
+      <command id="button_delete" oncommand="goDoCommand('button_delete')" disabled=""/>
+      <command id="open_in_folder_button" oncommand="goDoCommand('open_in_folder_button')" disabled=""/>
+      <command id="saveas_vf_button" oncommand="goDoCommand('saveas_vf_button')"/>
+      <command id="file_message_button" oncommand="MoveMessageInSearch(event.target._folder);" disabled=""/>
+      <command id="cmd_delete" oncommand="goDoCommand('cmd_delete')" disabled=""/>
+      <command id="cmd_shiftDelete" oncommand="goDoCommand('cmd_shiftDelete');"/>
+    </commandset>
+  </commands>
+
+  <keyset id="mailKeys">
+    <key data-l10n-id="close-cmd" modifiers="accel" oncommand="window.close();"/>
+    <key keycode="VK_ESCAPE" oncommand="window.close();"/>
+#ifdef XP_MACOSX
+      <key id="key_delete" keycode="VK_BACK"     command="cmd_delete"/>
+      <key id="key_delete2" keycode="VK_DELETE"  command="cmd_delete"/>
+      <key id="cmd_shiftDelete" keycode="VK_BACK"
+           oncommand="goDoCommand('cmd_shiftDelete');" modifiers="shift"/>
+      <key id="cmd_shiftDelete2" keycode="VK_DELETE"
+           oncommand="goDoCommand('cmd_shiftDelete');" modifiers="shift"/>
+#else
+      <key id="key_delete" keycode="VK_DELETE" command="cmd_delete"/>
+      <key id="cmd_shiftDelete" keycode="VK_DELETE"
+           oncommand="goDoCommand('cmd_shiftDelete');" modifiers="shift"/>
+#endif
+  </keyset>
+
+    <vbox id="searchTerms" class="themeable-brighttext" persist="height">
+      <vbox>
+        <hbox align="center">
+          <label data-l10n-id="search-heading"
+                 control="searchableFolders"/>
+          <menulist id="searchableFolders" class="folderMenuItem"
+                    displayformat="verbose">
+            <menupopup is="folder-menupopup" class="menulist-menupopup"
+                       mode="search" showAccountsFileHere="true" showFileHereLabel="true"
+                       oncommand="updateSearchFolderPicker(event.target._folder);"/>
+          </menulist>
+          <spacer style="flex: 10 10;"/>
+          <button id="search-button"
+                  data-l10n-id="search-button"
+                  oncommand="onSearchButton(event);"
+                  default="true"/>
+        </hbox>
+
+        <hbox align="center">
+          <checkbox id="checkSearchSubFolders"
+                    data-l10n-id="search-subfolders"
+                    checked=""
+                    persist="checked"/>
+          <spacer style="flex: 10 10;"/>
+           <button id="clear-button"
+                   data-l10n-id="clear-button"
+                   oncommand="onResetSearch(event);"/>
+        </hbox>
+        <hbox align="center">
+          <checkbox id="checkSearchOnline"
+                    data-l10n-id="search-on-server"
+                    oncommand="updateSearchLocalSystem();"
+                    persist="checked"/>
+        </hbox>
+      </vbox>
+
+      <hbox style="flex: 1 1 0; min-height: 0;">
+        <vbox id="searchTermListBox" flex="1">
+#include ../../../mailnews/search/content/searchTerm.inc.xhtml
+      </hbox>
+    </vbox>
+
+    <splitter id="gray_horizontal_splitter" persist="state" orient="vertical"/>
+
+    <vbox id="searchResults" persist="height">
+      <vbox id="searchResultListBox" flex="1">
+        <tree id="threadTree"
+              persist="lastfoldersent width"
+              treelines="true"
+              enableColumnDrag="true"
+              _selectDelay="250"
+              lastfoldersent="false"
+              keepcurrentinview="true"
+              disableKeyNavigation="true"
+              onkeydown="ThreadPaneKeyDown(event);"
+              onselect="ThreadPaneSelectionChanged();">
+          <treecols id="threadCols"
+                    pickertooltiptext="&columnChooser2.tooltip;">
+
+             <!--
+               The below code may suggest that 'ordinal' is still a supported XUL
+               XUL attribute. It is not. This is a crutch so that we can
+               continue persisting the CSS -moz-box-ordinal-group attribute,
+               which is the appropriate replacement for the ordinal attribute
+               but cannot yet be easily persisted. The code that synchronizes
+               the attribute with the CSS lives in
+               toolkit/content/widget/tree.js and is specific to tree elements.
+             -->
+            <treecol is="treecol-image" id="selectCol"
+                     class="thread-tree-icon-header selectColumnHeader"
+                     persist="hidden ordinal"
+                     fixed="fixed"
+                     cycler="true"
+                     currentView="unthreaded"
+                     hidden="hidden"
+                     closemenu="none"
+                     src="chrome://messenger/skin/icons/new/compact/checkbox.svg"
+                     label="&selectColumn.label;"
+                     tooltiptext="&selectColumn.tooltip;"/>
+            <splitter class="tree-splitter"/>
+            <treecol is="treecol-image" id="flaggedCol"
+                     class="thread-tree-icon-header flagColumnHeader"
+                     persist="hidden ordinal sortDirection"
+                     fixed="fixed"
+                     cycler="true"
+                     closemenu="none"
+                     src="chrome://messenger/skin/icons/new/star-sm.svg"
+                     label="&starredColumn.label;"
+                     tooltiptext="&starredColumn2.tooltip;"/>
+            <splitter class="tree-splitter"/>
+            <treecol is="treecol-image" id="attachmentCol"
+                     class="thread-tree-icon-header attachmentColumnHeader"
+                     persist="hidden ordinal sortDirection"
+                     fixed="fixed"
+                     closemenu="none"
+                     src="chrome://messenger/skin/icons/new/attachment-sm.svg"
+                     label="&attachmentColumn.label;"
+                     tooltiptext="&attachmentColumn2.tooltip;"/>
+            <splitter class="tree-splitter"/>
+            <treecol id="subjectCol"
+                     persist="ordinal width sortDirection"
+                     ignoreincolumnpicker="true"
+                     closemenu="none"
+                     label="&subjectColumn.label;"
+                     tooltiptext="&subjectColumn2.tooltip;"/>
+            <splitter class="tree-splitter"/>
+            <treecol is="treecol-image" id="unreadButtonColHeader"
+                     class="thread-tree-icon-header readColumnHeader"
+                     persist="hidden ordinal sortDirection"
+                     fixed="fixed"
+                     cycler="true"
+                     closemenu="none"
+                     src="chrome://messenger/skin/icons/new/unread-sm.svg"
+                     label="&readColumn.label;"
+                     tooltiptext="&readColumn2.tooltip;"/>
+            <splitter class="tree-splitter"/>
+            <treecol id="senderCol"
+                     persist="hidden ordinal sortDirection width"
+                     hidden="hidden"
+                     closemenu="none"
+                     label="&fromColumn.label;"
+                     tooltiptext="&fromColumn2.tooltip;"/>
+            <splitter class="tree-splitter"/>
+            <treecol id="recipientCol"
+                     persist="hidden ordinal sortDirection width"
+                     hidden="hidden"
+                     closemenu="none"
+                     label="&recipientColumn.label;"
+                     tooltiptext="&recipientColumn2.tooltip;"/>
+            <splitter class="tree-splitter"/>
+            <treecol id="correspondentCol"
+                     persist="hidden ordinal sortDirection width"
+                     closemenu="none"
+                     label="&correspondentColumn.label;"
+                     tooltiptext="&correspondentColumn2.tooltip;"/>
+            <splitter class="tree-splitter"/>
+            <treecol is="treecol-image" id="junkStatusCol"
+                     class="thread-tree-icon-header junkStatusHeader"
+                     persist="hidden ordinal sortDirection"
+                     fixed="fixed"
+                     cycler="true"
+                     closemenu="none"
+                     src="chrome://messenger/skin/icons/new/spam-sm.svg"
+                     data-l10n-id="column-status-spam"/>
+            <splitter class="tree-splitter"/>
+            <treecol id="receivedCol"
+                     persist="hidden ordinal sortDirection width"
+                     hidden="hidden"
+                     closemenu="none"
+                     label="&receivedColumn.label;"
+                     tooltiptext="&receivedColumn2.tooltip;"/>
+            <splitter class="tree-splitter"/>
+            <treecol id="dateCol"
+                     persist="hidden ordinal sortDirection width"
+                     closemenu="none"
+                     label="&dateColumn.label;"
+                     tooltiptext="&dateColumn2.tooltip;"/>
+            <splitter class="tree-splitter"/>
+            <treecol id="statusCol"
+                     persist="hidden ordinal sortDirection width"
+                     style="flex: 1 auto"
+                     hidden="hidden"
+                     closemenu="none"
+                     label="&statusColumn.label;"
+                     tooltiptext="&statusColumn2.tooltip;"/>
+            <splitter class="tree-splitter"/>
+            <treecol id="sizeCol"
+                     persist="hidden ordinal sortDirection width"
+                     style="flex: 1 auto"
+                     hidden="hidden"
+                     closemenu="none"
+                     label="&sizeColumn.label;"
+                     tooltiptext="&sizeColumn2.tooltip;"/>
+            <splitter class="tree-splitter"/>
+            <treecol id="tagsCol"
+                     persist="hidden ordinal sortDirection width"
+                     style="flex: 1 auto"
+                     hidden="hidden"
+                     closemenu="none"
+                     label="&tagsColumn.label;"
+                     tooltiptext="&tagsColumn2.tooltip;"/>
+            <splitter class="tree-splitter"/>
+            <treecol id="accountCol"
+                     persist="hidden ordinal sortDirection width"
+                     style="flex: 1 auto"
+                     hidden="hidden"
+                     closemenu="none"
+                     label="&accountColumn.label;"
+                     tooltiptext="&accountColumn2.tooltip;"/>
+            <splitter class="tree-splitter"/>
+            <treecol id="priorityCol"
+                     persist="hidden ordinal sortDirection width"
+                     style="flex: 1 auto"
+                     hidden="hidden"
+                     closemenu="none"
+                     label="&priorityColumn.label;"
+                     tooltiptext="&priorityColumn2.tooltip;"/>
+            <splitter class="tree-splitter"/>
+            <treecol id="unreadCol"
+                     persist="hidden ordinal sortDirection width"
+                     style="flex: 1 auto"
+                     hidden="hidden"
+                     closemenu="none"
+                     label="&unreadColumn.label;"
+                     tooltiptext="&unreadColumn2.tooltip;"/>
+            <splitter class="tree-splitter"/>
+            <treecol id="totalCol"
+                     persist="hidden ordinal sortDirection width"
+                     style="flex: 1 auto"
+                     hidden="hidden"
+                     closemenu="none"
+                     label="&totalColumn.label;"
+                     tooltiptext="&totalColumn2.tooltip;"/>
+            <splitter class="tree-splitter"/>
+            <treecol id="locationCol"
+                     persist="hidden ordinal sortDirection width"
+                     style="flex: 1 auto"
+                     closemenu="none"
+                     label="&locationColumn.label;"
+                     tooltiptext="&locationColumn2.tooltip;"/>
+            <splitter class="tree-splitter"/>
+            <treecol id="idCol"
+                     persist="hidden ordinal sortDirection width"
+                     style="flex: 1 auto"
+                     hidden="hidden"
+                     closemenu="none"
+                     label="&idColumn.label;"
+                     tooltiptext="&idColumn2.tooltip;"/>
+            <splitter class="tree-splitter"/>
+            <treecol is="treecol-image" id="deleteCol"
+                     class="thread-tree-icon-header deleteColumnHeader"
+                     persist="hidden ordinal"
+                     fixed="fixed"
+                     cycler="true"
+                     currentView="unthreaded"
+                     hidden="hidden"
+                     closemenu="none"
+                     src="chrome://messenger/skin/icons/new/trash-sm.svg"
+                     label="&deleteColumn.label;"
+                     tooltiptext="&deleteColumn.tooltip;"/>
+          </treecols>
+          <treechildren ondragstart="ThreadPaneOnDragStart(event);"/>
+        </tree>
+      </vbox>
+      <hbox align="start">
+        <button id="openButton" data-l10n-id="open-button" command="cmd_open"/>
+        <button id="fileMessageButton" type="menu" data-l10n-id="move-button"
+                command="file_message_button">
+          <menupopup is="folder-menupopup" showFileHereLabel="true" mode="filing"/>
+        </button>
+
+
+        <button id="deleteButton" data-l10n-id="delete-button" command="button_delete"/>
+        <button id="openInFolderButton" data-l10n-id="open-in-folder" command="open_in_folder_button" />
+        <button id="saveAsVFButton" data-l10n-id="save-as-vf-button" command="saveas_vf_button" />
+      <spacer flex="1" />
+    </hbox>
+  </vbox>
+
+  <hbox id="status-bar" class="statusbar chromeclass-status" role="status">
+    <label id="statusText" class="statusbarpanel" crop="end" flex="1"/>
+    <hbox id="statusbar-progresspanel" class="statusbarpanel statusbarpanel-progress" hidden="hidden">
+      <html:progress class="progressmeter-statusbar" id="statusbar-icon"/>
+    </hbox>
+  </hbox>
+</html:body>
+</html>

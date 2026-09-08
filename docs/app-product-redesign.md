@@ -143,8 +143,8 @@ an upstream URL, or an unbuilt source download.
 | --- | --- | --- |
 | P0 | Published | Publish this ownership map and link it from maintained navigation. |
 | M1 | Implemented | All six UI/MCP AI operations call shared typed functions without argv translation. The canonical App, native launcher and versioned XPI ship together; both transports reject malformed input before effects. Native grants derive from the MCP contract and stay limited to AI/own-memory authority. |
-| M2 | Planned | Define the shared Mail account, folder, message, thread and draft model against the chosen upstream implementation. Prove UI and headless callers address the same account/object, and specify explicit provider selection and per-operation grants. |
-| M3 | Planned | Import the pinned Thunderbird product source needed for in-product integration, preserve provenance/licenses, and wire its source build, package output and security updates. Prove the packaged product runs; do not ship a second independent Agent mailbox client. |
+| M2 | Source-first | Define account, folder, message, thread and draft operations inside the imported Mail product. The external-extension reference-layer experiment is not the product architecture. Prove UI and headless callers address the same account/object with explicit provider selection and per-operation grants. |
+| M3 | In progress | Complete Thunderbird 153.2.0esr source imported at `desktop/mail/comm/`, with immutable source/platform pins and provenance. Source build, package output, branding, security updates and packaged-product execution remain to be completed. Do not ship a second independent Agent mailbox client. |
 | M4 | Planned | Complete mailbox read/search/send and AI integration through the shared product backend. Consolidate SMTP delivery; cut over `email`, `mail-ai` and `gateway-email` to the canonical Mail identity atomically with manifests, discovery, launchers, extension identity, skills, packages, consent and data handling. Remove the old identities, not alias them. |
 | D1 | Planned | Converge Files/Editor/Launcher/Terminal/Store/Browser UI and Agent paths on their owning services; remove the remaining desktop App calls. Preserve browser mode isolation. |
 | S1 | Planned | Remove system forwarding Apps as their service contracts and UI/tool consumers are wired. Consolidate notifications using the existing durable service; retain audit/event separation. |
@@ -162,9 +162,11 @@ rootfs package-preservation fixtures. A live Thunderbird session and a full
 installed-system package upgrade have not been exercised; source/UI integration
 and installed-product acceptance remain necessary before completing Mail.
 
-M2 informs the internal changes in M3; upstream source inspection may happen
-during M2. Do not design a second mailbox engine first and merely attach the
-upstream UI afterward.
+Source import and native build now precede further M2 interface work, following
+the source-first product decision. Implement against the actual engine in
+[`desktop/mail/`](../desktop/mail/README.md), not an expanding external wrapper.
+Do not design a second mailbox engine first and merely attach the upstream UI
+afterward.
 
 ## Acceptance and publication
 

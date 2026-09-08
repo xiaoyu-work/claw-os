@@ -1,0 +1,12 @@
+[DEFAULT]
+head = "head_server.js"
+tags = [
+  "mbox",
+  "cpp",
+]
+dupe-manifest = true
+run-sequentially = true
+
+["include:xpcshell-shared.toml"]
+
+["test_fetchWhileLocked.js"]

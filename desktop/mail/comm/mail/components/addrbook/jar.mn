@@ -1,0 +1,34 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+messenger.jar:
+    content/messenger/addressbook/abCommon.js                   (content/abCommon.js)
+*   content/messenger/addressbook/abContactsPanel.xhtml         (content/abContactsPanel.xhtml)
+    content/messenger/addressbook/abContactsPanel.js            (content/abContactsPanel.js)
+    content/messenger/addressbook/abMailListDialog.xhtml        (content/abMailListDialog.xhtml)
+    content/messenger/addressbook/aboutAddressBook.js           (content/aboutAddressBook.js)
+*   content/messenger/addressbook/aboutAddressBook.xhtml        (content/aboutAddressBook.xhtml)
+    content/messenger/addressbook/aboutAddressBookCommands.mjs  (content/aboutAddressBookCommands.mjs)
+*   content/messenger/addressbook/abSearchDialog.xhtml          (content/abSearchDialog.xhtml)
+    content/messenger/addressbook/abSearchDialog.js             (content/abSearchDialog.js)
+    content/messenger/addressbook/addressBookTab.js             (content/addressBookTab.js)
+    content/messenger/addressbook/menulist-addrbooks.js         (content/menulist-addrbooks.js)
+
+    content/messenger/addressbook/AddrBookDataAdapter.mjs       (content/modules/AddrBookDataAdapter.mjs)
+# Edit view
+    content/messenger/addressbook/edit/adr.mjs                  (content/vcard-edit/adr.mjs)
+    content/messenger/addressbook/edit/custom.mjs               (content/vcard-edit/custom.mjs)
+    content/messenger/addressbook/edit/edit.mjs                 (content/vcard-edit/edit.mjs)
+    content/messenger/addressbook/edit/email.mjs                (content/vcard-edit/email.mjs)
+    content/messenger/addressbook/edit/fn.mjs                   (content/vcard-edit/fn.mjs)
+    content/messenger/addressbook/edit/impp.mjs                 (content/vcard-edit/impp.mjs)
+    content/messenger/addressbook/edit/n.mjs                    (content/vcard-edit/n.mjs)
+    content/messenger/addressbook/edit/nickname.mjs             (content/vcard-edit/nickname.mjs)
+    content/messenger/addressbook/edit/note.mjs                 (content/vcard-edit/note.mjs)
+    content/messenger/addressbook/edit/org.mjs                  (content/vcard-edit/org.mjs)
+    content/messenger/addressbook/edit/special-date.mjs         (content/vcard-edit/special-date.mjs)
+    content/messenger/addressbook/edit/tel.mjs                  (content/vcard-edit/tel.mjs)
+    content/messenger/addressbook/edit/tz.mjs                   (content/vcard-edit/tz.mjs)
+    content/messenger/addressbook/edit/url.mjs                  (content/vcard-edit/url.mjs)
+    content/messenger/addressbook/edit/id-gen.mjs               (content/vcard-edit/id-gen.mjs)

@@ -1,0 +1,61 @@
+<?xml version="1.0"?>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+<!DOCTYPE html SYSTEM "chrome://messenger/locale/joinChat.dtd">
+
+<html
+  id="joinChatDialog"
+  xmlns="http://www.w3.org/1999/xhtml"
+  xmlns:html="http://www.w3.org/1999/xhtml"
+  xmlns:xul="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+  scrolling="false"
+>
+  <head>
+    <title>&joinChatWindow.title;</title>
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src chrome:; script-src chrome: 'unsafe-inline' moz-src:; style-src chrome: 'unsafe-inline'"
+    />
+    <link rel="stylesheet" href="chrome://global/skin/global.css" />
+    <link rel="stylesheet" href="chrome://messenger/skin/menulist.css" />
+    <link rel="stylesheet" href="chrome://messenger/skin/joinchat.css" />
+    <link rel="stylesheet" href="chrome://messenger/skin/input-fields.css" />
+    <script
+      defer="defer"
+      src="chrome://messenger/content/globalOverlay.js"
+    ></script>
+    <script
+      defer="defer"
+      src="chrome://global/content/editMenuOverlay.js"
+    ></script>
+    <script
+      defer="defer"
+      src="chrome://messenger/content/chat/joinchat.js"
+    ></script>
+  </head>
+  <body>
+    <xul:dialog buttons="accept,cancel">
+      <div id="joinChatGrid">
+        <div>
+          <xul:label value="&account.label;" control="accountlist" />
+        </div>
+        <div>
+          <xul:menulist
+            id="accountlist"
+            onselect="joinChat.onAccountSelect()"
+          />
+        </div>
+        <div class="optional-col required">&optional.label;</div>
+      </div>
+      <xul:hbox>
+        <xul:checkbox
+          id="autojoin"
+          label="&autojoin.label;"
+          accesskey="&autojoin.accesskey;"
+        />
+      </xul:hbox>
+    </xul:dialog>
+  </body>
+</html>

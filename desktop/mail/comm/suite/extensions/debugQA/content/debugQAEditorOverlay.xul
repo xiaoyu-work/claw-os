@@ -1,0 +1,45 @@
+<?xml version="1.0"?>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+<!DOCTYPE overlay [
+<!ENTITY % debugQAEditorOverlayDTD SYSTEM "chrome://debugqa/locale/debugQAEditorOverlay.dtd">
+%debugQAEditorOverlayDTD;
+]>
+
+<overlay id="debugQAEditorOverlay"
+         xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul">
+
+  <script src="chrome://debugQA/content/debugQAEditorOverlay.js"/>
+
+  <menubar id="main-menubar">
+    <menu id="debugMenu" label="&debugMenu.label;" insertbefore="menu_Help">
+      <menupopup>
+        <menuitem label="&newEditorTestPage.label;"
+                  oncommand="NewEditorWindow('chrome://debugqa/content/EditorInitPage.html');"/>
+        <menuitem label="&textEditorCmd.label;"
+                  oncommand="EditorNewPlaintext();" />
+        <menuitem label="&outputTextCmd.label;"
+                  oncommand="EditorGetText()"/>
+        <menuitem label="&outputHTMLCmd.label;"
+                  oncommand="EditorGetHTML()"/>
+        <menuseparator/>
+        <menuitem label="&insertTextCmd.label;"
+                  oncommand="EditorInsertText('All good things come to those who wait. ')"/>
+        <menuseparator/>
+        <menuitem label="&testSelectionCmd.label;"
+                  oncommand="EditorTestSelection()"/>
+        <menuitem label="&testDocumentCmd.label;"
+                  oncommand="EditorTestDocument()"/>
+        <menuseparator/>
+        <menuitem label="&executeJSTransactionViaEditor.label;"
+                  oncommand="ExecuteJSTransactionViaEditor()"/>
+        <menuseparator/>
+        <menuitem label="&setFocusCmd.label;"
+                  oncommand="window.focus()"/>
+      </menupopup>
+    </menu>
+  </menubar>
+</overlay>

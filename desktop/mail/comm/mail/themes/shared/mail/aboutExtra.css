@@ -1,0 +1,143 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@import url("chrome://messenger/skin/icons.css");
+@import url("chrome://messenger/skin/colors.css");
+@import url("chrome://messenger/skin/variables.css");
+
+body {
+  /* Override the absolute (px) font-size value in common-shared.css. */
+  font-size: 1.1rem;
+}
+
+.sticky-container,
+.main-search,
+.main-heading {
+  background: var(--layout-background-0);
+  /* Nova overrides */
+  --button-background-color: transparent;
+  --button-background-color-ghost: transparent;
+  --button-background-color-ghost-hover: var(--button-background-color-hover);
+  --button-background-color-ghost-active: var(--button-background-color-active);
+  --button-border-color-ghost: var(--button-border-color);
+  --button-border-color-ghost-hover: var(--button-border-color-hover);
+  --button-border-color-ghost-active: var(--button-border-color-active);
+  --button-icon-fill: color-mix(in srgb, currentColor 20%, transparent);
+  --button-icon-stroke: currentColor;
+}
+
+#full {
+  grid-template-columns: 18em 1fr;
+}
+
+#sidebar {
+  background-color: var(--sidebar-background);
+
+  & #category-plugin {
+    display: none;
+  }
+}
+
+/* Hide Plugins category */
+button[name="plugin"] {
+  display: none;
+}
+
+#content {
+  --main-margin-start: 28px;
+}
+
+/* Hide in extension details the private browsing section */
+section > .addon-detail-row-private-browsing,
+.addon-detail-row-private-browsing + .addon-detail-row.addon-detail-help-row {
+  display: none;
+}
+
+/* Hide the options entry in the options menu, as we have a dedicated button */
+addon-options panel-item[action="preferences"] {
+  display: none;
+}
+
+.theme-enable-button {
+  --button-border: none;
+}
+
+.extension-options-button {
+  min-inline-size: auto;
+  min-block-size: auto;
+  inline-size: 24px;
+  block-size: 24px;
+  margin: 0;
+  margin-inline-start: 8px;
+  -moz-context-properties: fill;
+  fill: currentColor;
+  background-image: url("chrome://messenger/skin/icons/developer.svg");
+  background-repeat: no-repeat;
+  background-position: center center;
+  /* Get the -badged ::after element in the right spot. */
+  padding: 1px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+recommended-addon-card .addon.card:hover {
+  box-shadow: var(--card-shadow-hover);
+  cursor: pointer;
+}
+
+.card {
+  border-radius: var(--button-border-radius);
+}
+
+panel-list {
+  --panel-list-background-color: var(--color-surface-subtle);
+  --panel-list-color: var(--color-text-base);
+  --panel-list-border-color: var(--color-surface-border);
+  --panel-list-border-radius: 8px;
+  padding: 4px;
+}
+
+panel-item::part(button) {
+  border-radius: 3px;
+  background-position-x: 3px;
+  --button-background-color-hover: var(--button-hover-background-color);
+  --button-background-color-active: var(--button-active-background-color);
+}
+
+panel-item[action="remove"]::part(button) {
+  background-image: var(--icon-trash);
+  -moz-context-properties: fill, stroke;
+  fill: color-mix(in srgb, currentColor 20%, transparent);
+  stroke: currentColor;
+}
+
+/* Override the absolute (px) font-size values in aboutaddons.css. */
+
+.addon-name,
+.disco-addon-name {
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.theme-enable-button,
+.addon-description,
+.disco-addon-author,
+.disco-cta-button {
+  font-size: 1.1rem;
+}
+
+button.tab-button {
+  font-size: 1.1rem;
+}
+
+/* about:config */
+
+#toolbar,
+#prefs {
+  background-color: var(--layout-background-0);
+}
+
+#prefs > tr:not(:hover).odd {
+  background-color: var(--layout-background-1);
+}

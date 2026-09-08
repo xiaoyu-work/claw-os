@@ -1,0 +1,32 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+/* ===== dialogs.css ====================================================
+  == Styles used by the general dialogs in Messenger.
+  ======================================================================= */
+
+@import url("chrome://messenger/skin/messenger.css");
+
+@namespace url("http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul");
+
+/* ::::: fieldMapImport.xul ::::: */
+
+.importsampledata {
+  border-left: 3px solid #C2D0D0;
+  padding-inline-start: 10px;
+}
+
+/* ::::: importDialog.xul ::::: */
+
+#progressStatus {
+  margin: 1em 0px 0px;
+}
+
+#progressMeter {
+  margin-top: 1em;
+  margin-bottom: 2em;
+  margin-inline-start: 1em;
+  margin-inline-end: 2em;
+  width: 26em;
+}

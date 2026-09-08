@@ -1,0 +1,39 @@
+/* -*- Mode: C; c-basic-offset: 2 -*- */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@namespace url("http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul");
+
+.treecell-panel
+{
+ list-style-image: url("chrome://communicator/skin/places/bookmark-item.svg");
+}
+
+.treecell-panel[haslink="true"],
+treeitem[container="true"] > treerow > .treecell-panel
+{
+ list-style-image: url("chrome://communicator/skin/places/bookmark-folder-closed.png");
+}
+treeitem[selected="true"] > treerow > .treecell-panel[haslink="true"],
+treeitem[selected="true"][container="true"] > treerow > .treecell-panel
+{
+ list-style-image: url("chrome://communicator/skin/places/bookmark-folder-closed-sel.png");
+}
+
+treeitem[container="true"][open="true"] > treerow > .treecell-panel
+{
+ list-style-image: url("chrome://communicator/skin/places/bookmark-folder-open.png");
+}
+treeitem[selected="true"][container="true"][open="true"] > treerow > .treecell-panel
+{
+ list-style-image: url("chrome://communicator/skin/places/bookmark-folder-open-sel.png");
+}
+
+#header {
+  list-style-image: url("chrome://communicator/skin/sidebar/sidebar-icon.png");
+}
+
+box#reorder {
+  -moz-box-pack: center;
+}

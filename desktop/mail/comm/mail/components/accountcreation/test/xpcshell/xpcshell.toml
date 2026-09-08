@@ -1,0 +1,41 @@
+[DEFAULT]
+support-files = ["data/*"]
+prefs = [
+  "carddav.setup.loglevel=Debug",
+  "mail.setup.loglevel=Debug"
+]
+
+["test_accountConfig.js"]
+
+["test_accountCreationUtils.js"]
+
+["test_autoconfigUtils.js"]
+
+["test_autoconfigXML.js"]
+tags = ["oauth"]
+
+["test_exchangeAutoDiscover.js"]
+
+["test_fetchConfig.js"]
+skip-if = [
+  "os == 'win' && msix", # MSIX cannot write to application directory
+]
+
+["test_fetchHTTP.js"]
+
+["test_findConfig.js"]
+requesttimeoutfactor = 2
+tags = ["oauth"]
+
+["test_firstRun.js"]
+tags = ["addrbook"]
+
+["test_guessConfig.js"]
+
+["test_ldapDirectoryUtils.js"]
+tags = ["addrbook"]
+
+["test_remoteAddressBookUtils.js"]
+tags = ["addrbook", "carddav"]
+
+["test_sanitizer.js"]

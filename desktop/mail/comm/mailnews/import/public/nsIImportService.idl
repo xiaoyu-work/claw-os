@@ -1,0 +1,36 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+/**
+ * The import service.
+ */
+
+#include "nsISupports.idl"
+
+interface nsIImportModule;
+interface nsIImportMailboxDescriptor;
+interface nsIImportABDescriptor;
+interface nsIImportGeneric;
+interface nsIMsgSendListener;
+interface nsIMsgIdentity;
+interface nsIMsgCompFields;
+interface nsIMsgAttachedFile;
+interface nsIMsgEmbeddedImageData;
+
+[scriptable, uuid(d0ed4c50-5997-49c9-8a6a-045f0680ed29)]
+interface nsIImportService : nsISupports {
+  nsIImportMailboxDescriptor createNewMailboxDescriptor();
+  nsIImportABDescriptor createNewABDescriptor();
+  nsIImportGeneric createNewGenericMail();
+  nsIImportGeneric createNewGenericAddressBooks();
+  void createRFC822Message(in nsIMsgIdentity aIdentity,
+                           in nsIMsgCompFields aMsgFields,
+                           in string aBodytype,
+                           in ACString aBody,
+                           in boolean aCreateAsDraft,
+                           in Array<nsIMsgAttachedFile> aLoadedAttachments,
+                           in Array<nsIMsgEmbeddedImageData> aEmbeddedObjects,
+                           in nsIMsgSendListener aListener);
+
+};

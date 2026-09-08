@@ -1,0 +1,556 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "nsISupports.idl"
+#include "nsIArray.idl"
+#include "nsISupportsPrimitives.idl"
+#include "MailNewsTypes2.idl"
+
+interface IHeaderBlock;
+interface nsIMsgDBHdr;
+interface nsIRequest;
+interface nsIStreamListener;
+interface nsIMsgIncomingServer;
+interface nsIInputStream;
+interface nsIMsgCopyServiceListener;
+interface nsIURI;
+interface nsIUrlListener;
+
+// Forward declarations of callback classes defined later in this file.
+interface IExchangeFolderListener;
+interface IExchangeMessageSyncListener;
+interface IExchangeMessageCreateListener;
+interface IExchangeMessageFetchListener;
+
+interface IExchangeSimpleOperationListener;
+interface IExchangeFallibleOperationListener;
+
+/**
+ * A client for communicating with a Microsoft Exchange server.
+ *
+ * This interface is intended to provide an abstraction of Exchange operations to
+ * bridge the foreign function interface between the components of a Thunderbird
+ * mail protocol implementation and a single implementation of those Exchange ops.
+ *
+ * With the exception of initialization, all client operations are intended to
+ * be asynchronous, with implementations of the callback interfaces used to
+ * handle the results of the operations or handle errors.
+ */
+[scriptable, uuid(4a117361-653b-48a5-9ddb-588482ef9dbb)]
+interface IExchangeClient : nsISupports
+{
+  /**
+   * Whether the client is currently running.
+   *
+   * This will be false if `initialize()` hasn't been called yet, or if
+   * `shutdown()` has been called.
+   *
+   * The client is considered running if it's either performing operations, or
+   * waiting for new ones.
+   */
+  readonly attribute boolean running;
+
+  /**
+   * Whether the client is not currently processing any operation and is fully
+   * waiting for one to be triggered.
+   *
+   * If `running` is `false`, then `idle` will also be `false`.
+   */
+  readonly attribute boolean idle;
+
+  /**
+   * Record in telemetry (Glean) the version for the Exchange Server with the
+   * provided URL, and whether it refers to Office365 or an on-premise server.
+   *
+   * This method can fail if the provided URL is invalid (e.g. un-parseable
+   * URL, URL without a domain...) or if reading the pref in which Exchange
+   * Server versions are stored failed. If a failure, happens, no telemetry
+   * records are created.
+   *
+   * If no known version exists for this server, no version is recorded for this
+   * server in the telemetry data. However, a record regarding whether the
+   * server refers to Office365 or an on-premise server is still created in this
+   * case.
+   *
+   * This method is stateless (thus can be called repeatedly on the same
+   * `IExchangeClient` instance with different URLs) and does not require
+   * `initialize` to be called.
+   *
+   * @param endpoint - The full URL to the server's Exchange endpoint.
+   */
+  void recordTelemetry(in AUTF8String endpoint);
+
+  /**
+   * Initializes a new client with the necessary host address and authentication
+   * details to communicate with an Exchange server.
+   *
+   * @param endpoint - The HTTP(S) address of an Exchange server's endpoint.
+   * @param server - An incoming server entity corresponding to an Exchange-capable
+   *   account.
+   */
+  void initialize(
+    in AUTF8String endpoint,
+    in nsIMsgIncomingServer server);
+
+  /**
+   * Shuts down the client.
+   *
+   * This method might run asynchronously and there is no guarantee that the
+   * client won't emit any network traffic after it returns (consumers can check
+   * the `running` attribute to see when the client has fully stopped).
+   */
+  void shutdown();
+
+  /**
+   * Checks that the current client configuration is able to connect and
+   * authenticate against an Exchange server.
+   *
+   * The means of checking connectivity is implementation-defined.
+   *
+   * @param listener - Listener to communicate the success or failure of the
+   *   check.
+   * @returns The client's Exchange endpoint's URL.
+   */
+  nsIURI checkConnectivity(in nsIUrlListener listener);
+
+  /**
+   * Synchronizes the local folder listing with changes made on the remote
+   * Exchange server.
+   *
+   * @param listener - Listener for communicating changes to the folder list and
+   *   to the recorded synchronization state.
+   * @param syncStateToken - A synchronization state token provided by a prior
+   *   sync request, or an empty string to indicate that this is the initial
+   *   sync.
+   */
+  void syncFolderHierarchy(in IExchangeFolderListener listener, in AUTF8String syncStateToken);
+
+  /**
+   * Creates a new folder on the Exchange server as a child of the specified
+   * parent.
+   *
+   * @param listener - Listener that propagates the success or failure of the
+   *   folder creation operation to the consumer.
+   * @param parentId - The ID of the folder under which to create the new
+   *   folder.
+   * @param name - The name to use for the new folder.
+   */
+  void createFolder(in IExchangeSimpleOperationListener listener, in AUTF8String parentId, in AUTF8String name);
+
+  /**
+   * Synchronizes the local message listing for the given folder with changes
+   * made on the remote Exchange server.
+   *
+   * @param listener - Listener for communicating changes to the message list
+   *   and to the recorded synchronization state.
+   * @param folderId - The ID of the folder which message list to
+   *   synchronize.
+   * @param syncStateToken - A synchronization state token provided by a prior
+   *   sync request, or an empty string to indicate that this is the initial
+   *   sync.
+   */
+  void syncMessagesForFolder(in IExchangeMessageSyncListener listener, in AUTF8String folderId, in AUTF8String syncStateToken);
+
+  /**
+   * Retrieves the content of a message on the Exchange server.
+   *
+   * @param listener - Listener to communicate the operation's state and status,
+   *   as well as the message's content, to the consumer.
+   * @param id - The ID of the message to fetch.
+   */
+  void getMessage(in IExchangeMessageFetchListener listener, in AUTF8String id);
+
+  /**
+   * Changes the read/unread status of one or more messages on the Exchange
+   * server.
+   *
+   * @param messageIds - The IDs of the messages which read/unread status to
+   *   change.
+   * @param isRead - The new read/unread state for the message, indicating
+   *   whether the message should be marked as read.
+   */
+  void changeReadStatus(in IExchangeSimpleOperationListener listener, in Array<AUTF8String> messageIds, in boolean isRead);
+
+  /**
+   * Changes the flag status of one or more messages on the Exchange server.
+   *
+   * @param messageIds - The IDs of the messages to flag or unflag.
+   * @param isFlagged - The new flag state for the message.
+   */
+  void changeFlagStatus(in IExchangeSimpleOperationListener listener, in Array<AUTF8String> messageIds, in boolean isFlagged);
+
+  /**
+   * Changes the read/unread status of all messages in the listed folders on the
+   * Exchange server, if the server provides a dedicated operation to do this.
+   *
+   * If the server does not provide such an operation, the listener will use the
+   * success callback with the use_legacy_fallback flag set, but the items will
+   * not be marked read, and the consumer is then expected to use
+   * `changeReadStatus` on the individual messages instead.
+   *
+   * @param folderIds - The IDs of the folders which read/unread status to
+   *   change.
+   * @param isRead - The new read/unread state for the messages, indicating
+   *   whether the messages should be marked as read.
+   * @param suppressReadReceipts - Whether read receipts should be suppressed
+   *   for any messages marked read. This is ignored if the server is too old to
+   *   support it (pre-2013).
+   */
+  void changeReadStatusAll(in IExchangeSimpleOperationListener listener,
+                           in Array<AUTF8String> folderIds,
+                           in boolean isRead,
+                           in boolean suppressReadReceipts);
+
+  /**
+   * Creates a new message on the server using the data read from the stream.
+   *
+   * @param listener - Listener to indicate operation state and status.
+   * @param folderId - The ID of the folder.
+   * @param isDraft - Whether the message being created is an unsent draft.
+   * @param isRead - Whether the message has already been read.
+   * @param messageStream - The input stream to read the message from.
+   */
+  void createMessage(in IExchangeMessageCreateListener listener,
+                     in AUTF8String folderId,
+                     in boolean isDraft,
+                     in boolean isRead,
+                     in nsIInputStream messageStream);
+
+  /**
+   * Deletes the messages with the given IDs from the server.
+   *
+   * @param listener - Listener to indicate the success or failure of the
+   *   message deletion operation.
+   * @param messageIds - The IDs of the messages to delete.
+   */
+  void deleteMessages(in IExchangeSimpleOperationListener listener, in Array<AUTF8String> messageIds);
+
+  /**
+   * Deletes the folder with the given ID from the server.
+   *
+   * @param listener - Listener to indicate the success or failure of the
+   *   folder deletion operation.
+   * @param folderId - The ID of the folder to delete.
+   */
+  void deleteFolder(in IExchangeSimpleOperationListener listener, in AUTF8String folderId);
+
+  /**
+   * Empties the folder with the given ID from the server (deletes all
+   * messages and subfolders).
+   *
+   * @param listener - Listener to indicate the success or failure of the empty
+   *   folder operation. The `ids` argument of `onOperationSuccess` is currently
+   *   unset, the `useLegacyFallback` argument is true iff EmptyFolder was
+   *   unsupported and the workaround was used (which hopefully shouldn't
+   *   matter).
+   * @param folderId - The ID of the folder to empty.
+   * @param subfolderIds - The IDs of the child folders of the given
+   *   folderIds. Only used if EmptyFolder operation is not supported.
+   * @param messageIds - The IDs of the messages in the folders listed in
+   *   folderIds. Only used if EmptyFolder operation is not supported.
+   */
+  void emptyFolder(in IExchangeSimpleOperationListener listener, in AUTF8String folderId, in Array<AUTF8String> subfolderIds, in Array<AUTF8String> messageIds);
+
+  /**
+   * Renames a folder on the Exchange server.
+   *
+   * @param listener - Listener to indicate the success or failure of the
+   *   folder update operation to rename the folder.
+   * @param folderId - The ID of the folder to rename.
+   */
+  void updateFolder(in IExchangeSimpleOperationListener listener, in AUTF8String folderId, in AUTF8String folderName);
+
+  /**
+   * Moves items on the Exchange server.
+   *
+   * @param listener - Listener to indicate the success or failure of the move
+   * operation.
+   * @param destinationFolderId - The ID of the destination folder.
+   * @param itemIds - A list of the IDs of the items to be moved.
+   */
+  void moveItems(in IExchangeSimpleOperationListener listener, in AUTF8String destinationFolderId, in Array<AUTF8String> itemIds);
+
+  /**
+   * Copies items on the Exchange server.
+   *
+   * @param listener - Listener to indicate the success or failure of the copy
+   * operation.
+   * @param destinationFolderId - The ID of the destination folder.
+   * @param itemIds - A list of the IDs of the items to be copied.
+   */
+  void copyItems(in IExchangeSimpleOperationListener listener, in AUTF8String destinationFolderId, in Array<AUTF8String> itemIds);
+
+  /**
+   * Moves folders on the Exchange server.
+   *
+   * @param listener - Listener to indicate the success or failure of the move
+   * operation.
+   * @param destinationFolderId - The ID of the destination folder.
+   * @param itemIds - A list of the IDs of the folders to be moved.
+   */
+  void moveFolders(in IExchangeSimpleOperationListener listener, in AUTF8String destinationFolderId, in Array<AUTF8String> folderIds);
+
+  /**
+   * Copies folders on the Exchange server.
+   *
+   * @param listener - Listener to indicate the success or failure of the copy
+   *   operation.
+   * @param destinationFolderId - The ID of the destination folder.
+   * @param itemIds - A list of the IDs of the folders to be copied.
+   */
+  void copyFolders(in IExchangeSimpleOperationListener listener, in AUTF8String destinationFolderId, in Array<AUTF8String> folderIds);
+
+  /**
+   * Mark an item as Junk or not junk.
+   *
+   * @param listener - Callbacks to indicate the success or failure of the operation.
+   * @param itemIds - The IDs for the items to mark as junk or not junk.
+   * @param isJunk - Whether to mark as junk or not junk.
+   * @param legacyDestinationFolderId - The ID as the folder to use as the junk folder for
+   *        older versions of Exchange that do not support the `MarkAsJunk` operation.
+   */
+  void markItemsAsJunk(
+    in IExchangeSimpleOperationListener listener,
+    in Array<AUTF8String> itemIds,
+    in boolean isJunk,
+    in AUTF8String legacyDestinationFolderId);
+};
+
+[scriptable, uuid(5dacc994-30e0-42f7-94c8-52756638add5)]
+interface IExchangeFolderListener : nsISupports
+{
+  /**
+   * Called on the first sync when we have requested and received the ID for
+   * the account's root folder.
+   *
+   * The `IExchangeClient` implementation is responsible for ensuring this is
+   * only called in the first sync.
+   *
+   * @param id - The root folder's ID.
+   */
+  void onNewRootFolder(in AUTF8String id);
+
+  /**
+   * Called if a folder has been created on the server.
+   *
+   * This may be called multiple times in a single sync if multiple folders
+   * have been created since the last sync.
+   *
+   * @param id - The new folder's ID.
+   * @param parentId - The ID for the new folder's parent folder.
+   * @param name - The new folder's name.
+   * @param flags - The `nsMsgFolderFlags` for the new folder.
+   */
+  void onFolderCreated(in AUTF8String id, in AUTF8String parentId, in AUTF8String name, in unsigned long flags);
+
+  /**
+   * Called if an existing folder has been updated on the server.
+   *
+   * An update can mean the folder has been either renamed or moved to a new
+   * parent.
+   *
+   * This may be called multiple times in a single sync if multiple folders
+   * have been created since the last sync.
+   *
+   * Implementations are expected to return `NS_MSG_ERROR_FOLDER_MISSING` if the
+   * folder does not exist locally.
+   *
+   * @param id - The folder's ID.
+   * @param parentId - The ID for the folder's parent folder.
+   * @param name - The folder's name.
+   */
+  void onFolderUpdated(in AUTF8String id, in AUTF8String parentId, in AUTF8String name);
+
+  /**
+   * Called if an existing folder has been deleted on the server.
+   *
+   * This may be called multiple times in a single sync if multiple folders
+   * have been created since the last sync.
+   *
+   * @param id - The folder's ID.
+   */
+  void onFolderDeleted(in AUTF8String id);
+
+  /**
+   * Called after a sync has completed.
+   *
+   * In this context, a sync having completed does not necessarily mean the
+   * client has stopped syncing, because the server might have told it there is
+   * more data to sync than what could be included in one sync. In this case,
+   * the client will sync again (and call this method again).
+   *
+   * @param syncStateToken - The new sync state token to use in future syncs.
+   */
+  void onSyncStateTokenChanged(in AUTF8String syncStateToken);
+
+  /**
+   * Called after processing everything there was to sync from the server.
+   *
+   * Unlike `onSyncStateTokenChanged`, this will only be called after all the
+   * necessary sync operations have completed (rather than at the end of each
+   * one).
+   */
+  void onSuccess();
+};
+
+/**
+ * Callbacks used when interacting with an server via an `IExchangeClient` in the
+ * context of synchronizing changes to the message list.
+ *
+ * These callbacks allow the `IExchangeClient` instance to perform local operation on
+ * the folder that is being synchronized.
+ */
+[scriptable, uuid(dec2ddd5-b5a2-4724-bfc7-e5de31840f76)]
+interface IExchangeMessageSyncListener : nsISupports
+{
+  /**
+   * Called when a new message has been created on the server.
+   *
+   * @param id - The ID for the new message.
+   * @param headerBlock - The RFC5322-style email headers for the message.
+   * @param isRead - Is the message "Read" on the server?
+   * @param isFlagged - Is the message "Marked" on the server?
+   * @param preview - A short text preview of the message body?
+   */
+  void onMessageCreated(in AUTF8String id,
+                        in IHeaderBlock headerBlock,
+                        in unsigned long messageSize,
+                        in boolean isRead,
+                        in boolean isFlagged,
+                        in AUTF8String preview);
+
+  /**
+   * Called when an existing message has been updated on the server.
+   *
+   * Implementations are expected to return `NS_MSG_MESSAGE_NOT_FOUND` if the
+   * message does not exist locally.
+   *
+   * @param id - The ID for the updated message.
+   * @param headerBlock - The RFC5322-style email headers for the message.
+   * @param isRead - Is the message "Read" on the server?
+   * @param isFlagged - Is the message "Marked" on the server?
+   * @param preview - A short text preview of the message body
+   */
+  void onMessageUpdated(in AUTF8String id,
+                        in IHeaderBlock headerblock,
+                        in unsigned long messageSize,
+                        in boolean isRead,
+                        in boolean isFlagged,
+                        in AUTF8String preview);
+
+  /**
+   * Called when the read/unread flag was changed for a specific message.
+   *
+   * When a message is marked as read/unread on the server, the server
+   * will represent this either as an `Update` element or `ReadFlagChange`
+   * element (presumably for older versions of Exchange Server) when syncing the
+   * message list.
+   *
+   * If the server represents changes to read/unread flags as `ReadFlagChange`,
+   * then this method will be called, otherwise only `onMessageUpdated` will be
+   * called.
+   *
+   * @param id - The ID for the updated message.
+   * @param IsRead - The new read/unread status for the message.
+   */
+  void onReadStatusChanged(in AUTF8String id, in boolean isRead);
+
+  /**
+   * Called when an existing message has been deleted on the server.
+   *
+   * @param id - The ID for the deleted message.
+   */
+  void onMessageDeleted(in AUTF8String id);
+
+  /**
+   * Called after a sync has completed.
+   *
+   * In this context, a sync having completed does not necessarily mean the
+   * client has stopped syncing, because the server might have told it there is
+   * more data to sync than what could be included in one sync. In this case,
+   * the client will sync again (and call this method again).
+   *
+   * @param syncStateToken - The new sync state token to use in future syncs.
+   */
+  void onSyncStateTokenChanged(in AUTF8String syncStateToken);
+
+  /**
+   * Called after processing everything there was to sync from the server.
+   *
+   * Unlike `onSyncStateTokenChanged`, this will only be called after all the
+   * necessary sync operations have completed (rather than at the end of each
+   * one).
+   */
+  void onSyncComplete();
+};
+
+/**
+ * A set of callbacks called during the creation of a new message on an Exchange
+ * server.
+ */
+[scriptable, uuid(ff45569f-d618-4bb0-9686-6cb24b92b02b)]
+interface IExchangeMessageCreateListener : nsISupports
+{
+  /**
+   * Called when the server operation is finished.
+   * If status is successful, ewsId will hold the server-side id of the
+   * newly-created message. Upon failure, ewsId should be considered
+   * undefined.
+   * The return code from this callback will be ignored.
+   */
+  void onRemoteCreateFinished(in nsresult status, in AUTF8String id);
+};
+
+/**
+ * A listener used when downloading message content.
+ *
+ * Its shape is loosely based on `nsIStreamListener`, which cannot be used in
+ * this instance because we don't always have a request/channel that can be used
+ * in method calls when fetching a message's content (and using `nullptr`
+ * everywhere is quite ugly and potentially unsafe).
+ */
+[scriptable, uuid(027150b1-d127-41a9-8945-18f9374755b3)]
+interface IExchangeMessageFetchListener : nsISupports
+{
+  void onFetchStart();
+  void onFetchedDataAvailable(in nsIInputStream inputStream);
+  void onFetchStop(in nsresult status);
+};
+
+/**
+ * A listener for "simple" operations, which only report a success to the
+ * consumer.
+ */
+[scriptable, uuid(0217030b-dcad-4289-914f-48bad6693f2e)]
+interface IExchangeSimpleOperationListener : nsISupports {
+  /**
+   * Signals a successful completion of the operation.
+   *
+   * @param newIds - If the operation involves generating new identifiers
+   *   for one or several entities, they are included in this array. Otherwise,
+   *   this is an empty array.
+   * @param useLegacyFallback - Whether the client has decided the Exchange
+   *   server is too old to perform the operation the "normal" way and we need
+   *   to fall back to a "legacy" behaviour. What the normal and legacy
+   *   behaviours are, and whether there's even a difference in behaviour
+   *   depending on the server version, depends on the specific operation.
+   */
+  void onOperationSuccess(in Array<AUTF8String> newIds, in boolean useLegacyFallback);
+};
+
+/**
+ * A listener for operations which failures we want to report to the consumer.
+ *
+ * This interface will likely not be implemented on its own but be QI'd from an
+ * object of a different type (e.g. `IExchangeSimpleOperationListener`).
+ */
+[scriptable, uuid(50b04351-609c-4650-b915-81e2b8e209c0)]
+interface IExchangeFallibleOperationListener : nsISupports {
+  /**
+   * Signals an error causing the operation to be aborted.
+   *
+   * @param status - The status describing the error.
+   */
+  void onOperationFailure(in nsresult status);
+};

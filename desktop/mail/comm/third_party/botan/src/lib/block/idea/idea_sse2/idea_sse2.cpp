@@ -1,0 +1,183 @@
+/*
+* IDEA in SSE2
+* (C) 2009 Jack Lloyd
+*
+* Botan is released under the Simplified BSD License (see license.txt)
+*/
+
+#include <botan/internal/idea.h>
+
+#include <botan/internal/ct_utils.h>
+#include <botan/internal/isa_extn.h>
+#include <emmintrin.h>
+
+namespace Botan {
+
+// NOLINTBEGIN(portability-simd-intrinsics) TODO add various helper fns
+
+namespace {
+
+BOTAN_FN_ISA_SSE2 inline __m128i mul(__m128i X, uint16_t K_16) {
+   const __m128i zeros = _mm_set1_epi16(0);
+   const __m128i ones = _mm_set1_epi16(1);
+   const __m128i K = _mm_set1_epi16(K_16);
+
+   // If X == 0 or K == 0 then P == X * K == 0
+   const __m128i P_is_zero = _mm_or_si128(_mm_cmpeq_epi16(X, zeros), _mm_cmpeq_epi16(K, zeros));
+
+   // Return value if P == 0: 1 - X - K
+   const __m128i R0 = _mm_sub_epi16(_mm_sub_epi16(ones, X), K);
+
+   const __m128i mul_lo = _mm_mullo_epi16(X, K);
+   const __m128i mul_hi = _mm_mulhi_epu16(X, K);
+
+   __m128i R1 = _mm_sub_epi16(mul_lo, mul_hi);
+
+   // SSE doesn't have unsigned comparisons so emulate with a signed compare by flipping the sign bit
+   const __m128i sign_bit = _mm_set1_epi16(static_cast<int16_t>(0x8000));
+   const __m128i borrow = _mm_cmpgt_epi16(_mm_xor_si128(mul_hi, sign_bit), _mm_xor_si128(mul_lo, sign_bit));
+
+   // R1 = mul_lo - mul_hi + (mul_hi > mul_lo ? 1 : 0)
+   R1 = _mm_sub_epi16(R1, borrow);
+
+   // Return either R1 or R0 (1-X-K) depending on if P == 0 or not
+   return _mm_or_si128(_mm_andnot_si128(P_is_zero, R1), _mm_and_si128(P_is_zero, R0));
+}
+
+/*
+* 4x8 matrix transpose
+*/
+BOTAN_FN_ISA_SSE2 void transpose_in(__m128i& B0, __m128i& B1, __m128i& B2, __m128i& B3) {
+   B0 = _mm_shuffle_epi32(B0, _MM_SHUFFLE(3, 1, 2, 0));
+   B1 = _mm_shuffle_epi32(B1, _MM_SHUFFLE(3, 1, 2, 0));
+   B2 = _mm_shuffle_epi32(B2, _MM_SHUFFLE(3, 1, 2, 0));
+   B3 = _mm_shuffle_epi32(B3, _MM_SHUFFLE(3, 1, 2, 0));
+
+   B0 = _mm_shufflelo_epi16(B0, _MM_SHUFFLE(3, 1, 2, 0));
+   B1 = _mm_shufflelo_epi16(B1, _MM_SHUFFLE(3, 1, 2, 0));
+   B2 = _mm_shufflelo_epi16(B2, _MM_SHUFFLE(3, 1, 2, 0));
+   B3 = _mm_shufflelo_epi16(B3, _MM_SHUFFLE(3, 1, 2, 0));
+
+   B0 = _mm_shufflehi_epi16(B0, _MM_SHUFFLE(3, 1, 2, 0));
+   B1 = _mm_shufflehi_epi16(B1, _MM_SHUFFLE(3, 1, 2, 0));
+   B2 = _mm_shufflehi_epi16(B2, _MM_SHUFFLE(3, 1, 2, 0));
+   B3 = _mm_shufflehi_epi16(B3, _MM_SHUFFLE(3, 1, 2, 0));
+
+   const __m128i T0 = _mm_unpacklo_epi32(B0, B1);
+   const __m128i T1 = _mm_unpackhi_epi32(B0, B1);
+   const __m128i T2 = _mm_unpacklo_epi32(B2, B3);
+   const __m128i T3 = _mm_unpackhi_epi32(B2, B3);
+
+   B0 = _mm_unpacklo_epi64(T0, T2);
+   B1 = _mm_unpackhi_epi64(T0, T2);
+   B2 = _mm_unpacklo_epi64(T1, T3);
+   B3 = _mm_unpackhi_epi64(T1, T3);
+}
+
+/*
+* 4x8 matrix transpose (reverse)
+*/
+BOTAN_FN_ISA_SSE2 void transpose_out(__m128i& B0, __m128i& B1, __m128i& B2, __m128i& B3) {
+   __m128i T0 = _mm_unpacklo_epi64(B0, B1);
+   __m128i T1 = _mm_unpacklo_epi64(B2, B3);
+   __m128i T2 = _mm_unpackhi_epi64(B0, B1);
+   __m128i T3 = _mm_unpackhi_epi64(B2, B3);
+
+   T0 = _mm_shuffle_epi32(T0, _MM_SHUFFLE(3, 1, 2, 0));
+   T1 = _mm_shuffle_epi32(T1, _MM_SHUFFLE(3, 1, 2, 0));
+   T2 = _mm_shuffle_epi32(T2, _MM_SHUFFLE(3, 1, 2, 0));
+   T3 = _mm_shuffle_epi32(T3, _MM_SHUFFLE(3, 1, 2, 0));
+
+   T0 = _mm_shufflehi_epi16(T0, _MM_SHUFFLE(3, 1, 2, 0));
+   T1 = _mm_shufflehi_epi16(T1, _MM_SHUFFLE(3, 1, 2, 0));
+   T2 = _mm_shufflehi_epi16(T2, _MM_SHUFFLE(3, 1, 2, 0));
+   T3 = _mm_shufflehi_epi16(T3, _MM_SHUFFLE(3, 1, 2, 0));
+
+   T0 = _mm_shufflelo_epi16(T0, _MM_SHUFFLE(3, 1, 2, 0));
+   T1 = _mm_shufflelo_epi16(T1, _MM_SHUFFLE(3, 1, 2, 0));
+   T2 = _mm_shufflelo_epi16(T2, _MM_SHUFFLE(3, 1, 2, 0));
+   T3 = _mm_shufflelo_epi16(T3, _MM_SHUFFLE(3, 1, 2, 0));
+
+   B0 = _mm_unpacklo_epi32(T0, T1);
+   B1 = _mm_unpackhi_epi32(T0, T1);
+   B2 = _mm_unpacklo_epi32(T2, T3);
+   B3 = _mm_unpackhi_epi32(T2, T3);
+}
+
+}  // namespace
+
+/*
+* 8 wide IDEA encryption/decryption in SSE2
+*/
+BOTAN_FN_ISA_SSE2 void IDEA::sse2_idea_op_8(const uint8_t in[64], uint8_t out[64], const uint16_t EK[52]) {
+   CT::poison(in, 64);
+   CT::poison(out, 64);
+   CT::poison(EK, 52);
+
+   const __m128i* in_mm = reinterpret_cast<const __m128i*>(in);
+
+   __m128i B0 = _mm_loadu_si128(in_mm + 0);
+   __m128i B1 = _mm_loadu_si128(in_mm + 1);
+   __m128i B2 = _mm_loadu_si128(in_mm + 2);
+   __m128i B3 = _mm_loadu_si128(in_mm + 3);
+
+   transpose_in(B0, B1, B2, B3);
+
+   // byte swap
+   B0 = _mm_or_si128(_mm_slli_epi16(B0, 8), _mm_srli_epi16(B0, 8));
+   B1 = _mm_or_si128(_mm_slli_epi16(B1, 8), _mm_srli_epi16(B1, 8));
+   B2 = _mm_or_si128(_mm_slli_epi16(B2, 8), _mm_srli_epi16(B2, 8));
+   B3 = _mm_or_si128(_mm_slli_epi16(B3, 8), _mm_srli_epi16(B3, 8));
+
+   for(size_t i = 0; i != 8; ++i) {
+      B0 = mul(B0, EK[6 * i + 0]);
+      B1 = _mm_add_epi16(B1, _mm_set1_epi16(EK[6 * i + 1]));
+      B2 = _mm_add_epi16(B2, _mm_set1_epi16(EK[6 * i + 2]));
+      B3 = mul(B3, EK[6 * i + 3]);
+
+      const __m128i T0 = B2;
+      B2 = _mm_xor_si128(B2, B0);
+      B2 = mul(B2, EK[6 * i + 4]);
+
+      const __m128i T1 = B1;
+
+      B1 = _mm_xor_si128(B1, B3);
+      B1 = _mm_add_epi16(B1, B2);
+      B1 = mul(B1, EK[6 * i + 5]);
+
+      B2 = _mm_add_epi16(B2, B1);
+
+      B0 = _mm_xor_si128(B0, B1);
+      B1 = _mm_xor_si128(B1, T0);
+      B3 = _mm_xor_si128(B3, B2);
+      B2 = _mm_xor_si128(B2, T1);
+   }
+
+   B0 = mul(B0, EK[48]);
+   B1 = _mm_add_epi16(B1, _mm_set1_epi16(EK[50]));
+   B2 = _mm_add_epi16(B2, _mm_set1_epi16(EK[49]));
+   B3 = mul(B3, EK[51]);
+
+   // byte swap
+   B0 = _mm_or_si128(_mm_slli_epi16(B0, 8), _mm_srli_epi16(B0, 8));
+   B1 = _mm_or_si128(_mm_slli_epi16(B1, 8), _mm_srli_epi16(B1, 8));
+   B2 = _mm_or_si128(_mm_slli_epi16(B2, 8), _mm_srli_epi16(B2, 8));
+   B3 = _mm_or_si128(_mm_slli_epi16(B3, 8), _mm_srli_epi16(B3, 8));
+
+   transpose_out(B0, B2, B1, B3);
+
+   __m128i* out_mm = reinterpret_cast<__m128i*>(out);
+
+   _mm_storeu_si128(out_mm + 0, B0);
+   _mm_storeu_si128(out_mm + 1, B2);
+   _mm_storeu_si128(out_mm + 2, B1);
+   _mm_storeu_si128(out_mm + 3, B3);
+
+   CT::unpoison(in, 64);
+   CT::unpoison(out, 64);
+   CT::unpoison(EK, 52);
+}
+
+// NOLINTEND(portability-simd-intrinsics)
+
+}  // namespace Botan

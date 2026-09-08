@@ -1,0 +1,77 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+<html:template id="editContactPanelTemplate">
+<panel id="editContactPanel"
+        type="arrow"
+        orient="vertical"
+        class="cui-widget-panel popup-panel panel-no-padding"
+        ignorekeys="true"
+        aria-labelledby="editContactPanelTitle"
+        onpopuphidden="editContactInlineUI.onPopupHidden(event);"
+        onpopupshown="editContactInlineUI.onPopupShown(event);"
+        onkeypress="editContactInlineUI.onKeyPress(event, true);">
+  <html:div class="popup-panel-body">
+    <html:div id="editContactHeader">
+      <html:img id="editContactPanelIcon"
+                src="chrome://messenger/skin/icons/new/normal/address-book.svg"
+                alt="" />
+      <html:h3 id="editContactPanelTitle" flex="1"></html:h3>
+    </html:div>
+
+    <box id="editContactContent">
+      <hbox pack="end">
+        <label value="&editContactName.label;"
+               class="editContactPanel_rowLabel"
+               accesskey="&editContactName.accesskey;"
+               control="editContactName"/>
+      </hbox>
+      <html:input id="editContactName" class="editContactTextbox" type="text"
+                  onkeypress="editContactInlineUI.onKeyPress(event, true);"/>
+      <hbox pack="end">
+        <label value="&editContactEmail.label;"
+               class="editContactPanel_rowLabel"
+               accesskey="&editContactEmail.accesskey;"
+               control="editContactEmail"/>
+      </hbox>
+      <html:input id="editContactEmail" readonly="readonly"
+                  class="editContactTextbox" type="email"
+                  onkeypress="editContactInlineUI.onKeyPress(event, true);"/>
+      <hbox pack="end">
+        <label id="editContactAddressBook"
+               class="editContactPanel_rowLabel"
+               value="&editContactAddressBook.label;"
+               accesskey="&editContactAddressBook.accesskey;"
+               control="editContactAddressBookList"/>
+      </hbox>
+      <menulist is="menulist-addrbooks"
+                id="editContactAddressBookList"
+                flex="1"/>
+      <label value="" collapsed="collapsed"/>
+      <description id="contactMoveDisabledText" hidden="hidden">
+        &contactMoveDisabledWarning.description;
+      </description>
+    </box>
+
+    <html:div class="popup-panel-buttons-container">
+      <button id="editContactPanelEditDetailsButton"
+              class="button"
+              oncommand="editContactInlineUI.editDetails();"
+              onkeypress="editContactInlineUI.onKeyPress(event, false);"/>
+      <button id="editContactPanelDeleteContactButton"
+              class="button"
+              label="&editContactPanelDeleteContact.label;"
+              accesskey="&editContactPanelDeleteContact.accesskey;"
+              oncommand="editContactInlineUI.deleteContact();"
+              onkeypress="editContactInlineUI.onKeyPress(event, false);"/>
+      <button id="editContactPanelDoneButton"
+              class="button button-primary"
+              label="&editContactPanelDone.label;"
+              accesskey="&editContactPanelDone.accesskey;"
+              oncommand="editContactInlineUI.saveChanges();"
+              onkeypress="editContactInlineUI.onKeyPress(event, false);"/>
+    </html:div>
+  </html:div>
+</panel>
+</html:template>

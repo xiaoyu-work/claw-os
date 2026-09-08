@@ -1,0 +1,39 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+basepath = "../../.."
+
+locales = [
+    "cs",
+    "de",
+    "el",
+    "en-GB",
+    "es-AR",
+    "es-ES",
+    "fi",
+    "fr",
+    "hu",
+    "it",
+    "ja",
+    "ja-JP-mac",
+    "ka",
+    "nb-NO",
+    "nl",
+    "pl",
+    "pt-BR",
+    "pt-PT",
+    "ru",
+    "sk",
+    "sv-SE",
+    "tr",
+    "zh-CN",
+    "zh-TW",
+]
+
+[env]
+    l = "{l10n_base}/{locale}/"
+
+[[paths]]
+    reference = "suite/chatzilla/locales/en-US/**"
+    l10n = "{l}suite/chatzilla/**"

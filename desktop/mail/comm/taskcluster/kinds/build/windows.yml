@@ -1,0 +1,636 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+---
+task-defaults:
+    run-on-repo-type: [hg]
+    run:
+        using: mozharness
+        comm-checkout: true
+        config-paths:
+            - comm/testing/mozharness/configs
+    fetches:
+        toolchain:
+            - nsis
+            - vs
+        fetch:
+            - windows-rs
+
+win32/opt:
+    description: "Win32 Opt (Cross)"
+    index:
+        product: thunderbird
+        job-name: win32-opt
+    attributes:
+        enable-build-signing: true
+        enable-full-crashsymbols: true
+    treeherder:
+        platform: windows2012-32/opt
+        symbol: B
+        tier: 1
+    worker-type: b-linux
+    worker:
+        max-run-time: 7200
+        env:
+            PERFHERDER_EXTRA_OPTIONS: cross
+            MOZ_AUTOMATION_PACKAGE_TESTS: "1"
+    run:
+        actions: [build]
+        options: [append-env-variables-from-configs]
+        script: mozharness/scripts/fx_desktop_build.py
+        config:
+            - builds/taskcluster_base_thunderbird.py
+            - builds/releng_base_linux_64_builds.py
+        extra-config:
+            stage_platform: win32
+            mozconfig_platform: win32
+    use-sccache: true
+    optimization:
+        never: null
+    fetches:
+        toolchain:
+            - linux64-7zz
+            - linux64-cbindgen
+            - linux64-clang
+            - linux64-dump_syms
+            - linux64-nasm
+            - linux64-node
+            - linux64-rust-cross
+            - linux64-rust-size
+            - linux64-sccache
+            - linux64-upx
+            - linux64-winchecksec
+            - linux64-wine
+            - sysroot-wasm32-wasi
+            - sysroot-x86_64-linux-gnu
+            - terser
+            - win32-libotr
+            - winappsdk-x86-pc-windows-msvc
+
+win32-shippable/opt:
+    description: "Win32 Opt Shippable"
+    index:
+        product: thunderbird
+        job-name: win32-opt
+        type: shippable
+    attributes:
+        shippable: true
+        enable-build-signing: true
+        enable-full-crashsymbols: true
+    shipping-phase: build
+    shipping-product: thunderbird
+    treeherder:
+        platform: windows2012-32-shippable/opt
+        symbol: B
+        tier: 1
+    worker-type: b-linux
+    worker:
+        max-run-time: 7200
+        env:
+            PERFHERDER_EXTRA_OPTIONS: cross
+            MOZ_AUTOMATION_PACKAGE_TESTS: "1"
+    run:
+        actions: [build]
+        options: [append-env-variables-from-configs]
+        script: mozharness/scripts/fx_desktop_build.py
+        config:
+            - builds/taskcluster_base_thunderbird.py
+            - builds/releng_base_linux_64_builds.py
+            - taskcluster_nightly.py
+        extra-config:
+            stage_platform: win32
+            mozconfig_platform: win32
+    run-on-projects: ['release']
+    optimization:
+        never: null
+    fetches:
+        toolchain:
+            - linux64-7zz
+            - linux64-cbindgen
+            - linux64-clang
+            - linux64-dump_syms
+            - linux64-nasm
+            - linux64-node
+            - linux64-rust-cross
+            - linux64-rust-size
+            - linux64-upx
+            - linux64-winchecksec
+            - linux64-wine
+            - sysroot-wasm32-wasi
+            - sysroot-x86_64-linux-gnu
+            - terser
+            - win32-libotr
+            - winappsdk-x86-pc-windows-msvc
+
+win32/debug:
+    description: "Win32 Debug (Cross)"
+    index:
+        product: thunderbird
+        job-name: win32-debug
+    attributes:
+        enable-build-signing: true
+        enable-full-crashsymbols: true
+    treeherder:
+        platform: windows2012-32/debug
+        symbol: B
+        tier: 1
+    worker-type: b-linux
+    worker:
+        max-run-time: 7200
+        env:
+            PERFHERDER_EXTRA_OPTIONS: cross
+            MOZ_AUTOMATION_PACKAGE_TESTS: "1"
+    run:
+        actions: [build]
+        options: [append-env-variables-from-configs]
+        script: mozharness/scripts/fx_desktop_build.py
+        config:
+            - builds/taskcluster_base_thunderbird.py
+            - builds/releng_base_linux_64_builds.py
+            - builds/taskcluster_sub_win32/debug.py
+        mozconfig-variant: debug
+        extra-config:
+            mozconfig_platform: win32
+    use-sccache: true
+    optimization:
+        never: null
+    fetches:
+        toolchain:
+            - linux64-7zz
+            - linux64-cbindgen
+            - linux64-clang
+            - linux64-dump_syms
+            - linux64-nasm
+            - linux64-node
+            - linux64-rust-cross
+            - linux64-rust-size
+            - linux64-sccache
+            - linux64-upx
+            - linux64-winchecksec
+            - linux64-wine
+            - sysroot-wasm32-wasi
+            - sysroot-x86_64-linux-gnu
+            - win32-libotr
+            - winappsdk-x86-pc-windows-msvc
+
+win64/opt:
+    description: "Win64 Opt (Cross)"
+    index:
+        product: thunderbird
+        job-name: win64-opt
+    attributes:
+        enable-build-signing: true
+        enable-full-crashsymbols: true
+    treeherder:
+        platform: windows2012-64/opt
+        symbol: B
+        tier: 1
+    worker-type: b-linux
+    worker:
+        max-run-time: 7200
+        env:
+            PERFHERDER_EXTRA_OPTIONS: cross
+            MOZ_AUTOMATION_PACKAGE_TESTS: "1"
+            RUST_MIN_STACK: "16777216"
+    run:
+        actions: [build]
+        options: [append-env-variables-from-configs]
+        script: mozharness/scripts/fx_desktop_build.py
+        config:
+            - builds/taskcluster_base_thunderbird.py
+            - builds/releng_base_linux_64_builds.py
+        extra-config:
+            stage_platform: win64
+            mozconfig_platform: win64
+    use-sccache: true
+    optimization:
+        never: null
+    fetches:
+        toolchain:
+            - linux64-7zz
+            - linux64-cbindgen
+            - linux64-clang
+            - linux64-dump_syms
+            - linux64-nasm
+            - linux64-node
+            - linux64-rust-cross
+            - linux64-rust-size
+            - linux64-sccache
+            - linux64-upx
+            - linux64-winchecksec
+            - linux64-wine
+            - sysroot-wasm32-wasi
+            - sysroot-x86_64-linux-gnu
+            - terser
+            - win64-libotr
+            - winappsdk-x86_64-pc-windows-msvc
+
+win64-shippable/opt:
+    description: "Win64 Opt Shippable"
+    index:
+        product: thunderbird
+        job-name: win64-opt
+        type: shippable
+    attributes:
+        shippable: true
+        enable-build-signing: true
+        enable-full-crashsymbols: true
+    shipping-phase: build
+    shipping-product: thunderbird
+    treeherder:
+        platform: windows2012-64-shippable/opt
+        symbol: B
+        tier: 1
+    worker-type: b-linux
+    worker:
+        max-run-time: 7200
+        env:
+            PERFHERDER_EXTRA_OPTIONS: cross
+            MOZ_AUTOMATION_PACKAGE_TESTS: "1"
+            RUST_MIN_STACK: "16777216"
+    run:
+        actions: [build]
+        options: [append-env-variables-from-configs]
+        script: mozharness/scripts/fx_desktop_build.py
+        config:
+            - builds/taskcluster_base_thunderbird.py
+            - builds/releng_base_linux_64_builds.py
+            - taskcluster_nightly.py
+        extra-config:
+            stage_platform: win64
+            mozconfig_platform: win64
+    run-on-projects: ['release']
+    optimization:
+        never: null
+    fetches:
+        toolchain:
+            - linux64-7zz
+            - linux64-cbindgen
+            - linux64-clang
+            - linux64-dump_syms
+            - linux64-nasm
+            - linux64-node
+            - linux64-rust-cross
+            - linux64-rust-size
+            - linux64-upx
+            - linux64-winchecksec
+            - linux64-wine
+            - sysroot-wasm32-wasi
+            - sysroot-x86_64-linux-gnu
+            - terser
+            - win64-libotr
+            - winappsdk-x86_64-pc-windows-msvc
+
+win64/debug:
+    description: "Win64 Debug (Cross)"
+    index:
+        product: thunderbird
+        job-name: win64-debug
+    attributes:
+        enable-build-signing: true
+        enable-full-crashsymbols: true
+    treeherder:
+        platform: windows2012-64/debug
+        symbol: B
+        tier: 1
+    worker-type: b-linux
+    worker:
+        max-run-time: 7200
+        env:
+            PERFHERDER_EXTRA_OPTIONS: cross
+            MOZ_AUTOMATION_PACKAGE_TESTS: "1"
+            RUST_MIN_STACK: "16777216"
+    run:
+        actions: [build]
+        options: [append-env-variables-from-configs]
+        script: mozharness/scripts/fx_desktop_build.py
+        config:
+            - builds/taskcluster_base_thunderbird.py
+            - builds/releng_base_linux_64_builds.py
+            - builds/taskcluster_sub_win64/debug.py
+        mozconfig-variant: debug
+        extra-config:
+            mozconfig_platform: win64
+    use-sccache: true
+    optimization:
+        never: null
+    fetches:
+        toolchain:
+            - linux64-7zz
+            - linux64-cbindgen
+            - linux64-clang
+            - linux64-dump_syms
+            - linux64-nasm
+            - linux64-node
+            - linux64-rust-cross
+            - linux64-rust-size
+            - linux64-sccache
+            - linux64-upx
+            - linux64-winchecksec
+            - linux64-wine
+            - sysroot-wasm32-wasi
+            - sysroot-x86_64-linux-gnu
+            - win64-libotr
+            - winappsdk-x86_64-pc-windows-msvc
+
+win64-plain/debug:
+    description: "Win64 Debug Plain"
+    index:
+        product: thunderbird
+        job-name: win64-plain-debug
+    treeherder:
+        platform: windows2012-64/debug
+        symbol: Bp
+        tier: 2
+    worker-type: b-win2022
+    worker:
+        max-run-time: 7200
+        env:
+            PERFHERDER_EXTRA_OPTIONS: plain
+            RUST_MIN_STACK: "16777216"
+    run:
+        actions: [build]
+        options: [append-env-variables-from-configs]
+        script: mozharness/scripts/fx_desktop_build.py
+        config:
+            - builds/taskcluster_base_thunderbird.py
+            - builds/taskcluster_base_windows.py
+            - builds/taskcluster_base_win64.py
+        extra-config:
+            disable_package_metrics: true
+            stage_platform: win64
+        mozconfig-variant: plain-debug
+    run-on-projects: ['comm-central']
+    optimization:
+        skip-unless-backstop: null
+    fetches:
+        toolchain:
+            - sysroot-wasm32-wasi
+            - win64-cbindgen
+            - win64-clang
+            - win64-dump_syms
+            - win64-libotr
+            - win64-mozmake
+            - win64-node
+            - win64-nasm
+            - win64-rust
+            - win64-winchecksec
+            - winappsdk-x86_64-pc-windows-msvc
+
+win64-plain/opt:
+    description: "Win64 Opt Plain"
+    index:
+        product: thunderbird
+        job-name: win64-plain-opt
+    treeherder:
+        platform: windows2012-64/opt
+        symbol: Bp
+        tier: 2
+    worker-type: b-win2022
+    worker:
+        max-run-time: 7200
+        env:
+            PERFHERDER_EXTRA_OPTIONS: plain
+            RUST_MIN_STACK: "16777216"
+    run:
+        actions: [build]
+        options: [append-env-variables-from-configs]
+        script: mozharness/scripts/fx_desktop_build.py
+        config:
+            - builds/taskcluster_base_thunderbird.py
+            - builds/taskcluster_base_windows.py
+            - builds/taskcluster_base_win64.py
+        extra-config:
+            disable_package_metrics: true
+            stage_platform: win64
+        mozconfig-variant: plain-opt
+    run-on-projects: ['comm-central']
+    optimization:
+        skip-unless-backstop: null
+    fetches:
+        toolchain:
+            - sysroot-wasm32-wasi
+            - terser
+            - win64-cbindgen
+            - win64-clang
+            - win64-dump_syms
+            - win64-libotr
+            - win64-mozmake
+            - win64-node
+            - win64-nasm
+            - win64-rust
+            - win64-winchecksec
+            - winappsdk-x86_64-pc-windows-msvc
+
+win64-asan/opt:
+    description: "Win64 Opt ASAN"
+    index:
+        product: thunderbird
+        job-name: win64-asan-opt
+    treeherder:
+        platform: windows2012-64/asan
+        symbol: Bo
+        tier: 1
+    worker-type: b-linux
+    worker:
+        max-run-time: 7200
+        env:
+            PERFHERDER_EXTRA_OPTIONS: "opt asan"
+            MOZ_AUTOMATION_PACKAGE_TESTS: "1"
+            RUST_MIN_STACK: "16777216"
+    run:
+        actions: [build]
+        options: [append-env-variables-from-configs]
+        script: mozharness/scripts/fx_desktop_build.py
+        config:
+            - builds/taskcluster_base_thunderbird.py
+            - builds/releng_base_linux_64_builds.py
+        extra-config:
+            stage_platform: win64-asan
+            mozconfig_platform: win64
+        mozconfig-variant: nightly-asan
+    run-on-projects: ['comm-central']
+    use-sccache: true
+    optimization:
+        skip-unless-backstop: null
+    fetches:
+        toolchain:
+            - linux64-7zz
+            - linux64-cbindgen
+            - linux64-clang
+            - linux64-dump_syms
+            - linux64-nasm
+            - linux64-node
+            - linux64-rust-cross
+            - linux64-rust-size
+            - linux64-sccache
+            - linux64-upx
+            - linux64-winchecksec
+            - linux64-wine
+            - sysroot-wasm32-wasi
+            - sysroot-x86_64-linux-gnu
+            - terser
+            - win64-libotr
+            - win64-llvm-symbolizer
+            - winappsdk-x86_64-pc-windows-msvc
+
+win64-ccov/opt:
+    description: "Win64 Opt Code Coverage"
+    index:
+        product: thunderbird
+        job-name: win64-ccov-opt
+    attributes:
+        enable-build-signing: true
+    treeherder:
+        platform: windows2012-64/ccov
+        symbol: B
+        tier: 2
+    worker-type: b-win2022
+    worker:
+        artifacts:
+            - name: public/code-coverage-grcov.zip
+              path: workspace\obj-build\code-coverage-grcov.zip
+              type: file
+        max-run-time: 9000
+        env:
+            RUSTC_BOOTSTRAP: '1'
+            MOZ_AUTOMATION_PACKAGE_TESTS: "1"
+            RUST_MIN_STACK: "16777216"
+    run:
+        using: mozharness
+        comm-checkout: true
+        actions: [build]
+        config-paths:
+            - comm/testing/mozharness/configs
+        options: [append-env-variables-from-configs]
+        script: mozharness/scripts/fx_desktop_build.py
+        config:
+            - builds/taskcluster_base_thunderbird.py
+            - builds/taskcluster_base_windows.py
+            - builds/taskcluster_base_win64.py
+            - builds/taskcluster_sub_win64/ccov_opt.py
+        mozconfig-variant: code-coverage
+    run-on-projects: ['comm-central']
+    use-sccache: false
+    optimization:
+        never: null
+    fetches:
+        toolchain:
+            - sysroot-wasm32-wasi
+            - terser
+            - win64-7zz
+            - win64-cbindgen
+            - win64-clang
+            - win64-dump_syms
+            - win64-grcov
+            - win64-libotr
+            - win64-mozmake
+            - win64-nasm
+            - win64-node
+            - win64-rust-dev
+            - win64-rust-size
+            - win64-sccache
+            - win64-winchecksec
+            - winappsdk-x86_64-pc-windows-msvc
+
+win64-aarch64/debug:
+    description: "AArch64 Win64 Debug"
+    index:
+        product: thunderbird
+        job-name: win64-aarch64-debug
+    attributes:
+        enable-full-crashsymbols: true
+    treeherder:
+        platform: windows2012-aarch64/debug
+        symbol: B
+        tier: 1
+    worker-type: b-linux
+    worker:
+        max-run-time: 7200
+        env:
+            PERFHERDER_EXTRA_OPTIONS: aarch64
+            RUST_MIN_STACK: "16777216"
+    run:
+        actions: [build]
+        options: [append-env-variables-from-configs]
+        script: mozharness/scripts/fx_desktop_build.py
+        config:
+            - builds/taskcluster_base_thunderbird.py
+            - builds/releng_base_linux_64_builds.py
+            - builds/taskcluster_sub_win64/debug.py
+        extra-config:
+            mozconfig_platform: win64-aarch64
+        mozconfig-variant: debug
+    run-on-projects: ['comm-central']
+    use-sccache: true
+    fetches:
+        toolchain:
+            - linux64-7zz
+            - linux64-cbindgen
+            - linux64-clang
+            - linux64-dump_syms
+            - linux64-nasm
+            - linux64-node
+            - linux64-rust-cross
+            - linux64-rust-size
+            - linux64-sccache
+            - linux64-upx
+            - linux64-winchecksec
+            - linux64-wine
+            - sysroot-wasm32-wasi
+            - sysroot-x86_64-linux-gnu
+            - winappsdk-aarch64-pc-windows-msvc
+    optimization:
+        never: null
+
+
+win64-aarch64/opt:
+    description: "AArch64 Win64 Opt"
+    index:
+        product: thunderbird
+        job-name: win64-aarch64-opt
+    attributes:
+        enable-build-signing: true
+        enable-full-crashsymbols: true
+    treeherder:
+        platform: windows2012-aarch64/opt
+        symbol: B
+        tier: 1
+    worker-type: b-linux
+    worker:
+        max-run-time: 7200
+        env:
+            PERFHERDER_EXTRA_OPTIONS: aarch64
+            RUST_MIN_STACK: "16777216"
+    run:
+        actions: [build]
+        options: [append-env-variables-from-configs]
+        script: mozharness/scripts/fx_desktop_build.py
+        config:
+            - builds/taskcluster_base_thunderbird.py
+            - builds/releng_base_linux_64_builds.py
+        extra-config:
+            stage_platform: win64-aarch64
+            mozconfig_platform: win64-aarch64
+    run-on-projects: ['comm-central']
+    use-sccache: true
+    fetches:
+        toolchain:
+            - linux64-7zz
+            - linux64-cbindgen
+            - linux64-clang
+            - linux64-dump_syms
+            - linux64-nasm
+            - linux64-node
+            - linux64-rust-cross
+            - linux64-rust-size
+            - linux64-sccache
+            - linux64-upx
+            - linux64-winchecksec
+            - linux64-wine
+            - sysroot-wasm32-wasi
+            - sysroot-x86_64-linux-gnu
+            - terser
+            - winappsdk-aarch64-pc-windows-msvc
+    optimization:
+        never: null

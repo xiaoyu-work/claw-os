@@ -1,0 +1,219 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@namespace html url("http://www.w3.org/1999/xhtml");
+
+/* this is for attendee and organizer decoration in summary and event dialog */
+html|input.textbox-addressingWidget {
+  inline-size: 100%;
+  background-color: transparent !important;
+  flex: 1;
+}
+html|input.textbox-addressingWidget:disabled {
+  color: inherit;
+  opacity: 0.5;
+}
+
+#outer {
+  max-block-size: calc(100vh - 210px);
+}
+
+.attendee-list-container {
+  inline-size: 350px;
+}
+
+.item-attendees-list-container {
+  flex: 1 1 100px;
+  appearance: auto;
+  -moz-default-appearance: listbox;
+  margin: 2px 4px 0;
+  overflow-y: auto;
+}
+
+:root[lwt-tree] .item-attendees-list-container {
+  appearance: none;
+  background-color: var(--field-background-color);
+  color: var(--field-text-color);
+  border: 1px solid var(--field-border-color);
+}
+
+.attendee-list {
+  display: block;
+  padding: 0;
+  margin: 0;
+}
+
+.attendee-list-item {
+  display: contents;
+}
+
+.attendee-label {
+  padding: 2px;
+  display: flex;
+  align-items: baseline;
+  user-select: text;
+}
+
+.attendee-list .attendee-label:focus {
+  background-color: var(--selected-item-color);
+  color: var(--selected-item-text-color);
+}
+
+.itip-icon {
+  flex: 0 0 auto;
+}
+
+.attendee-name {
+  margin: 0 3px;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* this is for the itip icon setup in calendar */
+
+.itip-icon {
+  --itip-icon-partstat: -16px -16px; /* default: NEEDS-ACTION */
+  --itip-icon-role: 0px; /* default: REQ-PARTICIPANT */
+  --itip-icon-usertype: -32px; /* default: INDIVIDUAL */
+  inline-size: 16px;
+  block-size: 16px;
+  background-image:
+    url(chrome://calendar/skin/shared/calendar-itip-icons.svg),
+    url(chrome://calendar/skin/shared/calendar-itip-icons.svg);
+  background-position:
+    var(--itip-icon-partstat),
+    var(--itip-icon-usertype) var(--itip-icon-role);
+}
+.itip-icon[partstat="ACCEPTED"] {
+  --itip-icon-partstat: 0px 0px;
+}
+.itip-icon[partstat="DECLINED"] {
+  --itip-icon-partstat: 0px -16px;
+}
+.itip-icon[partstat="DELEGATED"] {
+  --itip-icon-partstat: 0px -32px;
+}
+.itip-icon[partstat="TENTATIVE"] {
+  --itip-icon-partstat: -16px 0px;
+}
+.itip-icon[usertype="INDIVIDUAL"] {
+  --itip-icon-usertype: -32px;
+}
+.itip-icon[usertype="GROUP"] {
+  --itip-icon-usertype: -48px;
+}
+.itip-icon[usertype="RESOURCE"] {
+  --itip-icon-usertype: -64px;
+}
+.itip-icon[usertype="ROOM"] {
+  --itip-icon-usertype: -80px;
+}
+.itip-icon[usertype="UNKNOWN"] {
+  --itip-icon-usertype: -96px;
+}
+.itip-icon[attendeerole="REQ-PARTICIPANT"] {
+  --itip-icon-role: 0px;
+}
+.itip-icon[attendeerole="OPT-PARTICIPANT"] {
+  --itip-icon-role: -16px;
+}
+.itip-icon[attendeerole="NON-PARTICIPANT"] {
+  --itip-icon-role: -32px;
+}
+.itip-icon[attendeerole="CHAIR"] {
+  --itip-icon-role: -32px;
+  --itip-icon-usertype: -16px;
+}
+
+/* Autocomplete popup label formatting */
+
+html|span.ac-emphasize-text {
+  font-weight: bold;
+}
+
+/* the following will get obsolete once porting to new itip icons is complete */
+
+.role-icon > .menu-icon,
+.usertype-icon > .menu-icon {
+  visibility: inherit;
+}
+
+.role-icon {
+  margin: 0 3px;
+  inline-size: 21px;
+  block-size: 16px;
+  object-fit: none;
+  object-position: top 0 left -138px;
+}
+
+.role-icon[disabled] {
+  object-position: top 0 left -138px;
+}
+
+.role-icon[attendeerole="REQ-PARTICIPANT"] {
+  object-position: top 0 left -138px;
+}
+.role-icon[attendeerole="REQ-PARTICIPANT"][disabled] {
+  object-position: top 0 left -138px;
+}
+
+.role-icon[attendeerole="OPT-PARTICIPANT"] {
+  object-position: top 0 left -159px;
+}
+.role-icon[attendeerole="OPT-PARTICIPANT"][disabled] {
+  object-position: top 0 left -159px;
+}
+
+.role-icon[attendeerole="CHAIR"] {
+  object-position: top 0 left -180px;
+}
+.role-icon[attendeerole="CHAIR"][disabled] {
+  object-position: top 0 left -180px;
+}
+
+.role-icon[attendeerole="NON-PARTICIPANT"] {
+  object-position: top 0 left -201px;
+}
+.role-icon[attendeerole="NON-PARTICIPANT"][disabled] {
+  object-position: top 0 left -201px;
+}
+
+.usertype-icon {
+  margin: 0 3px;
+  inline-size: 16px;
+  block-size: 16px;
+  object-fit: none;
+  object-position: top 0 left 0;
+}
+
+.usertype-icon[usertype="INDIVIDUAL"] {
+  object-position: top 0 left 0;
+}
+.usertype-icon[disabled],
+.usertype-icon[usertype="INDIVIDUAL"][disabled] {
+  object-position: top -16px left 0;
+}
+
+.usertype-icon[usertype="GROUP"] {
+  object-position: top 0 left -16px;
+}
+.usertype-icon[usertype="GROUP"][disabled] {
+  object-position: top -16px left -16px;
+}
+
+.usertype-icon[usertype="RESOURCE"] {
+  object-position: top 0 left -32px;
+}
+.usertype-icon[usertype="RESOURCE"][disabled] {
+  object-position: top -16px left -32px;
+}
+
+.usertype-icon[usertype="ROOM"] {
+  object-position: top 0 left -48px;
+}
+.usertype-icon[usertype="ROOM"][disabled] {
+  object-position: top -16px left -48px;
+}

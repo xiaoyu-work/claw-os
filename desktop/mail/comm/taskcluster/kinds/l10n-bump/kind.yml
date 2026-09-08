@@ -1,0 +1,101 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+---
+loader: taskgraph.loader.transform:loader
+
+transforms:
+    - gecko_taskgraph.transforms.resolve_landoscript_keyed_by:transforms
+    - gecko_taskgraph.transforms.task:transforms
+
+task-defaults:
+    run-on-repo-type: [hg]
+    worker-type: lando
+    worker:
+        implementation: scriptworker-lando
+
+        # Match Firefox behavior of only landing on beta when the tree is closed
+        dontbuild:
+            by-project:
+                comm-(central|beta|release|esr140): false
+                default: true
+        ignore-closed-tree:
+            by-project:
+                comm-(central|beta|release|esr153): false
+                default: true
+        lando-repo:
+            by-project:
+                comm-central: thunderbird-desktop-main
+                comm-beta: thunderbird-desktop-beta
+                comm-release: thunderbird-desktop-release
+                comm-esr153: thunderbird-desktop-esr153
+                try-comm-central:
+                    by-release-type:
+                        beta: staging-thunderbird-beta
+                        release: staging-thunderbird-release
+                        esr153: staging-thunderbird-esr153
+                        default: ""
+                default: ""
+        actions:
+            by-release-type:
+                # Whenever the the non-default config changes, make sure to make
+                #     the corresponding change in merge-automation/kind.yml
+                (beta|release|esr153):
+                    - l10n-bump:
+                          - name: Thunderbird l10n changesets
+                            path: mail/locales/l10n-changesets.json
+                            l10n-repo-url: https://github.com/thunderbird/thunderbird-l10n
+                            l10n-repo-target-branch: main
+                            ignore-config:
+                                ja:
+                                    - macosx64
+                                ja-JP-mac:
+                                    - linux64
+                                    - win32
+                                    - win64
+                            platform-configs: [
+                                {
+                                    "platforms": [
+                                        "linux64",
+                                        "macosx64",
+                                        "win32",
+                                        "win64"
+                                    ],
+                                    "path": "mail/locales/shipped-locales"
+                                }
+                            ]
+                default:
+                    - l10n-bump:
+                          - name: Thunderbird l10n changesets
+                            path: mail/locales/l10n-changesets.json
+                            l10n-repo-url: https://github.com/thunderbird/thunderbird-l10n
+                            l10n-repo-target-branch: main
+                            ignore-config:
+                                ja:
+                                    - macosx64
+                                ja-JP-mac:
+                                    - linux64
+                                    - win32
+                                    - win64
+                            platform-configs: [
+                                {
+                                    "platforms": [
+                                        "linux64",
+                                        "macosx64",
+                                        "win32",
+                                        "win64"
+                                    ],
+                                    "path": "mail/locales/all-locales"
+                                }
+                            ]
+
+tasks:
+    l10n-bumper:
+        name: l10n_bumper
+        description: l10n changesets bumper
+        run-on-projects: []
+        treeherder:
+            kind: build
+            platform: linux64/opt
+            symbol: l10n-bump(lb)
+            tier: 1

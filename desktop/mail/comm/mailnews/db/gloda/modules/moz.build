@@ -1,0 +1,30 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+EXTRA_JS_MODULES.gloda += [
+    "Collection.sys.mjs",
+    "Everybody.sys.mjs",
+    "Facet.sys.mjs",
+    "Gloda.sys.mjs",
+    "GlodaConstants.sys.mjs",
+    "GlodaContent.sys.mjs",
+    "GlodaDatabind.sys.mjs",
+    "GlodaDataModel.sys.mjs",
+    "GlodaDatastore.sys.mjs",
+    "GlodaExplicitAttr.sys.mjs",
+    "GlodaFundAttr.sys.mjs",
+    "GlodaIndexer.sys.mjs",
+    "GlodaMsgIndexer.sys.mjs",
+    "GlodaMsgSearcher.sys.mjs",
+    "GlodaPublic.sys.mjs",
+    "GlodaQueryClassFactory.sys.mjs",
+    "GlodaSyntheticView.sys.mjs",
+    "GlodaUtils.sys.mjs",
+    "IndexMsg.sys.mjs",
+    "MimeMessage.sys.mjs",
+    "NounFreetag.sys.mjs",
+    "NounMimetype.sys.mjs",
+    "NounTag.sys.mjs",
+    "SuffixTree.sys.mjs",
+]

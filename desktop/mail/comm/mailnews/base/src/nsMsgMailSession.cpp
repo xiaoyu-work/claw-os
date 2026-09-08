@@ -1,0 +1,531 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "nsMsgMailSession.h"
+
+#include "mozilla/Components.h"
+#include "mozilla/dom/Document.h"
+#include "mozilla/dom/Element.h"
+#include "mozilla/Preferences.h"
+#include "mozilla/Services.h"
+#include "msgCore.h"
+#include "nsAppDirectoryServiceDefs.h"
+#include "nsAppShellCID.h"
+#include "nsComponentManagerUtils.h"
+#include "nsEmbedCID.h"
+#include "nsFocusManager.h"
+#include "nsIAppStartup.h"
+#include "nsIChromeRegistry.h"
+#include "nsIDirectoryService.h"
+#include "nsIDocShell.h"
+#include "nsIMsgAccountManager.h"
+#include "nsIMsgMailNewsUrl.h"
+#include "nsIMsgMessageService.h"
+#include "nsIObserverService.h"
+#include "nsIPromptService.h"
+#include "nsIProperties.h"
+#include "nsISupportsPrimitives.h"
+#include "nsIWindowMediator.h"
+#include "nsIWindowWatcher.h"
+#include "nsMsgUtils.h"
+#include "nsPIDOMWindow.h"
+#include "nsServiceManagerUtils.h"
+#include "nsThreadUtils.h"
+#include "prcmon.h"
+
+using mozilla::Preferences;
+
+NS_IMPL_ISUPPORTS(nsMsgMailSession, nsIMsgMailSession, nsIFolderListener)
+
+nsMsgMailSession::nsMsgMailSession() {}
+
+nsMsgMailSession::~nsMsgMailSession() {}
+
+nsresult nsMsgMailSession::Init() {
+  // Ensures the shutdown service is initialised
+  nsresult rv;
+  nsCOMPtr<nsIMsgShutdownService> shutdownService =
+      do_GetService("@mozilla.org/messenger/msgshutdownservice;1", &rv);
+  return rv;
+}
+
+NS_IMETHODIMP nsMsgMailSession::AddFolderListener(nsIFolderListener* aListener,
+                                                  uint32_t aNotifyFlags) {
+  NS_ENSURE_ARG_POINTER(aListener);
+
+  // we don't care about the notification flags for equivalence purposes
+  size_t index = mListeners.IndexOf(aListener);
+  NS_ASSERTION(index == size_t(-1), "tried to add duplicate listener");
+  if (index == size_t(-1)) {
+    folderListener newListener(aListener, aNotifyFlags);
+    mListeners.AppendElement(newListener);
+  }
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP nsMsgMailSession::RemoveFolderListener(
+    nsIFolderListener* aListener) {
+  NS_ENSURE_ARG_POINTER(aListener);
+
+  mListeners.RemoveElement(aListener);
+  return NS_OK;
+}
+
+#define NOTIFY_FOLDER_LISTENERS(propertyflag_, propertyfunc_, params_) \
+  PR_BEGIN_MACRO                                                       \
+  nsTObserverArray<folderListener>::ForwardIterator iter(mListeners);  \
+  while (iter.HasMore()) {                                             \
+    const folderListener& fL = iter.GetNext();                         \
+    if (fL.mNotifyFlags & nsIFolderListener::propertyflag_)            \
+      fL.mListener->propertyfunc_ params_;                             \
+  }                                                                    \
+  PR_END_MACRO
+
+NS_IMETHODIMP
+nsMsgMailSession::OnFolderPropertyChanged(nsIMsgFolder* aItem,
+                                          const nsACString& aProperty,
+                                          const nsACString& aOldValue,
+                                          const nsACString& aNewValue) {
+  NOTIFY_FOLDER_LISTENERS(propertyChanged, OnFolderPropertyChanged,
+                          (aItem, aProperty, aOldValue, aNewValue));
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsMsgMailSession::OnFolderIntPropertyChanged(nsIMsgFolder* aItem,
+                                             const nsACString& aProperty,
+                                             int64_t aOldValue,
+                                             int64_t aNewValue) {
+  NOTIFY_FOLDER_LISTENERS(intPropertyChanged, OnFolderIntPropertyChanged,
+                          (aItem, aProperty, aOldValue, aNewValue));
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsMsgMailSession::OnFolderBoolPropertyChanged(nsIMsgFolder* aItem,
+                                              const nsACString& aProperty,
+                                              bool aOldValue, bool aNewValue) {
+  NOTIFY_FOLDER_LISTENERS(boolPropertyChanged, OnFolderBoolPropertyChanged,
+                          (aItem, aProperty, aOldValue, aNewValue));
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsMsgMailSession::OnFolderPropertyFlagChanged(nsIMsgDBHdr* aItem,
+                                              const nsACString& aProperty,
+                                              uint32_t aOldValue,
+                                              uint32_t aNewValue) {
+  NOTIFY_FOLDER_LISTENERS(propertyFlagChanged, OnFolderPropertyFlagChanged,
+                          (aItem, aProperty, aOldValue, aNewValue));
+  return NS_OK;
+}
+
+NS_IMETHODIMP nsMsgMailSession::OnFolderAdded(nsIMsgFolder* parent,
+                                              nsIMsgFolder* child) {
+  NOTIFY_FOLDER_LISTENERS(added, OnFolderAdded, (parent, child));
+  return NS_OK;
+}
+NS_IMETHODIMP nsMsgMailSession::OnMessageAdded(nsIMsgFolder* parent,
+                                               nsIMsgDBHdr* msg) {
+  NOTIFY_FOLDER_LISTENERS(added, OnMessageAdded, (parent, msg));
+  return NS_OK;
+}
+
+NS_IMETHODIMP nsMsgMailSession::OnFolderRemoved(nsIMsgFolder* parent,
+                                                nsIMsgFolder* child) {
+  NOTIFY_FOLDER_LISTENERS(removed, OnFolderRemoved, (parent, child));
+  return NS_OK;
+}
+
+NS_IMETHODIMP nsMsgMailSession::OnMessageRemoved(nsIMsgFolder* parent,
+                                                 nsIMsgDBHdr* msg) {
+  NOTIFY_FOLDER_LISTENERS(removed, OnMessageRemoved, (parent, msg));
+  return NS_OK;
+}
+
+NS_IMETHODIMP nsMsgMailSession::OnFolderEvent(nsIMsgFolder* aFolder,
+                                              const nsACString& aEvent) {
+  NOTIFY_FOLDER_LISTENERS(event, OnFolderEvent, (aFolder, aEvent));
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsMsgMailSession::AddUserFeedbackListener(
+    nsIMsgUserFeedbackListener* aListener) {
+  NS_ENSURE_ARG_POINTER(aListener);
+
+  size_t index = mFeedbackListeners.IndexOf(aListener);
+  NS_ASSERTION(index == size_t(-1), "tried to add duplicate listener");
+  if (index == size_t(-1)) mFeedbackListeners.AppendElement(aListener);
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsMsgMailSession::RemoveUserFeedbackListener(
+    nsIMsgUserFeedbackListener* aListener) {
+  NS_ENSURE_ARG_POINTER(aListener);
+
+  mFeedbackListeners.RemoveElement(aListener);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsMsgMailSession::AlertUser(const nsAString& aMessage, nsIURI* aUri,
+                            bool aSilent) {
+  bool handledByListener = false;
+  nsTObserverArray<nsCOMPtr<nsIMsgUserFeedbackListener>>::ForwardIterator iter(
+      mFeedbackListeners);
+  nsCOMPtr<nsIMsgUserFeedbackListener> listener;
+
+  while (iter.HasMore()) {
+    bool handled = false;
+    listener = iter.GetNext();
+    listener->OnAlert(aMessage, aUri, aSilent, &handled);
+
+    // If the alert was handled by at least one listener, we don't want to
+    // notify the user any further.
+    handledByListener = handledByListener || handled;
+  }
+
+  // If the listeners notified the user, then we don't need to. Additionally, if
+  // the alert should be silent (e.g. it was a generated as a result of
+  // background activity like autosync, biff, etc.), or if alerts are disabled
+  // entirely, we also shouldn't notify.
+  if (handledByListener || aSilent ||
+      Preferences::GetBool("mail.suppressAlertsForTests")) {
+    return NS_OK;
+  }
+
+  nsresult rv;
+  nsCOMPtr<nsIPromptService> dlgService(
+      do_GetService(NS_PROMPTSERVICE_CONTRACTID, &rv));
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  dlgService->Alert(nullptr, nullptr, PromiseFlatString(aMessage).get());
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsMsgMailSession::AlertCertError(nsITransportSecurityInfo* securityInfo,
+                                 nsIURI* url) {
+  nsTObserverArray<nsCOMPtr<nsIMsgUserFeedbackListener>>::ForwardIterator iter(
+      mFeedbackListeners);
+  nsCOMPtr<nsIMsgUserFeedbackListener> listener;
+  while (iter.HasMore()) {
+    listener = iter.GetNext();
+    listener->OnCertError(securityInfo, url);
+  }
+
+  return NS_OK;
+}
+
+nsresult nsMsgMailSession::GetTopmostMsgWindow(nsIMsgWindow** aMsgWindow) {
+  NS_ENSURE_ARG_POINTER(aMsgWindow);
+
+  *aMsgWindow = nullptr;
+  return (*aMsgWindow) ? NS_OK : NS_ERROR_FAILURE;
+}
+
+NS_IMETHODIMP nsMsgMailSession::AddMsgWindow(nsIMsgWindow* msgWindow) {
+  NS_ENSURE_ARG_POINTER(msgWindow);
+
+  mWindows.AppendObject(msgWindow);
+  return NS_OK;
+}
+
+NS_IMETHODIMP nsMsgMailSession::RemoveMsgWindow(nsIMsgWindow* msgWindow) {
+  mWindows.RemoveObject(msgWindow);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsMsgMailSession::ConvertMsgURIToMsgURL(const nsACString& aURI,
+                                        nsIMsgWindow* aMsgWindow,
+                                        nsACString& aURL) {
+  // convert the rdf msg uri into a url that represents the message...
+  nsCOMPtr<nsIMsgMessageService> msgService;
+  nsresult rv = GetMessageServiceFromURI(aURI, getter_AddRefs(msgService));
+  NS_ENSURE_SUCCESS(rv, NS_ERROR_NULL_POINTER);
+
+  nsCOMPtr<nsIURI> tURI;
+  rv = msgService->GetUrlForUri(aURI, aMsgWindow, getter_AddRefs(tURI));
+  NS_ENSURE_SUCCESS(rv, NS_ERROR_NULL_POINTER);
+
+  rv = tURI->GetSpec(aURL);
+  return rv;
+}
+
+//-------------------------------------------------------------------------
+// GetSelectedLocaleDataDir - If a locale is selected, appends the selected
+//                            locale to the defaults data dir and returns
+//                            that new defaults data dir
+//-------------------------------------------------------------------------
+nsresult nsMsgMailSession::GetSelectedLocaleDataDir(nsIFile* defaultsDir) {
+  NS_ENSURE_ARG_POINTER(defaultsDir);
+
+  return NS_OK;
+}
+
+//-----------------------------------------------------------------------------
+// GetDataFilesDir - Gets the application's default folder and then appends the
+//                   subdirectory named passed in as param dirName. If there is
+//                   a selected locale, will append that to the dir path before
+//                   returning the value
+//-----------------------------------------------------------------------------
+NS_IMETHODIMP
+nsMsgMailSession::GetDataFilesDir(const char* dirName, nsIFile** dataFilesDir) {
+  NS_ENSURE_ARG_POINTER(dirName);
+  NS_ENSURE_ARG_POINTER(dataFilesDir);
+
+  nsresult rv;
+  nsCOMPtr<nsIProperties> directoryService =
+      mozilla::components::Directory::Service();
+  nsCOMPtr<nsIFile> defaultsDir;
+  rv = directoryService->Get(NS_APP_DEFAULTS_50_DIR, NS_GET_IID(nsIFile),
+                             getter_AddRefs(defaultsDir));
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  rv = defaultsDir->AppendNative(nsDependentCString(dirName));
+  if (NS_SUCCEEDED(rv)) rv = GetSelectedLocaleDataDir(defaultsDir);
+
+  defaultsDir.forget(dataFilesDir);
+
+  return rv;
+}
+
+/********************************************************************************/
+
+NS_IMPL_ISUPPORTS(nsMsgShutdownService, nsIMsgShutdownService, nsIUrlListener,
+                  nsIObserver)
+
+nsMsgShutdownService::nsMsgShutdownService()
+    : mTaskIndex(0),
+      mQuitMode(nsIAppStartup::eAttemptQuit),
+      mProcessedShutdown(false),
+      mQuitForced(false),
+      mReadyToQuit(false) {
+  nsCOMPtr<nsIObserverService> observerService =
+      mozilla::services::GetObserverService();
+  if (observerService) {
+    observerService->AddObserver(this, "quit-application-requested", false);
+    observerService->AddObserver(this, "quit-application-granted", false);
+    observerService->AddObserver(this, "quit-application", false);
+  }
+}
+
+nsMsgShutdownService::~nsMsgShutdownService() {
+  nsCOMPtr<nsIObserverService> observerService =
+      mozilla::services::GetObserverService();
+  if (observerService) {
+    observerService->RemoveObserver(this, "quit-application-requested");
+    observerService->RemoveObserver(this, "quit-application-granted");
+    observerService->RemoveObserver(this, "quit-application");
+  }
+}
+
+nsresult nsMsgShutdownService::ProcessNextTask() {
+  bool shutdownTasksDone = true;
+
+  uint32_t count = mShutdownTasks.Length();
+  if (mTaskIndex < count) {
+    shutdownTasksDone = false;
+
+    nsCOMPtr<nsIMsgShutdownTask> curTask = mShutdownTasks[mTaskIndex];
+    nsString taskName;
+    curTask->GetCurrentTaskName(taskName);
+    SetStatusText(taskName);
+
+    nsCOMPtr<nsIMsgMailSession> mailSession =
+        mozilla::components::MailSession::Service();
+    nsCOMPtr<nsIMsgWindow> topMsgWindow;
+    mailSession->GetTopmostMsgWindow(getter_AddRefs(topMsgWindow));
+
+    bool taskIsRunning = true;
+    nsresult rv = curTask->DoShutdownTask(this, topMsgWindow, &taskIsRunning);
+    if (NS_FAILED(rv) || !taskIsRunning) {
+      // We have failed, let's go on to the next task.
+      mTaskIndex++;
+      mMsgProgress->OnProgressChange(nullptr, nullptr, 0, 0,
+                                     (int32_t)mTaskIndex, count);
+      ProcessNextTask();
+    }
+  }
+
+  if (shutdownTasksDone) {
+    if (mMsgProgress)
+      mMsgProgress->OnStateChange(nullptr, nullptr,
+                                  nsIWebProgressListener::STATE_STOP, NS_OK);
+    AttemptShutdown();
+  }
+
+  return NS_OK;
+}
+
+void nsMsgShutdownService::AttemptShutdown() {
+  if (mQuitForced) {
+    PR_CEnterMonitor(this);
+    mReadyToQuit = true;
+    PR_CNotifyAll(this);
+    PR_CExitMonitor(this);
+  } else {
+    nsCOMPtr<nsIAppStartup> appStartup =
+        mozilla::components::AppStartup::Service();
+    NS_ENSURE_TRUE_VOID(appStartup);
+    bool userAllowedQuit = true;
+    NS_ENSURE_SUCCESS_VOID(appStartup->Quit(mQuitMode, 0, &userAllowedQuit));
+  }
+}
+
+NS_IMETHODIMP nsMsgShutdownService::SetShutdownListener(
+    nsIWebProgressListener* inListener) {
+  NS_ENSURE_TRUE(mMsgProgress, NS_ERROR_FAILURE);
+  mMsgProgress->RegisterListener(inListener);
+  return NS_OK;
+}
+
+NS_IMETHODIMP nsMsgShutdownService::Observe(nsISupports* aSubject,
+                                            const char* aTopic,
+                                            const char16_t* aData) {
+  // Due to bug 459376 we don't always get quit-application-requested and
+  // quit-application-granted. quit-application-requested is preferred, but if
+  // we don't then we have to hook onto quit-application, but we don't want
+  // to do the checking twice so we set some flags to prevent that.
+  if (!strcmp(aTopic, "quit-application-granted")) {
+    // Quit application has been requested and granted, therefore we will shut
+    // down.
+    mProcessedShutdown = true;
+    return NS_OK;
+  }
+
+  // If we've already processed a shutdown notification, no need to do it again.
+  if (!strcmp(aTopic, "quit-application")) {
+    if (mProcessedShutdown)
+      return NS_OK;
+    else
+      mQuitForced = true;
+  }
+
+  nsCOMPtr<nsIObserverService> observerService =
+      mozilla::services::GetObserverService();
+  NS_ENSURE_STATE(observerService);
+
+  nsCOMPtr<nsISimpleEnumerator> listenerEnum;
+  nsresult rv = observerService->EnumerateObservers(
+      "msg-shutdown", getter_AddRefs(listenerEnum));
+  if (NS_SUCCEEDED(rv) && listenerEnum) {
+    bool hasMore;
+    listenerEnum->HasMoreElements(&hasMore);
+    if (!hasMore) return NS_OK;
+
+    while (hasMore) {
+      nsCOMPtr<nsISupports> curObject;
+      listenerEnum->GetNext(getter_AddRefs(curObject));
+
+      nsCOMPtr<nsIMsgShutdownTask> curTask = do_QueryInterface(curObject);
+      if (curTask) {
+        bool shouldRunTask;
+        curTask->GetNeedsToRunTask(&shouldRunTask);
+        if (shouldRunTask) mShutdownTasks.AppendObject(curTask);
+      }
+
+      listenerEnum->HasMoreElements(&hasMore);
+    }
+
+    if (mShutdownTasks.Count() < 1) return NS_ERROR_FAILURE;
+
+    mTaskIndex = 0;
+
+    mMsgProgress = do_CreateInstance("@mozilla.org/messenger/progress;1");
+    NS_ENSURE_TRUE(mMsgProgress, NS_ERROR_FAILURE);
+
+    nsCOMPtr<nsIMsgMailSession> mailSession =
+        mozilla::components::MailSession::Service();
+    nsCOMPtr<nsIMsgWindow> topMsgWindow;
+    mailSession->GetTopmostMsgWindow(getter_AddRefs(topMsgWindow));
+
+    nsCOMPtr<nsIWindowMediator> winMed =
+        do_GetService(NS_WINDOWMEDIATOR_CONTRACTID, &rv);
+    NS_ENSURE_SUCCESS(rv, rv);
+    nsCOMPtr<mozIDOMWindowProxy> domWindow;
+    winMed->GetMostRecentWindow(nullptr, getter_AddRefs(domWindow));
+    NS_ENSURE_TRUE(domWindow,
+                   NS_ERROR_FAILURE);  // Bail if we don't get a window.
+
+    if (!mQuitForced) {
+      nsCOMPtr<nsISupportsPRBool> stopShutdown = do_QueryInterface(aSubject);
+      stopShutdown->SetData(true);
+
+      // If the attempted quit was a restart, be sure to restart the app once
+      // the tasks have been run. This is usually the case when addons or
+      // updates are going to be installed.
+      if (aData && nsDependentString(aData).EqualsLiteral("restart"))
+        mQuitMode |= nsIAppStartup::eRestart;
+    }
+
+    mMsgProgress->SetMsgWindow(topMsgWindow);
+    mMsgProgress->OpenProgressDialog(
+        domWindow, "chrome://messenger/content/shutdownWindow.xhtml", nullptr);
+
+    if (mQuitForced) {
+      nsCOMPtr<nsIThread> thread(do_GetCurrentThread());
+
+      mReadyToQuit = false;
+      while (!mReadyToQuit) {
+        PR_CEnterMonitor(this);
+        // Waiting for 50 milliseconds
+        PR_CWait(this, PR_MicrosecondsToInterval(50000UL));
+        PR_CExitMonitor(this);
+        NS_ProcessPendingEvents(thread);
+      }
+    }
+  }
+
+  return NS_OK;
+}
+
+// nsIUrlListener
+NS_IMETHODIMP nsMsgShutdownService::OnStartRunningUrl(nsIURI* url) {
+  return NS_OK;
+}
+
+NS_IMETHODIMP nsMsgShutdownService::OnStopRunningUrl(nsIURI* url,
+                                                     nsresult aExitCode) {
+  mTaskIndex++;
+
+  if (mMsgProgress) {
+    int32_t numTasks = mShutdownTasks.Count();
+    mMsgProgress->OnProgressChange(nullptr, nullptr, 0, 0, (int32_t)mTaskIndex,
+                                   numTasks);
+  }
+
+  ProcessNextTask();
+  return NS_OK;
+}
+
+NS_IMETHODIMP nsMsgShutdownService::GetNumTasks(int32_t* inNumTasks) {
+  *inNumTasks = mShutdownTasks.Count();
+  return NS_OK;
+}
+
+NS_IMETHODIMP nsMsgShutdownService::StartShutdownTasks() {
+  ProcessNextTask();
+  return NS_OK;
+}
+
+NS_IMETHODIMP nsMsgShutdownService::CancelShutdownTasks() {
+  AttemptShutdown();
+  return NS_OK;
+}
+
+NS_IMETHODIMP nsMsgShutdownService::SetStatusText(
+    const nsAString& inStatusString) {
+  nsString statusString(inStatusString);
+  if (mMsgProgress)
+    mMsgProgress->OnStatusChange(nullptr, nullptr, NS_OK,
+                                 nsString(statusString).get());
+  return NS_OK;
+}

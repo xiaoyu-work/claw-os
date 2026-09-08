@@ -1,0 +1,319 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+/* import-globals-from amUtils.js */
+
+var { MailServices } = ChromeUtils.importESModule(
+  "resource:///modules/MailServices.sys.mjs"
+);
+
+window.addEventListener("DOMContentLoaded", () => {
+  gSmtpServerListWindow.onLoad();
+});
+
+var gSmtpServerListWindow = {
+  mBundle: null,
+  mServerList: null,
+  mAddButton: null,
+  mEditButton: null,
+  mDeleteButton: null,
+  mSetDefaultServerButton: null,
+
+  onLoad() {
+    parent.onPanelLoaded("am-smtp.xhtml");
+
+    this.mBundle = document.getElementById("bundle_messenger");
+    this.mServerList = document.getElementById("smtpList");
+    this.mAddButton = document.getElementById("addButton");
+    this.mEditButton = document.getElementById("editButton");
+    this.mDeleteButton = document.getElementById("deleteButton");
+    this.mSetDefaultServerButton = document.getElementById("setDefaultButton");
+
+    this.refreshServerList("", false);
+
+    this.updateButtons();
+  },
+
+  onSelectionChanged() {
+    var server = this.getSelectedServer();
+    if (!server) {
+      return;
+    }
+
+    this.updateButtons();
+    this.updateServerInfoBox(server);
+
+    this.mEditButton.disabled = server.type != "smtp";
+  },
+
+  onDeleteServer() {
+    var server = this.getSelectedServer();
+    if (!server) {
+      return;
+    }
+
+    // confirm deletion
+    const cancel = Services.prompt.confirmEx(
+      window,
+      this.mBundle.getString("smtpServers-confirmServerDeletionTitle"),
+      this.mBundle.getFormattedString(
+        "smtpServers-confirmServerDeletion",
+        [server.serverURI.host],
+        1
+      ),
+      Services.prompt.STD_YES_NO_BUTTONS,
+      null,
+      null,
+      null,
+      null,
+      {}
+    );
+
+    if (!cancel) {
+      // Remove password information first.
+      try {
+        server.forgetPassword();
+      } catch (e) {
+        /* It is OK if this fails. */
+      }
+
+      // If this was the default server, reset it to the first
+      // available server.
+      if (MailServices.outgoingServer.defaultServer.key === server.key) {
+        // If there are other servers available, choose the first one as default.
+        if (MailServices.outgoingServer.servers.length >= 2) {
+          const newDefault = MailServices.outgoingServer.servers.find(
+            x => x.key != server.key
+          );
+          MailServices.outgoingServer.defaultServer = newDefault;
+        } else {
+          MailServices.outgoingServer.defaultServer = null;
+        }
+      }
+
+      // Remove the server.
+      MailServices.outgoingServer.deleteServer(server);
+      parent.replaceWithDefaultSmtpServer(server.key);
+      this.refreshServerList("", true);
+    }
+  },
+
+  onAddServer() {
+    this.openServerEditor(null);
+  },
+
+  onEditServer() {
+    const server = this.getSelectedServer();
+    if (!server) {
+      return;
+    }
+
+    this.openServerEditor(server);
+  },
+
+  onSetDefaultServer() {
+    const server = this.getSelectedServer();
+    if (!server) {
+      return;
+    }
+
+    MailServices.outgoingServer.defaultServer = server;
+    this.refreshServerList(MailServices.outgoingServer.defaultServer.key, true);
+  },
+
+  updateButtons() {
+    const server = this.getSelectedServer();
+
+    if (server && MailServices.outgoingServer.defaultServer == server) {
+      this.mSetDefaultServerButton.toggleAttribute("disabled", true);
+    } else {
+      this.mSetDefaultServerButton.removeAttribute("disabled");
+    }
+
+    if (!server) {
+      this.mEditButton.toggleAttribute("disabled", true);
+    } else {
+      this.mEditButton.removeAttribute("disabled");
+    }
+  },
+
+  updateServerInfoBox(aServer) {
+    var noneSelected = this.mBundle.getString("smtpServerList-NotSpecified");
+
+    let serverType = noneSelected;
+    try {
+      if (aServer.type) {
+        serverType = this.mBundle.getString("serverType-" + aServer.type);
+      }
+    } catch {
+      // Addon-provided server types do not have a description string, then
+      // display the raw server type.
+      serverType = aServer.type;
+    }
+
+    document.getElementById("typeValue").textContent = serverType;
+    document.getElementById("nameValue").textContent = aServer.serverURI.host;
+    document.getElementById("descriptionValue").textContent =
+      aServer.description || noneSelected;
+    // `nsIURI` uses -1 as the port when it's left to the default value.
+    document.getElementById("portValue").textContent =
+      aServer.serverURI.port > 0 ? aServer.serverURI.port : noneSelected;
+    document.getElementById("userNameValue").textContent =
+      aServer.username || noneSelected;
+    document.getElementById("useSecureConnectionValue").textContent =
+      this.mBundle.getString(
+        "smtpServer-ConnectionSecurityType-" + aServer.socketType
+      );
+    if (aServer.socketType != Ci.nsMsgSocketType.plain) {
+      let port = aServer.serverURI.port;
+      if (port == -1 && aServer.serverURI.schemeIs("https")) {
+        port = 443;
+      }
+      if (port != -1) {
+        const certCheck = document.createElement("certificate-check");
+        document
+          .getElementById("useSecureConnectionValue")
+          .appendChild(certCheck);
+        certCheck.init(
+          aServer.serverURI.host,
+          port,
+          aServer.type,
+          aServer.socketType == Ci.nsMsgSocketType.alwaysSTARTTLS
+        );
+      }
+    }
+
+    var authStr = "";
+    switch (aServer.authMethod) {
+      case Ci.nsMsgAuthMethod.none:
+        authStr = "authNo";
+        break;
+      case Ci.nsMsgAuthMethod.passwordEncrypted:
+        authStr = "authPasswordEncrypted";
+        break;
+      case Ci.nsMsgAuthMethod.GSSAPI:
+        authStr = "authKerberos";
+        break;
+      case Ci.nsMsgAuthMethod.NTLM:
+        authStr = "authNTLM";
+        break;
+      case Ci.nsMsgAuthMethod.secure:
+        authStr = "authAnySecure";
+        break;
+      case Ci.nsMsgAuthMethod.passwordCleartext:
+        authStr =
+          aServer.socketType == Ci.nsMsgSocketType.SSL ||
+          aServer.socketType == Ci.nsMsgSocketType.alwaysSTARTTLS
+            ? "authPasswordCleartextViaSSL"
+            : "authPasswordCleartextInsecurely";
+        break;
+      case Ci.nsMsgAuthMethod.OAuth2:
+        authStr = "authOAuth2";
+        break;
+      default:
+        // leave empty
+        console.error(
+          "Warning: unknown value for smtpserver... authMethod: " +
+            aServer.authMethod
+        );
+    }
+    document.getElementById("authMethodValue").textContent = authStr
+      ? this.mBundle.getString(authStr)
+      : noneSelected;
+  },
+
+  refreshServerList(aServerKeyToSelect, aFocusList) {
+    while (this.mServerList.hasChildNodes()) {
+      this.mServerList.lastChild.remove();
+    }
+    for (const server of MailServices.outgoingServer.servers) {
+      const isDefault =
+        MailServices.outgoingServer.defaultServer?.key === server.key;
+      const listitem = this.createSmtpListItem(server, isDefault);
+      this.mServerList.appendChild(listitem);
+    }
+
+    if (aServerKeyToSelect) {
+      this.setSelectedServer(
+        this.mServerList.querySelector('[key="' + aServerKeyToSelect + '"]')
+      );
+    } else {
+      // Select the default server.
+      this.setSelectedServer(
+        this.mServerList.querySelector('[default="true"]')
+      );
+    }
+
+    if (aFocusList) {
+      this.mServerList.focus();
+    }
+  },
+
+  createSmtpListItem(aServer, aIsDefault) {
+    var listitem = document.createXULElement("richlistitem");
+    var serverName = "";
+
+    if (aServer.description) {
+      serverName = aServer.description + " - ";
+    } else if (aServer.username) {
+      serverName = aServer.username + " - ";
+    }
+
+    serverName += aServer.serverURI.host;
+
+    if (aIsDefault) {
+      serverName += " " + this.mBundle.getString("defaultServerTag");
+      listitem.setAttribute("default", "true");
+    }
+
+    const label = document.createXULElement("label");
+    label.setAttribute("value", serverName);
+    listitem.appendChild(label);
+    listitem.setAttribute("key", aServer.key);
+    listitem.setAttribute("class", "smtpServerListItem");
+
+    // give it some unique id
+    listitem.id = "smtpServer." + aServer.key;
+    return listitem;
+  },
+
+  openServerEditor(aServer) {
+    const args = editSMTPServer(aServer);
+
+    // now re-select the server which was just added
+    if (args.result) {
+      this.refreshServerList(aServer ? aServer.key : args.addSmtpServer, true);
+    }
+
+    return args.result;
+  },
+
+  setSelectedServer(aServer) {
+    if (!aServer) {
+      return;
+    }
+
+    setTimeout(
+      function (aServerList) {
+        aServerList.ensureElementIsVisible(aServer);
+        aServerList.selectItem(aServer);
+      },
+      0,
+      this.mServerList
+    );
+  },
+
+  getSelectedServer() {
+    // The list of servers is a single selection listbox
+    // therefore 1 item is always selected.
+    // But if there are no SMTP servers defined yet, nothing will be selected.
+    const selection = this.mServerList.selectedItem;
+    if (!selection) {
+      return null;
+    }
+
+    const serverKey = selection.getAttribute("key");
+    return MailServices.outgoingServer.getServerByKey(serverKey);
+  },
+};

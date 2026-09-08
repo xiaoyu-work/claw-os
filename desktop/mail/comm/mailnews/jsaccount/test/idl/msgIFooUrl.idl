@@ -1,0 +1,15 @@
+/* Any copyright is dedicated to the Public Domain.
+ * http://creativecommons.org/publicdomain/zero/1.0/ */
+
+// This is a sample test interface implemented by the URL object.
+
+#include "nsISupports.idl"
+
+[scriptable, uuid(12CAD9FC-57FC-4AEE-A800-895A289237DD)]
+interface msgIFooUrl : nsISupports
+{
+  /// Foo id for item.
+  attribute AString itemId;
+  /// Does this url refer to an attachment?
+  readonly attribute boolean isAttachment;
+};

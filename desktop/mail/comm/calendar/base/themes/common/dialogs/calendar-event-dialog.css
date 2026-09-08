@@ -1,0 +1,705 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@namespace html url("http://www.w3.org/1999/xhtml");
+
+#calendar-event-window,
+#calendar-task-window {
+  min-inline-size: 43em;
+  min-block-size: 51em;
+}
+
+:root:not([lwtheme]) {
+  #calendar-event-dialog,
+  #calendar-task-dialog {
+    background-color: transparent;
+  }
+
+  #calendar-event-dialog-inner,
+  #calendar-task-dialog-inner {
+    background-image: none !important;
+  }
+}
+
+:root[lwtheme]:not([lwt-tree]) #calendar-item-panel-iframe {
+  background-color: -moz-Dialog;
+}
+
+#calendar-event-dialog,
+#calendar-task-dialog,
+#calendar-event-dialog-inner,
+#calendar-event-summary-dialog,
+#calendar-task-dialog-inner {
+  padding: 0;
+}
+
+#calendar-event-dialog-inner,
+#calendar-task-dialog-inner {
+  background: -moz-Dialog !important; /* Override LW-theme background images. */
+}
+
+#calendar-event-dialog .todo-only,
+#calendar-task-dialog .event-only,
+#calendar-event-dialog-inner .todo-only,
+#calendar-task-dialog-inner .event-only {
+  display: none;
+}
+
+/*--------------------------------------------------------------------
+ *   Event dialog toolbar buttons
+ *-------------------------------------------------------------------*/
+
+.cal-event-toolbarbutton {
+  -moz-context-properties: fill, stroke;
+  fill: color-mix(in srgb, currentColor 20%, transparent);
+  stroke: currentColor;
+}
+
+#button-save {
+  list-style-image: var(--icon-download);
+}
+
+#button-save[mode="send"] {
+  list-style-image: var(--icon-sent);
+}
+
+#saveandcloseButton,
+#button-saveandclose {
+  list-style-image: var(--icon-download);
+}
+
+#button-saveandclose[mode="send"] {
+  list-style-image: var(--icon-sent);
+}
+
+#button-attendees {
+  list-style-image: var(--icon-address-book);
+}
+
+#button-privacy {
+  list-style-image: var(--icon-lock);
+}
+
+#button-url {
+  list-style-image: var(--icon-attachment);
+}
+
+#deleteButton,
+#button-delete.cal-event-toolbarbutton {
+  /* !important to override the SM #button-delete states */
+  list-style-image: var(--icon-trash) !important;
+}
+
+#button-priority {
+  list-style-image: var(--icon-priority);
+}
+
+#button-status {
+  list-style-image: var(--icon-event-status);
+}
+
+#button-freebusy {
+  list-style-image: var(--icon-clock);
+}
+
+#button-timezones {
+  list-style-image: var(--icon-globe);
+}
+
+#acceptButton {
+  list-style-image: var(--icon-check);
+}
+
+#tentativeButton {
+  list-style-image: var(--icon-tentative);
+}
+
+#declineButton {
+  list-style-image: var(--icon-close);
+}
+
+/*--------------------------------------------------------------------
+ *   Event dialog counter box section
+ *-------------------------------------------------------------------*/
+
+#counter-proposal-box {
+  background-color: rgb(186, 238, 255);
+  border-block-end: 1px solid #444444;
+}
+
+#counter-proposal-box > vbox:not(#counter-buttons) {
+  color: #000;
+}
+
+#counter-proposal-property-values > description {
+  margin-block-end: 2px;
+}
+
+#counter-proposal-summary {
+  font-weight: bold;
+}
+
+.counter-buttons {
+  max-block-size: 25px;
+}
+
+#yearly-period-of-label,
+label.label {
+  text-align: end;
+}
+
+#item-calendar,
+.item-calendar,
+#item-categories,
+#item-repeat,
+.item-alarm,
+.datepicker-text-class {
+  min-inline-size: 12em;
+}
+
+.cal-event-toolbarbutton .toolbarbutton-icon {
+  inline-size: 18px;
+  block-size: 18px;
+}
+
+#event-grid {
+  padding-block-start: 8px;
+  padding-inline-start: 8px;
+  padding-inline-end: 10px;
+  border-spacing: 0;
+}
+
+#event-grid > tr > th {
+  text-align: start;
+  font-weight: normal;
+}
+
+#event-grid > tr > td {
+  inline-size: 100%;
+}
+
+#event-grid-tab-box-row,
+#event-grid-tabbox,
+.event-grid-tabpanels {
+  flex: 1;
+}
+
+.event-input-td > input {
+  flex: 1;
+}
+
+#item-calendar,
+.item-calendar,
+#item-categories {
+  flex: 1;
+  inline-size: 100%;
+}
+
+#item-calendar::part(icon) {
+  margin-inline: 7px 3px;
+}
+
+#item-calendar::part(icon),
+#item-calendar > menupopup > menuitem .menu-icon,
+#item-categories::part(color) {
+  inline-size: 10px;
+  block-size: 10px;
+  border-radius: 5px;
+  background-color: var(--item-color);
+}
+
+#item-categories > menupopup > menuitem .menu-icon {
+  margin-inline-end: 3px;
+}
+
+#item-categories > menupopup > menuitem .menu-text {
+  padding-inline-start: 15px;
+  background-image: var(--icon-circle-small);
+  background-position: left center;
+  background-repeat: no-repeat;
+  -moz-context-properties: fill;
+  fill: var(--item-color);
+}
+
+#item-categories > menupopup > menuitem .menu-text:dir(rtl) {
+  background-position-x: right;
+}
+
+#item-categories::part(color) {
+  margin-inline-end: 1px;
+}
+
+#item-categories::part(color first) {
+  margin-inline-start: 7px;
+}
+
+#item-categories::part(color last) {
+  margin-inline-end: 3px !important;
+}
+
+#item-categories-textbox {
+  margin: 1px 8px;
+}
+
+#event-grid-item-calendar-td,
+#event-grid-category-color-td,
+.event-input-td {
+  display: flex;
+}
+
+#event-grid > tr > td > menulist,
+#event-grid checkbox,
+#event-grid td,
+#event-grid th {
+  margin: 0;
+  padding: 0;
+  margin-inline-end: 0;
+  margin-inline-start: 0;
+}
+
+.item-location-link,
+#item-location,
+.item-location,
+#item-title,
+.item-title {
+  margin: 0;
+  margin-inline-end: 0;
+  margin-inline-start: 0;
+  padding-inline-start: 4px;
+}
+
+.item-location-link {
+  padding-inline-start: 0;
+}
+
+.item-location-link > label {
+  cursor: pointer;
+}
+
+#todo-status,
+#item-repeat,
+.item-alarm {
+  margin: 0;
+}
+
+#event-grid td,
+#event-grid th {
+  padding: 4px 0;
+}
+
+#event-grid-startdate-row td,
+#event-grid-startdate-row th,
+#event-grid-enddate-row td,
+#event-grid-enddate-row th {
+  padding: 0;
+}
+
+.datepicker-menulist {
+  margin-inline-start: 0 !important;
+}
+
+#event-grid-tab-vbox {
+  display: flex;
+  flex-direction: column;
+  padding-block-end: 10px;
+  padding-inline: 8px 10px;
+}
+
+.separator td {
+  border-block-end: 1px solid var(--field-border-color);
+  padding: 0 !important;
+}
+
+#completed-date-picker {
+  margin-inline-start: 4px;
+}
+
+/*--------------------------------------------------------------------
+ *   Event dialog tabbox section
+ *-------------------------------------------------------------------*/
+
+#event-grid-tabbox {
+  margin: 5px 0;
+}
+
+#event-grid-tabbox #notify-options {
+  padding: 0 9px;
+}
+
+#FormatToolbox {
+  padding-inline: 4px;
+}
+
+#FormatToolbar {
+  -moz-context-properties: fill;
+  fill: currentColor;
+}
+
+#boldButton {
+  list-style-image: url("chrome://messenger/skin/icons/bold.svg");
+}
+
+#italicButton {
+  list-style-image: url("chrome://messenger/skin/icons/italics.svg");
+}
+
+#underlineButton {
+  list-style-image: url("chrome://messenger/skin/icons/underline.svg");
+}
+
+#linkButton {
+  list-style-image: url("chrome://global/skin/icons/link.svg");
+}
+
+#ulButton {
+  list-style-image: url("chrome://messenger/skin/icons/bullet-list.svg");
+}
+
+#olButton {
+  list-style-image: url("chrome://messenger/skin/icons/number-list.svg");
+}
+
+#outdentButton {
+  list-style-image: url("chrome://messenger/skin/icons/outdent.svg");
+}
+
+#indentButton {
+  list-style-image: url("chrome://messenger/skin/icons/indent.svg");
+}
+
+#AlignPopupButton {
+  list-style-image: url("chrome://messenger/skin/icons/left-align.svg");
+
+  &[state="center"] {
+    list-style-image: url("chrome://messenger/skin/icons/center-align.svg");
+  }
+
+  &[state="right"] {
+    list-style-image: url("chrome://messenger/skin/icons/right-align.svg");
+  }
+
+  &[state="justify"] {
+    list-style-image: url("chrome://messenger/skin/icons/justify.svg");
+  }
+}
+
+#AlignPopup > menuitem {
+  -moz-context-properties: fill;
+  fill: currentColor;
+}
+
+#AlignLeftItem {
+  --menuitem-icon: url("chrome://messenger/skin/icons/left-align.svg");
+}
+
+#AlignCenterItem {
+  --menuitem-icon: url("chrome://messenger/skin/icons/center-align.svg");
+}
+
+#AlignRightItem {
+  --menuitem-icon: url("chrome://messenger/skin/icons/right-align.svg");
+}
+
+#AlignJustifyItem {
+  --menuitem-icon: url("chrome://messenger/skin/icons/justify.svg");
+}
+
+#paragraphButton {
+  list-style-image: url("chrome://messenger/skin/icons/paragraph.svg");
+}
+
+#smileButtonMenu {
+  list-style-image: url("chrome://messenger/skin/icons/smiley.svg");
+}
+
+.formatting-button {
+  appearance: none;
+  border: 1px solid transparent;
+  border-radius: var(--button-border-radius);
+  color: inherit;
+  -moz-context-properties: fill;
+  fill: currentColor;
+  transition-property: background-color, border-color, box-shadow;
+  transition-duration: 150ms;
+
+  &:not([disabled]) {
+    &:hover {
+      background-color: var(--toolbarbutton-background-color-hover);
+      border-color: var(--toolbarbutton-hover-bordercolor);
+      box-shadow: var(--toolbarbutton-hover-boxshadow);
+    }
+
+    &:is([open="true"], [checked], :hover:active) {
+      background-color: var(--toolbarbutton-checked-background);
+      border-color: var(--toolbarbutton-active-bordercolor);
+      box-shadow: var(--toolbarbutton-active-boxshadow);
+    }
+
+    &:is([open="true"], :hover:active) {
+      background-color: var(--toolbarbutton-background-color-active) !important;
+    }
+  }
+
+  &[wantdropmarker="true"] {
+    background-image: var(--icon-nav-down-sm);
+    background-repeat: no-repeat;
+    background-position: calc(100% - 3px) center;
+    padding-inline-end: 18px;
+
+    &:-moz-locale-dir(rtl) {
+      background-position-x: 3px;
+    }
+  }
+
+  &[disabled] {
+    opacity: 0.4;
+  }
+}
+
+#item-description {
+  background-color: var(--field-background-color);
+  border: 1px solid var(--field-border-color);
+  border-radius: 2px;
+  margin: 2px 4px;
+}
+
+/*--------------------------------------------------------------------
+ *   Event dialog keep duration button
+ *-------------------------------------------------------------------*/
+
+#keepduration-button {
+  appearance: none;
+  list-style-image: url(chrome://calendar/skin/shared/chain-unlock.svg);
+  margin-block-end: -15px;
+  border-radius: var(--button-border-radius);
+  position: relative;
+  -moz-user-focus: normal;
+  -moz-context-properties: fill;
+  fill: CurrentColor;
+}
+
+#keepduration-button:hover {
+  background-color: var(--button-hover-background-color);
+}
+
+#keepduration-button:hover:active {
+  background-color: var(--button-active-background-color);
+}
+
+#keepduration-button[keep="true"] {
+  list-style-image: url(chrome://calendar/skin/shared/chain-lock.svg);
+  fill: var(--selected-item-color);
+}
+
+#keepduration-button[disabled] {
+  fill: GrayText;
+}
+
+#keepduration-button > label {
+  display: none;
+}
+
+.keepduration-link-image {
+  margin-inline-start: -1px;
+  -moz-context-properties: fill, stroke-opacity;
+  fill: CurrentColor;
+  stroke-opacity: 0;
+}
+
+#link-image-top {
+  margin-block: 0.6em -0.6em;
+}
+
+#link-image-top[keep="true"] {
+  stroke-opacity: 1;
+}
+
+#link-image-bottom {
+  margin-block: -0.6em 0.6em;
+}
+
+/*--------------------------------------------------------------------
+ *   Event dialog statusbar images
+ *-------------------------------------------------------------------*/
+
+.cal-statusbar-1 {
+  flex-direction: column;
+  -moz-context-properties: fill;
+  fill: currentColor;
+}
+
+/*--------------------------------------------------------------------
+ *   Event dialog statusbarpanels
+ *-------------------------------------------------------------------*/
+
+#status-privacy,
+#status-priority,
+#status-status,
+#status-freebusy {
+  overflow: hidden;
+}
+
+/*--------------------------------------------------------------------
+ *   Recurrence dialog
+ *-------------------------------------------------------------------*/
+
+#calendar-event-dialog-recurrence dialog {
+  overflow: scroll;
+}
+
+.recurrence-pattern-hbox-label {
+  margin-block-start: 6px;
+}
+
+#recurrencePreviewCalendars {
+  display: block;
+  margin: 2px;
+}
+
+#recurrencePreview {
+  display: flex;
+}
+
+#recurrencePreview calendar-minimonth {
+  display: inline-block;
+  margin: 2px;
+}
+
+#recurrencePreview calendar-minimonth[hidden] {
+  display: none;
+}
+
+#recurrencePreviewNavigation {
+  display: block;
+}
+
+#daypicker-weekday {
+  margin-block-start: 2px;
+  -moz-user-focus: normal;
+}
+
+.daypicker-monthday {
+  margin-block-start: 2px;
+  -moz-user-focus: normal;
+}
+
+.headline {
+  font-weight: bold;
+}
+
+.headline[align="end"],
+.headline[align="right"] {
+  text-align: end;
+}
+
+.default-spacer {
+  inline-size: 1em;
+  block-size: 1em;
+}
+
+.default-indent {
+  margin-inline-start: 1.5em;
+}
+
+#dialog-box {
+  padding-block: 8px 10px;
+  padding-inline: 8px 10px;
+}
+
+.checkbox-no-label > .checkbox-label-box {
+  display: none;
+}
+
+/* Thunderbird Light Theme (not system theme) */
+@media (prefers-color-scheme: light) {
+  :root[lwt-tree]:not([lwt-tree-brighttext]) #recurrencePreview calendar-minimonth {
+    background-color: var(--color-gray-05);
+    border-color: var(--color-gray-30);
+  }
+}
+
+/*--------------------------------------------------------------------
+ *   Event summary dialog
+ *-------------------------------------------------------------------*/
+#summary-toolbox {
+  margin-block-end: 5px;
+}
+
+#status-notifications > .notificationbox-stack {
+  background-color: transparent;
+  padding-inline: 6px;
+}
+
+#calendar-item-summary {
+  margin-block: 3px 10px;
+  margin-inline: 8px 10px;
+}
+
+#calendar-summary-dialog {
+  min-inline-size: 35em;
+}
+
+#calendar-summary-dialog .item-location,
+#calendar-summary-dialog .item-title,
+#calendar-event-summary-dialog .item-location,
+#calendar-event-summary-dialog .item-title,
+#calendar-task-summary-dialog .item-location,
+#calendar-task-summary-dialog .item-title {
+  padding-inline-start: 1px;
+}
+
+#calendar-summary-dialog .item-attachment-cell,
+#calendar-event-summary-dialog .item-attachment-cell,
+#calendar-task-summary-dialog .item-attachment-cell {
+  margin-inline-start: 0;
+}
+
+#calendar-summary-dialog .item-attachment-cell-label,
+#calendar-event-summary-dialog .item-attachment-cell-label,
+#calendar-task-summary-dialog .item-attachment-cell-label {
+  margin-inline-start: 0;
+}
+
+#calendar-summary-dialog .item-comment,
+#calendar-event-summary-dialog .item-comment,
+#calendar-task-summary-dialog .item-comment,
+#calendar-summary-dialog .item-description,
+#calendar-event-summary-dialog .item-description,
+#calendar-task-summary-dialog .item-description {
+  border: 1px solid var(--field-border-color);
+  margin: 2px 4px 0;
+}
+
+#calendar-summary-dialog .item-comment,
+#calendar-event-summary-dialog .item-comment a,
+#calendar-task-summary-dialog .item-comment a,
+#calendar-summary-dialog .item-description a,
+#calendar-task-summary-dialog .item-description a,
+#calendar-event-summary-dialog .item-description a {
+  color: LinkText;
+  color-scheme: light dark;
+}
+
+:root[lwt-tree-brighttext] #calendar-summary-dialog .item-comment a,
+:root[lwt-tree-brighttext] #calendar-event-summary-dialog .item-comment a,
+:root[lwt-tree-brighttext] #calendar-task-summary-dialog .item-comment a,
+:root[lwt-tree-brighttext] #calendar-summary-dialog .item-description a,
+:root[lwt-tree-brighttext] #calendar-event-summary-dialog .item-description a,
+:root[lwt-tree-brighttext] #calendar-task-summary-dialog .item-description a {
+  color: #0aa5ff;
+}
+
+#calendar-summary-dialog #item-start-row .headline,
+#calendar-event-summary-dialog #item-start-row .headline,
+#calendar-task-summary-dialog #item-start-row .headline,
+#calendar-summary-dialog #item-end-row .headline,
+#calendar-event-summary-dialog #item-end-row .headline,
+#calendar-task-summary-dialog #item-end-row .headline {
+  font-weight: normal;
+}
+
+.cloud-file-attach-image {
+  -moz-context-properties: fill;
+  fill: var(--selected-item-color);
+}

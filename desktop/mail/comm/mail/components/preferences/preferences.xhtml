@@ -1,0 +1,301 @@
+<?xml version="1.0"?>
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+<!DOCTYPE html [
+<!ENTITY % brandDTD SYSTEM "chrome://branding/locale/brand.dtd">
+%brandDTD;
+<!ENTITY % editorOverlayDTD SYSTEM "chrome://messenger/locale/messengercompose/editorOverlay.dtd">
+%editorOverlayDTD;
+<!ENTITY % lightningDTD SYSTEM "chrome://lightning/locale/lightning.dtd">
+%lightningDTD;
+<!ENTITY % globalDTD SYSTEM "chrome://calendar/locale/global.dtd">
+%globalDTD;
+<!ENTITY % eventDTD SYSTEM "chrome://calendar/locale/calendar-event-dialog.dtd">
+%eventDTD;
+]>
+
+<html id="MailPreferences" xmlns="http://www.w3.org/1999/xhtml"
+      role="document"
+      xmlns:xul="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+      xmlns:html="http://www.w3.org/1999/xhtml"
+      scrolling="false">
+<head>
+  <title data-l10n-id="preferences-doc-title2"></title>
+  <meta http-equiv="Content-Security-Policy" content="default-src chrome:; connect-src *; script-src chrome: 'unsafe-inline' moz-src:; img-src chrome: moz-icon: https: data: blob:; style-src chrome: data: 'unsafe-inline'; object-src 'none'" />
+  <meta name="color-scheme" content="light dark" />
+  <link rel="stylesheet" href="chrome://global/skin/global.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/input-fields.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/colors.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/variables.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/icons.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/spacings.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/widgets.css" />
+  <link
+    rel="stylesheet"
+    href="chrome://messenger/skin/preferences/applications.css"
+  />
+  <link rel="stylesheet" href="chrome://global/skin/in-content/common.css" />
+  <link
+    rel="stylesheet"
+    href="chrome://messenger/skin/preferences/preferences.css"
+  />
+  <link
+    rel="stylesheet"
+    href="chrome://calendar/skin/shared/calendar-preferences.css"
+  />
+  <link rel="stylesheet" href="chrome://calendar/skin/calendar.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/folderMenus.css" />
+
+  <link rel="localization" href="branding/brand.ftl" />
+  <link rel="localization" href="messenger/preferences/preferences.ftl" />
+  <link rel="localization" href="messenger/preferences/fonts.ftl" />
+  <link rel="localization" href="messenger/preferences/languages.ftl" />
+  <link rel="localization" href="messenger/aboutDialog.ftl"/>
+
+  <!-- Links below are only used for search-l10n-ids into subdialogs -->
+  <link rel="localization" href="messenger/preferences/receipts.ftl" />
+  <link rel="localization" href="messenger/preferences/permissions.ftl" />
+  <link rel="localization" href="messenger/preferences/cookies.ftl" />
+  <link rel="localization" href="messenger/preferences/system-integration.ftl" />
+  <link rel="localization" href="messenger/preferences/dock-options.ftl" />
+  <link rel="localization" href="messenger/preferences/notifications.ftl" />
+  <link rel="localization" href="messenger/preferences/new-tag.ftl" />
+  <link rel="localization" href="toolkit/updates/history.ftl" />
+  <link rel="localization" href="messenger/preferences/connection.ftl" />
+  <link rel="localization" href="messenger/preferences/offline.ftl" />
+  <link rel="localization" href="toolkit/about/config.ftl" />
+  <link rel="localization" href="messenger/preferences/attachment-reminder.ftl" />
+  <link rel="localization" href="messenger/preferences/passwordManager.ftl" />
+  <link rel="localization" href="security/certificates/certManager.ftl" />
+  <link rel="localization" href="security/certificates/deviceManager.ftl" />
+#ifdef MOZ_SERVICES_SYNC
+  <link rel="localization" href="messenger/preferences/sync-dialog.ftl" />
+  <link rel="localization" href="messenger/syncAccounts.ftl" />
+#endif  // MOZ_SERVICES_SYNC
+
+  <script defer="defer" src="chrome://global/content/preferencesBindings.js"></script>
+#ifdef MOZ_UPDATER
+  <script defer="defer" src="chrome://messenger/content/aboutDialog-appUpdater.js"></script>
+#endif  // MOZ_UPDATER
+  <script defer="defer" src="chrome://messenger/content/globalOverlay.js"></script>
+  <script defer="defer" src="chrome://global/content/editMenuOverlay.js"></script>
+  <script defer="defer" src="chrome://messenger/content/accountUtils.js"></script>
+
+  <script defer="defer" src="chrome://communicator/content/contentAreaClick.js"></script>
+  <script defer="defer" src="chrome://messenger/content/preferences/preferences.js"></script>
+  <script defer="defer" src="chrome://messenger/content/preferences/findInPage.js"></script>
+  <script defer="defer" src="chrome://calendar/content/calendar-ui-utils.js"></script>
+  <script defer="defer" src="chrome://calendar/content/calendar-dialog-utils.js"></script>
+  <script defer="defer" src="chrome://calendar/content/preferences/general.js"></script>
+  <script defer="defer" src="chrome://calendar/content/preferences/alarms.js"></script>
+  <script defer="defer" src="chrome://calendar/content/widgets/calendar-notifications-setting.js"/>
+  <script defer="defer" src="chrome://calendar/content/preferences/notifications.js"/>
+  <script defer="defer" src="chrome://calendar/content/preferences/categories.js"></script>
+  <script defer="defer" src="chrome://calendar/content/preferences/views.js"></script>
+  <script defer="defer" src="chrome://calendar/content/preferences/calendar-preferences.js"></script>
+</head>
+<html:body xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul">
+  <stack id="preferences-stack" flex="1">
+    <hbox id="prefBox" class="main-content" flex="1">
+
+      <vbox id="pref-category-box">
+
+        <!-- category list -->
+        <richlistbox id="categories"
+                     data-l10n-id="category-list"
+                     data-l10n-attrs="aria-label">
+          <richlistitem id="category-general"
+                        class="category"
+                        value="paneGeneral"
+                        data-l10n-id="category-general"
+                        align="center">
+            <html:img class="category-icon"
+                      src="chrome://messenger/skin/icons/new/touch/settings.svg"
+                      alt="" />
+            <label class="category-name" flex="1" data-l10n-id="pane-general-title"/>
+          </richlistitem>
+
+          <richlistitem id="category-appearance"
+                        class="category"
+                        value="paneAppearance"
+                        data-l10n-id="category-appearance"
+                        align="center">
+            <html:img class="category-icon"
+                      src="chrome://messenger/skin/icons/new/touch/paint-palette.svg"
+                      alt="" />
+            <label class="category-name" flex="1" data-l10n-id="pane-appearance-title"/>
+          </richlistitem>
+
+          <richlistitem id="category-compose"
+                        class="category"
+                        value="paneCompose"
+                        data-l10n-id="category-compose"
+                        align="center">
+            <html:img class="category-icon"
+                      src="chrome://messenger/skin/icons/new/touch/pencil.svg"
+                      alt="" />
+            <label class="category-name" flex="1" data-l10n-id="pane-compose-title"/>
+          </richlistitem>
+
+          <richlistitem id="category-privacy"
+                        class="category"
+                        value="panePrivacy"
+                        data-l10n-id="category-privacy"
+                        align="center">
+            <html:img class="category-icon"
+                      src="chrome://messenger/skin/icons/new/touch/lock.svg"
+                      alt="" />
+            <label class="category-name" flex="1" data-l10n-id="pane-privacy-title"/>
+          </richlistitem>
+
+          <richlistitem id="category-chat"
+                        class="category"
+                        value="paneChat"
+                        data-l10n-id="category-chat"
+                        align="center">
+            <html:img class="category-icon"
+                      src="chrome://messenger/skin/icons/new/touch/chat.svg"
+                      alt="" />
+            <label class="category-name" flex="1" data-l10n-id="pane-chat-title"/>
+          </richlistitem>
+
+          <richlistitem id="category-calendar"
+                        class="category"
+                        value="paneCalendar"
+                        data-l10n-id="category-calendar"
+                        align="center">
+            <html:img class="category-icon"
+                      src="chrome://messenger/skin/icons/new/touch/calendar.svg"
+                      alt="" />
+            <label class="category-name" flex="1" data-l10n-id="pane-calendar-title"/>
+          </richlistitem>
+#ifdef MOZ_SERVICES_SYNC
+          <richlistitem id="category-sync"
+                        class="category"
+                        value="paneSync"
+                        data-l10n-id="category-sync"
+                        align="center">
+            <html:img class="category-icon"
+                      src="chrome://messenger/skin/icons/new/touch/sync.svg"
+                      alt="" />
+            <label class="category-name" flex="1" data-l10n-id="pane-sync-title"/>
+          </richlistitem>
+#endif  // MOZ_SERVICES_SYNC
+          <richlistitem id="category-qrexport"
+                        class="category"
+                        value="paneQrExport"
+                        data-l10n-id="category-qr-export"
+                        align="center">
+            <html:img class="category-icon"
+                      src="chrome://messenger/skin/icons/lg/mobile-export.svg"
+                      alt="" />
+            <label class="category-name" flex="1" data-l10n-id="pane-qr-export-title"/>
+          </richlistitem>
+        </richlistbox>
+
+        <spacer flex="1"/>
+
+        <vbox class="sidebar-footer-list">
+          <html:a id="accountButton" class="sidebar-footer-link"
+                  onclick="MsgAccountManager(null);">
+            <html:img class="sidebar-footer-icon account-icon"
+                      src="chrome://messenger/skin/icons/new/compact/account-settings.svg"
+                      alt="" />
+            <label data-l10n-id="account-button" class="sidebar-footer-label" flex="1"/>
+          </html:a>
+
+          <html:a id="addonsButton" class="sidebar-footer-link"
+                  onclick="window.browsingContext.topChromeWindow.openAddonsMgr();">
+            <html:img class="sidebar-footer-icon"
+                      src="chrome://messenger/skin/icons/new/compact/extension.svg"
+                      alt="" />
+            <label class="sidebar-footer-label"
+                   data-l10n-id="open-addons-sidebar-button"
+                   flex="1"/>
+          </html:a>
+        </vbox>
+
+      </vbox>
+
+      <vbox id="preferencesContainer" flex="1" align="start">
+        <vbox class="paneDeckContainer">
+          <hbox class="sticky-container">
+            <hbox class="sticky-inner-container" pack="end" align="start">
+              <hbox id="policies-container" class="info-box-container smaller-font-size" flex="1" hidden="hidden">
+                <hbox class="info-icon-container">
+                  <html:img class="info-icon" alt="" />
+                </hbox>
+                <hbox align="center" flex="1">
+                  <html:a href="about:policies" target="_blank" data-l10n-id="managed-notice"/>
+                </hbox>
+              </hbox>
+              <html:input type="search"
+                          id="searchInput"
+                          data-l10n-id="search-preferences-input2"
+                          data-l10n-attrs="placeholder, style"/>
+            </hbox>
+          </hbox>
+          <vbox id="paneDeck">
+#include searchResults.inc.xhtml
+#include general.inc.xhtml
+#include appearance.inc.xhtml
+#include compose.inc.xhtml
+#include privacy.inc.xhtml
+#include chat.inc.xhtml
+#include ../../../calendar/base/content/preferences/calendar-preferences.inc.xhtml
+#ifdef MOZ_SERVICES_SYNC
+#include sync.inc.xhtml
+#endif  // MOZ_SERVICES_SYNC
+#include qrExport.inc.xhtml
+          </vbox>
+        </vbox>
+      </vbox>
+    </hbox>
+    <stack id="dialogStack" hidden="hidden"/>
+    <vbox id="dialogTemplate"
+          class="dialogOverlay"
+          align="center"
+          pack="center"
+          topmost="true"
+          hidden="hidden">
+      <vbox class="dialogBox"
+            pack="end"
+            role="dialog"
+            aria-labelledby="dialogTitle">
+        <hbox class="dialogTitleBar" align="center">
+          <label class="dialogTitle" flex="1"/>
+          <button class="dialogClose close-icon" data-l10n-id="close-button"/>
+        </hbox>
+        <browser class="dialogFrame"
+                 autoscroll="false"
+                 disablehistory="true"/>
+      </vbox>
+    </vbox>
+  </stack>
+
+  <!-- Helpers for the FileLink options browser select and autocomplete. -->
+  <popupset>
+    <!-- For select dropdowns. The menupopup is what shows the list of options,
+         and the popuponly menulist makes things like the menuactive attributes
+         work correctly on the menupopup. ContentSelectDropdown expects the
+         popuponly menulist to be its immediate parent. -->
+    <menulist popuponly="true" id="ContentSelectDropdown" hidden="hidden">
+      <menupopup rolluponmousewheel="true"
+                 activateontab="true"
+                 position="after_start"
+                 level="parent"
+#ifdef XP_WIN
+                 consumeoutsideclicks="false"
+                 ignorekeys="shortcuts"
+#endif  // XP_WIN
+      />
+    </menulist>
+    <panel is="autocomplete-richlistbox-popup" id="PopupAutoComplete"
+           type="autocomplete"
+           role="group"
+           noautofocus="noautofocus"/>
+  </popupset>
+</html:body>
+</html>

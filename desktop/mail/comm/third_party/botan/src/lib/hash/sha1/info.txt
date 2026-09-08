@@ -1,0 +1,11 @@
+<defines>
+SHA1 -> 20131128
+</defines>
+
+<module_info>
+name -> "SHA-1"
+</module_info>
+
+<requires>
+mdx_hash
+</requires>

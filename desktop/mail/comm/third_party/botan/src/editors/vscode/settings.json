@@ -1,0 +1,11 @@
+{
+    "[cpp]": {
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd"
+    },
+    "clangd.arguments": [
+        "--header-insertion=never"
+    ],
+    "clang-format.executable": "clang-format-17",
+    "pylint.args": ["--rcfile=src/configs/pylint.rc"]
+}

@@ -1,0 +1,70 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+/* Because this sheet is loaded synchronously while the user is waiting for the
+   compose window to appear, it must not @import a ton of other things, and
+   especially must not trigger network access. */
+
+/* ===== messageQuotes.css =================================================
+  == Shared styles such as block quote colors and signature style
+  == between the message body during
+  == message display and the mail editor instance for mail compose.
+  ======================================================================= */
+
+/* workaround for MS Outlook mails where the line-height is set to 0 */
+body {
+  line-height: initial !important;
+}
+
+/* ::::: signature ::::: */
+
+@media not print {
+  div.moz-text-flowed > div.moz-txt-sig,
+  div.moz-text-plain > pre > div.moz-txt-sig,
+  pre.moz-signature {
+    opacity: 0.6;
+  }
+}
+
+/* ::::: Turn on borders and padding for quotes. ::::: */
+/* ::::: Colorize block quote borders. We only go 5 levels deep. ::::: */
+
+body blockquote[type="cite"] {
+  margin-block: 1ex;
+  margin-inline: 0;
+  padding: 0.4ex 1ex;
+  color: var(--color-text-highlight) !important; /* override toolkit colors */
+  border-inline-start: 2px solid rgb(114, 159, 207); /* Sky Blue 1 */
+}
+
+blockquote[type="cite"] {
+  & & {
+    border-inline-start-color: rgb(173, 127, 168); /* Plum 1 */
+
+    & & {
+      border-inline-start-color: rgb(138, 226, 52); /* Chameleon 1 */
+
+      & & {
+        border-inline-start-color: rgb(252, 175, 62); /* Orange 1 */
+
+        & & {
+          border-inline-start-color: rgb(233, 185, 110); /* Chocolate 1 */
+        }
+      }
+    }
+  }
+}
+
+/* Styles for the dark mode */
+/* Disabled in bug 1639249. See also editorContent.css.
+@media (prefers-color-scheme: dark) {
+  body {
+    color: #f9f9fa;
+    background-color: #2a2a2e;
+  }
+
+  span[_moz_quote="true"] {
+    color: #009fff;
+  }
+} */

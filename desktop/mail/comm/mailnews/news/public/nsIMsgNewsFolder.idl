@@ -1,0 +1,104 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "nsISupports.idl"
+#include "nsIMsgFolder.idl"
+
+interface nsIMsgWindow;
+interface nsINntpIncomingServer;
+
+[scriptable, uuid(9a12c3a5-9de5-4c57-ace3-d51802b525a9)]
+interface nsIMsgNewsFolder : nsISupports {
+  /**|rawName| is an 8-bit string to represent the name of a newsgroup used by
+   * a news server. It's offered for the convenience of callers so that they
+   * don't have to convert |unicodeName| to the server-side name when
+   * communicating with a news server.  It's US-ASCII except for some
+   * 'stand-alone' Chinese news servers that use GB2312 for newsgroup names
+   * violating RFC 1036. For those servers, it's GB2312. However, it can be any
+   * other single and multibyte encoding in principle. The encoding of this
+   * string is stored in |nsINntpIncomingServer| because that's a server-wide
+   * property.
+   **/
+  readonly attribute ACString rawName;
+  readonly attribute nsINntpIncomingServer nntpServer;
+  attribute boolean saveArticleOffline;
+
+  /**
+   * @name Authentication methods
+   * NNTP authentication is slightly wonky, due to edge cases that are not seen
+   * in other protocols. Authentication is not necessary; if authentication is
+   * used, it could be configured on a per-group basis or even require only a
+   * username and not a password.
+   *
+   * Since passwords could be per-group, it is necessary to refer to passwords
+   * using the methods on this interface and not nsIMsgIncomingServer. Passwords
+   * for the server as a whole are found via the root folder. If the server is
+   * configured to use single sign-on (the default), asking any group for its
+   * password will result in the server's password, otherwise, each group stores
+   * its password individually.
+   *
+   * Due to this setup, most of the password management functions on
+   * nsIMsgIncomingServer do not correctly work. The only one that would affect
+   * the passwords stored on folders correctly is forgetPassword; using any
+   * other on a news server would result in inconsistent state.
+   *
+   * Before requesting either the username or password for authentication, it is
+   * first necessary to call getAuthenticationCredentials. If the method returns
+   * true, then groupUsername and groupPassword are appropriately set up for
+   * necessary authentication; if not, then authentication must be stopped.
+   */
+
+  /// The URL used when storing passwords for this folder.
+  readonly attribute AString urlForSignon;
+
+  /// The username that should be used for this group
+  attribute ACString groupUsername;
+
+  /// The password that should be used for this group
+  attribute ACString groupPassword;
+
+  nsIMsgFolder addNewsgroup(in AUTF8String newsgroupName, in ACString setStr);
+
+  void setReadSetFromStr(in ACString setStr);
+
+  /// returns the server's default charset.
+  readonly attribute ACString charset;
+
+  readonly attribute AUTF8String newsrcLine;
+  void SetNewsrcHasChanged(in boolean newsrcHasChanged);
+  void updateSummaryFromNNTPInfo(in long oldest, in long youngest, in long total);
+  void removeMessage(in nsMsgKey key);
+  void removeMessages(in Array<nsMsgKey> keys);
+  void cancelComplete();
+
+  ACString getMessageIdForKey(in nsMsgKey key);
+
+  void getNextNMessages(in nsIMsgWindow aMsgWindow);
+
+  /**
+   * Feed the article (message) into the folder, allowing offline storage
+   * to take place if configured.
+   *
+   * @param articleNumber - The article being loaded. It must already be in
+   *   the database.
+   * @param data - Article data, including end-of-line terminators.
+   */
+  void notifyArticleDownloaded(in unsigned long articleNumber, in ACString data);
+
+  void notifyFinishedDownloadinghdrs();
+
+  /**
+   * Requests that a message be canceled.
+   *
+   * Note that, before sending the news cancel, this method will check to make
+   * sure that the user has proper permission to cancel the message.
+   *
+   * @param aMsgHdr     The header of the message to be canceled.
+   * @param aUrlListener  Listener (if any) for the operation.
+   * @param aMsgWindow  The standard message window object, for error dialogs.
+   */
+  void cancelMessage(in nsIMsgDBHdr aMsgHdr, in nsIUrlListener aUrlListener, in nsIMsgWindow aMsgWindow);
+
+  void refreshSizeOnDisk();
+};

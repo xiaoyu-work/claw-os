@@ -1,0 +1,88 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "nsISupports.idl"
+
+interface nsISMimeVerificationListener;
+
+%{ C++
+#define NS_CMSMESSAGE_CONTRACTID "@mozilla.org/nsCMSMessage;1"
+%}
+
+interface nsIX509Cert;
+
+[uuid(cd76ec81-02f0-41a3-8852-c0acce0bab53)]
+interface nsICMSVerifyFlags : nsISupports
+{
+  const long NONE = 0;
+  const long VERIFY_ALLOW_WEAK_SHA1 = 1 << 0;
+};
+
+/**
+ * nsICMSMessage - Interface to a CMS Message.
+ */
+[uuid(c6d51c22-73e9-4dad-86b9-bde584e33c63)]
+interface nsICMSMessage : nsISupports
+{
+  readonly attribute boolean contentIsSigned;
+  readonly attribute boolean contentIsEncrypted;
+  readonly attribute string signerCommonName;
+  readonly attribute string signerEmailAddress;
+  readonly attribute nsIX509Cert signerCert;
+  readonly attribute nsIX509Cert encryptionCert;
+  readonly attribute PRTime signingTime;
+
+  /**
+   * @param verifyFlags - Optional flags from nsICMSVerifyFlags.
+   */
+  void verifySignature(in long verifyFlags);
+
+  /**
+   * @param verifyFlags - Optional flags from nsICMSVerifyFlags.
+   */
+  void verifyDetachedSignature(in long verifyFlags,
+                               in Array<octet> aDigestData,
+                               in int16_t aDigestType);
+  void createEncrypted(in Array<nsIX509Cert> aRecipientCerts);
+
+  /** The parameter aDigestType must be one of the values in nsICryptoHash */
+  void createSigned(in nsIX509Cert scert, in nsIX509Cert ecert,
+                    in Array<octet> aDigestData, in int16_t aDigestType);
+
+  /**
+    * Async version of nsICMSMessage::VerifySignature.
+    * Code will be executed on a background thread and
+    * availability of results will be notified using a
+    * call to nsISMimeVerificationListener.
+   */
+  void asyncVerifySignature(in long verifyFlags,
+                            in nsISMimeVerificationListener listener);
+
+  /**
+    * Async version of nsICMSMessage::VerifyDetachedSignature.
+    * Code will be executed on a background thread and
+    * availability of results will be notified using a
+    * call to nsISMimeVerificationListener.
+    *
+    * Set aDigestType to one of the values from nsICryptoHash.
+   */
+  void asyncVerifyDetachedSignature(in long verifyFlags,
+                                    in nsISMimeVerificationListener listener,
+                                    in Array<octet> aDigestData,
+                                    in int16_t aDigestType);
+};
+
+[uuid(5226d698-0773-4f25-b94c-7944b3fc01d3)]
+interface nsISMimeVerificationListener : nsISupports {
+
+  /**
+   * Notify that results are ready, that have been requested
+   * using nsICMSMessage::asyncVerify[Detached]Signature()
+   *
+   * verificationResultCode matches synchronous result code from
+   * nsICMSMessage::verify[Detached]Signature
+   */
+  void notify(in nsICMSMessage verifiedMessage,
+              in nsresult verificationResultCode);
+};

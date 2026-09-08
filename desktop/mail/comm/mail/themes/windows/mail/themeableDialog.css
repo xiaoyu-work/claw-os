@@ -1,0 +1,39 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@import url("chrome://messenger/skin/shared/themeableDialog.css");
+
+@namespace html url("http://www.w3.org/1999/xhtml");
+
+html|input {
+  padding: 2px 4px;
+}
+
+menulist[is="menulist-editable"][editable="true"]::part(text-input) {
+  padding: 2px 4px;
+  margin-block: -1px -2px;
+  margin-inline: -6px 4px;
+}
+
+menu > menupopup > menuitem,
+menu > menupopup > menu {
+  padding-inline: 5px;
+}
+
+.menu-right {
+  block-size: 12px;
+}
+
+.menu-right:-moz-locale-dir(rtl) {
+  transform: scaleX(-1);
+}
+
+.radio-label-box {
+  margin-inline-start: 0;
+  padding-inline-start: 0;
+}
+
+tabpanels {
+  color-scheme: light dark;
+}

@@ -1,0 +1,226 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+/* ===== messengercompose.css ===========================================
+  == Styles for the main Messenger Compose window.
+  ======================================================================= */
+
+@import url("chrome://messenger/skin/messenger.css");
+@import url("chrome://messenger/skin/shared/messengercompose.css");
+
+@namespace html url("http://www.w3.org/1999/xhtml");
+
+/* stylelint-disable-next-line media-query-no-invalid */
+@media -moz-pref("mail.theme.native-theme") {
+  :root:not([lwtheme]) {
+    #compose-toolbox {
+      background: transparent;
+
+      /* This is conceptually a background, but putting this on a
+       * pseudo-element avoids it from suppressing the chrome-content separator
+       * border, etc */
+      &::after {
+        -moz-default-appearance: -moz-window-titlebar;
+        appearance: auto;
+        content: "";
+        position: absolute;
+        inset: 0;
+        z-index: -1;
+      }
+
+      & > #composeToolbar2 {
+        background-color: transparent;
+      }
+    }
+  }
+}
+
+#compose-toolbox {
+  :root[lwtheme] &::after {
+    inset-block-start: 100%;
+    margin-block-start: -1px;
+    border-block-end: 1px solid var(--chrome-content-separator-color);
+    z-index: 1;
+  }
+
+  & toolbarbutton[checked] {
+    background-color: transparent;
+  }
+
+  /* Inactive window state */
+  & > toolbar:-moz-window-inactive {
+    border-block-start-color: rgba(255, 255, 255, 0.45);
+    border-block-end-color: rgba(0, 0, 0, 0.35);
+  }
+}
+
+#composeToolbar2 {
+  /* Cover the titlebar with the toolbox background */
+  margin-block-start: -22px;
+  padding: 22px 4px 0;
+}
+
+toolbar[nowindowdrag="true"] {
+  appearance: none;
+}
+
+/* Findbar */
+
+#findbar-replaceButton {
+  block-size: 18px;
+  margin-inline-start: 5px;
+  padding-block: 2px;
+}
+
+/* ::::: special toolbar colors ::::: */
+
+#composeContentBox {
+  color: -moz-DialogText;
+  text-shadow: none;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2) inset;
+
+  &:-moz-window-inactive {
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.1) inset;
+  }
+}
+
+#MsgHeadersToolbar {
+  padding-block-start: 5px;
+}
+
+#identityLabel-box {
+  margin-block-start: 3px;
+}
+
+#msgIdentity {
+  margin-block: 2px 0;
+  padding-block: 3px;
+  color: inherit;
+
+  &::part(text-input) {
+    color: inherit;
+    padding-inline-start: 3px;
+  }
+
+  &[is="menulist-editable"][editable="true"] > menupopup {
+    margin-inline-start: 0;
+  }
+}
+
+#msgIdentityPopup {
+  margin-inline-start: initial;
+}
+
+/* ::::: attachment reminder ::::: */
+
+.notification-button[is="toolbarbutton-menu-button"] {
+  padding-block-start: 0;
+
+  & > button {
+    appearance: none;
+    margin-block-end: -1px;
+    margin-inline: -3px 3px;
+    padding-inline-end: 5px;
+    border-inline-end: 1px solid #9b9b9b;
+  }
+}
+
+#subjectLabel {
+  margin-block-start: 3px;
+  margin-inline-end: 6px;
+}
+
+.address-label-container {
+  padding-block-start: 7px;
+}
+
+.address-container {
+  padding-block: 1px;
+
+  & > .address-input {
+    padding-block: 5px;
+    min-block-size: 14px;
+  }
+}
+
+#msgIdentity,
+.address-container,
+#msgSubject {
+  min-block-size: 26px;
+}
+
+.address-pill {
+  padding-block: 2px;
+
+  & label {
+    margin-block: 0;
+  }
+}
+
+.pill-indicator {
+  margin-block-start: -2px;
+}
+
+/* ::::: autocomplete icons ::::: */
+
+.ac-site-icon {
+  display: flex;
+  margin: 2px 5px;
+}
+
+/* ::::: format toolbar ::::: */
+
+#FormatToolbar {
+  padding-block: 4px;
+  margin-inline: 3px;
+  margin-block-end: 3px;
+
+  :root[lwt-tree] & {
+    background-image: none;
+    background-color: transparent !important;
+  }
+
+  & toolbarseparator {
+    background-image: none;
+  }
+}
+
+toolbarbutton.formatting-button {
+  margin-inline: 1px;
+  padding-inline: 4px;
+}
+
+#FontFaceSelect {
+  max-inline-size: 15em;
+}
+
+/* ::::: address book sidebar ::::: */
+
+#contactsBrowserTitle {
+  font: icon;
+}
+
+#titlebar {
+  z-index: 1;
+  block-size: 22px;
+}
+
+.titlebar-buttonbox-container {
+  margin-block-start: 3px;
+  margin-inline-start: 7px;
+}
+
+.titlebar-buttonbox {
+  margin-inline: 0;
+}
+
+#titlebar-title {
+  overflow: hidden;
+  /* Equalize  the titlebar-buttonbox width */
+  padding-inline-end: 60px;
+}
+
+#titlebar-title-label {
+  justify-content: center;
+}

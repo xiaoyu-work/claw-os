@@ -1,0 +1,485 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+/* ===== messenger.css ==================================================
+  == Styles shared throughout the Messenger application.
+  ======================================================================= */
+
+@import url("chrome://messenger/skin/shared/messenger.css");
+
+.folderMenuItem > .menu-icon,
+.menuitem-iconic > .menu-icon {
+  display: flex;
+}
+
+@media not (prefers-contrast) {
+  #messengerWindow:not([lwtheme]) {
+    background-color: light-dark(var(--color-gray-20), var(--color-gray-90));
+
+    &:-moz-window-inactive {
+      background-color: light-dark(var(--color-gray-10), var(--color-gray-90));
+    }
+  }
+
+  #messengerWindow[lwtheme] {
+    background-color: var(--lwt-accent-color);
+
+    &:-moz-window-inactive {
+      background-color: var(--lwt-accent-color-inactive, var(--lwt-accent-color));
+    }
+  }
+
+  /* This is needed for Windows 10, see bug 1963783 */
+  #messengerWindow[customtitlebar][sizemode="normal"] {
+    border-block-start: 0.5px solid rgba(0, 0, 0, 0.7);
+
+    @media (-moz-windows-accent-color-in-titlebar) or (-moz-windows-mica) {
+      border-block-start-color: ActiveBorder;
+
+      &:-moz-window-inactive {
+        border-block-start-color: InactiveBorder;
+      }
+    }
+  }
+
+  /* Only apply mica when accent color in titlebar is disabled */
+  @media (-moz-windows-mica) and (-moz-windows-accent-color-in-titlebar: 0) {
+    #messengerWindow[customtitlebar]:not([lwtheme]) {
+      background-color: transparent;
+
+      /* stylelint-disable-next-line media-query-no-invalid */
+      @media -moz-pref("widget.windows.mica.toplevel-backdrop", 2) {
+        /* For acrylic, do the same we do for popups to guarantee some contrast */
+        background-color: light-dark(rgba(255, 255, 255, 0.6), rgba(0, 0, 0, 0.6));
+      }
+    }
+  }
+}
+
+@media (prefers-contrast) {
+  #messengerWindow[customtitlebar]:not([lwtheme]) {
+    padding-block-start: 2px;
+    background-color: ActiveCaption;
+    color: CaptionText;
+
+    &:-moz-window-inactive {
+      background-color: InactiveCaption;
+      color: InactiveCaptionText;
+    }
+
+    & #navigation-toolbox {
+      background-color: -moz-Dialog;
+      color: -moz-DialogText;
+    }
+  }
+
+  #menubar-items > #mail-menubar > menu:not([disabled]) {
+    color: inherit;
+  }
+
+  #menubar-items > #mail-menubar > menu:not([disabled])[_moz-menuactive="true"] {
+    color: -moz-menuhovertext;
+  }
+}
+
+.titlebar-buttonbox-container {
+  align-items: stretch;
+}
+
+.titlebar-buttonbox,
+.titlebar-button {
+  appearance: none !important;
+}
+
+.titlebar-button {
+  border: none;
+  margin: 0 !important;
+  padding: 9px 18px;
+
+  /* Segoe Fluent Icons is the preferred font for Windows 11, and
+   * Segoe MDL2 Assets is there for windows 10. Luckily, the relevant glyphs
+   * are the same, so we can just fall back.
+   * See: https://learn.microsoft.com/en-us/windows/apps/design/style/segoe-fluent-icons-font */
+  font:
+    round(10px, env(hairline)) / 1 "Segoe Fluent Icons",
+    "Segoe MDL2 Assets"; /* stylelint-disable-line font-family-no-missing-generic-family-keyword */
+
+  & > .toolbarbutton-icon {
+    display: none;
+  }
+
+  &::before {
+    display: inline-block;
+    content: inherit;
+
+    &:-moz-locale-dir(rtl) {
+      transform: scaleX(-1);
+    }
+  }
+
+  &:hover {
+    color: inherit;
+    background-color: light-dark(hsla(0, 0%, 0%, 0.12), hsla(0, 0%, 100%, 0.12));
+
+    &:active {
+      background-color: light-dark(hsla(0, 0%, 0%, 0.22), hsla(0, 0%, 100%, 0.22));
+    }
+  }
+
+  &.titlebar-close:hover {
+    color: white;
+    background-color: hsl(355, 86%, 49%);
+
+    &:active {
+      background-color: hsl(355, 82%, 69%);
+    }
+  }
+
+  &:not(:hover):-moz-window-inactive::before {
+    opacity: 0.5;
+  }
+
+  @media (prefers-contrast) {
+    color: ButtonText;
+    background-color: Field;
+
+    &:is(:hover, :active),
+    &.titlebar-close:is(:hover, :active) {
+      color: SelectedItemText;
+      background-color: SelectedItem;
+    }
+  }
+}
+
+.titlebar-min {
+  /* Even though we use appearance: none, -moz-default-appearance is necessary
+   * for Windows 11's "snap layouts" feature, see
+   * DealWithWindowsAppearanceHacks */
+  -moz-default-appearance: -moz-window-button-minimize;
+  content: "\e921"; /* ChromeMinimize */
+  @media (prefers-contrast) {
+    content: "\ef2d"; /* ChromeMinimizeContrast */
+  }
+}
+
+.titlebar-max {
+  -moz-default-appearance: -moz-window-button-maximize;
+  content: "\e922"; /* ChromeMaximize */
+  @media (prefers-contrast) {
+    content: "\ef2e"; /* ChromeMaximizeContrast */
+  }
+}
+
+.titlebar-restore {
+  -moz-default-appearance: -moz-window-button-restore;
+  content: "\e923"; /* ChromeRestore */
+  @media (prefers-contrast) {
+    content: "\ef2f"; /* ChromeRestoreContrast */
+  }
+}
+
+.titlebar-close {
+  -moz-default-appearance: -moz-window-button-close;
+  content: "\e8bb"; /* ChromeClose */
+  @media (prefers-contrast) {
+    content: "\ef2c"; /* ChromeCloseContrast */
+  }
+}
+
+.inline-toolbar {
+  appearance: none;
+}
+
+/* ::::: menubar ::::: */
+
+#menubar-items {
+  flex-direction: column; /* for flex hack */
+  margin-block-end: 1px;
+
+  & > menubar {
+    flex: 1; /* make menu items expand to fill toolbar height */
+  }
+}
+
+:root[lwtheme] menubar > menu[disabled] {
+  color: inherit;
+  opacity: 0.4;
+}
+
+/* ::::: Toolbar customization ::::: */
+
+toolbarpaletteitem[place="toolbar"] > toolbarspacer {
+  inline-size: 11px;
+}
+
+/* ::::: toolbarbutton menu-button ::::: */
+
+toolbarbutton[is="toolbarbutton-menu-button"] {
+  padding: 0;
+}
+
+/* .......... dropmarker .......... */
+
+.toolbarbutton-menubutton-dropmarker {
+  appearance: none;
+  padding: 3px 7px;
+  inline-size: auto;
+}
+
+.toolbarbutton-icon {
+  margin-inline-end: 0;
+}
+
+.sidebar-header .toolbarbutton-text:not([value]) {
+  display: none;
+}
+
+menulist.folderMenuItem menu:not(.folderMenuItem) {
+  padding-block: 3px;
+
+  treecol[sortDirection="ascending"]:not([hideheader="true"]) > & {
+    list-style-image: var(--icon-nav-up-sm);
+  }
+
+  treecol[sortDirection="descending"]:not([hideheader="true"]) > & {
+    list-style-image: var(--icon-nav-down-sm);
+  }
+}
+
+.thread-tree-col-picker image,
+.thread-tree-icon-header img {
+  padding-inline: 1px 2px;
+  padding-block-end: 2px;
+}
+
+.treecol-sortdirection {
+  treecol[sortDirection="ascending"]:not([hideheader="true"]) > & {
+    list-style-image: var(--icon-nav-up-sm);
+  }
+
+  treecol[sortDirection="descending"]:not([hideheader="true"]) > & {
+    list-style-image: var(--icon-nav-down-sm);
+  }
+}
+
+treechildren::-moz-tree-row(multicol, odd) {
+  background-color: transparent;
+}
+
+treechildren::-moz-tree-cell-text {
+  padding-inline: 2px;
+}
+
+@media (prefers-contrast) {
+  #threadTree > treechildren::-moz-tree-row(tagged, selected),
+  #threadTree > treechildren::-moz-tree-row(untagged, selected),
+  tree:not(#threadTree) > treechildren::-moz-tree-row(selected) {
+    border-color: SelectedItem;
+    background-color: transparent;
+  }
+
+  tree > treechildren::-moz-tree-row(hover) {
+    border-color: SelectedItemText !important;
+    border-style: solid;
+    background-color: transparent;
+  }
+
+  #threadTree > treechildren::-moz-tree-cell-text(untagged, selected),
+  tree:not(#threadTree) > treechildren::-moz-tree-cell-text(selected) {
+    color: WindowText;
+  }
+
+  #threadTree > treechildren::-moz-tree-row(untagged, selected, focus),
+  tree:not(#threadTree) > treechildren::-moz-tree-row(selected, focus) {
+    background-color: SelectedItem;
+  }
+
+  treechildren::-moz-tree-row(current, focus) {
+    outline-width: 2px;
+    outline-offset: -2px;
+  }
+
+  treechildren::-moz-tree-row(selected, current, focus) {
+    outline-color: SelectedItemText;
+  }
+
+  tree > treechildren::-moz-tree-twisty {
+    color: WindowText;
+  }
+
+  treechildren::-moz-tree-image(selected) {
+    color: inherit;
+  }
+
+  #threadTree > treechildren::-moz-tree-twisty(untagged, selected, focus),
+  tree:not(#threadTree) > treechildren::-moz-tree-twisty(selected, focus),
+  #threadTree > treechildren::-moz-tree-image(untagged, selected, focus),
+  tree:not(#threadTree) > treechildren::-moz-tree-image(selected, focus),
+  #threadTree > treechildren::-moz-tree-cell-text(untagged, selected, focus),
+  tree:not(#threadTree) > treechildren::-moz-tree-cell-text(selected, focus) {
+    color: SelectedItemText;
+    fill: currentColor;
+  }
+
+  treechildren::-moz-tree-cell-text {
+    padding-inline-start: 4px !important;
+  }
+
+  .autocomplete-richlistitem:hover {
+    color: SelectedItemText;
+  }
+}
+
+treechildren::-moz-tree-indentation {
+  inline-size: 12px;
+}
+
+menulist {
+  padding: 0 5px 1px !important;
+
+  &.folderMenuItem::part(label) {
+    margin-inline-start: 2px !important;
+  }
+}
+
+button[is="toolbarbutton-menu-button"] > .button-box > button {
+  margin-block: -1px;
+}
+
+button.notification-button[is="toolbarbutton-menu-button"] {
+  padding-inline-end: 1px;
+}
+
+.messageCloseButton > .toolbarbutton-icon {
+  margin-inline-end: 12px;
+}
+
+/* ::::: primary toolbar buttons ::::: */
+
+.toolbarbutton-1 {
+  &,
+  & > .toolbarbutton-menubutton-button,
+  & > .toolbarbutton-menubutton-dropmarker {
+    appearance: none;
+  }
+
+  &[disabled] .toolbarbutton-icon,
+  &[disabled] .toolbarbutton-text,
+  &[disabled] > .toolbarbutton-menubutton-dropmarker {
+    opacity: 0.4;
+  }
+
+  toolbox[labelalign="end"] > toolbar[mode="full"] & .toolbarbutton-text {
+    padding-inline-end: 2px;
+  }
+}
+
+toolbar[mode="text"] .toolbarbutton-text {
+  margin: 0 !important;
+  padding-inline: 2px !important;
+}
+
+.statusbarpanel {
+  border-inline-end: 1px solid ThreeDLightShadow;
+
+  :root[lwtheme] & {
+    border-inline-end-color: var(--lwt-tabs-border-color);
+  }
+}
+
+#messagepanebox {
+  border-block-start-width: 0;
+  border-inline-start: none;
+}
+
+/* Status panel */
+
+.statuspanel-label {
+  margin: 0;
+  padding: 2px 4px;
+  background-color: -moz-dialog;
+  border: 1px none ThreeDLightShadow;
+  border-block-start-style: solid;
+  color: -moz-dialogText;
+  text-shadow: none;
+
+  &:-moz-locale-dir(ltr):not([mirror]),
+  &:-moz-locale-dir(rtl)[mirror] {
+    border-right-style: solid;
+    /* disabled for triggering grayscale AA (bug 659213)
+    border-top-right-radius: .3em;
+    */
+    margin-right: 1em;
+  }
+
+  &:-moz-locale-dir(rtl):not([mirror]),
+  &:-moz-locale-dir(ltr)[mirror] {
+    border-left-style: solid;
+    /* disabled for triggering grayscale AA (bug 659213)
+    border-top-left-radius: .3em;
+    */
+    margin-left: 1em;
+  }
+}
+
+.contentTabInstance {
+  background-color: -moz-dialog;
+
+  :root[lwtheme] & {
+    background-color: transparent;
+    background-image: linear-gradient(transparent 40px, -moz-dialog 40px);
+  }
+}
+
+/* ::::: groupbox ::::: */
+
+fieldset {
+  border: 0.5px groove ThreeDLightShadow;
+  border-radius: 3px;
+  margin: 1em 3px 3px;
+  padding: 3px 0 6px;
+
+  & > hbox,
+  & > vbox,
+  & > radiogroup {
+    inline-size: -moz-available;
+  }
+}
+
+legend {
+  margin-block-start: -1em;
+  margin-inline-start: 3px;
+  padding-inline: 3px;
+  background-color: -moz-dialog;
+  font-weight: bold;
+}
+
+/* UI Density customization */
+
+treechildren::-moz-tree-row {
+  block-size: 1.8rem;
+}
+
+:root[uidensity="compact"] treechildren::-moz-tree-row {
+  block-size: 1.6rem;
+}
+
+:root[uidensity="touch"] treechildren::-moz-tree-row {
+  block-size: 2.4rem;
+}
+
+/* Infobar styles */
+
+toolbarbutton.notification-button[is="toolbarbutton-menu-button"] {
+  padding-inline-end: 3px;
+
+  & > .toolbarbutton-menubutton-button {
+    appearance: none;
+    min-block-size: calc(1.8em - 2px);
+  }
+}
+
+#reminderBarPopup {
+  margin-block-start: -4px;
+}

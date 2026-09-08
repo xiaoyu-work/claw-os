@@ -1,0 +1,84 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@import url("chrome://messenger/skin/widgets.css");
+@import url("chrome://messenger/skin/variables.css");
+@import url("chrome://messenger/skin/colors.css");
+@import url("chrome://messenger/skin/icons.css");
+
+dialog {
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  grid-template-columns: auto;
+  inline-size: 600px;
+  block-size: 400px;
+  overflow: hidden;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background-color: var(--color-surface-base);
+  box-shadow: 0 18px 15px -15px rgba(0, 0, 0, 0.5);
+
+  &::backdrop {
+    background: rgba(0, 0, 0, 0.5);
+  }
+}
+
+/* Header style */
+header {
+  text-align: center;
+
+  & #close {
+    position: absolute;
+    inset-inline-end: 6px;
+    inset-block-start: 6px;
+    z-index: 1;
+  }
+}
+
+/* Body style */
+
+main {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 9px 12px;
+  overflow-y: auto;
+}
+
+/* Footer style */
+
+footer {
+  padding: 9px;
+}
+
+/* Shortcut row */
+
+shortcut-row {
+  display: grid;
+  grid-template-columns: 1fr max-content;
+  align-items: center;
+  gap: 9px;
+  padding-block: 6px;
+  border-block-end: 1px dashed var(--color-surface-border-intense);
+  font-size: 1.1rem;
+
+  & .content-area {
+    overflow-x: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  & .action-area {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 6px;
+    align-items: center;
+
+    & kbd {
+      font-size: 1rem;
+      padding: 4px 6px;
+    }
+  }
+}

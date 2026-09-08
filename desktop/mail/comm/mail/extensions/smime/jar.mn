@@ -1,0 +1,14 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+messenger.jar:
+% content messenger-smime %content/messenger-smime/
+   content/messenger-smime/msgHdrViewSMIMEOverlay.js                (content/msgHdrViewSMIMEOverlay.js)
+   content/messenger/certpicker.js                                  (/comm/mailnews/extensions/smime/certpicker.js)
+   content/messenger/certpicker.xhtml                               (/comm/mailnews/extensions/smime/certpicker.xhtml)
+   content/messenger-smime/msgReadSMIMEOverlay.js                   (/comm/mailnews/extensions/smime/msgReadSMIMEOverlay.js)
+   content/messenger-smime/msgCompSecurityInfo.js                   (/comm/mailnews/extensions/smime/msgCompSecurityInfo.js)
+   content/messenger-smime/msgCompSecurityInfo.xhtml                (/comm/mailnews/extensions/smime/msgCompSecurityInfo.xhtml)
+   content/messenger-smime/certFetchingStatus.xhtml                 (/comm/mailnews/extensions/smime/certFetchingStatus.xhtml)
+   content/messenger-smime/certFetchingStatus.js                    (/comm/mailnews/extensions/smime/certFetchingStatus.js)

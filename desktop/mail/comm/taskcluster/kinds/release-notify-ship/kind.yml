@@ -1,0 +1,37 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+---
+loader: taskgraph.loader.transform:loader
+
+transforms:
+    - gecko_taskgraph.transforms.release_deps:transforms
+    - gecko_taskgraph.transforms.release_notifications:transforms
+    - gecko_taskgraph.transforms.task:transforms
+
+kind-dependencies:
+    - release-balrog-scheduling
+    - release-bouncer-aliases
+    - release-version-bump
+    - release-mark-as-shipped
+
+task-defaults:
+    run-on-repo-type: [hg]
+    name: notify-release-drivers-ship
+    description: Sends email to release-drivers telling release was shipped.
+    run-on-projects: []
+    shipping-phase: ship
+    worker-type: succeed
+    notifications:
+        emails:
+            by-project:
+                comm-(beta|release|esr.*): ["thunderbird-drivers@mozilla.org"]
+                try-comm-central: ["{config[params][owner]}"]
+                default: []
+
+tasks:
+    thunderbird:
+        shipping-product: thunderbird
+        notifications:
+            subject: "{task[shipping-product]} {release_config[version]} build{release_config[build_number]}/{config[params][project]} updates are ready for signoff in Balrog!"
+            message: "{task[shipping-product]} {release_config[version]} build{release_config[build_number]}/{config[params][project]} updates are ready for signoff in Balrog!"

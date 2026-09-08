@@ -1,0 +1,82 @@
+<?xml version="1.0"?>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+<!DOCTYPE overlay SYSTEM "chrome://communicator/locale/pref/pref-http.dtd">
+<overlay xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul">
+  <prefpane id="http_pane"
+            label="&pref.http.title;"
+            script="chrome://communicator/content/pref/pref-http.js">
+
+    <preferences>
+      <preference id="network.http.version"
+                  name="network.http.version"
+                  type="string"/>
+      <preference id="network.http.proxy.version"
+                  name="network.http.proxy.version"
+                  type="string"/>
+      <preference id="general.useragent.compatMode.firefox"
+                  name="general.useragent.compatMode.firefox"
+                  type="bool"/>
+      <preference id="general.useragent.compatMode.strict-firefox"
+                  name="general.useragent.compatMode.strict-firefox"
+                  type="bool"/>
+    </preferences>
+
+    <description>&prefPara;</description>
+
+    <hbox align="start">
+      <groupbox flex="1">
+        <caption label="&prefDirect.label;"/>
+        <vbox class="indent" align="start">
+          <radiogroup id="httpVersion"
+                      preference="network.http.version">
+            <radio value="1.0"
+                   label="&prefEnableHTTP10.label;"
+                   accesskey="&prefEnableHTTP10.accesskey;"/>
+            <radio value="1.1"
+                   label="&prefEnableHTTP11.label;"
+                   accesskey="&prefEnableHTTP11.accesskey;"/>
+          </radiogroup>
+        </vbox>
+      </groupbox>
+
+      <groupbox flex="1">
+        <caption label="&prefProxy.label;"/>
+        <vbox class="indent" align="start">
+          <radiogroup id="httpVersionProxy"
+                      preference="network.http.proxy.version">
+            <radio value="1.0"
+                   label="&prefEnableHTTP10.label;"
+                   accesskey="&prefEnableHTTP10Proxy.accesskey;"/>
+            <radio value="1.1"
+                   label="&prefEnableHTTP11.label;"
+                   accesskey="&prefEnableHTTP11Proxy.accesskey;"/>
+          </radiogroup>
+        </vbox>
+      </groupbox>
+    </hbox>
+
+    <separator class="thin"/>
+
+    <groupbox>
+      <caption label="&prefUseragent.label;"/>
+      <radiogroup id="uaFirefoxCompat"
+                  oncommand="updateUAPrefs(this);">
+        <radio value="strict"
+               label="&prefFirefoxStrict.label;"
+               accesskey="&prefFirefoxStrict.accesskey;"/>
+        <radio value="none"
+               label="&prefFirefoxNone.label;"
+               accesskey="&prefFirefoxNone.accesskey;"/>
+        <radio value="compat"
+               label="&prefFirefoxCompat2.label;"
+               accesskey="&prefFirefoxCompat2.accesskey;"/>
+      </radiogroup>
+    </groupbox>
+
+    <description>&prefCompatWarning2.desc;</description>
+  </prefpane>
+
+</overlay>

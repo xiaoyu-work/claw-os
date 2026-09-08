@@ -1,0 +1,22 @@
+<defines>
+ECGDSA -> 20160301
+</defines>
+
+<module_info>
+name -> "ECGDSA"
+</module_info>
+
+<requires>
+asn1
+bigint
+ec_group
+ecc_key
+keypair
+numbertheory
+rng
+sha2_32
+</requires>
+
+<header:public>
+ecgdsa.h
+</header:public>

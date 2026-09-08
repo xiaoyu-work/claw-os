@@ -1,0 +1,1032 @@
+[
+  {
+    "namespace": "manifest",
+    "types": [
+      {
+        "$extend": "OptionalPermission",
+        "choices": [
+          {
+            "type": "string",
+            "enum": ["compose", "compose.save", "compose.send"]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "namespace": "compose",
+    "description": "The compose API allows to interact with the message composition window.",
+    "types": [
+      {
+        "id": "ComposeRecipient",
+        "choices": [
+          {
+            "type": "string",
+            "description": "A name and email address in mailbox format (<var>Name <email@example.com></var>), or just an email address. Mailing lists are specified as <var>ListName <ListName></var>. Use $(ref:messengerUtilities.parseMailboxString) to extract the name and/or the email from the mailbox string, or to expand mailing list entries."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "max_manifest_version": 2,
+                "description": "The ID of a contact or mailing list from the $(doc:contacts) or $(doc:mailingLists)."
+              },
+              "nodeId": {
+                "type": "string",
+                "min_manifest_version": 3,
+                "description": "The ID of a contact or mailing list node from the $(doc:addressBooks.contacts) or $(doc:addressBooks.mailingLists)."
+              },
+              "type": {
+                "type": "string",
+                "description": "Which sort of object this ID is for.",
+                "enum": ["contact", "mailingList"]
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "ComposeRecipientList",
+        "choices": [
+          {
+            "$ref": "ComposeRecipient"
+          },
+          {
+            "type": "array",
+            "items": {
+              "$ref": "ComposeRecipient"
+            }
+          }
+        ]
+      },
+      {
+        "id": "ComposeState",
+        "type": "object",
+        "description": "Represent the state of the message composer.",
+        "properties": {
+          "canSendNow": {
+            "type": "boolean",
+            "description": "The message can be send now."
+          },
+          "canSendLater": {
+            "type": "boolean",
+            "description": "The message can be send later."
+          }
+        }
+      },
+      {
+        "id": "ComposeDetails",
+        "type": "object",
+        "description": "Used by various functions to represent the state of a message being composed. Note that functions using this type may have a partial implementation.",
+        "properties": {
+          "additionalFccFolderId": {
+            "min_manifest_version": 3,
+            "$ref": "folders.MailFolderId",
+            "description": "An additional fcc folder which can be selected while composing the message. Cleared when set to <var>null</var>. Has no effect when the message is saved as a draft or template; the additional copy is only created when the message is actually sent or queued for sending. The permission <permission>accountsRead</permission> is required to use this property.",
+            "optional": "omit-key-if-missing"
+          },
+          "additionalFccFolder": {
+            "max_manifest_version": 2,
+            "choices": [
+              {
+                "$ref": "folders.MailFolder"
+              },
+              {
+                "type": "string",
+                "enum": [""]
+              },
+              {
+                "$ref": "folders.MailFolderId"
+              }
+            ],
+            "description": "An additional fcc folder which can be selected while composing the message, an empty string if not used. Has no effect when the message is saved as a draft or template; the additional copy is only created when the message is actually sent or queued for sending. The permission <permission>accountsRead</permission> is required to use this property.",
+            "optional": true
+          },
+          "attachPublicPGPKey": {
+            "type": "boolean",
+            "optional": true,
+            "description": "Whether the public OpenPGP key of the sending identity should be attached to the message."
+          },
+          "attachVCard": {
+            "type": "boolean",
+            "optional": true,
+            "description": "Whether or not the vCard of the used identity will be attached to the message during send."
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "choices": [
+                {
+                  "$ref": "FileAttachment"
+                },
+                {
+                  "$ref": "ComposeAttachment"
+                }
+              ]
+            },
+            "description": "Only used in the begin* functions. Attachments to add to the message.",
+            "optional": true
+          },
+          "bcc": {
+            "$ref": "ComposeRecipientList",
+            "optional": true
+          },
+          "body": {
+            "type": "string",
+            "description": "The HTML content of the message.",
+            "optional": true
+          },
+          "cc": {
+            "$ref": "ComposeRecipientList",
+            "optional": true
+          },
+          "customHeaders": {
+            "type": "array",
+            "items": {
+              "$ref": "CustomHeader"
+            },
+            "description": "Array of custom headers. Headers will be returned in <em>Http-Header-Case</em> (a.k.a. <em>Train-Case</em>). Set an empty array to clear all custom headers.",
+            "optional": true
+          },
+          "deliveryFormat": {
+            "type": "string",
+            "enum": ["auto", "plaintext", "html", "both"],
+            "description": "Defines the MIME format of the sent message (ignored on plain text messages). Defaults to <var>auto</var>, which will send html messages as plain text, if they do not include any formatting, and as <var>both</var> otherwise (a multipart/mixed message).",
+            "optional": true
+          },
+          "deliveryStatusNotification": {
+            "type": "boolean",
+            "optional": true,
+            "description": "Let the sender know when the recipient's server received the message. Not supported by all servers."
+          },
+          "selectedEncryptionTechnology": {
+            "choices": [
+              {
+                "$ref": "compose.EncryptionPropertiesSMIME"
+              },
+              {
+                "$ref": "compose.EncryptionPropertiesOpenPGP"
+              }
+            ],
+            "optional": true,
+            "description": "The selected encryption technology (<var>OpenPGP</var> or <var>S/MIME</var>) which is to be used to sign and/or encrypt the message. If the sending identity does not support encryption at all, this will be <var>undefined</var>."
+          },
+          "followupTo": {
+            "$ref": "ComposeRecipientList",
+            "optional": true
+          },
+          "from": {
+            "$ref": "ComposeRecipient",
+            "description": "*Caution*: Setting a value for <var>from</var> does not change the used identity, it overrides the <em>From</em> header. Many email servers do not accept emails where the <em>From</em> header does not match the sender identity. Must be set to exactly one valid email address.",
+            "optional": true
+          },
+          "identityId": {
+            "type": "string",
+            "description": "The ID of an identity from the $(doc:accounts). The settings from the identity will be used in the composed message. If <var>replyTo</var> is also specified, the <var>replyTo</var> property of the identity is overridden. The permission <permission>accountsRead</permission> is required to include the <var>identityId</var>.",
+            "optional": true
+          },
+          "isModified": {
+            "type": "boolean",
+            "description": "Whether the composer is considered modified by the user. A modified composer asks for confirmation, when it is closed.",
+            "optional": true
+          },
+          "isPlainText": {
+            "type": "boolean",
+            "description": "Whether the message is an HTML message or a plain text message.",
+            "optional": true
+          },
+          "newsgroups": {
+            "description": "A single newsgroup name or an array of newsgroup names.",
+            "choices": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            ],
+            "optional": true
+          },
+          "overrideDefaultFcc": {
+            "max_manifest_version": 2,
+            "type": "boolean",
+            "optional": true,
+            "description": "Indicates whether the default fcc setting (defined by the used identity) is being overridden for this message. Setting <var>false</var> will clear the override. Setting <var>true</var> will throw an <em>ExtensionError</em>, if <var>overrideDefaultFccFolder</var> is not set as well. The permission <permission>accountsRead</permission> is required to use this property."
+          },
+          "overrideDefaultFccFolder": {
+            "max_manifest_version": 2,
+            "choices": [
+              {
+                "$ref": "folders.MailFolder"
+              },
+              {
+                "type": "string",
+                "enum": [""]
+              },
+              {
+                "$ref": "folders.MailFolderId"
+              }
+            ],
+            "optional": true,
+            "description": "This value overrides the default fcc setting (defined by the used identity) for this message only. Either a $(ref:folders.MailFolder) specifying the folder for the copy of the sent message, or an empty string to not save a copy at all. The permission <permission>accountsRead</permission> is required to use this property."
+          },
+          "overrideDefaultFccFolderId": {
+            "min_manifest_version": 3,
+            "$ref": "folders.MailFolderId",
+            "description": "This value overrides the default fcc setting (defined by the used identity) for this message only. Either a $(ref:folders.MailFolderId) specifying the folder for the copy of the sent message, or an empty string to not save a copy at all. Reset when set to <var>null</var>. The permission <permission>accountsRead</permission> is required to use this property.",
+            "optional": "omit-key-if-missing"
+          },
+          "plainTextBody": {
+            "type": "string",
+            "description": "The plain text content of the message.",
+            "optional": true
+          },
+          "priority": {
+            "type": "string",
+            "enum": ["lowest", "low", "normal", "high", "highest"],
+            "description": "The priority of the message.",
+            "optional": true
+          },
+          "relatedMessageId": {
+            "description": "The id of the original message (in case of draft, template, forward or reply). Read-only. Is <var>undefined</var> in all other cases or if the original message was opened from file. The <permission>messagesRead</permission> permission is required to use this property.",
+            "$ref": "messages.MessageId",
+            "optional": true
+          },
+          "replyTo": {
+            "$ref": "ComposeRecipientList",
+            "optional": true
+          },
+          "returnReceipt": {
+            "type": "boolean",
+            "optional": true,
+            "description": "Add the <em>Disposition-Notification-To</em> header to the message to requests the recipients email client to send a reply once the message has been received. Recipient server may strip the header and the recipient might ignore the request."
+          },
+          "subject": {
+            "type": "string",
+            "optional": true
+          },
+          "to": {
+            "$ref": "ComposeRecipientList",
+            "optional": true
+          },
+          "type": {
+            "type": "string",
+            "description": "Read-only. The type of the message being composed, depending on how the compose window was opened by the user.",
+            "enum": ["draft", "new", "redirect", "reply", "forward"],
+            "optional": true
+          }
+        }
+      },
+      {
+        "id": "FileAttachment",
+        "type": "object",
+        "description": "Object used to add, update or rename an attachment in a message being composed.",
+        "properties": {
+          "file": {
+            "type": "object",
+            "isInstanceOf": "File",
+            "additionalProperties": true,
+            "description": "The new content for the attachment.",
+            "optional": true
+          },
+          "name": {
+            "type": "string",
+            "description": "The new name for the attachment, as displayed to the user. If not specified, the name of the provided <var>file</var> object is used.",
+            "optional": true
+          }
+        }
+      },
+      {
+        "id": "ComposeAttachment",
+        "type": "object",
+        "description": "Represents an attachment in a message being composed.",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "A unique identifier for this attachment."
+          },
+          "name": {
+            "type": "string",
+            "optional": true,
+            "description": "The name of this attachment, as displayed to the user."
+          },
+          "size": {
+            "type": "integer",
+            "optional": true,
+            "description": "The size in bytes of this attachment. Read-only."
+          }
+        }
+      },
+      {
+        "id": "CustomHeader",
+        "type": "object",
+        "description": "A custom header definition.",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name of a custom header, must be prefixed by <var>X-</var> (but not by <var>X-Mozilla-</var>) or be one of the explicitly allowed headers (<var>MSIP_Labels</var>)"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      {
+        "id": "ComposeDictionaries",
+        "type": "object",
+        "additionalProperties": {
+          "type": "boolean"
+        },
+        "description": "A <em>dictionary object</em> with entries for all installed dictionaries, having a language identifier as <em>key</em> (for example <var>en-US</var>) and a boolean expression as <em>value</em>, indicating whether that dictionary is enabled for spellchecking or not."
+      },
+      {
+        "id": "EncryptionPropertiesOpenPGP",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^OpenPGP$"
+          },
+          "encryptBody": {
+            "type": "boolean",
+            "description": "Whether encryption of the message body using the OpenPGP technology is enabled."
+          },
+          "encryptSubject": {
+            "type": "boolean",
+            "description": "Whether encryption of the message subject using the OpenPGP technology is enabled (only supported if encryption of the body is enabled a well)."
+          },
+          "signMessage": {
+            "type": "boolean",
+            "description": "Whether the message will be signed using the OpenPGP technology."
+          }
+        }
+      },
+      {
+        "id": "EncryptionPropertiesSMIME",
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^S/MIME$"
+          },
+          "encryptBody": {
+            "type": "boolean",
+            "description": "Whether encryption of the message body using the S/MIME technology is enabled."
+          },
+          "signMessage": {
+            "type": "boolean",
+            "description": "Whether the message will be signed using the S/MIME technology"
+          }
+        }
+      }
+    ],
+    "events": [
+      {
+        "name": "onBeforeSend",
+        "type": "function",
+        "description": "Fired when a message is about to be sent from the compose window. This is a user input event handler. For asynchronous listeners some $(url:user-input-restrictions)[restrictions] apply.",
+        "permissions": ["compose"],
+        "parameters": [
+          {
+            "name": "tab",
+            "$ref": "tabs.Tab"
+          },
+          {
+            "name": "details",
+            "$ref": "ComposeDetails",
+            "description": "The current state of the compose window. This is functionally the same as calling the $(ref:compose.getComposeDetails) function."
+          }
+        ],
+        "returns": {
+          "type": "object",
+          "properties": {
+            "cancel": {
+              "type": "boolean",
+              "optional": true,
+              "description": "Cancels the send."
+            },
+            "details": {
+              "$ref": "ComposeDetails",
+              "optional": true,
+              "description": "Updates the compose window. This is functionally the same as calling the $(ref:compose.setComposeDetails) function."
+            }
+          }
+        }
+      },
+      {
+        "name": "onAfterSend",
+        "type": "function",
+        "description": "Fired when sending a message succeeded or failed.",
+        "permissions": ["compose"],
+        "parameters": [
+          {
+            "name": "tab",
+            "$ref": "tabs.Tab",
+            "description": "The tab of the associated compose window. By the time the event listener is called, this window may have already been destroyed."
+          },
+          {
+            "name": "sendInfo",
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "description": "The used send mode.",
+                "enum": ["sendNow", "sendLater"]
+              },
+              "error": {
+                "type": "string",
+                "description": "An error description, if sending the message failed.",
+                "optional": true
+              },
+              "headerMessageId": {
+                "type": "string",
+                "description": "The header messageId of the outgoing message. Only included for actually sent messages.",
+                "optional": true
+              },
+              "messages": {
+                "type": "array",
+                "items": {
+                  "$ref": "messages.MessageHeader"
+                },
+                "description": "Copies of the sent message. The number of created copies depends on the applied file carbon copy configuration (fcc). The <permission>messagesRead</permission> permission is required for this property to be included."
+              },
+              "details": {
+                "$ref": "ComposeDetails",
+                "description": "The $(ref:compose.ComposeDetails) of the send message."
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "onAfterSave",
+        "type": "function",
+        "description": "Fired when saving a message as draft or template succeeded or failed.",
+        "permissions": ["compose"],
+        "parameters": [
+          {
+            "name": "tab",
+            "$ref": "tabs.Tab"
+          },
+          {
+            "name": "saveInfo",
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "description": "The used save mode.",
+                "enum": ["autoSave", "draft", "template"]
+              },
+              "error": {
+                "type": "string",
+                "description": "An error description, if saving the message failed.",
+                "optional": true
+              },
+              "messages": {
+                "type": "array",
+                "items": {
+                  "$ref": "messages.MessageHeader"
+                },
+                "description": "An array with exactly one element, the saved message. The <permission>messagesRead</permission> permission is required for this property to be included."
+              },
+              "details": {
+                "$ref": "ComposeDetails",
+                "description": "The $(ref:compose.ComposeDetails) of the saved message."
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "onAttachmentAdded",
+        "type": "function",
+        "description": "Fired when an attachment is added to a message being composed.",
+        "permissions": ["compose"],
+        "parameters": [
+          {
+            "name": "tab",
+            "$ref": "tabs.Tab"
+          },
+          {
+            "name": "attachment",
+            "$ref": "ComposeAttachment"
+          }
+        ]
+      },
+      {
+        "name": "onAttachmentRemoved",
+        "type": "function",
+        "description": "Fired when an attachment is removed from a message being composed.",
+        "permissions": ["compose"],
+        "parameters": [
+          {
+            "name": "tab",
+            "$ref": "tabs.Tab"
+          },
+          {
+            "name": "attachmentId",
+            "type": "integer"
+          }
+        ]
+      },
+      {
+        "name": "onIdentityChanged",
+        "type": "function",
+        "description": "Fired when the user changes the identity that will be used to send a message being composed.",
+        "permissions": ["accountsRead"],
+        "parameters": [
+          {
+            "name": "tab",
+            "$ref": "tabs.Tab"
+          },
+          {
+            "name": "identityId",
+            "type": "string"
+          }
+        ]
+      },
+      {
+        "name": "onComposeStateChanged",
+        "type": "function",
+        "description": "Fired when the state of the message composer changed.",
+        "parameters": [
+          {
+            "name": "tab",
+            "$ref": "tabs.Tab"
+          },
+          {
+            "name": "state",
+            "$ref": "ComposeState"
+          }
+        ]
+      },
+      {
+        "name": "onActiveDictionariesChanged",
+        "type": "function",
+        "description": "Fired when one or more dictionaries have been activated or deactivated.",
+        "parameters": [
+          {
+            "name": "tab",
+            "$ref": "tabs.Tab"
+          },
+          {
+            "name": "dictionaries",
+            "$ref": "ComposeDictionaries"
+          }
+        ]
+      }
+    ],
+    "functions": [
+      {
+        "name": "beginNew",
+        "type": "function",
+        "description": "Open a new message compose window.",
+        "async": "callback",
+        "parameters": [
+          {
+            "name": "messageId",
+            "description": "If specified, the message or template to edit as a new message.",
+            "$ref": "messages.MessageId",
+            "optional": true
+          },
+          {
+            "name": "details",
+            "$ref": "ComposeDetails",
+            "optional": true
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "name": "return",
+                "$ref": "tabs.Tab"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "beginReply",
+        "type": "function",
+        "description": "Open a new message compose window replying to a given message.",
+        "async": "callback",
+        "parameters": [
+          {
+            "name": "messageId",
+            "description": "The message to reply to, as retrieved using other APIs.",
+            "$ref": "messages.MessageId"
+          },
+          {
+            "name": "replyType",
+            "type": "string",
+            "enum": ["replyToSender", "replyToList", "replyToAll"],
+            "optional": true
+          },
+          {
+            "name": "details",
+            "$ref": "ComposeDetails",
+            "optional": true
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "name": "return",
+                "$ref": "tabs.Tab"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "beginForward",
+        "type": "function",
+        "description": "Open a new message compose window forwarding a given message.",
+        "async": "callback",
+        "parameters": [
+          {
+            "name": "messageId",
+            "description": "The message to forward, as retrieved using other APIs.",
+            "$ref": "messages.MessageId"
+          },
+          {
+            "name": "forwardType",
+            "type": "string",
+            "enum": ["forwardInline", "forwardAsAttachment"],
+            "optional": true
+          },
+          {
+            "name": "details",
+            "$ref": "ComposeDetails",
+            "optional": true
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "name": "return",
+                "$ref": "tabs.Tab"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "getComposeDetails",
+        "type": "function",
+        "async": "callback",
+        "description": "Fetches the current state of a compose window. Currently only a limited amount of information is available, more will be added in later versions.",
+        "permissions": ["compose"],
+        "parameters": [
+          {
+            "type": "integer",
+            "name": "tabId",
+            "minimum": 0
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "$ref": "ComposeDetails"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "setComposeDetails",
+        "type": "function",
+        "async": true,
+        "description": "Updates the compose window. The properties of the given $(ref:compose.ComposeDetails) object will be used to overwrite the current values of the specified compose window, so only properties that are to be changed should be included. Modified settings will be treated as user initiated, and turn off further automatic changes on these settings.",
+        "permissions": ["compose"],
+        "parameters": [
+          {
+            "type": "integer",
+            "name": "tabId",
+            "minimum": 0
+          },
+          {
+            "name": "details",
+            "$ref": "ComposeDetails"
+          }
+        ]
+      },
+      {
+        "name": "getActiveDictionaries",
+        "type": "function",
+        "async": "callback",
+        "description": "Returns a $(ref:compose.ComposeDictionaries) object, listing all installed dictionaries, including the information whether they are currently enabled or not.",
+        "permissions": ["compose"],
+        "parameters": [
+          {
+            "type": "integer",
+            "name": "tabId",
+            "minimum": 0
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "$ref": "ComposeDictionaries"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "setActiveDictionaries",
+        "type": "function",
+        "async": true,
+        "description": "Updates the active dictionaries. Throws if the <var>activeDictionaries</var> array contains unknown or invalid language identifiers.",
+        "permissions": ["compose"],
+        "parameters": [
+          {
+            "type": "integer",
+            "name": "tabId",
+            "minimum": 0
+          },
+          {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "name": "activeDictionaries"
+          }
+        ]
+      },
+      {
+        "name": "listAttachments",
+        "type": "function",
+        "description": "Lists all of the attachments of the message being composed in the specified tab.",
+        "permissions": ["compose"],
+        "async": "callback",
+        "parameters": [
+          {
+            "name": "tabId",
+            "type": "integer"
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "ComposeAttachment"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "getAttachmentFile",
+        "type": "function",
+        "description": "Gets the content of a $(ref:compose.ComposeAttachment) as a $(url:dom-file)[File] object.",
+        "async": "callback",
+        "parameters": [
+          {
+            "name": "id",
+            "type": "integer",
+            "description": "The unique identifier for the attachment."
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "type": "object",
+                "isInstanceOf": "File",
+                "additionalProperties": true
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "addAttachment",
+        "type": "function",
+        "description": "Adds an attachment to the message being composed in the specified tab.",
+        "permissions": ["compose"],
+        "async": "callback",
+        "parameters": [
+          {
+            "name": "tabId",
+            "type": "integer"
+          },
+          {
+            "name": "attachment",
+            "choices": [
+              {
+                "$ref": "FileAttachment"
+              },
+              {
+                "$ref": "ComposeAttachment"
+              }
+            ]
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "$ref": "ComposeAttachment"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "updateAttachment",
+        "type": "function",
+        "description": "Updates the name and/or the content of an attachment in the message being composed in the specified tab. If the specified attachment is a cloud file attachment and the associated provider failed to update the attachment, the function will throw an <em>ExtensionError</em>.",
+        "permissions": ["compose"],
+        "async": "callback",
+        "parameters": [
+          {
+            "name": "tabId",
+            "type": "integer"
+          },
+          {
+            "name": "attachmentId",
+            "type": "integer"
+          },
+          {
+            "name": "attachment",
+            "$ref": "FileAttachment"
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "$ref": "ComposeAttachment"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "removeAttachment",
+        "type": "function",
+        "description": "Removes an attachment from the message being composed in the specified tab.",
+        "permissions": ["compose"],
+        "async": true,
+        "parameters": [
+          {
+            "name": "tabId",
+            "type": "integer"
+          },
+          {
+            "name": "attachmentId",
+            "type": "integer"
+          }
+        ]
+      },
+      {
+        "name": "sendMessage",
+        "permissions": ["compose.send"],
+        "type": "function",
+        "description": "Sends the message currently being composed. If the send mode is not specified or set to <var>default</var>, the message will be send directly if the user is online and placed in the users outbox otherwise. The returned Promise fulfills once the message has been successfully sent or placed in the user's outbox. Throws when the send process has been aborted by the user, by an $(ref:compose.onBeforeSend) event or if there has been an error while sending the message to the outgoing mail server.",
+        "async": "callback",
+        "parameters": [
+          {
+            "name": "tabId",
+            "type": "integer"
+          },
+          {
+            "name": "options",
+            "type": "object",
+            "optional": true,
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": ["default", "sendNow", "sendLater"]
+              }
+            }
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "name": "return",
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "description": "The used send mode.",
+                    "enum": ["sendNow", "sendLater"]
+                  },
+                  "headerMessageId": {
+                    "type": "string",
+                    "description": "The header messageId of the outgoing message. Only included for actually sent messages.",
+                    "optional": true
+                  },
+                  "messages": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "messages.MessageHeader"
+                    },
+                    "description": "Copies of the sent message. The number of created copies depends on the applied file carbon copy configuration (fcc)."
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "saveMessage",
+        "permissions": ["compose.save"],
+        "type": "function",
+        "description": "Saves the message currently being composed as a draft or as a template. If the save mode is not specified, the message will be saved as a draft. The returned Promise fulfills once the message has been successfully saved.",
+        "async": "callback",
+        "parameters": [
+          {
+            "name": "tabId",
+            "type": "integer"
+          },
+          {
+            "name": "options",
+            "type": "object",
+            "optional": true,
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": ["draft", "template"]
+              }
+            }
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "name": "return",
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "description": "The used save mode.",
+                    "enum": ["draft", "template"]
+                  },
+                  "messages": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "messages.MessageHeader"
+                    },
+                    "description": "An array with exactly one element, the saved message."
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "getComposeState",
+        "type": "function",
+        "description": "Returns information about the current state of the message composer.",
+        "async": "callback",
+        "parameters": [
+          {
+            "name": "tabId",
+            "type": "integer"
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "name": "return",
+                "$ref": "ComposeState"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+]

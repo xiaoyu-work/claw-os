@@ -1,0 +1,10 @@
+[DEFAULT]
+dupe-manifest = true
+head = "head.js head-ews.js"
+support-files = ["data/utils.js"]
+tags = [
+  "ews",
+  "webextensions",
+]
+
+["test_ext_accounts_ews.js"]

@@ -1,0 +1,23 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+
+#include "nsISupports.idl"
+
+interface nsIMsgSearchTerm;
+
+[scriptable, uuid(28AC84DF-CBE5-430d-A5C0-4FA63B5424DF)]
+interface nsIMsgMailView : nsISupports {
+    attribute AUTF8String mailViewName;
+    readonly attribute AUTF8String prettyName; // localized pretty name
+
+    // the array of search terms
+    attribute Array<nsIMsgSearchTerm> searchTerms;
+
+    // these two helper methods are required to allow searchTermsOverlay.js to
+    // manipulate a mail view without knowing it is dealing with a mail view. nsIMsgFilter
+    // and nsIMsgSearchSession have the same two methods....we should probably make an interface around them.
+    void appendTerm(in nsIMsgSearchTerm term);
+    nsIMsgSearchTerm createTerm();
+};

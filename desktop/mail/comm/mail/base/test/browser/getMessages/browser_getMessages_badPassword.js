@@ -1,0 +1,360 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, you can obtain one at http://mozilla.org/MPL/2.0/. */
+
+/**
+ * Tests fetching mail with no password or a bad password, and the prompts
+ * that causes.
+ */
+
+/* eslint-disable sdl/no-insecure-url */
+
+const { MessageGenerator } = ChromeUtils.importESModule(
+  "resource://testing-common/mailnews/MessageGenerator.sys.mjs"
+);
+const { ServerTestUtils } = ChromeUtils.importESModule(
+  "resource://testing-common/mailnews/ServerTestUtils.sys.mjs"
+);
+
+const generator = new MessageGenerator();
+let localAccount, localRootFolder;
+let imapServer, imapAccount, imapRootFolder, imapInbox;
+let pop3Server, pop3Account, pop3RootFolder, pop3Inbox;
+let ewsServer, ewsAccount, ewsRootFolder, ewsInbox;
+let nntpServer, nntpAccount, nntpRootFolder, nntpFolder;
+
+const allInboxes = [];
+
+const about3Pane = document.getElementById("tabmail").currentAbout3Pane;
+const getMessagesButton = about3Pane.document.getElementById(
+  "folderPaneGetMessages"
+);
+const getMessagesContext = about3Pane.document.getElementById(
+  "folderPaneGetMessagesContext"
+);
+
+add_setup(async function () {
+  Services.prefs.setBoolPref("signon.rememberSignons", true);
+
+  localAccount = MailServices.accounts.createLocalMailAccount();
+  localRootFolder = localAccount.incomingServer.rootFolder;
+
+  [imapServer, pop3Server, ewsServer, nntpServer] =
+    await ServerTestUtils.createServers([
+      ServerTestUtils.serverDefs.imap.plain,
+      ServerTestUtils.serverDefs.pop3.plain,
+      ServerTestUtils.serverDefs.ews.plain,
+      {
+        ...ServerTestUtils.serverDefs.nntp.plain,
+        options: { username: "user", password: "password" },
+      },
+    ]);
+  nntpServer.addGroup("getmessages.newsgroup");
+
+  imapAccount = MailServices.accounts.createAccount();
+  imapAccount.addIdentity(MailServices.accounts.createIdentity());
+  imapAccount.incomingServer = MailServices.accounts.createIncomingServer(
+    "user",
+    "test.test",
+    "imap"
+  );
+  imapAccount.incomingServer.prettyName = "IMAP Account";
+  imapAccount.incomingServer.port = 143;
+  imapRootFolder = imapAccount.incomingServer.rootFolder;
+  imapInbox = imapRootFolder.getFolderWithFlags(Ci.nsMsgFolderFlags.Inbox);
+  allInboxes.push(imapInbox);
+
+  pop3Account = MailServices.accounts.createAccount();
+  pop3Account.addIdentity(MailServices.accounts.createIdentity());
+  pop3Account.incomingServer = MailServices.accounts.createIncomingServer(
+    "user",
+    "test.test",
+    "pop3"
+  );
+  pop3Account.incomingServer.prettyName = "POP3 Account";
+  pop3Account.incomingServer.port = 110;
+  pop3RootFolder = pop3Account.incomingServer.rootFolder;
+  pop3Inbox = pop3RootFolder.getFolderWithFlags(Ci.nsMsgFolderFlags.Inbox);
+  allInboxes.push(pop3Inbox);
+
+  ewsAccount = MailServices.accounts.createAccount();
+  ewsAccount.addIdentity(MailServices.accounts.createIdentity());
+  ewsAccount.incomingServer = MailServices.accounts.createIncomingServer(
+    "user",
+    "test.test",
+    "ews"
+  );
+  ewsAccount.incomingServer.setStringValue(
+    "ews_url",
+    "http://test.test/EWS/Exchange.asmx"
+  );
+  ewsAccount.incomingServer.prettyName = "EWS Account";
+  ewsRootFolder = ewsAccount.incomingServer.rootFolder;
+  // Add the *root folder* to the list of inboxes so that we don't have to
+  // connect now to get the inbox. Once the connection is made for the first
+  // time, the root folder will be replaced by the inbox in `allInboxes`.
+  allInboxes.push(ewsRootFolder);
+
+  nntpAccount = MailServices.accounts.createAccount();
+  nntpAccount.addIdentity(MailServices.accounts.createIdentity());
+  nntpAccount.incomingServer = MailServices.accounts.createIncomingServer(
+    "user",
+    "test.test",
+    "nntp"
+  );
+  nntpAccount.incomingServer.prettyName = "NNTP Account";
+  nntpAccount.incomingServer.port = 119;
+  nntpAccount.incomingServer.authMethod = Ci.nsMsgAuthMethod.passwordEncrypted;
+  nntpRootFolder = nntpAccount.incomingServer.rootFolder;
+  nntpRootFolder.createSubfolder("getmessages.newsgroup", null);
+  nntpFolder = nntpRootFolder.getChildNamed("getmessages.newsgroup");
+  allInboxes.push(nntpFolder);
+
+  registerCleanupFunction(async () => {
+    MailServices.accounts.removeAccount(localAccount, false);
+    MailServices.accounts.removeAccount(imapAccount, false);
+    MailServices.accounts.removeAccount(pop3Account, false);
+    MailServices.accounts.removeAccount(ewsAccount, false);
+    MailServices.accounts.removeAccount(nntpAccount, false);
+
+    await Services.logins.removeAllLoginsAsync();
+    Services.prefs.clearUserPref("signon.rememberSignons");
+  });
+});
+
+async function addMessagesToServer(type) {
+  const messages = generator.makeMessages({});
+  if (type == "imap") {
+    await imapServer.addMessages(imapInbox, messages, false);
+  } else if (type == "pop3") {
+    await pop3Server.addMessages(messages);
+  } else if (type == "ews") {
+    ewsServer.addMessages("inbox", messages);
+  } else if (type == "nntp") {
+    await nntpServer.addMessages("getmessages.newsgroup", messages);
+  }
+}
+
+async function fetchMessages(inbox) {
+  EventUtils.synthesizeMouseAtCenter(
+    getMessagesButton,
+    { type: "contextmenu" },
+    about3Pane
+  );
+  await BrowserTestUtils.waitForPopupEvent(getMessagesContext, "shown");
+  getMessagesContext.activateItem(
+    getMessagesContext.querySelector(`[data-server-key="${inbox.server.key}"]`)
+  );
+  await BrowserTestUtils.waitForPopupEvent(getMessagesContext, "hidden");
+}
+
+async function waitForMessages(inbox) {
+  if (inbox == ewsRootFolder) {
+    // We don't have an inbox yet, but we *are* expecting to connect to the
+    // server at this point. So connect, sync the folders, and replace the
+    // root folder with the inbox in `allInboxes`.
+    ewsInbox = await TestUtils.waitForCondition(
+      () => ewsRootFolder.getFolderWithFlags(Ci.nsMsgFolderFlags.Inbox),
+      "waiting for EWS folders to sync"
+    );
+    allInboxes[allInboxes.indexOf(ewsRootFolder)] = ewsInbox;
+    inbox = ewsInbox;
+  }
+
+  await TestUtils.waitForCondition(
+    () => inbox.getNumUnread(false) == 10 && inbox.numPendingUnread == 0,
+    `waiting for new ${inbox.server.type} messages to be received`
+  );
+  await promiseServerIdle(inbox.server);
+  info(`${inbox.server.type} messages received`);
+
+  inbox.markAllMessagesRead(window.msgWindow);
+  await promiseServerIdle(inbox.server);
+  await TestUtils.waitForCondition(
+    () => inbox.getNumUnread(false) == 0 && inbox.numPendingUnread == 0,
+    `waiting for ${inbox.server.type} messages to be marked read`
+  );
+  info(`${inbox.server.type} messages marked as read`);
+}
+
+function handleErrorPrompt() {
+  return BrowserTestUtils.promiseAlertDialog(undefined, undefined, {
+    async callback(win) {
+      await TestUtils.waitForTick();
+      info("error message dialog shown");
+      Assert.equal(
+        win.document.getElementById("infoBody").textContent,
+        "Login to server test.test with username user failed.",
+        "dialog text should be correct"
+      );
+
+      const dialog = win.document.querySelector("dialog");
+      Assert.deepEqual(
+        Array.from(
+          dialog.buttonBox.querySelectorAll("button:not([hidden])"),
+          b => b.getAttribute("dlgtype")
+        ).sort(),
+        ["accept", "cancel", "extra1"],
+        "dialog buttons should be the expected ones"
+      );
+      dialog.getButton("extra1").click();
+    },
+  });
+}
+
+function handlePasswordPrompt(button, password, rememberPassword = false) {
+  return BrowserTestUtils.promiseAlertDialog(undefined, undefined, {
+    async callback(win) {
+      await TestUtils.waitForTick();
+      info("password dialog shown");
+      Assert.stringContains(
+        win.document.getElementById("infoBody").textContent,
+        " password for ",
+        "dialog text"
+      );
+
+      const loginTextbox = win.document.getElementById("loginTextbox");
+      if (BrowserTestUtils.isVisible(loginTextbox)) {
+        // NNTP requires a username.
+        loginTextbox.select();
+        EventUtils.sendString("user", win);
+      }
+
+      win.document.getElementById("password1Textbox").select();
+      EventUtils.sendString(password, win);
+
+      const checkbox = win.document.getElementById("checkbox");
+      if (checkbox.checked != rememberPassword) {
+        EventUtils.synthesizeMouseAtCenter(checkbox, {}, win);
+      }
+
+      const dialog = win.document.querySelector("dialog");
+      Assert.deepEqual(
+        Array.from(
+          dialog.buttonBox.querySelectorAll("button:not([hidden])"),
+          b => b.getAttribute("dlgtype")
+        ).sort(),
+        ["accept", "cancel"],
+        "dialog buttons"
+      );
+      dialog.getButton(button).click();
+    },
+  });
+}
+
+async function checkSavedPassword(inbox) {
+  const logins = await Services.logins.searchLoginsAsync({
+    origin: `${inbox.server.localStoreType}://test.test`,
+  });
+  Assert.equal(
+    logins.length,
+    1,
+    "there should be a saved password for this server"
+  );
+  Assert.equal(logins[0].username, "user", "login username");
+  Assert.equal(logins[0].password, "password", "login password");
+}
+
+/**
+ * Tests getting messages when there is no password to use.
+ */
+add_task(async function testEnterPassword() {
+  await Services.logins.removeAllLoginsAsync();
+
+  for (const inbox of allInboxes) {
+    Assert.equal(
+      inbox.getNumUnread(false),
+      0,
+      `${inbox.server.type} inbox should start with no messages`
+    );
+  }
+
+  for (const inbox of allInboxes) {
+    info(`getting messages for ${inbox.server.type} inbox with no password`);
+    await addMessagesToServer(inbox.server.type);
+
+    const promptPromise = handlePasswordPrompt("accept", "password");
+    await fetchMessages(inbox);
+    await promptPromise;
+    await waitForMessages(inbox);
+  }
+
+  for (const inbox of allInboxes) {
+    info(
+      `getting messages for ${inbox.server.type} inbox with remembered password`
+    );
+    await addMessagesToServer(inbox.server.type);
+
+    await fetchMessages(inbox);
+    await waitForMessages(inbox);
+  }
+
+  const logins = await Services.logins.getAllLogins();
+  Assert.equal(logins.length, 0, "no passwords should be saved");
+
+  for (const inbox of allInboxes) {
+    inbox.server.forgetPassword();
+    inbox.server.closeCachedConnections();
+  }
+});
+
+/**
+ * Tests getting messages when there is no password to use.
+ * The entered password should be saved to the password manager.
+ */
+add_task(async function testEnterAndSavePassword() {
+  await Services.logins.removeAllLoginsAsync();
+
+  for (const inbox of allInboxes) {
+    info(`getting messages for ${inbox.server.type} inbox with no password`);
+    await addMessagesToServer(inbox.server.type);
+
+    const promptPromise = handlePasswordPrompt("accept", "password", true);
+    await fetchMessages(inbox);
+    await promptPromise;
+    await waitForMessages(inbox);
+  }
+
+  for (const inbox of allInboxes) {
+    await checkSavedPassword(inbox);
+    inbox.server.forgetPassword();
+    inbox.server.closeCachedConnections();
+  }
+
+  const logins = await Services.logins.getAllLogins();
+  Assert.equal(logins.length, 0, "no passwords should remain saved");
+});
+
+/**
+ * Tests getting messages when there is a bad password in the password manager.
+ * The new password should be saved to the password manager.
+ */
+add_task(async function testWrongPassword() {
+  await Services.logins.removeAllLoginsAsync();
+
+  for (const inbox of allInboxes) {
+    info(`getting messages for ${inbox.server.type} inbox with bad password`);
+    await addLoginInfo(
+      `${inbox.server.localStoreType}://test.test`,
+      "user",
+      "wrong password"
+    );
+    await addMessagesToServer(inbox.server.type);
+
+    const promptPromise = handleErrorPrompt().then(() =>
+      handlePasswordPrompt("accept", "password", true)
+    );
+    await fetchMessages(inbox);
+    await promptPromise;
+    await waitForMessages(inbox);
+  }
+
+  for (const inbox of allInboxes) {
+    await checkSavedPassword(inbox);
+    inbox.server.forgetPassword();
+    inbox.server.closeCachedConnections();
+  }
+
+  const logins = await Services.logins.getAllLogins();
+  Assert.equal(logins.length, 0, "no passwords should remain saved");
+});

@@ -1,0 +1,235 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+/* ==== button.css ==========================================================
+   == Styles for special buttons in the Communicator suite.
+   ========================================================================== */
+
+@namespace url("http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul");
+
+/* Restore Windows Classic fallbacks removed by bug 1340495 */
+
+@media (-moz-windows-classic) {
+
+  /* ::::: toolbarbutton ::::: */
+
+  toolbarbutton {
+    border: 1px solid transparent;
+    background-color: transparent;
+  }
+
+  toolbarbutton:hover:not([disabled="true"]) {
+    border-color: ThreeDHighlight ThreeDShadow ThreeDShadow ThreeDHighlight;
+  }
+
+  toolbarbutton:hover:active:not([disabled="true"]),
+  toolbarbutton[open="true"]:hover,
+  toolbarbutton[open="true"] {
+    border-color: ThreeDShadow ThreeDHighlight ThreeDHighlight ThreeDShadow;
+  }
+
+  toolbarbutton[checked="true"]:not([disabled="true"]) {
+    border-color: ThreeDShadow ThreeDHighlight ThreeDHighlight ThreeDShadow;
+    background-color: rgba(255,255,255,0.5);
+  }
+
+  /* ::::: toolbarbutton menu ::::: */
+
+  .toolbarbutton-menu-dropmarker {
+    border: none !important;
+    background-color: transparent !important;
+  }
+
+  /* ::::: toolbarbutton menu-button ::::: */
+
+  toolbarbutton[type="menu-button"],
+  toolbarbutton[type="menu-button"]:hover,
+  toolbarbutton[type="menu-button"]:hover:active,
+  toolbarbutton[type="menu-button"][open="true"],
+  toolbarbutton[type="menu-button"][disabled="true"],
+  toolbarbutton[type="menu-button"][disabled="true"]:hover,
+  toolbarbutton[type="menu-button"][disabled="true"]:hover:active {
+    border-style: none;
+  }
+
+  /* .......... dropmarker .......... */
+
+  .toolbarbutton-menubutton-dropmarker {
+    background-color: transparent;
+  }
+
+}
+
+/* End restore Windows Classic fallbacks removed by bug 1340495 */
+
+/* ::::: large toolbar buttons ::::: */
+
+.toolbarbutton-1,
+.toolbarbutton-1 > .toolbarbutton-menubutton-button {
+  min-width: 47px;
+  -moz-box-orient: vertical;
+}
+
+.toolbarbutton-1[type="menu-button"] {
+  -moz-box-orient: horizontal;
+}
+
+.toolbarbutton-1,
+.toolbarbutton-1 > .toolbarbutton-menubutton-button,
+.toolbarbutton-1[disabled="true"]:hover:active,
+.toolbarbutton-1[disabled="true"]:hover:active > .toolbarbutton-menubutton-button {
+  padding-top: 2px;
+  padding-bottom: 2px;
+  padding-inline-start: 2px;
+  padding-inline-end: 3px;
+}
+
+.toolbarbutton-1:hover:active,
+.toolbarbutton-1[open="true"],
+.toolbarbutton-1:hover:active > .toolbarbutton-menubutton-button {
+  padding-top: 3px;
+  padding-bottom: 1px;
+  padding-inline-start: 3px;
+  padding-inline-end: 2px;
+}
+
+.toolbarbutton-1[type="menu-button"],
+.toolbarbutton-1[type="menu-button"]:hover:active,
+.toolbarbutton-1[type="menu-button"][open="true"] {
+  padding: 0;
+}
+
+.toolbarbutton-1[type="menu"] {
+  -moz-binding: url("chrome://communicator/content/bindings/generalBindings.xml#menu-vertical");
+}
+
+toolbar[mode="icons"] .toolbarbutton-1,
+toolbar[mode="icons"] .toolbarbutton-menubutton-button,
+toolbar[iconsize="small"] .toolbarbutton-1,
+toolbar[iconsize="small"] .toolbarbutton-menubutton-button {
+  min-width: 0px;
+}
+
+toolbar[mode="icons"] .toolbarbutton-text,
+toolbar[mode="text"] .toolbarbutton-icon {
+  display: none;
+}
+
+toolbar[mode="text"] .toolbarbutton-1,
+toolbar[mode="text"] .toolbarbutton-1 > .toolbarbutton-menubutton-button {
+ -moz-box-orient: horizontal;
+}
+
+toolbar[labelalign="end"] .toolbarbutton-1,
+toolbar[labelalign="end"] .toolbarbutton-1 > .toolbarbutton-menubutton-button,
+toolbar[labelalign="end"] .toolbarbutton-1 > hbox > vbox {
+  -moz-box-orient: horizontal;
+}
+
+/* ::::: standard toolbar buttons ::::: */
+
+.button-toolbar {
+  -moz-user-focus: ignore;
+  border: 2px solid;
+  border-radius: 0;
+  min-width: 0;
+  background-color: transparent;
+}  
+  
+.button-toolbar > .button-box  {
+  margin: 0;
+  padding: 1px 2px;
+}
+
+.button-toolbar:hover:active > .button-box  {
+  padding-top: 2px;
+  padding-bottom: 0px;
+  padding-inline-start: 3px;
+  padding-inline-end: 1px;
+}
+
+.button-toolbar > .button-box > .button-icon[src],
+.button-toolbar > .button-box > .button-text {
+  margin-inline-end: 2px;
+}  
+
+.button-toolbar, 
+.button-toolbar[disabled="true"]:hover,
+.button-toolbar[disabled="true"]:hover:active {
+  padding: 1px;
+  border-top-color: ThreeDHighlight;
+  border-right-color: ThreeDShadow;
+  border-bottom-color: ThreeDShadow;
+  border-left-color: ThreeDHighlight;
+}
+  
+.button-toolbar:hover {
+  border-top-color: ThreeDDarkShadow;
+  border-right-color: ThreeDDarkShadow;
+  border-bottom-color: ThreeDDarkShadow;
+  border-left-color: ThreeDDarkShadow;
+}
+
+.button-toolbar:hover:active {
+  border-top-color: ThreeDDarkShadow;
+  border-right-color: ThreeDDarkShadow;
+  border-bottom-color: ThreeDDarkShadow;
+  border-left-color: ThreeDDarkShadow;
+}
+
+/* ::::: taskbuttons ::::: */
+
+.taskbutton {
+  padding: 1px;
+}
+
+.taskbutton:hover:active {
+  padding-top: 2px;
+  padding-bottom: 0px;
+  padding-inline-start: 2px;
+  padding-inline-end: 0px;
+}
+
+/* override windows */
+
+.toolbarbutton-icon[label]:not([label=""]),
+.toolbarbutton-icon[type="menu"] {
+  margin-inline-end: 2px;
+}
+
+/**
+ * Fix the missing dropmarker bevel in Classic (bug 216266)
+ * Not used in Firefox but used elsewhere,
+ **/
+
+@media (-moz-windows-classic) {
+
+  .toolbarbutton-menubutton-dropmarker {
+    border: 1px solid;
+    padding: 2px;
+    border-top-color: transparent;
+    border-right-color: transparent;
+    border-bottom-color: transparent;
+    border-left-color: transparent;
+  }
+
+  toolbarbutton[type="menu-button"]:hover > .toolbarbutton-menubutton-dropmarker:not([disabled="true"]) {
+    border-top-color: ThreeDHighlight;
+    border-right-color: ThreeDShadow;
+    border-bottom-color: ThreeDShadow;
+    border-left-color: ThreeDHighlight;
+  }
+
+  toolbarbutton[type="menu-button"]:hover:active > .toolbarbutton-menubutton-dropmarker:not([disabled="true"]),
+  toolbarbutton[type="menu-button"][open="true"] > .toolbarbutton-menubutton-dropmarker:not([disabled="true"]) {
+    border-top-color: ThreeDShadow;
+    border-right-color: ThreeDHighlight;
+    border-bottom-color: ThreeDHighlight;
+    border-left-color: ThreeDShadow;
+    padding-top: 3px;
+    padding-bottom: 1px;
+    padding-inline-start: 3px;
+    padding-inline-end: 1px;
+  }
+}

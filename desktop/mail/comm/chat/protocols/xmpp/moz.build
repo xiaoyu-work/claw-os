@@ -1,0 +1,23 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+with Files("**"):
+    BUG_COMPONENT = ("Chat Core", "XMPP")
+
+XPCSHELL_TESTS_MANIFESTS += ["test/xpcshell.toml"]
+
+EXTRA_JS_MODULES += [
+    "xmpp-authmechs.sys.mjs",
+    "xmpp-base.sys.mjs",
+    "xmpp-commands.sys.mjs",
+    "xmpp-session.sys.mjs",
+    "xmpp-xml.sys.mjs",
+    "xmpp.sys.mjs",
+]
+
+JAR_MANIFESTS += ["jar.mn"]
+
+XPCOM_MANIFESTS += [
+    "components.conf",
+]

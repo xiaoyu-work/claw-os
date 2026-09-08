@@ -1,0 +1,20 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+window,
+dialog {
+  padding: 7px 5px 5px 5px;
+}
+
+#instructions {
+  font-weight: bold;
+  font-size: 120%;
+}
+
+#CustomizeToolbarWindow > #main-box {
+  border-top: none;
+  border-left: 1px solid #5D616E;
+  border-right: 1px solid #5D616E;
+  border-bottom: 2px solid #5D616E;
+}

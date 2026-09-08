@@ -1,0 +1,15 @@
+suite/branding/seamonkey/icons/svg:
+This directory contains the base SVG images used for creation of the SeaMonkey
+window icons. The SVG images are not directly used in the software, but stored
+here for reference and as a base for possible later revisions or new icons
+that may be created in the future.
+
+All image files in this directory and images derived from them are licensed
+under the MPL 2 as follows:
+
+This Source Code Form is subject to the terms of the Mozilla Public
+License, v. 2.0. If a copy of the MPL was not distributed with this
+file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+Note: The images may contain parts of the SeaMonkey logo, which by itself is a
+registered trademark of SeaMonkey e.V.

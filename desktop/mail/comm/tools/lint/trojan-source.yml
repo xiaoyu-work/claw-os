@@ -1,0 +1,18 @@
+---
+trojan-source:
+    description: Trojan Source attack - CVE-2021-42572
+    include:
+        - comm/
+    extensions:
+        - .c
+        - .cc
+        - .cpp
+        - .h
+        - .py
+        - .rs
+    support-files:
+        - 'tools/lint/mozcheck/**'
+    type: external
+    payload: commlint:lint_wrapper
+    wraps: mozcheck:lint
+    check: trojan-source

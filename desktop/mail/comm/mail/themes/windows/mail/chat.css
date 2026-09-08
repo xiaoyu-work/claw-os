@@ -1,0 +1,102 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@import url("chrome://messenger/skin/shared/chat.css");
+
+.convUnreadTargetedCount {
+  padding: 0 7px;
+}
+
+#listPaneBox {
+  & > * {
+    background: transparent !important;
+    appearance: none !important;
+    border: none;
+  }
+  :root:not([lwt-tree]) & {
+    appearance: none;
+    background-color: Field;
+    color: FieldText;
+  }
+
+  @media not (prefers-contrast) {
+    :root:not([lwt-tree], [lwtheme]) & {
+      background-color: var(--layout-background-1);
+    }
+  }
+}
+
+#conversationsBox {
+  background: var(--imbox-selected-background-color);
+}
+
+.conv-textbox > .textbox-input-box {
+  background: inherit;
+}
+
+.conv-counter {
+  padding-block-end: 0;
+  padding-inline-end: 5px;
+  margin-inline-end: 2px;
+  margin-block-end: 2px !important; /* override 4px from description */
+
+  &[value^="-"] {
+    margin-inline-end: 2px;
+    padding-inline-end: 4px;
+  }
+}
+
+#contextPane {
+  background-color: Field;
+  color: FieldText;
+}
+
+.userIcon {
+  border-width: 0;
+}
+
+#logTree,
+.conv-nicklist {
+  appearance: none;
+  border-style: none;
+  margin: 0;
+}
+
+.conv-nicklist-header,
+.conv-logs-header-label {
+  margin: 0;
+  padding-block: 2px;
+  border-block-end: 1px solid ThreeDShadow;
+  background-color: -moz-Dialog;
+}
+
+.conv-nicklist-header-label {
+  font-weight: bold;
+  margin-inline: 0 2px !important;
+}
+
+.statusMessageToolbarItem {
+  margin: 0 1px;
+  margin-inline-start: -2px;
+  padding: 3px 3px 4px;
+}
+
+#nicklist > richlistitem[inactive][selected] > label {
+  color: -moz-cellhighlighttext !important;
+}
+
+richlistitem[is="chat-group-richlistitem"] .twisty {
+  margin-inline-end: 2px;
+}
+
+@media not (prefers-contrast) {
+  .conv-status-container {
+    border-block-end-color: var(--color-gray-30);
+  }
+
+  #chat-status-selector > vbox > .statusMessageToolbarItem[editing] {
+    appearance: none;
+    padding-inline: 2px;
+  }
+}

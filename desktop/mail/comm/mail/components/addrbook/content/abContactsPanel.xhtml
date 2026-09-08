@@ -1,0 +1,239 @@
+<?xml version="1.0"?>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+<!DOCTYPE html [ <!ENTITY % abResultsPaneDTD SYSTEM "chrome://messenger/locale/addressbook/abResultsPane.dtd">
+%abResultsPaneDTD;
+<!ENTITY % abContactsPanelDTD SYSTEM "chrome://messenger/locale/addressbook/abContactsPanel.dtd" >
+%abContactsPanelDTD;
+<!ENTITY % abMainWindowDTD SYSTEM "chrome://messenger/locale/addressbook/abMainWindow.dtd" >
+%abMainWindowDTD; ]>
+<html
+  xmlns="http://www.w3.org/1999/xhtml"
+  xmlns:xul="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+  xmlns:html="http://www.w3.org/1999/xhtml"
+  id="abContactsPanel"
+  scrolling="false"
+  lightweightthemes="true"
+>
+  <head>
+    <title></title>
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src chrome:; script-src chrome: 'unsafe-inline' moz-src:; style-src chrome: 'unsafe-inline'"
+    />
+    <link rel="stylesheet" href="chrome://messenger/skin/icons.css" />
+    <link rel="stylesheet" href="chrome://messenger/skin/colors.css" />
+    <link rel="stylesheet" href="chrome://messenger/skin/themeableDialog.css" />
+    <link
+      rel="stylesheet"
+      href="chrome://messenger/skin/addressbook/abResultsPane.css"
+    />
+    <link rel="stylesheet" href="chrome://messenger/skin/abContactsPanel.css" />
+    <link
+      rel="stylesheet"
+      href="chrome://messenger/skin/shared/tree-listbox.css"
+    />
+    <link rel="stylesheet" href="chrome://messenger/skin/contextMenu.css" />
+
+    <link
+      rel="localization"
+      href="messenger/addressbook/aboutAddressBook.ftl"
+    />
+    <link rel="localization" href="messenger/treeView.ftl" />
+
+    <script
+      defer="defer"
+      src="chrome://messenger/content/globalOverlay.js"
+    ></script>
+    <script
+      defer="defer"
+      src="chrome://global/content/editMenuOverlay.js"
+    ></script>
+    <script
+      defer="defer"
+      src="chrome://communicator/content/utilityOverlay.js"
+    ></script>
+    <script
+      defer="defer"
+      src="chrome://messenger/content/addressbook/abDragDrop.js"
+    ></script>
+    <script
+      defer="defer"
+      src="chrome://messenger/content/addressbook/abCommon.js"
+    ></script>
+    <script
+      defer="defer"
+      src="chrome://messenger/content/addressbook/abResultsPane.js"
+    ></script>
+    <script
+      defer="defer"
+      src="chrome://messenger/content/addressbook/abContactsPanel.js"
+    ></script>
+    <script
+      type="module"
+      src="chrome://messenger/content/search-bar.mjs"
+    ></script>
+    <script
+      defer="defer"
+      src="chrome://messenger/content/pane-splitter.js"
+    ></script>
+    <script
+      type="module"
+      src="chrome://messenger/content/auto-tree-view.mjs"
+    ></script>
+  </head>
+  <html:body
+    xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+  >
+    <commandset
+      id="CommandUpdate_AddressBook"
+      commandupdater="true"
+      events="focus,addrbook-select"
+      oncommandupdate="CommandUpdate_AddressBook()"
+    >
+      <command
+        id="cmd_addrTo"
+        oncommand="addSelectedAddresses('addr_to')"
+        disabled=""
+      />
+      <command
+        id="cmd_addrCc"
+        oncommand="addSelectedAddresses('addr_cc')"
+        disabled=""
+      />
+      <command
+        id="cmd_addrBcc"
+        oncommand="addSelectedAddresses('addr_bcc')"
+        disabled=""
+      />
+      <command id="cmd_delete" oncommand="goDoCommand('cmd_delete')" />
+    </commandset>
+
+    <keyset id="keyset_abContactsPanel">
+      <!-- This key (key_delete) does not trigger any command, but it is used
+         only to show the hotkey on the corresponding menuitem. -->
+      <key id="key_delete" keycode="VK_DELETE" internal="true" />
+    </keyset>
+
+    <menupopup id="cardProperties">
+      <menuitem
+        label="&addtoToFieldMenu.label;"
+        accesskey="&addtoToFieldMenu.accesskey;"
+        command="cmd_addrTo"
+      />
+      <menuitem
+        label="&addtoCcFieldMenu.label;"
+        accesskey="&addtoCcFieldMenu.accesskey;"
+        command="cmd_addrCc"
+      />
+      <menuitem
+        label="&addtoBccFieldMenu.label;"
+        accesskey="&addtoBccFieldMenu.accesskey;"
+        command="cmd_addrBcc"
+      />
+      <menuseparator />
+      <menuitem
+        label="&deleteAddrBookCard.label;"
+        accesskey="&deleteAddrBookCard.accesskey;"
+        key="key_delete"
+        command="cmd_delete"
+      />
+      <menuseparator id="abContextBeforeEditContact" hidden="hidden" />
+      <menuitem
+        id="abContextEditContact"
+        label="&editContactContext.label;"
+        accesskey="&editContactContext.accesskey;"
+        oncommand="editSelectedAddress()"
+        hidden="hidden"
+      />
+    </menupopup>
+
+    <menupopup
+      id="sidebarAbContextMenu"
+      class="no-accel-menupopup"
+      onpopupshowing="onAbContextShowing();"
+    >
+      <menuitem
+        id="sidebarAbContext-startupDir"
+        label="&showAsDefault.label;"
+        accesskey="&showAsDefault.accesskey;"
+        type="checkbox"
+        oncommand="abToggleSelectedDirStartup()"
+      />
+    </menupopup>
+
+    <separator class="thin" />
+
+    <label
+      value="&addressbookPicker.label;"
+      accesskey="&addressbookPicker.accesskey;"
+      control="addressbookList"
+    />
+    <hbox id="AbPickerHeader" class="themeable-full">
+      <menulist
+        is="menulist-addrbooks"
+        id="addressbookList"
+        alladdressbooks="true"
+        oncommand="AddressBookMenuListChange(this.value)"
+        flex="1"
+      />
+      <button
+        id="abContextMenuButton"
+        tooltiptext="&abContextMenuButton.tooltip;"
+        oncommand="abContextMenuButtonOnCommand(event)"
+      />
+    </hbox>
+
+    <separator class="thin" />
+
+    <label
+      value="&searchContacts.label;"
+      accesskey="&searchContacts.accesskey;"
+      control="peopleSearchInput"
+    />
+    #include ../../../base/content/widgets/search-bar.inc.xhtml
+    <html:search-bar
+      id="peopleSearchInput"
+      label="&SearchNameOrEmail.label;"
+      placeholder="&SearchNameOrEmail.label;"
+    >
+      <img slot="search-button" src="" alt="" />
+    </html:search-bar>
+
+    <separator class="thin" />
+
+    <html:auto-tree-view
+      id="abResultsTree"
+      contextSelection="cardProperties"
+      contextNoSelection="sidebarAbContextMenu"
+    >
+    </html:auto-tree-view>
+
+    <separator class="thin" />
+
+    <hbox pack="center">
+      <vbox>
+        <button
+          id="toButton"
+          label="&toButton.label;"
+          accesskey="&toButton.accesskey;"
+          command="cmd_addrTo"
+        />
+        <button
+          id="ccButton"
+          label="&ccButton.label;"
+          accesskey="&ccButton.accesskey;"
+          command="cmd_addrCc"
+        />
+        <button
+          id="bccButton"
+          label="&bccButton.label;"
+          accesskey="&bccButton.accesskey;"
+          command="cmd_addrBcc"
+        />
+      </vbox>
+    </hbox>
+  </html:body>
+</html>

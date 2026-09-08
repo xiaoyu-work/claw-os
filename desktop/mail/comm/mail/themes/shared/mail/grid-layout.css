@@ -1,0 +1,90 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+.grid-two-column {
+  display: inline-grid;
+  grid-template-columns: auto auto;
+}
+
+.grid-three-column {
+  display: inline-grid;
+  grid-template-columns: auto auto auto;
+}
+
+.grid-two-column-fr {
+  display: inline-grid;
+}
+
+.grid-block-two-column-fr {
+  display: block grid;
+}
+
+.grid-two-column-fr,
+.grid-block-two-column-fr {
+  grid-template-columns: auto 1fr;
+}
+
+.grid-two-column-equalsize {
+  display: inline-grid;
+  min-inline-size: max-content;
+  grid-template-columns: 1fr 1fr;
+}
+
+.grid-two-column-auto-min {
+  display: inline-grid;
+  grid-template-columns: auto min-content;
+}
+
+.grid-three-column-auto-x-auto {
+  display: inline-grid;
+  grid-template-columns: auto 1fr auto;
+}
+
+.grid-two-column-x-auto {
+  display: inline-grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: 1fr auto auto;
+}
+
+.grid-two-column menulist,
+.grid-two-column textarea,
+.grid-three-column menulist,
+.grid-three-column textarea {
+  inline-size: 100%;
+}
+
+.grid-items-baseline {
+  align-items: baseline;
+}
+
+.grid-items-center {
+  align-items: center;
+}
+
+.flex-items-center {
+  display: flex;
+  align-items: center;
+}
+
+.flex-content-center {
+  justify-content: center;
+}
+
+.flex-content-column {
+  display: flex;
+  flex-direction: column;
+}
+
+.flex-content-row {
+  display: flex;
+  flex-direction: row;
+}
+
+.grid-item-span-row {
+  grid-column: 1 / -1;
+}
+
+.grid-item-col2 {
+  grid-column: 2 / 2;
+}

@@ -1,0 +1,250 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "imIStatusInfo.idl"
+#include "imITagsService.idl"
+#include "nsISupports.idl"
+#include "nsIObserver.idl"
+
+interface imIBuddy;
+interface prplIAccountBuddy;
+interface imIAccount;
+interface prplIProtocol;
+
+/**
+ * An imIContact represents a person, e.g. our friend Alice. This person might
+ * have multiple means of contacting them.
+ *
+ * Remember that an imIContact can have multiple buddies (imIBuddy instances),
+ * each imIBuddy can have multiple account-buddies (prplIAccountBuddy instances)
+ * referencing it. To be explicit, the difference is that an imIBuddy represents
+ * a contact's account on a network, while a prplIAccountBuddy represents the
+ * link between your account and your contact's account.
+ *
+ * Each of these implement imIStatusInfo: imIContact and imIBuddy should merge
+ * the status info based on the information available in their instances of
+ * imIBuddy and prplIAccountBuddy, respectively.
+ */
+[scriptable, uuid(f585b0df-f6ad-40d5-9de4-c58b14af13e4)]
+interface imIContact: imIStatusInfo {
+  // The id will be positive if the contact is real (stored in the
+  // SQLite database) and negative if the instance is a dummy contact
+  // holding only a single buddy without aliases or additional tags.
+  readonly attribute long id;
+  attribute AUTF8String alias;
+
+  Array<imITag> getTags();
+
+  // Will do nothing if the contact already has aTag.
+  void addTag(in imITag aTag);
+  // Will throw if the contact doesn't have aTag or doesn't have any other tag.
+  void removeTag(in imITag aTag);
+
+  readonly attribute imIBuddy preferredBuddy;
+  Array<imIBuddy> getBuddies();
+
+  // Move all the buddies of aContact into the current contact,
+  // and copy all its tags.
+  void mergeContact(in imIContact aContact);
+
+  // Change the position of aBuddy in the current contact.
+  // The new position is the current position of aBeforeBuddy if it is
+  // specified, or at the end otherwise.
+  void moveBuddyBefore(in imIBuddy aBuddy, [optional] in imIBuddy aBeforeBuddy);
+
+  // Remove aBuddy from its current contact and append it to the list
+  // of buddies of the current contact.
+  // aBuddy should not already be attached to the current contact.
+  void adoptBuddy(in imIBuddy aBuddy);
+
+  // Returns a new contact that contains only aBuddy, and has the same
+  // list of tags.
+  // Will throw if aBuddy is not a buddy of the contact.
+  imIContact detachBuddy(in imIBuddy aBuddy);
+
+  // remove the contact from the buddy list. Will also remove the
+  // associated buddies.
+  void remove();
+
+  void addObserver(in nsIObserver aObserver);
+  void removeObserver(in nsIObserver aObserver);
+  /* Observers will be notified of changes related to the contact.
+   *  aSubject will point to the imIContact object
+   *  (with some exceptions for contact-moved-* notifications).
+   *
+   *  Fired notifications:
+   *   contact-availability-changed
+   *     when either statusType or availabilityDetails has changed.
+   *   contact-signed-on
+   *   contact-signed-off
+   *   contact-status-changed
+   *     when either statusType or statusText has changed.
+   *   contact-display-name-changed
+   *     when the alias (or serverAlias of the most available buddy if
+   *     no alias is set) has changed.
+   *     The old display name is provided in aData.
+   *   contact-preferred-buddy-changed
+   *     The buddy that would be favored to start a conversation has changed.
+   *   contact-moved, contact-moved-in, contact-moved-out
+   *     contact-moved     is notified through the observer service
+   *     contact-moved-in  is notified to
+   *      - the contact observers (aSubject is the new tag)
+   *      - the new tag           (aSubject is the contact instance)
+   *     contact-moved-out is notified to
+   *      - the contact observers (aSubject is the old tag)
+   *      - the old tag           (aSubject is the contact instance)
+   *   contact-no-longer-dummy
+   *     When a real contact is created to replace a dummy contact.
+   *     The old (negative) id will be given in aData.
+   *     See also the comment above the 'id' attribute.
+   *   contact-icon-changed
+   *
+   * Observers will also receive all the (forwarded) notifications
+   * from the linked buddies (imIBuddy instances) and their account
+   * buddies (prplIAccountBuddy instances).
+   */
+
+  // Exposed for add-on authors. All internal calls will come from the
+  // imIContact implementation itself so it wasn't required to expose this.
+  // This can be used to dispatch custom notifications to the
+  // observers of the contact and its tags.
+  // The notification will also be forwarded to the observer service.
+  void notifyObservers(in nsISupports aObj, in string aEvent,
+                       [optional] in wstring aData);
+};
+
+/**
+ * An imIBuddy represents a person's account on a particular network. Note that
+ * what a network is depends on the implementation of the prpl, e.g. for AIM
+ * there is only a single network, but both GTalk and XMPP are the same network.
+ *
+ * E.g. Our contact Alice has two accounts on the Foo network: @lic4 and
+ * alice88; and she has a single account on the Bar network: _alice_. This would
+ * result in an imIBuddy instance for each of these: @lic4, alice88, and _alice_
+ * that would all exist as part of the same imIContact.
+ */
+[scriptable, uuid(c56520ba-d923-4b95-8416-ca6733c4a38e)]
+interface imIBuddy: imIStatusInfo {
+  readonly attribute long id;
+  readonly attribute prplIProtocol protocol;
+  readonly attribute AUTF8String userName; // may be formatted
+  // A name that can be used to check for duplicates and is the basis
+  // for the directory name for log storage.
+  readonly attribute AUTF8String normalizedName;
+  // The optional server alias is in displayName (inherited from imIStatusInfo)
+  // displayName = serverAlias || userName.
+
+  readonly attribute imIContact contact;
+  readonly attribute prplIAccountBuddy preferredAccountBuddy;
+  Array<prplIAccountBuddy> getAccountBuddies();
+
+  // remove the buddy from the buddy list. If the contact becomes empty, it will be removed too.
+  void remove();
+
+  void addObserver(in nsIObserver aObserver);
+  void removeObserver(in nsIObserver aObserver);
+  /* Observers will be notified of changes related to the buddy.
+   *  aSubject will point to the imIBuddy object.
+   *  Fired notifications:
+   *   buddy-availability-changed
+   *     when either statusType or availabilityDetails has changed.
+   *   buddy-signed-on
+   *   buddy-signed-off
+   *   buddy-status-changed
+   *     when either statusType or statusText has changed.
+   *   buddy-display-name-changed
+   *     when the serverAlias has changed.
+   *     The old display name is provided in aData.
+   *   buddy-preferred-account-changed
+   *     The account that would be favored to start a conversation has changed.
+   *   buddy-icon-changed
+   *
+   * Observers will also receive all the (forwarded) notifications
+   * from the linked account buddies (prplIAccountBuddy instances).
+   */
+
+  // Exposed for add-on authors. All internal calls will come from the
+  // imIBuddy implementation itself so it wasn't required to expose this.
+  // This can be used to dispatch custom notifications to the
+  // observers of the buddy, its contact and its tags.
+  // The contact will forward the notifications to the observer service.
+  void notifyObservers(in nsISupports aObj, in string aEvent,
+                       [optional] in wstring aData);
+
+  // observe should only be called by the prplIAccountBuddy
+  // implementations to report changes.
+  void observe(in nsISupports aObj, in string aEvent,
+               [optional] in wstring aData);
+};
+
+/**
+ * A prplIAccountBuddy represents the connection on a network between one of the
+ * current user's accounts and a persons's account. E.g. if we're logged into
+ * the Foo network as BobbyBoy91 and want to talk to Alice, there may be two
+ * prplIAccountBuddy instances: @lic4 as seen by BobbyBoy91 or alice88 as seen
+ * by BobbyBoy91. Additionally, if we also login as 8ob, there could be @lic4 as
+ * seen by 8ob and alice88 as seen by 8ob; but these (now four)
+ * prplIAccountBuddy instances would link to only TWO imIBuddy instances (one
+ * each for @lic4 and alice88). Note that the above uses "may be" and "could"
+ * because it depends on whether the contacts are on the contact list (and
+ * therefore have imIContact / imIBuddy instances).
+ *
+ * prplIAccountBuddy implementations send notifications to their buddy:
+ *
+ * For all of them, aSubject points to the prplIAccountBuddy object.
+ *
+ * Supported notifications:
+ *  account-buddy-availability-changed
+ *    when either statusType or availabilityDetails has changed.
+ *  account-buddy-signed-on
+ *  account-buddy-signed-off
+ *  account-buddy-status-changed
+ *    when either statusType or statusText has changed.
+ *  account-buddy-display-name-changed
+ *    when the serverAlias has changed.
+ *    The old display name is provided in aData.
+ *  account-buddy-icon-changed
+ *
+ * All notifications (even unsupported ones) will be forwarded to the contact,
+ * its tags and nsObserverService.
+ */
+[scriptable, uuid(0c5021ac-7acd-4118-bf4f-c0dd9cb3ddef)]
+interface prplIAccountBuddy: imIStatusInfo {
+  // The setter is for internal use only. buddy will be set by the
+  // Contacts service when accountBuddyAdded is called on this
+  // instance of prplIAccountBuddy.
+           attribute imIBuddy buddy;
+  readonly attribute imIAccount account;
+  // Setting the tag will move the buddy to a different group on the
+  // server-stored buddy list.
+           attribute imITag tag;
+  readonly attribute AUTF8String userName;
+  // A name that can be used to check for duplicates and is the basis
+  // for the directory name for log storage.
+  readonly attribute AUTF8String normalizedName;
+           attribute AUTF8String serverAlias;
+
+  /** Whether we can verify the identity of this buddy. */
+  readonly attribute boolean canVerifyIdentity;
+
+  /**
+   * True if we trust the encryption with this buddy in E2EE conversations. Can
+   * only be true if |canVerifyIdentity| is true.
+   */
+  readonly attribute boolean identityVerified;
+
+  /**
+   * Initialize identity verification with this buddy.
+   * @returns {Promise<imISessionVerification>}
+   */
+  Promise verifyIdentity();
+
+  // remove the buddy from the buddy list of this account.
+  void remove();
+
+  // Called by the contacts service during its uninitialization to
+  // notify that all references kept to imIBuddy or imIAccount
+  // instances should be released now.
+  void unInit();
+};

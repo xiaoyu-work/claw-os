@@ -1,0 +1,493 @@
+; This Source Code Form is subject to the terms of the Mozilla Public
+; License, v. 2.0. If a copy of the MPL was not distributed with this
+; file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+; Package file for the Thunderbird build.
+;
+; Packaging manifest is used to copy files from dist/bin
+; to the staging directory.
+; Some other files are built in the staging directory directly,
+; so they will be implicitly packaged too.
+;
+; File format:
+;
+; [] designates a toplevel component. Example: [xpcom]
+; * wildcard support to recursively copy the entire directory
+; ; file comment
+;
+
+; Due to Apple Mac OS X packaging requirements, files that are in the same
+; directory on other platforms must be located in different directories on
+; Mac OS X. The following defines allow specifying the Mac OS X bundle
+; location which also work on other platforms.
+;
+; @BINPATH@
+; Equals Contents/MacOS/ on Mac OS X and is the path to the main binary on other
+; platforms.
+;
+; @RESPATH@
+; Equals Contents/Resources/ on Mac OS X and is equivalent to @BINPATH@ on other
+; platforms.
+
+#filter substitution
+
+#ifdef XP_UNIX
+#ifndef XP_MACOSX
+#define UNIX_BUT_NOT_MAC
+#endif
+#endif
+
+#ifdef XP_MACOSX
+; Mac bundle stuff
+@APPNAME@/Contents/Info.plist
+#ifdef MOZ_UPDATER
+@APPNAME@/Contents/Library/LaunchServices
+#endif
+@APPNAME@/Contents/Frameworks
+@APPNAME@/Contents/PkgInfo
+@APPNAME@/Contents/Library/Spotlight/thunderbird.mdimporter/
+@RESPATH@/thunderbird.icns
+@RESPATH@/@LPROJ_ROOT@.lproj/*
+#endif
+
+[@AB_CD@]
+@RESPATH@/@PREF_DIR@/all-l10n.js
+@RESPATH@/dictionaries/*
+@RESPATH@/localization/*
+#ifdef MOZ_BUNDLED_FONTS
+@RESPATH@/fonts/*
+#endif
+@RESPATH@/hyphenation/*
+#ifdef HAVE_MAKENSISU
+@BINPATH@/uninstall/helper.exe
+#endif
+#ifdef MOZ_UPDATER
+@RESPATH@/default.locale
+@RESPATH@/updater.ini
+#endif
+
+#if defined(MOZ_UPDATE_AGENT)
+@RESPATH@/locale.ini
+#endif
+
+#ifdef LLVM_SYMBOLIZER
+@BINPATH@/@LLVM_SYMBOLIZER@
+#endif
+
+#ifdef MOZ_CLANG_RT_ASAN_LIB
+@BINPATH@/@MOZ_CLANG_RT_ASAN_LIB@
+#endif
+
+#ifdef PKG_LOCALE_MANIFEST
+#include @PKG_LOCALE_MANIFEST@
+#endif
+
+[xpcom]
+@RESPATH@/dependentlibs.list
+#ifdef MOZ_SHARED_MOZGLUE
+@BINPATH@/@DLL_PREFIX@mozglue@DLL_SUFFIX@
+#endif
+#ifndef MOZ_STATIC_JS
+@BINPATH@/@DLL_PREFIX@mozjs@DLL_SUFFIX@
+#endif
+#ifndef MOZ_SYSTEM_NSPR
+#ifndef MOZ_FOLD_LIBS
+@BINPATH@/@DLL_PREFIX@nspr4@DLL_SUFFIX@
+@BINPATH@/@DLL_PREFIX@plc4@DLL_SUFFIX@
+@BINPATH@/@DLL_PREFIX@plds4@DLL_SUFFIX@
+#endif
+#endif
+#ifdef XP_MACOSX
+@BINPATH@/XUL
+#else
+@BINPATH@/@DLL_PREFIX@xul@DLL_SUFFIX@
+#endif
+#ifdef XP_MACOSX
+@BINPATH@/@MOZ_CHILD_PROCESS_NAME@.app/
+@BINPATH@/@MOZ_EME_PROCESS_NAME@.app/
+@BINPATH@/@MOZ_GPU_PROCESS_NAME@.app/
+#ifdef NIGHTLY_BUILD
+#ifndef MOZ_NO_SMART_CARDS
+@BINPATH@/@MOZ_PKCS11_PROCESS_NAME@.app/
+#endif
+#endif
+#endif
+#ifdef XP_WIN
+@BINPATH@/@MOZ_CHILD_PROCESS_NAME@
+#if MOZ_PACKAGE_MSVC_DLLS
+@BINPATH@/@MSVC_C_RUNTIME_DLL@
+#ifdef MSVC_C_RUNTIME_1_DLL
+@BINPATH@/@MSVC_C_RUNTIME_1_DLL@
+#endif
+@BINPATH@/@MSVC_CXX_RUNTIME_DLL@
+#endif
+@BINPATH@/@DLL_PREFIX@CoreMessagingXP@DLL_SUFFIX@
+@BINPATH@/@DLL_PREFIX@marshal@DLL_SUFFIX@
+@BINPATH@/@DLL_PREFIX@Microsoft.InputStateManager@DLL_SUFFIX@
+@BINPATH@/@DLL_PREFIX@Microsoft.Internal.FrameworkUdk@DLL_SUFFIX@
+@BINPATH@/@DLL_PREFIX@Microsoft.UI.Composition.OSSupport@DLL_SUFFIX@
+@BINPATH@/@DLL_PREFIX@Microsoft.UI.Input@DLL_SUFFIX@
+@BINPATH@/@DLL_PREFIX@Microsoft.UI.Windowing.Core@DLL_SUFFIX@
+@BINPATH@/@DLL_PREFIX@Microsoft.UI.Windowing@DLL_SUFFIX@
+#endif
+#ifdef MOZ_GTK
+@BINPATH@/glxtest
+@BINPATH@/@DLL_PREFIX@mozgtk@DLL_SUFFIX@
+#ifdef MOZ_WAYLAND
+@BINPATH@/@DLL_PREFIX@mozwayland@DLL_SUFFIX@
+@BINPATH@/vaapitest
+#endif
+#endif
+
+; We don't have a complete view of which dlls to expect when doing an artifact
+; build because we haven't run the relevant parts of configure, so we guess
+; here and trust what came from our source build.
+#if defined(MOZ_ARTIFACT_BUILDS) && defined(XP_WIN)
+@BINPATH@/vcruntime*.dll
+@BINPATH@/msvcp*.dll
+@BINPATH@/libEGL.dll
+@BINPATH@/libGLESv2.dll
+#endif
+
+; Optional RSS extension
+[newsblog]
+@RESPATH@/chrome/newsblog@JAREXT@
+@RESPATH@/chrome/newsblog.manifest
+
+[mail]
+#ifndef XP_UNIX
+@BINPATH@/@MOZ_APP_NAME@.exe
+@BINPATH@/thunderbird.VisualElementsManifest.xml
+@BINPATH@/VisualElements/VisualElements_150.png
+@BINPATH@/VisualElements/VisualElements_70.png
+#else
+#ifndef XP_MACOSX
+@BINPATH@/@MOZ_APP_NAME@-bin
+#endif
+@BINPATH@/@MOZ_APP_NAME@
+#endif
+@RESPATH@/application.ini
+#ifdef MOZ_UPDATER
+# update-settings.ini has been removed on macOS.
+#ifndef XP_MACOSX
+@RESPATH@/update-settings.ini
+#endif
+#endif
+@BINPATH@/@DLL_PREFIX@lgpllibs@DLL_SUFFIX@
+@BINPATH@/@DLL_PREFIX@gkcodecs@DLL_SUFFIX@
+@BINPATH@/@DLL_PREFIX@mozavutil@DLL_SUFFIX@
+@BINPATH@/@DLL_PREFIX@mozavcodec@DLL_SUFFIX@
+@RESPATH@/platform.ini
+#ifndef MOZ_FOLD_LIBS
+@RESPATH@/@DLL_PREFIX@mozsqlite3@DLL_SUFFIX@
+#endif
+#ifdef UNIX_BUT_NOT_MAC
+#ifdef MOZ_UPDATER
+@RESPATH@/icons/*.png
+#endif
+#endif
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; Mail Specific Files
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+@RESPATH@/defaults/messenger/mailViews.dat
+
+@RESPATH@/isp/*
+
+; interfaces.manifest doesn't get packaged because it is dynamically
+; re-created at packaging time when linking the xpts that will actually
+; go into the package, so the test related interfaces aren't included.
+@RESPATH@/chrome/toolkit@JAREXT@
+@RESPATH@/chrome/toolkit.manifest
+@RESPATH@/chrome/comm@JAREXT@
+@RESPATH@/chrome/comm.manifest
+; Browser: Hack to get built_in_addons.json packaged
+@RESPATH@/chrome/browser@JAREXT@
+@RESPATH@/chrome/browser.manifest
+@RESPATH@/chrome/messenger@JAREXT@
+@RESPATH@/chrome/messenger.manifest
+@RESPATH@/chrome/pdfjs.manifest
+@RESPATH@/chrome/pdfjs/*
+@RESPATH@/defaults/pref/PdfJsDefaultPrefs.js
+#ifndef XP_UNIX
+@RESPATH@/chrome/icons/default/messengerWindow.ico
+@RESPATH@/chrome/icons/default/msgcomposeWindow.ico
+@RESPATH@/chrome/icons/default/calendar-alarm-dialog.ico
+@RESPATH@/chrome/icons/default/calendar-general-dialog.ico
+#elifdef UNIX_BUT_NOT_MAC
+@RESPATH@/chrome/icons/default/*.png
+@RESPATH@/chrome/icons/default/*.svg
+#endif
+
+; Gloda
+@RESPATH@/chrome/gloda@JAREXT@
+@RESPATH@/chrome/gloda.manifest
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; Mail Extensions (smime, etc.)
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+#ifdef MOZ_MAPI_SUPPORT
+@BINPATH@/MapiProxy.dll
+@BINPATH@/mozMapi32.dll
+#endif
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; instant messaging
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+@RESPATH@/@PREF_DIR@/chat-prefs.js
+@RESPATH@/chrome/chat@JAREXT@
+@RESPATH@/chrome/chat.manifest
+
+; Thunderbird specific
+@RESPATH@/@PREF_DIR@/all-im.js
+
+; OTR libraries
+#ifdef TB_LIBOTR_PREBUILT
+#ifdef XP_WIN
+@BINPATH@/libssp-0@DLL_SUFFIX@
+@BINPATH@/libotr@DLL_SUFFIX@
+#else
+@BINPATH@/@DLL_PREFIX@otr@DLL_SUFFIX@
+#endif
+#endif
+
+; OpenPGP (librnp)
+#ifdef MZLA_LIBRNP
+@BINPATH@/@DLL_PREFIX@rnp@DLL_SUFFIX@
+@BINPATH@/rnp-cli@BIN_SUFFIX@
+@BINPATH@/rnpkeys@BIN_SUFFIX@
+#endif
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; Chrome Files
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+@RESPATH@/chrome/classic@JAREXT@
+@RESPATH@/chrome/classic.manifest
+
+; [DevTools Startup Files]
+@RESPATH@/chrome/devtools-startup@JAREXT@
+@RESPATH@/chrome/devtools-startup.manifest
+
+; DevTools
+@RESPATH@/chrome/devtools@JAREXT@
+@RESPATH@/chrome/devtools.manifest
+@RESPATH@/@PREF_DIR@/debugger.js
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; Default Profile Settings
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; default pref files
+@RESPATH@/defaults/pref/all-thunderbird.js
+# channel-prefs.js has been removed on macOS.
+#ifndef XP_MACOSX
+@RESPATH@/defaults/pref/channel-prefs.js
+#endif
+@RESPATH@/defaults/pref/composer.js
+@RESPATH@/defaults/pref/mailnews.js
+@RESPATH@/defaults/pref/mdn.js
+@RESPATH@/defaults/pref/e2e-prefs.js
+@RESPATH@/defaults/pref/thunderbird-branding.js
+@RESPATH@/defaults/permissions
+@RESPATH@/greprefs.js
+
+; Remote Settings JSON dumps
+@RESPATH@/defaults/settings/last_modified.json
+@RESPATH@/defaults/settings/blocklists
+@RESPATH@/defaults/settings/main
+@RESPATH@/defaults/settings/security-state
+@RESPATH@/defaults/settings/thunderbird
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; App extensions to Mail
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+@RESPATH@/chrome/openpgp@JAREXT@
+@RESPATH@/chrome/openpgp.manifest
+
+; mission control, autoconfig
+#ifdef MOZ_PREF_EXTENSIONS
+@RESPATH@/defaults/autoconfig/prefcalls.js
+#endif
+
+; Windows Search integration
+; the module is included as part of the "Modules" rule
+#ifdef XP_WIN
+@BINPATH@/WSEnable.exe
+#endif
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; Base Package Files
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+; accessibility (out of process API support)
+#ifdef ACCESSIBILITY
+#ifdef XP_WIN
+@BINPATH@/AccessibleMarshal.dll
+#endif
+#endif
+
+[calendar]
+@RESPATH@/chrome/calendar@JAREXT@
+@RESPATH@/chrome/calendar.manifest
+
+@RESPATH@/@PREF_DIR@/calendar.js
+
+; JavaScript components
+@RESPATH@/components/*.manifest
+
+; WebDriver (Marionette, Remote Agent) remote protocols
+#ifdef ENABLE_WEBDRIVER
+@RESPATH@/chrome/remote@JAREXT@
+@RESPATH@/chrome/remote.manifest
+#endif
+
+; Phishing Protection
+
+; Modules
+@RESPATH@/modules/*
+@RESPATH@/moz-src/*
+@RESPATH@/actors/*
+
+; ANGLE GLES-on-D3D rendering library
+#ifdef MOZ_ANGLE_RENDERER
+@BINPATH@/libEGL.dll
+@BINPATH@/libGLESv2.dll
+#endif # MOZ_ANGLE_RENDERER
+
+#ifdef MOZ_DXCOMPILER
+@BINPATH@/@MOZ_DXC_DLL_NAME@
+#endif
+
+; Background tasks-specific preferences.  These are in the GRE
+; location since they apply to all tasks at this time.
+#ifdef MOZ_BACKGROUNDTASKS
+@RESPATH@/defaults/backgroundtasks/backgroundtasks.js
+#endif
+
+; [Layout Engine Resources]
+; Style Sheets, Graphics and other Resources used by the layout engine.
+@RESPATH@/res/EditorOverride.css
+@RESPATH@/res/contenteditable.css
+@RESPATH@/res/table-add-column-after-active.gif
+@RESPATH@/res/table-add-column-after-hover.gif
+@RESPATH@/res/table-add-column-after.gif
+@RESPATH@/res/table-add-column-before-active.gif
+@RESPATH@/res/table-add-column-before-hover.gif
+@RESPATH@/res/table-add-column-before.gif
+@RESPATH@/res/table-add-row-after-active.gif
+@RESPATH@/res/table-add-row-after-hover.gif
+@RESPATH@/res/table-add-row-after.gif
+@RESPATH@/res/table-add-row-before-active.gif
+@RESPATH@/res/table-add-row-before-hover.gif
+@RESPATH@/res/table-add-row-before.gif
+@RESPATH@/res/table-remove-column-active.gif
+@RESPATH@/res/table-remove-column-hover.gif
+@RESPATH@/res/table-remove-column.gif
+@RESPATH@/res/table-remove-row-active.gif
+@RESPATH@/res/table-remove-row-hover.gif
+@RESPATH@/res/table-remove-row.gif
+@RESPATH@/res/grabber.gif
+#ifdef XP_MACOSX
+@RESPATH@/res/cursors/*
+#endif
+@RESPATH@/res/fonts/*
+@RESPATH@/res/dtd/*
+@RESPATH@/res/language.properties
+@RESPATH@/res/locale/layout/HtmlForm.properties
+@RESPATH@/res/locale/layout/MediaDocument.properties
+@RESPATH@/res/locale/layout/xmlparser.properties
+@RESPATH@/res/locale/dom/dom.properties
+@RESPATH@/res/locale/necko/necko.properties
+#ifdef XP_MACOSX
+@RESPATH@/res/MainMenu.nib/
+#endif
+
+; Content-accessible resources.
+@RESPATH@/contentaccessible/*
+
+; svg
+@RESPATH@/res/svg.css
+
+; [Personal Security Manager]
+;
+; NSS libraries are signed in the staging directory,
+; meaning their .chk files are created there directly.
+;
+#ifndef MOZ_SYSTEM_NSS
+#if defined(XP_LINUX) && !defined(ANDROID)
+@BINPATH@/@DLL_PREFIX@freeblpriv3@DLL_SUFFIX@
+#elif defined(XP_SOLARIS) && defined(SPARC64)
+@BINPATH@/@DLL_PREFIX@freebl_64fpu_3@DLL_SUFFIX@
+@BINPATH@/@DLL_PREFIX@freebl_64int_3@DLL_SUFFIX@
+#else
+@BINPATH@/@DLL_PREFIX@freebl3@DLL_SUFFIX@
+#endif
+@BINPATH@/@DLL_PREFIX@nss3@DLL_SUFFIX@
+#ifndef MOZ_FOLD_LIBS
+@BINPATH@/@DLL_PREFIX@nssutil3@DLL_SUFFIX@
+@BINPATH@/@DLL_PREFIX@smime3@DLL_SUFFIX@
+@BINPATH@/@DLL_PREFIX@ssl3@DLL_SUFFIX@
+#endif
+@BINPATH@/@DLL_PREFIX@softokn3@DLL_SUFFIX@
+#endif
+@RESPATH@/chrome/pippki@JAREXT@
+@RESPATH@/chrome/pippki.manifest
+
+; For process sandboxing
+#if defined(MOZ_SANDBOX)
+#if defined(XP_LINUX)
+@BINPATH@/@DLL_PREFIX@mozsandbox@DLL_SUFFIX@
+#endif
+#endif
+
+; [Updater]
+;
+#ifdef MOZ_UPDATER
+#ifdef XP_MACOSX
+@BINPATH@/updater.app/
+#else
+@BINPATH@/updater@BIN_SUFFIX@
+#endif
+#endif
+
+; [MaintenanceService]
+;
+#ifdef MOZ_MAINTENANCE_SERVICE
+@BINPATH@/maintenanceservice.exe
+@BINPATH@/maintenanceservice_installer.exe
+#endif
+
+; [Crash Reporter]
+;
+#ifdef MOZ_CRASHREPORTER
+#ifdef XP_MACOSX
+@BINPATH@/crashreporter.app/
+#else
+@BINPATH@/crashreporter@BIN_SUFFIX@
+#if defined(XP_WIN)
+@BINPATH@/@DLL_PREFIX@mozwer@DLL_SUFFIX@
+#endif
+#endif
+#endif
+
+; [ crashhelper ]
+;
+#ifdef MOZ_CRASHREPORTER
+@BINPATH@/crashhelper@BIN_SUFFIX@
+#endif
+
+; [ Ping Sender ]
+;
+@BINPATH@/pingsender@BIN_SUFFIX@
+
+; [ Notification COM Server ]
+;
+#if defined(MOZ_NOTIFICATION_SERVER)
+@BINPATH@/@DLL_PREFIX@notificationserver@DLL_SUFFIX@
+#endif
+
+; Shipped so that Glean tests are enabled on CI even if we have disabled
+; them during regular usage.
+@RESPATH@/interesting_serverknobs.json

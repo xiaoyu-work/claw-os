@@ -1,0 +1,146 @@
+<?xml version="1.0"?>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+<!DOCTYPE html SYSTEM "chrome://messenger/locale/am-advanced.dtd">
+<html
+  xmlns="http://www.w3.org/1999/xhtml"
+  xmlns:xul="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+  xmlns:html="http://www.w3.org/1999/xhtml"
+>
+  <head>
+    <title data-l10n-id="outgoing-server-settings-title"></title>
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src chrome:; script-src chrome: 'unsafe-inline' moz-src:; style-src chrome: 'unsafe-inline'; connect-src https:"
+    />
+    <link rel="stylesheet" href="chrome://messenger/skin/colors.css" />
+    <link rel="stylesheet" href="chrome://messenger/skin/icons.css" />
+    <link rel="stylesheet" href="chrome://messenger/skin/variables.css" />
+    <link rel="stylesheet" href="chrome://messenger/skin/input-fields.css" />
+    <link rel="stylesheet" href="chrome://messenger/skin/accountManage.css" />
+    <link rel="localization" href="messenger/accountManager.ftl" />
+    <link rel="localization" href="messenger/certError.ftl" />
+
+    <script
+      defer="defer"
+      src="chrome://messenger/content/globalOverlay.js"
+    ></script>
+    <script
+      defer="defer"
+      src="chrome://global/content/editMenuOverlay.js"
+    ></script>
+    <script
+      type="module"
+      src="chrome://messenger/content/certificate-check.mjs"
+    ></script>
+    <script defer="defer" src="chrome://messenger/content/amUtils.js"></script>
+    <script defer="defer" src="chrome://messenger/content/am-smtp.js"></script>
+  </head>
+  <html:body
+    xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+  >
+    <stringbundle
+      id="bundle_messenger"
+      src="chrome://messenger/locale/messenger.properties"
+    />
+
+    <vbox flex="1" style="overflow: auto"
+      ><vbox id="containerBox" flex="1">
+        <hbox class="dialogheader">
+          <label
+            class="dialogheader-title"
+            data-l10n-id="outgoing-server-settings-title"
+          />
+        </hbox>
+
+        <separator class="thin" />
+        <label
+          control="smtpList"
+          data-l10n-id="outgoing-server-settings-description"
+        ></label>
+        <separator class="thin" />
+
+        <hbox flex="1">
+          <richlistbox
+            id="smtpList"
+            onselect="gSmtpServerListWindow.onSelectionChanged(event)"
+            ondblclick="gSmtpServerListWindow.onEditServer(event)"
+            seltype="single"
+            flex="1"
+            style="height: 400px"
+          />
+
+          <vbox>
+            <button
+              id="addButton"
+              oncommand="gSmtpServerListWindow.onAddServer(event)"
+              label="&smtpListAdd.label;"
+              accesskey="&smtpListAdd.accesskey;"
+            />
+            <button
+              id="editButton"
+              oncommand="gSmtpServerListWindow.onEditServer(event)"
+              label="&smtpListEdit.label;"
+              accesskey="&smtpListEdit.accesskey;"
+            />
+            <separator />
+            <button
+              id="deleteButton"
+              oncommand="gSmtpServerListWindow.onDeleteServer(event)"
+              label="&smtpListDelete.label;"
+              accesskey="&smtpListDelete.accesskey;"
+            />
+            <button
+              id="setDefaultButton"
+              disabled=""
+              oncommand="gSmtpServerListWindow.onSetDefaultServer(event)"
+              label="&smtpListSetDefault.label;"
+              accesskey="&smtpListSetDefault.accesskey;"
+            />
+          </vbox>
+        </hbox>
+
+        <separator />
+
+        <label class="header">&serverDetails.label;</label>
+        <html:table id="smtpServerInfoBox">
+          <html:tr>
+            <html:th id="descriptionLabel">&serverDescription.label;</html:th>
+            <html:td id="descriptionValue"></html:td>
+          </html:tr>
+          <html:tr>
+            <html:th
+              id="typeLabel"
+              data-l10n-id="outgoing-server-type"
+            ></html:th>
+            <html:td id="typeValue"></html:td>
+          </html:tr>
+          <html:tr>
+            <html:th id="nameLabel">&serverName.label;</html:th>
+            <html:td id="nameValue"></html:td>
+          </html:tr>
+          <html:tr>
+            <html:th id="portLabel">&serverPort.label;</html:th>
+            <html:td id="portValue"></html:td>
+          </html:tr>
+          <html:tr>
+            <html:th id="userNameLabel">&userName.label;</html:th>
+            <html:td id="userNameValue"></html:td>
+          </html:tr>
+          <html:tr>
+            <html:th id="authMethodLabel">&authMethod.label;</html:th>
+            <html:td id="authMethodValue"></html:td>
+          </html:tr>
+          <html:tr>
+            <html:th id="connectionSecurityLabel"
+              >&connectionSecurity.label;</html:th
+            >
+            <html:td id="useSecureConnectionValue"></html:td>
+          </html:tr>
+        </html:table>
+        <separator flex="1" /> </vbox
+    ></vbox>
+  </html:body>
+</html>

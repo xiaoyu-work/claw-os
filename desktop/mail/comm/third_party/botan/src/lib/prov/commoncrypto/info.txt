@@ -1,0 +1,24 @@
+<defines>
+COMMONCRYPTO -> 20180903
+</defines>
+
+<module_info>
+name -> "CommonCrypto"
+brief -> "Helpers and Utilities for calling CommonCrypto"
+</module_info>
+
+load_on vendor
+
+<header:internal>
+commoncrypto.h
+commoncrypto_utils.h
+</header:internal>
+
+<os_features>
+commoncrypto
+</os_features>
+
+<requires>
+modes
+block
+</requires>

@@ -1,0 +1,58 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+EXPORTS += [
+    "nsMsgAttachmentData.h",
+    "nsMsgCompFields.h",
+    "nsMsgCompose.h",
+    "nsMsgCompUtils.h",
+]
+
+UNIFIED_SOURCES += [
+    "nsMsgAttachedFile.cpp",
+    "nsMsgAttachment.cpp",
+    "nsMsgAttachmentData.cpp",
+    "nsMsgCompFields.cpp",
+    "nsMsgCompose.cpp",
+    "nsMsgComposeContentHandler.cpp",
+    "nsMsgComposeParams.cpp",
+    "nsMsgComposeProgressParams.cpp",
+    "nsMsgComposeService.cpp",
+    "nsMsgCompUtils.cpp",
+    "nsMsgCopy.cpp",
+    "nsMsgPrompts.cpp",
+    "nsMsgQuote.cpp",
+    "nsMsgSendLater.cpp",
+    "nsSmtpUrl.cpp",
+]
+
+LOCAL_INCLUDES += [
+    "/dom/base",
+]
+
+include("/ipc/chromium/chromium-config.mozbuild")
+
+FINAL_LIBRARY = "mail"
+
+# clang-cl rightly complains about switch on nsresult.
+if CONFIG["CC_TYPE"] == "clang-cl":
+    CXXFLAGS += ["-Wno-switch"]
+
+EXTRA_JS_MODULES += [
+    "AddressCollector.sys.mjs",
+    "MailtoProtocolHandler.sys.mjs",
+    "MessageSend.sys.mjs",
+    "MimeEncoder.sys.mjs",
+    "MimeMessage.sys.mjs",
+    "MimeMessageUtils.sys.mjs",
+    "MimePart.sys.mjs",
+    "OutgoingServerService.sys.mjs",
+    "SmtpClient.sys.mjs",
+    "SMTPProtocolHandler.sys.mjs",
+    "SmtpServer.sys.mjs",
+]
+
+XPCOM_MANIFESTS += [
+    "components.conf",
+]

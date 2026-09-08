@@ -1,0 +1,133 @@
+Todo List
+========================================
+
+Feel free to take one of these on if it interests you. Before starting
+out on something, send an email to the dev list or open a discussion
+ticket on GitHub to make sure you're on the right track.
+
+Request a new feature by opening a pull request to update this file.
+
+New Ciphers/Hashes/MACs
+----------------------------------------
+* GCM-SIV (RFC 8452)
+* EME* tweakable block cipher (https://eprint.iacr.org/2004/125)
+* PMAC
+* SIV-PMAC
+* Threefish-1024
+* Skein-MAC
+* FFX format preserving encryption (NIST 800-38G)
+* HPKE (RFC 9180)
+* Blake3
+
+Hardware Specific Optimizations
+----------------------------------------
+* AVX512 IFMA optimized field arithmetic for P-256 and/or P-384
+* Stitched AES/GCM implementation
+* GFNI implementations of ZFEC, others?
+* NEON/VMX/LSX support for the SIMD based GHASH
+* SIMD evaluation of SHA-2 and SHA-3 compression functions
+* Improved Salsa implementations (SIMD_4x32, AVX2, AVX512, ...)
+* Add CLMUL/PMULL implementations for CRC24
+* Add support for ARMv8.4-A SHA-3 instructions
+* Support POWER8 SHA-2 extensions (GH #1486 + #1487)
+* Add support for RISC-V vector and crypto extensions
+* Add support for using Loongarch64 LASX (256-bit SIMD)
+
+Public Key Crypto, Math
+----------------------------------------
+
+* BLS12-381 pairing, BLS signatures
+* Identity based encryption
+* Paillier homomorphic cryptosystem
+* New PAKEs (pending CFRG bakeoff results)
+* SPHINX password store (https://eprint.iacr.org/2018/695)
+
+Utility Functions
+------------------
+
+* Make Memory_Pool more concurrent (currently uses a global lock)
+* Guarded integer type to prevent overflow bugs
+
+External Providers
+----------------------------------------
+
+* Add support for iOS keychain access
+* Extend support for TPM 2.0 (PCR, NVRAM, Policies, etc)
+
+TLS
+----------------------------------------
+
+* Make DTLS support optional at build time
+* Improve/optimize DTLS defragmentation and retransmission
+* Make RSA optional at build time
+* Make finite field DH optional at build time
+* Certificate Transparency extensions
+* TLS supplemental authorization data (RFC 4680, RFC 5878)
+* DTLS-SCTP (RFC 6083)
+
+PKIX
+----------------------------------------
+
+* Further tests of validation API (see GH #785)
+* X.509 policy constraints
+* OCSP responder logic
+
+New Protocols / Formats
+----------------------------------------
+
+* Noise protocol
+* ACME protocol (needs a story for JSON)
+* Cryptographic Message Syntax (RFC 5652)
+* Useful OpenPGP subset 1: symmetrically encrypted files.
+  Not aiming to process arbitrary OpenPGP, but rather produce
+  something that happens to be readable by `gpg` and is relatively
+  simple to process for decryption. Require AEAD mode (EAX/OCB).
+* Useful OpenPGP subset 2: Process OpenPGP public keys
+* Useful OpenPGP subset 3: Verification of OpenPGP signatures
+
+Cleanups
+-----------
+
+* Unicode path support on Windows (GH #1615)
+* The X.509 path validation tests have much duplicated logic
+
+FFI APIs
+----------------------------------------
+
+* PKCS10 requests
+* Certificate signing
+* Expose TLS
+* Expose secret sharing
+* Expose deterministic PRNG
+* base32
+* base58
+* DL_Group
+* EC_Group
+
+Build/Test
+----------------------------------------
+
+* Support hardcoding all test vectors into the botan-test binary
+  so it can run as a standalone item (copied to a device, etc)
+* Run iOS binary under simulator in CI
+* Run Android binary under simulator in CI
+
+CLI
+----------------------------------------
+
+* Add a ``--completion`` option to dump autocomplete info, write
+  support for autocompletion in bash/zsh.
+* Change `tls_server` to be a tty<->socket app, like `tls_client` is,
+  instead of a bogus echo server.
+* `encrypt` / `decrypt` tools providing password based file encryption
+* Add ECM factoring
+* Clone of `minisign` signature utility
+* Password store utility
+* TOTP calculator
+* Clone of magic wormhole
+* ACVP client (https://github.com/usnistgov/ACVP)
+
+Documentation
+----------------------------------------
+
+* Always needs help

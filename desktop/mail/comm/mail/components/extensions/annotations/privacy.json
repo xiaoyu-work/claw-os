@@ -1,0 +1,79 @@
+[
+  {
+    "namespace": "manifest",
+    "types": [
+      {
+        "$extend": "OptionalPermission",
+        "choices": [
+          {
+            "type": "string",
+            "enums": {
+              "privacy": {
+                "annotations": [
+                  {
+                    "version_added": true
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "namespace": "privacy",
+    "annotations": [
+      {
+        "version_added": true
+      },
+      {
+        "text": "The privacy API allows to control privacy-related settings."
+      }
+    ]
+  },
+  {
+    "namespace": "privacy.network",
+    "annotations": [
+      {
+        "version_added": true
+      }
+    ],
+    "properties": {
+      "globalPrivacyControl": {
+        "annotations": [
+          {
+            "additional_properties": {
+              "readOnly": true
+            }
+          }
+        ]
+      },
+      "httpsOnlyMode": {
+        "annotations": [
+          {
+            "additional_properties": {
+              "readOnly": true
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "namespace": "privacy.services",
+    "annotations": [
+      {
+        "version_added": true
+      }
+    ]
+  },
+  {
+    "namespace": "privacy.websites",
+    "annotations": [
+      {
+        "version_added": true
+      }
+    ]
+  }
+]

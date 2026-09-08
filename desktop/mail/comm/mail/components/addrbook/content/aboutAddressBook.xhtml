@@ -1,0 +1,473 @@
+<?xml version="1.0"?>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, you can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml"
+      xmlns:xul="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+      xmlns:html="http://www.w3.org/1999/xhtml"
+      lightweightthemes="true">
+<head>
+  <meta charset="utf-8" />
+  <title data-l10n-id="about-addressbook-title"></title>
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src chrome:; script-src chrome: resource: 'unsafe-inline' moz-src:; img-src blob: chrome: data: http: https:; style-src chrome: 'unsafe-inline'; object-src 'none'" />
+  <meta name="color-scheme" content="light dark" />
+
+  <link rel="icon" href="chrome://messenger/skin/icons/new/compact/address-book.svg" />
+
+  <link rel="stylesheet" href="chrome://messenger/skin/messenger.css" />
+  <link rel="stylesheet" href="chrome://global/skin/in-content/common.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/containers.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/primaryToolbar.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/contextMenu.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/shared/tree-listbox.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/inContentDialog.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/contactAvatar.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/aboutAddressBook.css" />
+
+  <link rel="localization" href="messenger/treeView.ftl" />
+  <link rel="localization" href="messenger/addressbook/aboutAddressBook.ftl" />
+  <link rel="localization" href="messenger/preferences/preferences.ftl" />
+  <link rel="localization" href="messenger/appmenu.ftl" />
+
+  <script src="chrome://messenger/content/globalOverlay.js"></script>
+  <script src="chrome://global/content/editMenuOverlay.js"></script>
+  <script src="chrome://messenger/content/pane-splitter.js"></script>
+  <script type="module" src="chrome://messenger/content/search-bar.mjs"></script>
+  <script type="module" src="chrome://messenger/content/tree-listbox.mjs"></script>
+  <script type="module" src="chrome://messenger/content/tree-view.mjs"></script>
+  <script src="chrome://messenger/content/addressbook/aboutAddressBook.js"></script>
+  <script type="module" src="chrome://messenger/content/addressbook/aboutAddressBookCommands.mjs"></script>
+</head>
+<body>
+  <div id="booksPane">
+    <div id="booksPaneHeaderBar" class="sidebar-panel-header">
+      <button id="booksPaneCreateBook"
+              class="button button-flat icon-button icon-only"
+              data-l10n-id="books-pane-add-book-button"
+              type="button">
+      </button>
+      <button id="booksPaneCreateContact"
+              class="button button-primary icon-button"
+              data-l10n-id="books-pane-create-contact-button"
+              type="button">
+      </button>
+      <button id="booksPaneCreateList"
+              class="button button-flat icon-button icon-only"
+              data-l10n-id="books-pane-create-list-button"
+              type="button">
+      </button>
+    </div>
+    <ul id="books"
+        is="ab-tree-listbox"
+        class="sidebar-panel-scroll"
+        role="tree"
+        data-l10n-id="address-book-list">
+      <li id="allAddressBooks"
+          class="bookRow noDelete readOnly"
+          data-l10n-id="all-address-books-row">
+        <div class="bookRow-container container">
+          <div class="twisty"></div>
+          <div class="bookRow-icon"></div>
+          <span class="bookRow-name" tabindex="-1" data-l10n-id="all-address-books"></span>
+          <div class="bookRow-menu"></div>
+        </div>
+      </li>
+    </ul>
+    <div class="books-pane-bottom">
+      <button id="booksPaneImport"
+              class="button button-flat icon-button"
+              data-l10n-id="books-pane-import-button"
+              type="button">
+      </button>
+    </div>
+    <div id="cardCount"></div>
+    <template id="bookRow">
+      <li class="bookRow">
+        <div class="bookRow-container container">
+          <div class="twisty">
+            <img class="twisty-icon" src="chrome://messenger/skin/icons/new/nav-down-sm.svg" alt="" />
+          </div>
+          <div class="bookRow-icon"></div>
+          <span class="bookRow-name" tabindex="-1"></span>
+          <div class="bookRow-menu"></div>
+        </div>
+        <ul></ul>
+      </li>
+    </template>
+    <template id="listRow">
+      <li class="listRow">
+        <div class="listRow-container container">
+          <div class="listRow-icon"></div>
+          <span class="listRow-name" tabindex="-1"></span>
+          <div class="listRow-menu"></div>
+        </div>
+      </li>
+    </template>
+  </div>
+  <hr is="pane-splitter" id="booksSplitter"
+      resize-direction="horizontal"
+      resize-id="booksPane"/>
+  <div id="cardsPane">
+    <div id="cardsPaneHeader">
+#include ../../../base/content/widgets/search-bar.inc.xhtml
+      <search-bar id="searchInput" data-l10n-attrs="label, placeholder">
+        <img slot="search-button" src="" alt="" />
+      </search-bar>
+      <button id="displayButton"
+              class="button icon-button icon-only button-flat"
+              data-l10n-id="about-addressbook-sort-button2">
+      </button>
+    </div>
+
+    <tree-view id="cards">
+      <slot name="placeholders">
+        <div id="placeholderEmptyBook"
+             hidden="hidden"
+             data-l10n-id="about-addressbook-placeholder-empty-book"></div>
+        <button id="placeholderCreateContact"
+                class="button button-flat icon-button"
+                hidden="hidden"
+                data-l10n-id="about-addressbook-placeholder-new-contact"></button>
+        <div id="placeholderSearchOnly"
+             hidden="hidden"
+             data-l10n-id="about-addressbook-placeholder-search-only"></div>
+        <div id="placeholderSearching"
+             hidden="hidden"
+             data-l10n-id="about-addressbook-placeholder-searching"></div>
+        <div id="placeholderNoSearchResults"
+             hidden="hidden"
+             data-l10n-id="about-addressbook-placeholder-no-search-results"></div>
+      </slot>
+    </tree-view>
+  </div>
+  <!-- We will dynamically switch this splitter to be horizontal or vertical and
+    affect the cardsPane or detailsPane based on the required layout. -->
+  <hr is="pane-splitter" id="sharedSplitter" />
+  <div id="detailsPane" hidden="hidden">
+    <article id="viewContact" class="contact-details-scroll">
+      <!-- If you're changing this, you probably want to change #printTemplate too. -->
+      <header>
+        <div class="contact-header">
+          <img id="viewContactPhoto" class="contact-photo" alt="" />
+          <div class="contact-headings">
+            <h1 id="viewContactName" class="contact-heading-name"></h1>
+            <p id="viewContactNickName" class="contact-heading-nickname"></p>
+            <p id="viewPrimaryEmail" class="contact-heading-email"></p>
+          </div>
+        </div>
+        <div class="list-header">
+          <div class="recipient-avatar is-mail-list">
+            <img alt="" src="chrome://messenger/skin/icons/new/compact/user-list-alt.svg" />
+          </div>
+          <h1 id="viewListName" class="contact-heading-name"></h1>
+        </div>
+        <div class="selection-header">
+          <h1 id="viewSelectionCount" class="contact-heading-name"></h1>
+        </div>
+      </header>
+      <div id="detailsBody">
+        <section id="detailsActions" class="button-block">
+          <div>
+            <button type="button" id="detailsWriteButton"
+                    class="button button-flat icon-button"
+                    data-l10n-id="about-addressbook-write-action-button"></button>
+            <button type="button" id="detailsEventButton"
+                    class="button button-flat icon-button"
+                    data-l10n-id="about-addressbook-event-action-button"></button>
+            <button type="button" id="detailsSearchButton"
+                    class="button button-flat icon-button"
+                    data-l10n-id="about-addressbook-search-action-button"></button>
+            <button type="button" id="detailsNewListButton"
+                    class="button button-flat icon-button"
+                    data-l10n-id="about-addressbook-new-list-action-button"></button>
+          </div>
+          <div class="edit-block">
+            <button type="button" id="editButton"
+                    data-l10n-id="about-addressbook-begin-edit-contact-button"></button>
+          </div>
+        </section>
+        <section id="emailAddresses" class="details-email-addresses">
+          <h2 data-l10n-id="about-addressbook-details-email-addresses-header"></h2>
+          <ul class="entry-list"></ul>
+        </section>
+        <section id="phoneNumbers" class="details-phone-numbers">
+          <h2 data-l10n-id="about-addressbook-details-phone-numbers-header"></h2>
+          <ul class="entry-list"></ul>
+        </section>
+        <section id="addresses" class="details-addresses">
+          <h2 data-l10n-id="about-addressbook-details-addresses-header"></h2>
+          <ul class="entry-list"></ul>
+        </section>
+        <section id="notes" class="details-notes">
+          <h2 data-l10n-id="about-addressbook-details-notes-header"></h2>
+          <div></div>
+        </section>
+        <section id="websites" class="details-websites">
+          <h2 data-l10n-id="about-addressbook-details-websites-header"></h2>
+          <ul class="entry-list"></ul>
+        </section>
+        <section id="instantMessaging" class="details-instant-messaging">
+          <h2 data-l10n-id="about-addressbook-details-impp-header"></h2>
+          <ul class="entry-list"></ul>
+        </section>
+        <section id="otherInfo" class="details-other-info">
+          <h2 data-l10n-id="about-addressbook-details-other-info-header"></h2>
+          <ul class="entry-list"></ul>
+        </section>
+        <section id="selectedCards">
+          <ul></ul>
+        </section>
+        <template id="entryItem">
+          <li class="entry-item">
+            <span class="entry-type"></span>
+            <span class="entry-value"></span>
+          </li>
+        </template>
+        <template id="selectedCard">
+          <li class="selected-card">
+            <contact-avatar></contact-avatar>
+            <div class="ab-card-row-data">
+              <p class="ab-card-first-line">
+                <span class="name"></span>
+              </p>
+              <p class="ab-card-second-line">
+                <span class="address"></span>
+              </p>
+            </div>
+          </li>
+        </template>
+      </div>
+    </article>
+    <form id="editContactForm"
+          autocomplete="off"
+          aria-labelledby="editContactHeadingName">
+      <div class="contact-details-scroll">
+        <div class="contact-header">
+          <div class="contact-headings">
+            <h1 id="editContactHeadingName" class="contact-heading-name"></h1>
+            <p id="editContactHeadingNickName" class="contact-heading-nickname">
+            </p>
+            <p id="editContactHeadingEmail" class="contact-heading-email"></p>
+          </div>
+          <!-- NOTE: We place the photo 'input' after the headings, since it is
+             - functionally a form control. However, we style the photo to
+             - appear at the inline-start of the contact-header. -->
+          <!-- NOTE: We wrap the button with a plain div because the button
+             - itself will not receive the paste event. -->
+          <div id="photoInput">
+            <button type="button" id="photoButton"
+                    class="plain-button"
+                    data-l10n-id="about-addressbook-details-edit-photo">
+              <img class="contact-photo" alt="" />
+              <div id="photoOverlay"></div>
+            </button>
+          </div>
+        </div>
+        <!-- Styles -->
+  #include vcard-edit/vCardTemplates.inc.xhtml
+        <vcard-edit />
+      </div>
+      <div id="detailsFooter" class="button-block">
+        <div>
+          <button type="button" id="detailsDeleteButton"
+                  class="button button-flat icon-button"
+                  data-l10n-id="about-addressbook-delete-edit-contact-button"></button>
+        </div>
+        <div>
+          <xul:label control="addContactBookList"
+                     data-l10n-id="about-addressbook-add-contact-to"/>
+          <xul:menulist is="menulist-addrbooks" id="addContactBookList"
+                        writable="true"/>
+          <button type="reset" id="cancelEditButton"
+                  data-l10n-id="about-addressbook-cancel-edit-contact-button"></button>
+          <button type="submit" id="saveEditButton"
+                  class="button button-primary"
+                  data-l10n-id="about-addressbook-save-edit-contact-button"></button>
+        </div>
+      </div>
+    </form>
+  </div>
+  <div id="detailsPaneBackdrop"><!--
+    When editing a card, this element covers everything except #detailsPane,
+    preventing change to another card.
+  --></div>
+
+  <dialog id="photoDialog">
+    <div id="photoDialogInner">
+      <!-- FIXME: The dialog is not semantic or accessible.
+         - We use a tabindex and role="alert" as a temporary solution. -->
+      <div id="photoDropTarget" role="alert" tabindex="0">
+        <div class="icon"></div>
+        <div class="label" data-l10n-id="about-addressbook-photo-drop-target"></div>
+      </div>
+      <svg xmlns="http://www.w3.org/2000/svg" width="520" height="520" viewBox="-10 -10 520 520">
+        <image/>
+        <path fill="#000000" fill-opacity="0.5" d="M0 0H500V500H0Z M200 200V300H300V200Z"/>
+        <rect x="0" y="0" width="500" height="500"/>
+        <rect class="corner nw" width="40" height="40"/>
+        <rect class="corner ne" width="40" height="40"/>
+        <rect class="corner se" width="40" height="40"/>
+        <rect class="corner sw" width="40" height="40"/>
+      </svg>
+    </div>
+
+    <menu class="dialog-menu-container">
+      <button class="extra1" data-l10n-id="about-addressbook-photo-discard"></button>
+      <button class="cancel" data-l10n-id="about-addressbook-photo-cancel"></button>
+      <button class="accept primary" data-l10n-id="about-addressbook-photo-save"></button>
+    </menu>
+  </dialog>
+
+  <!-- In-content dialogs. -->
+  <xul:stack id="dialogStack" hidden="hidden"/>
+  <xul:vbox id="dialogTemplate"
+            class="dialogOverlay"
+            align="center"
+            pack="center"
+            topmost="true"
+            hidden="hidden">
+    <xul:vbox class="dialogBox"
+              pack="end"
+              role="dialog"
+              aria-labelledby="dialogTitle">
+      <xul:hbox class="dialogTitleBar" align="center">
+        <xul:label class="dialogTitle" flex="1"/>
+        <xul:button class="dialogClose close-icon" data-l10n-id="close-button"/>
+      </xul:hbox>
+      <xul:browser class="dialogFrame"
+                   autoscroll="false"
+                   disablehistory="true"/>
+    </xul:vbox>
+  </xul:vbox>
+
+  <template id="printTemplate">
+    <!-- If you're changing this, you probably want to change #viewContact too. -->
+    <div class="contact-header">
+      <img class="contact-photo" alt="" />
+      <div class="contact-headings">
+        <h1 class="contact-heading-name"></h1>
+        <p class="contact-heading-nickname"></p>
+        <p class="contact-heading-email"></p>
+      </div>
+    </div>
+    <div class="contact-body">
+      <section class="details-email-addresses">
+        <h2 data-l10n-id="about-addressbook-details-email-addresses-header"></h2>
+        <ul class="entry-list"></ul>
+      </section>
+      <section class="details-phone-numbers">
+        <h2 data-l10n-id="about-addressbook-details-phone-numbers-header"></h2>
+        <ul class="entry-list"></ul>
+      </section>
+      <section class="details-addresses">
+        <h2 data-l10n-id="about-addressbook-details-addresses-header"></h2>
+        <ul class="entry-list"></ul>
+      </section>
+      <section class="details-notes">
+        <h2 data-l10n-id="about-addressbook-details-notes-header"></h2>
+        <div></div>
+      </section>
+      <section class="details-websites">
+        <h2 data-l10n-id="about-addressbook-details-websites-header"></h2>
+        <ul class="entry-list"></ul>
+      </section>
+      <section class="details-instant-messaging">
+        <h2 data-l10n-id="about-addressbook-details-impp-header"></h2>
+        <ul class="entry-list"></ul>
+      </section>
+      <section class="details-other-info">
+        <h2 data-l10n-id="about-addressbook-details-other-info-header"></h2>
+        <ul class="entry-list"></ul>
+      </section>
+    </div>
+  </template>
+</body>
+<xul:menupopup id="bookContext" needsgutter="">
+  <xul:menuitem id="bookContextProperties"/>
+  <xul:menuitem id="bookContextSynchronize"
+                data-l10n-id="about-addressbook-books-context-synchronize"/>
+  <xul:menuitem id="bookContextPrint"
+                data-l10n-id="about-addressbook-books-context-print"/>
+  <xul:menuitem id="bookContextExport"
+                data-l10n-id="about-addressbook-books-context-export"/>
+  <xul:menuitem id="bookContextDelete"
+                data-l10n-id="about-addressbook-books-context-delete"/>
+  <xul:menuitem id="bookContextRemove"
+                data-l10n-id="about-addressbook-books-context-remove"/>
+  <xul:menuseparator/>
+  <xul:menuitem id="bookContextStartupDefault" type="checkbox"
+                data-l10n-id="about-addressbook-books-context-startup-default"/>
+</xul:menupopup>
+<xul:menupopup id="sortContext"
+               position="bottomleft topleft">
+  <xul:menuitem type="radio"
+                name="format"
+                value="0"
+                checked=""
+                data-l10n-id="about-addressbook-name-format-display"/>
+  <xul:menuitem type="radio"
+                name="format"
+                value="2"
+                data-l10n-id="about-addressbook-name-format-firstlast"/>
+  <xul:menuitem type="radio"
+                name="format"
+                value="1"
+                data-l10n-id="about-addressbook-name-format-lastfirst"/>
+  <xul:menuseparator/>
+  <xul:menuitem type="radio"
+                name="sort"
+                value="GeneratedName ascending"
+                checked=""
+                data-l10n-id="about-addressbook-sort-name-ascending"/>
+  <xul:menuitem type="radio"
+                name="sort"
+                value="GeneratedName descending"
+                data-l10n-id="about-addressbook-sort-name-descending"/>
+  <xul:menuitem type="radio"
+                name="sort"
+                value="EmailAddresses ascending"
+                data-l10n-id="about-addressbook-sort-email-ascending"/>
+  <xul:menuitem type="radio"
+                name="sort"
+                value="EmailAddresses descending"
+                data-l10n-id="about-addressbook-sort-email-descending"/>
+  <xul:menuseparator/>
+  <xul:menuitem id="sortContextTableLayout"
+                type="checkbox"
+                data-l10n-id="about-addressbook-table-layout"/>
+</xul:menupopup>
+<xul:menupopup id="cardContext"
+               class="no-icon-menupopup">
+  <xul:menuitem id="cardContextWrite"
+                data-l10n-id="about-addressbook-cards-context-write"/>
+  <xul:menu id="cardContextWriteMenu"
+            data-l10n-id="about-addressbook-cards-context-write">
+    <xul:menupopup>
+      <!-- Filled dynamically. -->
+    </xul:menupopup>
+  </xul:menu>
+  <xul:menuseparator id="cardContextWriteSeparator"/>
+  <xul:menuitem id="cardContextEdit"
+                data-l10n-id="about-addressbook-books-context-edit"/>
+  <xul:menuitem id="cardContextPrint"
+                data-l10n-id="about-addressbook-books-context-print"/>
+  <xul:menuitem id="cardContextExport"
+                data-l10n-id="about-addressbook-books-context-export"/>
+  <xul:menuitem id="cardContextDelete"
+                data-l10n-id="about-addressbook-books-context-delete"/>
+  <xul:menuitem id="cardContextRemove"
+                data-l10n-id="about-addressbook-books-context-remove"/>
+</xul:menupopup>
+<xul:menupopup id="booksPaneCreateBookContext"
+               class="no-icon-menupopup">
+  <xul:menuitem id="booksPaneContextCreateBook"
+                data-l10n-id="about-addressbook-toolbar-add-address-book"/>
+  <xul:menuitem id="booksPaneContextCreateDav"
+                data-l10n-id="about-addressbook-toolbar-add-carddav-address-book"/>
+  <xul:menuitem id="booksPaneContextCreateLdap"
+                data-l10n-id="about-addressbook-toolbar-add-ldap-address-book"/>
+</xul:menupopup>
+</html>

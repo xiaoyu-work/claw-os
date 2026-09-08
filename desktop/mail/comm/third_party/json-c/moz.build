@@ -1,0 +1,76 @@
+# -*- Mode: python; indent-tabs-mode: nil; tab-width: 40 -*-
+# vim: set filetype=python:
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+Library("json-c")
+FINAL_LIBRARY = "rnp"
+
+# Honor --with-system-jsonc
+if CONFIG["MZLA_SYSTEM_JSONC"]:
+    OS_LIBS += CONFIG["MZLA_JSONC_LIBS"]
+else:
+    include("../rnpdefs.mozbuild")
+
+    if CONFIG["CC_TYPE"] == "clang-cl":
+        COMPILE_FLAGS["WARNINGS_CFLAGS"] += [
+            "-Wno-macro-redefined",
+        ]
+
+    DEFINES["_GNU_SOURCE"] = True
+    DEFINES["CC"] = CONFIG["_CC"]
+
+    json_c_strtoll = CONFIG["JSON_C_STRTOLL"]
+    json_c_strtoull = CONFIG["JSON_C_STRTOULL"]
+    GeneratedFile(
+        "config.h",
+        script="/comm/python/thirdroc/thirdroc/cmake_define_files.py",
+        inputs=["cmake/config.h.in"],
+        flags=[
+            "-DPACKAGE_URL=\"\"",
+            f"-Djson_c_strtoll={json_c_strtoll}",
+            f"-Djson_c_strtoull={json_c_strtoull}",
+        ]
+    )
+
+    have_inttypes_h = CONFIG["HAVE_INTTYPES_H"]
+    have_stdint_h = CONFIG["HAVE_STDINT_H"]
+    GeneratedFile(
+        "json_config.h",
+        script="/comm/python/thirdroc/thirdroc/cmake_define_files.py",
+        inputs=["cmake/json_config.h.in"],
+        flags=[
+            f"-DJSON_C_HAVE_INTTYPES_H={have_inttypes_h}",
+            f"-DJSON_C_HAVE_STDINT_H={have_stdint_h}",
+        ]
+    )
+
+    GeneratedFile(
+        "json.h",
+        script="/python/mozbuild/mozbuild/action/preprocessor.py",
+        entry_point="generate",
+        inputs=["json.h.cmakein"],
+        flags=[
+            "--marker", "%",
+            "-F", "substitution",
+            "-DJSON_H_JSON_POINTER=#include \"json_pointer.h\"",
+            "-DJSON_H_JSON_PATCH=#include \"json_patch.h\"",
+        ]
+    )
+
+    SOURCES += [
+        "arraylist.c",
+        "debug.c",
+        "json_c_version.c",
+        "json_object.c",
+        "json_object_iterator.c",
+        "json_pointer.c",
+        "json_tokener.c",
+        "json_util.c",
+        "json_visit.c",
+        "linkhash.c",
+        "printbuf.c",
+        "random_seed.c",
+        "strerror_override.c",
+    ]

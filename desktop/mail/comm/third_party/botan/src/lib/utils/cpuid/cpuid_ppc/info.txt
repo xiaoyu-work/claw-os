@@ -1,0 +1,12 @@
+<internal_defines>
+CPUID_DETECTION -> 20250327
+</internal_defines>
+
+<module_info>
+name -> "CPUID for POWER/PowerPC"
+</module_info>
+
+<arch>
+ppc32
+ppc64
+</arch>

@@ -1,0 +1,487 @@
+<?xml version="1.0"?>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, you can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml"
+      xmlns:html="http://www.w3.org/1999/xhtml"
+      xmlns:xul="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul">
+<head>
+  <title data-l10n-id="import-page-title"></title>
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src chrome:; script-src chrome: moz-src: about: 'unsafe-inline'; style-src chrome: 'unsafe-inline'"
+  />
+  <link rel="stylesheet" href="chrome://global/skin/global.css"/>
+  <link rel="stylesheet" href="chrome://global/skin/in-content/common.css"/>
+  <link rel="stylesheet" href="chrome://messenger/skin/preferences/preferences.css"/>
+  <link rel="stylesheet" href="chrome://calendar/skin/shared/calendar-attendees.css"/>
+  <link rel="stylesheet" href="chrome://calendar/skin/shared/calendar-item-summary.css"/>
+  <link rel="stylesheet" href="chrome://messenger/skin/aboutImport.css"/>
+  <link rel="localization" href="branding/brand.ftl" />
+  <link rel="localization" href="messenger/aboutImport.ftl"/>
+  <link rel="icon" href="chrome://messenger/skin/icons/new/compact/import.svg" sizes="any"/>
+  <script type="module" src="chrome://messenger/content/search-bar.mjs"></script>
+  <script defer="" src="chrome://messenger/content/aboutImport.js"></script>
+  <script defer="" src="chrome://messenger/content/csv-field-map.js"></script>
+  <script defer="" src="chrome://calendar/content/widgets/calendar-item-summary.js"></script>
+</head>
+<body>
+  <main id="main">
+    <nav>
+      <ol id="stepNav" data-l10n-id="step-list">
+        <li id="navConfirm">
+          <button data-l10n-id="step-confirm" disabled="disabled"></button>
+        </li>
+      </ol>
+    </nav>
+    <section id="errorNotifications"></section>
+    <div id="tabPane-start" class="tabPane">
+      <section id="start-sources">
+        <h1 id="startSource" data-l10n-id="import-start"></h1>
+        <h2 data-l10n-id="import-start-title"></h2>
+        <p data-l10n-id="import-start-description" class="description"></p>
+        <div class="source-list indent">
+          <label class="toggle-container-with-text">
+            <input type="radio"
+                   value="Thunderbird"
+                   name="appSource"
+                   checked="checked"/>
+            <p data-l10n-id="source-thunderbird"></p>
+            <p class="tip-caption" data-l10n-id="source-thunderbird-description"></p>
+          </label>
+          <label class="toggle-container-with-text">
+            <input type="radio"
+                   value="Seamonkey"
+                   name="appSource"/>
+            <p data-l10n-id="source-seamonkey"></p>
+            <p class="tip-caption" data-l10n-id="source-seamonkey-description"></p>
+          </label>
+#ifdef XP_WIN
+          <label class="toggle-container-with-text">
+            <input type="radio"
+                   value="Outlook"
+                   name="appSource"/>
+            <p data-l10n-id="source-outlook"></p>
+            <p class="tip-caption" data-l10n-id="source-outlook-description"></p>
+          </label>
+#endif
+#ifdef XP_MACOSX
+          <label class="toggle-container-with-text">
+            <input type="radio"
+                   value="AppleMail"
+                   name="appSource"/>
+            <p data-l10n-id="source-apple-mail"></p>
+            <p class="tip-caption" data-l10n-id="source-apple-mail-description"></p>
+          </label>
+#endif
+          <label class="toggle-container-with-text">
+            <input type="radio"
+                   value="file"
+                   name="appSource"/>
+            <p data-l10n-id="source-file2"></p>
+            <p class="tip-caption" data-l10n-id="source-file-description"></p>
+          </label>
+        </div>
+      </section>
+      <section id="start-file">
+        <h1 id="startFile" data-l10n-id="import-file"></h1>
+        <h2 data-l10n-id="import-file-title"></h2>
+        <p data-l10n-id="import-file-description" class="description"></p>
+        <div class="option-list indent">
+          <label class="toggle-container-with-text">
+            <input type="radio"
+                   value="profile"
+                   name="startFile"
+                   checked="checked"/>
+            <p data-l10n-id="file-profile2"></p>
+            <p data-l10n-id="file-profile-description" class="tip-caption"></p>
+          </label>
+          <label class="toggle-container-with-text">
+            <input type="radio"
+                   value="calendar"
+                   name="startFile"/>
+            <p data-l10n-id="file-calendar"></p>
+            <p data-l10n-id="file-calendar-description" class="tip-caption"></p>
+          </label>
+          <label class="toggle-container-with-text">
+            <input type="radio"
+                   value="addressbook"
+                   name="startFile"/>
+            <p data-l10n-id="file-addressbook"></p>
+            <p data-l10n-id="file-addressbook-description" class="tip-caption"></p>
+          </label>
+        </div>
+      </section>
+      <footer class="buttons-container">
+        <button id="startBackButton"
+                class="back"
+                onclick="startController.back()"
+                data-l10n-id="button-back"></button>
+        <button class="primary continue"
+                onclick="startController.next()"
+                data-l10n-id="button-continue"></button>
+      </footer>
+    </div>
+    <div id="tabPane-app" class="tabPane restart-required">
+      <section id="app-profiles">
+        <h1 id="profilesPaneTitle" data-l10n-id="import-from-app"></h1>
+        <h2 id="profilesPaneSubtitle"></h2>
+        <div class="profile-list indent" id="profileList"></div>
+        <div class="profile-list indent" id="filePickerList">
+          <label class="toggle-container-with-text">
+            <input type="radio"
+                  value="file-picker-dir"
+                  name="appProfile"/>
+            <p data-l10n-id="profile-file-picker-directory"></p>
+          </label>
+          <label class="toggle-container-with-text">
+            <input type="radio"
+                  value="file-picker-zip"
+                  name="appProfile"
+                  id="appFilePickerZip"/>
+            <p data-l10n-id="profile-file-picker-archive"></p>
+            <p data-l10n-id="profile-file-picker-archive-description" class="tip-caption"></p>
+          </label>
+        </div>
+      </section>
+      <section id="app-items">
+        <h1 data-l10n-id="import-from-app"></h1>
+        <dl>
+          <div id="appSourceProfileNameWrapper">
+            <dt data-l10n-id="items-pane-profile-name"></dt>
+            <dd id="appSourceProfileName"></dd>
+          </div>
+          <dt data-l10n-id="items-pane-directory"></dt>
+          <dd id="appSourceProfilePath"></dd>
+        </dl>
+        <p id="appSourceInvalid" class="center">
+          <img src="chrome://messenger/skin/icons/new/compact/warning.svg"
+               class="icon warn"
+               alt=""/>
+          <span data-l10n-id="items-pane-nothing-to-import"></span>
+        </p>
+        <div id="appSourceItems">
+          <h2 data-l10n-id="items-pane-title2" class="light-heading"></h2>
+          <p>
+            <img src="chrome://messenger/skin/icons/new/compact/info.svg"
+                 class="info icon"
+                 alt=""/>
+            <span data-l10n-id="items-pane-override"></span>
+          </p>
+          <div id="appItemsList" class="option-list indent">
+            <label class="toggle-container-with-text">
+              <input type="checkbox" id="checkAccounts"/>
+              <span data-l10n-id="items-pane-checkbox-accounts"></span>
+            </label>
+            <label class="toggle-container-with-text">
+              <input type="checkbox" id="checkAddressBooks"/>
+              <span data-l10n-id="items-pane-checkbox-address-books"></span>
+            </label>
+            <label class="toggle-container-with-text">
+              <input type="checkbox" id="checkCalendars"/>
+              <span data-l10n-id="items-pane-checkbox-calendars"></span>
+            </label>
+            <label class="toggle-container-with-text">
+              <input type="checkbox" id="checkMailMessages"/>
+              <span data-l10n-id="items-pane-checkbox-mail-messages"></span>
+            </label>
+          </div>
+          <p class="center">
+            <img src="chrome://messenger/skin/icons/new/compact/warning.svg"
+                 class="icon warn"
+                 alt=""/>
+            <span data-l10n-id="summary-pane-warning"></span>
+          </p>
+        </div>
+      </section>
+      <section id="app-summary">
+        <h1 data-l10n-id="import-from-app"></h1>
+        <dl>
+          <div id="appSummaryProfileNameWrapper">
+            <dt data-l10n-id="items-pane-profile-name"></dt>
+            <dd id="appSummaryProfileName"></dd>
+          </div>
+          <dt data-l10n-id="items-pane-directory"></dt>
+          <dd id="appSummaryProfilePath"></dd>
+        </dl>
+        <h2 data-l10n-id="summary-pane-title" class="light-heading"></h2>
+        <ul id="appSummaryItems" class="summary-items indent">
+        </ul>
+        <button id="appStartImport"
+                onclick="profileController.startImport()"
+                class="primary before-progress center-button"
+                data-l10n-id="summary-pane-start"></button>
+        <div class="progressPane">
+          <section class="progressPane-progress">
+            <progress class="progressPaneProgressBar"></progress>
+            <p class="progressPaneDesc tip-caption"></p>
+          </section>
+        </div>
+        <button class="progressFinish primary center-button"
+                onclick="profileController.next()"
+                data-l10n-id="button-finish"></button>
+        <button data-l10n-id="summary-pane-start-over"
+                class="progressFinish no-restart center-button btn-link"
+                onclick="restart()"></button>
+        <p class="restart-only center">
+          <img src="chrome://messenger/skin/icons/new/compact/warning.svg"
+               class="icon warn"
+               alt=""/>
+          <span data-l10n-id="summary-pane-warning"></span>
+        </p>
+      </section>
+      <footer class="buttons-container">
+        <button id="profileBackButton"
+                class="back"
+                onclick="profileController.back()"
+                data-l10n-id="button-back"></button>
+        <button id="profileNextButton"
+                class="primary next-button"
+                onclick="profileController.next()"
+                data-l10n-id="button-continue"></button>
+      </footer>
+    </div>
+
+    <div id="tabPane-addressBook" class="tabPane">
+      <section id="addr-book-sources">
+        <h1 id="importAddressBook" data-l10n-id="import-address-book-title"></h1>
+        <h2 data-l10n-id="import-file-title"></h2>
+        <p data-l10n-id="import-from-addr-book-file-description" class="description"></p>
+        <div class="source-list indent">
+          <label class="toggle-container-with-text">
+            <input type="radio"
+                   value="csv"
+                   name="addrBookSource"
+                   checked=""/>
+            <p data-l10n-id="addr-book-csv-file"></p>
+          </label>
+          <label class="toggle-container-with-text">
+            <input type="radio"
+                   value="ldif"
+                   name="addrBookSource"/>
+            <p data-l10n-id="addr-book-ldif-file"></p>
+          </label>
+          <label class="toggle-container-with-text">
+            <input type="radio"
+                   value="vcard"
+                   name="addrBookSource"/>
+            <p data-l10n-id="addr-book-vcard-file"></p>
+          </label>
+          <label class="toggle-container-with-text">
+            <input type="radio"
+                   value="sqlite"
+                   name="addrBookSource"/>
+            <p data-l10n-id="addr-book-sqlite-file"></p>
+          </label>
+          <label class="toggle-container-with-text">
+            <input type="radio"
+                   value="mab"
+                   name="addrBookSource"/>
+            <p data-l10n-id="addr-book-mab-file"></p>
+          </label>
+        </div>
+      </section>
+      <section id="addr-book-csvFieldMap">
+        <h1 data-l10n-id="import-address-book-title"></h1>
+        <h2 data-l10n-id="addr-book-csv-field-map-title"></h2>
+        <p data-l10n-id="addr-book-csv-field-map-desc" class="description"></p>
+        <csv-field-map id="csvFieldMap"/>
+      </section>
+      <section id="addr-book-directories">
+        <h1 data-l10n-id="import-address-book-title"></h1>
+        <h2 data-l10n-id="addr-book-directories-title"></h2>
+        <dl>
+          <dt data-l10n-id="addr-book-directories-pane-source"></dt>
+          <dd id="addrBookSourcePath"></dd>
+        </dl>
+        <div class="profile-list indent" id="directoryList"></div>
+        <label class="toggle-container-with-text indent">
+          <input type="radio"
+                  value=".new"
+                  name="addrBookDirectory"/>
+          <p id="newDirectoryLabel"></p>
+        </label>
+      </section>
+      <section id="addr-book-summary">
+        <h1 data-l10n-id="import-address-book-title"></h1>
+        <h2 id="addrBookSummarySubtitle"></h2>
+        <p class="description"></p>
+        <dl>
+          <dt data-l10n-id="addr-book-directories-pane-source"></dt>
+          <dd id="addrBookSummaryPath"></dd>
+        </dl>
+        <h2 data-l10n-id="summary-pane-title" class="light-heading"></h2>
+        <ul class="summary-items indent">
+          <li data-l10n-id="items-pane-checkbox-address-books"></li>
+        </ul>
+        <button id="addrBookStartImport"
+                onclick="addrBookController.startImport()"
+                class="primary before-progress center-button"
+                data-l10n-id="summary-pane-start"></button>
+        <div class="progressPane">
+          <section class="progressPane-progress">
+            <progress class="progressPaneProgressBar"></progress>
+            <p class="progressPaneDesc tip-caption"></p>
+          </section>
+        </div>
+        <button class="progressFinish primary center-button"
+                onclick="addrBookController.next()"
+                data-l10n-id="button-finish"></button>
+        <button data-l10n-id="summary-pane-start-over"
+                class="progressFinish no-restart center-button btn-link"
+                onclick="restart()"></button>
+        <p class="restart-only center">
+          <img src="chrome://messenger/skin/icons/new/compact/warning.svg"
+               class="icon warn"
+               alt=""/>
+          <span data-l10n-id="summary-pane-warning"></span>
+        </p>
+      </section>
+      <footer class="buttons-container">
+        <button id="addrBookBackButton"
+                class="back"
+                onclick="addrBookController.back()"
+                data-l10n-id="button-back"></button>
+        <button class="primary next-button continue"
+                id="addrBookNextButton"
+                onclick="addrBookController.next()"
+                data-l10n-id="button-continue"></button>
+      </footer>
+    </div>
+
+    <div id="tabPane-calendar" class="tabPane">
+      <section id="calendar-sources">
+        <h1 data-l10n-id="import-calendar-title"></h1>
+        <h2 data-l10n-id="import-from-calendar-file-desc"></h2>
+      </section>
+      <section id="calendar-items">
+        <h1 data-l10n-id="import-calendar-title"></h1>
+        <dl>
+          <dt data-l10n-id="addr-book-directories-pane-source"></dt>
+          <dd id="calendarSourcePath"></dd>
+        </dl>
+        <h2 data-l10n-id="calendar-items-title"></h2>
+        <div id="calendarItemsTools">
+          <search-bar id="calendarFilter"
+                      data-l10n-id="calendar-items-filter-input2"
+                      data-l10n-attrs="label, placeholder">
+            <img slot="search-button" src="" alt="" />
+          </search-bar>
+          <button id="calendarDeselectAll"
+                  data-l10n-id="calendar-deselect-all-items"
+                  onclick="calendarController.selectAllItems(false)"></button>
+          <button id="calendarSelectAll"
+                  data-l10n-id="calendar-select-all-items"
+                  onclick="calendarController.selectAllItems(true)"></button>
+        </div>
+        <div id="calendar-item-list"></div>
+      </section>
+      <section id="calendar-calendars">
+        <h1 data-l10n-id="import-calendar-title"></h1>
+        <dl>
+          <dt data-l10n-id="addr-book-directories-pane-source"></dt>
+          <dd id="calendarCalPath"></dd>
+        </dl>
+        <h2 data-l10n-id="calendar-target-title"></h2>
+        <div class="profile-list indent" id="calendarList"></div>
+        <label class="toggle-container-with-text indent">
+          <input type="radio"
+                  value=".new"
+                  name="targetCalendar"/>
+          <p id="newCalendarLabel"></p>
+        </label>
+      </section>
+      <section id="calendar-summary">
+        <h1 data-l10n-id="import-calendar-title"></h1>
+        <h2 id="calendarSummarySubtitle"></h2>
+        <p class="description"></p>
+        <dl>
+          <dt data-l10n-id="addr-book-directories-pane-source"></dt>
+          <dd id="calendarSummaryPath"></dd>
+        </dl>
+        <h2 data-l10n-id="summary-pane-title" class="light-heading"></h2>
+        <ul class="summary-items indent">
+          <li data-l10n-id="items-pane-checkbox-calendars"></li>
+        </ul>
+        <button id="calendarStartImport"
+                onclick="calendarController.startImport()"
+                class="primary before-progress center-button"
+                data-l10n-id="summary-pane-start"></button>
+        <div class="progressPane">
+          <section class="progressPane-progress">
+            <progress class="progressPaneProgressBar"></progress>
+            <p class="progressPaneDesc tip-caption"></p>
+          </section>
+        </div>
+        <button class="progressFinish primary center-button"
+                onclick="calendarController.next()"
+                data-l10n-id="button-finish"></button>
+        <button data-l10n-id="summary-pane-start-over"
+                class="progressFinish no-restart center-button btn-link"
+                onclick="restart()"></button>
+        <p class="restart-only center">
+          <img src="chrome://messenger/skin/icons/new/compact/warning.svg"
+               class="icon warn"
+               alt=""/>
+          <span data-l10n-id="summary-pane-warning"></span>
+        </p>
+      </section>
+      <footer class="buttons-container">
+        <button id="calendarBackButton"
+                class="back"
+                onclick="calendarController.back()"
+                data-l10n-id="button-back"></button>
+        <button class="primary next-button continue"
+                id="calendarNextButton"
+                onclick="calendarController.next()"
+                data-l10n-id="button-continue"></button>
+      </footer>
+    </div>
+
+    <div id="tabPane-export" class="tabPane">
+      <section>
+        <h1 data-l10n-id="export-profile"></h1>
+        <h2 data-l10n-id="export-profile-title"></h2>
+        <p class="description">
+          <img src="chrome://messenger/skin/icons/new/compact/info.svg"
+               class="info icon"
+               alt=""/>
+          <span data-l10n-id="export-profile-description"></span>
+          <button data-l10n-id="export-open-profile-folder"
+                  onclick="exportController.openProfileFolder()"
+                  class="btn-link"></button>
+        </p>
+        <button id="exportButton"
+                onclick="exportController.next()"
+                class="primary before-progress center-button"
+                data-l10n-id="button-export"></button>
+        <div class="progressPane">
+          <section class="progressPane-progress">
+            <progress class="progressPaneProgressBar"></progress>
+            <p class="progressPaneDesc tip-caption"></p>
+          </section>
+        </div>
+        <button class="progressFinish primary center-button"
+                onclick="exportController.back()"
+                data-l10n-id="button-finish"></button>
+      </section>
+    </div>
+
+    <footer id="importFooter" class="tip-caption">
+      <p data-l10n-id="footer-help"></p>
+      <a id="importDocs"
+         data-l10n-id="footer-import-documentation"
+         href="https://support.mozilla.org/kb/thunderbird-import"></a>
+      <a id="exportDocs"
+         data-l10n-id="footer-export-documentation"
+         href="https://support.mozilla.org/kb/thunderbird-export"></a>
+      -
+      <a data-l10n-id="footer-support-forum"
+         href="https://support.mozilla.org/products/thunderbird"></a>
+    </footer>
+  </main>
+#include ../../../mail/base/content/widgets/search-bar.inc.xhtml
+</body>
+</html>

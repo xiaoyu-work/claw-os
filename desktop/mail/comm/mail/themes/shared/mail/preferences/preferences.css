@@ -1,0 +1,1672 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@import url("chrome://messenger/skin/shared/preferences/subdialog.css");
+
+@namespace html url("http://www.w3.org/1999/xhtml");
+
+body {
+  font-size: 1.1rem;
+}
+
+button,
+menulist,
+html|select,
+html|input[type="color"] {
+  min-block-size: var(--button-height);
+}
+
+html|moz-input-search {
+  min-block-size: var(--button-height);
+}
+
+button {
+  padding: 0 12px;
+
+  &[open="true"] {
+    color: var(--button-text-color-hover);
+  }
+}
+
+menulist {
+  padding: 0 6px;
+
+  &[open="true"] {
+    color: var(--button-text-color-hover);
+  }
+}
+
+button,
+menulist,
+html|select,
+html|input:is([type="email"], [type="number"], [type="color"], [type="text"], [type="password"], [type="url"]),
+html|textarea,
+html|moz-input-search {
+  border-radius: var(--button-border-radius);
+}
+
+#MailPreferences {
+  text-rendering: optimizeLegibility;
+}
+
+#prefBox {
+  position: relative;
+}
+
+#pref-category-box {
+  background-color: var(--sidebar-background);
+  border-inline-end: none;
+  inline-size: 18em;
+}
+
+/* Temporary styles for the supernova icons */
+.sidebar-footer-icon,
+.category-icon {
+  -moz-context-properties: fill, stroke, stroke-opacity;
+  fill: color-mix(in srgb, currentColor 20%, transparent);
+  stroke: currentColor;
+}
+
+/*
+  The stack has some very tall content but it shouldn't be taller than the
+  viewport (and we know the tall content will still be accessible via scrollbars
+  regardless if the stack has a shorter height). So we use min-height: 0 to allow
+  the stack to be smaller than its content height so it can fit the viewport size.
+*/
+#preferences-stack {
+  min-block-size: 0;
+}
+
+.main-content {
+  padding: 0;
+  block-size: 100vh;
+}
+
+/**
+ * The first subcategory title for each category should not have margin-top.
+ */
+
+.subcategory:not([hidden]) ~ .subcategory {
+  margin-block-start: 16px;
+  padding-block-start: 16px;
+  border-block-start: 1px solid var(--border-color);
+  /* Avoid being hidden under the sticky container. This value is the height
+     of that container minus this element's border and padding. */
+  scroll-margin-top: calc(var(--button-height) + 33px);
+}
+
+fieldset {
+  margin: 0 0 32px;
+  padding: 0;
+  border-style: none !important;
+
+  & > :where(hbox, vbox, radiogroup) {
+    inline-size: -moz-available;
+  }
+}
+
+html|h1 {
+  margin: 0 0 8px;
+  font-size: 1.46em;
+  font-weight: 300;
+  line-height: 1.3em;
+}
+
+html|legend {
+  margin: 16px 0 4px;
+  font-size: 1.1em;
+  font-weight: 600;
+  line-height: 1.4em;
+  padding: 0;
+}
+
+html|th {
+  font-weight: normal;
+  text-align: start;
+}
+
+description,
+label {
+  line-height: 1.8em;
+  margin: 0;
+}
+
+button,
+menulist::part(label-box) {
+  font-weight: 400;
+}
+
+menulist::part(icon),
+.abMenuItem > .menu-icon {
+  -moz-context-properties: fill, stroke;
+  fill: color-mix(in srgb, currentColor 20%, transparent);
+  stroke: currentColor;
+}
+
+menulist::part(label),
+menuitem > label,
+button > hbox > label {
+  line-height: unset;
+}
+
+menulist::part(dropmarker-icon) {
+  inline-size: 16px;
+  block-size: 16px;
+  -moz-context-properties: stroke;
+  stroke: currentColor;
+}
+
+.abMenuItem > .menu-icon {
+  display: block;
+}
+
+#preferencesContainer {
+  padding: 0 28px 40px;
+  overflow: auto;
+}
+
+.paneDeckContainer {
+  display: block;
+  inline-size: min(100%, 800px);
+  min-inline-size: min-content;
+}
+
+#paneDeck {
+  inline-size: 100%;
+}
+
+#policies-container,
+#searchInput {
+  /* If these sizes change, update the scroll margin of .subcategory. */
+  min-block-size: var(--button-height);
+  margin: 20px 0 30px;
+}
+
+#policies-container {
+  margin-inline-end: var(--space-large);
+  /* Make sure the container is at least the same height as the searchbox.
+     This is needed in addition to the min-height above to make the info icon
+     the same height as the first line in the policies label.
+     Searchbox's height - line-height - border top and bottom */
+  padding-block: max(0px, calc((32px - 1.8em - 2px) / 2));
+}
+
+.info-box-container {
+  background-color: var(--background-color-box-info);
+  padding: 9px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+}
+
+.info-box-container.smaller-font-size {
+  font-size: 85%;
+}
+
+.info-icon-container {
+  display: flex;
+}
+
+.info-icon {
+  content: url("chrome://global/skin/icons/info.svg");
+  inline-size: 16px;
+  block-size: 16px;
+  margin-inline-end: 6px;
+  align-self: start;
+  margin-block-start: 0.4em;
+  flex-shrink: 0;
+}
+
+.info-box-container.smaller-font-size .info-icon {
+  margin-block-start: 0.3em;
+}
+
+.sticky-container {
+  position: sticky;
+  background-color: var(--layout-background-0);
+  inset-block-start: 0;
+  z-index: 1;
+  /* The sticky-container should have the capability to cover all spotlight area. */
+  inline-size: calc(100% + 8px);
+  margin-inline: -4px;
+  padding-inline: 4px;
+}
+
+.sticky-inner-container {
+  flex: 1;
+}
+
+.search-tooltip {
+  max-inline-size: 150px;
+  font-size: 1.25rem;
+  position: absolute;
+  padding: 0 10px;
+  background-color: #ffe900;
+  color: #000;
+  border: 1px solid #d7b600;
+  inset-block-end: 36px;
+  opacity: 0.85;
+
+  &:hover {
+    opacity: 0.1;
+  }
+
+  &::before {
+    position: absolute;
+    content: "";
+    border: 7px solid transparent;
+    border-block-start-color: #d7b600;
+    inset-block-start: 100%;
+    inset-inline-start: calc(50% - 7px);
+    forced-color-adjust: none;
+  }
+
+  &::after {
+    position: absolute;
+    content: "";
+    border: 6px solid transparent;
+    border-block-start-color: #ffe900;
+    inset-block-start: 100%;
+    inset-inline-start: calc(50% - 6px);
+    forced-color-adjust: none;
+  }
+
+  @media (forced-colors: active) {
+    &::before {
+      border-block-start-color: CanvasText;
+    }
+
+    &::after {
+      border-block-start-color: Canvas;
+    }
+  }
+
+  & > span {
+    user-select: none;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+.search-tooltip-parent {
+  position: relative;
+}
+
+.tip-caption {
+  font-size: 0.9em;
+  color: var(--in-content-deemphasized-text);
+}
+
+.visually-hidden {
+  visibility: collapse;
+}
+
+tabpanel > label,
+tabpanel > description,
+tabpanel > hbox > description {
+  margin-inline-start: 0;
+}
+
+/* Web search menulist */
+#defaultWebSearch::part(icon) {
+  margin-inline: 5px 8px;
+  inline-size: 16px;
+  block-size: 16px;
+}
+
+/* Category List */
+
+#categories {
+  overflow: visible;
+  min-block-size: auto;
+}
+
+.sidebar-footer-link {
+  margin-inline: 6px;
+  border-radius: var(--button-border-radius);
+}
+
+@media (max-width: 830px) {
+  #categories {
+    inline-size: auto;
+  }
+}
+
+html|input:is([type="email"], [type="tel"], [type="text"], [type="password"], [type="url"]) {
+  padding-block: initial;
+  min-block-size: var(--button-height);
+}
+
+html|input[type="number"] {
+  margin-inline-start: 4px;
+  padding: 1px;
+  min-block-size: var(--button-height);
+
+  /* sizes: chars + 8px padding + 1px borders + spin buttons 25+2+10px  */
+  &.size2 {
+    inline-size: calc(2ch + 55px);
+  }
+  &.size3 {
+    inline-size: calc(3ch + 55px);
+  }
+  &.size4 {
+    inline-size: calc(4ch + 55px);
+  }
+  &.size5 {
+    inline-size: calc(5ch + 55px);
+  }
+
+  &::-moz-number-spin-box {
+    padding-inline-start: 10px;
+  }
+
+  &::-moz-number-spin-up,
+  &::-moz-number-spin-down {
+    min-inline-size: 25px;
+    min-block-size: calc(var(--button-height) * 0.5 - 4px);
+    border: 1px solid var(--border-color);
+    background-color: var(--button-background-color);
+    color: var(--button-text-color);
+  }
+
+  &::-moz-number-spin-up:hover,
+  &::-moz-number-spin-down:hover {
+    background-color: var(--button-hover-background-color);
+    color: var(--button-text-color-hover);
+  }
+}
+
+separator.groove:not([orient="vertical"]) {
+  border-block-start-color: #c1c1c1;
+  border-block-end-width: 0;
+}
+
+tab {
+  &:not([selected="true"]):hover {
+    border-block-end-color: transparent;
+  }
+
+  &:focus-visible {
+    background-color: var(--button-background-color);
+
+    & > .tab-middle {
+      outline: none;
+
+      & > .tab-text {
+        outline: none;
+      }
+    }
+  }
+}
+
+#defaultWebSearchPopup > menuitem > .menu-icon {
+  display: flex;
+}
+
+/* Applications Pane Styles */
+
+#filter {
+  flex: 1;
+  --input-text-max-width: none;
+
+  #CookiesDialog & {
+    margin-inline-start: 8px;
+  }
+}
+
+/* XXX This style is for bug 740213 and should be removed once that
+   bug has a solution. */
+description > html|a {
+  cursor: pointer;
+}
+
+#previewBox {
+  block-size: 220px;
+}
+
+.indent,
+html|input.indent {
+  /* This should match the checkboxes/radiobuttons' width and inline margin,
+     such that when we have a toggle with a label followed by another element
+     with this class, the other element's text aligns with the toggle label. */
+  margin-inline-start: 22px;
+}
+
+checkbox {
+  margin-inline: 0;
+}
+
+treechildren::-moz-tree-row(selected) {
+  background-color: var(--selected-item-color) !important;
+  border-color: transparent;
+  outline-color: transparent;
+}
+
+treechildren::-moz-tree-cell-text(selected) {
+  color: var(--selected-item-text-color);
+}
+
+.align-no-label {
+  margin-inline-start: 4px;
+}
+
+.tail-with-learn-more {
+  margin-inline-end: 10px;
+}
+
+.learnMore {
+  margin-inline-start: 0;
+  font-weight: normal;
+  white-space: nowrap;
+  line-height: 1.8em;
+}
+
+.accessory-button {
+  min-inline-size: 150px;
+}
+
+#tagList {
+  block-size: 180px;
+}
+
+#keywordList {
+  block-size: 250px;
+}
+
+#signonsTree {
+  block-size: 20em;
+}
+
+.update-deck-container {
+  display: flex;
+  align-items: center;
+
+  & > * {
+    flex: 0 0 auto;
+  }
+
+  &.deck-selected {
+    visibility: visible;
+  }
+
+  & > button {
+    /* Align the button at the end. */
+    margin-inline-start: auto;
+  }
+}
+
+.update-throbber {
+  inline-size: 1.3em;
+  min-block-size: 1.3em;
+  margin-inline-end: 8px;
+  content: url("chrome://messenger/skin/icons/spinning.svg");
+  -moz-context-properties: fill;
+  fill: var(--in-content-accent-color);
+
+  /* Work around bug 560067 - animated images in visibility: hidden
+   * still eat CPU. */
+  #updateDeck > *:not(.deck-selected) > & {
+    display: none;
+  }
+}
+
+.updateSettingCrossUserWarningContainer {
+  background: var(--background-color-box-info);
+  border: 1px solid var(--border-color-box-info);
+  border-radius: 5px;
+  padding: 2px 8px 8px;
+  margin-block-end: 17px;
+}
+
+#updateSettingCrossUserWarning {
+  padding-inline-start: 30px;
+  margin-block-start: 20px;
+  line-height: 20px;
+  background-image: url("chrome://messenger/skin/icons/info.svg");
+  background-position-x: left 2px;
+  background-position-y: top 2px;
+  background-size: 16px 16px;
+  background-repeat: no-repeat;
+  -moz-context-properties: fill;
+  fill: currentColor;
+
+  &:-moz-locale-dir(rtl) {
+    background-position-x: right 2px;
+  }
+}
+
+#releasenotes {
+  margin-inline-start: 6px !important;
+}
+
+#telemetry-container {
+  border-radius: 4px;
+  background-color: rgba(12, 12, 13, 0.2);
+  font-size: 85%;
+  padding: 3px;
+  margin-block: 4px;
+  inline-size: 100%;
+  display: flex;
+
+  &[hidden] {
+    display: none;
+  }
+}
+
+#telemetryInfoIcon {
+  flex: 0 0 auto;
+  align-self: start;
+  inline-size: 16px;
+  block-size: 16px;
+  padding: 2px;
+}
+
+#telemetryDisabledDescription {
+  flex: 1 1 auto;
+  align-self: start;
+  line-height: 1.3;
+  margin-inline-start: 6px;
+}
+
+#telemetryDataDeletionLearnMore {
+  flex: 0 0 auto;
+  align-self: center;
+}
+
+#submitHealthReportBox {
+  display: inline-flex;
+}
+
+/* Remove the start margin to align these elements */
+#addCloudFileAccount,
+#chatStartupAction,
+#defaults-itemtype-menulist,
+#manageCertificatesButton {
+  margin-inline-start: 0;
+}
+
+#dictionaryList,
+#keyServerList {
+  list-style-type: none;
+  padding: 0;
+  margin-block: 0.5em;
+
+  & label {
+    display: flex;
+    align-items: center;
+  }
+}
+
+/**
+ * Font dialog menulist fixes
+ */
+
+#font-chooser-group {
+  display: grid;
+  grid-template-columns: max-content 1fr max-content max-content;
+}
+
+#fontsTitle {
+  margin-block: 4px;
+}
+
+#defaultFontType,
+#serif,
+#sans-serif,
+#monospace {
+  min-inline-size: 30ch;
+}
+
+/**
+ * toolkit element overrides
+ */
+
+richlistbox:not(#categories) {
+  appearance: none;
+  background-color: var(--background-color-box);
+  color: var(--color-text-base);
+
+  & richlistitem {
+    padding: 0.3em;
+    padding-inline-start: 12px;
+    margin: 0;
+    border: none;
+    border-radius: 0;
+    background-image: none;
+
+    &:hover {
+      color: var(--text-color-list-item-hover);
+      background-color: var(--background-color-list-item-hover);
+    }
+
+    &[selected="true"] {
+      background-color: var(--color-accent-primary-selected-unfocused);
+      color: inherit;
+    }
+  }
+
+  &:focus {
+    & > richlistitem[selected="true"] {
+      background-color: var(--selected-item-color);
+      color: var(--selected-item-text-color) !important;
+    }
+  }
+}
+
+#defaultWebSearch {
+  margin-inline: 0 4px;
+}
+
+#defaultFontSize,
+#directoriesList,
+#localDirectoriesList,
+#defaultStartupDirList {
+  margin-inline-end: 4px;
+}
+
+#messengerLanguagesDialogPane {
+  min-block-size: 360px;
+}
+
+#primaryMessengerLocale {
+  margin-inline: 0 4px;
+  min-inline-size: 20em;
+}
+
+#availableLocales {
+  margin-inline: 0;
+
+  & > image {
+    -moz-context-properties: fill;
+    fill: var(--selected-item-color);
+  }
+}
+
+#warning-message {
+  margin-block-start: 8px;
+
+  & > .message-bar-description {
+    inline-size: 32em;
+  }
+}
+
+.action-button {
+  margin-inline-start: 8px;
+}
+
+#tagList,
+#categorieslist {
+  margin-inline-end: 4px;
+}
+
+#new-tag-button,
+#newCButton {
+  margin-block-start: 0;
+}
+
+#PermissionsDialog > body {
+  min-block-size: 100vh;
+  display: flex;
+}
+
+#permissionsTree {
+  flex: 1 1 0;
+}
+
+/* Menulist styles */
+.label-item {
+  font-size: 0.8em;
+}
+
+#datePrefsBox {
+  display: grid;
+  grid-template-columns: auto 1fr 1fr;
+}
+
+#PopupAutoComplete > richlistbox {
+  margin: unset;
+  border: unset;
+  border-radius: unset;
+}
+
+#synchronizeTree treechildren::-moz-tree-twisty(selected, focus),
+#synchronizeTree treechildren::-moz-tree-image(folderNameCol, selected, focus) {
+  fill: color-mix(in srgb, currentColor 20%, transparent) !important;
+  stroke: currentColor !important;
+}
+
+/**
+ * Connection dialog
+ */
+
+#proxyExtensionContent:not([hidden]) {
+  display: flex;
+  align-items: center;
+}
+
+#proxyExtensionDescription {
+  margin-block: 0;
+  flex: 1 1 auto;
+
+  & > img {
+    block-size: 20px;
+    inline-size: 20px;
+    vertical-align: text-bottom;
+    -moz-context-properties: fill;
+    fill: currentColor;
+  }
+}
+
+#proxyExtensionDisable {
+  flex: 0 0 auto;
+}
+
+#proxy-grid,
+#dnsOverHttps-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+}
+
+.proxy-grid-row:not([hidden]),
+.dnsOverHttps-grid-row:not([hidden]) {
+  display: contents;
+}
+
+#proxy-grid > .thin {
+  grid-column: span 2;
+  block-size: 20px;
+}
+
+calendar-notifications-setting {
+  display: flex;
+  flex-direction: column;
+  margin-block-end: 9px;
+
+  & .add-button {
+    list-style-image: var(--icon-add);
+    -moz-context-properties: stroke;
+    stroke: currentColor;
+
+    & .button-icon {
+      margin-inline-end: 6px;
+    }
+  }
+
+  & .remove-button {
+    inline-size: 32px;
+    min-inline-size: 0;
+    padding: 0;
+    list-style-image: var(--icon-trash);
+    -moz-context-properties: fill, stroke;
+    fill: color-mix(in srgb, currentColor 20%, transparent);
+    stroke: currentColor;
+    background: none;
+    --in-content-button-horizontal-padding: 0;
+  }
+}
+
+/**
+ * End connection dialog
+ */
+
+/**
+ * Sync Settings Page
+ */
+
+#noFxaAccount:not([hidden]) {
+  display: flex;
+  gap: 24px;
+}
+
+#noFxaInfo {
+  display: flex;
+  flex-direction: column;
+  align-self: center;
+  flex: 3;
+}
+
+#noFxaCaption {
+  margin-block: 0 4px;
+}
+
+#noFxaDescription {
+  padding-inline-end: 52px;
+  padding-block-end: 52px;
+}
+
+#noFxaSignIn {
+  margin-inline-start: 8px;
+  max-inline-size: 151px;
+  margin: 4px 0;
+}
+
+#noFxaSyncIllustration {
+  inline-size: 169px;
+  flex-grow: 2;
+}
+
+.sync-account-section:not([hidden]) {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 24px;
+  margin: 24px 0;
+}
+
+#fxaLoginUnverified:not([hidden]),
+#fxaLoginRejected:not([hidden]) {
+  display: flex;
+  align-items: center;
+}
+
+#photoInput {
+  display: contents;
+  place-self: center;
+}
+
+.contact-photo,
+#photoButton {
+  border-radius: 100%;
+  padding: 0;
+  margin: 0;
+}
+
+.contact-photo {
+  inline-size: 78px;
+  block-size: 78px;
+  object-fit: cover;
+  object-position: center;
+  border: 1px solid var(--button-background-color);
+
+  &[src=""] {
+    background-color: var(--button-background-color);
+    background-image: var(--icon-user);
+    background-size: 48px;
+    background-position: calc(50% - 1px) calc(50% - 1px);
+    background-repeat: no-repeat;
+    -moz-context-properties: stroke;
+    stroke: color-mix(in srgb, currentColor 30%, transparent);
+  }
+}
+
+#photoButton {
+  position: relative;
+  inline-size: 80px;
+  block-size: 80px;
+  min-inline-size: 80px;
+  overflow: hidden;
+  background-color: transparent;
+  border: none;
+
+  &:hover {
+    background: none;
+  }
+
+  &:focus-visible {
+    outline: 2px solid var(--in-content-focus-outline-color);
+    outline-offset: 2px;
+  }
+
+  & #photoOverlay {
+    position: absolute;
+    inset: 0;
+    border-radius: 100%;
+  }
+
+  &:is(:focus-visible, :hover) #photoOverlay {
+    background-color: color-mix(in srgb, var(--color-gray-90) 75%, transparent);
+    background-image: var(--icon-more);
+    background-position: center center;
+    background-repeat: no-repeat;
+    background-size: 48px;
+    -moz-context-properties: stroke;
+    stroke: var(--color-white);
+    cursor: pointer;
+
+    @media (prefers-contrast) {
+      background-color: var(--color-black);
+    }
+  }
+}
+
+#fxaAccountInfo {
+  display: flex;
+  flex-direction: column;
+  align-self: center;
+  align-items: flex-start;
+}
+
+#fxaDisplayName {
+  font-weight: bold;
+  font-size: 1.3rem;
+}
+
+#fxaEmailAddress {
+  margin-block-end: 6px;
+}
+
+.place-self-start {
+  place-self: start;
+}
+
+.place-self-center {
+  place-self: center;
+}
+
+.place-self-end {
+  place-self: end;
+}
+
+#fxaDeviceInfo {
+  display: flex;
+  gap: 6px;
+  margin: 24px 0;
+}
+
+#fxaDeviceNameInput {
+  flex-grow: 1;
+  align-self: center;
+}
+
+.sync-section {
+  margin-block-end: 24px;
+}
+
+#showSyncedHeader,
+#showSyncedListHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+/*
+* We usually use rem for font size but this header needs to match perfectly
+* the styling of the HTML legend coming from toolkit.
+*/
+.sync-header {
+  margin: 16px 0 4px;
+  font-size: 1.1em;
+  font-weight: 600;
+  line-height: 1.4em;
+}
+
+.sync-panel {
+  display: grid;
+  margin-block-start: 15px;
+  padding: 15px;
+  background-color: var(--background-color-box-info);
+  border-radius: 6px;
+}
+
+#syncDisconnected {
+  & .sync-panel {
+    grid-template-columns: 1fr auto;
+    align-items: center;
+  }
+
+  & p {
+    margin: 0;
+  }
+}
+
+#showSyncedListHeading {
+  font-size: 1.1rem;
+  font-weight: bold;
+  margin: 0;
+}
+
+.synced-list {
+  display: grid;
+  gap: 24px;
+  padding-inline-start: 12px;
+  -moz-context-properties: fill, stroke;
+  fill: color-mix(in srgb, currentColor 20%, transparent);
+  stroke: currentColor;
+}
+
+.synced-item:not([hidden]) {
+  display: inline-flex;
+  align-items: center;
+}
+
+.synced-item::before,
+.synced-item-label::before {
+  block-size: 16px;
+  inline-size: 16px;
+  margin-inline-end: 6px;
+}
+
+#showSyncedList,
+#configSyncList {
+  grid-template-columns: 1fr 1fr;
+}
+
+/* For when we get per-account controls:
+#showSyncAccount,
+#configAccountsContainer {
+  display: grid;
+  gap: 12px;
+  grid-column: 1 / span 2;
+}
+
+#syncedAccounts,
+#configAccounts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+}
+
+#syncedAccounts .synced-list {
+  gap: 9px;
+}
+
+#showSyncAccountLabel::before,*/
+#showSyncAccount::before,
+#configSyncAccountLabel::before {
+  content: var(--icon-mail);
+}
+
+#showSyncAddress::before,
+#configSyncAddressLabel::before {
+  content: var(--icon-address-book);
+}
+
+#showSyncCalendar::before,
+#configSyncCalendarLabel::before {
+  content: var(--icon-calendar);
+}
+
+#showSyncIdentity::before,
+#configSyncIdentityLabel::before {
+  content: var(--icon-id);
+}
+
+#showSyncPasswords::before,
+#configSyncPasswordsLabel::before {
+  content: var(--icon-key);
+}
+
+.synced-account {
+  padding-inline-start: 21px;
+}
+
+.synced-account-name {
+  font-size: 1rem;
+  font-weight: bold;
+  margin: 0;
+  margin-block-end: 9px;
+}
+
+.synced-account-server-config::before {
+  content: var(--icon-globe);
+}
+
+.synced-account-filters::before {
+  content: var(--icon-filter);
+}
+
+.synced-account-keys::before {
+  content: var(--icon-lock);
+}
+
+#configSyncDialogHeading {
+  place-self: center;
+  margin: 0;
+}
+
+#configSyncList {
+  margin-block: 12px 24px;
+  margin-inline: 6px;
+}
+
+#configAccountsContainer {
+  gap: 9px;
+}
+
+.config-list {
+  display: grid;
+  gap: 24px;
+  padding-inline-start: 0;
+  -moz-context-properties: fill, stroke;
+  fill: color-mix(in srgb, currentColor 20%, transparent);
+  stroke: currentColor;
+
+  & li {
+    list-style: none;
+  }
+}
+
+.synced-account .config-list {
+  gap: 0;
+  margin-inline-start: 21px;
+}
+
+.config-item {
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
+
+  & label::before {
+    display: inline-block;
+    block-size: 16px;
+    inline-size: 16px;
+    margin-inline-end: 6px;
+    vertical-align: sub;
+  }
+}
+
+/* Feature labels */
+
+.align-baseline {
+  align-items: baseline;
+  gap: calc(4 * var(--space-step));
+}
+
+/* QR Export for Mobile */
+
+#qrExportContent {
+  --qr-legend-icon-gap: 6px;
+  --qr-gap: 12px;
+  --qr-inset-margin: calc(16px + var(--qr-legend-icon-gap));
+
+  h2 {
+    font-weight: 500;
+    font-size: 1.2rem;
+  }
+
+  h3 {
+    font-weight: 600;
+    font-size: 1.2rem;
+    margin: 0;
+  }
+
+  h4 {
+    font-weight: normal;
+    font-size: 1.2rem;
+    margin: 0;
+    margin-block-end: var(--qr-gap);
+  }
+
+  .qr-panel {
+    background: var(--color-surface-subtle);
+    border: 1px solid var(--color-surface-border);
+    border-radius: 6px;
+    padding-inline: 32px;
+    padding-block: 24px 15px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+
+    section {
+      padding-inline: var(--qr-gap);
+    }
+  }
+
+  .qr-small {
+    font-size: 0.85rem;
+    line-height: 1.5rem;
+  }
+
+  .qr-subpanel {
+    background: var(--color-surface-base);
+    border-radius: 3px;
+    padding: var(--qr-gap);
+
+    header {
+      display: flex;
+      justify-content: space-between;
+    }
+  }
+
+  .qr-warn {
+    font-weight: bold;
+  }
+
+  .qr-nav {
+    display: flex;
+    justify-content: space-between;
+
+    .end {
+      margin-inline-start: auto;
+    }
+  }
+
+  .inset {
+    margin-inline-start: var(--qr-inset-margin);
+  }
+
+  .inset-icon::before {
+    margin-inline-start: calc(-1 * var(--qr-inset-margin));
+    margin-inline-end: var(--qr-legend-icon-gap);
+    -moz-context-properties: fill, stroke;
+    fill: color-mix(in srgb, currentColor 20%, transparent);
+    stroke: currentColor;
+    vertical-align: middle;
+  }
+}
+
+#qrExportAccountsLegend::before {
+  content: var(--icon-mail);
+}
+
+#qrExportSecurityLegend::before {
+  content: var(--icon-lock);
+}
+
+#qrExportOauthWarning::before {
+  content: var(--icon-warning);
+}
+
+#qrExportSecurityHint::before {
+  content: var(--icon-info);
+  margin-inline-end: var(--qr-legend-icon-gap);
+  -moz-context-properties: fill, stroke;
+  fill: color-mix(in srgb, currentColor 20%, transparent);
+  stroke: currentColor;
+  vertical-align: middle;
+  margin-inline-start: calc(-1 * (16px + var(--qr-legend-icon-gap)));
+}
+
+#qrExportAccountsList {
+  list-style-type: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid: auto-flow / repeat(2, 1fr);
+  column-gap: var(--qr-gap);
+
+  & li {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: block ruby;
+  }
+}
+
+#qrExportSelectAll {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  border-radius: 3px;
+  background: var(--button-primary-background-color);
+  color: var(--button-primary-text-color);
+  padding: 4px 9px;
+  border: 1px solid var(--button-primary-border-color);
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.25);
+  font-weight: 700;
+
+  &:hover {
+    background: var(--button-primary-hover-background-color);
+  }
+}
+
+qr-code-wizard {
+  text-align: center;
+
+  figure {
+    margin: 0;
+  }
+
+  figcaption {
+    font-weight: 600;
+    color: var(--color-text-secondary);
+    margin-block-end: var(--qr-gap);
+  }
+
+  img {
+    max-inline-size: 420px;
+    image-rendering: pixelated;
+  }
+}
+
+#qrExportSummaryList {
+  padding: 0;
+  margin: 0;
+  list-style-position: inside;
+  line-height: 2rem;
+
+  & > li > ul {
+    list-style-type: disc;
+    display: grid;
+
+    & li {
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+  }
+}
+
+#qrExportSummary h2 {
+  font-size: 1em;
+  font-weight: normal;
+  margin: 0;
+}
+
+#qrExportRestart {
+  margin-block-start: 24px;
+}
+
+/* Appearance Tab */
+
+#accentColor {
+  flex: 1;
+
+  &::part(icon) {
+    block-size: 12px;
+    inline-size: 12px;
+    border-radius: 6px;
+    background-color: AccentColor;
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.15);
+  }
+
+  &[value="thunderbird"]::part(icon) {
+    background-color: light-dark(var(--color-blue-60), var(--color-accent-blue-dark));
+  }
+
+  &[value="purple"]::part(icon) {
+    background-color: light-dark(var(--color-purple-80), var(--color-accent-purple-light));
+  }
+
+  &[value="orange"]::part(icon) {
+    background-color: light-dark(var(--color-accent-orange-light), var(--color-accent-orange-dark));
+  }
+
+  &[value="pink"]::part(icon) {
+    background-color: light-dark(var(--color-accent-pink-light), var(--color-accent-pink-dark));
+  }
+
+  &[value="ink"]::part(icon) {
+    background-color: light-dark(var(--color-accent-ink-light), var(--color-accent-ink-dark));
+  }
+
+  &[value="teal"]::part(icon) {
+    background-color: light-dark(var(--color-accent-teal-light), var(--color-accent-teal-dark));
+  }
+
+  @media (prefers-contrast) {
+    &::part(icon) {
+      background-color: SelectedItem !important;
+    }
+  }
+
+  menuitem {
+    &::before {
+      display: inline-block;
+      content: "";
+      inline-size: 12px;
+      block-size: 12px;
+      border-radius: 6px;
+      margin-inline-end: 6px;
+      padding-inline: 0;
+      background-color: AccentColor;
+      box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.15);
+      visibility: visible;
+    }
+
+    &.accent-color-thunderbird::before {
+      background-color: light-dark(var(--color-blue-60), var(--color-accent-blue-dark));
+    }
+
+    &.accent-color-purple::before {
+      background-color: light-dark(var(--color-purple-80), var(--color-accent-purple-light));
+    }
+
+    &.accent-color-orange::before {
+      background-color: light-dark(var(--color-accent-orange-light), var(--color-accent-orange-dark));
+    }
+
+    &.accent-color-pink::before {
+      background-color: light-dark(var(--color-accent-pink-light), var(--color-accent-pink-dark));
+    }
+
+    &.accent-color-ink::before {
+      background-color: light-dark(var(--color-accent-ink-light), var(--color-accent-ink-dark));
+    }
+
+    &.accent-color-teal::before {
+      background-color: light-dark(var(--color-accent-teal-light), var(--color-accent-teal-dark));
+    }
+
+    @media (-moz-platform: macos) {
+      padding-inline-start: 6px;
+    }
+  }
+}
+
+@media not (prefers-contrast) {
+  #accentColorDisabledDescription {
+    display: none;
+  }
+}
+
+.pane-appearance-sorting-options {
+  display: grid;
+  grid-template-columns: max-content 1fr 1fr;
+  align-items: center;
+  margin-block: 18px;
+
+  & label {
+    text-align: end;
+  }
+}
+
+.pane-appearance-sorting-buttons {
+  text-align: end;
+  display: flex;
+  justify-content: end;
+  align-items: center;
+}
+
+.folder-chooser-popup-button {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 6px;
+  padding-inline-start: 6px;
+
+  -moz-context-properties: fill, stroke;
+  --icon-color: currentColor;
+  fill: color-mix(in srgb, var(--icon-color) 20%, transparent);
+  stroke: var(--icon-color);
+
+  &::before {
+    position: relative;
+    content: var(--icon-folder);
+  }
+
+  &::after {
+    position: relative;
+    content: var(--icon-nav-down-sm);
+  }
+}
+
+#defaultSortOrder {
+  & .radio-icon {
+    margin-inline-end: 3px;
+    -moz-context-properties: stroke;
+    stroke: currentColor;
+  }
+
+  & [selected="true"] .radio-icon {
+    stroke: AccentColor;
+  }
+}
+
+#defaultSortOrderAscending .radio-icon {
+  list-style-image: var(--icon-ascending-xs);
+}
+
+#defaultSortOrderDescending .radio-icon {
+  list-style-image: var(--icon-descending-xs);
+}
+
+.appearance-options {
+  display: flex;
+  flex-direction: row;
+  gap: 15px;
+  margin-block-start: 9px;
+
+  & .radio-icon {
+    -moz-context-properties: fill, stroke;
+    fill: var(--color-text-base);
+    stroke: var(--color-text-secondary);
+    margin-inline-start: -22px;
+    background-color: var(--color-surface-base);
+    border-radius: 6px;
+  }
+
+  & radio {
+    display: flex;
+    align-items: end;
+    background-color: var(--color-surface-subtle);
+    border: 1px solid var(--color-surface-border);
+    border-radius: 10px;
+    padding: 3px;
+    margin: 0;
+
+    & .radio-check {
+      margin-block: 0;
+    }
+
+    & .radio-label-box {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      margin: 0;
+      padding: 0;
+    }
+
+    & .radio-label {
+      align-self: start;
+      margin: 0;
+      padding: 0;
+      line-height: 1.3;
+    }
+
+    &:hover {
+      background-color: var(--color-surface-border);
+    }
+
+    &[selected="true"] {
+      border-color: var(--selected-item-color);
+      outline: 1px solid var(--selected-item-color);
+
+      .radio-icon {
+        fill: var(--selected-item-color);
+        stroke: var(--selected-item-color);
+      }
+    }
+  }
+}
+
+#defaultFlagThreaded .radio-icon {
+  list-style-image: var(--threaded-illustration);
+}
+
+#defaultFlagUnthreaded .radio-icon {
+  list-style-image: var(--unthreaded-illustration);
+}
+
+#defaultFlagGrouped .radio-icon {
+  list-style-image: var(--grouped-illustration);
+}
+
+#appearanceStyleTable .radio-icon {
+  list-style-image: var(--table-view-illustration);
+}
+
+#appearanceStyleCards .radio-icon {
+  list-style-image: var(--cards-view-illustration);
+}
+
+.highlighting-group {
+  --section-highlight-background-color: color-mix(in srgb, AccentColor 20%, transparent);
+}
+
+.privacy-detailedoption .checkbox-label-box,
+.arrowhead {
+  -moz-context-properties: fill;
+  fill: currentColor;
+}
+
+.privacy-detailedoption {
+  margin: 3px 0;
+  border-color: var(--border-color);
+
+  @media not (forced-colors) {
+    background-color: rgba(215, 215, 219, 0.1);
+  }
+
+  &.disabled {
+    opacity: 0.5;
+
+    & .radio-check {
+      opacity: 1;
+    }
+  }
+
+  & > .indent {
+    /* Apply display: block to the containers of all the category information, as
+     * without this the flex-wrapped blocks inside don't stretch vertically to
+     * enclose their content. */
+    display: block;
+    margin-inline-end: 22px;
+  }
+
+  &.selected {
+    border-color: var(--selected-item-color);
+
+    @media not (forced-colors) {
+      background-color: var(--section-highlight-background-color);
+    }
+
+    @media (forced-colors) {
+      outline: 2px solid var(--color-accent-primary);
+    }
+
+    & .arrowhead {
+      display: none;
+    }
+  }
+
+  & .radio-label-box {
+    font-weight: bold;
+  }
+
+  &:not(.expanded, .selected) .privacy-extra-information {
+    visibility: collapse;
+  }
+
+  &:where(.expanded, .selected) .privacy-extra-information {
+    display: flex;
+    flex-direction: column;
+    align-content: stretch;
+  }
+}
+
+.extra-information-label {
+  margin-block-start: 18px;
+}
+
+.arrowhead {
+  border-color: transparent;
+  min-block-size: 20px;
+  min-inline-size: 20px;
+  max-block-size: 20px;
+  max-inline-size: 20px;
+  list-style-image: var(--icon-nav-down-sm);
+  background-color: transparent;
+  padding: 3px;
+}
+
+.arrowhead:not([disabled]):hover {
+  cursor: pointer;
+}
+
+.arrowhead.up {
+  list-style-image: var(--icon-nav-up-sm);
+}
+
+.doh-label {
+  display: list-item;
+}

@@ -1,0 +1,158 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+/* ===== cardViewOverlay.css ============================================
+  == Styles for Address Book dialogs.
+  ======================================================================= */
+
+@import url("chrome://messenger/skin/messenger.css");
+@import url("chrome://messenger/skin/icons.css");
+
+@namespace html url("http://www.w3.org/1999/xhtml");
+
+window {
+  --lwt-header-image: none !important;
+}
+
+.input-inline {
+  margin-inline-end: 0 !important;
+}
+
+/* ::::: Card Edit dialog ::::: */
+
+#contactGrid {
+  display: grid;
+  grid-auto-flow: column;
+}
+
+.inputGrid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-content: start;
+  align-items: center;
+}
+
+.align-end {
+  text-align: end;
+}
+
+#BirthMonth[value="-1"],
+#BirthDay[value="-1"],
+.placeholderOption {
+  color: #888;
+}
+
+.YearWidth {
+  inline-size: 8ch;
+}
+
+.ZipWidth {
+  max-inline-size: 14ch !important;
+}
+
+.DepartmentWidth {
+  max-inline-size: 20ch !important;
+}
+
+/* ::::: List dialogs ::::: */
+
+.menu-icon,
+menulist::part(icon) {
+  -moz-context-properties: fill, stroke;
+  fill: color-mix(in srgb, currentColor 20%, transparent);
+  stroke: currentColor;
+}
+
+#addressingWidget {
+  -moz-user-focus: none;
+  block-size: 15em;
+  margin-block-end: 12px;
+}
+
+.dummy-row,
+.addressingWidgetItem {
+  border: none !important;
+  background-color: inherit !important;
+  color: inherit !important;
+  min-block-size: 30px;
+}
+
+.addressingWidgetItem:hover,
+.autocomplete-richlistitem:hover {
+  color: var(--text-color-list-item-hover);
+  background-color: var(--background-color-list-item-hover);
+}
+
+.textbox-addressingWidget {
+  min-block-size: 30px;
+  padding-inline: 5px;
+  outline-offset: -2px;
+}
+
+.dummy-row-cell,
+.addressingWidgetCell {
+  border-block-end: 1px solid hsla(0, 0%, 50%, 0.3);
+}
+
+panel[type="autocomplete-richlistbox"] {
+  border: 1px solid var(--border-color, ThreeDShadow);
+
+  &::part(content) {
+    border-width: 0;
+  }
+}
+
+.autocomplete-richlistbox {
+  border-width: 0;
+  border-radius: 0;
+}
+
+.autocomplete-richlistitem {
+  padding-inline-start: 3px;
+}
+
+.person-icon {
+  margin: 0 3px;
+  content: var(--icon-contact);
+  -moz-context-properties: fill, stroke;
+  fill: color-mix(in srgb, currentColor 20%, transparent);
+  stroke: currentColor;
+}
+
+#photo {
+  list-style-image: var(--icon-user);
+  -moz-context-properties: fill, stroke;
+  fill: color-mix(in srgb, currentColor 20%, transparent);
+  stroke: currentColor;
+  box-shadow: 0 0 5px rgba(127, 127, 127, 0.7);
+}
+
+#PhotoContainer {
+  margin: 5px;
+}
+
+#PhotoDropTarget {
+  margin-block-start: 5px;
+
+  &:hover {
+    border: 1px dashed hsla(0, 0%, 50%, 0.5);
+  }
+}
+
+#PhotoFile {
+  background-position: 2px center;
+  background-repeat: no-repeat;
+  padding-inline-start: 20px;
+}
+
+#ProgressContainer {
+  max-block-size: 0;
+  transition: all 0.5s ease-out;
+  overflow: hidden;
+
+  &.expanded {
+    margin-block-start: 10px;
+    max-block-size: 40px; /* something higher than the actual height, but not too large */
+  }
+}

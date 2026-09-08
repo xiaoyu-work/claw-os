@@ -1,0 +1,27 @@
+
+soname_suffix "so"
+
+soname_pattern_base "lib{libname}.so"
+shared_lib_symlinks no
+
+<target_features>
+posix1
+posix_mlock
+clock_gettime
+
+arc4random
+dev_random
+
+getauxval
+
+# Added in API 28
+#getentropy
+
+atomics
+sockets
+system_clock
+threads
+thread_local
+filesystem
+prctl
+</target_features>

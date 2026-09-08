@@ -1,0 +1,2024 @@
+[
+  {
+    "namespace": "manifest",
+    "types": [
+      {
+        "$extend": "OptionalPermission",
+        "choices": [
+          {
+            "type": "string",
+            "enum": [
+              "messagesDelete",
+              "messagesImport",
+              "messagesModifyPermanent",
+              "messagesMove",
+              "messagesRead",
+              "messages.save",
+              "messagesTags",
+              "messagesTagsList",
+              "messagesUpdate",
+              "sensitiveDataUpload"
+            ]
+          }
+        ]
+      },
+      {
+        "$extend": "OptionalOnlyPermission",
+        "choices": [
+          {
+            "type": "string",
+            "enum": ["messages.send"]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "namespace": "messages",
+    "description": "The messages API allows to access and manage the user's messages.",
+    "permissions": ["messagesRead"],
+    "types": [
+      {
+        "id": "MessageId",
+        "type": "integer",
+        "minimum": 1,
+        "description": "A unique id representing a $(ref:messages.MessageHeader) and the associated message. This id doesn’t refer to the Message-ID email header. It is an internal tracking number that does not remain after a restart. Nor does it follow an email that has been moved to a different folder."
+      },
+      {
+        "id": "InlineTextPart",
+        "type": "object",
+        "description": "An inline part with content type <var>text/*</var>. These parts are not returned by $(ref:messages.listAttachments) and usually make up the readable content of the message, mostly with content type <var>text/plain</var> or <var>text/html</var>",
+        "properties": {
+          "contentType": {
+            "type": "string",
+            "description": "The content type of the part. Most common types for inline text parts are <var>text/plain</var> and <var>text/html</var>. Possible other (deprecated) types are <var>text/richtext</var> and <var>text/enriched</var>. Some calendaring services include an inline text part with type <var>text/calendar</var>."
+          },
+          "content": {
+            "type": "string",
+            "description": "The content of this inline text part."
+          }
+        }
+      },
+      {
+        "id": "MailBoxHeaderString",
+        "type": "string",
+        "description": "Content may either be a single email address, or a mailbox string (see RFC 5322, section 3.4). Use $(ref:messengerUtilities.parseMailboxString) to extract the name and/or the email from the mailbox string."
+      },
+      {
+        "id": "MessageHeader",
+        "type": "object",
+        "description": "Basic information about a message.",
+        "properties": {
+          "author": {
+            "$ref": "messages.MailBoxHeaderString"
+          },
+          "bccList": {
+            "description": "The Bcc recipients. Not populated for news/nntp messages.",
+            "type": "array",
+            "items": {
+              "$ref": "messages.MailBoxHeaderString"
+            }
+          },
+          "ccList": {
+            "description": "The Cc recipients. Not populated for news/nntp messages.",
+            "type": "array",
+            "items": {
+              "$ref": "messages.MailBoxHeaderString"
+            }
+          },
+          "date": {
+            "description": "The date and time when the message was sent, according to the Date header in the message.",
+            "$ref": "extensionTypes.Date"
+          },
+          "external": {
+            "type": "boolean",
+            "description": "Whether this message is a real message or an external message (opened from a file or from an attachment)."
+          },
+          "flagged": {
+            "type": "boolean",
+            "description": "Whether this message is flagged (a.k.a. starred)."
+          },
+          "folder": {
+            "$ref": "folders.MailFolder",
+            "description": "The <permission>accountsRead</permission> permission is required for this property to be included. Not available for external or attached messages.",
+            "optional": true
+          },
+          "headerMessageId": {
+            "type": "string",
+            "description": "The message-id header of the message."
+          },
+          "headersOnly": {
+            "description": "Some account types (for example <var>pop3</var>) allow to download only the headers of the message, but not its body. The body of such messages will not be available.",
+            "type": "boolean"
+          },
+          "id": {
+            "$ref": "messages.MessageId"
+          },
+          "junk": {
+            "description": "Whether the message has been marked as junk. Always <var>false</var> for news/nntp messages and external messages.",
+            "type": "boolean"
+          },
+          "junkScore": {
+            "type": "integer",
+            "description": "The junk score associated with the message. Always <var>0</var> for news/nntp messages and external messages.",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "priority": {
+            "type": "string",
+            "description": "The priority of the message.",
+            "enum": ["none", "lowest", "low", "normal", "high", "highest"]
+          },
+          "read": {
+            "type": "boolean",
+            "optional": true,
+            "description": "Whether the message has been marked as read. Not available for external or attached messages."
+          },
+          "new": {
+            "type": "boolean",
+            "description": "Whether the message has been received recently and is marked as new."
+          },
+          "recipients": {
+            "description": "The To recipients. Not populated for news/nntp messages.",
+            "type": "array",
+            "items": {
+              "$ref": "messages.MailBoxHeaderString"
+            }
+          },
+          "size": {
+            "description": "The total size of the message in bytes.",
+            "type": "integer"
+          },
+          "subject": {
+            "type": "string",
+            "description": "The subject of the message."
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Tags associated with this message. For a list of available tags, use $(ref:messages.tags.list)."
+          }
+        }
+      },
+      {
+        "id": "MessageList",
+        "type": "object",
+        "description": "See $(doc:guides/messageLists) for more information.",
+        "properties": {
+          "id": {
+            "choices": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Id of the message list, to be used with $(ref:messages.continueList) or $(ref:messages.abortList)."
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "messages.MessageHeader"
+            }
+          }
+        }
+      },
+      {
+        "id": "MessagePart",
+        "type": "object",
+        "description": "Represents an email message \"part\", which could be the whole message.",
+        "properties": {
+          "body": {
+            "type": "string",
+            "description": "The quoted-printable or base64 decoded content of the part. Only present for parts with a content type of <var>text/*</var> and only if requested, see the <var>decodeContent</var> option of $(ref:messages.getFull). Use $(ref:messages.getAttachmentFile) to retrieve the content of parts which have a content type other than <var>text/*</var>.",
+            "optional": true
+          },
+          "contentType": {
+            "type": "string",
+            "optional": true
+          },
+          "decryptionStatus": {
+            "type": "string",
+            "optional": true,
+            "description": "The decryption status, only available for the root part.",
+            "enum": ["none", "skipped", "success", "fail"]
+          },
+          "headers": {
+            "$ref": "messages.HeadersDictionary",
+            "description": "A <em>dictionary object</em> of RFC 2047 decoded part headers as <em>key-value</em> pairs, with the header name as <em>key</em>, and an array of headers as <em>value</em>. Only present if requested, see the <var>decodeHeaders</var> option of $(ref:messages.getFull).",
+            "optional": true
+          },
+          "name": {
+            "type": "string",
+            "description": "Name of the part, if it is a file.",
+            "optional": true
+          },
+          "partName": {
+            "type": "string",
+            "optional": true,
+            "description": "The identifier of this part, used in $(ref:messages.getAttachmentFile)."
+          },
+          "parts": {
+            "type": "array",
+            "items": {
+              "$ref": "messages.MessagePart"
+            },
+            "description": "Any sub-parts of this part.",
+            "optional": true
+          },
+          "rawBody": {
+            "type": "string",
+            "description": "The raw content of the part. Only present if requested, see the <var>decodeContent</var> option of $(ref:messages.getFull).",
+            "optional": true
+          },
+          "rawHeaders": {
+            "$ref": "messages.HeadersDictionary",
+            "description": "A <em>dictionary object</em> of raw part headers as <em>key-value</em> pairs, with the header name as <em>key</em>, and an array of headers as <em>value</em>. Only present if requested, see the <var>decodeHeaders</var> option of $(ref:messages.getFull).",
+            "optional": true
+          },
+          "size": {
+            "type": "integer",
+            "optional": true,
+            "description": "The size of this part. The size of parts with content type <em>message/rfc822</em> is not the actual message size (on disc), but the total size of its decoded body parts, excluding headers."
+          }
+        }
+      },
+      {
+        "id": "MessageProperties",
+        "type": "object",
+        "description": "Message properties used in $(ref:messages.update) and $(ref:messages.import). They can also be monitored by $(ref:messages.onUpdated).",
+        "properties": {
+          "flagged": {
+            "type": "boolean",
+            "description": "Whether the message is flagged (a.k.a starred).",
+            "optional": true
+          },
+          "junk": {
+            "type": "boolean",
+            "optional": true,
+            "description": "Whether the message is marked as junk. Only supported in $(ref:messages.update)."
+          },
+          "new": {
+            "type": "boolean",
+            "description": "Whether the message is marked as new. Only supported in $(ref:messages.import).",
+            "optional": true
+          },
+          "read": {
+            "type": "boolean",
+            "description": "Whether the message is marked as read.",
+            "optional": true
+          },
+          "tags": {
+            "type": "array",
+            "description": "Tags associated with this message. For a list of available tags, call the $(ref:messages.tags.list) method.",
+            "optional": true,
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      {
+        "id": "AttachmentType",
+        "type": "string",
+        "enum": ["normal", "detached", "deleted", "linked", "cloudFile"],
+        "description": "The type of an attachment in a message."
+      },
+      {
+        "id": "MessageAttachment",
+        "type": "object",
+        "description": "Represents an attachment in a message.",
+        "properties": {
+          "contentDisposition": {
+            "type": "string",
+            "description": "The content disposition of the attachment, for example <var>attachment</var> for normal attachments, or <var>inline</var> for inline attachments."
+          },
+          "contentType": {
+            "type": "string",
+            "description": "The content type of the attachment. A value of <var>text/x-moz-deleted</var> indicates that the original attachment was permanently deleted and replaced by a placeholder text attachment with some meta information about the original attachment."
+          },
+          "type": {
+            "$ref": "messages.AttachmentType",
+            "description": "The type of this attachment."
+          },
+          "headers": {
+            "$ref": "messages.HeadersDictionary",
+            "description": "A <em>dictionary object</em> of RFC 2047 decoded attachment headers as <em>key-value</em> pairs, with the header name as <em>key</em>, and an array of headers as <em>value</em>."
+          },
+          "name": {
+            "type": "string",
+            "description": "The name, as displayed to the user, of this attachment. This is usually but not always the filename of the attached file. For a <var>cloudFile</var> attachment, this is the real name of the linked file, when the message provides one."
+          },
+          "partName": {
+            "type": "string",
+            "description": "Identifies the MIME part of the message associated with this attachment."
+          },
+          "size": {
+            "type": "integer",
+            "description": "The size in bytes of this attachment."
+          },
+          "linkUrl": {
+            "type": "string",
+            "optional": true,
+            "description": "The remote location the attachment's content is linked to. Present for <var>linked</var> attachments (see $(ref:messages.AttachmentType)), whose content is not part of the message and can be fetched from this url."
+          },
+          "cloudFileUrl": {
+            "type": "string",
+            "optional": true,
+            "description": "The remote location a <var>cloudFile</var> attachment's content is stored at. Present for <var>cloudFile</var> attachments (see $(ref:messages.AttachmentType)), whose content is not part of the message."
+          },
+          "contentId": {
+            "type": "string",
+            "optional": true,
+            "description": "The content-id of this part. Available for related parts, which are referenced from other places inside the same message (e.g. inline images)."
+          },
+          "message": {
+            "$ref": "messages.MessageHeader",
+            "optional": true,
+            "description": "A MessageHeader, if this attachment is a message."
+          }
+        }
+      },
+      {
+        "id": "HeadersDictionary",
+        "type": "object",
+        "description": "A <em>dictionary object</em> of headers as <em>key-value</em> pairs, with the header name as <em>key</em>, and an array of headers as <em>value</em>.",
+        "additionalProperties": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      {
+        "id": "QueryRange",
+        "type": "object",
+        "description": "An object defining a range.",
+        "properties": {
+          "min": {
+            "type": "integer",
+            "optional": true,
+            "description": "The minimum value required to match the query."
+          },
+          "max": {
+            "type": "integer",
+            "optional": true,
+            "description": "The maximum value required to match the query."
+          }
+        }
+      },
+      {
+        "id": "NewMessageDetails",
+        "type": "object",
+        "description": "Details of a message to be sent.",
+        "additionalProperties": true,
+        "properties": {
+          "identityId": {
+            "type": "string",
+            "description": "The ID of an identity from the :doc:`accounts` API. Defaults to the default identity. The permission <permission>accountsRead</permission> is required to include the ``identityId``.",
+            "optional": true
+          },
+          "from": {
+            "$ref": "compose.ComposeRecipient",
+            "description": "*Caution*: Setting a value for ``from`` does not change the used identity, it overrides the FROM header. Many email servers do not accept emails where the FROM header does not match the sender identity. Must be set to exactly one valid email address.",
+            "optional": true
+          },
+          "to": {
+            "$ref": "compose.ComposeRecipientList",
+            "optional": true
+          },
+          "cc": {
+            "$ref": "compose.ComposeRecipientList",
+            "optional": true
+          },
+          "bcc": {
+            "$ref": "compose.ComposeRecipientList",
+            "optional": true
+          },
+          "overrideDefaultFccFolder": {
+            "choices": [
+              {
+                "$ref": "folders.MailFolder"
+              },
+              {
+                "type": "string",
+                "enum": [""]
+              }
+            ],
+            "optional": true,
+            "description": " This value overrides the default fcc setting (defined by the used identity) for this message. Either a :ref:`folders.MailFolder` specifying the folder for the copy of the sent message, or an empty string to not save a copy at all."
+          },
+          "additionalFccFolder": {
+            "choices": [
+              {
+                "$ref": "folders.MailFolder"
+              },
+              {
+                "type": "string",
+                "enum": [""]
+              }
+            ],
+            "description": "An additional fcc folder. Only effective for send operations ($(ref:messages.sendMessage)), has no effect for save operations ($(ref:messages.saveMessage)), which only ever store the message in the primary draft or template folder. For compatibility with :ref:`compose.ComposeDetails`, setting an empty string is supported as well, but has no effect.",
+            "optional": true
+          },
+          "replyTo": {
+            "$ref": "compose.ComposeRecipientList",
+            "optional": true
+          },
+          "followupTo": {
+            "$ref": "compose.ComposeRecipientList",
+            "optional": true
+          },
+          "newsgroups": {
+            "description": "A single newsgroup name or an array of newsgroup names.",
+            "choices": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            ],
+            "optional": true
+          },
+          "subject": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string",
+            "description": "The HTML content for the message.",
+            "optional": true
+          },
+          "plainTextBody": {
+            "type": "string",
+            "description": "The content for a plain text message. A specified <value>body</value> will be preferred, except when <value>isPlainText</value> is specified as well.",
+            "optional": true
+          },
+          "isPlainText": {
+            "type": "boolean",
+            "description": "Whether the message should be sent as plain text or as HTML. Prefers a specified <value>plainTextBody</value> over a specified <value>body</value>.",
+            "optional": true
+          },
+          "deliveryFormat": {
+            "type": "string",
+            "enum": ["auto", "plaintext", "html", "both"],
+            "description": "Defines the mime format of the sent message. Defaults to <value>auto</value>, which prefers to send plain text messages, if the specified body does not include any formatting.\n**Note**: If a plain text body and an HTML body is included in the message, the plain text body is always derived from the included HTML body. It is not possible to specify two independent values via <value>body</value> and <value>plainTextBody</value>.",
+            "optional": true
+          },
+          "contentLanguage": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The languages of the message content, used for the <em>Content-Language</em> header. Each entry is a free-form language tag (for example <var>en-US</var>). If omitted, no <em>Content-Language</em> header is added. The i18n API's <var>detectLanguage()</var> can be used to derive a value from the message body, which should be converted to plain text first (for example via $(ref:messengerUtilities.convertToPlainText)), so that markup does not influence the detection.",
+            "optional": true
+          },
+          "customHeaders": {
+            "type": "array",
+            "items": {
+              "$ref": "compose.CustomHeader"
+            },
+            "description": "Array of custom headers.",
+            "optional": true
+          },
+          "priority": {
+            "type": "string",
+            "enum": ["lowest", "low", "normal", "high", "highest"],
+            "description": "The priority of the message.",
+            "optional": true
+          },
+          "returnReceipt": {
+            "type": "boolean",
+            "optional": true,
+            "description": "Add the <em>Disposition-Notification-To</em> header to the message to requests the recipients email client to send a reply once the message has been received. Recipient server may strip the header and the recipient might ignore the request."
+          },
+          "deliveryStatusNotification": {
+            "type": "boolean",
+            "optional": true,
+            "description": "Let the sender know when the recipient's server received the message. Not supported by all servers."
+          },
+          "attachVCard": {
+            "type": "boolean",
+            "optional": true,
+            "description": "Wether or not the vCard of the used identity will be attached to the message during send."
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "choices": [
+                {
+                  "$ref": "compose.FileAttachment"
+                },
+                {
+                  "$ref": "compose.ComposeAttachment"
+                }
+              ]
+            },
+            "description": "Attachments to add to the message. **Note:** :ref:`compose.ComposeAttachments` are included as real file attachments, not as cloudFile links.",
+            "optional": true
+          }
+        }
+      }
+    ],
+    "events": [
+      {
+        "name": "onUpdated",
+        "type": "function",
+        "description": "Fired when one or more properties of a message have been updated.",
+        "parameters": [
+          {
+            "name": "message",
+            "$ref": "messages.MessageHeader"
+          },
+          {
+            "name": "changedProperties",
+            "$ref": "messages.MessageProperties"
+          },
+          {
+            "name": "oldProperties",
+            "$ref": "messages.MessageProperties"
+          }
+        ]
+      },
+      {
+        "name": "onMoved",
+        "type": "function",
+        "description": "Fired when messages have been moved.",
+        "permissions": ["accountsRead"],
+        "parameters": [
+          {
+            "name": "originalMessages",
+            "$ref": "messages.MessageList"
+          },
+          {
+            "name": "movedMessages",
+            "$ref": "messages.MessageList"
+          }
+        ]
+      },
+      {
+        "name": "onCopied",
+        "type": "function",
+        "description": "Fired when messages have been copied.",
+        "permissions": ["accountsRead"],
+        "parameters": [
+          {
+            "name": "originalMessages",
+            "$ref": "messages.MessageList"
+          },
+          {
+            "name": "copiedMessages",
+            "$ref": "messages.MessageList"
+          }
+        ]
+      },
+      {
+        "name": "onDeleted",
+        "type": "function",
+        "description": "Fired when messages have been permanently deleted.",
+        "permissions": ["accountsRead"],
+        "parameters": [
+          {
+            "name": "messages",
+            "$ref": "messages.MessageList"
+          }
+        ]
+      },
+      {
+        "name": "onNewMailReceived",
+        "type": "function",
+        "description": "Fired when a new message is received, and has been handled by message filters and junk classification. Filters running after junk classification may move the message again.",
+        "permissions": ["accountsRead"],
+        "parameters": [
+          {
+            "name": "folder",
+            "$ref": "folders.MailFolder"
+          },
+          {
+            "name": "messages",
+            "$ref": "messages.MessageList"
+          }
+        ],
+        "extraParameters": [
+          {
+            "name": "monitorAllFolders",
+            "description": "Monitor all folders (including all special use folders as defined by $(ref:folders.MailFolderSpecialUse)) instead of just inbox folders and normal folders.",
+            "type": "boolean",
+            "optional": true
+          }
+        ]
+      }
+    ],
+    "functions": [
+      {
+        "name": "list",
+        "type": "function",
+        "min_manifest_version": 3,
+        "description": "Gets all messages in a folder.",
+        "async": "callback",
+        "permissions": ["accountsRead"],
+        "parameters": [
+          {
+            "name": "folderId",
+            "$ref": "folders.MailFolderId"
+          },
+          {
+            "name": "options",
+            "type": "object",
+            "optional": true,
+            "properties": {
+              "sortType": {
+                "type": "string",
+                "description": "Specifies how the returned messages should be sorted. Default sort order is <var>descending</var>, if not specified otherwise. Returning sorted messages is faster than manually sorting the messages afterwards, but slower than returning the messages in their original order.",
+                "optional": true,
+                "enum": [
+                  "author",
+                  "date",
+                  "flagged",
+                  "junk",
+                  "junkScore",
+                  "priority",
+                  "read",
+                  "recipients",
+                  "size",
+                  "subject",
+                  "tags"
+                ]
+              },
+              "sortOrder": {
+                "type": "string",
+                "description": "The sort order for the returned messages. Ignored if <var>sortType</var> is not specified.",
+                "optional": true,
+                "enum": ["ascending", "descending"]
+              }
+            }
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "$ref": "messages.MessageList"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "list",
+        "type": "function",
+        "max_manifest_version": 2,
+        "description": "Gets all messages in a folder.",
+        "async": "callback",
+        "permissions": ["accountsRead"],
+        "parameters": [
+          {
+            "name": "folder",
+            "choices": [
+              {
+                "deprecated": "Support deprecated since Thunderbird 121 and removed in Manifest V3: messages.list() requires to specify a MailFolderId instead of a full MailFolder object.",
+                "$ref": "folders.MailFolder"
+              },
+              {
+                "$ref": "folders.MailFolderId"
+              }
+            ]
+          },
+          {
+            "name": "options",
+            "type": "object",
+            "optional": true,
+            "properties": {
+              "sortType": {
+                "type": "string",
+                "description": "Specifies how the returned messages should be sorted. Default sort order is <var>descending</var>, if not specified otherwise. Returning sorted messages is faster than manually sorting the messages afterwards, but slower than returning the messages in their original order.",
+                "optional": true,
+                "enum": [
+                  "author",
+                  "date",
+                  "flagged",
+                  "junk",
+                  "junkScore",
+                  "priority",
+                  "read",
+                  "recipients",
+                  "size",
+                  "subject",
+                  "tags"
+                ]
+              },
+              "sortOrder": {
+                "type": "string",
+                "optional": true,
+                "description": "The sort order for the returned messages. Ignored if <var>sortType</var> is not specified.",
+                "enum": ["ascending", "descending"]
+              }
+            }
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "$ref": "messages.MessageList"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "continueList",
+        "type": "function",
+        "description": "Returns the next chunk of messages in a list. See $(doc:guides/messageLists) for more information.",
+        "async": "callback",
+        "parameters": [
+          {
+            "name": "messageListId",
+            "type": "string"
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "$ref": "messages.MessageList"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "abortList",
+        "type": "function",
+        "description": "Finalizes the specified list and terminates any process currently still adding messages.",
+        "async": true,
+        "parameters": [
+          {
+            "name": "messageListId",
+            "type": "string"
+          }
+        ]
+      },
+      {
+        "name": "get",
+        "type": "function",
+        "description": "Returns the specified message.",
+        "async": "callback",
+        "parameters": [
+          {
+            "name": "messageId",
+            "$ref": "messages.MessageId"
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "$ref": "messages.MessageHeader"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "getFull",
+        "type": "function",
+        "description": "Returns the specified message, including all headers and MIME parts. Throws if the message could not be read, for example due to network issues.",
+        "async": "callback",
+        "parameters": [
+          {
+            "name": "messageId",
+            "$ref": "messages.MessageId"
+          },
+          {
+            "name": "options",
+            "type": "object",
+            "properties": {
+              "decrypt": {
+                "type": "boolean",
+                "description": "Whether the message should be decrypted. If the message could not be decrypted, its parts are omitted. Defaults to <var>true</var>.",
+                "optional": true
+              },
+              "decodeHeaders": {
+                "type": "boolean",
+                "description": "Whether to decode RFC 2047 encoded headers of message parts. Defaults to <var>true</var>.",
+                "optional": true
+              },
+              "decodeContent": {
+                "type": "boolean",
+                "description": "Whether to decode quoted-printable or base64 encoded content of message parts. Defaults to <var>true</var>.",
+                "optional": true
+              }
+            },
+            "optional": true
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "$ref": "messages.MessagePart"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "getHeaders",
+        "type": "function",
+        "description": "Returns all message headers of the specified message, without MIME structure parsing. Throws an error if the message cannot be read, for example due to network issues. This function is significantly faster than $(ref:messages.getFull) when only the header information is required.",
+        "async": "callback",
+        "parameters": [
+          {
+            "name": "messageId",
+            "$ref": "messages.MessageId"
+          },
+          {
+            "name": "options",
+            "type": "object",
+            "properties": {
+              "decodeHeaders": {
+                "type": "boolean",
+                "description": "Whether to decode RFC 2047 encoded headers. Defaults to <var>true</var>.",
+                "optional": true
+              }
+            },
+            "optional": true
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "$ref": "messages.HeadersDictionary"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "getRaw",
+        "type": "function",
+        "description": "Returns the raw content of a message. Throws if the message could not be read, for example due to network issues.",
+        "async": "callback",
+        "parameters": [
+          {
+            "name": "message",
+            "description": "Either a $(ref:messages.MessageId) of an existing message, or a $(ref:messages.MessagePart) with raw header and raw content data representing a full RFC 822 message (the provided data will be used as-is without applying any further encoding). See the <var>decodeHeaders</var> and <var>decodeContent</var> options of $(ref:messages.getFull) for further details on how to retrieve a $(ref:messages.MessagePart) with raw values. You can use $(ref:messengerUtilities.decodeMimeHeader) and $(ref:messengerUtilities.encodeMimeHeader) to manipulate a raw MessagePart.",
+            "choices": [
+              {
+                "$ref": "messages.MessageId"
+              },
+              {
+                "$ref": "messages.MessagePart"
+              }
+            ]
+          },
+          {
+            "name": "options",
+            "type": "object",
+            "properties": {
+              "decrypt": {
+                "type": "boolean",
+                "description": "Whether the message should be decrypted. Throws, if the message could not be decrypted.",
+                "optional": true
+              },
+              "data_format": {
+                "choices": [
+                  {
+                    "max_manifest_version": 2,
+                    "description": "The message can either be returned as a DOM File or as a $(url:binary-string)[binary string]. The historic default is to return a binary string (kept for backward compatibility). However, it is now recommended to use the <var>File</var> format, because the DOM File object can be used as-is with the downloads API and has useful methods to access the content, like $(url:dom-file-text)[File.text()] and $(url:dom-file-array-buffer)[File.arrayBuffer()].",
+                    "type": "string",
+                    "enum": ["File", "BinaryString"]
+                  },
+                  {
+                    "min_manifest_version": 3,
+                    "description": "The message can either be returned as a DOM File (default) or as a $(url:binary-string)[binary string]. It is recommended to use the <var>File</var> format, because the DOM File object can be used as-is with the downloads API and has useful methods to access the content, like $(url:dom-file-text)[File.text()] and $(url:dom-file-array-buffer)[File.arrayBuffer()].",
+                    "type": "string",
+                    "enum": ["File", "BinaryString"]
+                  }
+                ],
+                "optional": true
+              }
+            },
+            "optional": true
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "choices": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "object",
+                    "isInstanceOf": "File",
+                    "additionalProperties": true
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "listAttachments",
+        "type": "function",
+        "description": "Lists the attachments of a message. If the message is encrypted, the attachments of the decrypted message are listed.",
+        "async": "callback",
+        "parameters": [
+          {
+            "name": "messageId",
+            "$ref": "messages.MessageId"
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "messages.MessageAttachment"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "listInlineTextParts",
+        "type": "function",
+        "description": "Lists all inline text parts of a message. These parts are not returned by $(ref:messages.listAttachments) and usually make up the readable content of the message, mostly with content type <var>text/plain</var> or <var>text/html</var>. If a message only includes a part with content type <var>text/html</var>, the method $(ref:messengerUtilities.convertToPlainText) can be used to retreive a plain text version. If the message is encrypted, the inline text parts of the decrypted message are listed.",
+        "async": "callback",
+        "parameters": [
+          {
+            "name": "messageId",
+            "$ref": "messages.MessageId"
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "messages.InlineTextPart"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "getAttachmentFile",
+        "type": "function",
+        "description": "Gets the content of a $(ref:messages.MessageAttachment) as a $(url:dom-file)[File] object. If the message is encrypted, the function retrieves the attachment from the decrypted message.",
+        "async": "callback",
+        "parameters": [
+          {
+            "name": "messageId",
+            "$ref": "messages.MessageId"
+          },
+          {
+            "name": "partName",
+            "description": "The <var>partName</var> of an attachment to be retrieved from the decrypted message.",
+            "type": "string",
+            "pattern": "^\\d+(\\.\\d+\\$?)*$"
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "type": "object",
+                "isInstanceOf": "File",
+                "additionalProperties": true
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "deleteAttachments",
+        "type": "function",
+        "description": "Deletes the specified attachments and replaces them by placeholder text attachments with meta information about the original attachments and a <var>text/x-moz-deleted</var> content type. This permanently modifies the message. Deleting attachments of encrypted messages is not supported and will throw an <em>ExtensionError</em>.",
+        "permissions": ["messagesModifyPermanent"],
+        "async": true,
+        "parameters": [
+          {
+            "name": "messageId",
+            "type": "integer"
+          },
+          {
+            "name": "partNames",
+            "type": "array",
+            "description": "An array of attachments, identifying the to be deleted attachments by their <var>partName</var>.",
+            "items": {
+              "type": "string",
+              "pattern": "^\\d+(\\.\\d+)*$"
+            },
+            "minItems": 1
+          }
+        ]
+      },
+      {
+        "name": "openAttachment",
+        "type": "function",
+        "description": "Opens the specified attachment.",
+        "async": true,
+        "parameters": [
+          {
+            "name": "messageId",
+            "$ref": "messages.MessageId"
+          },
+          {
+            "name": "partName",
+            "type": "string",
+            "pattern": "^\\d+(\\.\\d+)*$"
+          },
+          {
+            "name": "tabId",
+            "type": "integer",
+            "description": "The ID of the tab associated with the message opening."
+          }
+        ]
+      },
+      {
+        "name": "query",
+        "type": "function",
+        "description": "Gets all messages that have the specified properties, or all messages if no properties are specified. Messages of unified mailbox folders are not included by default (as that could double the amount of returned messages), but explicitly specifying a unified mailbox folder is supported.",
+        "async": "callback",
+        "parameters": [
+          {
+            "type": "object",
+            "name": "queryInfo",
+            "optional": true,
+            "default": {},
+            "properties": {
+              "accountId": {
+                "choices": [
+                  {
+                    "$ref": "accounts.MailAccountId"
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "$ref": "accounts.MailAccountId"
+                    }
+                  }
+                ],
+                "optional": true,
+                "description": "Limits the search to the specified account(s). Accounts are searched in the specified order."
+              },
+              "attachment": {
+                "choices": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "$ref": "QueryRange"
+                  }
+                ],
+                "optional": true,
+                "description": "Whether the message has attachments, or not. Supports to specify a $(ref:messages.QueryRange) (min/max) instead of a simple boolean value (none/some)."
+              },
+              "author": {
+                "type": "string",
+                "optional": true,
+                "description": "Returns only messages with this value matching the author. The search value is a single email address, a name or a combination (e.g.: <var>Name <user@domain.org></var>). The address part of the search value (if provided) must match the author's address completely. The name part of the search value (if provided) must match the author's name partially. All matches are done case-insensitive."
+              },
+              "body": {
+                "type": "string",
+                "optional": true,
+                "description": "Returns only messages with this value in the body of the mail."
+              },
+              "flagged": {
+                "type": "boolean",
+                "optional": true,
+                "description": "Returns only flagged (or unflagged if false) messages."
+              },
+              "folderId": {
+                "choices": [
+                  {
+                    "$ref": "folders.MailFolderId"
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "$ref": "folders.MailFolderId"
+                    }
+                  }
+                ],
+                "optional": true,
+                "description": "Limits the search to the specified folder(s). Folders are searched in the specified order. The <permission>accountsRead</permission> permission is required."
+              },
+              "folder": {
+                "$ref": "folders.MailFolder",
+                "max_manifest_version": 2,
+                "deprecated": "Support deprecated since Thunderbird 121 and removed in Manifest V3: messages.queryInfo.folder has been replaced by messages.queryInfo.folderId.",
+                "optional": true,
+                "description": "Returns only messages from the specified folder. The <permission>accountsRead</permission> permission is required."
+              },
+              "fromDate": {
+                "$ref": "extensionTypes.Date",
+                "optional": true,
+                "description": "Returns only messages with a date after this value."
+              },
+              "fromMe": {
+                "type": "boolean",
+                "optional": true,
+                "description": "Returns only messages with the author's address matching any configured identity."
+              },
+              "fullText": {
+                "type": "string",
+                "optional": true,
+                "description": "Returns only messages with this value somewhere in the mail (subject, body or author)."
+              },
+              "headerMessageId": {
+                "type": "string",
+                "optional": true,
+                "description": "Returns only messages with a Message-ID header matching this value."
+              },
+              "includeSubFolders": {
+                "type": "boolean",
+                "optional": true,
+                "description": "Search the specified folder recursively."
+              },
+              "online": {
+                "type": "boolean",
+                "optional": true,
+                "description": "Query the server directly instead of the local message database. Online queries currently only support querying the <var>headerMessageId</var> property. Currently only supported for NNTP accounts."
+              },
+              "recipients": {
+                "type": "string",
+                "optional": true,
+                "description": "Returns only messages whose recipients match all specified addresses. The search value is a semicolon separated list of email addresses, names or combinations (e.g.: <var>Name <user@domain.org></var>). For a match, all specified addresses must equal a recipient's address completely and all specified names must match a recipient's name partially. All matches are done case-insensitive."
+              },
+              "size": {
+                "$ref": "QueryRange",
+                "optional": true,
+                "description": "Returns only messages with a size in the specified byte range."
+              },
+              "subject": {
+                "type": "string",
+                "optional": true,
+                "description": "Returns only messages whose subject contains the provided string."
+              },
+              "tags": {
+                "$ref": "messages.tags.TagsDetail",
+                "optional": true,
+                "description": "Returns only messages with the specified tags. For a list of available tags, call the $(ref:messages.tags.list) method."
+              },
+              "toDate": {
+                "$ref": "extensionTypes.Date",
+                "optional": true,
+                "description": "Returns only messages with a date before this value."
+              },
+              "toMe": {
+                "type": "boolean",
+                "optional": true,
+                "description": "Returns only messages with at least one recipient address matching any configured identity."
+              },
+              "junk": {
+                "type": "boolean",
+                "optional": true,
+                "description": "Returns only messages whith the specified junk state."
+              },
+              "junkScore": {
+                "$ref": "QueryRange",
+                "optional": true,
+                "description": "Returns only messages with a junk score in the specified range."
+              },
+              "new": {
+                "type": "boolean",
+                "optional": true,
+                "description": "Returns only messages with the specified new state."
+              },
+              "unread": {
+                "type": "boolean",
+                "optional": true,
+                "max_manifest_version": 2,
+                "description": "Returns only unread (or read if false) messages."
+              },
+              "read": {
+                "type": "boolean",
+                "optional": true,
+                "description": "Returns only messages with the specified read state.",
+                "min_manifest_version": 3
+              },
+              "autoPaginationTimeout": {
+                "type": "integer",
+                "optional": true,
+                "description": "Set the timeout in ms after which results should be returned, even if the nominal number of messages-per-page has not yet been reached. Defaults to <var>1000</var> ms. Setting it to <var>0</var> will disable auto-pagination."
+              },
+              "messagesPerPage": {
+                "type": "integer",
+                "optional": true,
+                "description": "Set the nominal number of messages-per-page for this query. Defaults to <var>100</var> messages."
+              },
+              "returnMessageListId": {
+                "type": "boolean",
+                "optional": true,
+                "description": "The <em>messageListId</em> is usually returned together with the first page, after some messages have been found. Enabling this option will change the return value of this function and return the <em>messageListId</em> directly."
+              }
+            }
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "choices": [
+                  {
+                    "$ref": "messages.MessageList"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "update",
+        "type": "function",
+        "description": "Updates message properties and tags. Updating external messages will throw an <em>ExtensionError</em>.",
+        "async": true,
+        "permissions": ["messagesUpdate"],
+        "parameters": [
+          {
+            "name": "messageId",
+            "$ref": "messages.MessageId"
+          },
+          {
+            "name": "newProperties",
+            "$ref": "messages.MessageProperties"
+          }
+        ]
+      },
+      {
+        "name": "move",
+        "type": "function",
+        "max_manifest_version": 2,
+        "description": "Moves messages to a specified folder. If the messages cannot be removed from the source folder, they will be copied instead of moved. Moving external messages will throw an <em>ExtensionError</em>.",
+        "async": true,
+        "permissions": ["accountsRead", "messagesMove"],
+        "parameters": [
+          {
+            "name": "messageIds",
+            "type": "array",
+            "description": "The IDs of the messages to move.",
+            "items": {
+              "$ref": "messages.MessageId"
+            }
+          },
+          {
+            "name": "destination",
+            "choices": [
+              {
+                "deprecated": "Support deprecated since Thunderbird 121 and removed in Manifest V3: messages.move() requires to specify a MailFolderId instead of a full MailFolder object.",
+                "$ref": "folders.MailFolder"
+              },
+              {
+                "$ref": "folders.MailFolderId"
+              }
+            ],
+            "description": "The folder to move the messages to."
+          },
+          {
+            "name": "options",
+            "type": "object",
+            "optional": true,
+            "properties": {
+              "isUserAction": {
+                "type": "boolean",
+                "optional": true,
+                "description": "Whether this move operation should be treated as a user action, for example allowing undo."
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "move",
+        "type": "function",
+        "min_manifest_version": 3,
+        "description": "Moves messages to a specified folder. If the messages cannot be removed from the source folder, they will be copied instead of moved. Moving external messages will throw an <em>ExtensionError</em>.",
+        "async": true,
+        "permissions": ["accountsRead", "messagesMove"],
+        "parameters": [
+          {
+            "name": "messageIds",
+            "type": "array",
+            "description": "The IDs of the messages to move.",
+            "items": {
+              "$ref": "messages.MessageId"
+            }
+          },
+          {
+            "name": "folderId",
+            "$ref": "folders.MailFolderId",
+            "description": "The folder to move the messages to."
+          },
+          {
+            "name": "options",
+            "type": "object",
+            "optional": true,
+            "properties": {
+              "isUserAction": {
+                "type": "boolean",
+                "optional": true,
+                "description": "Whether this move operation should be treated as a user action, for example allowing undo."
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "copy",
+        "type": "function",
+        "max_manifest_version": 2,
+        "description": "Copies messages to a specified folder.",
+        "async": true,
+        "permissions": ["accountsRead", "messagesMove"],
+        "parameters": [
+          {
+            "name": "messageIds",
+            "type": "array",
+            "description": "The IDs of the messages to copy.",
+            "items": {
+              "$ref": "messages.MessageId"
+            }
+          },
+          {
+            "name": "destination",
+            "choices": [
+              {
+                "deprecated": "Support deprecated since Thunderbird 121 and removed in Manifest V3: messages.copy() requires to specify a MailFolderId instead of a full MailFolder object.",
+                "$ref": "folders.MailFolder"
+              },
+              {
+                "$ref": "folders.MailFolderId"
+              }
+            ],
+            "description": "The folder to copy the messages to."
+          },
+          {
+            "name": "options",
+            "type": "object",
+            "optional": true,
+            "properties": {
+              "isUserAction": {
+                "type": "boolean",
+                "optional": true,
+                "description": "Whether this copy operation should be treated as a user action, for example allowing undo."
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "copy",
+        "type": "function",
+        "min_manifest_version": 3,
+        "description": "Copies messages to a specified folder.",
+        "async": true,
+        "permissions": ["accountsRead", "messagesMove"],
+        "parameters": [
+          {
+            "name": "messageIds",
+            "type": "array",
+            "description": "The IDs of the messages to copy.",
+            "items": {
+              "$ref": "messages.MessageId"
+            }
+          },
+          {
+            "name": "folderId",
+            "$ref": "folders.MailFolderId",
+            "description": "The folder to copy the messages to."
+          },
+          {
+            "name": "options",
+            "type": "object",
+            "optional": true,
+            "properties": {
+              "isUserAction": {
+                "type": "boolean",
+                "optional": true,
+                "description": "Whether this copy operation should be treated as a user action, for example allowing undo."
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "delete",
+        "type": "function",
+        "description": "Deletes messages permanently, or moves them to the trash folder (honoring the account's deletion behavior settings). Deleting external messages will throw an <em>ExtensionError</em>. The <var>deletePermanently</var> parameter allows immediate permanent deletion, bypassing the trash folder.",
+        "async": true,
+        "permissions": ["messagesDelete"],
+        "parameters": [
+          {
+            "name": "messageIds",
+            "type": "array",
+            "description": "The IDs of the messages to delete.",
+            "items": {
+              "$ref": "messages.MessageId"
+            }
+          },
+          {
+            "name": "options",
+            "optional": true,
+            "choices": [
+              {
+                "type": "boolean",
+                "deprecated": "Specify the options object instead of a plain boolean to delete messages permanently.",
+                "description": "Whether the message will be deleted permanently, regardless of the account's deletion behavior settings."
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "deletePermanently": {
+                    "type": "boolean",
+                    "optional": true,
+                    "description": "Whether the message will be deleted permanently, regardless of the account's deletion behavior settings. A permanently deleted message cannot be restored, even if the action is defined as a user action. Use this with care!"
+                  },
+                  "isUserAction": {
+                    "type": "boolean",
+                    "optional": true,
+                    "description": "Whether this copy operation should be treated as a user action, for example allowing undo."
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "import",
+        "type": "function",
+        "max_manifest_version": 2,
+        "description": "Imports a message into a folder. Supports local folders, POP and IMAP folders. Throws, if the destination folder already contains a message with the Message-ID of the message being imported.",
+        "async": "callback",
+        "permissions": ["accountsRead", "messagesImport"],
+        "parameters": [
+          {
+            "name": "file",
+            "type": "object",
+            "isInstanceOf": "File",
+            "additionalProperties": true
+          },
+          {
+            "name": "destination",
+            "choices": [
+              {
+                "deprecated": "Support deprecated since Thunderbird 121 and removed in Manifest V3: messages.import() requires to specify a MailFolderId instead of a full MailFolder object.",
+                "$ref": "folders.MailFolder"
+              },
+              {
+                "$ref": "folders.MailFolderId"
+              }
+            ],
+            "description": "The folder to import the messages into."
+          },
+          {
+            "name": "properties",
+            "$ref": "messages.MessageProperties",
+            "optional": true
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "$ref": "messages.MessageHeader"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "import",
+        "type": "function",
+        "min_manifest_version": 3,
+        "description": "Imports a message into a folder. Supports local folders, POP and IMAP folders. Throws, if the destination folder already contains a message with the Message-ID of the message being imported.",
+        "async": "callback",
+        "permissions": ["accountsRead", "messagesImport"],
+        "parameters": [
+          {
+            "name": "file",
+            "type": "object",
+            "isInstanceOf": "File",
+            "additionalProperties": true
+          },
+          {
+            "name": "folderId",
+            "$ref": "folders.MailFolderId",
+            "description": "The folder to import the messages into."
+          },
+          {
+            "name": "properties",
+            "$ref": "messages.MessageProperties",
+            "optional": true
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "$ref": "messages.MessageHeader"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "sendMessage",
+        "permissions": ["messages.send"],
+        "type": "function",
+        "description": "Sends a message programmatically in the background without user interaction. If the send mode is not specified or set to <value>default</value>, the message will be sent directly if the user is online and placed in the user's outbox otherwise. The returned Promise fulfills once the message has been successfully sent or placed in the user's outbox. Throws when there has been an error while sending the message to the outgoing mail server.\n**Note:** If no <value>deliveryFormat</value> is specified, the message is sent as plain text when the body contains no HTML formatting.\n**Note:** It is possible to pass in a :ref:`compose.ComposeDetails` object as the <value>details</value> parameter, and it will be interpreted as a :ref:`messages.NewMessageDetails` object.",
+        "async": "callback",
+        "parameters": [
+          {
+            "name": "details",
+            "$ref": "messages.NewMessageDetails"
+          },
+          {
+            "name": "options",
+            "type": "object",
+            "optional": true,
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": ["default", "sendNow", "sendLater"]
+              }
+            }
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "name": "return",
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "description": "The used send mode.",
+                    "enum": ["sendNow", "sendLater"]
+                  },
+                  "headerMessageId": {
+                    "type": "string",
+                    "description": "The header messageId of the outgoing message. Only included for actually sent messages.",
+                    "optional": true
+                  },
+                  "messages": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "messages.MessageHeader"
+                    },
+                    "description": "Copies of the sent message. The number of created copies depends on the applied file carbon copy configuration (fcc)."
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "saveMessage",
+        "permissions": ["messages.save"],
+        "type": "function",
+        "description": "Saves a message programmatically as a draft or as a template in the background without user interaction. The save mode defaults to <value>draft</value>. The returned Promise fulfills once the message has been successfully saved. Throws when there has been an error while saving the message.\n**Note:** If no <value>deliveryFormat</value> is specified, the message is saved as plain text when the body contains no HTML formatting.",
+        "async": "callback",
+        "parameters": [
+          {
+            "name": "details",
+            "$ref": "NewMessageDetails"
+          },
+          {
+            "name": "options",
+            "type": "object",
+            "optional": true,
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": ["draft", "template"]
+              }
+            }
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "name": "return",
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "description": "The used save mode.",
+                    "enum": ["draft", "template"]
+                  },
+                  "messages": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "messages.MessageHeader"
+                    },
+                    "description": "The saved message(s). The number of saved messages depends on the applied file carbon copy configuration (fcc)."
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "archive",
+        "type": "function",
+        "description": "Archives messages using the current settings. Archiving external messages will throw an <em>ExtensionError</em>.",
+        "async": true,
+        "permissions": ["messagesMove"],
+        "parameters": [
+          {
+            "name": "messageIds",
+            "type": "array",
+            "description": "The IDs of the messages to archive.",
+            "items": {
+              "$ref": "messages.MessageId"
+            }
+          }
+        ]
+      },
+      {
+        "name": "listTags",
+        "type": "function",
+        "description": "Returns a list of tags that can be set on messages, and their human-friendly name, colour, and sort order.",
+        "async": "callback",
+        "max_manifest_version": 2,
+        "deprecated": "Deprecated since Thunderbird 121 and removed in Manifest V3: messages.listTags() is now available as messages.tags.list().",
+        "parameters": [
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "messages.tags.MessageTag"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "createTag",
+        "type": "function",
+        "description": "Creates a new message tag. Tagging a message will store the tag's key in the user's message. Throws if the specified tag key is used already.",
+        "async": true,
+        "permissions": ["messagesTags"],
+        "max_manifest_version": 2,
+        "deprecated": "Deprecated since Thunderbird 121 and removed in Manifest V3: messages.createTag() is now available as messages.tags.create().",
+        "parameters": [
+          {
+            "type": "string",
+            "name": "key",
+            "description": "Unique tag identifier (will be converted to lower case). Must not include <var>()<>{/%*\"</var> or spaces.",
+            "pattern": "^[^ ()/{%*<>\"]+$"
+          },
+          {
+            "type": "string",
+            "name": "tag",
+            "description": "Human-readable tag name."
+          },
+          {
+            "type": "string",
+            "name": "color",
+            "description": "Tag color in hex format (i.e.: <var>#000080</var> for navy blue).",
+            "pattern": "^#[0-9a-fA-F]{6}"
+          }
+        ]
+      },
+      {
+        "name": "updateTag",
+        "type": "function",
+        "description": "Updates a message tag. Throws if the specified tag key does not exist.",
+        "async": true,
+        "permissions": ["messagesTags"],
+        "max_manifest_version": 2,
+        "deprecated": "Deprecated since Thunderbird 121 and removed in Manifest V3: messages.updateTag() is now available as messages.tags.update().",
+        "parameters": [
+          {
+            "type": "string",
+            "name": "key",
+            "description": "Unique tag identifier (will be converted to lower case). Must not include <var>()<>{/%*\"</var> or spaces.",
+            "pattern": "^[^ ()/{%*<>\"]+$"
+          },
+          {
+            "type": "object",
+            "name": "updateProperties",
+            "properties": {
+              "tag": {
+                "type": "string",
+                "optional": true,
+                "description": "Human-readable tag name."
+              },
+              "color": {
+                "type": "string",
+                "pattern": "^#[0-9a-fA-F]{6}",
+                "description": "Tag color in hex format (i.e.: <var>#000080</var> for navy blue).",
+                "optional": true
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "deleteTag",
+        "type": "function",
+        "description": "Deletes a message tag, removing it from the list of known tags. Its key will not be removed from tagged messages, but they will appear untagged. Recreating a deleted tag, will make all former tagged messages appear tagged again.",
+        "async": true,
+        "permissions": ["messagesTags"],
+        "max_manifest_version": 2,
+        "deprecated": "Deprecated since Thunderbird 121 and removed in Manifest V3: messages.deleteTag() is now available as messages.tags.delete().",
+        "parameters": [
+          {
+            "type": "string",
+            "name": "key",
+            "description": "Unique tag identifier (will be converted to lower case). Must not include <var>()<>{/%*\"</var> or spaces.",
+            "pattern": "^[^ ()/{%*<>\"]+$"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "namespace": "messages.tags",
+    "description": "The messages.tags API allows to manage the user's message tags.",
+    "types": [
+      {
+        "id": "MessageTag",
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "Unique tag identifier."
+          },
+          "tag": {
+            "type": "string",
+            "description": "Human-readable tag name."
+          },
+          "color": {
+            "type": "string",
+            "description": "Tag color in upper case hex format (i.e.: <var>#000080</var> for navy blue)."
+          },
+          "ordinal": {
+            "type": "string",
+            "description": "A custom sort string."
+          }
+        }
+      },
+      {
+        "id": "MessageTagProperties",
+        "type": "object",
+        "properties": {
+          "tag": {
+            "type": "string",
+            "optional": true,
+            "description": "Human-readable tag name."
+          },
+          "color": {
+            "type": "string",
+            "pattern": "^#[0-9a-fA-F]{6}",
+            "optional": true,
+            "description": "Tag color in upper case hex format (i.e.: <var>#000080</var> for navy blue)."
+          },
+          "ordinal": {
+            "type": "string",
+            "optional": true,
+            "description": "A custom sort string."
+          }
+        }
+      },
+      {
+        "id": "TagsDetail",
+        "type": "object",
+        "description": "Used for filtering messages by tag in various methods. Note that functions using this type may have a partial implementation.",
+        "properties": {
+          "tags": {
+            "type": "object",
+            "description": "A <em>dictionary object</em> with one or more filter condition as <em>key-value</em> pairs, the <em>key</em> being the tag to filter on, and the <em>value</em> being a boolean expression, requesting whether a message must include (<var>true</var>) or exclude (<var>false</var>) the tag. For a list of available tags, call the $(ref:messages.tags.list) method.",
+            "patternProperties": {
+              ".*": {
+                "type": "boolean"
+              }
+            }
+          },
+          "mode": {
+            "type": "string",
+            "description": "Whether <var>all</var> of the tag filters must apply, <var>any</var> of them, or <var>none</var>. The <var>none</var> mode ignores the provided filters and selects only messages without any tags.",
+            "enum": ["all", "any", "none"]
+          }
+        }
+      }
+    ],
+    "events": [
+      {
+        "name": "onCreated",
+        "permissions": ["messagesTagsList"],
+        "type": "function",
+        "description": "Fired when a new message tag has been created.",
+        "parameters": [
+          {
+            "name": "tag",
+            "$ref": "messages.tags.MessageTag"
+          }
+        ]
+      },
+      {
+        "name": "onUpdated",
+        "permissions": ["messagesTagsList"],
+        "type": "function",
+        "description": "Fired when one or more properties of a message tag have been updated.",
+        "parameters": [
+          {
+            "type": "string",
+            "name": "key",
+            "description": "Unique tag identifier of the updated message tag."
+          },
+          {
+            "name": "changedProperties",
+            "$ref": "messages.tags.MessageTagProperties",
+            "description": "The changed message tag properties."
+          },
+          {
+            "name": "oldProperties",
+            "$ref": "messages.tags.MessageTagProperties",
+            "description": "The old values of the changed message tag properties."
+          }
+        ]
+      },
+      {
+        "name": "onDeleted",
+        "type": "function",
+        "description": "Fired when a message tag has been deleted.",
+        "permissions": ["messagesTagsList"],
+        "parameters": [
+          {
+            "type": "string",
+            "name": "key",
+            "description": "Unique tag identifier of the deleted message tag."
+          }
+        ]
+      }
+    ],
+    "functions": [
+      {
+        "name": "list",
+        "type": "function",
+        "description": "Returns a list of tags that can be set on messages, and their human-friendly name, colour, and sort order.",
+        "async": "callback",
+        "permissions": ["messagesTagsList"],
+        "parameters": [
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "messages.tags.MessageTag"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "get",
+        "type": "function",
+        "description": "Returns a message tag identified by its key.",
+        "async": "callback",
+        "permissions": ["messagesTagsList"],
+        "parameters": [
+          {
+            "type": "string",
+            "name": "key",
+            "description": "The key of the message tag to retrieve."
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "$ref": "messages.tags.MessageTag"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "create",
+        "type": "function",
+        "description": "Creates a new message tag and returns the associated key. Tagging a message will store the tag's key in the user's message. Throws if the specified tag key is used already.",
+        "async": true,
+        "permissions": ["messagesTags"],
+        "parameters": [
+          {
+            "type": "string",
+            "name": "key",
+            "optional": true,
+            "description": "Unique tag identifier (will be converted to lower case). Must not include <var>()<>{/%*\"</var> or spaces. Will be auto-generated if not provided.",
+            "pattern": "^[^ ()/{%*<>\"]+$"
+          },
+          {
+            "type": "string",
+            "name": "tag",
+            "description": "Human-readable tag name."
+          },
+          {
+            "type": "string",
+            "name": "color",
+            "description": "Tag color in hex format (i.e.: <var>#000080</var> for navy blue).",
+            "pattern": "^#[0-9a-fA-F]{6}"
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "optional": true,
+            "parameters": [
+              {
+                "type": "string",
+                "name": "key"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "update",
+        "type": "function",
+        "description": "Updates a message tag. Throws if the specified tag key does not exist.",
+        "async": true,
+        "permissions": ["messagesTags"],
+        "parameters": [
+          {
+            "type": "string",
+            "name": "key",
+            "description": "Unique tag identifier (will be converted to lower case). Must not include <var>()<>{/%*\"</var> or spaces.",
+            "pattern": "^[^ ()/{%*<>\"]+$"
+          },
+          {
+            "name": "updateProperties",
+            "$ref": "messages.tags.MessageTagProperties"
+          }
+        ]
+      },
+      {
+        "name": "delete",
+        "type": "function",
+        "description": "Deletes a message tag, removing it from the list of known tags. Its key will not be removed from tagged messages, but they will appear untagged. Recreating a deleted tag, will make all former tagged messages appear tagged again.",
+        "async": true,
+        "permissions": ["messagesTags"],
+        "parameters": [
+          {
+            "type": "string",
+            "name": "key",
+            "description": "Unique tag identifier (will be converted to lower case). Must not include <var>()<>{/%*\"</var> or spaces.",
+            "pattern": "^[^ ()/{%*<>\"]+$"
+          }
+        ]
+      }
+    ]
+  }
+]

@@ -1,0 +1,47 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "nsISupports.idl"
+#include "prplIConversation.idl"
+#include "prplIMessage.idl"
+
+// Because of limitations in libpurple (write_conv is called without context),
+// there's an implicit contract that whatever message string the conversation
+// service passes to a protocol, it'll get back as the originalMessage when
+// "new-text" is notified. This is required for the OTR extensions to work.
+
+// A cancellable outgoing message. Before handing a message off to a protocol,
+// the conversation service notifies observers of `preparing-message` and
+// `sending-message` (typically add-ons) of an outgoing message, which can be
+// transformed or cancelled.
+[scriptable, uuid(f88535b1-0b99-433b-a6de-c1a4bf8b43ea)]
+interface imIOutgoingMessage: nsISupports {
+           attribute AUTF8String message;
+           attribute boolean cancelled;
+  /** Outgoing message is an action command. */
+  readonly attribute boolean action;
+  /** Outgoing message is a notice */
+  readonly attribute boolean notification;
+  readonly attribute prplIConversation conversation;
+};
+
+// A cancellable message to be displayed. When the conversation service is
+// notified of a `new-text` (ie. an incoming or outgoing message to be
+// displayed), it in turn notifies observers of `received-message`
+// (again, typically add-ons), which have the opportunity to swap or cancel
+// the message.
+[scriptable, uuid(3f88cc5c-6940-4eb5-a576-c65770f49ce9)]
+interface imIMessage: prplIMessage {
+  attribute boolean cancelled;
+  // Holds the sender color for Chats.
+  // Empty string by default, it is set by the conversation binding.
+  attribute AUTF8String color;
+
+  // What eventually gets shown to the user.
+  attribute AUTF8String displayMessage;
+
+  // The related incoming or outgoing message is transmitted
+  // with encryption through OTR.
+  attribute boolean otrEncrypted;
+};

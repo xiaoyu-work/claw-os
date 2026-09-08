@@ -1,0 +1,16 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@import url(chrome://calendar/skin/shared/calendar-views.css);
+
+#calendar-view-box #calendar-view-splitter {
+  border: none;
+  border-block-end: 1px solid var(--sidebar-border);
+  min-block-size: 0;
+  block-size: 5px;
+  background-color: transparent;
+  margin-block-start: -5px;
+  position: relative;
+  z-index: 10;
+}

@@ -1,0 +1,49 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+.gloda-single-identity,
+#PopupGlodaAutocomplete .explanation {
+  margin-inline-start: 1em;
+  margin-block: 2px;
+}
+
+#PopupGlodaAutocomplete {
+  & .autocomplete-richlistbox {
+    display: flex;
+    justify-content: flex-start;
+    flex-direction: column;
+  }
+
+  & .ac-comment {
+    font-size: 1.1em;
+    margin-inline-start: 0;
+  }
+
+  & .ac-url-text {
+    color: LinkText;
+    font-size: 0.95em;
+
+    &[selected="true"] {
+      color: inherit;
+    }
+  }
+
+  & span.ac-emphasize-text {
+    font-weight: bold;
+  }
+
+  & .parameters {
+    font-style: italic;
+    margin-inline-start: 1em;
+  }
+
+  /**
+   * Match type gloda-single-tag-richlistitem, gloda-single-identity-richlistitem,
+   * gloda-fulltext-single-richlistitem, gloda-fulltext-all, gloda-contact-chunk-richlistitem
+   * and gloda-multi.
+   */
+  & .autocomplete-richlistitem[type^="gloda"] {
+    overflow: clip;
+  }
+}

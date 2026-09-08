@@ -1,0 +1,226 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "nsISupports.idl"
+#include "MailNewsTypes2.idl"
+interface nsIURI;
+interface nsIUrlListener;
+interface nsIStreamListener;
+interface nsIMsgWindow;
+interface nsIFile;
+interface nsIMsgFolder;
+interface nsIMsgSearchSession;
+interface nsIMsgDBHdr;
+interface nsIStreamConverter;
+interface nsIDocShell;
+
+%{C++
+#include "MailNewsTypes.h"
+%}
+
+/**
+ * nsIMsgMessageService provides higher-level, UI-oriented calls for
+ * dealing with messages in a protocol-agnostic way.
+ * Things the user would recognise as actions they initiated.
+ * This covers things like displaying messages, copying them, saving them
+ * to disk, saving attachments...
+ */
+[scriptable, uuid(3aa7080a-73ac-4394-9636-fc00e182319b)]
+interface nsIMsgMessageService : nsISupports {
+
+  /**
+   * If you want a handle on the running task, pass in a valid nsIURI
+   * ptr. You can later interrupt this action by asking the netlib
+   * service manager to interrupt the url you are given back.
+   * Remember to release aURL when you are done with it. Pass nullptr
+   * in for aURL if you don't care about the returned URL.
+   */
+
+  /**
+   * Pass in the URI for the message you want to have copied.
+   *
+   * @param aSrcURI       The URI of the message to copy. This URI usually uses
+   *                      the protocol-specific message scheme (e.g.
+   *                      `ews-message` or `mailbox-message`), and follows the
+   *                      form: scheme://user@server/path/to/folder#messageKey
+   * @param aCopyListener already knows about the destination folder.
+   * @param aMoveMessage  TRUE if you want the message to be moved.
+   *                      FALSE leaves it as just a copy.
+   * @param aUrlListener
+   * @param aMsgWindow
+   */
+  void copyMessage(in AUTF8String aSrcURI, in nsIStreamListener aCopyListener, in boolean aMoveMessage,
+                   in nsIUrlListener aUrlListener, in nsIMsgWindow aMsgWindow);
+
+  /**
+   * Copy multiple messages at a time.
+   *
+   * @param keys
+   * @param srcFolder
+   * @param aCopyListener
+   * @param aMoveMessage
+   * @param aUrlListener
+   * @param aMsgWindow
+   * @returns URI that's run to perform the copy
+   */
+  nsIURI CopyMessages(in Array<nsMsgKey> aKeys,
+                      in nsIMsgFolder srcFolder,
+                      in nsIStreamListener aCopyListener,
+                      in boolean aMoveMessage,
+                      in nsIUrlListener aUrlListener,
+                      in nsIMsgWindow aMsgWindow);
+
+  /**
+   * When you want a message displayed... this loads it into the docshell
+   * consumer.
+   *
+   * @param aMessageURI - A uri representing the message to display.
+   * @param aDocShell - A nsIDocShell which we'll use to load the message into.
+   * @param aMsgWindow
+   * @param aUrlListener
+   * @param aAutodetectCharset Whether the characterset should be auto-detected.
+   */
+  void loadMessage(in AUTF8String aMessageURI,
+                   in nsIDocShell aDocShell,
+                   in nsIMsgWindow aMsgWindow,
+                   in nsIUrlListener aUrlListener,
+                   in boolean aAutodetectCharset);
+
+  /**
+   * When you want to spool a message out to a file on disk.
+   * This is an asynch operation of course. You must pass in a
+   * url listener in order to figure out when the operation is done.
+   *
+   * @param aMessageURI The uri representing the message to spool out to disk.
+   * @param aFile The file you want the message saved to
+   * @param aGenerateDummyEnvelope Usually FALSE. Set to TRUE if you want the msg
+   *        appended at the end of the file.
+   * @param aUrlListener
+   * @param canonicalLineEnding
+   * @param aMsgWindow
+   */
+  void saveMessageToDisk(in AUTF8String aMessageURI, in nsIFile aFile,
+                         in boolean aGenerateDummyEnvelope,
+                         in nsIUrlListener aUrlListener,
+                         in boolean canonicalLineEnding, in nsIMsgWindow aMsgWindow);
+
+  /**
+   * When you have a uri and you would like to convert that
+   * to a url which can be run through necko, you can use this method.
+   * the Uri MUST refer to a message and not a folder!
+   *
+   * @param aMessageURI A message uri to convert.
+   * @param aMsgWindow
+   *
+   * @return a URL which can be run through necko
+   */
+  nsIURI getUrlForUri(in AUTF8String aMessageURI, [optional] in nsIMsgWindow aMsgWindow);
+
+  /**
+   *
+   *
+   * @param aSearchSession
+   * @param aMsgWindow
+   * @param aMsgFolder
+   * @param aSearchUri
+   */
+  void Search(in nsIMsgSearchSession aSearchSession, in nsIMsgWindow aMsgWindow, in nsIMsgFolder aMsgFolder, in AUTF8String aSearchUri);
+
+  /**
+   * This method streams a message to the passed in consumer. If aConvertData is true, it
+   * will create a stream converter from message rfc822 to star/star. It will also tack
+   * aAdditionalHeader onto the url (e.g., "header=filter").
+   *
+   * @param aMessageURI - The uri of message to stream.
+   * @param aStreamlistener - A streamlistener listening to the message.
+   * @param aMsgWindow - msgWindow for progress and status feedback.
+   * @param aUrlListener - Gets notified when url starts and stops.
+   * @param aConvertData - Whether to send data through a stream converter.
+   * @param aAdditionalHeader - Added to URI, e.g., "header=filter".
+   * @param aLocalOnly - Whether data should be retrieved only from local caches
+   *   If streaming over the network is required and this is true, then
+   *   an exception is thrown. This defaults to false.
+   *   NOTE: If we're offline, then even if aLocalOnly is false, we won't stream
+   *   over the network.
+   *
+   * @return the URL that gets run
+   */
+  nsIURI streamMessage(in AUTF8String aMessageURI,
+                       in nsIStreamListener aStreamlistener,
+                       in nsIMsgWindow aMsgWindow,
+                       in nsIUrlListener aUrlListener,
+                       in boolean aConvertData,
+                       in AUTF8String aAdditionalHeader,
+                       [optional] in boolean aLocalOnly);
+
+  /**
+   * This method streams a message's headers to the passed in consumer.
+   * This is for consumers who want a particular header but don't
+   * want to stream the whole message.
+   *
+   * @param aMessageURI  uri of message whose headers we are to stream
+   * @param aConsumer    a stream listener listening to the message
+                         headers.
+   * @param aUrlListener gets notified when url starts and stops, if we run a url.
+   * @param aLocalOnly whether data should be retrieved only from local caches
+   *   If streaming over the network is required and this is true, then
+   *   an exception is thrown. This defaults to false.
+   *   NOTE: If we're offline, then even if aLocalOnly is false, we won't stream
+   *   over the network.
+   *
+   * @return the URL that gets run, if any.
+   */
+  nsIURI streamHeaders(in AUTF8String aMessageURI, in nsIStreamListener aConsumer,
+                       in nsIUrlListener aUrlListener,
+                       [optional] in boolean aLocalOnly);
+
+  /**
+   * Determines whether a message is in the memory cache. Local folders
+   * don't implement this.
+   * The URL needs to address a message, not a message part, all query
+   * qualifiers will be stripped before looking up the entry in the cache.
+   *
+   * @param aUrl The URL of the message, possibly with an appropriate command in it
+   * @param aFolder The folder this message is in
+   *
+   * @return TRUE if the message is in mem cache; FALSE if it is not.
+   */
+  boolean isMsgInMemCache(in nsIURI aUrl,
+                          in nsIMsgFolder aFolder);
+
+  /**
+   * now the the message datasource is going away
+   * we need away to go from message uri to go nsIMsgDBHdr
+   *
+   * @param uri A message uri to get nsIMsgDBHdr for.
+   *
+   * @return nsIMsgDBHdr for specified uri or null if failed.
+   */
+  nsIMsgDBHdr messageURIToMsgHdr(in AUTF8String uri);
+};
+
+/**
+ * Some mail protocols (like imap) allow you to fetch individual mime parts. We use this interface
+ * to represent message services whose protocols support this. To use this interface, you should get
+ * the message service then QI for this interface. If it's present, then can fetch a mime part.
+ */
+[scriptable, uuid(3728C255-480C-11d4-98D0-001083010E9B)]
+interface nsIMsgMessageFetchPartService : nsISupports
+{
+  /**
+   * Used to fetch an individual mime part
+   *
+   * @param aURI url representing the message
+   * @param aMessageURI RDF URI including the part to fetch
+   * @param aStreamListener
+   * @param aMsgWindow
+   * @param aUrlListener
+   *
+   * @return
+   */
+  nsIURI fetchMimePart(in nsIURI aURI, in AUTF8String aMessageUri,
+                       in nsIStreamListener aStreamListener,
+                       in nsIMsgWindow aMsgWindow,
+                       in nsIUrlListener aUrlListener);
+};

@@ -1,0 +1,18 @@
+<internal_defines>
+LOCKING_ALLOCATOR -> 20131128
+</internal_defines>
+
+<module_info>
+name -> "Locking Allocator"
+brief -> "STL allocator using mlock to lock memory"
+</module_info>
+
+<os_features>
+posix1
+virtual_lock
+</os_features>
+
+<requires>
+os_utils
+mem_pool
+</requires>

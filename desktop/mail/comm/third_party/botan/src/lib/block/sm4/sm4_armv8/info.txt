@@ -1,0 +1,16 @@
+<internal_defines>
+SM4_ARMV8 -> 20180709
+</internal_defines>
+
+<module_info>
+name -> "SM4 ARMv8"
+brief -> "SM4 using ARMv8 crypto instructions"
+</module_info>
+
+<isa>
+armv8sm4
+</isa>
+
+<requires>
+cpuid
+</requires>

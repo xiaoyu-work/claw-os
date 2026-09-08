@@ -1,0 +1,28 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@import url("chrome://messenger/skin/messenger.css");
+
+#subscribeWindow,
+dialog {
+  min-inline-size: 40em;
+  min-block-size: 30em;
+}
+
+#namefield {
+  flex: 1;
+  --input-text-max-width: none;
+}
+
+#treepanel > div {
+  flex: 1 1 0;
+  block-size: 0;
+  align-items: stretch;
+  display: flex;
+}
+
+#subscribeTree {
+  flex: 1;
+  margin-inline-end: 4px;
+}

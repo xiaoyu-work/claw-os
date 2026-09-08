@@ -1,0 +1,48 @@
+<defines>
+# When bumping remember to also update
+# - BOTAN_FFI_API_VERSION in ffi.h
+# - botan_ffi_supports_api in ffi.cpp
+# - The table of versions in ffi.rst
+# - BOTAN_FFI_VERSION in botan3.py
+FFI -> 20260303
+</defines>
+
+<module_info>
+name -> "Foreign Function Interface"
+brief -> "C API for Botan's functionality"
+</module_info>
+
+<header:internal>
+ffi_cert.h
+ffi_ec.h
+ffi_mp.h
+ffi_oid.h
+ffi_pkey.h
+ffi_rng.h
+ffi_util.h
+</header:internal>
+
+<header:public>
+ffi.h
+</header:public>
+
+<requires>
+block
+stream
+hash
+aead
+kdf
+pbkdf
+pubkey
+xof
+pem
+bigint
+sha2_32
+#x509
+#tls
+system_rng
+auto_rng
+
+# TODO this should be made optional
+ec_group
+</requires>

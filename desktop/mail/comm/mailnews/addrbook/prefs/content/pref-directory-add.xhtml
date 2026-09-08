@@ -1,0 +1,189 @@
+<?xml version="1.0"?>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+<!DOCTYPE html SYSTEM "chrome://messenger/locale/addressbook/pref-directory-add.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml"
+      xmlns:xul="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+      xmlns:html="http://www.w3.org/1999/xhtml"
+      scrolling="false">
+<head>
+  <title><!-- directoryTitleEdit --></title>
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src chrome:; script-src chrome: 'unsafe-inline' moz-src:; style-src chrome: 'unsafe-inline'"
+  />
+  <link rel="stylesheet" href="chrome://messenger/skin/messenger.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/icons.css" />
+  <link
+    rel="stylesheet"
+    href="chrome://messenger/skin/shared/grid-layout.css"
+  />
+  <link rel="stylesheet" href="chrome://messenger/skin/input-fields.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/preferences/preferences.css" />
+  <style>
+    #directoryTabPanels .grid-two-column :is(input[type="text"], textarea, menulist) {
+      width: 100%;
+      margin-inline: 0;
+    }
+
+    #directoryTabPanels input[type="number"] {
+      margin-inline: 0 4px;
+    }
+
+    #directoryTabPanels radiogroup {
+      margin-inline-start: 4px;
+    }
+  </style>
+  <script defer="defer" src="chrome://messenger/content/globalOverlay.js"></script>
+  <script defer="defer" src="chrome://global/content/editMenuOverlay.js"></script>
+  <script defer="defer" src="chrome://messenger/content/addressbook/pref-directory-add.js"></script>
+</head>
+<html:body xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul">
+<dialog id="addDirectory" buttons="accept,cancel" style="width:100vw; min-width:&newDirectoryWidth;">
+  <stringbundle id="bundle_addressBook" src="chrome://messenger/locale/addressbook/addressBook.properties"/>
+  <stringbundle id="bundle_replication" src="chrome://messenger/locale/addressbook/replicationProgress.properties"/>
+
+  <vbox id="editDirectory">
+
+    <tabbox style="margin:5px">
+      <tabs id="directoryTabBox">
+        <tab label="&General.tab;"/>
+        <tab label="&Offline.tab;"/>
+        <tab label="&Advanced.tab;"/>
+      </tabs>
+
+      <tabpanels id="directoryTabPanels" flex="1">
+          <vbox>
+             <div xmlns="http://www.w3.org/1999/xhtml" class="grid-two-column">
+                <div class="flex-items-center">
+                  <xul:label id="descriptionLabel" value="&directoryName.label;"
+                             accesskey="&directoryName.accesskey;"
+                             control="description"/>
+                </div>
+                <div>
+                  <input id="description" type="text" class="input-inline"
+                         aria-labelledby="descriptionLabel"/>
+                </div>
+                <div class="flex-items-center">
+                  <xul:label id="hostnameLabel"
+                             value="&directoryHostname.label;"
+                             accesskey="&directoryHostname.accesskey;"
+                             control="hostname"/>
+                </div>
+                <div>
+                  <input id="hostname" type="text"
+                         class="uri-element input-inline"
+                         aria-labelledby="descriptionLabel"
+                         disableiflocked="true"/>
+                </div>
+                <div class="flex-items-center">
+                  <xul:label id="portLabel" value="&portNumber.label;"
+                             accesskey="&portNumber.accesskey;"
+                             control="port"/>
+                </div>
+                <div class="flex-content-row">
+                  <input id="port" type="number"
+                         class="size5 input-inline"
+                         min="1" max="65535"
+                         aria-labelledby="portLabel"
+                         disableiflocked="true"/>
+                  <xul:checkbox id="secure"
+                                label="&directorySecure.label;"
+                                accesskey="&directorySecure.accesskey;"
+                                disableiflocked="true"
+                                oncommand="onSecure();"/>
+                </div>
+                <div class="flex-items-center">
+                  <xul:label id="basednLabel"
+                             value="&directoryBaseDN.label;"
+                             accesskey="&directoryBaseDN.accesskey;"
+                             control="basedn"/>
+                </div>
+                <div>
+                  <input id="basedn" type="text"
+                         class="uri-element input-inline"
+                         aria-labelledby="basednLabel"
+                         disableiflocked="true"/>
+                </div>
+                <div class="flex-items-center">
+                  <xul:label id="loginLabel" value="&directoryLogin.label;"
+                             accesskey="&directoryLogin.accesskey;"
+                             control="login"/>
+                </div>
+                <div>
+                  <input id="login" type="text" class="uri-element input-inline"
+                         aria-labelledby="loginLabel"/>
+                </div>
+             </div>
+          </vbox>
+          <vbox>
+              <description>&offlineText.label;</description>
+              <separator/>
+              <hbox>
+                  <button id="download" oncommand="DownloadNow();"/>
+                  <spacer flex="1"/>
+              </hbox>
+              <description id="downloadWarningMsg" hidden="hidden" class="error"/>
+              <description id="replicationProgressText" hidden="hidden"/>
+
+              <html:progress id="replicationProgressMeter" value="0" max="100" hidden="hidden"/>
+          </vbox>
+          <vbox>
+            <div xmlns="http://www.w3.org/1999/xhtml" class="grid-two-column">
+              <div class="flex-items-center">
+                <xul:label id="returnMaxLabel" value="&return.label;"
+                           accesskey="&return.accesskey;"
+                           control="results"/>
+              </div>
+              <div class="flex-items-center">
+                <input id="results" type="number"
+                       class="size5 input-inline"
+                       min="1" max="2147483647" value="100"
+                       aria-labelledby="returnMaxLabel"/>
+                <xul:label value="&results.label;"/>
+              </div>
+              <div class="flex-items-center">
+                <xul:label value="&scope.label;" control="scope"
+                           accesskey="&scope.accesskey;"/>
+              </div>
+              <div>
+                <xul:radiogroup id="scope"
+                                orient="horizontal">
+                  <xul:radio id="one" value="1" label="&scopeOneLevel.label;"
+                             disableiflocked="true" accesskey="&scopeOneLevel.accesskey;"/>
+                  <xul:radio id="sub" value="2" label="&scopeSubtree.label;"
+                             disableiflocked="true" accesskey="&scopeSubtree.accesskey;"/>
+                </xul:radiogroup>
+              </div>
+              <div class="flex-items-center">
+                <xul:label value="&searchFilter.label;"
+                           accesskey="&searchFilter.accesskey;"
+                           control="search"/>
+              </div>
+              <div>
+                <textarea id="search" class="no-resize" disableiflocked="true"></textarea>
+              </div>
+              <div class="flex-items-center">
+                <xul:label value="&saslMechanism.label;" control="saslMechanism"
+                           accesskey="&saslMechanism.accesskey;"/>
+              </div>
+              <div>
+                <xul:menulist id="saslMechanism">
+                  <xul:menupopup>
+                    <xul:menuitem id="Simple" value="" label="&saslOff.label;"
+                                  accesskey="&saslOff.accesskey;"/>
+                    <xul:menuitem id="GSSAPI" value="GSSAPI" label="&saslGSSAPI.label;"
+                                  accesskey="&saslGSSAPI.accesskey;"/>
+                  </xul:menupopup>
+                </xul:menulist>
+              </div>
+            </div>
+          </vbox>
+      </tabpanels>
+    </tabbox>
+  </vbox>
+</dialog>
+</html:body>
+</html>

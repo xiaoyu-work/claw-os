@@ -1,0 +1,94 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+LOCALE_TOPDIR=$(commtopsrcdir)
+LOCALE_RELATIVEDIR=mail/locales
+
+include $(topsrcdir)/config/config.mk
+
+SUBMAKEFILES += \
+	$(DEPTH)/$(MOZ_BRANDING_DIRECTORY)/Makefile \
+	$(DEPTH)/$(MOZ_BRANDING_DIRECTORY)/locales/Makefile \
+	$(NULL)
+
+# This makefile uses variable overrides from the l10n-% target to
+# build non-default locales to non-default dist/ locations. Be aware!
+
+PWD := $(CURDIR)
+
+ZIP_IN ?= $(ABS_DIST)/$(PACKAGE)
+
+MOZ_LANGPACK_EID=langpack-$(AB_CD)@thunderbird.mozilla.org
+
+NON_OMNIJAR_FILES = defaults/messenger/mailViews.dat
+
+# Required for l10n.mk - defines a list of app sub dirs that should
+# be included in langpack xpis.
+DIST_SUBDIRS = $(DIST_SUBDIR)
+
+include $(topsrcdir)/config/rules.mk
+
+include $(topsrcdir)/toolkit/locales/l10n.mk
+
+ifeq ($(VCS_CHECKOUT_TYPE),hg)
+L10N_CO = $(PYTHON3) $(topsrcdir)/comm/python/l10n/l10n_clone/l10n_clone.py $(AB_CD) $(L10NBASEDIR)
+else
+L10N_CO = $(error You need to use hg)
+endif
+
+l10n-%: AB_CD=$*
+l10n-%:
+# merge if we're not en-US. Conditional function because
+# we need the current value of AB_CD.
+	$(if $(filter en-US,$(AB_CD)),, @$(MAKE) merge-$*)
+	$(if $(filter en-US,$(AB_CD)),, @$(MAKE) post-merge-$*)
+	$(NSINSTALL) -D $(DIST)/install
+	@$(MAKE) -C $(DEPTH)/toolkit/locales l10n-$*  XPI_ROOT_APPID='$(XPI_ROOT_APPID)'
+	@$(MAKE) -C $(DEPTH)/devtools/client/locales AB_CD=$* XPI_NAME=locale-$* XPI_ROOT_APPID='$(XPI_ROOT_APPID)'
+	@$(MAKE) -C $(DEPTH)/devtools/startup/locales AB_CD=$* XPI_NAME=locale-$* XPI_ROOT_APPID='$(XPI_ROOT_APPID)'
+	@$(MAKE) -C ../../chat/locales AB_CD=$* XPI_NAME=locale-$*
+	@$(MAKE) -C ../../calendar/locales AB_CD=$* XPI_NAME=locale-$*
+	@$(MAKE) -C $(DEPTH)/extensions/spellcheck/locales AB_CD=$* XPI_NAME=locale-$*
+	@$(MAKE) l10n AB_CD=$* XPI_NAME=locale-$* PREF_DIR=$(PREF_DIR)
+	@$(MAKE) multilocale.txt-$* AB_CD=$* XPI_NAME=locale-$*
+	@$(MAKE) -C $(DEPTH)/$(MOZ_BRANDING_DIRECTORY)/locales AB_CD=$* XPI_NAME=locale-$*
+
+post-merge-%:
+	$(PYTHON3) $(MOZILLA_DIR)/mach tb-add-missing-ftls --merge $(BASE_MERGE) $*
+
+package-win32-installer: $(SUBMAKEFILES)
+	$(MAKE) -C ../installer/windows CONFIG_DIR=l10ngen ZIP_IN='$(ZIP_OUT)' installer
+
+ifdef MOZ_ARTIFACT_BUILDS
+langpack:
+	@echo 'Skipping language pack creation'
+else
+langpack: langpack-$(AB_CD)
+endif
+
+# This is a generic target that will make a langpack, repack ZIP (+tarball)
+# builds, and repack an installer if applicable. It is called from the
+# tinderbox scripts. Alter it with caution.
+
+installers-%: IS_LANGUAGE_REPACK=1
+installers-%:
+	@$(MAKE) clobber-$*
+	@$(MAKE) l10n-$*
+	@$(MAKE) package-langpack-$*
+	@$(MAKE) repackage-zip-$*
+ifeq (WINNT,$(OS_ARCH))
+	@$(MAKE) package-win32-installer AB_CD=$*
+endif
+	@echo 'repackaging done'
+
+ident:
+	@printf 'comm_revision '
+	@$(PYTHON3) $(topsrcdir)/config/printconfigsetting.py \
+	    '$(STAGEDIST)/application.ini' App SourceStamp
+	@printf 'moz_revision '
+	@$(PYTHON3) $(topsrcdir)/config/printconfigsetting.py \
+	    '$(STAGEDIST)/platform.ini' Build SourceStamp
+	@printf 'buildid '
+	@$(PYTHON3) $(topsrcdir)/config/printconfigsetting.py \
+	    '$(STAGEDIST)/application.ini' App BuildID

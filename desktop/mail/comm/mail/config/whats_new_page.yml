@@ -1,0 +1,44 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+---
+- type: product-details
+  # yamllint disable-line rule:line-length
+  url: https://live.thunderbird.net/thunderbird/releasenotes?locale=%LOCALE%&version={version}&channel={release-type}
+  conditions:
+      release-types: [release, beta]
+- type: product-details
+  # yamllint disable-line rule:line-length
+  url: https://live.thunderbird.net/thunderbird/releasenotes?locale=%LOCALE%&version={version}&channel=esr
+  conditions:
+      release-types: [esr128, esr140]
+- type: show-url
+  # yamllint disable-line rule:line-length
+  url: https://live.thunderbird.net/thunderbird/whatsnew?locale=%LOCALE%&version={version}&channel=esr&oldversion=%OLD_VERSION%
+  conditions:
+      blob-types: [wnp]
+      release-types: [esr128, esr140]
+      products: [thunderbird]
+      update-channel: esr
+      # e.g.: ["<78.0"] for the current release. {version.major_number} reflects
+      # the current version and compares to the version the client is updating from
+      # on Balrog
+      versions: ["<{version.major_number}.0"]
+- type: show-url
+  # yamllint disable-line rule:line-length
+  url: https://live.thunderbird.net/thunderbird/whatsnew?locale=%LOCALE%&version={version}&channel=release&oldversion=%OLD_VERSION%
+  conditions:
+      blob-types: [wnp]
+      release-types: []
+      products: [thunderbird]
+      update-channel: release
+      versions: ["<{version.major_number}.0"]
+- type: show-url
+  # yamllint disable-line rule:line-length
+  url: https://live.thunderbird.net/thunderbird/whatsnew?locale=%LOCALE%&version={version}&channel=beta&oldversion=%OLD_VERSION%
+  conditions:
+      blob-types: [wnp]
+      release-types: [beta]
+      products: [thunderbird]
+      update-channel: beta
+      versions: ["<{version.major_number}.0"]

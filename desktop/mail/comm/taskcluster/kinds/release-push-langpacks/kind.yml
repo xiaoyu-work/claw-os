@@ -1,0 +1,45 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+---
+loader: taskgraph.loader.transform:loader
+
+transforms:
+    - taskgraph.transforms.from_deps
+    - comm_taskgraph.transforms.push_langpacks
+    - gecko_taskgraph.transforms.task
+
+kind-dependencies:
+    - build
+    - shippable-l10n
+
+
+only-for-build-platforms:
+    - linux64-shippable/opt  # ATN only support 1 platform per locale. That's why we use linux64
+    - macosx64-shippable/opt  # Although, we need the special locale "ja-JP-Mac" from this platform
+
+
+tasks:
+    release-push-langpacks:
+        from-deps: {}
+        worker:
+            env:
+                TASK_ID: {"task-reference": "<self>"}
+                TASKCLUSTER_PROXY_URL: http://taskcluster
+                PATH: /builds/worker/bin:/usr/local/bin:/usr/bin:/bin
+            channel:
+                by-project:
+                    comm-(beta|release|esr.*):
+                        by-platform:
+                            # ja-JP-mac is only langpack on mac, and is unlisted always
+                            macosx64.*: unlisted
+                            default: listed
+                    default: unlisted
+            command:
+                - /builds/worker/bin/run-task-hg
+                - "--"
+                - /builds/worker/venv/bin/python
+                - /builds/worker/bin/atn_langpack.py
+        run-on-projects: []
+        shipping-phase: push
+        shipping-product: thunderbird

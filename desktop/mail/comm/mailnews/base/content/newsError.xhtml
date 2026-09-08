@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src chrome:; script-src chrome: moz-src:;"
+    />
+    <title data-l10n-id="news-error-title"></title>
+    <link
+      rel="stylesheet"
+      href="chrome://global/skin/aboutNetError.css"
+      type="text/css"
+      media="all"
+    />
+    <!-- If the location of the favicon is changed here, the FAVICON_ERRORPAGE_URL symbol in
+         toolkit/components/places/src/nsFaviconService.h should be updated. -->
+    <link
+      rel="icon"
+      type="image/png"
+      id="favicon"
+      href="chrome://global/skin/icons/warning.svg"
+    />
+    <link rel="localization" href="messenger/news.ftl" />
+  </head>
+  <body>
+    <div id="errorPageContainer">
+      <div id="errorTitle">
+        <h1 id="errorTitleText" data-l10n-id="article-not-found-title"></h1>
+      </div>
+      <div id="errorLongContent">
+        <div id="errorShortDesc">
+          <p id="errorShortDescText">
+            <b data-l10n-id="article-not-found-desc"></b>
+          </p>
+        </div>
+        <div id="errorLongDesc">
+          <ul>
+            <li>
+              <span data-l10n-id="news-server-responded-prefix"></span>
+              <span id="ngResp"></span>
+            </li>
+
+            <li data-l10n-id="article-may-have-expired"></li>
+
+            <li id="messageIdDesc">
+              <span data-l10n-id="try-searching-prefix"></span>
+              &lt;<span id="msgId"></span>&gt; (<span id="msgKey"></span>)
+            </li>
+          </ul>
+        </div>
+      </div>
+      <!-- This button really means "remove all expired articles", but we use
+           the "errorTryAgain" id to piggyback on toolkit's CSS. -->
+      <button
+        id="errorTryAgain"
+        data-l10n-id="remove-expired-articles-label"
+      ></button>
+    </div>
+    <script src="chrome://messenger/content/newsError.js" />
+  </body>
+</html>

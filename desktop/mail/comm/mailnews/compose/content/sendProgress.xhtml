@@ -1,0 +1,69 @@
+<?xml version="1.0"?>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+<!DOCTYPE html SYSTEM "chrome://messenger/locale/messengercompose/sendProgress.dtd">
+<html
+  xmlns="http://www.w3.org/1999/xhtml"
+  xmlns:xul="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+  xmlns:html="http://www.w3.org/1999/xhtml"
+  style="min-width: 56ch; min-height: 8em"
+  lightweightthemes="true"
+  scrolling="false"
+>
+  <head>
+    <title>&sendDialog.title;</title>
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src chrome:; script-src chrome: 'unsafe-inline' moz-src:; style-src chrome: 'unsafe-inline'"
+    />
+    <link rel="stylesheet" href="chrome://messenger/skin/messenger.css" />
+    <link rel="stylesheet" href="chrome://messenger/skin/colors.css" />
+    <link rel="stylesheet" href="chrome://messenger/skin/themeableDialog.css" />
+
+    <link rel="localization" href="branding/brand.ftl" />
+    <script
+      defer="defer"
+      src="chrome://messenger/content/dialogShadowDom.js"
+    ></script>
+    <script
+      defer="defer"
+      src="chrome://messenger/content/messengercompose/sendProgress.js"
+    ></script>
+  </head>
+  <html:body
+    xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+  >
+    <dialog id="sendProgress" buttons="cancel">
+      <hbox flex="1">
+        <vbox align="end">
+          <hbox flex="1" align="center">
+            <label value="&status.label;" />
+          </hbox>
+          <hbox flex="1" align="center">
+            <label value="&progress.label;" />
+          </hbox>
+        </vbox>
+        <vbox flex="1">
+          <hbox flex="1" align="center">
+            <label id="dialog.status" crop="center" />
+          </hbox>
+          <hbox
+            class="thin-separator"
+            flex="1"
+            style="display: flex; align-items: center"
+          >
+            <html:progress
+              id="dialog.progress"
+              value="0"
+              max="100"
+              style="flex: 1"
+            />
+            <label id="dialog.progressText" value="" />
+          </hbox>
+        </vbox>
+      </hbox>
+    </dialog>
+  </html:body>
+</html>

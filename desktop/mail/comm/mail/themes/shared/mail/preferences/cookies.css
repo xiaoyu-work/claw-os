@@ -1,0 +1,23 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+body {
+  min-block-size: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+td > input {
+  inline-size: -moz-available;
+}
+
+#cookiesList {
+  min-block-size: 10em;
+  flex: 1 1 0;
+}
+
+#filter {
+  flex: 1;
+  --input-text-max-width: none;
+}

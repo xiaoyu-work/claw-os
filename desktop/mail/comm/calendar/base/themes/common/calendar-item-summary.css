@@ -1,0 +1,84 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#calendar-item-summary {
+  max-inline-size: 100vw;
+}
+
+.calendar-summary-table {
+  inline-size: 100%;
+}
+
+.calendar-summary-table th {
+  user-select: text;
+  font-weight: normal;
+  padding-inline-end: 5px;
+  text-align: end;
+  vertical-align: baseline;
+  white-space: nowrap;
+}
+
+.calendar-summary-table td {
+  user-select: text;
+  padding-block-start: 0;
+  vertical-align: baseline;
+  inline-size: 100%;
+  max-inline-size: 0;
+}
+
+.calendar-summary-table td.item-location {
+  vertical-align: top;
+}
+
+.calendar-summary-table .item-location-link > label {
+  margin-inline: 0;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+  inline-size: 100%;
+}
+
+.calendar-summary-table .item-organizer-cell {
+  margin-inline: 0;
+}
+
+.calendar-summary-table .attachments-label {
+  vertical-align: top;
+}
+
+.item-summary-splitter {
+  appearance: none;
+  border-style: none;
+  border-block-end: 1px solid var(--field-border-color);
+  min-block-size: 0;
+  block-size: 10px;
+  background-color: transparent;
+  margin: 10px;
+  position: relative;
+  z-index: 10;
+  transition: border-width 0.3s ease-in;
+}
+
+.item-summary-splitter[state="collapsed"] {
+  transition: border-color 0.3s;
+}
+
+.item-summary-splitter[state="collapsed"]:hover {
+  border-block-end: 4px solid var(--selected-item-color);
+}
+
+.item-description-box {
+  flex: 2 1 10em;
+  min-block-size: 0;
+}
+
+.item-comment-box {
+  flex: 1 1 0;
+  min-block-size: 0;
+}
+
+.item-comment,
+.item-description {
+  flex: 1 1 0;
+}

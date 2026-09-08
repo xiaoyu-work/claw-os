@@ -1,0 +1,257 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+/*--------------------------------------------------------------------
+ *   Datepicker (text field with minimonth popup)
+ *-------------------------------------------------------------------*/
+
+@import url("chrome://messenger/skin/menulist.css");
+
+timepicker-grids {
+  --tpMainColor: -moz-DialogText;
+  --tpMainBackground: -moz-Dialog;
+  --tpBorderColor: ThreeDShadow;
+  --tpSubColor: -moz-DialogText;
+  --tpSubBackground: -moz-Dialog;
+  --tpFiveminColor: WindowText;
+  --tpFiveminBackground: Window;
+  --tpItemHoverColor: InactiveCaptionText;
+  --tpItemHoverBackground: InactiveCaption;
+  --tbHighlightColor: var(--selected-item-text-color);
+  --tbHighlightBackground: var(--selected-item-color);
+}
+
+:root[lwt-tree] timepicker-grids {
+  --tpMainColor: var(--sidebar-color);
+  --tpMainBackground: var(--sidebar-background);
+  --tpBorderColor: rgba(0, 0, 0, 0.5);
+  --tpSubColor: var(--tpMainColor);
+  --tpSubBackground: rgba(0, 0, 0, 0.1);
+  --tpFiveminColor: var(--tpMainColor);
+  --tpFiveminBackground: transparent;
+  --tpItemHoverColor: var(--tpMainColor);
+  --tpItemHoverBackground: rgba(0, 0, 0, 0.3);
+}
+
+:root[lwt-tree-brighttext] timepicker-grids {
+  --tpBorderColor: rgba(255, 255, 255, 0.5);
+  --tpSubBackground: rgba(255, 255, 255, 0.15);
+  --tpItemHoverBackground: rgba(255, 255, 255, 0.3);
+  --tbHighlightColor: #fff;
+  --tbHighlightBackground: #0a84ff;
+}
+
+/* menulist */
+datepicker > menulist::part(text-input) {
+  inline-size: 9em;
+}
+
+/*-------------------------------------------------------------------
+ *   Timepicker (text menulist with popup)
+ *-------------------------------------------------------------------*/
+
+timepicker > menulist::part(text-input) {
+  inline-size: 6em;
+}
+
+/*-------------------------------------------------------------------
+ *   popup (from timepicker/timepicker.css)
+ *-------------------------------------------------------------------*/
+
+.timepicker-menulist > menupopup::part(content) {
+  --panel-padding: 3px;
+}
+
+/* Box that occupies whole window */
+
+.time-picker-grids {
+  background-color: var(--tpMainBackground);
+  font-size: 8pt;
+  margin: 1px 1px 2px;
+}
+
+/* Grid for hours */
+
+.time-picker-hour-grid {
+  border-block: 1px solid var(--tpBorderColor);
+  border-inline-end: 1px solid var(--tpBorderColor);
+  margin: 1px;
+}
+
+/* Boxes with AM/PM labels */
+
+.timepicker-amLabelBox-class,
+.timepicker-pmLabelBox-class {
+  border-inline-start: 3px double var(--tpBorderColor);
+  background-color: var(--tpFiveminBackground);
+  color: var(--tpFiveminColor);
+}
+
+/* Box in each cell of the grid for hours */
+
+.time-picker-hour-box-class {
+  background-color: var(--tpSubBackground);
+  color: var(--tpMainColor);
+}
+
+.time-picker-hour-grid[format12hours="false"] .time-picker-hour-box-class {
+  min-inline-size: 28px;
+  align-items: center;
+  border-inline-start: 1px solid var(--tpBorderColor);
+}
+
+.time-picker-hour-grid[format12hours="true"] .time-picker-hour-box-class {
+  min-inline-size: 24px;
+  align-items: center;
+  border-inline-start: 1px solid var(--tpBorderColor);
+}
+
+.timepicker-topRow-hour-class {
+  border-block-end: 1px solid var(--tpBorderColor);
+}
+
+.time-picker-hour-grid[format12hours="true"] .timepicker-topRow-hour-class {
+  border-block-end: 3px double var(--tpBorderColor);
+}
+
+.time-picker-hour-box-class:hover {
+  background-color: var(--tpItemHoverBackground);
+  color: var(--tpItemHoverColor);
+  cursor: pointer;
+}
+
+/* selected hour box */
+
+.time-picker-hour-box-class[selected="true"],
+.time-picker-hour-box-class[selected="true"]:hover {
+  background-color: var(--tbHighlightBackground);
+  color: var(--tbHighlightColor);
+}
+
+/* label inside each minute/hour */
+
+.time-picker-minute-label,
+.time-picker-hour-label {
+  text-align: center;
+}
+
+.time-picker-minute-label:hover,
+.time-picker-hour-label:hover {
+  cursor: pointer !important;
+}
+
+.time-picker-minute-box-class {
+  align-items: center;
+  border-inline-end: 1px solid var(--tpBorderColor);
+  border-block-end: 1px solid var(--tpBorderColor);
+}
+
+.time-picker-minute-box-class:hover {
+  cursor: pointer;
+  background-color: var(--tpSubBackground);
+  color: var(--tpSubColor);
+}
+
+/* box around five minute grid */
+
+.time-picker-five-minute-grid-box {
+  min-inline-size: 195px;
+  margin-inline-start: 1px;
+}
+
+/* five minute grid */
+
+.time-picker-five-minute-grid {
+  margin-block-start: 2px;
+  margin-inline-end: 1px;
+  border-block-start: 1px solid var(--tpBorderColor);
+  border-inline: 1px solid var(--tpBorderColor);
+  background-color: var(--tpFiveminBackground);
+  color: var(--tpFiveminColor);
+}
+
+/* box in five-minute grid elements */
+
+.time-picker-five-minute-class:hover {
+  background-color: var(--tpItemHoverBackground);
+  color: var(--tpItemHoverColor);
+  cursor: pointer;
+}
+
+.time-picker-minute-label[selected="true"]:hover {
+  background-color: var(--tbHighlightBackground);
+  color: var(--tbHighlightColor);
+  cursor: pointer;
+}
+
+/* selected five-minute grid element box */
+
+.time-picker-five-minute-class[selected="true"] {
+  background-color: var(--tbHighlightBackground);
+  color: var(--tbHighlightColor);
+}
+
+/* box around one minute grid */
+.time-picker-one-minute-grid-box {
+  min-inline-size: 195px;
+  margin-inline-start: 1px;
+}
+
+/* one minute grid */
+
+.time-picker-one-minute-grid {
+  margin-block-start: 2px;
+  margin-inline-end: 1px;
+  border-block-start: 1px solid var(--tpBorderColor);
+  border-inline: 1px solid var(--tpBorderColor);
+  background-color: var(--tpFiveminBackground);
+  color: var(--tpFiveminColor);
+}
+
+/* box in one-minute grid elements */
+
+.time-picker-one-minute-class {
+  align-items: center;
+}
+
+.time-picker-one-minute-class:hover {
+  background-color: var(--tpItemHoverBackground);
+  color: var(--tpItemHoverColor);
+  cursor: pointer;
+}
+
+.time-picker-one-minute-class[selected="true"] > label:hover {
+  background-color: var(--tbHighlightBackground) !important;
+  color: var(--tbHighlightColor) !important;
+  cursor: pointer;
+}
+
+/* selected one-minute grid element box */
+
+.time-picker-one-minute-class[selected="true"] {
+  background-color: var(--tbHighlightBackground);
+  color: var(--tbHighlightColor);
+}
+
+.time-picker-more-control-label {
+  background-color: var(--tbHighlightBackground);
+  color: var(--tbHighlightColor);
+  margin: 0;
+  border: 1px solid var(--tpSubBackground);
+  padding-inline: 8px;
+  font-size: 1rem;
+}
+
+.time-picker-more-control-label:hover {
+  border-color: var(--tpBorderColor);
+}
+
+/* line across the bottom of the minute boxes, made to line up with more & less tabs */
+
+.time-picker-minutes-bottom {
+  background-color: var(--tpSubBackground);
+  color: var(--tpSubColor);
+  border: 1px solid var(--tpBorderColor);
+  margin-inline-end: 1px;
+}

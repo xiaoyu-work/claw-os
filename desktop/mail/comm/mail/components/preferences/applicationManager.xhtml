@@ -1,0 +1,93 @@
+<?xml version="1.0"?>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+<!DOCTYPE html>
+<html
+  xmlns="http://www.w3.org/1999/xhtml"
+  xmlns:xul="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+  xmlns:html="http://www.w3.org/1999/xhtml"
+  scrolling="false"
+  style="min-width: 30em"
+>
+  <head>
+    <title data-l10n-id="app-manager-dialog-title"></title>
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src chrome:; script-src chrome: 'unsafe-inline' moz-src:; style-src chrome: 'unsafe-inline'"
+    />
+    <link rel="stylesheet" href="chrome://global/skin/global.css" />
+    <link rel="stylesheet" href="chrome://messenger/skin/input-fields.css" />
+    <link
+      rel="stylesheet"
+      href="chrome://messenger/skin/preferences/applications.css"
+    />
+    <link
+      rel="localization"
+      href="messenger/preferences/application-manager.ftl"
+    />
+    <script
+      defer="defer"
+      src="chrome://global/content/preferencesBindings.js"
+    ></script>
+    <script
+      defer="defer"
+      src="chrome://messenger/content/preferences/general.js"
+    ></script>
+    <script
+      defer="defer"
+      src="chrome://messenger/content/preferences/applicationManager.js"
+    ></script>
+  </head>
+  <html:body
+    xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+  >
+    <dialog id="appManager" buttons="accept,cancel">
+      <commandset id="appManagerCommandSet">
+        <command
+          id="cmd_delete"
+          oncommand="gAppManagerDialog.remove()"
+          disabled=""
+        />
+      </commandset>
+
+      <keyset id="appManagerKeyset">
+        <key id="delete" keycode="VK_DELETE" command="cmd_delete" />
+      </keyset>
+
+      <stringbundle
+        id="appManagerBundle"
+        src="chrome://messenger/locale/preferences/applicationManager.properties"
+      />
+      <stringbundle
+        id="bundlePreferences"
+        src="chrome://messenger/locale/preferences/preferences.properties"
+      />
+
+      <description id="appDescription" />
+      <separator class="thin" />
+      <hbox flex="1">
+        <richlistbox
+          id="appList"
+          onselect="gAppManagerDialog.onSelect()"
+          flex="1"
+          style="min-height: 150px"
+        />
+        <vbox>
+          <button
+            id="remove"
+            data-l10n-id="remove-app-button"
+            command="cmd_delete"
+          />
+          <spacer flex="1" />
+        </vbox>
+      </hbox>
+      <vbox id="appDetails">
+        <separator class="thin" />
+        <label id="appType" />
+        <html:input id="appLocation" type="text" readonly="readonly" />
+      </vbox>
+    </dialog>
+  </html:body>
+</html>

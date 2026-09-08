@@ -1,0 +1,159 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+/* import-globals-from ../../base/prefs/content/am-prefs.js */
+
+var { FeedUtils } = ChromeUtils.importESModule(
+  "resource:///modules/FeedUtils.sys.mjs"
+);
+ChromeUtils.defineESModuleGetters(this, {
+  AccountManagerUtils:
+    "moz-src:///comm/mail/modules/AccountManagerUtils.sys.mjs",
+});
+
+var gAccount,
+  gUpdateEnabled,
+  gUpdateValue,
+  gBiffUnits,
+  gAutotagEnable,
+  gAutotagUsePrefix,
+  gAutotagPrefix;
+var AMUtils;
+
+/**
+ * Initialize am-newsblog account settings page when it gets shown.
+ * Update an account's main settings title etc.
+ *
+ * @returns {void}
+ */
+function onInit() {
+  setAccountTitle();
+  setServerColor();
+
+  const optionsAcct = FeedUtils.getOptionsAcct(gAccount.incomingServer);
+  document.getElementById("doBiff").checked = optionsAcct.doBiff;
+
+  gUpdateEnabled = document.getElementById("updateEnabled");
+  gUpdateValue = document.getElementById("updateValue");
+  gBiffUnits = document.getElementById("biffUnits");
+  gAutotagEnable = document.getElementById("autotagEnable");
+  gAutotagUsePrefix = document.getElementById("autotagUsePrefix");
+  gAutotagPrefix = document.getElementById("autotagPrefix");
+
+  gUpdateEnabled.checked = optionsAcct.updates.enabled;
+  gBiffUnits.value = optionsAcct.updates.updateUnits;
+  const minutes =
+    optionsAcct.updates.updateUnits == FeedUtils.kBiffUnitsMinutes
+      ? optionsAcct.updates.updateMinutes
+      : optionsAcct.updates.updateMinutes / (24 * 60);
+  gUpdateValue.value = Number(minutes);
+  onCheckItem("updateValue", ["updateEnabled"]);
+  onCheckItem("biffMinutes", ["updateEnabled"]);
+  onCheckItem("biffDays", ["updateEnabled"]);
+
+  gAutotagEnable.checked = optionsAcct.category.enabled;
+  gAutotagUsePrefix.disabled = !gAutotagEnable.checked;
+  gAutotagUsePrefix.checked = optionsAcct.category.prefixEnabled;
+  gAutotagPrefix.disabled =
+    gAutotagUsePrefix.disabled || !gAutotagUsePrefix.checked;
+  gAutotagPrefix.value = optionsAcct.category.prefix;
+}
+
+function onPreInit(account) {
+  gAccount = account;
+  AMUtils = new AccountManagerUtils(gAccount);
+}
+
+/**
+ * Handle the blur event of the #server.prettyName pref input.
+ * Update account name in account manager tree and account settings' main title.
+ *
+ * @param {Event} event - Blur event from the pretty name input.
+ * @returns {void}
+ */
+function serverPrettyNameOnBlur(event) {
+  parent.setAccountLabel(gAccount.key, event.target.value);
+  setAccountTitle();
+}
+
+/**
+ * Update an account's main settings title with the account name if applicable.
+ *
+ * @returns {void}
+ */
+function setAccountTitle() {
+  const accountName = document.getElementById("server.prettyName");
+  const title = document.querySelector(
+    "#am-newsblog-title .dialogheader-title"
+  );
+  let titleValue = title.getAttribute("defaultTitle");
+  if (accountName.value) {
+    titleValue += " - " + accountName.value;
+  }
+
+  title.setAttribute("value", titleValue);
+  document.title = titleValue;
+}
+
+function setPrefs(aNode) {
+  const optionsAcct = FeedUtils.getOptionsAcct(gAccount.incomingServer);
+  switch (aNode.id) {
+    case "doBiff":
+      FeedUtils.pauseFeedFolderUpdates(
+        gAccount.incomingServer.rootFolder,
+        !aNode.checked,
+        true
+      );
+      break;
+    case "updateEnabled":
+    case "updateValue":
+    case "biffUnits": {
+      optionsAcct.updates.enabled = gUpdateEnabled.checked;
+      onCheckItem("updateValue", ["updateEnabled"]);
+      onCheckItem("biffMinutes", ["updateEnabled"]);
+      onCheckItem("biffDays", ["updateEnabled"]);
+      const minutes =
+        gBiffUnits.value == FeedUtils.kBiffUnitsMinutes
+          ? gUpdateValue.value
+          : gUpdateValue.value * 24 * 60;
+      optionsAcct.updates.updateMinutes = Number(minutes);
+      optionsAcct.updates.updateUnits = gBiffUnits.value;
+      break;
+    }
+    case "autotagEnable":
+      optionsAcct.category.enabled = aNode.checked;
+      gAutotagUsePrefix.disabled = !aNode.checked;
+      gAutotagPrefix.disabled = !aNode.checked || !gAutotagUsePrefix.checked;
+      break;
+    case "autotagUsePrefix":
+      optionsAcct.category.prefixEnabled = aNode.checked;
+      gAutotagPrefix.disabled = aNode.disabled || !aNode.checked;
+      break;
+    case "autotagPrefix":
+      optionsAcct.category.prefix = aNode.value;
+      break;
+  }
+
+  FeedUtils.setOptionsAcct(gAccount.incomingServer, optionsAcct);
+}
+
+function setServerColor() {
+  const colorInput = document.getElementById("serverColor");
+  colorInput.value = AMUtils.serverColor;
+
+  colorInput.addEventListener("input", event =>
+    AMUtils.previewServerColor(event.target.value)
+  );
+  colorInput.addEventListener("change", event =>
+    AMUtils.updateServerColor(event.target.value)
+  );
+  document
+    .getElementById("resetColor")
+    .addEventListener("click", () => resetServerColor());
+}
+
+function resetServerColor() {
+  document.getElementById("serverColor").value = AMUtils.defaultServerColor;
+  AMUtils.resetServerColor();
+}

@@ -1,0 +1,278 @@
+<?xml version="1.0"?>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+<!-- TODO: messenger.dtd is used for the "Next" button; some relocation is needed. -->
+<!DOCTYPE html [ <!ENTITY % dtd3 SYSTEM "chrome://lightning/locale/lightning.dtd">
+%dtd3;
+<!ENTITY % dtd4 SYSTEM "chrome://messenger/locale/messenger.dtd" >
+%dtd4; ]>
+<html
+  xmlns="http://www.w3.org/1999/xhtml"
+  xmlns:xul="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+  xmlns:html="http://www.w3.org/1999/xhtml"
+  icon="calendar-general-dialog"
+  lightweightthemes="true"
+  style="min-width: 500px; min-height: 380px"
+  scrolling="false"
+>
+  <head>
+    <title data-l10n-id="calendar-creation-dialog-title"></title>
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src chrome:; script-src chrome: 'unsafe-inline' moz-src:; style-src chrome: 'unsafe-inline'"
+    />
+    <link rel="stylesheet" href="chrome://messenger/skin/messenger.css" />
+    <link rel="stylesheet" href="chrome://messenger/skin/input-fields.css" />
+    <link rel="stylesheet" href="chrome://messenger/skin/colors.css" />
+    <link rel="stylesheet" href="chrome://messenger/skin/themeableDialog.css" />
+    <link rel="stylesheet" href="chrome://calendar/skin/shared/calendar-creation.css" />
+    <link rel="localization" href="toolkit/global/wizard.ftl" />
+    <link rel="localization" href="calendar/calendar.ftl" />
+    <link rel="localization" href="calendar/calendar-creation.ftl" />
+    <script defer="defer" src="chrome://messenger/content/globalOverlay.js"></script>
+    <script defer="defer" src="chrome://global/content/editMenuOverlay.js"></script>
+    <script defer="defer" src="chrome://messenger/content/dialogShadowDom.js"></script>
+    <script defer="defer" src="chrome://calendar/content/calendar-ui-utils.js"></script>
+    <script defer="defer" src="chrome://calendar/content/calendar-identity-utils.js"></script>
+    <script defer="defer" src="chrome://calendar/content/calendar-creation.js"></script>
+  </head>
+  <html:body xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul">
+    <dialog
+      id="calendar-creation-dialog"
+      style="width: 100vw; height: 100vh"
+      buttons="accept,cancel"
+    >
+      <!-- Panel: Select Calendar Type -->
+      <vbox
+        id="panel-select-calendar-type"
+        buttonlabelaccept="&nextButton.label;"
+        buttonaccesskeyaccept=""
+      >
+        <description data-l10n-id="calendar-creation-initial-description"></description>
+        <hbox class="indent">
+          <radiogroup id="calendar-type">
+            <radio
+              value="local"
+              data-l10n-id="calendar-creation-initial-computer"
+              selected="true"
+            />
+            <radio value="network" data-l10n-id="calendar-creation-initial-network" />
+          </radiogroup>
+        </hbox>
+      </vbox>
+
+      <!-- Panel: Local Calendar Settings -->
+      <vbox
+        id="panel-local-calendar-settings"
+        data-l10n-id="calendar-creation-panel-local-settings"
+        data-l10n-attrs="buttonlabelaccept,buttonaccesskeyaccept,buttonlabelextra2,buttonaccesskeyextra2"
+        hidden="hidden"
+      >
+        <vbox id="no-identity-notification" class="notification-inline">
+          <!-- notificationbox will be added here lazily. -->
+        </vbox>
+        <html:form>
+          <html:table>
+            <html:tr>
+              <html:th>
+                <label
+                  data-l10n-id="calendar-server-dialog-name-label"
+                  control="local-calendar-name-input"
+                />
+              </html:th>
+              <html:td>
+                <html:input
+                  id="local-calendar-name-input"
+                  class="calendar-creation-text-input"
+                  flex="1"
+                  required="required"
+                  oninput="checkRequired()"
+                />
+              </html:td>
+            </html:tr>
+            <html:tr>
+              <html:th>
+                <label
+                  data-l10n-id="calendar-properties-color"
+                  control="local-calendar-color-picker"
+                />
+              </html:th>
+              <html:td>
+                <html:input
+                  id="local-calendar-color-picker"
+                  class="small-margin"
+                  type="color"
+                  value="#A8C2E1"
+                />
+              </html:td>
+            </html:tr>
+            <html:tr>
+              <html:th> </html:th>
+              <html:td>
+                <checkbox
+                  id="local-fire-alarms-checkbox"
+                  data-l10n-id="calendar-properties-show-reminders"
+                  checked=""
+                />
+              </html:td>
+            </html:tr>
+            <html:tr id="calendar-email-identity-row">
+              <html:th>
+                <label
+                  value="&lightning.calendarproperties.email.label;"
+                  control="email-identity-menulist"
+                />
+              </html:th>
+              <html:td>
+                <menulist id="email-identity-menulist" oncommand="onChangeIdentity(event)">
+                  <menupopup id="email-identity-menupopup" />
+                </menulist>
+              </html:td>
+            </html:tr>
+          </html:table>
+        </html:form>
+      </vbox>
+
+      <!-- Panel: Network Calendar Settings -->
+      <html:table
+        id="panel-network-calendar-settings"
+        flex="1"
+        data-l10n-id="calendar-creation-panel-network-settings"
+        data-l10n-attrs="buttonlabelaccept,buttonaccesskeyaccept,buttonlabelextra2,buttonaccesskeyextra2"
+        hidden="hidden"
+      >
+        <html:tr id="network-username-row">
+          <html:th>
+            <label data-l10n-id="calendar-creation-username" control="network-username-input" />
+          </html:th>
+          <html:td>
+            <html:input
+              id="network-username-input"
+              class="calendar-creation-text-input"
+              flex="1"
+              oninput="
+                fillLocationPlaceholder();
+                checkRequired();
+              "
+            />
+          </html:td>
+        </html:tr>
+        <html:tr id="network-location-row">
+          <html:th>
+            <label data-l10n-id="calendar-creation-location" control="network-location-input" />
+          </html:th>
+          <html:td>
+            <html:input
+              id="network-location-input"
+              class="calendar-creation-text-input"
+              flex="1"
+              oninput="checkRequired()"
+              data-l10n-id="calendar-creation-location-placeholder"
+              data-l10n-attrs="placeholder,default-placeholder"
+            />
+          </html:td>
+        </html:tr>
+        <html:tr id="network-nocredentials-row">
+          <html:th> </html:th>
+          <html:td>
+            <checkbox
+              id="network-nocredentials-checkbox"
+              data-l10n-id="calendar-creation-network-nocredentials"
+              oncommand="updateNoCredentials(this.checked)"
+            />
+          </html:td>
+        </html:tr>
+        <html:tr id="network-cache-row">
+          <html:th> </html:th>
+          <html:td>
+            <checkbox
+              id="network-cache-checkbox"
+              data-l10n-id="calendar-properties-offline-support"
+              checked=""
+            />
+          </html:td>
+        </html:tr>
+        <html:tr class="network-status-row" status="none">
+          <html:th>
+            <html:img
+              class="network-status-image"
+              src="chrome://messenger/skin/icons/spinning.svg"
+              alt=""
+            />
+          </html:th>
+          <html:td>
+            <description
+              class="status-label network-loading-label"
+              data-l10n-id="calendar-creation-network-loading"
+            ></description>
+            <description
+              class="status-label network-notfound-label"
+              data-l10n-id="calendar-creation-network-notfound"
+            ></description>
+            <description
+              class="status-label network-authfail-label"
+              data-l10n-id="calendar-creation-network-authfail"
+            ></description>
+            <description
+              class="status-label network-certerror-label"
+              data-l10n-id="calendar-creation-network-certerror"
+            ></description>
+          </html:td>
+        </html:tr>
+      </html:table>
+
+      <!-- Panel: Select Calendars -->
+      <vbox
+        id="panel-select-calendars"
+        flex="1"
+        data-l10n-id="calendar-creation-panel-select-calendars"
+        data-l10n-attrs="buttonlabelaccept,buttonaccesskeyaccept,buttonlabelextra2,buttonaccesskeyextra2"
+        hidden="hidden"
+      >
+        <description
+          id="network-selectcalendar-description-single"
+          data-l10n-id="calendar-creation-network-subscribe-single"
+        ></description>
+        <description
+          id="network-selectcalendar-description-multiple"
+          hidden="hidden"
+          data-l10n-id="calendar-creation-network-subscribe-multiple"
+        ></description>
+        <hbox id="network-selectcalendar-providertype-box" align="center" hidden="hidden">
+          <label
+            id="network-selectcalendar-providertype-label"
+            data-l10n-id="calendar-creation-type"
+          />
+          <menulist
+            id="network-selectcalendar-providertype-menulist"
+            flex="1"
+            onselect="selectProvider(this.selectedItem.value)"
+          >
+            <menupopup id="network-selectcalendar-providertype-menupopup" />
+          </menulist>
+        </hbox>
+        <richlistbox
+          id="network-calendar-list"
+          data-l10n-id="calendar-context-properties"
+          data-l10n-attrs="aria-label"
+        />
+        <html:hr />
+        <hbox>
+          <html:button id="selectcalendars-all" data-l10n-id="select-all-calendars"></html:button>
+          <html:button id="selectcalendars-none" data-l10n-id="select-none-calendars"></html:button>
+        </hbox>
+      </vbox>
+
+      <!-- Panel: Add-on Calendar Settings -->
+      <!-- Populated dynamically by add-ons that need UI for a particular calendar type. -->
+      <vbox
+        id="panel-addon-calendar-settings"
+        data-l10n-id="calendar-creation-panel-addon-settings"
+        data-l10n-attrs="buttonlabelaccept,buttonaccesskeyaccept,buttonlabelextra2,buttonaccesskeyextra2"
+        hidden="hidden"
+      />
+    </dialog>
+  </html:body>
+</html>

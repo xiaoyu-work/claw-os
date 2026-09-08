@@ -1,0 +1,93 @@
+<?xml version="1.0"?>
+
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+<!DOCTYPE bindings [
+<!ENTITY % notificationDTD SYSTEM "chrome://global/locale/notification.dtd">
+%notificationDTD;
+]>
+
+<bindings id="notificationBindings" xmlns="http://www.mozilla.org/xbl">
+
+  <binding id="notificationbox" extends="chrome://global/content/bindings/notification.xml#notificationbox">
+    <implementation>
+      <constructor><![CDATA[
+        let localScope = {};
+        ChromeUtils.import("resource://services-common/observers.js", localScope);
+        ChromeUtils.import("resource://services-sync/notifications.js", localScope);
+
+        localScope.Observers.add("weave:notification:added", this.onNotificationAdded, this);
+        localScope.Observers.add("weave:notification:removed", this.onNotificationRemoved, this);
+        localScope.Notifications.notifications.forEach(this._appendNotification, this);
+      ]]></constructor>
+
+      <destructor><![CDATA[
+        let localScope = {};
+        ChromeUtils.import("resource://services-common/observers.js", localScope);
+        localScope.Observers.remove("weave:notification:added", this.onNotificationAdded, this);
+        localScope.Observers.remove("weave:notification:removed", this.onNotificationRemoved, this);
+      ]]></destructor>
+
+      <method name="onNotificationAdded">
+        <parameter name="subject"/>
+        <parameter name="data"/>
+        <body><![CDATA[
+          this._appendNotification(subject);
+        ]]></body>
+      </method>
+
+      <method name="onNotificationRemoved">
+        <parameter name="subject"/>
+        <parameter name="data"/>
+        <body><![CDATA[
+          // If the view of the notification hasn't been removed yet, remove it.
+          var notifications = this.allNotifications;
+          for (let notification of notifications) {
+            if (notification.notification == subject) {
+              notification.close();
+              break;
+            }
+          }
+        ]]></body>
+      </method>
+
+      <method name="_appendNotification">
+        <parameter name="notification"/>
+        <body><![CDATA[
+          var node = this.appendNotification(notification.description,
+                                             notification.title,
+                                             notification.iconURL,
+                                             notification.priority,
+                                             notification.buttons);
+          node.notification = notification;
+        ]]></body>
+      </method>
+
+    </implementation>
+  </binding>
+
+  <binding id="notification" extends="chrome://global/content/bindings/notification.xml#notification">
+    <implementation>
+      <method name="close">
+        <body><![CDATA[
+          let localScope = {};
+          ChromeUtils.import("resource://services-sync/notifications.js", localScope);
+          localScope.Notifications.remove(this.notification);
+
+          // We should be able to call the base class's close method here
+          // to remove the notification element from the notification box,
+          // but we can't because of bug 373652, so instead we copied its code
+          // and execute it below.
+          var control = this.control;
+          if (control)
+            control.removeNotification(this);
+          else
+            this.hidden = true;
+        ]]></body>
+      </method>
+    </implementation>
+  </binding>
+
+</bindings>

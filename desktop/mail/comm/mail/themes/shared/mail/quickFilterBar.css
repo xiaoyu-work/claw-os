@@ -1,0 +1,220 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+:root {
+  --qfb-padding: 3px;
+
+  &[uidensity="compact"] {
+    --qfb-padding: 0 3px;
+  }
+}
+
+#quick-filter-bar {
+  --button-margin: 3px;
+  background-color: var(--layout-background-1);
+  padding: var(--qfb-padding);
+  border-block-end: 1px solid var(--sidebar-border);
+
+  :root[lwtheme][lwt-tree] & {
+    background-color: color-mix(in srgb, var(--toolbar-background-color) 50%, transparent);
+    color: var(--lwt-text-color);
+  }
+}
+
+#qfb-sticky {
+  background-image: var(--icon-pin);
+  block-size: auto;
+}
+
+#qfb-unread {
+  background-image: var(--icon-unread);
+}
+
+#qfb-starred {
+  background-image: var(--icon-star);
+}
+
+#qfb-inaddrbook {
+  background-image: var(--icon-address-book);
+}
+
+#qfb-tags {
+  background-image: var(--icon-tag);
+}
+
+#qfb-attachment {
+  background-image: var(--icon-attachment);
+}
+
+#qfd-dropdown {
+  background-image: var(--icon-filter);
+  display: none;
+}
+
+#qfb-results-label {
+  margin: 3px;
+  text-align: end;
+  align-self: center;
+
+  .searching & {
+    display: none;
+  }
+}
+
+#qfb-qs-textbox {
+  flex: 1;
+  margin: 3px;
+  max-inline-size: 450px;
+}
+
+.qfb-search-button-icon {
+  content: var(--icon-search);
+}
+
+@container threadPane (max-width: 499px) {
+  #qfb-qs-textbox {
+    min-inline-size: 200px;
+  }
+
+  #qfd-dropdown {
+    display: inline-block;
+    min-inline-size: 22px;
+  }
+
+  .button-group.quickFilterButtons {
+    display: none;
+  }
+}
+
+#quickFilterBarTagsContainer:not([hidden]) {
+  display: flex;
+  align-items: center;
+  margin-inline-start: -3px;
+  flex-wrap: wrap;
+
+  &.none-mode-selected button.qfb-tag-button {
+    display: none;
+  }
+}
+
+#qfb-tag-filter-mode {
+  line-height: unset;
+  min-block-size: 0;
+  margin: 3px;
+  padding-block: 3px;
+}
+
+button.qfb-tag-button {
+  --tag-color: currentColor;
+  --tag-contrast-color: currentColor;
+  --button-padding: 3px;
+  --button-margin: 3px;
+  background-color: transparent;
+  color: var(--tag-color);
+  border-color: var(--tag-color);
+  border-radius: 100px;
+  padding-inline: 9px;
+  min-block-size: 0;
+  min-inline-size: 0;
+  line-height: 1;
+
+  &:enabled:hover:not([aria-pressed="true"]) {
+    color: var(--tag-color);
+    background-color: color-mix(in srgb, var(--tag-color) 20%, transparent);
+    border-color: var(--tag-color);
+  }
+
+  &[aria-pressed="true"] {
+    --tag-color: currentColor;
+    color: var(--tag-contrast-color);
+    background-color: var(--tag-color);
+    border-color: color-mix(in srgb, var(--tag-color) 60%, black);
+    border-radius: 100px;
+    box-shadow: none;
+
+    &:enabled:hover {
+      color: var(--tag-contrast-color);
+      background-color: color-mix(in srgb, var(--tag-color) 70%, white);
+      border-color: color-mix(in srgb, var(--tag-color) 60%, black);
+
+      &:active {
+        background-color: color-mix(in srgb, var(--tag-color) 80%, black);
+        border-color: color-mix(in srgb, var(--tag-color) 60%, black);
+      }
+    }
+  }
+
+  &[inverted] {
+    background-color: transparent;
+    color: var(--tag-color);
+    border-color: var(--tag-color);
+    text-decoration: line-through;
+
+    &:enabled:hover {
+      color: var(--tag-color);
+      background-color: color-mix(in srgb, var(--tag-color) 20%, transparent);
+      border-color: var(--tag-color);
+    }
+  }
+}
+
+#quickFilterBarContainer {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+#quickFilterBarSecondFilters {
+  display: flex;
+  align-items: center;
+  padding-inline-start: var(--button-margin);
+  flex-wrap: wrap;
+  column-gap: 12px;
+}
+
+#quick-filter-bar-filter-text-bar:not([hidden]) {
+  --button-padding: 3px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+
+  & > .button-group > .button {
+    min-inline-size: 0;
+  }
+}
+
+#quick-filter-bar {
+  #qfb-searching-throbber {
+    margin-inline-end: 3px;
+    inline-size: 12px;
+    min-block-size: 12px;
+    vertical-align: middle;
+    content: url("chrome://messenger/skin/icons/spinning.svg");
+    -moz-context-properties: fill;
+    fill: AccentColor;
+  }
+
+  &:not(.searching) #qfb-searching-throbber {
+    display: none;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    #qfb-searching-throbber {
+      content: url("chrome://messenger/skin/icons/hourglass.svg");
+    }
+  }
+}
+
+#qfb-upsell-line-one {
+  font-weight: bold;
+}
+
+/* Hide the search glass in QFB search box when Gloda is disabled. */
+
+/* stylelint-disable-next-line media-query-no-invalid */
+@media not -moz-pref("mailnews.database.global.indexer.enabled") {
+  #qfb-qs-textbox {
+    --search-button-show: none;
+    --search-buttons-padding: var(--search-padding);
+  }
+}

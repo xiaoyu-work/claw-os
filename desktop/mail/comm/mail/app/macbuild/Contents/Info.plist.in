@@ -1,0 +1,143 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>English</string>
+	<key>CFBundleExecutable</key>
+	<string>@MOZ_APP_NAME@</string>
+	<key>CFBundleGetInfoString</key>
+	<string>@MAC_APP_NAME@ @APP_VERSION_DISPLAY@</string>
+	<key>CFBundleIconFile</key>
+	<string>thunderbird.icns</string>
+	<key>CFBundleIdentifier</key>
+	<string>@MOZ_MACBUNDLE_ID@</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>@MAC_APP_NAME@</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@APP_VERSION@</string>
+	<key>CFBundleSignature</key>
+	<string>MOZM</string>
+	<key>CFBundleVersion</key>
+	<string>@MAC_BUNDLE_VERSION@</string>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>Email Address URL</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>mailto</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>News URL</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>news</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>RSS / ATOM URL</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>feed</string>
+			</array>
+		</dict>
+	</array>
+	<key>NSAppleScriptEnabled</key>
+	<true/>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<key>LSFileQuarantineEnabled</key>
+	<true/>
+	<key>LSMinimumSystemVersion</key>
+	<string>10.15.0</string>
+	<key>NSSupportsAutomaticGraphicsSwitching</key>
+	<true/>
+	<key>NSRequiresAquaSystemAppearance</key>
+	<false/>
+	<key>NSDisablePersistence</key>
+	<true/>
+	<key>NSPrincipalClass</key>
+	<string>GeckoNSApplication</string>
+	<key>SMPrivilegedExecutables</key>
+	<dict>
+		<key>org.mozilla.updater</key>
+		<string>identifier "org.mozilla.updater" and ((anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.9]) or (anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] and certificate leaf[field.1.2.840.113635.100.6.1.13] and certificate leaf[subject.OU] = "43AQ936H96"))</string>
+	</dict>
+	<key>MozillaDeveloperRepoPath</key>
+	<string>@MOZ_DEVELOPER_REPO_PATH@</string>
+	<key>MozillaDeveloperObjPath</key>
+	<string>@MOZ_DEVELOPER_OBJ_PATH@</string>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.mozilla.thunderbird.mozeml</string>
+			<key>UTTypeReferenceURL</key>
+			<string>https://thunderbird.net</string>
+			<key>UTTypeDescription</key>
+			<string>Thunderbird Mail Message</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+				<string>public.content</string>
+				<string>public.email-message</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>com.apple.ostype</key>
+				<string>TBMZ</string>
+				<key>public.filename-extension</key>
+				<array>
+					<string>mozeml</string>
+				</array>
+			</dict>
+		</dict>
+	</array>
+
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>mozeml</string>
+			</array>
+			<key>CFBundleTypeOSTypes</key>
+			<array>
+				<string>TBMZ</string>
+			</array>
+
+			<key>CFBundleTypeName</key>
+			<string>Thunderbird Mail Message</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSTypeIsPackage</key>
+			<false/>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.mozilla.thunderbird.mozeml</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+			    <string>eml</string>
+			</array>
+			<key>CFBundleTypeName</key>
+			<string>Thunderbird Email</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+		</dict>
+	</array>
+	<key>NSContactsUsageDescription</key>
+	<string>Use your macOS contacts in @MAC_APP_NAME@.</string>
+</dict>
+</plist>

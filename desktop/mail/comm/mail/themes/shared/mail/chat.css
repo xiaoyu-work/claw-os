@@ -1,0 +1,1014 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@namespace html url("http://www.w3.org/1999/xhtml");
+
+#chatTabPanel {
+  --imbox-selected-text-color: FieldText;
+  --imbox-selected-background-color: Field;
+  --imgroup-selected-background-color: ThreeDLightShadow;
+  overflow: hidden;
+
+  :root[lwt-tree-brighttext] & {
+    --imbox-selected-text-color: #f9f9fa;
+    --imbox-selected-background-color: #18181a;
+  }
+}
+
+.im-placeholder-screen {
+  color: FieldText;
+  background-color: Field;
+  overflow: auto;
+  font-size: 15px;
+  font-weight: normal;
+
+  :root[lwt-tree-brighttext] & {
+    color: var(--sidebar-color);
+    background-color: var(--sidebar-background);
+  }
+}
+
+.im-placeholder-box {
+  max-inline-size: calc(500px + 9em);
+  min-block-size: 3em;
+  background: url("chrome://global/skin/icons/info.svg") left 0 no-repeat;
+  -moz-context-properties: fill;
+  fill: currentColor;
+  background-size: 3em;
+  margin-inline: 0.5em;
+  padding-inline: 4.5em;
+
+  &:-moz-locale-dir(rtl) {
+    background-position-x: right;
+  }
+}
+
+.im-placeholder-innerbox {
+  opacity: 0.8;
+}
+
+.im-placeholder-title {
+  font-size: 2em;
+  font-weight: lighter;
+  line-height: 1.2;
+  margin: 0;
+  margin-block-end: 0.5em;
+  padding-block-end: 0.4em;
+  border-block-end: 1px solid var(--sidebar-border);
+}
+
+.im-placeholder-desc {
+  margin-inline: 0;
+}
+
+#noPreviousConvDesc {
+  margin-block: 0;
+}
+
+.im-placeholder-button-box > button {
+  /* override forms.css */
+  font: inherit;
+  min-block-size: 30px;
+
+  &:focus-visible {
+    outline: var(--focus-outline);
+    outline-offset: var(--focus-outline-offset);
+  }
+
+  & > .button-box {
+    padding-inline: 10px;
+  }
+}
+
+#listPaneBox {
+  border-inline-end: 1px solid var(--sidebar-border);
+
+  :root[lwt-tree] & {
+    appearance: none;
+    background-color: var(--sidebar-background);
+    border-inline-end-color: var(--sidebar-border);
+    color: var(--sidebar-color);
+  }
+
+  :root[lwt-tree-brighttext] & {
+    border-inline-end-color: var(--sidebar-border);
+  }
+}
+
+#contactlistbox {
+  color: inherit;
+  margin: 0;
+  /* make it possible to let the children overwrite the end border.
+     margin-inline-start because of the inverted direction */
+  margin-inline-start: -1px;
+  contain: size;
+
+  /* move the scrollbar to the left */
+  &:-moz-locale-dir(ltr),
+  &:-moz-locale-dir(rtl) > richlistitem:is([is="chat-imconv-richlistitem"], [is="chat-contact-richlistitem"], [is="chat-group-richlistitem"]) {
+    direction: rtl;
+  }
+
+  &:-moz-locale-dir(rtl),
+  &:-moz-locale-dir(ltr) > richlistitem:is([is="chat-imconv-richlistitem"], [is="chat-contact-richlistitem"], [is="chat-group-richlistitem"]) {
+    direction: ltr;
+  }
+}
+
+richlistitem[is="chat-group-richlistitem"] {
+  align-items: center;
+  padding-inline-start: 4px;
+  margin-inline-end: 1px;
+
+  & > label {
+    margin-inline-start: 4px;
+  }
+
+  &[selected="true"] {
+    background-color: var(--imgroup-selected-background-color);
+    color: var(--imbox-selected-text-color);
+
+    richlistbox:focus > & {
+      background-color: var(--imgroup-selected-background-color);
+      color: var(--imbox-selected-text-color);
+    }
+  }
+
+  & .twisty {
+    padding-block-start: 1px;
+    inline-size: 10px;
+    block-size: 10px;
+    margin-inline-start: 5px;
+    background: var(--icon-nav-down-sm) no-repeat center;
+    background-size: contain;
+    -moz-context-properties: stroke;
+    stroke: currentColor;
+
+    @media (prefers-reduced-motion: no-preference) {
+      transition: transform 200ms ease;
+    }
+  }
+
+  &.closed .twisty {
+    transform: rotate(-90deg);
+
+    &:-moz-locale-dir(rtl) {
+      transform: rotate(90deg);
+    }
+  }
+}
+
+richlistitem[is="chat-group-richlistitem"],
+richlistitem[is="chat-imconv-richlistitem"][unread] {
+  font-weight: bold;
+}
+
+richlistitem[is="chat-imconv-richlistitem"][attention] {
+  color: blue;
+}
+
+richlistitem[is="chat-imconv-richlistitem"],
+richlistitem[is="chat-contact-richlistitem"] {
+  border-block: 1px solid transparent;
+  align-items: center;
+}
+
+richlistitem:is([is="chat-imconv-richlistitem"], [is="chat-contact-richlistitem"], [is="chat-group-richlistitem"]) {
+  pointer-events: auto;
+}
+
+richlistitem:is([is="chat-imconv-richlistitem"], [is="chat-contact-richlistitem"], [is="chat-group-richlistitem"]):not([selected="true"]):hover {
+  background-color: rgba(0, 0, 0, 0.1);
+}
+
+:root[lwt-tree] richlistitem[is="chat-group-richlistitem"],
+:root[lwt-tree] richlistitem[is="chat-imconv-richlistitem"]:not([selected]),
+:root[lwt-tree] richlistitem[is="chat-contact-richlistitem"]:not([selected]) {
+  color: var(--sidebar-color);
+}
+
+richlistitem[is="chat-imconv-richlistitem"][selected="true"],
+richlistitem[is="chat-contact-richlistitem"][selected="true"] {
+  background-color: var(--imbox-selected-background-color) !important;
+  border-color: var(--sidebar-border) !important;
+  color: var(--imbox-selected-text-color) !important;
+}
+
+:root[lwt-tree] richlistitem[is="chat-group-richlistitem"][selected],
+:root[lwt-tree]
+  richlistitem:is([is="chat-imconv-richlistitem"], [is="chat-contact-richlistitem"], [is="chat-group-richlistitem"]):not([selected="true"]):hover {
+  background-color: var(--sidebar-highlight-background-color, hsla(0, 0%, 80%, 0.3));
+  color: var(--sidebar-highlight-text-color, var(--sidebar-color));
+}
+
+:root[lwt-tree-brighttext] richlistitem[is="chat-group-richlistitem"][selected],
+:root[lwt-tree-brighttext]
+  richlistitem:is([is="chat-imconv-richlistitem"], [is="chat-contact-richlistitem"], [is="chat-group-richlistitem"]):not([selected="true"]):hover {
+  background-color: var(--sidebar-highlight-background-color, rgba(249, 249, 250, 0.1));
+}
+
+richlistitem[is="chat-imconv-richlistitem"]:not(:hover) > .closeConversationButton {
+  visibility: hidden;
+}
+
+.contact-hbox {
+  align-items: center;
+  overflow: hidden;
+}
+
+.conv-hbox {
+  overflow: hidden;
+}
+
+.box-line {
+  inline-size: 2px;
+  block-size: 100%;
+
+  &[selected="true"] {
+    background-color: var(--tabline-color);
+  }
+
+  richlistitem[is="chat-contact-richlistitem"] > & {
+    /* equalize the space, the .closeConversationButton uses */
+    margin-inline-end: 22px;
+  }
+}
+
+.contactStatusText,
+.convStatusText {
+  color: GrayText;
+}
+
+.convDisplayName,
+.blistDisplayName,
+.contactDisplayName,
+richlistitem[is="chat-group-richlistitem"] > label {
+  display: inline-block;
+}
+
+.blistDisplayName {
+  flex: 1 auto;
+}
+
+.convUnreadCount,
+.contactDisplayName,
+.convDisplayName,
+.contactDisplayNameInput {
+  margin-inline-end: 0;
+}
+
+.contactDisplayNameInput {
+  margin: 0;
+}
+
+.convUnreadCount {
+  margin-inline-start: 0.5ch;
+}
+
+.convUnreadTargetedCount {
+  color: hsl(0, 100%, 27%);
+  background-color: hsl(0, 100%, 87%);
+  border-radius: 50px;
+  margin: 1px 3px;
+  margin-inline-start: 1ch;
+}
+
+.convUnreadCount[value="0"],
+.convUnreadTargetedCount[value="0"] {
+  display: none;
+}
+
+.convUnreadTargetedCountLabel {
+  margin: 0;
+}
+
+.contactStatusText,
+.convStatusText {
+  margin-inline-start: 0;
+}
+
+/* Avoid a strange jumping bug when hovering and the startChatBubble appears */
+.contact-vbox {
+  min-block-size: 40px;
+}
+
+.startChatBubble,
+.closeConversationButton {
+  margin: 0 3px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  appearance: none;
+  inline-size: 16px;
+  block-size: 16px;
+  min-block-size: 16px;
+  min-inline-size: 16px;
+  cursor: pointer;
+  -moz-user-focus: ignore;
+}
+
+.startChatBubble {
+  display: none;
+  list-style-image: var(--icon-new-chat);
+  -moz-context-properties: fill, stroke;
+  fill: color-mix(in srgb, currentColor 20%, transparent);
+  stroke: currentColor;
+
+  richlistitem[is="chat-contact-richlistitem"][cansend]:hover & {
+    display: flex;
+  }
+}
+
+.closeConversationButton > .button-box > .button-icon {
+  inline-size: 16px;
+  block-size: 16px;
+}
+
+/* From im/themes/conversation.css */
+.browser {
+  margin: 0 0;
+}
+
+.conv-bottom,
+.conv-nicklist {
+  margin: 0 0;
+}
+
+.convBox {
+  min-block-size: 135px;
+  min-inline-size: 200px;
+}
+
+.conv-top {
+  min-block-size: 60px;
+}
+
+.conv-top-info {
+  margin: 0;
+  border-style: none;
+  appearance: none;
+  -moz-window-dragging: no-drag;
+  border-block-end: 1px solid var(--sidebar-border);
+}
+
+.userIcon {
+  border: 2px solid rgba(0, 0, 0, 0.15);
+  border-radius: 5px;
+  object-fit: contain;
+  inline-size: 48px;
+  block-size: 48px;
+
+  :root[lwt-tree-brighttext] & {
+    border-color: rgba(255, 255, 255, 0.15);
+  }
+
+  &:not([src]) {
+    display: none;
+  }
+}
+
+.fillUserIcon {
+  -moz-context-properties: fill, fill-opacity;
+  fill: currentColor;
+  fill-opacity: 0.3;
+}
+
+.statusTypeIcon,
+.smallStatusIcon {
+  /* Place in opposite corner. */
+  /* NOTE: unlike position: absolute, the image will still take up space if its
+   * sibling (such as .userIcon) is hidden. */
+  margin-block: auto 0;
+  margin-inline: auto 0;
+}
+
+.statusTypeIcon {
+  inline-size: 16px;
+  block-size: 16px;
+  -moz-context-properties: fill, stroke;
+  fill: color-mix(in srgb, var(--color-ink-50) 20%, transparent);
+  stroke: var(--color-ink-50);
+
+  .userIcon:not([src]) + & {
+    /* If userIcon is invisible (for chat) we still keep the status icon in the
+     * same position. */
+    padding-block-start: 32px;
+  }
+}
+
+/* Used with protoIcon. */
+.smallStatusIcon {
+  inline-size: 10px;
+  block-size: 10px;
+  -moz-context-properties: fill;
+  fill: var(--selected-item-color);
+}
+
+#protolist richlistitem {
+  align-items: center;
+}
+
+.protoIcon {
+  inline-size: 16px;
+  block-size: 16px;
+  object-fit: contain;
+}
+
+.protoIconDimmed {
+  opacity: 0.7;
+}
+
+richlistitem:not([selected]) .protoIconDimmed {
+  opacity: 0.3;
+}
+
+:root[lwt-tree-brighttext] .protoIconDimmed {
+  opacity: 0.8;
+}
+
+:root[lwt-tree-brighttext] richlistitem:not([selected]) .protoIconDimmed {
+  opacity: 0.5;
+}
+
+#statusTypeIcon {
+  min-inline-size: 40px;
+
+  &:not([disabled]) {
+    cursor: pointer;
+  }
+
+  /* show the status icon also in text mode */
+  toolbar[mode="text"] & > .toolbarbutton-icon {
+    display: flex;
+  }
+
+  &[status="available"] {
+    list-style-image: var(--icon-status-online);
+  }
+
+  &[status="idle"] {
+    list-style-image: var(--icon-status-idle);
+  }
+
+  &[status="offline"],
+  &[status="invisible"] {
+    list-style-image: var(--icon-status-offline);
+  }
+
+  &[status="unavailable"],
+  &[status="away"] {
+    list-style-image: var(--icon-status-away);
+  }
+}
+
+#statusTypeAvailable,
+#imStatusAvailable {
+  --menuitem-icon: var(--icon-status-online);
+}
+
+#statusTypeOffline,
+#imStatusOffline {
+  --menuitem-icon: var(--icon-status-offline);
+}
+
+#statusTypeUnavailable,
+#imStatusUnavailable {
+  --menuitem-icon: var(--icon-status-away);
+}
+
+/* corresponds to im/themes/conversation.css @media all and (min-height: 251px) */
+.displayUserAccount {
+  padding: 6px;
+  display: flex;
+  gap: 6px;
+
+  /* User image and status stack. */
+  & > stack {
+    flex: 0 0 auto;
+    align-self: start;
+  }
+}
+
+.nameAndStatusGrid {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 4px;
+  flex: 1 1 auto;
+
+  & > * {
+    margin: 0;
+  }
+
+  & > :is(hr, .statusMessage, .statusMessageInput) {
+    grid-column: 1 / 3;
+  }
+
+  & > hr {
+    block-size: 0;
+    border-block-start: 1px solid hsla(0, 0%, 50%, 0.5);
+    border-block-end: none;
+    border-inline: none;
+  }
+
+  & > .displayName:empty + hr {
+    display: none;
+  }
+}
+
+.displayName {
+  font-size: larger;
+  display: block;
+}
+
+.statusMessage {
+  display: inline-block;
+
+  &[noTopic] {
+    font-style: italic;
+  }
+}
+
+.statusMessageInput[editing] {
+  color: -moz-dialogtext;
+}
+
+.conv-messages {
+  min-inline-size: 150px;
+}
+
+.conv-status-container {
+  display: block;
+  block-size: 20px;
+  padding: 3px;
+  border-block-end: 1px solid ThreeDShadow;
+  transition-property: margin-top, opacity, visibility;
+  transition-duration: 150ms, 150ms, 0s;
+  transition-timing-function: ease-in-out, ease-in-out, linear;
+
+  &[hidden] {
+    /* Override display:none to make the transition work. */
+    display: flex;
+    visibility: collapse;
+    margin-block-start: -1em;
+    opacity: 0;
+    transition-delay: 0s, 0s, 150ms;
+  }
+}
+
+.conv-textbox {
+  appearance: none;
+  margin: 0;
+  /* margin-inline-end so the borders show up on all sides. */
+  margin-inline-end: 1px;
+  padding: 2px;
+  box-sizing: content-box;
+  border: 2px solid transparent;
+
+  :root[lwt-tree] & {
+    background-color: var(--toolbar-field-background-color);
+    color: var(--toolbar-field-color);
+  }
+
+  &:focus-visible {
+    border-color: var(--toolbar-field-focus-border-color);
+    outline-style: none;
+  }
+
+  &[invalidInput="true"] {
+    border-color: red;
+  }
+}
+
+.conv-counter {
+  justify-self: end;
+  align-self: end;
+  color: #000;
+  background-color: rgba(246, 246, 246, 0.7);
+  border-inline-start: 1px solid rgb(200, 200, 200);
+  border-block-start: 1px solid rgb(200, 200, 200);
+  border-start-start-radius: 3px;
+  /* Padding that gets flipped to margins in .conv-counter[value^="0"] to avoid the red border. */
+  font-size: 130%;
+  padding-block: 0 1px;
+  padding-inline: 5px 6px;
+  margin: 0;
+
+  :root[lwt-tree-brighttext] & {
+    color: var(--sidebar-color);
+    background-color: rgba(22, 22, 22, 0.2);
+    border-inline-start: 1px solid var(--sidebar-border);
+    border-block-start: 1px solid var(--sidebar-border);
+  }
+
+  &[value=""] {
+    display: none;
+  }
+
+  /* Negative counter values (user went over the character limit). */
+  &[value^="-"] {
+    color: red;
+  }
+}
+
+.splitter[orient="vertical"],
+#logsSplitter {
+  border-style: none;
+  min-block-size: 0;
+  /* splitter grip area */
+  block-size: 5px;
+  background-color: transparent;
+  /* make only the splitter border visible */
+  margin-block-start: -5px;
+  margin-inline-start: 0;
+  /* because of the negative margin needed to make the splitter visible */
+  position: relative;
+  z-index: 10;
+  border-block-end: 1px solid var(--sidebar-border);
+}
+
+/* Adaptation of #folderpane_splitter */
+#listSplitter,
+#contextSplitter {
+  margin-block-start: 0;
+  /* splitter grip area */
+  inline-size: 5px;
+  /* because of the negative margin needed to make the splitter visible */
+  position: relative;
+  z-index: 10;
+  transition: border-width 0.3s ease-in;
+}
+
+#listSplitter {
+  border-inline-start: 1px solid transparent;
+  /* make only the splitter border visible */
+  margin-inline-end: -5px;
+
+  &[state="collapsed"]:hover {
+    border-inline-start: 4px solid var(--selected-item-color);
+  }
+}
+
+#contextSplitter {
+  border-inline-end: 1px solid var(--sidebar-border);
+  /* make only the splitter border visible */
+  margin-inline-start: -5px;
+
+  &[state="collapsed"]:hover {
+    border-inline-end: 4px solid var(--selected-item-color);
+  }
+}
+
+#conv-toolbar {
+  border-style: none;
+}
+
+#logTree {
+  margin: 0 0;
+}
+
+.conv-nicklist-label {
+  pointer-events: none;
+  font-weight: bold;
+  padding-inline-start: 1px;
+  display: inline-block;
+}
+
+.conv-nicklist-image {
+  pointer-events: none;
+  inline-size: 16px;
+  margin: 0 2px;
+  -moz-context-properties: fill, stroke;
+  fill: color-mix(in srgb, currentColor 20%, transparent);
+  stroke: currentColor;
+
+  &:not([src]) {
+    visibility: hidden;
+  }
+
+  #nicklist > richlistitem[inactive] > & {
+    opacity: 0.45;
+  }
+
+  #nicklist > richlistitem[inactive][selected] > & {
+    opacity: 0.7;
+  }
+}
+
+.conv-logs-header-label {
+  margin: 0;
+  margin-inline-end: -1px;
+  padding-inline-start: 3px;
+}
+
+#nicklist > richlistitem[inactive] > label {
+  color: GrayText !important;
+  font-weight: normal;
+}
+
+.conv-nicklist:focus > richlistitem[inactive][selected] > label {
+  color: var(--selected-item-text-color) !important;
+}
+
+.prplBuddyIcon {
+  margin: 2px 0;
+}
+
+.searchProtoIcon {
+  -moz-context-properties: fill;
+  fill: currentColor;
+  opacity: 0.54;
+}
+
+.status-container {
+  inline-size: 15em;
+}
+
+#statusMessageLabel:not([statusType="offline"], [disabled]) {
+  cursor: text;
+}
+
+#statusMessageInput.status-message-input {
+  margin: 0;
+}
+
+.statusMessageToolbarItem {
+  margin: 2px 4px;
+  margin-inline-start: -1px;
+  padding: 3px 5px 4px;
+  border: 1px solid transparent;
+  border-radius: var(--button-border-radius);
+  background-clip: padding-box;
+
+  #chat-status-selector:hover > vbox > &,
+  &:focus {
+    color: var(--toolbar-field-color);
+    background-color: var(--toolbar-field-background-color);
+    border-color: var(--toolbar-field-border-color);
+  }
+
+  #chat-status-selector > vbox > &[editing],
+  :root[lwtheme] &:focus {
+    appearance: none;
+    padding-inline: 4px;
+    color: var(--toolbar-field-color);
+    background-color: var(--toolbar-field-background-color-focus);
+    border-color: var(--toolbar-field-focus-border-color);
+    outline: 1px solid var(--toolbar-field-focus-border-color);
+  }
+
+  &:is([disabled], [statusType="offline"]) {
+    border: none;
+  }
+}
+
+.alltabs-item[style*="chat.svg"] {
+  -moz-context-properties: fill, stroke-opacity;
+  stroke-opacity: 0;
+  fill: currentColor;
+}
+
+#button-add-buddy {
+  list-style-image: var(--icon-new-contact);
+}
+
+#button-join-chat {
+  list-style-image: var(--icon-new-chat);
+}
+
+#button-chat-accounts {
+  list-style-image: var(--icon-id);
+}
+
+:root[lwt-tree] #contextPane {
+  background-color: var(--sidebar-background);
+  border-block-end: 1px solid var(--sidebar-border);
+  color: var(--sidebar-color);
+}
+
+#contextPaneFlexibleBox {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+
+  & vbox.conv-chat {
+    flex: 1 1 0;
+    min-block-size: 0;
+  }
+}
+
+#previousConversations {
+  flex: 1 1 0;
+}
+
+:root[lwt-tree] #nicklist,
+:root[lwt-tree] .conv-nicklist-header,
+:root[lwt-tree] .conv-logs-header-label {
+  appearance: none;
+  background-color: var(--sidebar-background);
+  border-block-end: 1px solid var(--sidebar-border);
+  color: var(--sidebar-color);
+}
+
+:root[lwt-tree-brighttext] #nicklist,
+:root[lwt-tree-brighttext] .conv-nicklist-header,
+:root[lwt-tree-brighttext] .conv-logs-header-label {
+  border-block-end-color: var(--sidebar-border);
+}
+
+.conv-header-label {
+  display: inline-block;
+}
+
+#participantCount {
+  background: transparent;
+  inline-size: 0;
+
+  :root[lwt-tree] & {
+    color: var(--sidebar-color);
+  }
+}
+
+:root[lwt-tree] .conv-nicklist > richlistitem {
+  color: var(--sidebar-color);
+  box-shadow: none;
+}
+
+:root[lwt-tree] .conv-nicklist > richlistitem[selected="true"],
+:root[lwt-tree] .conv-nicklist:focus > richlistitem[current="true"],
+:root[lwt-tree] .conv-nicklist:focus > richlistitem[selected="true"] {
+  background-color: var(--sidebar-highlight-background-color, hsla(0, 0%, 80%, 0.3));
+  background-image: none;
+  border-color: var(--sidebar-border);
+  color: var(--sidebar-highlight-text-color, var(--sidebar-color));
+}
+
+:root[lwt-tree-brighttext] .conv-nicklist > richlistitem[selected="true"],
+:root[lwt-tree-brighttext] .conv-nicklist:focus > richlistitem[current="true"],
+:root[lwt-tree-brighttext] .conv-nicklist:focus > richlistitem[selected="true"] {
+  background-color: var(--sidebar-highlight-background-color, rgba(249, 249, 250, 0.1));
+  border-color: var(--sidebar-highlight-background-color, rgba(249, 249, 250, 0.1));
+}
+
+:root[lwt-tree] #nicklist > richlistitem[inactive]:not([selected]) > label {
+  color: var(--sidebar-color) !important;
+  opacity: 0.55;
+}
+
+:root[lwt-tree] #nicklist > richlistitem[inactive][selected] > label,
+:root[lwt-tree] #nicklist:focus > richlistitem[inactive][selected] > label {
+  color: var(--sidebar-highlight-text-color, var(--sidebar-color)) !important;
+}
+
+:root[lwt-tree] #logTree {
+  appearance: none;
+}
+
+#goToConversation {
+  appearance: none !important;
+  margin: 4px;
+  padding: 1px !important;
+  color: inherit !important;
+  border: 1px solid hsla(0, 0%, 50%, 0.5);
+  border-radius: var(--button-border-radius);
+  background-color: hsla(0, 0%, 50%, 0.2) !important;
+  box-shadow: none;
+  transition-property: background-color, border-color, box-shadow;
+  transition-duration: 150ms;
+
+  &:hover {
+    background-color: hsla(0, 0%, 50%, 0.3) !important;
+
+    &:active {
+      background-color: hsla(0, 0%, 50%, 0.4) !important;
+      box-shadow: 0 0 1px hsla(0, 0%, 50%, 0.15) inset;
+    }
+  }
+}
+
+/* Chat Toolbar button. */
+toolbar[mode="text"] #button-chat {
+  flex-direction: row;
+}
+
+.badgeButton-badge {
+  background-color: red;
+  border: 1px solid white;
+  border-radius: 1em;
+  box-shadow: 1px 1px 1px black;
+  color: white;
+  font:
+    xx-small Helvetica,
+    Verdana,
+    Tahoma,
+    sans-serif;
+  block-size: -moz-fit-content;
+  min-inline-size: 1em;
+  text-align: center;
+  margin-block-start: -4px;
+  margin-inline: 5px 0;
+  padding: 1px 1px 0;
+
+  toolbar[mode="text"] & {
+    margin: 0;
+  }
+}
+
+.badgeButton-badgeLabel {
+  margin: 0;
+}
+
+/* encryption status selector */
+
+.encryption-container {
+  border-block-start: 1px solid var(--sidebar-border);
+  min-block-size: 32px;
+  padding: 4px;
+}
+
+.encryption-label {
+  font-weight: 600;
+  text-overflow: ellipsis;
+  display: inline-block;
+  white-space: nowrap;
+  overflow: hidden;
+  min-inline-size: 0;
+}
+
+.encryption-not-private > image {
+  list-style-image: url("chrome://messenger/skin/icons/new/chat-lock-insecure.svg");
+}
+
+.encryption-unverified > image {
+  list-style-image: url("chrome://messenger/skin/icons/new/chat-lock-unverified.svg");
+}
+
+.encryption-finished > image {
+  list-style-image: url("chrome://messenger/skin/icons/new/chat-lock-finished.svg");
+}
+
+.encryption-private > image {
+  list-style-image: url("chrome://messenger/skin/icons/new/chat-lock-private.svg");
+}
+
+.encryption-button {
+  appearance: none !important;
+  padding: 1px !important;
+  border: 1px solid var(--toolbarbutton-hover-bordercolor);
+  border-radius: var(--button-border-radius);
+  background: var(--toolbarbutton-background-color-hover) !important;
+  box-shadow: var(--toolbarbutton-hover-boxshadow);
+  transition-property: background-color, border-color, box-shadow;
+  transition-duration: 150ms;
+  -moz-context-properties: fill, stroke;
+  fill: color-mix(in srgb, currentColor 20%, transparent);
+  stroke: currentColor;
+
+  &:not([disabled]):not([open="true"]):hover {
+    background: var(--toolbarbutton-background-color-active) !important;
+    border-color: var(--toolbarbutton-active-bordercolor);
+  }
+
+  &[open="true"] {
+    background: var(--toolbarbutton-background-color-active) !important;
+    border-color: var(--toolbarbutton-active-bordercolor);
+    box-shadow: var(--toolbarbutton-active-boxshadow);
+  }
+
+  & > image {
+    margin-inline-end: 3px !important;
+    inline-size: 14px;
+  }
+
+  &[wantdropmarker="true"] {
+    background-image: var(--icon-nav-down-sm);
+    background-repeat: no-repeat;
+    background-position: calc(100% - 6px) center;
+    padding-inline-end: 22px;
+
+    &:-moz-locale-dir(rtl) {
+      background-position-x: 6px;
+    }
+  }
+}
+
+@media not (-moz-platform: macos) {
+  .splitter.conv-chat {
+    border-inline-start: 1px solid rgba(0, 0, 0, 0.25);
+  }
+
+  #listSplitter,
+  #contextSplitter {
+    background-color: transparent;
+    min-inline-size: 0;
+  }
+
+  #listSplitter {
+    border-inline-end-width: 0;
+  }
+
+  #contextSplitter {
+    border-inline-start-width: 0;
+  }
+}

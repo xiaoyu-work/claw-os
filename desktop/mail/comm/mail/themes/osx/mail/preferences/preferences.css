@@ -1,0 +1,33 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@import url("chrome://messenger/skin/shared/preferences/preferences.css");
+@namespace html "http://www.w3.org/1999/xhtml";
+
+html|h2 {
+  border-block-end-width: 0;
+  padding-block-end: 2px !important;
+  padding-inline-start: 0;
+}
+
+html|legend {
+  margin: 0;
+}
+
+tab:-moz-focusring > .tab-middle > .tab-text {
+  outline: none;
+}
+
+/**
+ * Dialog
+ */
+
+/* Add to Cookies dialog a bottom padding */
+#CookiesDialog > hbox > .actionButtons {
+  padding-block-end: 10px;
+}
+
+#defaultWebSearchPopup > menuitem > .menu-icon {
+  margin-inline: 5px 3px;
+}

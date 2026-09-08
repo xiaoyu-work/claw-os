@@ -1,0 +1,22 @@
+[DEFAULT]
+head = "head.js"
+prefs = [
+  "calendar.timezone.local=UTC",
+  "calendar.timezone.useSystemTimezone=false",
+]
+tags = ["notifications"]
+
+# These tests are in a separate directory because they're all related.
+# Please don't add unrelated tests.
+
+["test_caldavCalendar_cached.js"]
+tags = ["caldav"]
+
+["test_caldavCalendar_uncached.js"]
+tags = ["caldav"]
+
+["test_icsCalendar_cached.js"]
+
+["test_icsCalendar_uncached.js"]
+
+["test_storageCalendar.js"]

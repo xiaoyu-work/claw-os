@@ -1,0 +1,31 @@
+<defines>
+XMSS_RFC8391 -> 20201101
+</defines>
+
+<module_info>
+name -> "XMSS"
+</module_info>
+
+<header:public>
+xmss.h
+xmss_parameters.h
+</header:public>
+
+<header:internal>
+xmss_address.h
+xmss_common_ops.h
+xmss_hash.h
+xmss_signature.h
+xmss_signature_operation.h
+xmss_tools.h
+xmss_verification_operation.h
+xmss_wots.h
+</header:internal>
+
+<requires>
+asn1
+rng
+hash
+stateful_key_index
+trunc_hash
+</requires>

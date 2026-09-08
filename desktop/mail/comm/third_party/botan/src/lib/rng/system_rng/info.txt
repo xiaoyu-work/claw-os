@@ -1,0 +1,30 @@
+<defines>
+SYSTEM_RNG -> 20141202
+</defines>
+
+<module_info>
+name -> "System RNG"
+brief -> "Wrapper around the system-provided standard RNG"
+</module_info>
+
+<os_features>
+# Any one of these feature sets is sufficient
+dev_random,posix1
+ccrandom
+arc4random
+getrandom
+rtlgenrandom
+crypto_ng
+</os_features>
+
+<libs>
+uwp -> bcrypt
+</libs>
+
+<requires>
+rtlgenrandom?dyn_load
+</requires>
+
+<header:public>
+system_rng.h
+</header:public>

@@ -1,0 +1,42 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, you can obtain one at http://mozilla.org/MPL/2.0/. */
+
+html {
+  min-inline-size: 450px;
+  min-block-size: 210px;
+}
+
+body {
+  min-block-size: 100vh;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+}
+
+dialog {
+  margin: 5px;
+  flex: 1 1 0;
+}
+
+#listWrapper,
+#list {
+  flex: 1 1 0;
+}
+
+richlistitem {
+  display: flex;
+  align-items: center;
+  padding: 4px 8px;
+
+  & > label {
+    flex: 1 1 auto;
+  }
+
+  & > img {
+    flex: 0 0 auto;
+    margin-inline-end: 8px;
+    inline-size: 32px;
+    block-size: 32px;
+  }
+}

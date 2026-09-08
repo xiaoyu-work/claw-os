@@ -1,0 +1,114 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#activityManager[lwt-tree] {
+  background-color: var(--toolbar-background-color);
+  color: var(--lwt-text-color);
+}
+
+body {
+  margin: 0;
+}
+
+#activityContainer {
+  display: flex;
+  flex-direction: column;
+  block-size: 100vh;
+
+  & > #activityView {
+    min-block-size: 0;
+    flex: 1 1 auto;
+  }
+
+  & > #clearListButton {
+    align-self: start;
+    flex: 0 0 auto;
+  }
+}
+
+ul.activityview {
+  display: block;
+  margin: 0;
+  padding-inline-start: 0;
+  overflow: auto;
+  border-block-end: 1px solid var(--field-border-color);
+  background-color: var(--field-background-color);
+}
+
+li {
+  &.activitygroup {
+    display: block;
+  }
+
+  &.activityitem {
+    display: grid;
+    grid-template:
+      "icon display time" auto
+      "icon progress progress" auto
+      "icon status status" 1fr / auto 1fr auto;
+    align-items: baseline;
+  }
+}
+
+.activityitem {
+  padding: 7px 4px;
+  border-block-end: 1px solid var(--field-border-color);
+
+  .activitygroup-list & {
+    padding-inline-start: 12px;
+  }
+
+  & > img {
+    inline-size: 48px;
+    block-size: 48px;
+    grid-area: icon;
+    align-self: start;
+  }
+
+  & > .displayText {
+    grid-area: display;
+  }
+
+  & > .dateTime {
+    grid-area: time;
+  }
+
+  & > .progressmeter {
+    grid-area: progress;
+  }
+
+  & > .statusText {
+    grid-area: status;
+  }
+}
+
+.contextDisplayText,
+.progressmeter,
+.dateTime,
+.displayText,
+.statusText {
+  margin: 2px 6px;
+}
+
+:is(.contextDisplayText, .dateTime, .displayText, .statusText):empty {
+  display: none;
+}
+
+.contextDisplayText,
+.displayText,
+.statusText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+h2.contextDisplayText {
+  font-size: inherit;
+}
+
+.dateTime,
+.statusText {
+  font-size: smaller;
+  opacity: 0.8;
+}

@@ -1,0 +1,11 @@
+<internal_defines>
+MEM_POOL -> 20180309
+</internal_defines>
+
+<module_info>
+name -> "Memory Pool"
+</module_info>
+
+<header:internal>
+mem_pool.h
+</header:internal>

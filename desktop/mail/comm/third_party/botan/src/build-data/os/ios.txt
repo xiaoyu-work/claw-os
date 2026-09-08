@@ -1,0 +1,26 @@
+
+default_compiler xcode
+
+uses_pkg_config no
+
+doc_dir doc
+
+<target_features>
+posix1
+posix_mlock
+arc4random
+
+sysctlbyname
+
+commoncrypto
+
+atomics
+sockets
+system_clock
+threads
+thread_local
+filesystem
+</target_features>
+
+<aliases>
+</aliases>

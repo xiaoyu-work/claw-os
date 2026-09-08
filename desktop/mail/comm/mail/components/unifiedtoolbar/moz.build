@@ -1,0 +1,24 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+JAR_MANIFESTS += ["jar.mn"]
+
+with Files("**"):
+    BUG_COMPONENT = ("Thunderbird", "Toolbars and Tabs")
+
+EXTRA_JS_MODULES += [
+    "modules/ButtonStyle.mjs",
+    "modules/CustomizableItems.sys.mjs",
+    "modules/CustomizableItemsDetails.mjs",
+    "modules/CustomizationState.mjs",
+    "modules/ToolbarMigration.sys.mjs",
+]
+
+BROWSER_CHROME_MANIFESTS += [
+    "test/browser/browser.toml",
+]
+
+XPCSHELL_TESTS_MANIFESTS += [
+    "test/unit/xpcshell.toml",
+]

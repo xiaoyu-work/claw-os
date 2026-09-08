@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta charset="utf-8" />
+  <title>Test for the tree-view custom element</title>
+  <link rel="stylesheet" href="chrome://messenger/skin/shared/tree-listbox.css" />
+  <style>
+    .tree-view-scrollable-container {
+      height: 630px;
+      scroll-behavior: unset;
+    }
+
+    tr[is="test-row"] td > div {
+      display: flex;
+      align-items: center;
+    }
+
+    button.threader {
+      width: 1em;
+      height: 1em;
+    }
+
+    div.twisty {
+      width: 1em;
+      height: 1em;
+    }
+
+    tr[is="test-row"].children button.threader {
+      display: inline-block;
+    }
+
+    tr[is="test-row"] button.threader {
+      display: hidden;
+    }
+
+    tr[is="test-row"].children div.twisty {
+      background-color: green;
+    }
+
+    tr[is="test-row"].children.collapsed div.twisty {
+      background-color: red;
+    }
+
+    tr[is="test-row"].level1 .d2 {
+      padding-inline-start: 1em;
+    }
+
+    tr[is="test-row"].level2 .d2 {
+      padding-inline-start: 2em;
+    }
+
+    tr[is="test-row"].selected {
+      background-color: rebeccapurple;
+      color: white;
+    }
+  </style>
+  <script type="module" src="tree-element-test-scroll.mjs"></script>
+</head>
+<body>
+  <tree-view id="testTree" data-select-delay="250"/>
+</body>
+</html>

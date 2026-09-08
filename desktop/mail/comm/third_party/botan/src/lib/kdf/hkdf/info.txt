@@ -1,0 +1,11 @@
+<defines>
+HKDF -> 20170927
+</defines>
+
+<module_info>
+name -> "HKDF"
+</module_info>
+
+<requires>
+hmac
+</requires>

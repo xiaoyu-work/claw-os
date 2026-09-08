@@ -1,0 +1,38 @@
+---
+l10n:
+    description: Localization linter
+    # list of include directories of both
+    # comm/mail and comm/calendar l10n.tomls
+    # Paths that are not part of Thunderbird (editor/browser/devtools/etc)
+    # are included to
+    include:
+        - comm/calendar/locales/en-US
+        - comm/chat/locales/en-US
+        - comm/mail/branding/tb_beta/locales/en-US
+        - comm/mail/branding/thunderbird/locales/en-US
+        - comm/mail/locales/en-US
+    # files not supported by compare-locales,
+    # and also not relevant to this linter
+    exclude:
+        - comm/mail/locales/en-US/all-l10n.js
+        - comm/mail/extensions/openpgp/test
+        - comm/calendar/locales/en-US/README.txt
+    extensions:
+        - .dtd
+        - .properties
+        - .ini
+        - .ftl
+    l10n_configs:
+        - comm/mail/locales/l10n.toml
+        - comm/calendar/locales/l10n.toml
+    type: external
+    payload: commlint:lint_wrapper
+    wraps: commlint.l10n_lint:lint
+    setup: commlint.l10n_lint:comm_strings_setup
+    support-files:
+        - 'comm/calendar/locales/l10n.toml'
+        - 'comm/mail/locales/l10n.toml'
+        - 'comm/tools/lint/l10n.yml'
+        - 'third_party/python/compare-locales/**'
+        - 'third_party/python/fluent/**'
+        - 'tools/lint/python/l10n_lint.py'

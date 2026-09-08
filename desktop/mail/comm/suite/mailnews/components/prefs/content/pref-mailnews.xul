@@ -1,0 +1,133 @@
+<?xml version="1.0"?>
+
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+<?xml-stylesheet href="chrome://messenger/skin/prefPanels.css" type="text/css"?>
+<?xml-stylesheet href="chrome://communicator/skin/" type="text/css"?>
+
+<!DOCTYPE overlay [
+<!ENTITY % prefMailnewsDTD SYSTEM "chrome://messenger/locale/pref-mailnews.dtd">
+%prefMailnewsDTD;
+]>
+
+<overlay xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul">
+  <prefpane id="mailnews_pane"
+            label="&pref.mailnews.title;"
+            script="chrome://messenger/content/pref-mailnews.js">
+
+    <preferences id="mailnews_preferences">
+      <preference id="mailnews.confirm.moveFoldersToTrash"
+                  name="mailnews.confirm.moveFoldersToTrash" type="bool"/>
+      <preference id="mailnews.thread_pane_column_unthreads"
+                  name="mailnews.thread_pane_column_unthreads"
+                  inverted="true" type="bool"/>
+      <preference id="mail.tabs.autoHide"
+                  name="mail.tabs.autoHide"
+                  type="bool"/>
+      <preference id="mail.tabs.loadInBackground"
+                  name="mail.tabs.loadInBackground"
+                  inverted="true" type="bool"/>
+      <preference id="mail.biff.on_new_window"
+                  name="mail.biff.on_new_window"
+                  type="bool"
+                  inverted="true"/>
+      <preference id="mail.tabs.opentabfor.middleclick"
+                  name="mail.tabs.opentabfor.middleclick"
+                  type="bool"/>
+      <preference id="mail.tabs.opentabfor.doubleclick"
+                  name="mail.tabs.opentabfor.doubleclick"
+                  type="bool"/>
+      <preference id="mailnews.start_page.enabled"
+                  onchange="this.parentNode.parentNode.startPageCheck();"
+                  name="mailnews.start_page.enabled" type="bool"/>
+      <preference id="mailnews.start_page.url"
+                  name="mailnews.start_page.url" type="wstring"/>
+    </preferences>
+
+    <groupbox>
+      <caption label="&generalSettings.caption;"/>
+
+      <hbox align="center">
+        <checkbox id="mailnewsConfirmMoveFoldersToTrash" label="&confirmMove.label;"
+                  preference="mailnews.confirm.moveFoldersToTrash"
+                  accesskey="&confirmMove.accesskey;"/>
+      </hbox>
+
+      <hbox align="center">
+        <checkbox id="mailPreserveThreading"
+                  label="&preserveThreading.label;"
+                  accesskey="&preserveThreading.accesskey;"
+                  preference="mailnews.thread_pane_column_unthreads"/>
+      </hbox>
+
+      <hbox align="center">
+        <checkbox id="mailAutoHide"
+                  label="&mailAutoHide.label;"
+                  accesskey="&mailAutoHide.accesskey;"
+                  preference="mail.tabs.autoHide"/>
+      </hbox>
+
+      <hbox align="center">
+        <checkbox id="loadInBackground"
+                  label="&loadInBackground.label;"
+                  accesskey="&loadInBackground.accesskey;"
+                  preference="mail.tabs.loadInBackground"/>
+      </hbox>
+
+      <hbox align="center">
+        <checkbox id="mailBiffOnNewWindow"
+                  label="&mailBiffOnNewWindow.label;"
+                  accesskey="&mailBiffOnNewWindow.accesskey;"
+                  preference="mail.biff.on_new_window"/>
+      </hbox>
+    </groupbox>
+
+    <groupbox id="mailOpenTabFor" align="start">
+      <caption label="&mailOpenTabsFor.label;"/>
+      <hbox align="center">
+        <checkbox id="mailMiddleClick"
+#ifndef XP_MACOSX
+                  label="&mailMiddleClick.label;"
+                  accesskey="&mailMiddleClick.accesskey;"
+#else
+                  label="&mailMiddleClickMac.label;"
+                  accesskey="&mailMiddleClickMac.accesskey;"
+#endif
+                  preference="mail.tabs.opentabfor.middleclick"/>
+      </hbox>
+
+      <hbox align="center">
+        <checkbox id="mailDoubleClick"
+                  label="&mailDoubleClick.label;"
+                  accesskey="&mailDoubleClick.accesskey;"
+                  preference="mail.tabs.opentabfor.doubleclick"/>
+      </hbox>
+    </groupbox>
+
+    <groupbox>
+      <caption label="&messengerStartPage.caption;"/>
+      <hbox align="center">
+        <checkbox id="mailnewsStartPageEnabled" label="&enableStartPage.label;"
+                  preference="mailnews.start_page.enabled"
+                  accesskey="&enableStartPage.accesskey;"/>
+      </hbox>
+
+      <hbox align="center">
+        <label value="&location.label;" accesskey="&location.accesskey;"
+               control="mailnewsStartPageUrl"/>
+        <textbox id="mailnewsStartPageUrl" flex="1" type="autocomplete"
+                 preference="mailnews.start_page.url" timeout="50"
+                 autocompletesearch="history" maxrows="6" class="uri-element"/>
+      </hbox>
+      <hbox pack="end">
+        <button label="&useDefault.label;" accesskey="&useDefault.accesskey;"
+                oncommand="setHomePageToDefaultPage();">
+          <observes element="mailnewsStartPageUrl" attribute="disabled"/>
+        </button>
+      </hbox>
+
+    </groupbox>
+  </prefpane>
+</overlay>

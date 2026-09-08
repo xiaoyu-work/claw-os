@@ -1,0 +1,20 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@import url("chrome://messenger/skin/shared/popupPanel.css");
+
+@namespace html url("http://www.w3.org/1999/xhtml");
+
+#contactMoveDisabledText {
+  margin-block-start: 5px;
+}
+
+html|input.editContactTextbox {
+  padding: 3px 6px;
+}
+
+#messageHeaderCustomizationPanel {
+  margin-block-start: -10px;
+  margin-inline-end: 1px;
+}

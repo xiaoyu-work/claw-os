@@ -1,0 +1,12 @@
+<defines>
+HASH -> 20180112
+</defines>
+
+<module_info>
+name -> "Hashes"
+brief -> "Implementations of hash algorithms"
+</module_info>
+
+<header:public>
+hash.h
+</header:public>

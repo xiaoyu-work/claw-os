@@ -1,0 +1,22 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+Program("WSEnable")
+
+SOURCES += [
+    "WSEnable.cpp",
+]
+
+OS_LIBS += [
+    "advapi32",
+    "ole32",
+    "shell32",
+]
+
+RCINCLUDE = "WSEnable.rc"
+
+# This isn't XPCOM code, but it wants to use STL so disable STL wrappers
+DisableStlWrapping()
+
+WINCONSOLE = False

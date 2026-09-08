@@ -1,0 +1,1027 @@
+/**
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ */
+
+/* import-globals-from ../../../mailnews/base/prefs/content/accountUtils.js */
+/* import-globals-from ../../components/addrbook/content/addressBookTab.js */
+/* import-globals-from ../../components/customizableui/content/panelUI.js */
+/* import-globals-from ../../components/preferences/preferencesTab.js */
+/* import-globals-from glodaFacetTab.js */
+/* import-globals-from mailCore.js */
+/* import-globals-from mail-offline.js */
+/* import-globals-from mailTabs.js */
+/* import-globals-from mailWindowOverlay.js */
+/* import-globals-from messenger-customization.js */
+/* import-globals-from searchBar.js */
+/* import-globals-from spacesToolbar.js */
+/* import-globals-from specialTabs.js */
+/* import-globals-from toolbarIconColor.js */
+
+/* globals CreateMailWindowGlobals, InitMsgWindow, OnMailWindowUnload */ // From mailWindow.js
+
+/* globals loadCalendarComponent */
+
+ChromeUtils.importESModule(
+  "resource:///modules/activity/activityModules.sys.mjs"
+);
+var { openLinkExternally } = ChromeUtils.importESModule(
+  "resource:///modules/LinkHelper.sys.mjs"
+);
+var { MailServices } = ChromeUtils.importESModule(
+  "resource:///modules/MailServices.sys.mjs"
+);
+var { AppConstants } = ChromeUtils.importESModule(
+  "resource://gre/modules/AppConstants.sys.mjs"
+);
+var { isFirstRun } = ChromeUtils.importESModule(
+  "resource:///modules/accountcreation/FirstRun.sys.mjs"
+);
+var { setupShortcuts } = ChromeUtils.importESModule(
+  "moz-src:///comm/mail/base/content/modules/ShortcutsOverlay.mjs",
+  { global: "current" }
+);
+
+ChromeUtils.defineESModuleGetters(this, {
+  BondOpenPGP: "chrome://openpgp/content/BondOpenPGP.sys.mjs",
+  Color: "resource://gre/modules/Color.sys.mjs",
+  MailConsts: "resource:///modules/MailConsts.sys.mjs",
+  MailNotificationManager:
+    "resource:///modules/MailNotificationManager.sys.mjs",
+  MailUtils: "resource:///modules/MailUtils.sys.mjs",
+  PeriodicFilterManager: "resource:///modules/PeriodicFilterManager.sys.mjs",
+  SearchService: "moz-src:///toolkit/components/search/SearchService.sys.mjs",
+  SessionStoreManager: "resource:///modules/SessionStoreManager.sys.mjs",
+  msgDBCacheManager: "resource:///modules/MsgDBCacheManager.sys.mjs",
+});
+
+ChromeUtils.defineLazyGetter(this, "PopupNotifications", function () {
+  const { PopupNotifications } = ChromeUtils.importESModule(
+    "resource:///modules/GlobalPopupNotifications.sys.mjs"
+  );
+  try {
+    // Hide all notifications while the URL is being edited and the address bar
+    // has focus, including the virtual focus in the results popup.
+    // We also have to hide notifications explicitly when the window is
+    // minimized because of the effects of the "noautohide" attribute on Linux.
+    // This can be removed once bug 545265 and bug 1320361 are fixed.
+    const shouldSuppress = () => window.windowState == window.STATE_MINIMIZED;
+    return new PopupNotifications(
+      document.getElementById("tabmail"),
+      document.getElementById("notification-popup"),
+      document.getElementById("notification-popup-box"),
+      { shouldSuppress }
+    );
+  } catch (ex) {
+    console.error(ex);
+    return null;
+  }
+});
+
+/* This is where functions related to the 3 pane window are kept */
+
+/**
+ * Tracks whether the right mouse button changed the selection or not.  If the
+ * user right clicks on the selection, it stays the same.  If they click outside
+ * of it, we alter the selection (but not the current index) to be the row they
+ * clicked on.
+ *
+ * The value of this variable is an object with "view" and "selection" keys
+ * and values.  The view value is the view whose selection we saved off, and
+ * the selection value is the selection object we saved off.
+ */
+var gRightMouseButtonSavedSelection = null;
+var gNewAccountToLoad = null;
+
+// The object in charge of managing the mail summary pane
+var gSummaryFrameManager;
+
+let _resolveDelayedStartup;
+var delayedStartupPromise = new Promise(resolve => {
+  _resolveDelayedStartup = resolve;
+});
+
+var gMailInit = {
+  onBeforeInitialXULLayout() {
+    // Set a sane starting width/height for all resolutions on new profiles.
+    // Do this before the window loads.
+    if (!document.documentElement.hasAttribute("width")) {
+      const TARGET_WIDTH = 1280;
+      const defaultWidth = Math.min(screen.availWidth * 0.9, TARGET_WIDTH);
+      const defaultHeight = screen.availHeight;
+
+      document.documentElement.setAttribute("width", defaultWidth);
+      document.documentElement.setAttribute("height", defaultHeight);
+
+      // On small screens, default to maximized state.
+      if (defaultWidth < TARGET_WIDTH) {
+        document.documentElement.setAttribute("sizemode", "maximized");
+      }
+      // Make sure we're safe at the left/top edge of screen
+      document.documentElement.setAttribute("screenX", screen.availLeft);
+      document.documentElement.setAttribute("screenY", screen.availTop);
+    }
+
+    // Run menubar initialization first, to avoid CustomTitlebar code picking
+    // up mutations from it and causing a reflow.
+    AutoHideMenubar.init();
+    CustomTitlebar.init();
+
+    // Call this after we set attributes that might change toolbars' computed
+    // text color.
+    ToolbarIconColor.init();
+  },
+
+  /**
+   * Called on startup to initialize various parts of the main window.
+   * Most of this should be moved out into _delayedStartup or only
+   * initialized when needed.
+   */
+  onLoad() {
+    CreateMailWindowGlobals();
+
+    if (!Services.policies.isAllowed("devtools")) {
+      const devtoolsMenu = document.getElementById("devtoolsMenu");
+      if (devtoolsMenu) {
+        devtoolsMenu.hidden = true;
+      }
+    }
+
+    // - initialize tabmail system
+    // Do this before loadPostAccountWizard since that code selects the first
+    //  folder for display, and we want gFolderDisplay setup and ready to handle
+    //  that event chain.
+    // Also, we definitely need to register the tab type prior to the call to
+    //  specialTabs.openSpecialTabsOnStartup below.
+    const tabmail = document.getElementById("tabmail");
+    if (tabmail) {
+      // mailTabType is defined in mailTabs.js
+      tabmail.registerTabType(mailTabType);
+      // glodaFacetTab* in glodaFacetTab.js
+      tabmail.registerTabType(glodaFacetTabType);
+      tabmail.registerTabMonitor(GlodaSearchBoxTabMonitor);
+      tabmail.openFirstTab();
+      setupShortcuts();
+    }
+
+    // This also registers the contentTabType ("contentTab")
+    specialTabs.openSpecialTabsOnStartup();
+    tabmail.registerTabType(addressBookTabType);
+    tabmail.registerTabType(preferencesTabType);
+
+    // Depending on the pref, hide/show the gloda toolbar search widgets.
+    XPCOMUtils.defineLazyPreferenceGetter(
+      this,
+      "gGlodaEnabled",
+      "mailnews.database.global.indexer.enabled",
+      true,
+      (pref, oldVal, newVal) => {
+        for (const widget of document.querySelectorAll(
+          ".gloda-search-widget"
+        )) {
+          widget.hidden = !newVal;
+        }
+      }
+    );
+    for (const widget of document.querySelectorAll(".gloda-search-widget")) {
+      widget.hidden = !this.gGlodaEnabled;
+    }
+
+    window.addEventListener("AppCommand", HandleAppCommandEvent, true);
+
+    this._boundDelayedStartup = this._delayedStartup.bind(this);
+    window.addEventListener("MozAfterPaint", this._boundDelayedStartup);
+
+    // Listen for the messages sent to the main 3 pane window.
+    window.addEventListener("message", this._onMessageReceived);
+  },
+
+  _cancelDelayedStartup() {
+    window.removeEventListener("MozAfterPaint", this._boundDelayedStartup);
+    this._boundDelayedStartup = null;
+  },
+
+  /**
+   * Handle the messages sent via postMessage() method to the main 3 pane
+   * window.
+   *
+   * @param {Event} event - The message event.
+   */
+  _onMessageReceived(event) {
+    switch (event.data) {
+      case "account-created":
+      case "account-created-in-backend":
+        // Set the pref to false in case it was previously changed.
+        Services.prefs.setBoolPref("app.use_without_mail_account", false);
+        loadPostAccountWizard();
+
+        // Always update the mail UI to guarantee all the panes are visible even
+        // if the mail tab is not the currently active tab.
+        updateMailPaneUI();
+        break;
+
+      case "account-setup-closed":
+        // The user closed the account setup after a successful run. Make sure
+        // to focus on the primary mail tab.
+        switchToMailTab();
+        gSpacesToolbar.onLoad();
+        // Trigger the integration dialog if necessary.
+        showSystemIntegrationDialog();
+        break;
+
+      case "account-setup-dismissed":
+        // The user closed the account setup before completing it. Be sure to
+        // initialize the few important areas we need.
+        if (!gSpacesToolbar.isLoaded) {
+          loadPostAccountWizard();
+        }
+        break;
+      default:
+        break;
+    }
+  },
+
+  /**
+   * Delayed startup happens after the first paint of the window. Anything
+   * that can be delayed until after paint, should be to help give the
+   * illusion that Thunderbird is starting faster.
+   *
+   * Note: this only runs for the main 3 pane window.
+   */
+  _delayedStartup() {
+    this._cancelDelayedStartup();
+
+    MailOfflineMgr.init();
+
+    BondOpenPGP.init();
+
+    PanelUI.init();
+    gExtensionsNotifications.init();
+
+    SearchService.init();
+
+    PeriodicFilterManager.setupFiltering();
+
+    if (!Services.prefs.getBoolPref("mail.panorama.enabled", false)) {
+      msgDBCacheManager.init();
+    }
+
+    this._loadComponentsAtStartup().then(() => {
+      this.delayedStartupFinished = true;
+      _resolveDelayedStartup(window);
+      Services.obs.notifyObservers(window, "browser-delayed-startup-finished");
+
+      // Notify observer to resolve the browserStartupPromise, which is used for the
+      // delayed background startup of WebExtensions.
+      Services.obs.notifyObservers(window, "extensions-late-startup");
+    });
+  },
+
+  /**
+   * Load all the necessary components to make Thunderbird usable before
+   * checking for existing accounts.
+   */
+  async _loadComponentsAtStartup() {
+    updateTroubleshootMenuItem();
+    // The calendar component needs to be loaded before restoring any tabs.
+    await loadCalendarComponent();
+
+    // Don't trigger the existing account verification if the user wants to use
+    // Thunderbird without an email account.
+    if (!Services.prefs.getBoolPref("app.use_without_mail_account", false)) {
+      // This is as much restoring we'll do. Notify to hook up enterprice
+      // policies properly.
+      Services.obs.notifyObservers(window, "sessionstore-windows-restored");
+      // For the crash monitor.
+      Services.obs.notifyObservers(
+        window,
+        "sessionstore-final-state-write-complete"
+      );
+
+      // Load the Mail UI only if we already have at least one account configured
+      // otherwise the verifyExistingAccounts will trigger the account wizard.
+      verifyExistingAccounts();
+      switchToMailTab();
+      await loadPostAccountWizard();
+    } else {
+      // Run the tabs restore method here since we're skipping the loading of
+      // the Mail UI which would have taken care of this to properly handle
+      // opened folders or messages in tabs.
+      await atStartupRestoreTabs(false);
+      gSpacesToolbar.onLoad();
+    }
+
+    if (Services.prefs.getBoolPref("mail.inappnotifications.enabled", false)) {
+      import("moz-src:///comm/mail/components/inappnotifications/content/in-app-notification-manager.mjs")
+        .then(() => {
+          document
+            .querySelector(".in-app-notification-root")
+            .replaceChildren(
+              document.createElement("in-app-notification-manager")
+            );
+        })
+        .catch(console.error);
+    }
+
+    Glean.inappnotifications.preferences["mail.inappnotifications.enabled"].set(
+      Services.prefs.getBoolPref("mail.inappnotifications.enabled", false)
+    );
+
+    // Run the system integration checks if this is not a first run scenario.
+    if (!isFirstRun()) {
+      window.requestIdleCallback(() => showSystemIntegrationDialog());
+    }
+  },
+
+  /**
+   * Called by messenger.xhtml:onunload, the 3-pane window inside of tabs window.
+   *  It's being unloaded!  Right now!
+   */
+  onUnload() {
+    Services.obs.notifyObservers(window, "mail-unloading-messenger");
+
+    if (gRightMouseButtonSavedSelection) {
+      // Avoid possible cycle leaks.
+      gRightMouseButtonSavedSelection.view = null;
+      gRightMouseButtonSavedSelection = null;
+    }
+
+    PanelUI.uninit();
+    SessionStoreManager.unloadingWindow(window);
+    CustomTitlebar.uninit();
+    ToolbarIconColor.uninit();
+    gSpacesToolbar.onUnload();
+
+    document.getElementById("tabmail")._teardown();
+
+    OnMailWindowUnload();
+  },
+};
+
+/**
+ * Called at startup to verify if we have ny existing account, even if invalid,
+ * and if not, it will trigger the Account Hub in a tab.
+ */
+function verifyExistingAccounts() {
+  try {
+    // Trigger the new account configuration wizard only if we don't have any
+    // existing account, not even if we have at least one invalid account.
+    if (isFirstRun()) {
+      openAccountSetup();
+      return;
+    }
+
+    // If we're in tests that want to bypass account startup logic, oblige their
+    // request.
+    if (
+      Services.prefs.getBoolPref(
+        "mail.provider.suppress_dialog_on_startup",
+        false
+      )
+    ) {
+      return;
+    }
+
+    let localFoldersExists;
+    try {
+      localFoldersExists = MailServices.accounts.localFoldersServer;
+    } catch (ex) {
+      localFoldersExists = false;
+    }
+
+    // We didn't trigger the account configuration wizard, so we need to verify
+    // that local folders exists.
+    if (!localFoldersExists && requireLocalFoldersAccount()) {
+      MailServices.accounts.createLocalMailAccount();
+    }
+  } catch (ex) {
+    console.error("Error verifying accounts", ex);
+  }
+}
+
+/**
+ * Switch the view to the first Mail tab if the currently selected tab is not
+ * the first Mail tab.
+ */
+function switchToMailTab() {
+  const tabmail = document.getElementById("tabmail");
+  if (tabmail?.selectedTab.mode.name != "mail3PaneTab") {
+    tabmail.switchToTab(0);
+  }
+}
+
+/**
+ * Trigger the initialization of the entire UI. Called after the okCallback of
+ * the emailWizard during a first run.
+ */
+async function loadPostAccountWizard() {
+  InitMsgWindow();
+
+  MailServices.accounts.setSpecialFolders();
+
+  try {
+    MailServices.accounts.loadVirtualFolders();
+  } catch (e) {
+    console.error(e);
+  }
+
+  // Init the mozINewMailListener service (MailNotificationManager) before
+  // any new mails are fetched.
+  MailNotificationManager.init();
+
+  // Restore the previous folder selection before shutdown, or select the first
+  // inbox folder of a newly created account.
+  await selectFirstFolder();
+
+  gSpacesToolbar.onLoad();
+}
+
+/**
+ * Check if we need to show the system integration dialog before notifying the
+ * application that the startup process is completed.
+ */
+function showSystemIntegrationDialog() {
+  // Check the shell service.
+  let shellService;
+  try {
+    shellService = Cc["@mozilla.org/mail/shell-service;1"].getService(
+      Ci.nsIShellService
+    );
+  } catch (ex) {}
+  const defaultAccount = MailServices.accounts.defaultAccount;
+
+  // Load the search integration module.
+  const { SearchIntegration } = ChromeUtils.importESModule(
+    "resource:///modules/SearchIntegration.sys.mjs"
+  );
+
+  // Show the default client dialog only if
+  // EITHER: we have at least one account, and we aren't already the default
+  // for mail,
+  // OR: we have the search integration module, the OS version is suitable,
+  // and the first run hasn't already been completed.
+  // Needs to be shown outside the he normal load sequence so it doesn't appear
+  // before any other displays, in the wrong place of the screen.
+  if (
+    (shellService &&
+      defaultAccount &&
+      shellService.shouldCheckDefaultClient &&
+      !shellService.isDefaultClient(
+        true,
+        Ci.nsIShellService.MAIL | Ci.nsIShellService.NET_THUNDERBIRD
+      )) ||
+    (SearchIntegration &&
+      !SearchIntegration.osComponentsNotRunning &&
+      !SearchIntegration.firstRunDone)
+  ) {
+    window.openDialog(
+      "chrome://messenger/content/systemIntegrationDialog.xhtml",
+      "SystemIntegration",
+      "dependent,centerscreen,chrome,resizable=no"
+    );
+  }
+}
+
+/**
+ * Properly select the starting folder or message header if we have one.
+ */
+async function selectFirstFolder() {
+  let startFolderURI = null;
+  let startMsgHdr = null;
+
+  if ("arguments" in window && window.arguments.length > 0) {
+    let arg0 = window.arguments[0];
+    // If the argument is a string, it is folder URI.
+    if (typeof arg0 == "string") {
+      startFolderURI = arg0;
+    } else if (arg0) {
+      // arg0 is an object
+      if ("wrappedJSObject" in arg0 && arg0.wrappedJSObject) {
+        arg0 = arg0.wrappedJSObject;
+      }
+      startMsgHdr = "msgHdr" in arg0 ? arg0.msgHdr : null;
+    }
+  }
+
+  // Don't try to be smart with this because we need the loadStartFolder()
+  // method to run even if startFolderURI is null otherwise our UI won't
+  // properly restore.
+  if (startMsgHdr) {
+    await loadStartMsgHdr(startMsgHdr);
+  } else {
+    await loadStartFolder(startFolderURI);
+  }
+}
+
+function HandleAppCommandEvent(evt) {
+  evt.stopPropagation();
+  switch (evt.command) {
+    case "Back":
+      goDoCommand("cmd_goBack");
+      break;
+    case "Forward":
+      goDoCommand("cmd_goForward");
+      break;
+    case "Stop":
+      document.getElementById("tabmail").currentTabInfo.chromeBrowser.stop();
+      break;
+    case "Bookmarks":
+      toAddressBook();
+      break;
+    case "Home":
+    case "Reload":
+    default:
+      break;
+  }
+}
+
+/**
+ * Called by the session store manager periodically and at shutdown to get
+ * the state of this window for persistence.
+ */
+function getWindowStateForSessionPersistence() {
+  const tabmail = document.getElementById("tabmail");
+  const tabsState = tabmail.persistTabs();
+  return { type: "3pane", tabs: tabsState };
+}
+
+/**
+ * Attempt to restore the previous tab states.
+ *
+ * @param {boolean} aDontRestoreFirstTab - If this is true, the first tab will
+ *   not be restored, and will continue to retain focus at the end. This is
+ *   needed if the window was opened with a folder or a message as an argument.
+ * @returns {boolean} true if the restoration was successful, false otherwise.
+ */
+async function atStartupRestoreTabs(aDontRestoreFirstTab) {
+  const state = await SessionStoreManager.loadingWindow(window);
+  if (state) {
+    const tabsState = state.tabs;
+    const tabmail = document.getElementById("tabmail");
+    try {
+      tabmail.restoreTabs(tabsState, aDontRestoreFirstTab);
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  // It's now safe to load extra Tabs.
+  loadExtraTabs();
+
+  // Note: The tabs have not finished loading at this point.
+  SessionStoreManager._restored = true;
+  Services.obs.notifyObservers(window, "mail-tabs-session-restored");
+  // We only restore one window, so this is it...
+  Services.obs.notifyObservers(window, "sessionstore-windows-restored");
+  // For the crash monitor.
+  Services.obs.notifyObservers(
+    window,
+    "sessionstore-final-state-write-complete"
+  );
+
+  return !!state;
+}
+
+/**
+ * Loads and restores tabs upon opening a window by evaluating window.arguments[1].
+ *
+ * The type of the object is specified by it's action property. It can be
+ * either "restore" or "open". "restore" invokes tabmail.restoreTab() for each
+ * item in the tabs array. While "open" invokes tabmail.openTab() for each item.
+ *
+ * In case a tab can't be restored it will fail silently
+ *
+ * the object need at least the following properties:
+ *
+ * {
+ *   action = "restore" | "open"
+ *   tabs = [];
+ * }
+ *
+ */
+function loadExtraTabs() {
+  if (!("arguments" in window) || window.arguments.length < 2) {
+    return;
+  }
+
+  let tab = window.arguments[1];
+  if (!tab || typeof tab != "object") {
+    return;
+  }
+
+  if ("wrappedJSObject" in tab) {
+    tab = tab.wrappedJSObject;
+  }
+
+  const tabmail = document.getElementById("tabmail");
+
+  // we got no action, so suppose its "legacy" code
+  if (!("action" in tab)) {
+    if ("tabType" in tab) {
+      tabmail.openTab(tab.tabType, tab.tabParams);
+    }
+    return;
+  }
+
+  if (!("tabs" in tab)) {
+    return;
+  }
+
+  // this is used if a tab is detached to a new window.
+  if (tab.action == "restore") {
+    for (let i = 0; i < tab.tabs.length; i++) {
+      tabmail.restoreTab(tab.tabs[i]);
+    }
+
+    // we currently do not support opening in background or opening a
+    // special position. So select the last tab opened.
+    tabmail.switchToTab(tabmail.tabInfo[tabmail.tabInfo.length - 1]);
+    return;
+  }
+
+  if (tab.action == "open") {
+    for (let i = 0; i < tab.tabs.length; i++) {
+      if ("tabType" in tab.tabs[i]) {
+        tabmail.openTab(tab.tabs[i].tabType, tab.tabs[i].tabParams);
+      }
+    }
+  }
+}
+
+/**
+ * Loads the given message header at window open. Exactly one out of this and
+ * |loadStartFolder| should be called.
+ *
+ * @param {nsIMsgDBHdr} aStartMsgHdr - The message header to load at window open.
+ */
+async function loadStartMsgHdr(aStartMsgHdr) {
+  const mailStartupObserver = {
+    observe() {
+      MsgDisplayMessageInFolderTab(aStartMsgHdr);
+      Services.obs.removeObserver(this, "mail-startup-done");
+    },
+  };
+  Services.obs.addObserver(mailStartupObserver, "mail-startup-done");
+  // We'll just clobber the default tab
+  await atStartupRestoreTabs(true);
+}
+
+async function loadStartFolder(initialUri) {
+  var defaultServer = null;
+  var startFolder;
+  var isLoginAtStartUpEnabled = false;
+
+  // If a URI was explicitly specified, we'll just clobber the default tab
+  let loadFolder = !(await atStartupRestoreTabs(!!initialUri));
+
+  if (initialUri) {
+    loadFolder = true;
+  }
+
+  // First get default account
+  try {
+    if (initialUri) {
+      startFolder = MailUtils.getOrCreateFolder(initialUri);
+    } else {
+      const defaultAccount = MailServices.accounts.defaultAccount;
+      if (!defaultAccount) {
+        return;
+      }
+
+      defaultServer = defaultAccount.incomingServer;
+      var rootMsgFolder = defaultServer.rootMsgFolder;
+
+      startFolder = rootMsgFolder;
+
+      // Get the user pref to see if the login at startup is enabled for default account
+      isLoginAtStartUpEnabled = defaultServer.loginAtStartUp;
+
+      // Get Inbox only if login at startup is enabled.
+      if (isLoginAtStartUpEnabled) {
+        // now find Inbox
+        var inboxFolder = rootMsgFolder.getFolderWithFlags(
+          Ci.nsMsgFolderFlags.Inbox
+        );
+        if (!inboxFolder) {
+          return;
+        }
+
+        startFolder = inboxFolder;
+      }
+    }
+
+    // it is possible we were given an initial uri and we need to subscribe or try to add
+    // the folder. i.e. the user just clicked on a news folder they aren't subscribed to from a browser
+    // the news url comes in here.
+
+    // Perform biff on the server to check for new mail, except for imap
+    // or a pop3 account that is deferred or deferred to,
+    // or the case where initialUri is non-null (non-startup)
+    if (
+      !initialUri &&
+      isLoginAtStartUpEnabled &&
+      !defaultServer.isDeferredTo &&
+      defaultServer.rootFolder == defaultServer.rootMsgFolder
+    ) {
+      defaultServer.performBiff(msgWindow);
+    }
+    if (loadFolder) {
+      const tab = document.getElementById("tabmail")?.tabInfo[0];
+      tab.chromeBrowser.addEventListener(
+        "load",
+        () => (tab.folder = startFolder),
+        true
+      );
+    }
+  } catch (ex) {
+    console.error(ex);
+  }
+
+  MsgGetMessagesForAllServers(defaultServer);
+
+  if (MailOfflineMgr.isOnline()) {
+    // Check if we shut down offline, and restarted online, in which case
+    // we may have offline events to playback. Since this is not a pref
+    // the user should set, it's not in mailnews.js, so we need a try catch.
+    const playbackOfflineEvents = Services.prefs.getBoolPref(
+      "mailnews.playback_offline",
+      false
+    );
+    if (playbackOfflineEvents) {
+      Services.prefs.setBoolPref("mailnews.playback_offline", false);
+      MailOfflineMgr.offlineManager.goOnline(false, true, msgWindow);
+    }
+
+    // If appropriate, send unsent messages. This may end up prompting the user,
+    // so we need to get it out of the flow of the normal load sequence.
+    setTimeout(function () {
+      if (MailOfflineMgr.shouldSendUnsentMessages()) {
+        SendUnsentMessages();
+      }
+    }, 0);
+  }
+}
+
+function OpenMessageInNewTab(msgHdr, tabParams = {}) {
+  if (tabParams.background === undefined) {
+    tabParams.background = Services.prefs.getBoolPref(
+      "mail.tabs.loadInBackground"
+    );
+  }
+  if (tabParams.event?.shiftKey) {
+    tabParams.background = !tabParams.background;
+  }
+
+  const tabmail = document.getElementById("tabmail");
+  return tabmail.openTab("mailMessageTab", {
+    ...tabParams,
+    messageURI: msgHdr.folder.getUriForMsg(msgHdr),
+  });
+}
+
+function GetSelectedMsgFolders() {
+  const tabInfo = document.getElementById("tabmail")?.currentTabInfo;
+  if (tabInfo?.mode.name == "mail3PaneTab") {
+    const folder = tabInfo.folder;
+    if (folder) {
+      return [folder];
+    }
+  }
+  return [];
+}
+
+function SelectFolder() {
+  // TODO: Replace this.
+}
+
+function ReloadMessage() {}
+
+function messageFlavorDataProvider() {}
+
+messageFlavorDataProvider.prototype = {
+  QueryInterface: ChromeUtils.generateQI(["nsIFlavorDataProvider"]),
+
+  // This code is used when dragging a message from a "Search Messages" panel.
+  getFlavorData(aTransferable, aFlavor) {
+    if (aFlavor !== "application/x-moz-file-promise") {
+      return;
+    }
+    const fileName = {};
+    aTransferable.getTransferData(
+      "application/x-moz-file-promise-dest-filename",
+      fileName
+    );
+    fileName.value.QueryInterface(Ci.nsISupportsString);
+
+    const destDir = {};
+    aTransferable.getTransferData(
+      "application/x-moz-file-promise-dir",
+      destDir
+    );
+    destDir.value.QueryInterface(Ci.nsIFile);
+
+    const file = destDir.value.clone();
+    file.append(fileName.value.data);
+
+    const messageURI = {};
+    aTransferable.getTransferData("text/plain", messageURI);
+    messageURI.value.QueryInterface(Ci.nsISupportsString);
+
+    const messenger = Cc["@mozilla.org/messenger;1"].createInstance(
+      Ci.nsIMessenger
+    );
+    messenger.saveAs(messageURI.value.data, true, null, file.path, true);
+  },
+};
+
+var CustomTitlebar = {
+  init() {
+    this._readPref();
+    Services.prefs.addObserver(this._drawInTitlePref, this);
+
+    window.addEventListener("resolutionchange", this);
+    window.addEventListener("resize", this);
+
+    this._initialized = true;
+    this.update();
+  },
+
+  allowedBy(condition, allow) {
+    if (allow) {
+      if (condition in this._disallowed) {
+        delete this._disallowed[condition];
+        this.update();
+      }
+    } else if (!(condition in this._disallowed)) {
+      this._disallowed[condition] = null;
+      this.update();
+    }
+  },
+
+  get systemSupported() {
+    let isSupported = false;
+    switch (AppConstants.MOZ_WIDGET_TOOLKIT) {
+      case "windows":
+      case "cocoa":
+        isSupported = true;
+        break;
+      case "gtk":
+        isSupported = window.matchMedia("(-moz-gtk-csd-available)");
+        break;
+    }
+    delete this.systemSupported;
+    return (this.systemSupported = isSupported);
+  },
+
+  get enabled() {
+    return document.documentElement.getAttribute("customtitlebar") == "true";
+  },
+
+  observe(subject, topic) {
+    if (topic == "nsPref:changed") {
+      this._readPref();
+    }
+  },
+
+  handleEvent(aEvent) {
+    switch (aEvent.type) {
+      case "resolutionchange":
+        if (aEvent.target == window) {
+          this.update();
+        }
+        break;
+      case "resize": {
+        // The spaces toolbar needs special styling for the fullscreen mode.
+        gSpacesToolbar.onWindowResize();
+        if (window.fullScreen || aEvent.target != window) {
+          break;
+        }
+        // We use resize events because the window is not ready after
+        // sizemodechange events. However, we only care about the event when
+        // the sizemode is different from the last time we updated the
+        // appearance of the tabs in the titlebar.
+        const sizemode = document.documentElement.getAttribute("sizemode");
+        if (this._lastSizeMode == sizemode) {
+          break;
+        }
+        const oldSizeMode = this._lastSizeMode;
+        this._lastSizeMode = sizemode;
+        // Don't update right now if we are leaving fullscreen, since the UI is
+        // still changing in the consequent "fullscreen" event. Code there will
+        // call this function again when everything is ready.
+        // See browser-fullScreen.js: FullScreen.toggle and bug 1173768.
+        if (oldSizeMode == "fullscreen") {
+          break;
+        }
+        this.update();
+        break;
+      }
+    }
+  },
+
+  _initialized: false,
+  _disallowed: {},
+  _drawInTitlePref: "mail.tabs.drawInTitlebar",
+  _lastSizeMode: null,
+
+  _readPref() {
+    // check is only true when drawInTitlebar=true
+    const check = Services.prefs.getBoolPref(this._drawInTitlePref);
+    this.allowedBy("pref", check);
+  },
+
+  update() {
+    if (!this._initialized || window.fullScreen) {
+      return;
+    }
+
+    let allowed =
+      this.systemSupported && Object.keys(this._disallowed).length == 0;
+
+    if (
+      document.documentElement.getAttribute("chromehidden")?.includes("toolbar")
+    ) {
+      // Don't draw in titlebar in case of a popup window.
+      allowed = false;
+    }
+
+    if (allowed) {
+      document.documentElement.setAttribute("customtitlebar", "true");
+      if (AppConstants.platform == "macosx") {
+        document.documentElement.removeAttribute("drawtitle");
+      }
+    } else {
+      document.documentElement.removeAttribute("customtitlebar");
+      if (AppConstants.platform == "macosx") {
+        document.documentElement.setAttribute("drawtitle", "true");
+      }
+    }
+  },
+
+  uninit() {
+    this._initialized = false;
+    Services.prefs.removeObserver(this._drawInTitlePref, this);
+  },
+};
+
+var BrowserAddonUI = {
+  async promptRemoveExtension(addon) {
+    const { name } = addon;
+    const [title, btnTitle] = await document.l10n.formatValues([
+      {
+        id: "addon-removal-title",
+        args: { name },
+      },
+      {
+        id: "addon-removal-confirmation-button",
+      },
+    ]);
+    const {
+      BUTTON_TITLE_IS_STRING: titleString,
+      BUTTON_TITLE_CANCEL: titleCancel,
+      BUTTON_POS_0,
+      BUTTON_POS_1,
+      confirmEx,
+    } = Services.prompt;
+    const btnFlags = BUTTON_POS_0 * titleString + BUTTON_POS_1 * titleCancel;
+    let message = null;
+
+    if (!Services.prefs.getBoolPref("prompts.windowPromptSubDialog", false)) {
+      message = await document.l10n.formatValue(
+        "addon-removal-confirmation-message",
+        {
+          name,
+        }
+      );
+    }
+
+    const checkboxState = { value: false };
+    const result = confirmEx(
+      window,
+      title,
+      message,
+      btnFlags,
+      btnTitle,
+      /* button1 */ null,
+      /* button2 */ null,
+      /* checkboxMessage */ null,
+      checkboxState
+    );
+
+    return { remove: result === 0, report: false };
+  },
+
+  async removeAddon(addonId) {
+    const addon = addonId && (await AddonManager.getAddonByID(addonId));
+    if (!addon || !(addon.permissions & AddonManager.PERM_CAN_UNINSTALL)) {
+      return;
+    }
+
+    const { remove, report } = await this.promptRemoveExtension(addon);
+
+    if (remove) {
+      await addon.uninstall(report);
+    }
+  },
+};

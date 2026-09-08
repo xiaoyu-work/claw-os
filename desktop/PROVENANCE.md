@@ -1,5 +1,9 @@
 # Provenance
 
+The [Mail product fork](mail/PROVENANCE.md) has separate Thunderbird/Mozilla
+provenance and licensing. The COSMIC origin table below does not apply to
+`mail/`.
+
 This directory is a **vendored fork** of the COSMIC Desktop Environment
 by System76. Code was copied (not submodule-linked) on 2026-05-12, and
 **directory names were normalized** to drop the upstream `cosmic-`

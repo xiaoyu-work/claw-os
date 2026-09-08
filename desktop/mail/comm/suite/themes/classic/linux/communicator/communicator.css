@@ -1,0 +1,331 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+/* ==== communicator.css ====================================================
+   == Styles shared everywhere throughout the Communicator suite.
+   ========================================================================== */
+
+@import url("chrome://global/skin/global.css");
+@import url("chrome://communicator/content/communicator.css");
+@import url("chrome://communicator/skin/brand.css");
+@import url("chrome://communicator/skin/button.css");
+@import url("chrome://communicator/skin/toolbar.css");
+
+@namespace url("http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul");
+
+.wizard-box {
+  padding: 20px 44px 10px;
+}
+
+/* ::::: toolbar-primary ::::: */
+
+.toolbar-primary {
+  -moz-binding: url("chrome://communicator/content/bindings/toolbar-xpfe.xml#grippytoolbar-primary");
+}
+
+/* .padded is used by autocomplete widgets that don't have an icon. Gross. -dwh */
+textbox:not(.padded) {
+  cursor: default;
+  padding: 0;
+}
+
+textbox[enablehistory="true"] {
+  -moz-appearance: none;
+  border: 0;
+  background-color: transparent;
+}
+
+textbox[enablehistory="true"] > .autocomplete-textbox-container {
+  -moz-appearance: menulist-textfield;
+}
+/* ::::: autocomplete ::::: */
+
+.autocomplete-history-popup {
+  max-height: 25em;
+}
+
+textbox[autocompletesearch="history file"] .autocomplete-treebody::-moz-tree-image(treecolAutoCompleteValue) {
+  width: 16px;
+  height: 16px;
+  margin-left: 1px;
+}
+
+textbox[autocompletesearch="history file"] .autocomplete-treebody::-moz-tree-image(treecolAutoCompleteValue, directory) {
+  list-style-image: url("chrome://communicator/skin/places/bookmark-folder-closed.png");
+}
+
+textbox[autocompletesearch="history file"] .autocomplete-treebody::-moz-tree-image(treecolAutoCompleteValue, file) {
+  list-style-image: url("chrome://communicator/skin/places/bookmark-item.svg");
+}
+
+/* ::::: online/offline icons ::::: */
+
+#offline-status[offline="true"] {
+  list-style-image: url("chrome://communicator/skin/icons/offline.png");
+}
+
+#offline-status {
+  list-style-image: url("chrome://communicator/skin/icons/online.png");
+}
+
+/* ::::: spell checker ::::: */
+
+.spell-suggestion {
+  font-weight: bold;
+}
+
+/* ::::: error messages ::::: */
+
+description.error {
+  color: #FF0000;
+}
+
+/* ::::: directional button icons ::::: */
+
+.up {
+  min-width: 0px;
+  list-style-image: url("chrome://global/skin/arrow/arrow-up.gif");
+}
+
+.up[disabled="true"] {
+  list-style-image: url("chrome://global/skin/arrow/arrow-up-dis.gif");
+}
+
+.down {
+  min-width: 0px;
+  list-style-image: url("chrome://global/skin/arrow/arrow-dn.gif");
+}
+
+.down[disabled="true"] {
+  list-style-image: url("chrome://global/skin/arrow/arrow-dn-dis.gif");
+}
+
+.sidebarTree {
+  border: none;
+  margin: 0px !important;
+}
+
+/* ::::: iconic menus and menuitems ::::: */
+
+menu.menu-iconic > .menu-iconic-left,
+menuitem.menuitem-iconic > .menu-iconic-left {
+  display: -moz-box;
+}
+
+/* Fix to show the menulist-dropmarker under newer GTK3 versions */
+menulist[editable="true"] > .menulist-dropmarker {
+  min-width: 2em;
+}
+
+/* ::::: toolbar print button ::::: */
+#print-button {
+  list-style-image: url("chrome://communicator/skin/icons/communicatoricons.png");
+  -moz-image-region: rect(0 29px 29px 0);
+}
+
+#print-button:hover {
+  -moz-image-region: rect(0 59px 29px 30px);
+}
+
+#print-button:hover:active {
+  -moz-image-region: rect(0 89px 29px 60px);
+}
+
+#print-button[disabled="true"] {
+  -moz-image-region: rect(0 119px 29px 90px) !important;
+}
+
+toolbar[iconsize="small"] > toolbarpaletteitem > #print-button,
+toolbar[iconsize="small"] > #print-button {
+  list-style-image: url("chrome://communicator/skin/icons/communicatoricons-small.png");
+  -moz-image-region: rect(0 19px 19px 0);
+}
+
+toolbar[iconsize="small"] > #print-button:hover {
+  -moz-image-region: rect(0 39px 19px 20px);
+}
+
+toolbar[iconsize="small"] > #print-button:hover:active {
+  -moz-image-region: rect(0 59px 19px 40px);
+}
+
+toolbar[iconsize="small"] > #print-button[disabled="true"] {
+  -moz-image-region: rect(0 79px 19px 60px) !important;
+}
+
+/* ::::: lightweight themes ::::: */
+
+toolbar button:-moz-lwtheme,
+toolbar menulist:-moz-lwtheme:not([open="true"]),
+toolbar textbox:-moz-lwtheme:not([focused="true"]) {
+  opacity: .8;
+}
+
+treecols:-moz-lwtheme {
+  text-shadow: none;
+  color: -moz-dialogtext;
+  background-color: -moz-dialog;
+}
+
+/* ::::: notification bars ::::: */
+
+.messageImage[value="refresh-blocked"] {
+  list-style-image: url("chrome://communicator/skin/icons/application.png");
+}
+
+.messageImage[value="blocked-plugins"],
+.messageImage[value="disabled-plugins"],
+.messageImage[value="missing-plugins"],
+.messageImage[value="outdated-plugins"],
+.messageImage[value="click-to-play-plugins"],
+.messageImage[value="plugin-crashed"] {
+  list-style-image: url("chrome://mozapps/skin/plugins/pluginGeneric-16.png");
+}
+
+.messageImage[value="geolocation"] {
+  list-style-image: url("chrome://communicator/skin/icons/geo.png");
+}
+
+.messageImage[value="webNotifications"] {
+  list-style-image: url("chrome://communicator/skin/icons/notification-16.png");
+}
+
+.messageImage[value="indexedDB-permissions-prompt"],
+.messageImage[value="indexedDB-quota-prompt"] {
+  list-style-image: url("chrome://global/skin/icons/question-16.png");
+}
+
+.messageImage[value="addon-install-blocked"],
+.messageImage[value="addon-install-cancelled"],
+.messageImage[value="addon-install-complete"],
+.messageImage[value="addon-install-disabled"],
+.messageImage[value="addon-install-failed"],
+.messageImage[value="addon-install-started"],
+.messageImage[value="lwtheme-install-request"],
+.messageImage[value="lwtheme-install-notification"] {
+  list-style-image: url("chrome://mozapps/skin/extensions/extensionGeneric-16.png");
+}
+
+.messageImage[value="popup-blocked"] {
+  list-style-image: url("chrome://navigator/skin/icons/popup-blocked.png");
+}
+
+.messageImage[value="blocked-badware-page"] {
+  list-style-image: url("chrome://global/skin/icons/blacklist_favicon.png");
+}
+
+.messageImage[value="EnterInsecureMessage"] {
+  list-style-image: url("chrome://communicator/skin/icons/lock-insecure-16.png");
+}
+
+.messageImage[value="EnterSecureMessage"],
+.messageImage[value="BlockedActiveContentMessage"],
+.messageImage[value="BlockedDisplayContentMessage"] {
+  list-style-image: url("chrome://communicator/skin/icons/lock-secure-16.png");
+}
+
+.messageImage[value="MixedContentMessage"],
+.messageImage[value="MixedActiveContentMessage"],
+.messageImage[value="MixedDisplayContentMessage"] {
+  list-style-image: url("chrome://communicator/skin/icons/lock-broken-16.png");
+}
+
+/* ::::: tree rows ::::: */
+
+/* ::::: dialog header ::::: */
+
+dialogheader {
+  margin: 0px 5px 5px 5px;
+  border: 1px solid;
+  border-top-color: ThreeDDarkShadow;
+  border-right-color: ThreeDDarkShadow;
+  border-bottom-color: ThreeDDarkShadow;
+  border-left-color: ThreeDDarkShadow;
+  padding: 5px 8px;
+  background-color: Highlight;
+  color: HighlightText;
+}
+
+.dialogheader-title {
+  margin: 0px !important;
+  font-size: larger;
+  font-weight: bold;
+}
+
+/* ::::: statusbar ::::: */
+
+statusbar {
+  -moz-appearance: statusbar;
+  border-top: 1px solid ThreeDLightShadow;
+  border-left: 1px solid ThreeDShadow;
+  border-right: 1px solid ThreeDHighlight;
+  border-bottom: 1px solid ThreeDHighlight;
+  background-color: -moz-Dialog;
+  min-height: 22px;
+}
+
+statusbar:-moz-lwtheme {
+  -moz-appearance: none;
+  background: none;
+  border-style: none;
+}
+
+statusbarpanel {
+  -moz-appearance: statusbarpanel;
+  -moz-box-align: center;
+  -moz-box-pack: center;
+  border-left: 1px solid ThreeDHighlight;
+  border-top: 1px solid ThreeDHighlight;
+  border-right: 1px solid ThreeDShadow;
+  border-bottom: 1px solid ThreeDShadow;
+  padding: 0 4px;
+}
+
+statusbarpanel:not(.statusbar-resizerpanel):-moz-lwtheme {
+  -moz-appearance: none;
+  border-top-style: none;
+  border-bottom-style: none;
+  border-inline-start-style: none;
+}
+
+.statusbar-resizerpanel {
+  -moz-box-align: end;
+  -moz-box-pack: end;
+  -moz-appearance: resizerpanel;
+  padding: 0;
+  border: none;
+}
+
+.statusbarpanel-iconic,
+.statusbarpanel-iconic-text {
+  padding: 0 1px;
+}
+
+.statusbarpanel-backgroundbox {
+  -moz-box-align: stretch;
+  padding: 0px;
+}
+
+.statusbarpanel-backgroundbox > .statusbarpanel-contentbox {
+  padding: 0px 1px;
+  -moz-box-align: center;
+}
+
+/* colorpicker button */
+
+colorpicker[type="button"] {
+  -moz-appearance: button;
+  width: 56px;
+  height: 24px;
+}
+
+/* filefield */
+
+.fileFieldContentBox {
+  padding-inline-start: 3px;
+  margin-inline-start: -4px;
+  margin-inline-end: -4px;
+  margin-top: 4px;
+  margin-bottom: 4px;
+}

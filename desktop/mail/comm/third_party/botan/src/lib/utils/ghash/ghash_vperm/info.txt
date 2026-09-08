@@ -1,0 +1,13 @@
+<internal_defines>
+GHASH_CLMUL_VPERM -> 20201002
+</internal_defines>
+
+<module_info>
+name -> "GHASH Vector Permutations"
+brief -> "GHASH using Vector Permutation instructions"
+</module_info>
+
+<requires>
+cpuid
+simd_2x64
+</requires>

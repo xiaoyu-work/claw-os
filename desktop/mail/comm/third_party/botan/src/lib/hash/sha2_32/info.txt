@@ -1,0 +1,15 @@
+<defines>
+SHA_224 -> 20250130
+SHA_256 -> 20250130
+
+# TODO(Botan4) remove this macro
+SHA2_32 -> 20131128
+</defines>
+
+<module_info>
+name -> "SHA-256 and SHA-224"
+</module_info>
+
+<requires>
+mdx_hash
+</requires>

@@ -1,0 +1,27 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#abResultsTree {
+  & #GeneratedNameButton {
+    padding-inline-start: 24px;
+  }
+
+  & .generatedname-column {
+    padding-inline-start: 24px;
+    background-image: var(--icon-contact);
+    background-repeat: no-repeat;
+    background-position: 4px center;
+    -moz-context-properties: fill, stroke;
+    fill: color-mix(in srgb, currentColor 17%, transparent);
+    stroke: color-mix(in srgb, currentColor 85%, transparent);
+
+    &:dir(rtl) {
+      background-position-x: right 4px;
+    }
+  }
+
+  & tr[data-properties~="mailing-list"] .generatedname-column {
+    background-image: var(--icon-user-list);
+  }
+}

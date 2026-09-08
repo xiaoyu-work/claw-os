@@ -1,0 +1,154 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@import url("chrome://messenger/skin/colors.css");
+
+@namespace html url("http://www.w3.org/1999/xhtml");
+
+dialog,
+window,
+.windowDialog {
+  appearance: none;
+  background-color: var(--color-surface-base);
+  color: var(--color-text-base);
+  margin: 0;
+  padding: 0;
+}
+
+.contentPane,
+dialog::part(content-box) {
+  flex: 1;
+}
+
+.contentPane.doScroll,
+dialog.doScroll::part(content-box) {
+  overflow-y: auto;
+  contain: size;
+}
+
+dialog.doScroll {
+  min-block-size: 100vh;
+  margin-inline: -4px;
+
+  &::part(content-box) {
+    padding-inline: 4px;
+  }
+}
+
+tabbox {
+  /* override the rule in certManager.xhtml */
+  margin: 0 0 5px !important;
+}
+
+tabpanels {
+  font-size: 1em;
+}
+
+tabs,
+label,
+description,
+#useDocumentColors {
+  margin-inline: 4px;
+}
+
+/* This element (in passwordManager.xhtml) has no height until Fluent fills
+   it, but we need to calculate the document height before then. The value is
+   the same as the line-height for a label in preferences.css. */
+label#signonsIntro {
+  block-size: 1.8em;
+}
+
+tree {
+  min-block-size: 150px;
+}
+
+caption {
+  padding-inline-start: 0;
+}
+
+groupbox {
+  margin-block-start: 0;
+  margin-inline: 4px;
+  padding-block: 0 5px;
+
+  & description {
+    margin-inline: 0;
+  }
+}
+
+menulist label {
+  font-weight: unset;
+}
+
+.actionButtons + resizer {
+  display: none;
+}
+
+menulist,
+button,
+html|input[type="number"] {
+  margin-inline-end: 0;
+}
+
+button,
+menulist {
+  padding: 0 8px;
+}
+
+/* Create a separate rule to unset these styles on .tree-input instead of
+   using :not(.tree-input) so the selector specificity doesn't change. */
+textbox.tree-input {
+  font-size: unset;
+}
+
+/* Give some space in front of elements that follows a menulist, button or an
+   input in dialogs */
+.startSpacing {
+  margin-inline-start: 8px;
+}
+
+.wrap {
+  white-space: wrap;
+}
+
+#siteCol {
+  flex: 3 auto;
+}
+
+#statusCol {
+  flex: 1 auto;
+}
+
+#domainCol {
+  flex: 2 auto;
+}
+
+#nameCol {
+  flex: 1 auto;
+}
+
+/* Adjust the Lightning Edit Category dialog */
+#colorSelectRow {
+  margin-block-start: 10px;
+  margin-inline-start: 4px;
+}
+
+#totalOpenTime {
+  min-inline-size: calc(3ch + 55px);
+}
+
+#logView {
+  border: 1px solid var(--border-color);
+  margin: 0 4px 5px;
+}
+
+#cookieInfoSettings {
+  margin-block-start: 8px;
+  margin-inline-end: -4px;
+}
+
+/* Edit SMTP Server dialog */
+#smtpUsername {
+  margin-inline: 8px 0;
+}

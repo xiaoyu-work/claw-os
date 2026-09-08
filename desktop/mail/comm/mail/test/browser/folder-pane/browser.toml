@@ -1,0 +1,50 @@
+[DEFAULT]
+prefs = [
+  "mail.account.account1.identities=id1",
+  "mail.account.account1.server=server1",
+  "mail.account.account2.identities=id2",
+  "mail.account.account2.server=server2",
+  "mail.accountmanager.accounts=account2,account1",
+  "mail.accountmanager.defaultaccount=account1",
+  "mail.accountmanager.localfoldersserver=server1",
+  "mail.server.server1.hostname=Local Folders",
+  "mail.server.server1.name=Local Folders",
+  "mail.server.server1.type=none",
+  "mail.server.server1.userName=nobody",
+  "mail.server.server2.hostname=tinderbox123",
+  "mail.server.server2.name=tinderbox@foo.invalid",
+  "mail.server.server2.type=pop3",
+  "mail.server.server2.userName=tinderbox",
+
+  "mail.shell.checkDefaultClient=false",
+  "mail.spotlight.firstRunDone=true",
+  "mail.winsearch.firstRunDone=true",
+  "mailnews.start_page.override_url=about:blank",
+  "mailnews.start_page.url=about:blank",
+  "ui.prefersReducedMotion=1",
+]
+subsuite = "thunderbird"
+
+["browser_displayMessageWithFolderModes.js"]
+skip-if = [
+  "true", # TODO
+]
+
+["browser_folderNamesInRecentMode.js"]
+skip-if = [
+  "true", # TODO
+]
+
+["browser_folderPane.js"]
+
+["browser_folderPaneConsumers.js"]
+skip-if = [
+  "true", # TODO
+]
+# skip-if = ["os == 'mac'"]
+
+["browser_folderPaneDragDrop.js"]
+
+["browser_folderPaneHeader.js"]
+
+["browser_folderPaneModeContextMenu.js"]

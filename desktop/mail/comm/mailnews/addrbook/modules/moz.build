@@ -1,0 +1,34 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, you can obtain one at http://mozilla.org/MPL/2.0/.
+
+EXTRA_JS_MODULES += [
+    "AddrBookCard.sys.mjs",
+    "AddrBookDirectory.sys.mjs",
+    "AddrBookMailingList.sys.mjs",
+    "AddrBookManager.sys.mjs",
+    "AddrBookUtils.sys.mjs",
+    "CardDAVDirectory.sys.mjs",
+    "CardDAVUtils.sys.mjs",
+    "LDAPClient.sys.mjs",
+    "LDAPConnection.sys.mjs",
+    "LDAPDirectory.sys.mjs",
+    "LDAPDirectoryQuery.sys.mjs",
+    "LDAPListenerBase.sys.mjs",
+    "LDAPMessage.sys.mjs",
+    "LDAPOperation.sys.mjs",
+    "LDAPProtocolHandler.sys.mjs",
+    "LDAPReplicationService.sys.mjs",
+    "LDAPService.sys.mjs",
+    "LDAPURLParser.sys.mjs",
+    "QueryStringToExpression.sys.mjs",
+    "SQLiteDirectory.sys.mjs",
+    "VCardUtils.sys.mjs",
+]
+
+if CONFIG["MOZ_PREF_EXTENSIONS"]:
+    EXTRA_JS_MODULES += ["LDAPSyncQuery.sys.mjs"]
+
+XPCOM_MANIFESTS += [
+    "components.conf",
+]

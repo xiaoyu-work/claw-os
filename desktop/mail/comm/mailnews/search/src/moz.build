@@ -1,0 +1,46 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+EXPORTS += [
+    "nsMsgBodyHandler.h",
+    "nsMsgResultElement.h",
+    "nsMsgSearchAdapter.h",
+    "nsMsgSearchBoolExpression.h",
+    "nsMsgSearchScopeTerm.h",
+    "nsMsgSearchTerm.h",
+]
+
+UNIFIED_SOURCES += [
+    "nsMsgBodyHandler.cpp",
+    "nsMsgBodyHandler2.cpp",
+    "nsMsgFilter.cpp",
+    "nsMsgFilterList.cpp",
+    "nsMsgFilterService.cpp",
+    "nsMsgImapSearch.cpp",
+    "nsMsgLocalSearch.cpp",
+    "nsMsgSearchAdapter.cpp",
+    "nsMsgSearchNews.cpp",
+    "nsMsgSearchSession.cpp",
+    "nsMsgSearchTerm.cpp",
+    "nsMsgSearchValue.cpp",
+]
+
+EXTRA_JS_MODULES += [
+    "MsgTraitService.sys.mjs",
+    "PeriodicFilterManager.sys.mjs",
+]
+
+XPCOM_MANIFESTS += [
+    "components.conf",
+]
+
+FINAL_LIBRARY = "mail"
+
+FINAL_TARGET_FILES.isp += [
+    "Bogofilter.sfd",
+    "DSPAM.sfd",
+    "POPFile.sfd",
+    "SpamAssassin.sfd",
+    "SpamPal.sfd",
+]

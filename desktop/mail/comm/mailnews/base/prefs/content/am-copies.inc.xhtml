@@ -1,0 +1,308 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+  <vbox id="copiesAndFolders" flex="1">
+
+  <linkset>
+    <html:link rel="localization" href="messenger/preferences/am-copies.ftl"/>
+  </linkset>
+
+  <stringbundle id="bundle_messenger" src="chrome://messenger/locale/messenger.properties"/>
+
+    <label id="identity.fccFolderURI" hidden="hidden" wsm_persist="true"
+           pref="true" preftype="string" prefattribute="value"
+           prefstring="mail.identity.%identitykey%.fcc_folder"/>
+    <label id="identity.draftsFolderURI" hidden="hidden" wsm_persist="true"
+           pref="true" preftype="string" prefattribute="value"
+           prefstring="mail.identity.%identitykey%.draft_folder"/>
+    <label id="identity.archivesFolderURI" hidden="hidden" wsm_persist="true"
+           pref="true" preftype="string" prefattribute="value"
+           prefstring="mail.identity.%identitykey%.archive_folder"/>
+    <label id="identity.templatesFolderURI" hidden="hidden" wsm_persist="true"
+           pref="true" preftype="string" prefattribute="value"
+           prefstring="mail.identity.%identitykey%.stationery_folder"/>
+    <label id="identity.email" hidden="hidden" wsm_persist="true"/>
+    <label id="identity.fccFolderPickerMode" hidden="hidden" wsm_persist="true"
+           pref="true" preftype="int" prefattribute="value"
+           prefstring="mail.identity.%identitykey%.fcc_folder_picker_mode"/>
+    <label id="identity.draftsFolderPickerMode" hidden="hidden" wsm_persist="true"
+           pref="true" preftype="int" prefattribute="value"
+           prefstring="mail.identity.%identitykey%.drafts_folder_picker_mode"/>
+    <label id="identity.archivesFolderPickerMode" hidden="hidden" wsm_persist="true"
+           pref="true" preftype="int" prefattribute="value"
+           prefstring="mail.identity.%identitykey%.archives_folder_picker_mode"/>
+    <label id="identity.templatesFolderPickerMode" hidden="hidden" wsm_persist="true"
+           pref="true" preftype="int" prefattribute="value"
+           prefstring="mail.identity.%identitykey%.tmpl_folder_picker_mode"/>
+    <html:div>
+    <html:fieldset id="copiesGroup">
+      <html:legend>&sendingPrefix.label;</html:legend>
+
+      <hbox align="center">
+        <checkbox id="identity.doFcc" wsm_persist="true" label="&fccMailFolder.label;"
+                  accesskey="&fccMailFolder.accesskey;"
+                  prefattribute="value"
+                  prefstring="mail.identity.%identitykey%.fcc"
+                  oncommand="setupFccItems();"/>
+      </hbox>
+        <radiogroup id="doFcc" aria-labelledby="identity.doFcc">
+        <hbox class="specialFolderPickerGrid">
+          <vbox>
+            <hbox flex="1" align="center">
+              <radio id="fcc_selectAccount"
+                     class="depends-on-do-fcc"
+                     value="0" label="&sentFolderOn.label;"
+                     accesskey="&sentFolderOn.accesskey;"
+                     oncommand="setPickersState('msgFccAccountPicker', 'msgFccFolderPicker', event)"/>
+            </hbox>
+            <hbox flex="1" align="center">
+              <radio id="fcc_selectFolder"
+                     class="depends-on-do-fcc"
+                     value="1" label="&sentInOtherFolder.label;"
+                     accesskey="&sentInOtherFolder.accesskey;"
+                     oncommand="setPickersState('msgFccFolderPicker', 'msgFccAccountPicker', event)"/>
+            </hbox>
+          </vbox>
+          <vbox flex="1">
+             <menulist id="msgFccAccountPicker"
+                       class="folderMenuItem depends-on-do-fcc"
+                       aria-labelledby="fcc_selectAccount">
+                <menupopup is="folder-menupopup" id="msgFccAccountPopup"
+                           mode="filing"
+                           expandFolders="false"
+                           oncommand="noteSelectionChange('fcc', 'Account', event)"/>
+              </menulist>
+              <menulist id="msgFccFolderPicker"
+                        class="folderMenuItem depends-on-do-fcc"
+                        aria-labelledby="fcc_selectFolder"
+                        displayformat="verbose">
+                <menupopup is="folder-menupopup" id="msgFccFolderPopup"
+                           mode="filing"
+                           class="menulist-menupopup"
+                           showFileHereLabel="true"
+                           oncommand="noteSelectionChange('fcc', 'Folder', event)"/>
+              </menulist>
+          </vbox>
+        </hbox>
+      </radiogroup>
+
+      <hbox align="center" class="fccReplyFollowsParent" hidable="true" hidefor="nntp,rss">
+        <checkbox id="identity.fccReplyFollowsParent" wsm_persist="true"
+                  class="depends-on-do-fcc"
+                  label="&fccReplyFollowsParent.label;"
+                  accesskey="&fccReplyFollowsParent.accesskey;"
+                  prefattribute="value"
+                  prefstring="mail.identity.%identitykey%.fcc_reply_follows_parent"/>
+      </hbox>
+
+      <separator class="thin"/>
+
+      <hbox>
+        <vbox>
+          <hbox flex="1" align="center">
+            <checkbox id="identity.doCc" wsm_persist="true" label="&ccAddress.label;"
+                      accesskey="&ccAddress.accesskey;"
+                      control="identity.doCcList"
+                      oncommand="identityDoCcBccOnCommand(event);"
+                      prefattribute="value"
+                      prefstring="mail.identity.%identitykey%.doCc"/>
+          </hbox>
+          <hbox flex="1" align="center">
+            <checkbox id="identity.doBcc" wsm_persist="true" label="&bccAddress.label;"
+                      accesskey="&bccAddress.accesskey;"
+                      control="identity.doBccList"
+                      oncommand="identityDoCcBccOnCommand(event);"
+                      prefattribute="value"
+                      prefstring="mail.identity.%identitykey%.doBcc"/>
+          </hbox>
+        </vbox>
+        <vbox flex="1">
+          <hbox flex="1" class="input-container" align="center">
+            <html:input id="identity.doCcList" wsm_persist="true"
+                        type="text"
+                        aria-labelledby="identity.doCc"
+                        prefstring="mail.identity.%identitykey%.doCcList"
+                        class="uri-element input-inline"
+                        placeholder="&ccAddressList.placeholder;"
+                        onblur="identityDoCcBccOnBlur(event);"/>
+          </hbox>
+          <hbox flex="1" class="input-container" align="center">
+            <html:input id="identity.doBccList" wsm_persist="true"
+                        type="text"
+                        aria-labelledby="identity.doBcc"
+                        prefstring="mail.identity.%identitykey%.doBccList"
+                        class="uri-element input-inline"
+                        placeholder="&bccAddressList.placeholder;"
+                        onblur="identityDoCcBccOnBlur(event);"/>
+          </hbox>
+        </vbox>
+      </hbox>
+      <description class="indent tip-caption"
+                   data-l10n-id="account-prefs-show-address-row-description"/>
+    </html:fieldset>
+    </html:div>
+
+    <html:div>
+    <html:fieldset id="archivesGroup">
+      <html:legend>&archivesTitle.label;</html:legend>
+
+      <hbox pack="start">
+        <checkbox id="identity.archiveEnabled" wsm_persist="true"
+                  label="&keepArchives.label;"
+                  accesskey="&keepArchives.accesskey;"
+                  prefattribute="value"
+                  prefstring="mail.identity.%identitykey%.archive_enabled"
+                  oncommand="setupArchiveItems();"/>
+      </hbox>
+
+      <radiogroup id="messageArchives">
+        <hbox class="specialFolderPickerGrid">
+          <vbox>
+            <hbox flex="1" align="center">
+              <radio id="archive_selectAccount"
+                     class="depends-on-archive"
+                     value="0" label="&archivesFolderOn.label;"
+                     accesskey="&archivesFolderOn.accesskey;"
+                     oncommand="setPickersState('msgArchivesAccountPicker', 'msgArchivesFolderPicker', event)"/>
+            </hbox>
+            <hbox flex="1" align="center">
+              <radio id="archive_selectFolder"
+                     class="depends-on-archive"
+                     value="1" label="&archiveInOtherFolder.label;"
+                     accesskey="&archiveInOtherFolder.accesskey;"
+                     oncommand="setPickersState('msgArchivesFolderPicker', 'msgArchivesAccountPicker', event)"/>
+            </hbox>
+          </vbox>
+          <vbox flex="1">
+            <menulist id="msgArchivesAccountPicker"
+                      class="folderMenuItem depends-on-archive"
+                      aria-labelledby="archive_selectAccount">
+              <menupopup is="folder-menupopup" id="msgArchivesAccountPopup"
+                         mode="filing"
+                         expandFolders="false"
+                         oncommand="noteSelectionChange('archive', 'Account', event)"/>
+            </menulist>
+            <menulist id="msgArchivesFolderPicker"
+                      class="folderMenuItem depends-on-archive"
+                      aria-labelledby="archive_selectFolder"
+                      displayformat="verbose">
+              <menupopup is="folder-menupopup" id="msgArchivesFolderPopup"
+                         mode="filing"
+                         class="menulist-menupopup"
+                         showFileHereLabel="true"
+                         oncommand="noteSelectionChange('archive', 'Folder', event)"/>
+            </menulist>
+          </vbox>
+        </hbox>
+      </radiogroup>
+      <hbox pack="end">
+        <button id="archiveHierarchyButton"
+                class="depends-on-archive"
+                label="&archiveHierarchyButton.label;"
+                accesskey="&archiveHierarchyButton.accesskey;"
+                oncommand="ChangeArchiveHierarchy();"/>
+      </hbox>
+    </html:fieldset>
+    </html:div>
+
+    <html:div>
+    <html:fieldset id="foldersGroup">
+      <html:legend>&specialFolders.label;</html:legend>
+
+      <hbox align="center">
+        <label value="&keepDrafts2.label;" control="messageDrafts"/>
+      </hbox>
+
+      <radiogroup id="messageDrafts">
+        <hbox class="specialFolderPickerGrid">
+          <vbox>
+            <hbox flex="1" align="center">
+              <radio id="draft_selectAccount"
+                     oncommand="setPickersState('msgDraftsAccountPicker', 'msgDraftsFolderPicker', event)"
+                     value="0" label="&draftsFolderOn.label;"
+                     accesskey="&draftsFolderOn.accesskey;"/>
+            </hbox>
+            <hbox flex="1" align="center">
+              <radio id="draft_selectFolder"
+                     oncommand="setPickersState('msgDraftsFolderPicker', 'msgDraftsAccountPicker', event)"
+                     value="1" label="&draftInOtherFolder.label;"
+                     accesskey="&draftInOtherFolder.accesskey;"/>
+            </hbox>
+          </vbox>
+          <vbox flex="1">
+            <menulist id="msgDraftsAccountPicker"
+                      class="folderMenuItem"
+                      aria-labelledby="draft_selectAccount">
+              <menupopup is="folder-menupopup" id="msgDraftAccountPopup"
+                         mode="filing"
+                         expandFolders="false"
+                         oncommand="noteSelectionChange('draft', 'Account', event)"/>
+            </menulist>
+            <menulist id="msgDraftsFolderPicker"
+                      class="folderMenuItem"
+                      aria-labelledby="draft_selectFolder"
+                      displayformat="verbose">
+              <menupopup is="folder-menupopup" id="msgDraftsFolderPopup"
+                         mode="filing"
+                         class="menulist-menupopup"
+                         showFileHereLabel="true"
+                         oncommand="noteSelectionChange('draft', 'Folder', event)"/>
+            </menulist>
+          </vbox>
+        </hbox>
+      </radiogroup>
+
+      <separator class="thin"/>
+
+      <hbox align="center">
+        <label value="&keepTemplates.label;" control="messageTemplates"/>
+      </hbox>
+
+      <radiogroup id="messageTemplates">
+        <hbox class="specialFolderPickerGrid">
+          <vbox>
+            <hbox flex="1" align="center">
+              <radio id="tmpl_selectAccount"
+                     oncommand="setPickersState('msgTemplatesAccountPicker', 'msgTemplatesFolderPicker', event)"
+                     value="0" label="&templatesFolderOn.label;"
+                     accesskey="&templatesFolderOn.accesskey;"/>
+            </hbox>
+            <hbox flex="1" align="center">
+              <radio id="tmpl_selectFolder"
+                     oncommand="setPickersState('msgTemplatesFolderPicker', 'msgTemplatesAccountPicker', event)"
+                     value="1" label="&templateInOtherFolder.label;"
+                     accesskey="&templateInOtherFolder.accesskey;"/>
+            </hbox>
+          </vbox>
+          <vbox flex="1">
+            <menulist id="msgTemplatesAccountPicker"
+                        class="folderMenuItem"
+                        aria-labelledby="tmpl_selectAccount">
+              <menupopup is="folder-menupopup" id="msgFccAccountPopup"
+                         mode="filing"
+                         expandFolders="false"
+                         oncommand="noteSelectionChange('tmpl', 'Account', event)"/>
+            </menulist>
+            <menulist id="msgTemplatesFolderPicker"
+                        class="folderMenuItem"
+                        aria-labelledby="tmpl_selectFolder"
+                        displayformat="verbose">
+              <menupopup is="folder-menupopup" id="msgTemplFolderPopup"
+                         mode="filing"
+                         class="menulist-menupopup"
+                         showFileHereLabel="true"
+                         oncommand="noteSelectionChange('tmpl', 'Folder', event)"/>
+            </menulist>
+          </vbox>
+        </hbox>
+      </radiogroup>
+      <hbox align="center">
+        <checkbox id="identity.showSaveMsgDlg" wsm_persist="true" label="&saveMessageDlg.label;"
+                  accesskey="&saveMessageDlg.accesskey;"
+                  prefattribute="value"
+                  prefstring="mail.identity.%identitykey%.showSaveMsgDlg"/>
+      </hbox>
+    </html:fieldset>
+    </html:div>
+  </vbox>

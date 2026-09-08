@@ -1,0 +1,11 @@
+<internal_defines>
+MDX_HASH_FUNCTION -> 20131128
+</internal_defines>
+
+<module_info>
+name -> "Merkle-Damgård Helper"
+brief -> "Helper class for implementing Merkle-Damgård hashes"
+type -> "Internal"
+</module_info>
+
+load_on dep

@@ -1,0 +1,117 @@
+<?xml version="1.0"?>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+<!DOCTYPE html>
+<html
+  xmlns="http://www.w3.org/1999/xhtml"
+  xmlns:xul="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+  xmlns:html="http://www.w3.org/1999/xhtml"
+  scrolling="false"
+>
+  <head>
+    <title data-l10n-id="openpgp-change-expiry-title"></title>
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src chrome:; script-src chrome: 'unsafe-inline' moz-src:; style-src chrome: 'unsafe-inline'"
+    />
+    <link rel="stylesheet" href="chrome://global/skin/global.css" />
+    <link rel="stylesheet" href="chrome://messenger/skin/colors.css" />
+    <link rel="stylesheet" href="chrome://messenger/skin/variables.css" />
+    <link
+      rel="stylesheet"
+      href="chrome://messenger/skin/openpgp/inlineNotification.css"
+    />
+    <link rel="stylesheet" href="chrome://messenger/skin/themeableDialog.css" />
+    <link
+      rel="stylesheet"
+      href="chrome://messenger/skin/openpgp/changeExpiryDlg.css"
+    />
+
+    <link rel="localization" href="messenger/openpgp/changeExpiryDlg.ftl" />
+    <link rel="localization" href="messenger/openpgp/openpgp.ftl" />
+    <script
+      defer="defer"
+      src="chrome://messenger/content/dialogShadowDom.js"
+    ></script>
+    <script
+      defer="defer"
+      src="chrome://openpgp/content/ui/changeExpiryDlg.js"
+    ></script>
+  </head>
+  <body>
+    <xul:dialog id="changeExpiryDlg" buttons="cancel,accept">
+      <div class="inline-notification-container info-container self-center">
+        <img
+          class="notification-image"
+          src="chrome://messenger/skin/icons/information.svg"
+          alt=""
+        />
+        <p id="intro"></p>
+      </div>
+
+      <p id="info-current-expiry"></p>
+
+      <div id="complexKeyContainer">
+        <label
+          id="select-key-prompt-id"
+          for="keySelect"
+          data-l10n-id="select-key-prompt"
+        />
+        <select id="keySelect"></select>
+
+        <p id="longerUsage" data-l10n-id="info-explanation-2"></p>
+
+        <div class="selected-keys-properties">
+          <span class="key-property-title" data-l10n-id="created-label"></span>
+          <span id="created-info"></span>
+          <span class="key-property-title" data-l10n-id="usage-label"></span>
+          <span id="usage-info"></span>
+          <span
+            class="key-property-title"
+            data-l10n-id="algorithm-label"
+          ></span>
+          <span id="algo-info"></span>
+        </div>
+      </div>
+
+      <fieldset class="indent">
+        <div>
+          <input
+            id="radio-expire-keep"
+            type="radio"
+            name="expiry"
+            value="-1"
+            checked="checked"
+          />
+          <label
+            id="radio-expire-keep-label"
+            for="radio-expire-keep"
+            data-l10n-id="expire-no-change-label"
+          />
+        </div>
+
+        <div>
+          <input id="radio-expire-yes" type="radio" name="expiry" value="" />
+          <label
+            id="radio-expire-yes-label"
+            for="radio-expire-yes"
+            data-l10n-id="expire-in-time-label"
+          />
+
+          <select id="expiry-in"></select>
+        </div>
+
+        <div>
+          <input id="radio-expire-no" type="radio" name="expiry" value="0" />
+          <label
+            id="radio-expire-no-label"
+            for="radio-expire-no"
+            data-l10n-id="expire-never-expire-label"
+          />
+        </div>
+      </fieldset>
+    </xul:dialog>
+  </body>
+</html>

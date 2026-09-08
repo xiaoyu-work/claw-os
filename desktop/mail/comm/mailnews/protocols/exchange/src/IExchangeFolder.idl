@@ -1,0 +1,87 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "nsISupports.idl"
+#include "MailNewsTypes2.idl" // For nsMsgKey.
+
+interface nsIMsgCopyServiceListener;
+interface nsIMsgDBHdr;
+interface nsIMsgFolder;
+interface nsIMsgWindow;
+
+interface IExchangeFolderOperationListener;
+
+/**
+ * Specialized interface to folders on an Exchange server.
+ */
+[scriptable, uuid(56dd52a2-ce37-4999-91d0-ff5dd6487981)]
+interface IExchangeFolder : nsISupports {
+
+/**
+ * Copy a collection of items from another folder on the same server to this
+ * folder.
+ *
+ * @param sourceFolder The folder that the items are being copied from.
+ * @param headers The headers for the items that are to be copied.
+ * @param isMove Whether or not this is a move operation.
+ * @param window A context window for the operation.
+ * @param copyListener The copy listener for the operation.
+ * @param allowUndo Whether or not to generate an undo transaction.
+ * @param undoOperationType An enumeration value from `nsIMessenger` to indicate
+ *   what kind of operation the corresponding undo should be.
+ * @param listener A listener to perform any operations on the new headers.
+ */
+void copyItemsOnSameServer(
+    in IExchangeFolder sourceFolder,
+    in Array<nsIMsgDBHdr> headers,
+    in boolean isMove,
+    in nsIMsgWindow window,
+    in nsIMsgCopyServiceListener copyListener,
+    in boolean allowUndo,
+    in long undoOperationType,
+    in IExchangeFolderOperationListener listener);
+
+/**
+ * Copy a folder on the same server to this folder.
+ *
+ * @param sourceFolder The folder to copy.
+ * @param isMove Whether or not this is a move operation.
+ * @param window A context window for the operation.
+ * @param copyListener The copy listener for the operation.
+ */
+void copyFolderOnSameServer(
+    in nsIMsgFolder sourceFolder,
+    in boolean isMove,
+    in nsIMsgWindow window,
+    in nsIMsgCopyServiceListener copyListener);
+
+/**
+ * Tell the folder that some messages have been downloaded for
+ * offline use and are now in the local message store.
+ *
+ * IMAP and NNTP handle downloading messages directly in the folder code,
+ * but Exchange farms the work out to folder-external code
+ * (EwsFetchMsgsToOffline()), so this call is needed to tell the folder
+ * to perform any actions it might need to do in response (e.g. applying
+ * message filters which require the full message).
+ *
+ * Ultimately it'd be nice to have IMAP and NNTP share the same
+ * offline-download path as EWS, and at that point this call would
+ * be removed in favour of a more general mechanism.
+ */
+ void handleDownloadedMessages();
+};
+
+/**
+ * An interface for listeners for intra-EWS server operations.
+ */
+[scriptable, uuid(f54907ed-03f1-4c18-b3e9-0688885f261d)]
+interface IExchangeFolderOperationListener : nsISupports {
+    /**
+     * Signal that the operation has completed.
+     *
+     * @param headers The headers for newly created items on the server.
+     */
+    void OnComplete(in Array<nsIMsgDBHdr> headers);
+};

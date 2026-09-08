@@ -1,0 +1,99 @@
+<?xml version="1.0"?>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, you can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+<!DOCTYPE html [
+  <!ENTITY % brandDTD SYSTEM "chrome://branding/locale/brand.dtd">
+  %brandDTD;
+  <!ENTITY % messengerDTD SYSTEM "chrome://messenger/locale/messenger.dtd">
+  %messengerDTD;
+]>
+<html id="browserRequest" xmlns="http://www.w3.org/1999/xhtml"
+      xmlns:xul="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+      xmlns:html="http://www.w3.org/1999/xhtml"
+      windowtype="mail:extensionPopup"
+      width="800" height="500"
+      scrolling="false">
+<head>
+  <title data-l10n-id="extension-popup-default-title"></title>
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src chrome:; script-src chrome: 'unsafe-inline' moz-src:; style-src chrome: 'unsafe-inline'"
+  />
+  <link rel="stylesheet" href="chrome://global/skin/global.css" />
+  <link rel="stylesheet" href="chrome://global/skin/popup.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/messenger.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/tabmail.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/icons.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/colors.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/searchBox.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/browserRequest.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/extensionPopup.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/contextMenu.css" />
+
+  <link rel="localization" href="branding/brand.ftl"/>
+  <link rel="localization" href="toolkit/global/textActions.ftl" />
+  <link rel="localization" href="messenger/messenger.ftl" />
+  <link rel="localization" href="messenger/extensions/popup.ftl"/>
+  <script defer="defer" src="chrome://communicator/content/utilityOverlay.js"></script>
+  <script defer="defer" src="chrome://global/content/contentAreaUtils.js"></script>
+  <script defer="defer" src="chrome://global/content/editMenuOverlay.js"></script>
+  <script defer="defer" src="chrome://messenger/content/globalOverlay.js"></script>
+  <script defer="defer" src="chrome://messenger/content/viewZoomOverlay.js"></script>
+  <script defer="defer" src="chrome://messenger/content/browserRequest.js"></script>
+  <script defer="defer" src="chrome://messenger/content/browserPopups.js"></script>
+  <script defer="defer" src="chrome://messenger/content/extensionPopup.js"></script>
+</head>
+<html:body xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul">
+
+  <popupset id="mainPopupSet">
+    <tooltip id="aHTMLTooltip" page="true"/>
+#include ../../base/content/widgets/browserPopups.inc.xhtml
+  </popupset>
+
+  <commandset>
+    <command id="cmd_copyLink" oncommand="goDoCommand('cmd_copyLink')"/>
+    <command id="cmd_copyImage" oncommand="goDoCommand('cmd_copyImageContents')"/>
+    <command id="cmd_close" oncommand="window.tryToClose()"/>
+    <command id="cmd_reload" oncommand="goDoCommand('cmd_reload');"/>
+    <command id="cmd_stop" oncommand="goDoCommand('cmd_stop');"/>
+    <command id="Browser:Back" oncommand="goDoCommand('Browser:Back');"/>
+    <command id="Browser:Forward" oncommand="goDoCommand('Browser:Forward');"/>
+  </commandset>
+
+  <stringbundle id="bundle_messenger" src="chrome://messenger/locale/messenger.properties"/>
+
+  <keyset id="popupKeys">
+    <key id="key_close" data-l10n-id="close-shortcut" command="cmd_close" modifiers="accel" reserved="true"/>
+  </keyset>
+
+  <keyset id="browserKeys">
+    #ifdef XP_MACOSX
+      <key id="key_goBackKb" keycode="VK_LEFT" oncommand="gBrowser.goBack()" modifiers="accel"/>
+      <key id="key_goForwardKb" keycode="VK_RIGHT" oncommand="gBrowser.goForward()" modifiers="accel"/>
+    #else
+      <key id="key_goBackKb" keycode="VK_LEFT" oncommand="gBrowser.goBack()" modifiers="alt" />
+      <key id="key_goForwardKb" keycode="VK_RIGHT" oncommand="gBrowser.goForward()" modifiers="alt" />
+    #endif
+  </keyset>
+
+  <!-- Use the same styling and semantics as content tabs. -->
+  <html:div id="header" class="contentTabAddress">
+    <html:img id="security-icon" class="contentTabSecurity" />
+    <html:input id="headerMessage" class="contentTabUrlInput themeableSearchBox"
+                readonly="readonly" />
+  </html:div>
+  <stack flex="1">
+    <browser id="requestFrame"
+             type="content"
+             nodefaultsrc="nodefaultsrc"
+             maychangeremoteness="true"
+             flex="1"
+             tooltip="aHTMLTooltip"
+             autocompletepopup="PopupAutoComplete"
+             context="browserContext"
+             messagemanagergroup="single-site"/>
+  </stack>
+</html:body>
+</html>

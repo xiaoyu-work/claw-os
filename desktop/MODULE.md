@@ -26,6 +26,7 @@ component crates plus Claw-specific agent bridges and applets.
 | `comp/`, `session/`, `panel/` | Shell/compositor/session surfaces |
 | `settings/`, `settings-daemon/` | System settings UI and services |
 | `toolkit/`, `text/`, `theme/` | Shared UI/rendering foundations |
+| `mail/MODULE.md` | Vendored Thunderbird product source and paired Firefox build dependency; separate from the COSMIC build |
 | `edit/src/mcp.rs`, `edit/src/claw_glue/ai.rs` | Editor App handlers use controlled filesystem/desktop primitives and SDK AI, never App intercalls; see `edit/README.md` |
 
 ## Dependencies

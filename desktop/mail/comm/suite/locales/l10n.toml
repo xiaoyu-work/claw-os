@@ -1,0 +1,113 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+basepath = "../.."
+
+locales = [
+    "ca",
+    "cs",
+    "da",
+    "de",
+    "el",
+    "en-GB",
+    "es-AR",
+    "es-ES",
+    "fi",
+    "fr",
+    "hu",
+    "it",
+    "ja",
+    "ja-JP-mac",
+    "ka",
+    "lt",
+    "nb-NO",
+    "nl",
+    "pl",
+    "pt-BR",
+    "pt-PT",
+    "ro",
+    "ru",
+    "si",
+    "sk",
+    "sv-SE",
+    "tr",
+    "zh-CN",
+    "zh-TW",
+]
+
+[env]
+    l = "{l10n_base}/{locale}/"
+    mozilla = ".."
+
+[[paths]]
+    reference = "suite/locales/en-US/**"
+    l10n = "{l}suite/**"
+
+[[paths]]
+    reference = "suite/branding/seamonkey/locales/en-US/**"
+    l10n = "{l}suite/branding/seamonkey/**"
+
+[[paths]]
+    reference = "{mozilla}/services/sync/locales/en-US/**"
+    l10n = "{l}services/sync/**"
+
+[[includes]]
+    path = "{mozilla}/toolkit/locales/l10n.toml"
+
+[[includes]]
+    path = "calendar/locales/l10n.toml"
+
+[[includes]]
+    path = "{mozilla}/devtools/client/locales/l10n.toml"
+
+[[includes]]
+    path = "suite/chatzilla/locales/l10n.toml"
+
+[[paths]]
+    reference = "{mozilla}/devtools/startup/locales/en-US/**"
+    l10n = "{l}devtools/startup/**"
+
+# for Gecko 60 and older and cross-channel
+[[paths]]
+    reference = "{mozilla}/devtools/shim/locales/en-US/**"
+    l10n = "{l}devtools/shim/**"
+
+# suite-l10n.js can be missing completely
+[[filters]]
+    path = [
+        "{l}suite/suite-l10n.js",
+    ]
+    action = "ignore"
+
+# search prefs don't have the same number for all locales
+[[filters]]
+    path = "{l}suite/chrome/common/region.properties"
+    key = "re:browser\\.search\\.order\\.[1-9].*"
+    action = "ignore"
+
+# content handler prefs don't have the same number for all locales
+[[filters]]
+    path = "{l}suite/chrome/browser/region.properties"
+    key = "re:browser\\.contentHandlers\\.types\\.[0-5].*"
+    action = "ignore"
+
+# map service prefs don't have the same number for all locales
+[[filters]]
+    path = "{l}suite/chrome/mailnews/region.properties"
+    key = "re:mail\\.addr_book\\.mapit_url\\.[1-5].*"
+    action = "ignore"
+
+# search plugins are different per locale, ignore file difference
+[[filters]]
+    path = "{l}suite/searchplugins/*.xml"
+    action = "ignore"
+
+# extra data and help images are optional
+[[filters]]
+    path = [
+        "{l}suite/profile/bookmarks.extra",
+        "{l}suite/profile/panels.extra",
+        "{l}suite/chrome/common/help/images/*.*",
+    ]
+    action = "ignore"

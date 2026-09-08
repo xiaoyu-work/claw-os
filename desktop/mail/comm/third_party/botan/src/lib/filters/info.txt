@@ -1,0 +1,26 @@
+<defines>
+FILTERS -> 20160415
+CODEC_FILTERS -> 20131128
+</defines>
+
+<module_info>
+name -> "Filters"
+brief -> "Filter/Pipe API for data transformations"
+</module_info>
+
+<header:public>
+data_snk.h
+filter.h
+filters.h
+pipe.h
+</header:public>
+
+<header:internal>
+secqueue.h
+out_buf.h
+</header:internal>
+
+<requires>
+modes
+base64
+</requires>

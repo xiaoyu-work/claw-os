@@ -1,0 +1,98 @@
+/*
+* Entropy Source Using Intel's rdseed instruction
+* (C) 2015 Daniel Neus
+* (C) 2015,2019 Jack Lloyd
+*
+* Botan is released under the Simplified BSD License (see license.txt)
+*/
+
+#include <botan/internal/rdseed.h>
+
+#include <botan/compiler.h>
+#include <botan/rng.h>
+#include <botan/internal/cpuid.h>
+#include <botan/internal/target_info.h>
+
+#if !defined(BOTAN_USE_GCC_INLINE_ASM)
+   #include <immintrin.h>
+#endif
+
+namespace Botan {
+
+namespace {
+
+BOTAN_FUNC_ISA("rdseed,sse2") bool read_rdseed(secure_vector<uint32_t>& seed) {
+   /*
+   * RDSEED is not guaranteed to generate an output within any specific number
+   * of attempts. However in testing on a Skylake system, with all hyperthreads
+   * occupied in tight RDSEED loops, RDSEED will still usually succeed in under
+   * 150 attempts. The maximum ever seen was 230 attempts until success. When
+   * idle, RDSEED usually succeeds in 1 or 2 attempts.
+   *
+   * We set an upper bound of 1024 attempts, because it is possible that due
+   * to firmware issue RDSEED is simply broken and never succeeds. We do not
+   * want to loop forever in that case. If we exceed that limit, then we assume
+   * the hardware is actually just broken, and stop the poll.
+   */
+   const size_t RDSEED_RETRIES = 1024;
+
+   for(size_t i = 0; i != RDSEED_RETRIES; ++i) {
+      uint32_t r = 0;  // NOLINT(*-const-correctness) clang-tidy doesn't understand inline asm
+      int cf = 0;      // NOLINT(*-const-correctness) clang-tidy doesn't understand inline asm
+
+#if defined(BOTAN_USE_GCC_INLINE_ASM)
+      asm("rdseed %0; adcl $0,%1" : "=r"(r), "=r"(cf) : "0"(r), "1"(cf) : "cc");  // NOLINT(*-no-assembler)
+#else
+      cf = _rdseed32_step(&r);
+#endif
+
+      if(1 == cf) {
+         seed.push_back(r);
+         return true;
+      }
+
+      // Intel suggests pausing if RDSEED fails.
+#if defined(BOTAN_USE_GCC_INLINE_ASM)
+      asm volatile("pause");  // NOLINT(*-no-assembler)
+#else
+      _mm_pause();  // NOLINT(portability-simd-intrinsics)
+#endif
+   }
+
+   return false;  // failed to produce an output after many attempts
+}
+
+}  // namespace
+
+size_t Intel_Rdseed::poll(RandomNumberGenerator& rng) {
+   const size_t RDSEED_BYTES = 1024;
+   static_assert(RDSEED_BYTES % 4 == 0, "Bad RDSEED configuration");
+
+   if(CPUID::has(CPUID::Feature::RDSEED)) {
+      secure_vector<uint32_t> seed;
+      seed.reserve(RDSEED_BYTES / 4);
+
+      for(size_t p = 0; p != RDSEED_BYTES / 4; ++p) {
+         /*
+         If at any point we exceed our retry count, we stop the entire seed
+         gathering process. This situation will only occur in situations of
+         extremely high RDSEED utilization. If RDSEED is currently so highly
+         contended, then the rest of the poll is likely to also face contention and
+         it is better to quit now rather than (presumably) face very high retry
+         times for the rest of the poll.
+         */
+         if(!read_rdseed(seed)) {
+            break;
+         }
+      }
+
+      if(!seed.empty()) {
+         rng.add_entropy(reinterpret_cast<const uint8_t*>(seed.data()), seed.size() * sizeof(uint32_t));
+      }
+   }
+
+   // RDSEED is used but not trusted
+   return 0;
+}
+
+}  // namespace Botan

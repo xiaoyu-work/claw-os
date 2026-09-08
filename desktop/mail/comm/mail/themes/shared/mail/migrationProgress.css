@@ -1,0 +1,125 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, you can obtain one at http://mozilla.org/MPL/2.0/. */
+
+:root {
+  /* Override "dialog" as it results in a transparent background om macOS.  */
+  -moz-default-appearance: none;
+}
+
+body {
+  margin: 0;
+  padding: 1em;
+  padding-inline-end: calc(256px - 2em);
+
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+
+  font: message-box;
+  font-size: 15px;
+}
+
+img {
+  position: absolute;
+  inset-inline-end: -3em;
+  inset-block-end: -3em;
+  opacity: 0.66;
+}
+
+h1 {
+  font-weight: normal;
+  font-size: 1.5em;
+  margin-block: 0;
+}
+
+ol {
+  inline-size: 25em;
+  line-height: 24px;
+  list-style: none;
+  padding-inline: 8px;
+}
+
+li {
+  display: flex;
+  align-items: center;
+}
+
+.running {
+  font-weight: bold;
+}
+
+.task-icon {
+  margin-inline-end: 8px;
+  inline-size: 16px;
+  block-size: 16px;
+  -moz-context-properties: fill;
+  fill: currentColor;
+
+  .finished & {
+    background-image: url("chrome://global/skin/icons/check.svg");
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .running & {
+      position: relative;
+      overflow: hidden;
+    }
+
+    .running &::before {
+      content: "";
+      position: absolute;
+      background-image: url("chrome://messenger/skin/icons/loading.svg");
+      inline-size: 480px;
+      block-size: 100%;
+      animation: tab-throbber-animation 1.05s steps(30) infinite;
+    }
+
+    .running &:dir(rtl)::before {
+      animation-name: tab-throbber-animation-rtl;
+    }
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes tab-throbber-animation {
+    0% {
+      transform: translateX(0);
+    }
+    100% {
+      transform: translateX(-100%);
+    }
+  }
+
+  @keyframes tab-throbber-animation-rtl {
+    0% {
+      transform: translateX(0);
+    }
+    100% {
+      transform: translateX(100%);
+    }
+  }
+}
+
+progress {
+  appearance: none;
+  block-size: 4px;
+  background-color: hsla(0, 0%, 60%, 0.2);
+  border-style: none;
+  border-radius: 2px;
+}
+
+::-moz-progress-bar {
+  background: linear-gradient(90deg, #2094d2, #236ac2, #393c96, #236ac2, #2094d2, #236ac2, #393c96, #236ac2, #2094d2);
+  background-size: 1200px 100%;
+  animation: progress-animation 5s linear infinite;
+}
+
+@keyframes progress-animation {
+  0% {
+    background-position: 0;
+  }
+  100% {
+    background-position: 1200px;
+  }
+}

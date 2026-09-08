@@ -1,0 +1,16 @@
+# One Graph object schema base name per line.
+
+directoryObject
+emailAddress
+entity
+internetMessageHeader
+itemBody
+mailFolder
+mailFolderCollectionResponse
+mailboxSettings
+message
+messageCollectionResponse
+outlookItem
+recipient
+singleValueLegacyExtendedProperty
+user

@@ -1,0 +1,172 @@
+<?xml version="1.0"?>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+   - License, v. 2.0. If a copy of the MPL was not distributed with this
+   - file, you can obtain one at http://mozilla.org/MPL/2.0/. -->
+
+#filter substitution
+
+<!DOCTYPE html [
+<!ENTITY % msgHdrViewOverlayDTD SYSTEM "chrome://messenger/locale/msgHdrViewOverlay.dtd">
+%msgHdrViewOverlayDTD;
+<!ENTITY % messengerDTD SYSTEM "chrome://messenger/locale/messenger.dtd" >
+%messengerDTD;
+<!ENTITY % editContactOverlayDTD SYSTEM "chrome://messenger/locale/editContactOverlay.dtd">
+%editContactOverlayDTD;
+<!ENTITY % lightningDTD SYSTEM "chrome://lightning/locale/lightning.dtd">
+%lightningDTD;
+<!ENTITY % smimeDTD SYSTEM "chrome://messenger-smime/locale/msgReadSecurityInfo.dtd">
+%smimeDTD;
+]>
+<html xmlns="http://www.w3.org/1999/xhtml"
+      lightweightthemes="true"
+      xmlns:xul="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+      xmlns:html="http://www.w3.org/1999/xhtml">
+<head>
+  <meta charset="utf-8" />
+  <title></title>
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src chrome:; script-src chrome: about: moz-src: 'unsafe-inline'; style-src about: 'unsafe-inline'; img-src moz-icon: chrome: moz-src: data:;"
+  />
+
+  <link rel="icon" href="chrome://messenger/skin/icons/new/compact/draft.svg" />
+
+  <link rel="stylesheet" href="chrome://calendar/skin/calendar.css" />
+  <link rel="stylesheet" href="chrome://calendar/skin/shared/calendar-invitation-display.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/aboutMessage.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/popupPanel.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/messageHeader.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/icons.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/colors.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/folderMenus.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/attachmentList.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/searchBox.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/openpgp/inlineNotification.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/contextMenu.css" />
+  <link rel="stylesheet" href="chrome://messenger/skin/autocomplete.css" />
+
+  <link rel="localization" href="branding/brand.ftl" />
+  <link rel="localization" href="messenger/messenger.ftl" />
+  <link rel="localization" href="toolkit/main-window/findbar.ftl" />
+  <link rel="localization" href="toolkit/global/textActions.ftl" />
+  <link rel="localization" href="calendar/calendar.ftl" />
+  <link rel="localization" href="calendar/calendar-invitation-panel.ftl" />
+  <link rel="localization" href="messenger/openpgp/openpgp.ftl" />
+  <link rel="localization" href="messenger/openpgp/openpgp-frontend.ftl" />
+  <link rel="localization" href="messenger/openpgp/msgReadStatus.ftl" />
+  <link rel="localization" href="messenger/messageheader/headerFields.ftl" />
+
+  <script defer="defer" src="chrome://messenger/content/globalOverlay.js"></script>
+  <script defer="defer" src="chrome://global/content/contentAreaUtils.js"></script>
+  <script defer="defer" src="chrome://communicator/content/utilityOverlay.js"></script>
+  <script defer="defer" src="chrome://communicator/content/contentAreaClick.js"></script>
+  <script defer="defer" src="chrome://messenger/content/msgViewNavigation.js"></script>
+  <script defer="defer" src="chrome://messenger/content/editContactPanel.js"></script>
+  <script defer="defer" src="chrome://messenger/content/header-fields.js"></script>
+  <script defer="defer" src="chrome://messenger/content/mail-offline.js"></script>
+  <script defer="defer" src="chrome://messenger-smime/content/msgHdrViewSMIMEOverlay.js"></script>
+  <script defer="defer" src="chrome://messenger-smime/content/msgReadSMIMEOverlay.js"></script>
+  <script defer="defer" src="chrome://openpgp/content/ui/enigmailMessengerOverlay.js"></script>
+  <script defer="defer" src="chrome://openpgp/content/ui/enigmailMsgHdrViewOverlay.js"></script>
+  <script defer="defer" src="chrome://messenger/content/msgSecurityPane.js"></script>
+  <script defer="defer" src="chrome://messenger-newsblog/content/newsblogOverlay.js"></script>
+  <script defer="defer" src="chrome://messenger/content/messenger-customization.js"></script>
+  <script defer="defer" src="chrome://calendar/content/calendar-item-editing.js"></script>
+  <script defer="defer" src="chrome://calendar/content/imip-bar.js"></script>
+  <script defer="defer" src="chrome://calendar/content/calendar-invitation-display.js"></script>
+  <script defer="defer" src="chrome://calendar/content/widgets/calendar-invitation-panel.js"></script>
+  <script defer="defer" src="chrome://messenger/content/mailCore.js"></script>
+  <script defer="defer" src="chrome://messenger/content/mailContext.js"></script>
+  <script defer="defer" src="chrome://messenger/content/mailCommon.js"></script>
+  <script defer="defer" src="chrome://messenger/content/msgHdrView.js"></script>
+  <script defer="defer" src="chrome://messenger/content/aboutMessage.js"></script>
+  <script type="module" src="chrome://messenger/content/attachment-list.mjs"></script>
+  <script type="module" src="chrome://messenger/content/lazy-findbar.mjs"></script>
+</head>
+<html:body xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul">
+
+  <stringbundle id="bundle_brand" src="chrome://branding/locale/brand.properties"/>
+  <stringbundle id="bundle_messenger" src="chrome://messenger/locale/messenger.properties"/>
+
+  <commandset id="attachmentCommands">
+    <command id="cmd_openAttachment"
+             oncommand="goDoCommand('cmd_openAttachment');"/>
+    <command id="cmd_openAllAttachments"
+             oncommand="goDoCommand('cmd_openAllAttachments');"/>
+    <command id="cmd_saveAllAttachments"
+             oncommand="goDoCommand('cmd_saveAllAttachments');"/>
+    <command id="cmd_detachAllAttachments"
+             oncommand="goDoCommand('cmd_detachAllAttachments');"/>
+    <command id="cmd_deleteAllAttachments"
+             oncommand="goDoCommand('cmd_deleteAllAttachments');"/>
+  </commandset>
+
+  <popupset id="mainPopupSet">
+#include mailContext.inc.xhtml
+#include msgHdrPopup.inc.xhtml
+#include editContactPanel.inc.xhtml
+    <tooltip id="aHTMLTooltip" page="true"/>
+  </popupset>
+
+    <!-- msg header view -->
+    <!-- a convenience box for ease of extension overlaying -->
+    <hbox id="messagepaneboxwrapper" flex="1">
+      <vbox id="messagepanebox">
+        <vbox id="singleMessage">
+          <hbox id="msgHeaderView" collapsed="collapsed" class="main-header-area">
+#include msgHdrView.inc.xhtml
+          </hbox>
+#include ../../../calendar/base/content/imip-bar-overlay.inc.xhtml
+        </vbox>
+        <!-- The msgNotificationBar appears on top of the message and displays
+             information like: junk, mdn, remote content and phishing warnings -->
+        <vbox id="mail-notification-top">
+          <!-- notificationbox will be added here lazily. -->
+        </vbox>
+
+#include ../../../calendar/base/content/widgets/calendar-invitation-panel.inc.xhtml
+#include ../../../calendar/base/content/widgets/calendar-minidate.inc.xhtml
+
+        <vbox id="calendarInvitationDisplayContainer"
+              flex="1"
+              hidden="hidden">
+          <html:div id="calendarInvitationDisplay">
+            <!-- The calendar invitation panel is displayed here. -->
+          </html:div>
+        </vbox>
+
+        <!-- message view -->
+        <browser id="messagepane"
+                 tooltip="aHTMLTooltip"
+                 name="messagepane"
+                 disablesecurity="true"
+                 disablehistory="true"
+                 type="content"
+                 primary="primary"
+                 autofind="false"
+                 nodefaultsrc="nodefaultsrc"
+                 forcemessagemanager="forcemessagemanager"
+                 maychangeremoteness="true"
+                 messagemanagergroup="single-page"
+                 autocompletepopup="PopupAutoComplete"
+                 manualactiveness="true"
+                 onclick="return contentAreaClick(event);"
+                 onresize="messagePaneOnResize();"/>
+        <splitter id="attachment-splitter" orient="vertical"
+                  resizebefore="closest" resizeafter="closest"
+                  collapse="after" collapsed="collapsed"/>
+        <vbox id="attachmentView" collapsed="collapsed">
+#include msgAttachmentView.inc.xhtml
+        </vbox>
+        <html:lazy-findbar id="findToolbar" browserid="messagepane"/>
+      </vbox>
+#include msgSecurityPane.inc.xhtml
+    </hbox>
+</html:body>
+<popupset xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul">
+  <panel is="autocomplete-richlistbox-popup" id="PopupAutoComplete"
+         type="autocomplete"
+         role="group"
+         noautofocus="noautofocus"/>
+</popupset>
+</html>

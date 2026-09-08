@@ -1,0 +1,45 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+<menu id="helpMenu"
+      data-l10n-id="menu-help-help-title"
+      onpopupshowing="buildHelpMenu();">
+        <menupopup id="menu_HelpPopup">
+          <menuitem id="menu_openHelp"
+                    data-l10n-id="menu-help-get-help"
+                    key="key_openHelp"
+                    oncommand="openSupportURL();"/>
+#if MOZ_UPDATE_CHANNEL == beta || defined(NIGHTLY_BUILD)
+          <menuitem id="menu_openReleaseHelp"
+                    data-l10n-id="menu-help-get-release-help"
+                    oncommand="openLinkText(event, 'releaseSupportURL');" />
+#endif
+          <menuitem id="menu_keyboardShortcuts"
+                    data-l10n-id="menu-help-shortcuts"
+                    oncommand="openLinkText(event, 'keyboardShortcutsURL');"/>
+          <menuseparator/>
+          <menuitem id="getInvolved"
+                    data-l10n-id="menu-help-get-involved"
+                    oncommand="openLinkText(event, 'getInvolvedURL');"/>
+          <menuitem id="donationsPage"
+                    data-l10n-id="menu-help-donation"
+                    oncommand="openLinkText(event, 'donateURL');"/>
+          <menuitem id="feedbackPage"
+                    data-l10n-id="menu-help-share-feedback"
+                    oncommand="openLinkText(event, 'feedbackURL');"/>
+          <menuseparator id="functionsSeparator"/>
+          <menuitem id="helpTroubleshootMode"
+                    data-l10n-id="menu-help-enter-troubleshoot-mode"
+                    oncommand="safeModeRestart();"/>
+          <menuitem id="aboutsupport_open"
+                    data-l10n-id="menu-help-troubleshooting-info"
+                    oncommand="openAboutSupport();"/>
+#ifndef XP_MACOSX
+          <menuseparator id="aboutSeparator"/>
+#endif
+          <menuitem id="aboutName"
+                    data-l10n-id="menu-help-about-product"
+                    oncommand="openAboutDialog();"/>
+        </menupopup>
+      </menu>

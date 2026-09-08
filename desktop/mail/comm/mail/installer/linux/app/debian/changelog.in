@@ -1,0 +1,5 @@
+${PKG_NAME} (1:${PKG_VERSION}) UNRELEASED; urgency=medium
+
+  * N/A
+
+ -- Thunderbird Build & Release Team <tb-builds@thunderbird.net>  ${CHANGELOG_DATE}

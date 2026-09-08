@@ -1,0 +1,49 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "nsISupports.idl"
+
+interface mozIStorageConnection;
+interface nsIFolderDatabase;
+interface nsIMessageDatabase;
+interface nsIMsgFolder;
+
+[scriptable, builtinclass, uuid(f7aa8063-35b5-4692-829c-a49eff539064)]
+interface nsIDatabaseCore : nsISupports {
+  /**
+   * Open a connection to the database and load in the folders from it.
+   * Returns a promise that resolves (with no value) when loading is complete.
+   */
+  void startup();
+
+  /**
+   * Access to the folders and folder_properties tables on the database.
+   */
+  [infallible] readonly attribute nsIFolderDatabase folderDB;
+
+  /**
+   * Access to the messages and message_properties tables on the database.
+   */
+  [infallible] readonly attribute nsIMessageDatabase messageDB;
+
+  /**
+   * Migrate the virtualFolders.dat file into the new database. This can only
+   * happen after the folder hierarchy has been created in the database, and
+   * will do nothing if the database existed before the program started.
+   */
+  void migrateVirtualFolders();
+
+  /**
+   * Migrate a folder's messages from its message summary into the new database.
+   *
+   * Returns a Promise that resolves when migration of the folder is complete.
+   */
+  [implicit_jscontext] Promise migrateFolderDatabase(in nsIMsgFolder srcFolder);
+
+  /**
+   * Access to the database for testing purposes only. If you are not a test,
+   * you'll get NS_ERROR_NOT_AVAILABLE instead.
+   */
+  readonly attribute mozIStorageConnection connectionForTests;
+};

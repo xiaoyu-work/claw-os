@@ -1,0 +1,130 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+#include ./widgets/search-bar.inc.xhtml
+    <div id="quick-filter-bar" class="themeable-brighttext" hidden="hidden">
+      <div id="quickFilterBarContainer">
+        <button is="toggle-button" id="qfb-sticky"
+                class="button icon-button icon-only check-button"
+                data-l10n-id="quick-filter-bar-sticky">
+        </button>
+        <search-bar id="qfb-qs-textbox"
+                    maxlength="192"
+                    data-l10n-id="quick-filter-bar-search2"
+                    data-l10n-attrs="label"
+                    aria-keyshortcuts="Control+Shift+K">
+          <span slot="placeholder" data-l10n-id="quick-filter-bar-search-placeholder-with-key" class="kbd-container"></span>
+          <img data-l10n-id="quick-filter-bar-search-button"
+               slot="search-button"
+               class="qfb-search-button-icon"
+               src="" />
+        </search-bar>
+        <button id="qfd-dropdown"
+                class="button button-flat icon-button icon-only"
+                data-l10n-id="quick-filter-bar-dropdown">
+        </button>
+        <div class="roving-group button-group quickFilterButtons">
+          <button is="toggle-button" id="qfb-unread"
+                  class="button collapsible-button icon-button check-button"
+                  data-l10n-id="quick-filter-bar-unread">
+            <span data-l10n-id="quick-filter-bar-unread-label"></span>
+          </button>
+          <button is="toggle-button" id="qfb-starred"
+                  class="button collapsible-button icon-button check-button"
+                  data-l10n-id="quick-filter-bar-starred">
+            <span data-l10n-id="quick-filter-bar-starred-label"></span>
+          </button>
+          <button is="toggle-button" id="qfb-inaddrbook"
+                  class="button collapsible-button icon-button check-button"
+                  data-l10n-id="quick-filter-bar-inaddrbook">
+            <span data-l10n-id="quick-filter-bar-inaddrbook-label"></span>
+          </button>
+          <button is="toggle-button" id="qfb-tags"
+                  class="button collapsible-button icon-button check-button"
+                  data-l10n-id="quick-filter-bar-tags">
+            <span data-l10n-id="quick-filter-bar-tags-label"></span>
+          </button>
+          <button is="toggle-button" id="qfb-attachment"
+                  class="button collapsible-button icon-button check-button"
+                  data-l10n-id="quick-filter-bar-attachment">
+            <span data-l10n-id="quick-filter-bar-attachment-label"></span>
+          </button>
+        </div>
+        <img id="qfb-searching-throbber"
+             data-l10n-id="quick-filter-bar-searching"
+             alt=""/>
+        <span id="qfb-results-label"></span>
+      </div>
+      <div id="quickFilterBarSecondFilters">
+        <div id="quick-filter-bar-filter-text-bar" hidden="hidden">
+          <span id="qfb-qs-label"
+                data-l10n-id="quick-filter-bar-text-filter-explanation"></span>
+          <div class="roving-group button-group">
+            <button is="toggle-button" id="qfb-qs-sender"
+                    class="button check-button"
+                    data-l10n-id="quick-filter-bar-text-filter-sender"></button>
+            <button is="toggle-button" id="qfb-qs-recipients"
+                    class="button check-button"
+                    data-l10n-id="quick-filter-bar-text-filter-recipients"></button>
+            <button is="toggle-button" id="qfb-qs-subject"
+                    class="button check-button"
+                    data-l10n-id="quick-filter-bar-text-filter-subject"></button>
+            <button is="toggle-button" id="qfb-qs-body"
+                    class="button check-button"
+                    data-l10n-id="quick-filter-bar-text-filter-body"></button>
+          </div>
+        </div>
+        <div id="quickFilterBarTagsContainer" hidden="hidden">
+          <xul:menulist id="qfb-tag-filter-mode" value="OR">
+            <xul:menupopup class="no-icon-menupopup">
+              <xul:menuitem id="qfb-tag-filter-mode-or"
+                            value="OR"
+                            data-l10n-id="quick-filter-bar-boolean-mode-any"
+                            default="default"/>
+              <xul:menuitem id="qfb-tag-filter-mode-and"
+                            value="AND"
+                            data-l10n-id="quick-filter-bar-boolean-mode-all"/>
+              <xul:menuitem id="qfb-tag-filter-mode-none"
+                            value="NONE"
+                            data-l10n-id="quick-filter-bar-tag-mode-none"/>
+            </xul:menupopup>
+          </xul:menulist>
+        </div>
+      </div>
+    </div>
+    <xul:menupopup id="quickFilterButtonsContext"
+                   class="no-accel-menupopup"
+                   position="bottomleft topleft"
+                   onpopupshowing="quickFilterBar.updateCheckedStateQuickFilterButtons();">
+      <xul:menuitem id="quickFilterButtonsContextUnreadToggle"
+                    class="quick-filter-menuitem"
+                    type="checkbox"
+                    value="unread"
+                    closemenu="none"
+                    data-l10n-id="quick-filter-bar-dropdown-unread"/>
+      <xul:menuitem id="quickFilterButtonsContextStarredToggle"
+                    class="quick-filter-menuitem"
+                    type="checkbox"
+                    value="starred"
+                    closemenu="none"
+                    data-l10n-id="quick-filter-bar-dropdown-starred"/>
+      <xul:menuitem id="quickFilterButtonsContextInaddrbookToggle"
+                    class="quick-filter-menuitem"
+                    type="checkbox"
+                    value="addrBook"
+                    closemenu="none"
+                    data-l10n-id="quick-filter-bar-dropdown-inaddrbook"/>
+      <xul:menuitem id="quickFilterButtonsContextTagsToggle"
+                    class="quick-filter-menuitem"
+                    type="checkbox"
+                    value="tags"
+                    closemenu="none"
+                    data-l10n-id="quick-filter-bar-dropdown-tags"/>
+      <xul:menuitem id="quickFilterButtonsContextAttachmentToggle"
+                    class="quick-filter-menuitem"
+                    type="checkbox"
+                    value="attachment"
+                    closemenu="none"
+                    data-l10n-id="quick-filter-bar-dropdown-attachment"/>
+    </xul:menupopup>

@@ -1,0 +1,246 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "nsMsgProgress.h"
+
+#include "nsIFeedbackService.h"
+#include "mozIDOMWindow.h"
+#include "mozilla/Components.h"
+#include "mozilla/dom/BrowsingContext.h"
+#include "nsArray.h"
+#include "nsComponentManagerUtils.h"
+#include "nsError.h"
+#include "nsIMsgComposeProgressParams.h"
+#include "nsIMutableArray.h"
+#include "nsIStringBundle.h"
+#include "nsISupportsPrimitives.h"
+#include "nsIWindowWatcher.h"
+#include "nsMsgUtils.h"
+#include "nsPIDOMWindow.h"
+#include "nsXPCOM.h"
+
+NS_IMPL_ISUPPORTS(nsMsgProgress, nsIMsgProgress, nsIWebProgressListener,
+                  nsIProgressEventSink, nsISupportsWeakReference)
+
+nsMsgProgress::nsMsgProgress() {
+  m_closeProgress = false;
+  m_processCanceled = false;
+  m_pendingStateFlags = -1;
+  m_pendingStateValue = NS_OK;
+}
+
+nsMsgProgress::~nsMsgProgress() { (void)ReleaseListeners(); }
+
+NS_IMETHODIMP nsMsgProgress::OpenProgressDialog(
+    mozIDOMWindowProxy* parentDOMWindow, const char* dialogURL,
+    nsIMsgComposeProgressParams* parameters) {
+  NS_ENSURE_ARG_POINTER(dialogURL);
+
+  // Set up window.arguments...
+  nsCOMPtr<nsIMutableArray> array = nsArray::Create();
+  array->AppendElement(static_cast<nsIMsgProgress*>(this));
+  array->AppendElement(parameters);
+
+  // Open the dialog.
+  nsCOMPtr<nsIWindowWatcher> wwatch =
+      mozilla::components::WindowWatcher::Service();
+
+  nsCOMPtr<mozIDOMWindowProxy> newWindow;
+  return wwatch->OpenWindow(parentDOMWindow, nsDependentCString(dialogURL),
+                            "_blank"_ns, "chrome,dependent,centerscreen"_ns,
+                            array, getter_AddRefs(newWindow));
+}
+
+NS_IMETHODIMP nsMsgProgress::CloseProgressDialog(bool forceClose) {
+  m_closeProgress = true;
+  return OnStateChange(nullptr, nullptr, nsIWebProgressListener::STATE_STOP,
+                       forceClose ? NS_ERROR_FAILURE : NS_OK);
+}
+
+NS_IMETHODIMP nsMsgProgress::GetProcessCanceledByUser(
+    bool* aProcessCanceledByUser) {
+  NS_ENSURE_ARG_POINTER(aProcessCanceledByUser);
+  *aProcessCanceledByUser = m_processCanceled;
+  return NS_OK;
+}
+NS_IMETHODIMP nsMsgProgress::SetProcessCanceledByUser(
+    bool aProcessCanceledByUser) {
+  m_processCanceled = aProcessCanceledByUser;
+  OnStateChange(nullptr, nullptr, nsIWebProgressListener::STATE_STOP,
+                NS_BINDING_ABORTED);
+  return NS_OK;
+}
+
+NS_IMETHODIMP nsMsgProgress::RegisterListener(
+    nsIWebProgressListener* listener) {
+  if (!listener)  // Nothing to do with a null listener!
+    return NS_OK;
+
+  NS_ENSURE_ARG(this != listener);  // Check for self-reference (see bug 271700)
+
+  nsWeakPtr listenerWeak = do_GetWeakReference(listener);
+  if (!listenerWeak) {
+    return NS_ERROR_INVALID_ARG;
+  }
+  if (mListenerInfoList.Contains(listenerWeak)) {
+    // The listener is already registered!
+    return NS_ERROR_FAILURE;
+  }
+
+  mListenerInfoList.AppendElement(ListenerInfo(listenerWeak));
+  if (m_closeProgress || m_processCanceled)
+    listener->OnStateChange(nullptr, nullptr,
+                            nsIWebProgressListener::STATE_STOP, NS_OK);
+  else {
+    listener->OnStatusChange(nullptr, nullptr, NS_OK, m_pendingStatus.get());
+    if (m_pendingStateFlags != -1)
+      listener->OnStateChange(nullptr, nullptr, m_pendingStateFlags,
+                              m_pendingStateValue);
+  }
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP nsMsgProgress::UnregisterListener(
+    nsIWebProgressListener* listener) {
+  nsWeakPtr listenerWeak = do_GetWeakReference(listener);
+  if (!listenerWeak) {
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  return mListenerInfoList.RemoveElement(listenerWeak) ? NS_OK
+                                                       : NS_ERROR_FAILURE;
+}
+
+NS_IMETHODIMP nsMsgProgress::OnStateChange(nsIWebProgress* aWebProgress,
+                                           nsIRequest* aRequest,
+                                           uint32_t aStateFlags,
+                                           nsresult aStatus) {
+  m_pendingStateFlags = aStateFlags;
+  m_pendingStateValue = aStatus;
+
+  ListenerArray::ForwardIterator iter(mListenerInfoList);
+  while (iter.HasMore()) {
+    ListenerInfo& info = iter.GetNext();
+    nsCOMPtr<nsIWebProgressListener> listener =
+        do_QueryReferent(info.mWeakListener);
+    if (!listener) {
+      mListenerInfoList.RemoveElement(info);
+      continue;
+    }
+
+    listener->OnStateChange(aWebProgress, aRequest, aStateFlags, aStatus);
+  }
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP nsMsgProgress::OnProgressChange(nsIWebProgress* aWebProgress,
+                                              nsIRequest* aRequest,
+                                              int32_t aCurSelfProgress,
+                                              int32_t aMaxSelfProgress,
+                                              int32_t aCurTotalProgress,
+                                              int32_t aMaxTotalProgress) {
+  ListenerArray::ForwardIterator iter(mListenerInfoList);
+  while (iter.HasMore()) {
+    ListenerInfo& info = iter.GetNext();
+    nsCOMPtr<nsIWebProgressListener> listener =
+        do_QueryReferent(info.mWeakListener);
+    if (!listener) {
+      mListenerInfoList.RemoveElement(info);
+      continue;
+    }
+
+    listener->OnProgressChange(aWebProgress, aRequest, aCurSelfProgress,
+                               aMaxSelfProgress, aCurTotalProgress,
+                               aMaxTotalProgress);
+  }
+  return NS_OK;
+}
+
+NS_IMETHODIMP nsMsgProgress::OnLocationChange(nsIWebProgress* aWebProgress,
+                                              nsIRequest* aRequest,
+                                              nsIURI* location,
+                                              uint32_t aFlags) {
+  return NS_OK;
+}
+
+NS_IMETHODIMP nsMsgProgress::OnStatusChange(nsIWebProgress* aWebProgress,
+                                            nsIRequest* aRequest,
+                                            nsresult aStatus,
+                                            const char16_t* aMessage) {
+  if (aMessage && *aMessage) m_pendingStatus = aMessage;
+  ListenerArray::ForwardIterator iter(mListenerInfoList);
+  while (iter.HasMore()) {
+    ListenerInfo& info = iter.GetNext();
+    nsCOMPtr<nsIWebProgressListener> listener =
+        do_QueryReferent(info.mWeakListener);
+    if (!listener) {
+      mListenerInfoList.RemoveElement(info);
+      continue;
+    }
+
+    listener->OnStatusChange(aWebProgress, aRequest, aStatus, aMessage);
+  }
+  return NS_OK;
+}
+
+NS_IMETHODIMP nsMsgProgress::OnSecurityChange(nsIWebProgress* aWebProgress,
+                                              nsIRequest* aRequest,
+                                              uint32_t state) {
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsMsgProgress::OnContentBlockingEvent(nsIWebProgress* aWebProgress,
+                                      nsIRequest* aRequest, uint32_t aEvent) {
+  return NS_OK;
+}
+
+nsresult nsMsgProgress::ReleaseListeners() {
+  mListenerInfoList.Clear();
+  return NS_OK;
+}
+
+NS_IMETHODIMP nsMsgProgress::SetMsgWindow(nsIMsgWindow* aMsgWindow) {
+  m_msgWindow = do_GetWeakReference(aMsgWindow);
+  return NS_OK;
+}
+
+NS_IMETHODIMP nsMsgProgress::GetMsgWindow(nsIMsgWindow** aMsgWindow) {
+  NS_ENSURE_ARG_POINTER(aMsgWindow);
+
+  if (m_msgWindow)
+    CallQueryReferent(m_msgWindow.get(), aMsgWindow);
+  else
+    *aMsgWindow = nullptr;
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP nsMsgProgress::OnProgress(nsIRequest* request, int64_t aProgress,
+                                        int64_t aProgressMax) {
+  // XXX: What should the nsIWebProgress be?
+  // XXX: This truncates 64-bit to 32-bit
+  return OnProgressChange(nullptr, request, int32_t(aProgress),
+                          int32_t(aProgressMax),
+                          int32_t(aProgress) /* current total progress */,
+                          int32_t(aProgressMax) /* max total progress */);
+}
+
+NS_IMETHODIMP nsMsgProgress::OnStatus(nsIRequest* request, nsresult aStatus,
+                                      const char16_t* aStatusArg) {
+  nsString msg;
+  nsAutoString host;
+  host.Append(aStatusArg);
+  nsresult rv = FormatStatusMessage(aStatus, host, msg);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  nsCOMPtr<nsIFeedbackService> feedback =
+      mozilla::components::Feedback::Service();
+  if (feedback) {
+    feedback->ReportStatus(NS_ConvertUTF16toUTF8(msg), ""_ns);
+  }
+  return NS_OK;
+}

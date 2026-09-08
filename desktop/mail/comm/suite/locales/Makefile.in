@@ -1,0 +1,165 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+LOCALE_TOPDIR=$(topsrcdir)/comm
+LOCALE_RELATIVEDIR=suite/locales
+
+include $(topsrcdir)/config/config.mk
+
+MERGE_FILES = $(foreach f,$(1),$(call MERGE_FILE,$(f)))
+
+SUBMAKEFILES += \
+	$(DEPTH)/$(MOZ_BRANDING_DIRECTORY)/Makefile \
+	$(DEPTH)/$(MOZ_BRANDING_DIRECTORY)/locales/Makefile \
+	$(NULL)
+
+# This makefile uses variable overrides from the l10n-% target to
+# build non-default locales to non-default dist/ locations. Be aware!
+
+PWD := $(CURDIR)
+
+# These are defaulted to be compatible with the files the wget-en-US target
+# pulls. You may override them if you provide your own files.
+ZIP_IN ?= $(ABS_DIST)/$(PACKAGE)
+
+MOZ_LANGPACK_EID=langpack-$(AB_CD)@seamonkey.mozilla.org
+# For Nightly, we know where to get the builds from to do local repacks
+ifdef NIGHTLY_BUILD
+export EN_US_BINARY_URL ?= https://archive.mozilla.org/pub/seamonkey/nightly/latest-comm-central-trunk
+endif
+
+ifeq ($(MOZ_WIDGET_TOOLKIT),cocoa)
+MOZ_PKG_MAC_DSSTORE=$(ABS_DIST)/branding/dsstore
+MOZ_PKG_MAC_BACKGROUND=$(ABS_DIST)/branding/background.png
+MOZ_PKG_MAC_ICON=$(ABS_DIST)/branding/disk.icns
+MOZ_PKG_MAC_EXTRA=--symlink '/Applications:/ '
+endif
+
+MOZ_SFX_PACKAGE=$(topsrcdir)/comm/other-licenses/7zstub/seamonkey/7zSD.sfx
+
+NON_OMNIJAR_FILES = \
+	defaults/messenger/mailViews.dat \
+	defaults/profile/panels.rdf \
+	defaults/profile/mimeTypes.rdf \
+	defaults/profile/chrome/userChrome-example.css \
+	defaults/profile/chrome/userContent-example.css \
+	$(NULL)
+
+# Required for l10n.mk - defines a list of app sub dirs that should
+# be included in langpack xpis.
+# Currently not set in SeaMonkey.
+DIST_SUBDIRS = $(DIST_SUBDIR)
+
+include $(topsrcdir)/config/rules.mk
+
+include $(topsrcdir)/toolkit/locales/l10n.mk
+
+PROFILE_CHROME = userChrome-example.css userContent-example.css
+
+NO_JA_JP_MAC_AB_CD := $(if $(filter ja-JP-mac, $(AB_CD)),ja,$(AB_CD))
+
+BOOKMARKS_INC_FILE = $(call MERGE_FILE,profile/bookmarks.inc)
+BOOKMARKS_XTRA_FILE = $(call MERGE_FILE,profile/bookmarks.extra)
+
+# the #include in the .in file requires all to be in the same dir, sadly.
+$(FINAL_TARGET)/defaults/profile/bookmarks.html: $(BOOKMARKS_INC_FILE) $(BOOKMARKS_XTRA_FILE) $(srcdir)/generic/profile/bookmarks.html.in
+	$(SYSINSTALL) -D $(dir $@)
+	$(RM) -rf profile/*bookmarks*
+	$(NSINSTALL) -D profile
+	cp $^ profile/
+	$(call py_action,preprocessor, \
+	  -DAB_CD=$(NO_JA_JP_MAC_AB_CD) \
+	  profile/bookmarks.html.in \
+	  -o $@)
+
+PANELS_XTRA_FILE = $(call MERGE_FILE,profile/panels.extra)
+
+# the #include in the .in file requires all to be in the same dir, sadly.
+$(FINAL_TARGET)/defaults/profile/panels.rdf: $(PANELS_XTRA_FILE) $(srcdir)/generic/profile/panels.rdf.in
+	$(SYSINSTALL) -D $(dir $@)
+	$(RM) -rf profile/panels*
+	$(NSINSTALL) -D profile
+	cp $^ profile/
+	sed \
+	  -n 's/.*<RDF:Description about="\(.*\)">.*/        <RDF:li resource="\1"\/>/p' \
+	  profile/panels.extra > profile/panels-urn.inc
+	$(call py_action,preprocessor, \
+	  profile/panels.rdf.in -o $@)
+
+misc:: $(FINAL_TARGET)/defaults/profile/bookmarks.html ;
+misc:: $(FINAL_TARGET)/defaults/profile/panels.rdf ;
+
+misc:: $(call MERGE_FILES,$(addprefix profile/chrome/,$(PROFILE_CHROME)))
+	$(SYSINSTALL) $(IFLAGS1) $^ $(FINAL_TARGET)/defaults/profile/chrome
+
+l10n-%: AB_CD=$*
+l10n-%:
+# merge if we're not en-US. Conditional function because
+# we need the current value of AB_CD.
+	$(if $(filter en-US,$(AB_CD)),, @$(MAKE) merge-$*)
+	$(NSINSTALL) -D $(DIST)/install
+	@$(MAKE) -C $(DEPTH)/toolkit/locales l10n-$*
+#	@$(MAKE) -C $(DEPTH)/services/sync/locales AB_CD=$* XPI_NAME=locale-$*
+	@$(MAKE) -C ../../calendar/locales AB_CD=$* XPI_NAME=locale-$*
+ifdef MOZ_IRC
+	@$(MAKE) -C ../chatzilla/locales AB_CD=$* XPI_NAME=locale-$*
+endif
+ifdef MOZ_DEBUGQA
+	@$(MAKE) -C ../extensions/debugQA/locales AB_CD=$* XPI_NAME=locale-$*
+endif
+	@$(MAKE) -C $(DEPTH)/extensions/spellcheck/locales AB_CD=$* XPI_NAME=locale-$*
+	@$(MAKE) -C $(DEPTH)/devtools/client/locales AB_CD=$* XPI_NAME=locale-$*
+	@$(MAKE) -C $(DEPTH)/devtools/startup/locales AB_CD=$* XPI_NAME=locale-$* XPI_ROOT_APPID='$(XPI_ROOT_APPID)'
+	@$(MAKE) l10n AB_CD=$* XPI_NAME=locale-$* PREF_DIR=defaults/pref
+	@$(MAKE) multilocale.txt-$* AB_CD=$* XPI_NAME=locale-$*
+	@$(MAKE) -C $(DEPTH)/$(MOZ_BRANDING_DIRECTORY)/locales AB_CD=$* XPI_NAME=locale-$*
+
+package-win32-installer: $(SUBMAKEFILES)
+	$(MAKE) -C ../installer/windows CONFIG_DIR=l10ngen ZIP_IN='$(ZIP_OUT)' installer
+
+repackage-extensions: $(STAGEDIST)
+	$(MAKE) -C ../app pack-ext AB_CD=$(AB_CD) STAGEDIST=$(STAGEDIST)/extensions;
+
+langpack: langpack-$(AB_CD)
+
+# This is a generic target that will make a langpack, repack ZIP (+tarball)
+# builds, and repack and installer if applicable. It is called from the
+# tinderbox scripts. Alter it with caution.
+installers-%: IS_LANGUAGE_REPACK=1
+installers-%:
+	@$(MAKE) clobber-$*
+	@$(MAKE) l10n-$*
+	@$(MAKE) package-langpack-$*
+	@$(MAKE) repackage-zip-$*
+	@$(MAKE) repackage-extensions AB_CD=$*
+ifeq (WINNT,$(OS_ARCH))
+	@$(MAKE) package-win32-installer AB_CD=$*
+endif
+	@echo 'repackaging done'
+
+ifdef MOZ_UPDATER
+misc:: $(call MERGE_FILE,updater/updater.ini) $(call mkdir_deps,$(DIST)/bin)
+ifeq ($(OS_ARCH),WINNT)
+	cat $< $(srcdir)/../installer/windows/nsis/updater_append.ini | \
+	  sed -e 's/^InfoText=/Info=/' -e 's/^TitleText=/Title=/' | \
+	  sed -e 's/%MOZ_APP_DISPLAYNAME%/$(MOZ_APP_DISPLAYNAME)/' > \
+	  $(FINAL_TARGET)/updater.ini
+else
+	cat $< | \
+	  sed -e 's/^InfoText=/Info=/' -e 's/^TitleText=/Title=/' | \
+	  sed -e 's/%MOZ_APP_DISPLAYNAME%/$(MOZ_APP_DISPLAYNAME)/' > \
+	  $(FINAL_TARGET)/updater.ini
+endif
+endif
+
+ident:
+	@printf 'comm_revision '
+	@$(PYTHON3) $(topsrcdir)/config/printconfigsetting.py \
+	    '$(STAGEDIST)/application.ini' App SourceStamp
+	@printf 'moz_revision '
+	@$(PYTHON3) $(topsrcdir)/config/printconfigsetting.py \
+	    '$(STAGEDIST)/platform.ini' Build SourceStamp
+	@printf 'buildid '
+	@$(PYTHON3) $(topsrcdir)/config/printconfigsetting.py \
+	    '$(STAGEDIST)/application.ini' App BuildID

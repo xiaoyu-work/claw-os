@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <meta charset="utf-8" />
+    <title></title>
+
+    <link rel="stylesheet" href="chrome://messenger/skin/messenger.css" />
+    <link rel="stylesheet" href="chrome://messenger/skin/icons.css" />
+    <link
+      rel="stylesheet"
+      href="chrome://messenger/skin/shared/tree-listbox.css"
+    />
+    <style>
+      img.icon {
+        content: var(--icon-heart);
+        tr[data-properties~="red"] &amp; {
+          color: red;
+        }
+        tr[data-properties~="orange"] &amp; {
+          color: orange;
+        }
+        tr[data-properties~="yellow"] &amp; {
+          color: yellow;
+        }
+        tr[data-properties~="green"] &amp; {
+          color: green;
+        }
+        tr[data-properties~="blue"] &amp; {
+          color: blue;
+        }
+        tr[data-properties~="indigo"] &amp; {
+          color: indigo;
+        }
+        tr[data-properties~="violet"] &amp; {
+          color: violet;
+        }
+      }
+    </style>
+
+    <link rel="localization" href="messenger/treeView.ftl" />
+
+    <script
+      defer="defer"
+      src="chrome://messenger/content/pane-splitter.js"
+    ></script>
+    <script type="module" src="autoTreeView.mjs"></script>
+  </head>
+  <body>
+    <auto-tree-view
+      id="autoTree"
+      style="width: 640px; height: 640px; border: 1px solid gray; margin: 1em"
+    ></auto-tree-view>
+  </body>
+</html>

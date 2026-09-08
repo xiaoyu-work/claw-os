@@ -1,0 +1,6 @@
+
+family sparc
+
+<aliases>
+sparc
+</aliases>

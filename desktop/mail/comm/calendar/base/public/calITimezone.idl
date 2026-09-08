@@ -1,0 +1,43 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "nsISupports.idl"
+
+interface calIIcalComponent;
+
+[scriptable, uuid(d79161e7-0db9-427d-a0c3-27e0db3b030f)]
+interface calITimezone : nsISupports
+{
+    /**
+     * VTIMEZONE ical component, null if floating or UTC.
+     */
+    readonly attribute calIIcalComponent icalComponent;
+
+    /**
+     * The TZID of this timezone.
+     */
+    readonly attribute AUTF8String tzid;
+
+    /**
+     * Whether this timezone is the "floating" timezone.
+     */
+    readonly attribute boolean isFloating;
+
+    /**
+     * Whether this is the "UTC" timezone.
+     */
+    readonly attribute boolean isUTC;
+
+    /**
+     * Localized name of the timezone; falls back to TZID if unknown.
+     */
+    readonly attribute AString displayName;
+
+    /**
+     * For debugging purposes.
+     *
+     * @return "UTC", "floating" or component's ical representation
+     */
+    AUTF8String toString();
+};

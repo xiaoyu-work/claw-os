@@ -1,0 +1,53 @@
+Directory ./zlib contains a copy of zlib which has been obtained from:
+https://github.com/madler/zlib
+
+For licensing information, please refer to the included documentation.
+
+[tag v1.3.1]
+
+Updating:
+- cd $topsrcdir/comm
+- ../mach vendor -r <tag_name> third_party/zlib/moz.yaml
+- Review the changes
+- Commit the changes
+
+The tag information in this file is automatically updated. The moz.yaml file
+is automatically updated. If upstream changes require updating moz.build, that
+must be done with a manual step.
+
+The following files and directories were removed from the source distribution's root:
+amiga
+contrib
+doc
+examples
+msdos
+nintendods
+old
+os400
+qnx
+test
+watcom
+win32
+CMakeLists.txt
+Makefile
+Makefile.in
+configure
+make_vms.com
+treebuild.xml
+zconf.h.cmakein
+zconf.h.in
+zlib.3
+zlib.3.pdf
+zlib.map
+zlib.pc.cmakein
+zlib.pc.in
+zlib2ansi
+
+
+The following files were added to the source's root by MZLA Technologies:
+moz.build
+moz.yaml
+
+
+Use of this distribution is not required to build Thunderbird's OpenPGP support.
+You may set --enable-system-zlib at build time to dynamically link to another zlib.

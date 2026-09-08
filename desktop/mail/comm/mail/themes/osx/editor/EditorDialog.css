@@ -1,0 +1,17 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@import url("chrome://messenger/skin/shared/EditorDialog.css");
+
+groupbox {
+  padding: 0 8px 5px;
+  margin: 6px;
+  margin-block-start: 1.5em;
+
+  & > .groupbox-title > .header {
+    font-size: 1.18em;
+    margin-block: -1.3em 5px;
+    margin-inline-start: -5px;
+  }
+}

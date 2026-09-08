@@ -1,0 +1,127 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+/* ===== button.css =====================================================
+  == Styles used by the XUL (and XHTML in netError.xhtml) button element.
+  ======================================================================= */
+
+/* :::::::::: button :::::::::: */
+
+button {
+  margin: 2px;
+  border: 1px solid;
+  padding: 3px;
+  border-color: #5F5F5F;
+  border-radius: 2px;
+  min-width: 6em;
+  background-color: #AAB6C4;
+  background-clip: padding-box;
+  color: #000000;
+  font: menu;
+}
+
+.button-icon {
+  margin-inline-start: 2px;
+}
+
+.button-text {
+  margin-top: 0px !important;
+  margin-bottom: 0px !important;
+  margin-inline-start: 4px !important;
+  margin-inline-end: 6px !important;
+  text-align: center;
+}
+
+/* .......... focused state .......... */
+
+button:focus {
+  border-color: #000000;
+}
+
+/* .......... active/open/checked state .......... */
+
+button:hover:active,
+button[checked="true"],
+button[open="true"] {
+  border-color: #000000;
+  background-color: #90A1B3;
+  color: #FFFFFF;
+}
+
+button:hover:active:focus,
+button[checked="true"]:focus,
+button[open="true"]:focus {
+  border: 2px solid;
+  border-color: #000000;
+}
+
+/* .......... disabled state .......... */
+
+button[disabled="true"] {
+  border-color: #8290A5 !important;
+  background-color: #B7BFCB !important;
+  color: #8C99AB !important;
+}
+  
+/* .......... default state .......... */
+
+button[default="true"] {
+  border-color: #000000;
+}
+
+button[default="true"]:hover:active {
+  border-color: #000000;
+  border-radius: 2px;
+}
+
+button[default="true"]:hover:active:focus {
+  border-color: #000000;
+}
+
+button[default="true"]:focus {
+  border-color: #000000;
+}
+
+/* ::::: menu/menu-button buttons ::::: */
+
+button[type="menu-button"] {
+  border: none;
+  background: transparent !important;
+}
+
+.button-menubutton-button {
+  margin: 0;
+}
+
+.button-menu-dropmarker,
+.button-menubutton-dropmarker {
+  margin: 1px;
+  background-color: transparent;
+  border: none;
+}
+  
+.button-menubutton-dropmarker[open="true"] {
+  margin-top: 2px;
+  margin-bottom: 0px;
+  margin-inline-start: 2px;
+  margin-inline-end: 0px;
+}
+
+/* ::::: plain buttons ::::: */
+
+button.plain,
+button.plain:hover,
+button.plain:hover:active
+{
+  margin: 0px;
+  border: none !important;
+  padding: 0px;
+}
+
+/* ::::: xhtml buttons ::::: */
+
+button::-moz-focus-inner {
+  padding: 0px;
+  border: 0px none;
+}

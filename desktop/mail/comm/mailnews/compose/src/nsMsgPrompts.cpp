@@ -1,0 +1,83 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#include "nsMsgPrompts.h"
+
+#include "nsIWindowWatcher.h"
+#include "nsIWindowMediator.h"
+#include "nsIStringBundle.h"
+#include "nsServiceManagerUtils.h"
+#include "nsMsgUtils.h"
+#include "mozilla/Components.h"
+#include "nsIPromptService.h"
+#include "nsEmbedCID.h"
+
+nsresult nsMsgGetMessageByName(const char* aName, nsString& aResult) {
+  nsresult rv;
+  nsCOMPtr<nsIStringBundleService> bundleService =
+      mozilla::components::StringBundle::Service();
+  NS_ENSURE_TRUE(bundleService, NS_ERROR_UNEXPECTED);
+
+  nsCOMPtr<nsIStringBundle> bundle;
+  rv = bundleService->CreateBundle(
+      "chrome://messenger/locale/messengercompose/composeMsgs.properties",
+      getter_AddRefs(bundle));
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  return bundle->GetStringFromName(aName, aResult);
+}
+
+static nsresult nsMsgBuildMessageByName(const char* aName, nsIFile* aFile,
+                                        nsString& aResult) {
+  NS_ENSURE_ARG_POINTER(aFile);
+  nsresult rv;
+  nsCOMPtr<nsIStringBundleService> bundleService =
+      mozilla::components::StringBundle::Service();
+  NS_ENSURE_TRUE(bundleService, NS_ERROR_UNEXPECTED);
+
+  nsCOMPtr<nsIStringBundle> bundle;
+  rv = bundleService->CreateBundle(
+      "chrome://messenger/locale/messengercompose/composeMsgs.properties",
+      getter_AddRefs(bundle));
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  nsString path;
+  aFile->GetPath(path);
+
+  AutoTArray<nsString, 1> params = {path};
+  return bundle->FormatStringFromName(aName, params, aResult);
+}
+
+nsresult nsMsgBuildMessageWithFile(nsIFile* aFile, nsString& aResult) {
+  return nsMsgBuildMessageByName("unableToOpenFile", aFile, aResult);
+}
+
+nsresult nsMsgBuildMessageWithTmpFile(nsIFile* aFile, nsString& aResult) {
+  return nsMsgBuildMessageByName("unableToOpenTmpFile", aFile, aResult);
+}
+
+nsresult nsMsgDisplayMessageByName(const char* aName,
+                                   const char16_t* windowTitle) {
+  nsString msg;
+  nsMsgGetMessageByName(aName, msg);
+  return nsMsgDisplayMessageByString(msg.get(), windowTitle);
+}
+
+nsresult nsMsgDisplayMessageByString(const char16_t* msg,
+                                     const char16_t* windowTitle) {
+  NS_ENSURE_ARG_POINTER(msg);
+
+  nsresult rv;
+  nsCOMPtr<nsIPromptService> dlgService(
+      do_GetService(NS_PROMPTSERVICE_CONTRACTID, &rv));
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  nsCOMPtr<mozIDOMWindowProxy> domWindow;
+  nsCOMPtr<nsIWindowMediator> winMed =
+      do_GetService(NS_WINDOWMEDIATOR_CONTRACTID, &rv);
+  NS_ENSURE_SUCCESS(rv, rv);
+  winMed->GetMostRecentWindow(nullptr, getter_AddRefs(domWindow));
+
+  return dlgService->Alert(domWindow, windowTitle, msg);
+}

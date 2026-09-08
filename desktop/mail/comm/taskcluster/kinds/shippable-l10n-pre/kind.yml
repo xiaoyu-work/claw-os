@@ -1,0 +1,66 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+---
+loader: taskgraph.loader.transform:loader
+
+kind-dependencies:
+    - toolchain
+
+transforms:
+    - comm_taskgraph.transforms.l10n_pre:transforms
+    - gecko_taskgraph.transforms.build:transforms
+    - gecko_taskgraph.transforms.build_attrs:transforms
+    - gecko_taskgraph.transforms.job:transforms
+    - gecko_taskgraph.transforms.task:transforms
+
+task-defaults:
+    run-on-repo-type: [hg]
+    shipping-phase: promote
+    shipping-product: thunderbird
+    treeherder:
+        symbol: L10n-pre-S
+    worker-type: b-linux
+    worker:
+        max-run-time: 900
+        env:
+            MACH_BUILD_PYTHON_NATIVE_PACKAGE_SOURCE: system
+    use-python: default
+    attributes:
+        shippable: true
+    locale-list:
+        by-release-level:
+            production:
+                by-release-type:
+                    beta|release|esr.*: comm/mail/locales/shipped-locales
+                    default: comm/mail/locales/all-locales
+            staging: comm/mail/locales/onchange-locales
+    comm-locales-file: comm/mail/locales/l10n-changesets.json
+    browser-locales-file: browser/locales/l10n-changesets.json
+    run:
+        using: mozharness
+        comm-checkout: true
+        actions:
+            - clone-gecko-locales
+            - clone-comm-locales
+            - merge-repos
+            - pack-merged
+            - gen-changesets
+        script: comm/taskcluster/scripts/desktop_comm_l10n.py
+        config-paths:
+            - comm/testing/mozharness/configs
+        config:
+            - single_locale/linux64.py
+            - single_locale/tc_common.py
+            - single_locale/thunderbird_split_l10n.py
+            - taskcluster_nightly.py
+        options: []
+    run-on-projects: []
+    optimization: null
+
+
+tasks:
+    shippable-l10n-pre/opt:
+        description: Pre-Localization artifact build
+        treeherder:
+            platform: thunderbird-release/opt

@@ -1,0 +1,264 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+/* ==== communicator.css ====================================================
+   == Styles shared everywhere throughout the Communicator suite.
+   ========================================================================== */
+
+@import url("chrome://global/skin/global.css");
+@import url("chrome://communicator/content/communicator.css");
+@import url("chrome://communicator/skin/brand.css");
+@import url("chrome://communicator/skin/button.css");
+@import url("chrome://communicator/skin/toolbar.css");
+
+@namespace url("http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul");
+
+.wizard-box {
+  padding: 20px 44px 10px;
+}
+
+/* ::::: autocomplete ::::: */
+
+.autocomplete-history-popup {
+  max-height: 25em;
+}
+
+textbox[autocompletesearch="history file"] .autocomplete-treebody::-moz-tree-image(treecolAutoCompleteValue) {
+  width: 16px;
+  height: 16px;
+  margin-left: 1px;
+}
+
+textbox[autocompletesearch="history file"] .autocomplete-treebody::-moz-tree-image(treecolAutoCompleteValue, directory) {
+  /*list-style-image: url("chrome://global/skin/filepicker/dir-closed.png");*/
+  list-style-image: url("chrome://communicator/skin/places/bookmark-folder-closed.png");
+}
+
+textbox[autocompletesearch="history file"] .autocomplete-treebody::-moz-tree-image(treecolAutoCompleteValue, file) {
+  list-style-image: url("chrome://communicator/skin/places/bookmark-item.svg");
+}
+
+/* ::::: online/offline icons ::::: */
+
+#offline-status[offline="true"] {
+  list-style-image: url("chrome://communicator/skin/icons/offline.png");
+}
+
+#offline-status {
+  list-style-image: url("chrome://communicator/skin/icons/online.png");
+}
+
+/* ::::: security button icons ::::: */
+
+#security-button {
+  list-style-image: url("chrome://communicator/skin/icons/lock-insecure.png");
+}
+
+#security-button[level="high"] {
+  list-style-image: url("chrome://communicator/skin/icons/lock-secure.png");
+}
+
+#security-button[level="broken"] {
+  list-style-image: url("chrome://communicator/skin/icons/lock-broken.png");
+}
+
+/* ::::: spell checker ::::: */
+
+.spell-suggestion {
+  font-weight: bold;
+}
+
+/* ::::: directional button icons ::::: */
+
+.up {
+  min-width: 0px;
+  list-style-image: url("chrome://global/skin/arrow/arrow-up.png");
+}
+
+.up[disabled="true"] {
+  list-style-image: url("chrome://global/skin/arrow/arrow-up-dis.png");
+}
+
+.down {
+  min-width: 0px;
+  list-style-image: url("chrome://global/skin/arrow/arrow-dn.png");
+}
+
+.down[disabled="true"] {
+  list-style-image: url("chrome://global/skin/arrow/arrow-dn-dis.png");
+}
+
+.sidebarTree {
+  border: none;
+  margin: 0px !important;
+}
+
+/* ::::: toolbar print button ::::: */
+#print-button {
+  list-style-image: url("chrome://communicator/skin/icons/common.png");
+  -moz-image-region: rect(0 42px 39px 0);
+}
+
+#print-button:hover {
+  -moz-image-region: rect(0 84px 39px 42px);
+}
+
+#print-button:hover:active {
+  -moz-image-region: rect(0 126px 39px 84px);
+}
+
+#print-button[disabled="true"] {
+  -moz-image-region: rect(0 168px 39px 126px) !important;
+}
+
+toolbar[iconsize="small"] > toolbarpaletteitem > #print-button,
+toolbar[iconsize="small"] > #print-button {
+  list-style-image: url("chrome://communicator/skin/icons/common-small.png");
+  -moz-image-region: rect(0 19px 19px 0);
+}
+
+toolbar[iconsize="small"] > #print-button:hover {
+  -moz-image-region: rect(0 38px 19px 19px);
+}
+
+toolbar[iconsize="small"] > #print-button:hover:active {
+  -moz-image-region: rect(0 57px 19px 38px);
+}
+
+toolbar[iconsize="small"] > #print-button[disabled="true"] {
+  -moz-image-region: rect(0 76px 19px 57px) !important;
+}
+
+/* ::::: notification bars ::::: */
+
+.messageImage[value="refresh-blocked"] {
+  list-style-image: url("chrome://communicator/skin/icons/application.png");
+}
+
+.messageImage[value="plugin-crashed"] {
+  list-style-image: url("chrome://mozapps/skin/plugins/pluginGeneric-16.png");
+}
+
+.messageImage[value="geolocation"] {
+  list-style-image: url("chrome://communicator/skin/icons/geo.png");
+}
+
+.messageImage[value="persistent-storage"] {
+  list-style-image: url("chrome://communicator/skin/icons/persistent-storage.svg");
+  width: 16px;
+  height: 16px;
+}
+
+.messageImage[value="webNotifications"] {
+  list-style-image: url("chrome://communicator/skin/icons/notification-16.png");
+}
+
+.messageImage[value="indexedDB-permissions-prompt"],
+.messageImage[value="indexedDB-quota-prompt"] {
+  list-style-image: url("chrome://global/skin/icons/question-16.png");
+}
+
+.messageImage[value="addon-install-blocked"],
+.messageImage[value="addon-install-cancelled"],
+.messageImage[value="addon-install-complete"],
+.messageImage[value="addon-install-disabled"],
+.messageImage[value="addon-install-failed"],
+.messageImage[value="addon-install-started"],
+.messageImage[value="lwtheme-install-request"],
+.messageImage[value="lwtheme-install-notification"] {
+  list-style-image: url("chrome://mozapps/skin/extensions/extensionGeneric-16.png");
+}
+
+.messageImage[value="popup-blocked"] {
+  list-style-image: url("chrome://navigator/skin/icons/popup-blocked.png");
+}
+
+.messageImage[value="blocked-badware-page"] {
+  list-style-image: url("chrome://global/skin/icons/blacklist_favicon.png");
+}
+
+.messageImage[value="EnterInsecureMessage"] {
+  list-style-image: url("chrome://communicator/skin/icons/lock-insecure-16.png");
+}
+
+.messageImage[value="EnterSecureMessage"],
+.messageImage[value="BlockedActiveContentMessage"],
+.messageImage[value="BlockedDisplayContentMessage"] {
+  list-style-image: url("chrome://communicator/skin/icons/lock-secure-16.png");
+}
+
+.messageImage[value="MixedContentMessage"],
+.messageImage[value="MixedActiveContentMessage"],
+.messageImage[value="MixedDisplayContentMessage"] {
+  list-style-image: url("chrome://communicator/skin/icons/lock-broken-16.png");
+}
+
+/* ::::: dialog header ::::: */
+
+dialogheader {
+  margin: 0px 5px 5px;
+  border: 1px solid #2D3B49;
+  padding: 5px 8px;
+  background-color: #90A1B3;
+  color: #000000;
+}
+
+.dialogheader-title {
+  margin: 0px !important;
+  font-size: 120%;
+  font-weight: bold;
+}
+
+/* ::::: statusbar ::::: */
+
+statusbar {
+  border-top: 1px solid #C7D0D9;
+  min-height: 15px;
+  min-width: 1px; /* DON'T DELETE!
+    Prevents hiding of scrollbars in browser when window is made smaller.*/
+  background-color: #C7D0D9;
+  color: #22262F;
+  font-size: 83.3333%;
+}
+
+statusbarpanel {
+  -moz-box-align: center;
+  -moz-box-pack: center;
+  border-top: 1px solid #E0ECF6;
+  border-right: 1px solid #8997A1;
+  border-left: 1px solid #E0ECF6;
+  padding: 0px 4px;
+}
+
+.statusbar-resizerpanel {
+  border: 0px;
+  -moz-box-align: end;
+  -moz-box-pack: end;
+  padding: 0px;
+}
+
+.statusbarpanel-progress {
+  -moz-box-align: stretch;
+  border: 0px;
+  margin: 0px;
+  padding: 0px;
+}
+
+.statusbarpanel-iconic {
+  padding: 0px;
+}
+
+.statusbarpanel-text {
+  margin: 0px !important;
+}
+
+.statusbarpanel-backgroundbox {
+  -moz-box-align: stretch;
+  padding: 0px;
+}
+
+.statusbarpanel-backgroundbox > .statusbarpanel-contentbox {
+  padding: 0px 4px;
+  -moz-box-align: center;
+}

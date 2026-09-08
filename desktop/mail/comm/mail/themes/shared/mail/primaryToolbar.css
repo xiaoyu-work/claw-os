@@ -1,0 +1,196 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+/* ::::: Mail Toolbars and Menubars ::::: */
+
+.mail-toolbox,
+.contentTabToolbox {
+  background-color: var(--toolbar-background-color);
+
+  :root[lwtheme] & {
+    color: var(--toolbar-text-color, inherit);
+    background-color: var(--lwt-accent-color);
+    background-image:
+      linear-gradient(var(--lwt-selected-tab-background-color, transparent), var(--lwt-selected-tab-background-color, transparent)),
+      linear-gradient(var(--toolbar-background-color), var(--toolbar-background-color)), var(--lwt-header-image, none);
+    background-position:
+      right top,
+      var(--lwt-background-alignment);
+  }
+}
+
+.mail-toolbox > toolbar {
+  /* force iconsize="small" on these toolbars */
+  counter-reset: smallicons;
+}
+
+#button-getmsg {
+  list-style-image: var(--icon-cloud-download);
+}
+
+#button-newmsg {
+  list-style-image: var(--icon-pencil);
+}
+
+#button-address {
+  list-style-image: var(--icon-address-book);
+}
+
+#button-print {
+  list-style-image: var(--icon-print);
+}
+
+#button-file {
+  list-style-image: var(--icon-file);
+}
+
+#button-nextUnread {
+  list-style-image: var(--icon-nav-down-unread);
+}
+
+#button-previousUnread {
+  list-style-image: var(--icon-nav-up-unread);
+}
+
+#button-mark {
+  list-style-image: var(--icon-unread);
+}
+
+#button-tag {
+  list-style-image: var(--icon-tag);
+}
+
+#button-goback {
+  list-style-image: var(--icon-nav-back);
+}
+
+#button-goforward {
+  list-style-image: var(--icon-nav-forward);
+}
+
+#button-chat {
+  -moz-context-properties: fill, stroke, fill-opacity;
+}
+
+#button-nextMsg {
+  list-style-image: var(--icon-nav-down);
+}
+
+#button-previousMsg {
+  list-style-image: var(--icon-nav-up);
+}
+
+#button-showconversation {
+  list-style-image: var(--icon-conversation);
+}
+
+#button-addons {
+  list-style-image: var(--icon-extension);
+}
+
+.button-appmenu {
+  list-style-image: var(--icon-app-menu);
+  min-inline-size: 35px !important;
+  margin-inline: 4px;
+
+  &[badge-status] {
+    list-style-image: var(--icon-app-menu-badged);
+  }
+
+  &[badge-status="addon-alert"] {
+    list-style-image: var(--icon-app-menu-addon);
+  }
+
+  & .toolbarbutton-text {
+    display: none;
+  }
+
+  toolbar[mode="text"] & .toolbarbutton-icon {
+    display: flex;
+  }
+}
+
+#button-chat[unreadMessages="true"] {
+  fill: color-mix(in srgb, var(--toolbarbutton-icon-fill-attention) 20%, transparent);
+  stroke: var(--toolbarbutton-icon-fill-attention);
+
+  toolbar[mode="text"] > & {
+    color: var(--toolbarbutton-icon-fill-attention);
+  }
+}
+
+#button-newMsgPopup .menuitem-iconic {
+  fill: color-mix(in srgb, currentColor 20%, transparent);
+  stroke: currentColor;
+}
+
+/* remove the small icons checkbox in Customize window */
+#smallicons {
+  display: none;
+}
+
+#folder-location-container {
+  flex: 2 2;
+}
+
+/* Force the folder location and mail view items to fit in the available width
+   in the Customize Toolbar dialog. */
+#palette-box #locationFolders,
+#palette-box #folder-location-container,
+#palette-box #folderpane-mode-selector,
+#palette-box #viewPicker {
+  flex: 1;
+}
+
+#palette-box #button-chat {
+  background: var(--icon-chat) no-repeat center;
+
+  /* Hide the toolbarbutton-icon when the button is removed from the toolbar */
+  & > stack > .toolbarbutton-icon {
+    display: none;
+  }
+}
+
+/* ::::: message notification bar style rules ::::: */
+
+.msgNotificationBarText {
+  font-weight: bold;
+  margin-block-end: 0;
+}
+
+.msgNotificaton-smallText {
+  padding-inline-start: 10px;
+  font-size: 90%;
+}
+
+.subviewbutton-iconic {
+  -moz-context-properties: fill, stroke, fill-opacity;
+  fill: color-mix(in srgb, currentColor 20%, transparent);
+  stroke: currentColor;
+  fill-opacity: var(--toolbarbutton-icon-fill-opacity);
+}
+
+#button-getAllNewMsg {
+  list-style-image: var(--icon-download);
+}
+
+#spacesButtonMail {
+  list-style-image: var(--icon-mail);
+}
+
+#spacesButtonAddressBook {
+  list-style-image: var(--icon-address-book);
+}
+
+#spacesButtonCalendar {
+  list-style-image: var(--icon-calendar);
+}
+
+#spacesButtonTasks {
+  list-style-image: var(--icon-tasks);
+}
+
+#spacesButtonChat {
+  list-style-image: var(--icon-chat);
+}

@@ -1,0 +1,11 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+@import url("chrome://messenger/skin/shared/variables.css");
+
+:root {
+  --row-grouped-header-bg-color: #d5d5d5;
+  --row-grouped-header-bg-color-selected: #3874d1;
+  --autocomplete-popup-url-color: hsl(210, 77%, 47%);
+}

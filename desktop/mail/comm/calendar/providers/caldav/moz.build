@@ -1,0 +1,24 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+DIRS += ["public"]
+
+EXTRA_JS_MODULES += [
+    "CalDavCalendar.sys.mjs",
+    "CalDavProvider.sys.mjs",
+]
+
+XPCOM_MANIFESTS += [
+    "components.conf",
+]
+
+EXTRA_JS_MODULES.caldav += [
+    "modules/CalDavRequest.sys.mjs",
+    "modules/CalDavRequestHandlers.sys.mjs",
+    "modules/CalDavSession.sys.mjs",
+    "modules/CalDavUtils.sys.mjs",
+]
+
+with Files("**"):
+    BUG_COMPONENT = ("Calendar", "Provider: CalDAV")

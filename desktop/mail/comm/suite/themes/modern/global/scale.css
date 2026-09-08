@@ -1,0 +1,51 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+/* ===== scale.css =================================================
+  == Styles used by XUL scale elements.
+  ======================================================================= */
+
+@namespace url("http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul");
+
+/* ::::: scale ::::: */
+
+.scale-slider {
+  background: url("chrome://global/skin/scrollbar/slider-hrz.png") repeat-x;
+  border-left: 1px solid black;
+  border-right: 1px solid black;
+  margin: 2px 4px;
+  width: 100px;
+  height: 15px;
+}
+
+.scale-slider[orient="vertical"]
+{
+  background: url("chrome://global/skin/scrollbar/slider-vrt.png") repeat-y;
+  border-left: none;
+  border-right: none;
+  border-top: 1px solid black;
+  border-bottom: 1px solid black;
+  margin: 4px 2px;
+  width: 15px;
+  height: 100px;
+}
+
+/* ::::: scale thumb ::::: */
+
+.scale-thumb {
+  border: 1px solid #000000;
+  background-image: url("chrome://global/skin/scrollbar/thumb-hrz-grip.png");
+  min-width: 18px;
+}
+
+.scale-thumb[orient="vertical"] {
+  background-image: url("chrome://global/skin/scrollbar/thumb-vrt-grip.png");
+  min-height: 18px;
+  min-width: 0px;
+}
+
+.scale-thumb[disabled="true"] {
+  border-color: #000000;
+  background: #9CA8B4;
+}

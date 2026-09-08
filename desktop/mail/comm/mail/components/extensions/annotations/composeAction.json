@@ -1,0 +1,82 @@
+[
+  {
+    "namespace": "manifest",
+    "types": [
+      {
+        "$extend": "WebExtensionManifest",
+        "properties": {
+          "compose_action": {
+            "properties": {
+              "default_area": {
+                "enums": {
+                  "maintoolbar": {
+                    "annotations": [
+                      {
+                        "text": "The main toolbar of the message compose window."
+                      }
+                    ]
+                  },
+                  "formattoolbar": {
+                    "annotations": [
+                      {
+                        "text": "The formatting toolbar of the message compose window."
+                      }
+                    ]
+                  }
+                }
+              },
+              "type": {
+                "enums": {
+                  "menu": {
+                    "annotations": [
+                      {
+                        "text": "The $(ref:menus.ContextType.compose_action_menu) context of the $(doc:menus) can be used to add menu entries to a menu-typed composeAction button."
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "namespace": "composeAction",
+    "types": [
+      {
+        "id": "OnClickData",
+        "properties": {
+          "modifiers": {
+            "items": {
+              "enums": {
+                "Command": {
+                  "annotations": [
+                    {
+                      "text": "Only available on macOS."
+                    }
+                  ]
+                },
+                "Ctrl": {
+                  "annotations": [
+                    {
+                      "text": "Not available on macOS."
+                    }
+                  ]
+                },
+                "MacCtrl": {
+                  "annotations": [
+                    {
+                      "text": "Only available on macOS, but of limited use in a click event: Holding down the CTRL key while clicking with the mouse is referred to as a 'CTRL click' under macOS and is interpreted as a right mouse click. In a default profile  the <var>dom.event.treat_ctrl_click_as_right_click.disabled</var> preference is not enabled and the <var>MacCtrl</var> modifier key is not forwarded to the API."
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+]

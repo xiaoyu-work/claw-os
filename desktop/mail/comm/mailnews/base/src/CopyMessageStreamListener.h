@@ -1,0 +1,30 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
+#ifndef COMM_MAILNEWS_BASE_SRC_COPYMESSAGESTREAMLISTENER_H_
+#define COMM_MAILNEWS_BASE_SRC_COPYMESSAGESTREAMLISTENER_H_
+
+#include "nsIStreamListener.h"
+#include "nsICopyMessageListener.h"
+#include "nsCOMPtr.h"
+
+class CopyMessageStreamListener : public nsIStreamListener,
+                                  public nsICopyMessageListener {
+ public:
+  CopyMessageStreamListener(nsICopyMessageListener* destination, bool isMove);
+
+  NS_DECL_THREADSAFE_ISUPPORTS
+  NS_DECL_NSICOPYMESSAGELISTENER
+  NS_DECL_NSIREQUESTOBSERVER
+  NS_DECL_NSISTREAMLISTENER
+
+ protected:
+  virtual ~CopyMessageStreamListener();
+
+ private:
+  nsCOMPtr<nsICopyMessageListener> mDestination;
+  bool mIsMove;
+};
+
+#endif  // COMM_MAILNEWS_BASE_SRC_COPYMESSAGESTREAMLISTENER_H_

@@ -1,0 +1,12 @@
+<internal_defines>
+RAW_HASH_FN -> 20230221
+</internal_defines>
+
+<module_info>
+name -> "Raw Hash Function"
+brief -> "Hash Function Used For Signature Schemes"
+</module_info>
+
+<requires>
+hash
+</requires>
