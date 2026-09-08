@@ -38,7 +38,6 @@ desktop/
 ├── randr/                  Multi-monitor control
 ├── initial-setup/          First-run wizard
 │
-├── term/                   Terminal
 ├── store/                  App store
 ├── settings/               System settings
 ├── settings-daemon/        Backend for system settings
@@ -59,6 +58,15 @@ desktop/
 ```
 
 ## Building
+
+The complete [Terminal product](https://github.com/xiaoyu-work/clawos-app/tree/main/products/terminal)
+is built with `just terminal-build` from the immutable App pin at
+`build/native-apps/cosmic-term`. It retains its original locked renderer,
+file-chooser/toolkit graph, password integration, translations, themes and
+packaging. Native UI writes and fixed window activation use controlled OS
+services; its MCP shares product command logic without invoking another App.
+`cosmic-term` remains a desktop-package identity, separate from `exec` and its
+process registry. This source move does not move user histories or PTY state.
 
 The complete [Files product](https://github.com/xiaoyu-work/clawos-app/tree/main/products/files)
 is built with `just files-build` from the immutable App pin. Generated source

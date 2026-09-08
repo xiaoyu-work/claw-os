@@ -48,7 +48,7 @@ and agent tasks.
 | `browser.rs` | Attached-browser provider: exact action capabilities, expected-origin injection, owner socket validation, and bounded Native Messaging frames |
 | `network_diagnostics.rs` | Host-network diagnostic provider: interface/route inspection, bounded DNS resolution, and DNS-pinned TCP probes for the `netdiag` App |
 | `filesystem.rs` | Exact-scope bounded text reads and atomic writes/replacements for App workers; pinned paths, task-owned inverse snapshots, no App dispatch |
-| `desktop.rs` | Owner desktop service; native Files can reveal one local file/directory only in `com.clawos.Files`, with exact metadata and launch capabilities |
+| `desktop.rs` | Owner desktop service; native Files reveals only its fixed target; native Terminal opens only `/usr/bin/cosmic-term` with an optional local directory under its original exact process-spawn grant |
 | `client_identity.rs` | Peer/owner identity and synchronous thread-local filesystem credentials; trusted owner primary/supplementary groups, distinct from extension execution GID, with restoration on every exit |
 | `users.rs` | User Manager provider: status requires `sys.observe:identities`; mutations require `sys.identity:manage`, with exact secret reads for passwords; OS-owned account state and rollback |
 | `system_caps.rs` | System capability derivation |

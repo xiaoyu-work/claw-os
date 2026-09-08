@@ -30,7 +30,7 @@ Pulls `nodejs` and `npm` from apt (`packages.txt`) — npm is required to instal
 
 ## Used by
 
-* `desktop/term/src/ai/shell_integration.rs` — embeds `copilot` in the
+* [Terminal shell integration](https://github.com/xiaoyu-work/clawos-app/blob/main/products/terminal/native/cosmic-term/src/ai/shell_integration.rs) — embeds `copilot` in the
   generated bash/zsh/fish/pwsh `__cos_ai` functions
-* `desktop/term/src/ai/mod.rs` — `$COS_AI_COPILOT_BIN` env override resolves
+* [Terminal AI runtime](https://github.com/xiaoyu-work/clawos-app/blob/main/products/terminal/native/cosmic-term/src/ai/mod.rs) — `$COS_AI_COPILOT_BIN` env override resolves
   the binary path; defaults to bare `copilot` so the user's `$PATH` lookup wins

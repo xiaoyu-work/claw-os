@@ -133,8 +133,17 @@ the Agent package's `claw_files.document` library. Native reveal admits only
 Summary memory is Files-owned; metadata's sidecar needs an explicit parent
 read. User files, UI caches/settings and the existing Recoll index are not
 migrated or unified, and no App invokes another App.
-The Terminal product also owns the `exec` App source; core process authority
-and sandbox enforcement remain in the OS.
+The Terminal product owns the complete native UI/MCP/resources and the `exec`
+App source. Native composition uses `build/native-apps/cosmic-term` with the
+original locked renderer/file-chooser/toolkit graph. Native MCP embeds the
+canonical product bounded command/PATH implementation, never invoking `exec`;
+the independent identities, grants and process registries are unchanged.
+UI writes use controlled filesystem snapshots and policy-gated directory
+creation. Native window activation is a fixed OS desktop service restricted
+to Terminal's existing `proc.spawn:cosmic-term` scope, with no arbitrary
+executable/argument delegation. Authenticated worker sessions remain broker
+authority; call metadata or process environment never synthesizes snapshots.
+Interactive PTY state, user histories and credentials are not migrated.
 The Containers product owns `container-manager` and its fourteen MCP handlers;
 runtime execution, App-bound container authority and backend isolation remain
 in the OS's container provider.

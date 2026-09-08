@@ -3,7 +3,7 @@
 # (`@github/copilot`) globally inside the chroot so `copilot` lands on
 # $PATH for every shell.
 #
-# Used by cosmic-term's `@`-trigger AI integration (desktop/term/src/ai/)
+# Used by the external Terminal product's `@`-trigger AI integration.
 # which exec's `copilot -p "<prompt>" --allow-all-tools` from a shell
 # function. The first time a user runs it, copilot itself walks them
 # through OAuth device-flow auth and writes credentials to

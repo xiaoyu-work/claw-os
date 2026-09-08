@@ -77,6 +77,13 @@ declares its tag-sidecar parent read; reveal uses only `com.clawos.Files`
 desktop authority, and summary memory is `self:cosmic-files` rather than
 `self:doc`. Existing grants are not unioned or silently transferred.
 
+Terminal now follows the same immutable native source composition. The signed
+desktop package still owns `/usr/bin/cosmic-term`, its descriptor and
+`com.clawos.Term` resources. Its paired OS desktop service preserves the
+existing `proc.spawn:cosmic-term` launch grant; native command/PATH handlers
+share product logic without calling the `exec` App. Native PTYs, history,
+password state and the independent `exec` registry are not moved or unified.
+
 Updates only ever move forward. An older Claw OS release stays validly signed
 forever, so the signature alone cannot tell a current release from a superseded
 one; see [Downgrade protection](#downgrade-protection) for what stops one being

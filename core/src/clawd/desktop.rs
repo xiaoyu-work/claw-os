@@ -50,6 +50,10 @@ pub async fn control(
         let app_id = optional_string(&params, "app_id")?;
         let uris = optional_string_list(&params, "uris")?;
         validate_action(&action, identifier.as_deref(), app_id.as_deref(), &uris)?;
+        if terminal_caller(authority, &action, app_id.as_deref()) {
+            authorize_editor_target(authority, app_id.as_deref(), &uris)?;
+            return open_terminal(&uris, authority, uid, gid, home, peer_pid).await;
+        }
         authorize_caller(authority, &action)?;
         authorize_editor_target(authority, app_id.as_deref(), &uris)?;
         if authority.app_is("cosmic-files") {
@@ -134,7 +138,8 @@ fn requested_caps(action: &str, app_id: Option<&str>, uris: &[String]) -> Result
 /// should be refused twice.
 fn authorize_caller(authority: &Decision, action: &str) -> Result<(), String> {
     match action {
-        "launch" if authority.app_is("cosmic-edit") || authority.app_is("cosmic-files") => Ok(()),
+        "launch" if authority.app_is("cosmic-edit") || authority.app_is("cosmic-files")
+            || authority.app_is("cosmic-term") => Ok(()),
         "launch" => authority.require_app("launcher"),
         "list" | "focus" | "close" | "restart" => authority.require_app("desktop-manager"),
         _ => Err(format!("unknown desktop action: {action}")),
@@ -146,6 +151,13 @@ fn authorize_editor_target(
     app_id: Option<&str>,
     uris: &[String],
 ) -> Result<(), String> {
+    if authority.app_is("cosmic-term")
+        && (app_id != Some("com.clawos.Term")
+            || uris.len() > 1
+            || uris.iter().any(|uri| !uri.starts_with("file://")))
+    {
+        return Err("Terminal may open only its own native target with one optional directory".into());
+    }
     if authority.app_is("cosmic-files")
         && (app_id != Some("com.clawos.Files") || uris.len() != 1
             || !uris[0].starts_with("file://"))
@@ -162,6 +174,57 @@ fn authorize_editor_target(
         );
     }
     Ok(())
+}
+
+fn terminal_caller(authority: &Decision, action: &str, app_id: Option<&str>) -> bool {
+    action == "launch" && app_id == Some("com.clawos.Term")
+        && (authority.app_is("cosmic-term")
+            || (authority.app_id().is_none() && authority.task_id().is_none()))
+}
+
+fn terminal_launch_args(uris: &[String]) -> Result<Vec<String>, String> {
+    match uris {
+        [] => Ok(Vec::new()),
+        [uri] => {
+            let parsed = url::Url::parse(uri).map_err(|_| "invalid Terminal directory URI")?;
+            if parsed.scheme() != "file" || parsed.host_str().is_some()
+                || parsed.query().is_some() || parsed.fragment().is_some()
+            {
+                return Err("Terminal requires a local directory URI".into());
+            }
+            let path = parsed.to_file_path().map_err(|_| "invalid Terminal directory path")?;
+            let directory = fs::canonicalize(path).map_err(|error| error.to_string())?;
+            if !directory.is_dir() {
+                return Err("Terminal working directory must be a directory".into());
+            }
+            Ok(vec![
+                "--working-directory".into(),
+                directory.to_str().ok_or("Terminal directory must be UTF-8")?.into(),
+            ])
+        }
+        _ => Err("Terminal accepts at most one working directory".into()),
+    }
+}
+
+async fn open_terminal(
+    uris: &[String], authority: &Decision, uid: u32, gid: u32,
+    home: PathBuf, peer_pid: u32,
+) -> Result<Value, String> {
+    // Preserve the existing manifest scope, not a new desktop.launch grant.
+    let _authorized = authority.require(Cap::new(
+        Verb::PROC_SPAWN, Scope::name("cosmic-term"),
+    ))?;
+    let args = {
+        let _identity = super::client_identity::FsIdentityGuard::enter(uid)?;
+        terminal_launch_args(uris)?
+    };
+    let environment = DesktopEnvironment::for_user(uid, gid, home, peer_pid)?;
+    let program = PathBuf::from("/usr/bin/cosmic-term");
+    let status = run_user_launch_command(program.clone(), args, environment, LAUNCH_TIMEOUT).await?;
+    if !status.success() {
+        return Err(format!("native Terminal launcher failed: {status}"));
+    }
+    Ok(json!({"launched": true, "app_id": "com.clawos.Term", "launcher": program}))
 }
 
 async fn reveal_files(

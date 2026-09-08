@@ -8,6 +8,70 @@ use serde_json::json;
 const APP_ID: &str = "com.example.App";
 
 #[test]
+fn terminal_launch_is_fixed_target_and_cannot_inherit_other_app_grants() {
+    let decision = decision_for_app(Some("cosmic-term"), vec![], "terminal-launch");
+    assert!(terminal_caller(&decision, "launch", Some("com.clawos.Term")));
+    assert!(!terminal_caller(&decision, "launch", Some("com.clawos.Edit")));
+    authorize_caller(&decision, "launch").unwrap();
+    for action in ["restart", "list", "focus", "close"] {
+        assert!(authorize_caller(&decision, action).is_err());
+    }
+    authorize_editor_target(&decision, Some("com.clawos.Term"), &[]).unwrap();
+    authorize_editor_target(&decision, Some("com.clawos.Term"), &["file:///work/".into()]).unwrap();
+    for (target, uris) in [
+        ("com.clawos.Edit", vec![]),
+        ("com.clawos.Term", vec!["https://example.test".into()]),
+        ("com.clawos.Term", vec!["file:///work/a".into(), "file:///work/b".into()]),
+    ] {
+        assert!(authorize_editor_target(&decision, Some(target), &uris).is_err());
+    }
+}
+
+#[test]
+fn terminal_human_ui_does_not_require_an_app_intercall() {
+    let human = decision_for_app(None, vec![], "terminal-human");
+    assert!(terminal_caller(&human, "launch", Some("com.clawos.Term")));
+    assert!(!terminal_caller(&human, "restart", Some("com.clawos.Term")));
+    for app in ["exec", "cosmic-files", "cosmic-edit", "launcher"] {
+        let other = decision_for_app(Some(app), vec![], &format!("terminal-other-{app}"));
+        assert!(!terminal_caller(&other, "launch", Some("com.clawos.Term")));
+    }
+}
+#[test]
+fn terminal_launch_directory_is_data_not_arguments_or_an_app() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("a #é --command");
+    fs::create_dir(&directory).unwrap();
+    let uri = url::Url::from_file_path(&directory).unwrap().to_string();
+    assert_eq!(terminal_launch_args(&[uri]).unwrap(), vec![
+        "--working-directory".to_string(), directory.display().to_string(),
+    ]);
+    let link = root.path().join("linked-directory");
+    std::os::unix::fs::symlink(&directory, &link).unwrap();
+    let uri = url::Url::from_directory_path(&link).unwrap().to_string();
+    assert_eq!(terminal_launch_args(&[uri]).unwrap()[1], directory.display().to_string());
+    assert!(terminal_launch_args(&[]).unwrap().is_empty());
+    let file = root.path().join("file");
+    fs::write(&file, "fixture").unwrap();
+    assert!(terminal_launch_args(&[url::Url::from_file_path(file).unwrap().to_string()]).is_err());
+    assert!(terminal_launch_args(&["https://example.test".into()]).is_err());
+}
+
+#[tokio::test]
+async fn terminal_launch_requires_original_exact_proc_scope_before_desktop_access() {
+    for (index, caps) in [
+        vec![],
+        vec![Cap::new(Verb::DESKTOP_LAUNCH, Scope::name("com.clawos.Term"))],
+        vec![Cap::new(Verb::PROC_SPAWN, Scope::name("other-program"))],
+    ].into_iter().enumerate() {
+        let decision = decision_for_app(Some("cosmic-term"), caps, &format!("term-denied-{index}"));
+        let error = open_terminal(&[], &decision, 1000, 1000, PathBuf::from("/nonexistent"), 1)
+            .await.unwrap_err();
+        assert!(!error.contains("home"), "{error}");
+    }
+}
+
+#[test]
 fn files_launch_is_fixed_target_and_metadata_only() {
     let decision = decision_for_app(Some("cosmic-files"), vec![], "files-launch");
     authorize_caller(&decision, "launch").unwrap();

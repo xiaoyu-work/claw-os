@@ -33,6 +33,7 @@ component crates plus Claw-specific agent bridges and applets.
 | [`clawos-app/products/mail`](https://github.com/xiaoyu-work/clawos-app/tree/main/products/mail) | External Mail product source and paired Firefox build dependency; not part of the COSMIC build |
 | [external Editor](https://github.com/xiaoyu-work/clawos-app/tree/main/products/editor) | Complete native UI/MCP/resources; controlled filesystem/desktop and SDK AI remain OS-provided; build with `just editor-build` |
 | [external Files](https://github.com/xiaoyu-work/clawos-app/tree/main/products/files) | Complete native UI/library/companion and shared business sources; build both executables with `just files-build`; OS keeps authority and index service |
+| [external Terminal](https://github.com/xiaoyu-work/clawos-app/tree/main/products/terminal) | Complete native terminal UI/MCP/resources; `just terminal-build`; OS keeps snapshots, fixed desktop activation and process authority |
 
 ## Dependencies
 
@@ -54,6 +55,14 @@ dependencies and resolves only SDK/runtime from this OS checkout. Normal
 build/install keeps its executable, desktop identity, resources and grants.
 The product's unit/process tests own descriptor/resource and UI/MCP coverage;
 OS tests retain filesystem, AI and fixed desktop-target authority coverage.
+
+`just terminal-build` prepares `build/native-apps/cosmic-term` from the same
+immutable pin. Its native MCP embeds product-owned bounded command/PATH logic
+while OS policy and the native Host sandbox retain authority. New Window and
+MCP launch use the fixed OS Terminal target under `proc.spawn:cosmic-term`.
+Interactive PTYs, native configuration and the separate `exec` registry are
+not consolidated or copied. Original native renderer/toolkit dependencies,
+licenses, resources and installed executable/desktop IDs remain unchanged.
 
 Bundled apps launch Ask Claw through `cos_runtime::ask_claw`, with only typed
 app-specific context adapters in their local `claw_glue` modules. The runtime

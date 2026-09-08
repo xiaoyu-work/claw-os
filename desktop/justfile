@@ -4,9 +4,10 @@ make := `which make`
 launcher := '../build/native-apps/cosmic-launcher/justfile'
 editor := '../build/native-apps/cosmic-edit/justfile'
 files := '../build/native-apps/cosmic-files/justfile'
+terminal := '../build/native-apps/cosmic-term/justfile'
 
 prepare-native-apps:
-    if [ "${CLAW_NATIVE_APPS_PREPARED:-0}" = 1 ]; then test -f {{ launcher }} && test -f {{ editor }} && test -f {{ files }}; else python3 ../scripts/app_sources.py --native; fi
+    if [ "${CLAW_NATIVE_APPS_PREPARED:-0}" = 1 ]; then test -f {{ launcher }} && test -f {{ editor }} && test -f {{ files }} && test -f {{ terminal }}; else python3 ../scripts/app_sources.py --native; fi
 
 launcher-build: prepare-native-apps
     {{ just }} --justfile {{ launcher }} build-release --locked
@@ -16,6 +17,9 @@ editor-build: prepare-native-apps
 
 files-build: prepare-native-apps
     {{ just }} --justfile {{ files }} build-release --locked
+
+terminal-build: prepare-native-apps
+    {{ just }} --justfile {{ terminal }} build-release --locked
 
 [default]
 build: prepare-native-apps
@@ -43,7 +47,7 @@ build: prepare-native-apps
     {{ make }} -C settings-daemon all
     {{ just }} session/build-release
     {{ just }} store/build-release
-    {{ just }} term/build-release
+    {{ just }} terminal-build
     {{ make }} -C wallpapers all
     {{ make }} -C workspaces all
     {{ just }} launcher-backend/build-release
@@ -72,7 +76,7 @@ install rootdir="" prefix="/usr/local": build
     {{ make }} -C settings-daemon install DESTDIR={{rootdir}} prefix={{prefix}}
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} session/install
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} store/install
-    {{ just }} rootdir={{rootdir}} prefix={{prefix}} term/install
+    {{ just }} --justfile {{ terminal }} rootdir={{rootdir}} prefix={{prefix}} install
     {{ make }} -C wallpapers install DESTDIR={{rootdir}} prefix={{prefix}}
     {{ make }} -C workspaces install DESTDIR={{rootdir}} prefix={{prefix}}
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} launcher-backend/install
@@ -114,7 +118,7 @@ clean:
     rm -rf settings-daemon/target
     rm -rf session/target
     {{ just }} store/clean
-    {{ just }} term/clean
+    rm -rf ../build/native-apps/cosmic-term/target
     {{ make }} -C wallpapers clean
     rm -rf workspaces/target
     {{ just }} launcher-backend/clean

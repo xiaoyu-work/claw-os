@@ -12,7 +12,7 @@
 #   cos-agent-bridge       — desktop/agent,         target/release/cos-agent-bridge
 #   cosmic-files           — build/native-apps/cosmic-files, target/release/cosmic-files
 #   cosmic-edit            — build/native-apps/cosmic-edit, target/release/cosmic-edit
-#   cosmic-term            — desktop/term,          target/release/cosmic-term
+#   cosmic-term            — build/native-apps/cosmic-term, target/release/cosmic-term
 #   cosmic-initial-setup   — desktop/initial-setup, target/release/cosmic-initial-setup
 #
 # Options:
@@ -71,7 +71,7 @@ target_spec() {
     cos-agent-bridge)      echo "desktop/agent|cos-agent-bridge|/usr/bin/cos-agent-bridge" ;;
     cosmic-files)          echo "build/native-apps/cosmic-files|cosmic-files|/usr/bin/cosmic-files" ;;
     cosmic-edit)           echo "build/native-apps/cosmic-edit|cosmic-edit|/usr/bin/cosmic-edit" ;;
-    cosmic-term)           echo "desktop/term|cosmic-term|/usr/bin/cosmic-term" ;;
+    cosmic-term)           echo "build/native-apps/cosmic-term|cosmic-term|/usr/bin/cosmic-term" ;;
     cosmic-initial-setup)  echo "desktop/initial-setup|cosmic-initial-setup|/usr/bin/cosmic-initial-setup" ;;
     *) echo "" ;;
   esac
