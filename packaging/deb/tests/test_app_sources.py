@@ -239,12 +239,15 @@ def test_native_manual_image_and_asset_build_paths_agree():
     cargo = (applets / "cosmic-applets/Cargo.toml").read_text()
     assert '../../../build/native-apps/claw-applet-calendar' in cargo
     assert '../../../build/native-apps/claw-applet-clipboard' in cargo
+    assert '../../../build/native-apps/claw-applet-widget-rail' in cargo
     just = (applets / "justfile").read_text()
     assert 'build-debug *args: prepare-apps' in just
     assert 'python3 ../../scripts/app_sources.py --native' in just
     assert "(_install_icons calendar-src)" in just
     assert "_install_calendar" in just.split("install:", 1)[1]
     assert "_install_clipboard" in just.split("install:", 1)[1]
+    assert "_install_widget_rail" in just.split("install:", 1)[1]
+    assert "test -f {{ widget-rail-src }}/Cargo.toml" in just
     assert "test -f {{ clipboard-src }}/Cargo.toml" in just
     script = (ROOT / "rootfs/features/desktop/install.sh").read_text()
     assert 'CHROOT_NATIVE_APPS="$ROOTFS/build/build/native-apps"' in script
@@ -256,11 +259,13 @@ def test_native_manual_image_and_asset_build_paths_agree():
     ).read_text()
 
 
-@pytest.mark.parametrize("product", ["calendar", "clipboard"])
-def test_external_desktop_app_stays_out_of_agent_package(locked_source, tmp_path, product):
+@pytest.mark.parametrize(("product", "app_id"), [
+    ("calendar", "panel-calendar"), ("clipboard", "panel-clipboard"),
+    ("desktop-widgets", "widget-rail"),
+])
+def test_external_desktop_app_stays_out_of_agent_package(locked_source, tmp_path, product, app_id):
     root, lock = locked_source
     upstream = Path(lock["repository"])
-    app_id = f"panel-{product}"
     package = upstream / "products" / product
     app = package / "apps" / app_id
     app.mkdir(parents=True)

@@ -78,6 +78,12 @@ The shell injects its history-only policy callback through the shared policy
 service, without a Widget Rail dependency or selection-grant expansion.
 The existing `edit-paste-symbolic` icon and CopyQ behavior are unchanged;
 CopyQ history and Wayland selection remain separate backends.
+The complete Widget Rail UI, translations, desktop entry and UI tests live in
+the [Desktop Widgets product](https://github.com/xiaoyu-work/clawos-app/tree/main/products/desktop-widgets).
+The shell injects independent Calendar/task/telemetry callbacks. Shared OS
+services retain policy, read-only task collection and telemetry sampling;
+Agent Activity's UI and task mutations do not move. The rail keeps its original
+visuals, refresh/error states, grants and desktop package identity.
 Applet `just build-*` prepares the exact `packaging/apps.lock.json` source
 under ignored `build/native-apps` before compiling. Image builds prepare it on
 the host and bind the generated inputs into the chroot. The existing toolkit

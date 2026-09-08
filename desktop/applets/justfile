@@ -20,6 +20,7 @@ metainfo-src := 'data' / metainfo
 metainfo-dst := clean(rootdir / prefix) / 'share' / 'metainfo' / metainfo
 calendar-src := '../../build/native-apps/claw-applet-calendar'
 clipboard-src := '../../build/native-apps/claw-applet-clipboard'
+widget-rail-src := '../../build/native-apps/claw-applet-widget-rail'
 
 default: build-release
 
@@ -29,7 +30,7 @@ build-debug *args: prepare-apps
 
 # Image builds mount inputs already prepared and verified on the host.
 prepare-apps:
-    if [ "${CLAW_NATIVE_APPS_PREPARED:-0}" = 1 ]; then test -f {{ calendar-src }}/Cargo.toml && test -f {{ clipboard-src }}/Cargo.toml; else python3 ../../scripts/app_sources.py --native; fi
+    if [ "${CLAW_NATIVE_APPS_PREPARED:-0}" = 1 ]; then test -f {{ calendar-src }}/Cargo.toml && test -f {{ clipboard-src }}/Cargo.toml && test -f {{ widget-rail-src }}/Cargo.toml; else python3 ../../scripts/app_sources.py --native; fi
 
 # Compiles with release profile
 build-release *args: (build-debug '--release' args)
@@ -59,6 +60,8 @@ _install_calendar: (_install_icons calendar-src) (_install_desktop targetdir + '
 # Clipboard uses the shared edit-paste-symbolic icon, not product-local icons.
 _install_clipboard: (_install_desktop targetdir + '/xdgen/com.clawos.AppletClipboard.desktop') (_link_applet 'claw-applet-clipboard')
 
+_install_widget_rail: (_install_desktop targetdir + '/xdgen/com.clawos.AppletWidgetRail.desktop') (_link_applet 'claw-applet-widget-rail')
+
 _install_button id name: (_install_icons name) (_install_desktop targetdir + '/xdgen/' + id + '.desktop')
 
 # The branding button also ships the entry it presents. `Name=ClawOS` is a
@@ -87,7 +90,7 @@ _install_status_notifier_watcher:
     install -Dm0644 cosmic-applet-status-area/data/com.clawos.StatusNotifierWatcher.service {{ libdir }}/systemd/user/com.clawos.StatusNotifierWatcher.service
 
 # Installs files into the system
-install: (_install_bin 'cosmic-applets') (_link_applet 'cosmic-panel-button') (_install_applet 'com.clawos.AppList' 'cosmic-app-list') (_install_default_schema 'cosmic-app-list') (_install_applet 'com.clawos.AppletA11y' 'cosmic-applet-a11y') (_install_applet 'com.clawos.AppletAgentActivity' 'claw-applet-agent-activity') (_install_applet 'com.clawos.AppletApprovalGate' 'claw-applet-approval-gate') _install_calendar _install_clipboard (_install_applet 'com.clawos.AppletWidgetRail' 'claw-applet-widget-rail') (_install_applet 'com.clawos.AppletAudio' 'cosmic-applet-audio') (_install_applet 'com.clawos.AppletInputSources' 'cosmic-applet-input-sources') (_install_applet 'com.clawos.AppletBattery' 'cosmic-applet-battery') (_install_default_schema 'cosmic-applet-battery') (_install_applet 'com.clawos.AppletBluetooth' 'cosmic-applet-bluetooth') (_install_applet 'com.clawos.AppletMinimize' 'cosmic-applet-minimize') (_install_applet 'com.clawos.AppletNetwork' 'cosmic-applet-network') (_install_applet 'com.clawos.AppletNotifications' 'cosmic-applet-notifications') (_install_applet 'com.clawos.AppletPower' 'cosmic-applet-power') (_install_applet 'com.clawos.AppletStatusArea' 'cosmic-applet-status-area') (_install_applet 'com.clawos.AppletTiling' 'cosmic-applet-tiling') (_install_applet 'com.clawos.AppletTime' 'cosmic-applet-time') (_install_applet 'com.clawos.AppletWorkspaces' 'cosmic-applet-workspaces') _install_brand_button _install_app_library_button _install_launcher_button _install_dock_divider (_install_button 'com.clawos.PanelWorkspacesButton' 'cosmic-panel-workspaces-button') _install_metainfo _install_status_notifier_watcher
+install: (_install_bin 'cosmic-applets') (_link_applet 'cosmic-panel-button') (_install_applet 'com.clawos.AppList' 'cosmic-app-list') (_install_default_schema 'cosmic-app-list') (_install_applet 'com.clawos.AppletA11y' 'cosmic-applet-a11y') (_install_applet 'com.clawos.AppletAgentActivity' 'claw-applet-agent-activity') (_install_applet 'com.clawos.AppletApprovalGate' 'claw-applet-approval-gate') _install_calendar _install_clipboard _install_widget_rail (_install_applet 'com.clawos.AppletAudio' 'cosmic-applet-audio') (_install_applet 'com.clawos.AppletInputSources' 'cosmic-applet-input-sources') (_install_applet 'com.clawos.AppletBattery' 'cosmic-applet-battery') (_install_default_schema 'cosmic-applet-battery') (_install_applet 'com.clawos.AppletBluetooth' 'cosmic-applet-bluetooth') (_install_applet 'com.clawos.AppletMinimize' 'cosmic-applet-minimize') (_install_applet 'com.clawos.AppletNetwork' 'cosmic-applet-network') (_install_applet 'com.clawos.AppletNotifications' 'cosmic-applet-notifications') (_install_applet 'com.clawos.AppletPower' 'cosmic-applet-power') (_install_applet 'com.clawos.AppletStatusArea' 'cosmic-applet-status-area') (_install_applet 'com.clawos.AppletTiling' 'cosmic-applet-tiling') (_install_applet 'com.clawos.AppletTime' 'cosmic-applet-time') (_install_applet 'com.clawos.AppletWorkspaces' 'cosmic-applet-workspaces') _install_brand_button _install_app_library_button _install_launcher_button _install_dock_divider (_install_button 'com.clawos.PanelWorkspacesButton' 'cosmic-panel-workspaces-button') _install_metainfo _install_status_notifier_watcher
 
 # Vendor Cargo dependencies locally
 vendor:

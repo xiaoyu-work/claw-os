@@ -863,6 +863,7 @@ name = "claw-applet-agent-activity"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "claw-applet-services",
  "i18n-embed",
  "i18n-embed-fl",
  "libcosmic",
@@ -935,19 +936,13 @@ dependencies = [
 name = "claw-applet-widget-rail"
 version = "0.1.0"
 dependencies = [
- "claw-applet-agent-activity",
- "claw-applet-services",
  "i18n-embed",
  "i18n-embed-fl",
  "jiff",
  "libcosmic",
  "rust-embed",
- "serde",
- "serde_json",
  "tokio",
  "tracing",
- "tracing-log",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -1470,6 +1465,7 @@ dependencies = [
  "cosmic-applet-workspaces",
  "cosmic-panel-button",
  "libcosmic",
+ "tokio",
  "tracing",
  "tracing-log",
  "tracing-subscriber",

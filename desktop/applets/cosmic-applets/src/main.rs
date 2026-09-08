@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+mod widget_rail;
 
 fn main() -> cosmic::iced::Result {
     tracing_subscriber::fmt().with_env_filter("warn").init();
@@ -55,7 +56,7 @@ fn main() -> cosmic::iced::Result {
             })
         }),
         "claw-applet-clipboard" => claw_applet_clipboard::run(clipboard_policy),
-        "claw-applet-widget-rail" => claw_applet_widget_rail::run(),
+        "claw-applet-widget-rail" => claw_applet_widget_rail::run(widget_rail::providers()),
         "cosmic-panel-button" => cosmic_panel_button::run(),
         _ => Ok(()),
     }

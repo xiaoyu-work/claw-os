@@ -5,6 +5,7 @@ fn main() {
     println!("cargo:rerun-if-changed=../i18n");
     println!("cargo:rerun-if-changed=../../../build/native-apps/claw-applet-calendar/i18n");
     println!("cargo:rerun-if-changed=../../../build/native-apps/claw-applet-clipboard/i18n");
+    println!("cargo:rerun-if-changed=../../../build/native-apps/claw-applet-widget-rail/i18n");
     let ctx = Context::new("../i18n/", "desktop_entries").unwrap();
     let calendar_ctx = Context::new(
         "../../../build/native-apps/claw-applet-calendar/i18n/",
@@ -18,6 +19,10 @@ fn main() {
         .parent()
         .expect("cosmic-applets is a direct workspace member")
         .to_path_buf();
+    let widget_rail_ctx = Context::new(
+        "../../../build/native-apps/claw-applet-widget-rail/i18n/",
+        "desktop_entries",
+    ).unwrap();
     let target_dir = env::var_os("CARGO_TARGET_DIR")
         .map(PathBuf::from)
         .map(|path| {
@@ -179,7 +184,7 @@ fn main() {
     ]
     .into_iter()
     .map(|(id, name, comment, keywords)| {
-        let template_path = if matches!(name, "claw-applet-calendar" | "claw-applet-clipboard") {
+        let template_path = if matches!(name, "claw-applet-calendar" | "claw-applet-clipboard" | "claw-applet-widget-rail") {
             format!("../../../build/native-apps/{name}/data/{id}.desktop")
         } else {
             format!("../{name}/data/{id}.desktop")
@@ -193,6 +198,7 @@ fn main() {
         let context = match name {
             "claw-applet-calendar" => &calendar_ctx,
             "claw-applet-clipboard" => &clipboard_ctx,
+            "claw-applet-widget-rail" => &widget_rail_ctx,
             _ => &ctx,
         };
         (id, app.expand_desktop(&template_path, context).unwrap())

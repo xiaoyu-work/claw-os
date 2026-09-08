@@ -103,6 +103,13 @@ The following files at the root of `desktop/` came from
 
 ## License obligations
 
+The first-party GPL-3.0-only Widget Rail UI has moved to the
+[Desktop Widgets product](https://github.com/xiaoyu-work/clawos-app/tree/main/products/desktop-widgets),
+including the original applet license, SPDX notices, translations, desktop
+entry and UI tests. OS shared policy/data providers remain here. The immutable
+`packaging/apps.lock.json` pin supplies corresponding native source for linked
+shell builds; the original COSMIC applet provenance is unchanged.
+
 This vendored tree contains GPL-3.0 code (most components), MPL-2.0
 code (`toolkit/`, `bg/`, etc.), and a few MIT/Apache-2.0 crates.
 Distributing any binary built from this tree requires offering the

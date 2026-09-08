@@ -22,7 +22,7 @@ shared build helpers.
 | `lib/image-identity.sh` | Image user/identity assertions |
 | `lib/git-readonly.sh` | Read-only Git wrapper for privileged builds |
 | `app_sources.py` | Resolve the immutable App repository pin and stage product-owned package assets |
-| `app_sources.py --native` | Validate and refresh product-declared native libraries/assets (Calendar and Clipboard) at stable ignored build paths from the immutable pin |
+| `app_sources.py --native` | Validate and refresh product-declared native libraries/assets (Calendar, Clipboard and Widget Rail) at stable ignored build paths from the immutable pin |
 
 ## Dependencies
 

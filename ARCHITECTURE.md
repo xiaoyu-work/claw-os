@@ -88,16 +88,20 @@ Recoll-backed `docs` tools, explicit-provider Browser `search` and headless
 extension now live in the Browser product too. The reusable `cos-browser`
 engine and privileged attached-browser provider remain here.
 
-The Calendar and Clipboard UI libraries, localization and assets are materialized from the
+The Calendar, Clipboard and Widget Rail UI libraries, localization and assets are materialized from the
 same App source pin into ignored `build/native-apps` by
 `scripts/app_sources.py --native`. Manual applet builds prepare these inputs;
 image builds bind the prepared tree into the chroot. The `cosmic-applets`
 host links these libraries against the existing forked toolkit and injects
-Calendar's typed agenda callback and Clipboard's history policy callback.
-Shared read-only Calendar access and policy checks
-live in `desktop/applets/claw-applet-services`, not in either App. Widget
-Rail consumes that library independently. `panel-calendar` and `panel-clipboard` remain owned by
-the desktop Debian package, with its launcher identity and narrow grant
+Calendar's typed agenda callback, Clipboard's history policy callback and Widget
+Rail's typed Calendar/task/system data callbacks. Shared read-only Calendar,
+task-list and telemetry providers and policy checks live in
+`desktop/applets/claw-applet-services`, not in an App. Agent Activity shares
+only the task-list provider; task mutations and Agent execution remain OS-owned.
+Widget Rail's original telemetry fallback and process-local sampling deltas
+remain in the OS. No new state store or cross-App call is introduced.
+`panel-calendar`, `panel-clipboard` and `widget-rail` remain owned by the desktop
+Debian package, with original launcher identities and independent grants
 unchanged; installed updates remain signed APT packages.
 The Terminal product also owns the `exec` App source; core process authority
 and sandbox enforcement remain in the OS.

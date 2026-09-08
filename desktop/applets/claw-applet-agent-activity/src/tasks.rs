@@ -8,43 +8,7 @@
 
 use serde::Deserialize;
 use std::process::Command;
-use std::time::Duration;
-use tokio::{process::Command as TokioCommand, time::timeout};
-
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(3);
-
-/// One row in the `cos agent ls` response.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-pub struct Task {
-    pub id: String,
-    #[serde(default)]
-    pub purpose: String,
-    pub status: String,
-    #[serde(default)]
-    pub creator_runtime: Option<String>,
-    pub created_at: String,
-    #[serde(default)]
-    pub ended_at: Option<String>,
-    #[serde(default)]
-    pub lease: Option<LeaseInfo>,
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-pub struct LeaseInfo {
-    pub pid: u32,
-    #[serde(default)]
-    pub runtime: Option<String>,
-    pub started_at: String,
-    pub heartbeat_at: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct LsEnvelope {
-    #[serde(default)]
-    n: usize,
-    #[serde(default)]
-    tasks: Vec<Task>,
-}
+pub use claw_applet_services::tasks::{LeaseInfo, LoadError, Task, load_tasks, load_tasks_async};
 
 /// Fields returned by `cos agent show <id>` that we surface in the
 /// detail card. Anything else in the envelope is ignored — adding
@@ -75,9 +39,6 @@ pub struct MutationSummary {
     pub count: usize,
 }
 
-#[derive(Debug, Clone)]
-pub struct LoadError(pub String);
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum AgentMode {
     Local,
@@ -85,39 +46,6 @@ pub enum AgentMode {
     Unconfigured,
     #[default]
     Unknown,
-}
-
-pub fn load_tasks() -> Result<Vec<Task>, LoadError> {
-    let output = Command::new(cos_binary())
-        .args(["agent", "ls"])
-        .output()
-        .map_err(|e| LoadError(format!("spawn cos: {e}")))?;
-    parse_tasks_output(output)
-}
-
-pub async fn load_tasks_async() -> Result<Vec<Task>, LoadError> {
-    let mut command = TokioCommand::new(cos_binary());
-    command.args(["agent", "ls"]).kill_on_drop(true);
-    let output = timeout(COMMAND_TIMEOUT, command.output())
-        .await
-        .map_err(|_| LoadError("cos agent ls timed out".to_string()))?
-        .map_err(|e| LoadError(format!("spawn cos: {e}")))?;
-    parse_tasks_output(output)
-}
-
-fn parse_tasks_output(output: std::process::Output) -> Result<Vec<Task>, LoadError> {
-    if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(LoadError(if err.is_empty() {
-            format!("cos agent ls exited with {}", output.status)
-        } else {
-            err
-        }));
-    }
-    let envelope: LsEnvelope = serde_json::from_slice(&output.stdout)
-        .map_err(|e| LoadError(format!("parse cos agent ls output: {e}")))?;
-    debug_assert_eq!(envelope.n, envelope.tasks.len());
-    Ok(envelope.tasks)
 }
 
 /// Read the configured LLM provider through the public `cos` surface.

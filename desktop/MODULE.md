@@ -20,9 +20,9 @@ component crates plus Claw-specific agent bridges and applets.
 | `README.md` | Component map, build instructions, product-fork boundary |
 | `PROVENANCE.md` | Upstream origin and revision per component |
 | `justfile` | Desktop build/install orchestration |
-| `applets/claw-applet-services/` | Shared policy and read-only Calendar provider, consumed independently by Widget Rail and the Calendar host adapter |
-| `../scripts/app_sources.py --native` | Materialize pinned product-declared Calendar/Clipboard native UI and assets under ignored build storage before direct Cargo use |
-| `applets/cosmic-applets/` | Host native libraries; inject Calendar agenda and Clipboard history-policy callbacks, and generate product-owned desktop entries |
+| `applets/claw-applet-services/` | Shared policy, read-only Calendar/task-list providers and system telemetry; no UI/App dependencies |
+| `../scripts/app_sources.py --native` | Materialize pinned product-declared Calendar/Clipboard/Widget Rail native UI and assets under ignored build storage before direct Cargo use |
+| `applets/cosmic-applets/` | Host native libraries; inject Calendar agenda, Clipboard history-policy and Widget Rail typed data callbacks, and generate product-owned desktop entries |
 | `agent/` | Native agent bridge and UI |
 | `agent/protocol/` | Versioned desktop Agent HTTP/SSE presentation contract |
 | `agent/ui/MODULE.md` | Agent UI state ownership, effects, views, and test boundaries |

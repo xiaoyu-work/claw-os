@@ -173,6 +173,13 @@ groups, not a proposal to replace 75 Apps with 28 new App packages.
 | Events and audit | `event-center`, `log` | Query surfaces over distinct event/audit authorities; do not merge them into notification storage. |
 | Agent and shell UI | `widget-rail` | Presentation of existing product/task state, not another workflow or state owner. |
 
+Widget Rail's complete native presentation now lives in the external
+`products/desktop-widgets` product. This preserves the Agent/shell role above:
+typed OS providers own Calendar/task/telemetry access and authorization, while
+the product owns the original rail UI/resources/tests. It does not transfer
+Agent execution or introduce a new data store. Visual/full-image acceptance
+remains separate from this native source/build migration.
+
 ### Shared capabilities
 
 | Target | Starting App IDs | Implementation disposition |

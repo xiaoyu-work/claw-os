@@ -21,7 +21,6 @@ members = [
     "claw-applet-agent-activity",
     "claw-applet-approval-gate",
     "claw-applet-services",
-    "claw-applet-widget-rail",
     "cosmic-applets-config",
 ]
 

@@ -5,6 +5,7 @@ edition = "2024"
 license = "GPL-3.0-only"
 
 [dependencies]
+claw-applet-services = { path = "../claw-applet-services" }
 anyhow.workspace = true
 i18n-embed-fl.workspace = true
 i18n-embed.workspace = true
