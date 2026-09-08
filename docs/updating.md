@@ -61,6 +61,13 @@ missing runtime libraries no longer enable unguarded standalone SMTP. The
 Agent package also installs the shared `canonical_argv.py` module with the
 Python runtime so legacy packaged entrypoints can resolve their parser.
 
+Text Editor's complete native source and descriptor are now built from the
+same immutable App repository pin. The signed `claw-os-desktop` package still
+owns `/usr/bin/cosmic-edit`, `/usr/lib/cos/apps/cosmic-edit` and the
+`com.clawos.Edit` desktop entry/resources. No user documents, editor settings,
+permissions or model credentials are moved, and no separate runtime updater
+is introduced.
+
 Updates only ever move forward. An older Claw OS release stays validly signed
 forever, so the signature alone cannot tell a current release from a superseded
 one; see [Downgrade protection](#downgrade-protection) for what stops one being

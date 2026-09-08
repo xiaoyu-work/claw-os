@@ -10,7 +10,9 @@ fn parse(s: &str) -> Manifest {
 
 #[test]
 fn editor_tools_derive_only_owned_service_capabilities() {
-    let manifest = parse(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../apps/cosmic-edit/app.json")));
+    let manifest = parse(
+        &std::fs::read_to_string(app_sources::app_dir("cosmic-edit").join("app.json")).unwrap(),
+    );
     let empty = BTreeMap::new();
     let open = manifest.resolve_mcp_tool_needs("edit.open", &empty).unwrap();
     assert_eq!(open.into_iter().flatten().collect::<Vec<_>>(),

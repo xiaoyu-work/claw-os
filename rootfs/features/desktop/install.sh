@@ -184,9 +184,8 @@ fi
 #    inside the chroot (../../crates from /build/desktop/<x> →
 #    /build/crates).
 #
-#    Likewise desktop/{term,edit,files}/Cargo.toml depend on
-#    `path = "../../cos-runtime/rust"` for the internal SDK that wraps
-#    every `cos app <id> <verb>` call (audit + caps + snapshot). Without
+#    Likewise desktop/{term,files} and composed native Apps depend on
+#    cos-runtime/rust for the internal controlled-service SDK. Without
 #    this mount cargo cannot resolve cos-runtime inside the chroot and
 #    the desktop build fails before producing a single binary.
 #

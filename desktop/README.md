@@ -39,7 +39,6 @@ desktop/
 ├── initial-setup/          First-run wizard
 │
 ├── files/                  File manager
-├── edit/                   Text editor
 ├── term/                   Terminal
 ├── store/                  App store
 ├── settings/               System settings
@@ -87,6 +86,14 @@ Applet `just build-*` prepares the exact `packaging/apps.lock.json` source
 under ignored `build/native-apps` before compiling. Image builds prepare it on
 the host and bind the generated inputs into the chroot. The existing toolkit
 patches and desktop Debian package ownership are preserved.
+
+The complete [Text Editor product](https://github.com/xiaoyu-work/clawos-app/tree/main/products/editor)
+is external too. `just editor-build` materializes the pinned native source
+under `build/native-apps/cosmic-edit` and builds it with its original locked
+toolkit/file-chooser graph and OS SDK/runtime. Normal desktop install retains
+`/usr/bin/cosmic-edit`, `com.clawos.Edit`, localized resources and desktop
+package ownership. Its UI and MCP use controlled filesystem/desktop services
+and SDK AI; the product no longer invokes the Files, Terminal or Document Apps.
 
 The desktop is built from this tree by `rootfs/features/desktop/install.sh`
 as part of `rootfs/build.sh`. Manual local build:

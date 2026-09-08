@@ -263,6 +263,7 @@ def test_native_manual_image_and_asset_build_paths_agree():
     ("calendar", "panel-calendar"), ("clipboard", "panel-clipboard"),
     ("desktop-widgets", "widget-rail"),
     ("launcher", "cosmic-launcher"),
+    ("editor", "cosmic-edit"),
 ])
 def test_external_desktop_app_stays_out_of_agent_package(locked_source, tmp_path, product, app_id):
     root, lock = locked_source
@@ -340,19 +341,58 @@ def test_duplicate_native_exports_are_rejected(tmp_path, monkeypatch):
         sources.prepare_native()
 
 
-def test_standalone_launcher_uses_external_source_and_matching_chroot_layout():
+@pytest.mark.parametrize(("product", "component"), [
+    ("launcher", "launcher"), ("editor", "edit"),
+])
+def test_standalone_app_uses_external_source_and_matching_chroot_layout(product, component):
     just = (ROOT / "desktop/justfile").read_text()
-    assert "launcher := '../build/native-apps/cosmic-launcher/justfile'" in just
-    assert "launcher-build: prepare-native-apps" in just
+    assert f"{product} := '../build/native-apps/cosmic-{component}/justfile'" in just
+    assert f"{product}-build: prepare-native-apps" in just
+    assert f"test -f {{{{ {product} }}}}" in just
     assert "[default]\nbuild:" in just
-    assert "{{ just }} --justfile {{ launcher }} build-release --locked" in just
-    assert "{{ just }} --justfile {{ launcher }} rootdir={{rootdir}} prefix={{prefix}} install" in just
-    assert "{{ just }} launcher/build-release" not in just
+    assert "build: prepare-native-apps\n    #!/usr/bin/env bash" in just
+    assert "export CLAW_NATIVE_APPS_PREPARED=1" in just
+    assert "{{ just }} --justfile {{ " + product + " }} build-release --locked" in just
+    assert "{{ just }} --justfile {{ " + product + " }} rootdir={{rootdir}} prefix={{prefix}} install" in just
+    assert "{{ just }} " + component + "/build-release" not in just
     script = (ROOT / "rootfs/features/desktop/install.sh").read_text()
     assert 'CHROOT_SRC="$ROOTFS/build/desktop"' in script
     assert "cd /build/desktop" in script
     assert "/build/desktop-src" not in script
-    assert not (ROOT / "desktop/launcher").exists()
-    assert not (ROOT / "apps/cosmic-launcher").exists()
-    assert "cosmic-launcher" in sources.read_lock()["apps"]
-    assert "cosmic-launcher" in sources.desktop_apps()
+    assert not (ROOT / "desktop" / component).exists()
+    assert not (ROOT / "apps" / f"cosmic-{component}").exists()
+    assert f"cosmic-{component}" in sources.read_lock()["apps"]
+    assert f"cosmic-{component}" in sources.desktop_apps()
+
+
+@pytest.mark.skipif(shutil.which("just") is None, reason="desktop just runner unavailable")
+def test_desktop_build_prepares_once_and_propagates_prepared_inputs(tmp_path):
+    desktop = tmp_path / "desktop"
+    desktop.mkdir()
+    shutil.copyfile(ROOT / "desktop/justfile", desktop / "justfile")
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "app_sources.py").write_text(
+        "from pathlib import Path\n"
+        "root = Path(__file__).resolve().parents[1]\n"
+        "with (root / 'prepared').open('a') as log: log.write('prepared\\n')\n"
+    )
+    runner = tmp_path / "runner"
+    runner.write_text(
+        "#!/bin/sh\n"
+        'test "$CLAW_NATIVE_APPS_PREPARED" = 1 || exit 97\n'
+        'printf "%s\\n" "$*" >> "$0.calls"\n'
+    )
+    runner.chmod(0o755)
+    env = os.environ.copy()
+    env.pop("CLAW_NATIVE_APPS_PREPARED", None)
+    subprocess.run(
+        ["just", "--justfile", str(desktop / "justfile"),
+         f"just={runner}", f"make={runner}", "build"],
+        check=True, env=env, capture_output=True, text=True,
+    )
+    assert (tmp_path / "prepared").read_text() == "prepared\n"
+    calls = (tmp_path / "runner.calls").read_text().splitlines()
+    assert calls.count("editor-build") == 1
+    assert calls.count("launcher-build") == 1
+    assert calls.count("applets/build-release") == 1

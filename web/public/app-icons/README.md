@@ -6,7 +6,7 @@ These are the same first-party icons shipped by the native Claw OS desktop:
 | --- | --- |
 | `agent.svg` | `rootfs/features/desktop/overlay/usr/share/icons/hicolor/scalable/apps/clawos-agent.svg` |
 | `files.svg` | `desktop/files/res/icons/hicolor/scalable/apps/com.clawos.Files.svg` |
-| `edit.svg` | `desktop/edit/res/icons/hicolor/scalable/apps/com.clawos.Edit.svg` |
+| `edit.svg` | [Editor product native resource](https://github.com/xiaoyu-work/clawos-app/blob/main/products/editor/native/cosmic-edit/res/icons/hicolor/scalable/apps/com.clawos.Edit.svg), pinned by `packaging/apps.lock.json` |
 | `store.svg` | `desktop/store/res/icons/hicolor/scalable/apps/com.clawos.Store.svg` |
 | `settings.svg` | `desktop/settings/resources/icons/scalable/apps/com.clawos.Settings.svg` |
 | `player.svg` | `desktop/player/res/icons/hicolor/scalable/apps/com.clawos.Player.svg` |

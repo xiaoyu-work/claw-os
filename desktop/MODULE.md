@@ -31,7 +31,7 @@ component crates plus Claw-specific agent bridges and applets.
 | `settings/`, `settings-daemon/` | System settings UI and services |
 | `toolkit/`, `text/`, `theme/` | Shared UI/rendering foundations |
 | [`clawos-app/products/mail`](https://github.com/xiaoyu-work/clawos-app/tree/main/products/mail) | External Mail product source and paired Firefox build dependency; not part of the COSMIC build |
-| `edit/src/mcp.rs`, `edit/src/claw_glue/ai.rs` | Editor App handlers use controlled filesystem/desktop primitives and SDK AI, never App intercalls; see `edit/README.md` |
+| [external Editor](https://github.com/xiaoyu-work/clawos-app/tree/main/products/editor) | Complete native UI/MCP/resources; controlled filesystem/desktop and SDK AI remain OS-provided; build with `just editor-build` |
 
 ## Dependencies
 
@@ -46,6 +46,13 @@ SDK/runtime and launcher-backend dependencies. Normal desktop build/install
 uses the same justfile and installs `/usr/bin/cosmic-launcher` for the packaged
 native descriptor. Its compiled-in product MCP backend uses the OS Python
 SDK and typed desktop launch service, never another App.
+
+`just editor-build` prepares `build/native-apps/cosmic-edit` from the same pin.
+It preserves the Editor's existing locked upstream toolkit/file-chooser
+dependencies and resolves only SDK/runtime from this OS checkout. Normal
+build/install keeps its executable, desktop identity, resources and grants.
+The product's unit/process tests own descriptor/resource and UI/MCP coverage;
+OS tests retain filesystem, AI and fixed desktop-target authority coverage.
 
 Bundled apps launch Ask Claw through `cos_runtime::ask_claw`, with only typed
 app-specific context adapters in their local `claw_glue` modules. The runtime

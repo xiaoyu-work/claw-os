@@ -72,6 +72,9 @@ resolved from the same immutable source pin by desktop package assembly;
 their complete product-owned native UIs are linked into `cosmic-applets`.
 The complete standalone Launcher source/resources are composed from that pin
 too; `cosmic-launcher` remains a desktop-package descriptor and executable.
+The complete native Editor is composed likewise; `cosmic-edit`, its localized
+desktop/metainfo files and icons retain desktop-package ownership. Editor's
+locked renderer/file-chooser graph is not replaced by the shell toolkit.
 Its Python MCP code is embedded at compilation and imports the packaged
 Agent SDK/runtime, already guaranteed by desktop → base → agent dependencies.
 `deb/claw-os-desktop/apps.list` remains the package-ownership authority.

@@ -112,6 +112,16 @@ desktop launch service instead of forwarding to another App. The normal UI
 still consumes the OS-owned `desktop/launcher-backend` library/service and
 forked toolkit. This move shares Python/native MCP business logic but does not
 unify UI-service catalog/history or change isolated App data/grants.
+The complete native Editor now lives in `clawos-app/products/editor` and is
+composed at `build/native-apps/cosmic-edit`. Its original locked upstream
+toolkit/file-chooser libraries are preserved; only SDK/runtime remain local
+OS dependencies. Native UI reload/save/New Window and buffer AI no longer
+invoke the Files, Terminal or Document Apps. They use the same controlled
+filesystem/fixed desktop/SDK AI boundaries as its seven MCP handlers.
+Filesystem scope enforcement, atomic writes, task-owned inverse snapshots,
+AI identity/consent/budget/audit and model providers remain OS-owned.
+`cosmic-edit` and its resources remain desktop-package assets with unchanged
+installed identity and user state.
 The Terminal product also owns the `exec` App source; core process authority
 and sandbox enforcement remain in the OS.
 The Containers product owns `container-manager` and its fourteen MCP handlers;

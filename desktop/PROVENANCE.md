@@ -37,7 +37,7 @@ upstream identifiers; rename them before any commercial release.
 | `applibrary/` | github.com/pop-os/cosmic-applibrary | `29972234789b` | GPL-3.0 |
 | `bg/` | github.com/pop-os/cosmic-bg | `b1ca4c180ab2` | MPL-2.0 |
 | `comp/` | github.com/pop-os/cosmic-comp | `b955789a4e79` | GPL-3.0 |
-| `edit/` | github.com/pop-os/cosmic-edit | `7bbe82ec3f2b` | GPL-3.0 |
+| [external Editor](https://github.com/xiaoyu-work/clawos-app/tree/main/products/editor/native) | github.com/pop-os/cosmic-edit | `7bbe82ec3f2b` | GPL-3.0-only; pinned through `packaging/apps.lock.json` |
 | `files/` | github.com/pop-os/cosmic-files | `accb9fd41866` | GPL-3.0 |
 | `greeter/` | github.com/pop-os/cosmic-greeter | `1047333fbb97` | GPL-3.0 |
 | `icons/` | github.com/pop-os/cosmic-icons | `2c697e8e97cf` | CC-BY-SA-4.0 |
