@@ -11,6 +11,11 @@ same composed rootfs for WSL, Docker, VM, ISO, Azure, and desktop targets.
 This document maps the source architecture. Image identity and packaging detail
 remain in [`docs/image-architecture.md`](docs/image-architecture.md).
 
+The [product-centric App redesign plan](docs/app-product-redesign.md) records
+the target ownership of bundled Apps, system capabilities and connectors.
+Its milestones are prospective; existing implementation boundaries below are
+not considered migrated until their complete UI/service/authority cutover.
+
 ## System Context
 
 ```text

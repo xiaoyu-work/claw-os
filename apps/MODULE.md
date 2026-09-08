@@ -14,6 +14,12 @@ Apps do not call other Apps, including through App-owned agents. Their shared
 workflow orchestrator is the built-in system Agent; Apps may use gated AI,
 controlled kernel/system services, and shared libraries.
 
+Follow the [product-centric redesign plan](../docs/app-product-redesign.md)
+before migrating another legacy directory. UI and MCP must share the owning
+product's business implementation; converting a forwarding wrapper to MCP
+alone does not complete a product migration. The plan maps all starting App
+identities to products, system capabilities or connectors.
+
 ## Responsibilities
 
 - Own every operation, argument, dependency, AI use, and capability need in

@@ -1,0 +1,183 @@
+# Product-Centric App Redesign
+
+## Status and scope
+
+This is the implementation plan for reorganizing the 75 bundled App identities
+present when this work began. It describes a target, not completed behavior.
+Existing broker, App Host, provenance, SDK, AI gate and system-service
+boundaries remain in use.
+
+The implementation unit is a working product boundary, not an old App
+directory. Each completed slice is committed and published separately.
+
+## Product contract
+
+An App owns a business domain, its account/object identities, state and
+operations. Human UI and Agent MCP are clients of the same business
+implementation. UI does not have to speak MCP, and MCP must not depend on a
+window being open.
+
+```text
+Human UI -----------+
+                    +--> product business interface --> product state
+Agent --> App MCP --+                  |
+                                      +--> controlled system services
+                                      +--> SDK AI gate
+```
+
+- Product identity, process identity and installation unit are different
+  concepts. A product may have several processes without duplicating its
+  accounts or authorization policy.
+- Sharing implementation does not merge grants. Each entry point and operation
+  has its own authenticated authority; an AI-only host does not inherit mailbox
+  deletion or account-management permissions.
+- Apps do not invoke other Apps, including through App-owned agents. The
+  system Agent coordinates cross-product workflows. Apps may use controlled
+  system services and shared libraries.
+- Filesystem, HTTP, execution, indexing and storage are reusable capabilities,
+  not alternate business Apps for Agent callers.
+- App manifests and system-service definitions remain their respective
+  contract authorities. Do not create a second hand-maintained operation
+  catalog for a UI transport.
+- One authoritative state source per domain does not mean one database for all
+  domains. Notifications, audit, context events and Agent memory stay separate.
+- A removed App ID has no runtime alias or fallback. Installed user data needs
+  an explicit migration/preservation decision, not deletion or indefinite dual
+  writes. Renamed identities require renewed or explicitly migrated consent,
+  not automatic inheritance of the union of old permissions.
+
+See [architecture](../ARCHITECTURE.md),
+[App development](app-development.md), and
+[extension provenance](extension-provenance.md) for the existing enforcement
+contracts.
+
+## Complete ownership map
+
+Each starting App ID occurs in exactly one row below. These are ownership
+groups, not a proposal to replace 75 Apps with 28 new App packages.
+
+### Business products
+
+| Target | Starting App IDs | Implementation disposition |
+| --- | --- | --- |
+| Mail | `email`, `mail-ai`, `gateway-email` | One mailbox/account and sending implementation; UI, MCP, AI assistance and restricted delivery adapter belong to that product. |
+| Calendar | `calendar`, `panel-calendar` | Calendar owns event identity, sync and reminder rules; the panel is a UI surface. |
+| Files | `cosmic-files`, `fs`, `docs` | Files owns the file-management experience; filesystem and file indexing become reusable services, not required App-to-App dependencies. |
+| Editor | `cosmic-edit` | UI and MCP share editing behavior and controlled filesystem/AI services. |
+| Browser | `web`, `browser-attached`, `search` | One product interface; isolated headless sessions and attached logged-in sessions are explicit, separately authorized modes, never automatic fallbacks. |
+| Terminal | `cosmic-term`, `exec` | Terminal owns terminal sessions; process execution is a system primitive. |
+| Store | `cosmic-store`, `pkg` | Shared software-management interface backed by the package transaction service. |
+| Media Player | `cosmic-player` | UI and MCP operate on the same playback/session state. |
+| Capture | `cosmic-screenshot` | Shared capture behavior with caller-specific authorization and user-interaction requirements. |
+| Backup and Recovery | `backup-center`, `system-snapshot` | One product surface, with distinct data-backup and whole-system recovery semantics and permissions. |
+| Containers | `container-manager` | Container-management domain with CLI/MCP and an optional console; a new GUI is not a prerequisite. |
+
+### Shell and system management
+
+| Target | Starting App IDs | Implementation disposition |
+| --- | --- | --- |
+| Launcher | `cosmic-launcher`, `launcher` | Shared application catalog, launch behavior and shell presentation. |
+| Notifications | `cosmic-notifications`, `notify` | Existing core Notification Service is authoritative; remove the separate App JSON store through an explicit state decision. |
+| Clipboard | `clipboard-manager`, `panel-clipboard` | One clipboard service and permission boundary, with panel presentation. |
+| Settings | `cosmic-settings`, `accessibility-manager`, `audio-manager`, `bluetooth-manager`, `camera-manager`, `display-manager`, `desktop-manager`, `location-manager`, `network-manager`, `power-manager`, `printer-manager`, `user-manager` | Settings organizes pages; independent system providers retain exact scopes. Do not create a super-privileged Settings process. |
+| Maintenance | `config-editor`, `systemd` | Typed configuration and service-management operations; no standalone forwarding Apps. |
+| Diagnostics | `hardware-center`, `crash-doctor`, `netdiag` | Hardware, crash and network diagnostics remain modular services consumed by diagnostics UI and Agent tools. |
+| Security | `security-center`, `firewall-manager`, `usb-guard` | Shared presentation, separate enforcement for security inspection, firewall and device authorization. |
+| Storage | `storage-manager` | Storage-management service with optional UI, not raw access to all product databases. |
+| Events and audit | `event-center`, `log` | Query surfaces over distinct event/audit authorities; do not merge them into notification storage. |
+| Agent and shell UI | `widget-rail` | Presentation of existing product/task state, not another workflow or state owner. |
+
+### Shared capabilities
+
+| Target | Starting App IDs | Implementation disposition |
+| --- | --- | --- |
+| Document engine | `doc` | Shared parsing and conversion; product-specific AI stays with the consuming product. |
+| Storage SDK | `db`, `kv` | Owner/App-scoped storage; not a global App database or Agent-memory substitute. |
+| HTTP | `net` | Controlled network interface with exact destination authority. |
+| AI gate/helpers | `summarize` | Shared AI capability used under the consuming product's identity and budget. |
+
+### Connectors
+
+| Target | Starting App IDs | Implementation disposition |
+| --- | --- | --- |
+| Messaging channels | `gateway-discord`, `gateway-dingtalk`, `gateway-googlechat`, `gateway-larksuite`, `gateway-matrix`, `gateway-mattermost`, `gateway-rocketchat`, `gateway-signal`, `gateway-slack`, `gateway-sms`, `gateway-teams`, `gateway-telegram`, `gateway-webex`, `gateway-whatsapp`, `gateway-zulip` | Signed, optional channel connectors; admit supported inbound messages through authenticated owner/sender binding, rate limits and replay controls before the system Agent. |
+| Notification/event delivery | `gateway-ntfy`, `gateway-pushover`, `gateway-webhook` | Restricted delivery adapters; reuse durable service leases, retries and acknowledgements instead of another notification database. |
+| Home integration | `gateway-homeassistant` | Device-control integration, not a chat transport. Do not invent a new GUI without a product requirement. |
+
+The additional `ffmpeg`, `libarchive`, `libreoffice` and `qpdf` adapters remain
+engine/provider integrations. The adapter template is not an installed App.
+Connector/adapter classification does not exempt code from package
+authentication, revocation, sandboxing or capability checks.
+
+## Open-source product ownership
+
+For products requiring deep UI or domain changes, prefer an in-repository
+source fork over a permanent parallel implementation outside the product.
+The existing [desktop fork](../desktop/README.md) and its
+[provenance record](../desktop/PROVENANCE.md) demonstrate the source layout,
+not a blanket license clearance for new imports.
+
+Before importing a product:
+
+1. Record the upstream source URL, immutable revision, source digest, license,
+   dependency licenses and applicable trademark restrictions.
+2. Preserve notices and license files; document local changes and source
+   distribution obligations for the actual imported components.
+3. Integrate a reproducible build and package/update path before replacing the
+   installed binary. Use the Linux filesystem for source/image builds.
+4. Name the security-update tracking and patch-import process. A product fork
+   may diverge from upstream features but must not abandon security fixes.
+
+Do not copy every library into the tree merely for visual uniformity. Engines
+that need no local modification can remain dependencies. External services and
+closed-source products retain their documented integration boundaries.
+
+Thunderbird source is not currently vendored: the repository currently ships
+an extension and a native host alongside distribution-provided Thunderbird.
+The source-fork milestone below must not be marked complete by an XPI rename,
+an upstream URL, or an unbuilt source download.
+
+## Sequenced implementation
+
+| Step | Status | Scope and exit condition |
+| --- | --- | --- |
+| P0 | Documented | Publish this ownership map and link it from maintained navigation. |
+| M1 | In progress | Establish the shared Mail AI business seam: all six existing UI/MCP operations call typed functions without argv translation; both entrances use one canonical installed package, reject malformed input before effects, and preserve authority, consent and AI accounting. |
+| M2 | Planned | Define the shared Mail account, folder, message, thread and draft model against the chosen upstream implementation. Prove UI and headless callers address the same account/object, and specify explicit provider selection and per-operation grants. |
+| M3 | Planned | Import the pinned Thunderbird product source needed for in-product integration, preserve provenance/licenses, and wire its source build, package output and security updates. Prove the packaged product runs; do not ship a second independent Agent mailbox client. |
+| M4 | Planned | Complete mailbox read/search/send and AI integration through the shared product backend. Consolidate SMTP delivery; cut over `email`, `mail-ai` and `gateway-email` to the canonical Mail identity atomically with manifests, discovery, launchers, extension identity, skills, packages, consent and data handling. Remove the old identities, not alias them. |
+| D1 | Planned | Converge Files/Editor/Launcher/Terminal/Store/Browser UI and Agent paths on their owning services; remove the remaining desktop App calls. Preserve browser mode isolation. |
+| S1 | Planned | Remove system forwarding Apps as their service contracts and UI/tool consumers are wired. Consolidate notifications using the existing durable service; retain audit/event separation. |
+| C1 | Planned | Introduce the connector lifecycle and migrate channels/delivery/home integration with signed packages, explicit sender ownership and deterministic delivery policy. |
+| F1 | Planned | Remove unused operation-to-argv bridges and obsolete identities, assets, manifests and package entries. Update the actual architecture/catalog and retire completed plan entries. |
+
+M1 deliberately keeps the current `mail-ai` identity until the M4 identity and
+data cutover can be complete. It is a preparatory shared-code slice, not an
+alias, a claim of unified mailbox state, or the final product organization.
+No new standalone "Agent email" product is introduced during that interval.
+
+M2 informs the internal changes in M3; upstream source inspection may happen
+during M2. Do not design a second mailbox engine first and merely attach the
+upstream UI afterward.
+
+## Acceptance and publication
+
+For each slice, trace UI/CLI/MCP callers, manifests, service providers,
+authority/audit, provenance, packaging and persistent state before editing.
+Use the narrowest existing runner covering the changed paths. Protocol work
+needs actual framed requests and responses, not only imports or `--probe`.
+UI changes require a real supported UI run before claiming their visual or
+interactive behavior is complete.
+
+Mail is complete only when a UI-selected message can be addressed through the
+same account/object model by MCP, AI output remains a draft until authorized
+to send, headless operations work without an open window, and the retired
+identities cannot still be discovered or invoked.
+
+A representative cross-product workflow is: the system Agent reads Mail,
+creates an event through Calendar, then uses the Notification Service. Mail
+does not acquire Calendar App invocation authority.
+
+Commit and push each complete slice to `main` using explicit paths. Preserve
+unrelated worktree changes. Do not publish a partial identity/package cutover
+as a completed product migration.

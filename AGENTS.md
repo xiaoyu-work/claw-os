@@ -53,6 +53,7 @@ editing additional surfaces.
 | MCP client/server integration | `core/src/agent/tools/mcp/`, `core/src/config.rs` | tool registry and agent lifecycle attachment |
 | Extension package provenance (App/Skill/MCP signing, trust roots, revocation) | `core/src/provenance/`, `docs/extension-provenance.md` | `core/src/apps.rs`, `core/src/agent/skills/loader.rs`, `core/src/agent/tools/mcp/discover.rs`, `packaging/deb/build-debs.sh` |
 | Python app operation | `apps/<id>/app.json`, `apps/<id>/main.py` | `test_main.py`, `cos_runtime.policy`, app lint |
+| Bundled App product boundary or source fork | `docs/app-product-redesign.md`, `apps/MODULE.md` | Product UI/backend, manifests, provenance/licenses, native launchers, account/state migration, packaging |
 | Adapter | `adapters/<id>/app.json`, `adapters/<id>/main.py` | adapter tests and external binary dependency |
 | App/SDK wire contract | `claw-os-sdk/wire/`, language SDK package | generated bindings, conformance tests, `publish-sdk-release.yml` |
 | Rootfs composition | `scripts/lib/image-profiles.sh`, `rootfs/build.sh`, `rootfs/features/` | target build script and package contents |
