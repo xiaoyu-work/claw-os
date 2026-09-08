@@ -21,6 +21,7 @@ shared build helpers.
 | `lib/package-version.sh` | Monotonic Debian package version |
 | `lib/image-identity.sh` | Image user/identity assertions |
 | `lib/git-readonly.sh` | Read-only Git wrapper for privileged builds |
+| `app_sources.py` | Resolve the immutable App repository pin and stage product-owned package assets |
 
 ## Dependencies
 
@@ -32,6 +33,7 @@ under sudo.
 
 ```bash
 bash -n scripts/*.sh scripts/lib/*.sh
+python3 -m pytest -q packaging/deb/tests/test_app_sources.py
 ```
 
 Also run the narrowest consuming target/package command.

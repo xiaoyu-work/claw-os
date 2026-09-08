@@ -1,9 +1,0 @@
-{
-  "description": "OpenPGP alias rules",
-  "rules": [
-    {
-      "email": "alice@openpgp.example",
-      "keys": "bad type, not an array"
-    }
-  ]
-}

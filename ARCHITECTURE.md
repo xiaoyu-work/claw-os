@@ -64,7 +64,7 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | SDK/runtime | One public multi-language App SDK, including MCP service APIs, plus internal bundled-App policy helpers | `claw-os-sdk/`, `cos-runtime/` |
 | Browser and semantic services | Obscura browser stack, `cos-browser`, embedding and semantic-search services | `crates/obscura-*`, `crates/cos-browser`, `crates/claw-*` |
 | Desktop | Product desktop fork and native UI clients communicating through stable OS boundaries; the Agent UI and bridge share a versioned presentation protocol | `desktop/`, `desktop/agent/protocol/` |
-| Mail source fork | Checked-in Thunderbird product source with a paired Firefox platform build dependency; native build and product cutover remain in progress | `desktop/mail/MODULE.md` |
+| Migrated App products | Product UI, business implementation, MCP and upstream source live in a separate repository; Mail native build and product cutover remain in progress | [`clawos-app`](https://github.com/xiaoyu-work/clawos-app), `packaging/apps.lock.json` |
 | Image composition | Reusable rootfs features and profile definitions | `rootfs/`, `scripts/lib/image-profiles.sh` |
 | Web desktop | React/Vite Linux desktop whose browser opens the embedded marketing site; independently built before Pages composition | `web/`, `.github/workflows/publish-website.yml` |
 | Distribution | WSL/Docker/VM/ISO/Azure packaging, Debian packages, signed APT repo, releases | `targets/`, `packaging/`, `.github/workflows/` |
@@ -74,6 +74,19 @@ registry and capability/guardrail layers. Privileged execution crosses the
 Dependencies point from entry points and orchestration toward stable
 definitions, then to providers; authorization and persistence remain explicit
 cross-cutting boundaries rather than hidden implementation details.
+
+### App source ownership
+
+Products migrate individually from this repository to
+[`xiaoyu-work/clawos-app`](https://github.com/xiaoyu-work/clawos-app).
+Mail's native source, `mail-ai` implementation and extension UI have moved;
+the remaining Apps stay here until their own paired migration. The App
+repository pins SDK/runtime source independently and does not import a sibling
+OS checkout. `packaging/apps.lock.json` pins a published App commit, and
+`scripts/app_sources.py` invokes its product-owned staging during OS package
+assembly. Installed execution still uses the existing authenticated package,
+App Host, capabilities and SDK; it never follows a Git branch or downloads
+product code at runtime. The OS retains native authority launchers and services.
 
 ### Capability seams
 

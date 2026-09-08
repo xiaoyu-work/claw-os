@@ -20,6 +20,13 @@ product's business implementation; converting a forwarding wrapper to MCP
 alone does not complete a product migration. The plan maps all starting App
 identities to products, system capabilities or connectors.
 
+Product sources are moving individually to
+[`xiaoyu-work/clawos-app`](https://github.com/xiaoyu-work/clawos-app).
+`mail-ai` and its UI/native source are owned there already. Do not recreate a
+local copy: OS package assembly consumes the immutable revision in
+[`packaging/apps.lock.json`](../packaging/apps.lock.json). Source relocation
+does not rename installed App identities or grant additional authority.
+
 ## Responsibilities
 
 - Own every operation, argument, dependency, AI use, and capability need in

@@ -22,8 +22,9 @@ Debian packages and a signed multi-architecture APT repository.
 | Path | Role |
 | --- | --- |
 | `deb/build-debs.sh` | Package staging and `.deb` assembly |
-| `deb/build-mail-extension.py` | Reproducible Mail XPI, packaged with its native host and shared business implementation |
-| `deb/tests/test_mail_extension.py` | Mail UI/native package ownership, archive identity and reproducibility |
+| `apps.lock.json` | Immutable clawos-app source revision and expected product/App payload |
+| `../scripts/app_sources.py` | Fetch pinned product sources and stage their package-owned payload |
+| `deb/tests/test_app_sources.py` | Immutable source/cache, payload identity, and OS native-launcher ownership |
 | `deb/*/control` | Package metadata, ABI generation, and runtime dependencies |
 | `deb/*/{preinst,postinst,prerm,postrm}` | Upgrade/install/remove behavior and the downgrade gates |
 | `deb/claw-os-agent/extension-gid-scan.py` | Root-owned mount/ownership/ACL proof used during Agent postinstall |
@@ -61,11 +62,16 @@ a rootfs except for the separately staged desktop package. Rootfs features
 install the resulting packages. Package dependencies express runtime layering
 without forcing synchronized versions or publication schedules.
 
+Migrated products live in `xiaoyu-work/clawos-app`, not a second local App
+implementation. `apps.lock.json` pins their published commit. Product-owned
+staging builds the Mail XPI and Python payload; OS packaging retains the native
+authority launcher and distributes these together in `claw-os-agent`.
+
 ## Tests
 
 ```bash
 ARCH=amd64 ./packaging/deb/build-debs.sh
-python3 -m pytest -q packaging/deb/tests/test_mail_extension.py rootfs/features/claw-mail-ai/test_install.py
+python3 -m pytest -q packaging/deb/tests/test_app_sources.py rootfs/features/claw-mail-ai/test_install.py
 bash packaging/apt-repo/tests/test-sync-existing-packages.sh
 bash packaging/apt-repo/tests/test-release-security-publication.sh
 bash packaging/deb/tests/test-security-floor-packaging.sh

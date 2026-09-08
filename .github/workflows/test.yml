@@ -217,5 +217,4 @@ jobs:
           PYTHONPATH: claw-os-sdk/python/src:cos-runtime/python/src
         run: >-
           python3 -m pytest -q apps adapters claw-os-sdk/python/src cos-runtime/python/src
-          extensions/claw-mail-ai/test_contract.py
-          packaging/deb/tests/test_mail_extension.py rootfs/features/claw-mail-ai/test_install.py
+          packaging/deb/tests/test_app_sources.py rootfs/features/claw-mail-ai/test_install.py

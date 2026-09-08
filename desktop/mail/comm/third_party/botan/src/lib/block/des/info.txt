@@ -1,7 +1,0 @@
-<defines>
-DES -> 20200926
-</defines>
-
-<module_info>
-name -> "DES"
-</module_info>

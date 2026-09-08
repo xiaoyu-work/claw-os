@@ -1,8 +1,0 @@
-rules:
-  unpinned-uses:
-    config:
-      policies:
-        actions/*: ref-pin
-        google/oss-fuzz/*: ref-pin
-        github/codeql-action/*: ref-pin
-        "*": hash-pin

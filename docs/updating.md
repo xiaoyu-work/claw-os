@@ -49,6 +49,13 @@ directory is not a fallback and is no longer loaded. This first redesign
 slice does not rename the App identity or migrate mailbox accounts/data;
 those changes are tracked in the [product redesign plan](app-product-redesign.md).
 
+Mail product source now lives in the separate `xiaoyu-work/clawos-app`
+repository. OS package builds consume the exact published revision in
+[`packaging/apps.lock.json`](../packaging/apps.lock.json), keeping the Python
+implementation and XPI together. This is a source-ownership change, not a
+second installed updater: APT still upgrades the signed package, App identity
+and data paths are unchanged, and runtime discovery never downloads from Git.
+
 Updates only ever move forward. An older Claw OS release stays validly signed
 forever, so the signature alone cannot tell a current release from a superseded
 one; see [Downgrade protection](#downgrade-protection) for what stops one being

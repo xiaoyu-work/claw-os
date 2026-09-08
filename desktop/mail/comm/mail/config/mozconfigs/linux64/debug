@@ -1,4 +1,0 @@
-. "$topsrcdir/comm/build/mozconfig.comm-sccache"
-. "$topsrcdir/comm/mail/config/mozconfigs/linux64/common-linux64"
-
-ac_add_options --enable-debug

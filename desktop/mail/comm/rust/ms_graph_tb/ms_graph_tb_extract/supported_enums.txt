@@ -1,3 +1,0 @@
-# One Graph enum schema base name per line.
-
-importance

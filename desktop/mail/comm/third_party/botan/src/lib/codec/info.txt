@@ -1,5 +1,0 @@
-<module_info>
-name -> "Codecs"
-brief -> "Helpers for data encoding and decoding"
-type -> "Virtual"
-</module_info>

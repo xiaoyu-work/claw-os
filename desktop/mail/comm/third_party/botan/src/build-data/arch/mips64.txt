@@ -1,4 +1,0 @@
-
-<aliases>
-mips64el
-</aliases>

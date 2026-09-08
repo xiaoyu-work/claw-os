@@ -10,6 +10,26 @@ boundaries remain in use.
 The implementation unit is a working product boundary, not an old App
 directory. Each completed slice is committed and published separately.
 
+## Repository split
+
+Product UI, business logic, MCP, upstream source, tests and product builds move
+to [`xiaoyu-work/clawos-app`](https://github.com/xiaoyu-work/clawos-app).
+Core Agent, App Host, authority, system services, SDK/runtime and OS package
+integration remain here. Each source migration is a paired App-repository and
+OS-repository commit: publish the product commit first, then pin that exact
+revision in [`packaging/apps.lock.json`](../packaging/apps.lock.json).
+There are no sibling-checkout dependencies or runtime download fallbacks.
+
+| Source migration | Status |
+| --- | --- |
+| Mail native source, `mail-ai`, extension UI and product tests/build | Moved to `clawos-app/products/mail`; installed identity, paths and authority preserved |
+| `email` and `gateway-email` | Still here; migrate individually into the same Mail product, not new products |
+| Other products and connectors | Pending their individual paired migrations |
+
+Moving source does not complete a product redesign milestone or merge legacy
+identities. APT remains the installed update path until a separate, complete
+distribution change replaces it.
+
 ## Product contract
 
 An App owns a business domain, its account/object identities, state and
@@ -111,7 +131,7 @@ authentication, revocation, sandboxing or capability checks.
 
 ## Open-source product ownership
 
-For products requiring deep UI or domain changes, prefer an in-repository
+For products requiring deep UI or domain changes, prefer a product-repository
 source fork over a permanent parallel implementation outside the product.
 The existing [desktop fork](../desktop/README.md) and its
 [provenance record](../desktop/PROVENANCE.md) demonstrate the source layout,
@@ -132,10 +152,10 @@ Do not copy every library into the tree merely for visual uniformity. Engines
 that need no local modification can remain dependencies. External services and
 closed-source products retain their documented integration boundaries.
 
-Thunderbird source is not currently vendored: the repository currently ships
-an extension and a native host alongside distribution-provided Thunderbird.
-The source-fork milestone below must not be marked complete by an XPI rename,
-an upstream URL, or an unbuilt source download.
+The complete Thunderbird source is vendored in `clawos-app/products/mail/comm`.
+Installed images still use distribution-provided Thunderbird with the extension
+and native host until the native fork is built, packaged and accepted. Source
+ownership alone does not complete that product cutover.
 
 ## Sequenced implementation
 
@@ -144,7 +164,7 @@ an upstream URL, or an unbuilt source download.
 | P0 | Published | Publish this ownership map and link it from maintained navigation. |
 | M1 | Implemented | All six UI/MCP AI operations call shared typed functions without argv translation. The canonical App, native launcher and versioned XPI ship together; both transports reject malformed input before effects. Native grants derive from the MCP contract and stay limited to AI/own-memory authority. |
 | M2 | Source-first | Define account, folder, message, thread and draft operations inside the imported Mail product. The external-extension reference-layer experiment is not the product architecture. Prove UI and headless callers address the same account/object with explicit provider selection and per-operation grants. |
-| M3 | In progress | Complete Thunderbird 153.2.0esr source imported at `desktop/mail/comm/`, with immutable source/platform pins and provenance. Source build, package output, branding, security updates and packaged-product execution remain to be completed. Do not ship a second independent Agent mailbox client. |
+| M3 | In progress | Complete Thunderbird 153.2.0esr source imported at `clawos-app/products/mail/comm/`, with immutable source/platform pins and provenance. Source build, package output, branding, security updates and packaged-product execution remain to be completed. Do not ship a second independent Agent mailbox client. |
 | M4 | Planned | Complete mailbox read/search/send and AI integration through the shared product backend. Consolidate SMTP delivery; cut over `email`, `mail-ai` and `gateway-email` to the canonical Mail identity atomically with manifests, discovery, launchers, extension identity, skills, packages, consent and data handling. Remove the old identities, not alias them. |
 | D1 | Planned | Converge Files/Editor/Launcher/Terminal/Store/Browser UI and Agent paths on their owning services; remove the remaining desktop App calls. Preserve browser mode isolation. |
 | S1 | Planned | Remove system forwarding Apps as their service contracts and UI/tool consumers are wired. Consolidate notifications using the existing durable service; retain audit/event separation. |
@@ -164,7 +184,8 @@ and installed-product acceptance remain necessary before completing Mail.
 
 Source import and native build now precede further M2 interface work, following
 the source-first product decision. Implement against the actual engine in
-[`desktop/mail/`](../desktop/mail/README.md), not an expanding external wrapper.
+[`clawos-app/products/mail`](https://github.com/xiaoyu-work/clawos-app/tree/main/products/mail),
+not an expanding external wrapper.
 Do not design a second mailbox engine first and merely attach the upstream UI
 afterward.
 

@@ -1,8 +1,8 @@
 # Provenance
 
-The [Mail product fork](mail/PROVENANCE.md) has separate Thunderbird/Mozilla
-provenance and licensing. The COSMIC origin table below does not apply to
-`mail/`.
+The [Mail product fork](https://github.com/xiaoyu-work/clawos-app/blob/main/products/mail/PROVENANCE.md)
+and its Thunderbird/Mozilla provenance now live in `clawos-app`. The COSMIC
+origin table below covers the components remaining in this repository.
 
 This directory is a **vendored fork** of the COSMIC Desktop Environment
 by System76. Code was copied (not submodule-linked) on 2026-05-12, and

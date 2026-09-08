@@ -44,10 +44,22 @@ packaging/
 `cos-browser`, the per-task App/MCP extension host, and all command-style apps.
 It also owns the Mail XPI at
 `/usr/lib/thunderbird/distribution/extensions/claw-mail-ai@claw.os.xpi`, built
-reproducibly by `deb/build-mail-extension.py`. This small UI protocol adapter
+reproducibly by the Mail product in
+[`xiaoyu-work/clawos-app`](https://github.com/xiaoyu-work/clawos-app/tree/main/products/mail).
+This small UI protocol adapter
 must upgrade with its native host and Python implementation, not wait for an
 independent desktop release. It adds no Thunderbird runtime dependency;
 desktop/rootfs registration enables it when Thunderbird is installed.
+
+[`apps.lock.json`](apps.lock.json) pins an immutable published App repository
+commit and the expected product/App IDs. `scripts/app_sources.py` fetches that
+revision into `build/app-sources/` and invokes product-owned payload staging.
+Package builds reject modified caches and unexpected App IDs; there is no
+moving-branch or sibling-checkout fallback. The OS still owns capability
+enforcement, the native launcher and package signing. Product source changes
+are released by updating this pin and publishing the normal OS packages;
+installed systems do not fetch executable code from Git.
+
 It also creates the empty root-owned `/usr/lib/cos/extensions` registry.
 Executable Agent extension packages placed there remain inactive until their
 signed id is selected in user configuration; see

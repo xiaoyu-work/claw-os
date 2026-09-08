@@ -63,9 +63,10 @@ desktop/
 
 ## Building
 
-The separate [Mail product source](mail/README.md) is a vendored Thunderbird
-fork. Its Mozilla build system is independent of the COSMIC commands below;
-see [Mail provenance](mail/PROVENANCE.md) for its paired platform dependency.
+The [Mail product source](https://github.com/xiaoyu-work/clawos-app/tree/main/products/mail)
+has moved to `clawos-app`, including Thunderbird provenance and its paired
+Firefox platform dependency. Its Mozilla build is independent of this tree
+and the COSMIC commands below.
 
 The desktop is built from this tree by `rootfs/features/desktop/install.sh`
 as part of `rootfs/build.sh`. Manual local build:

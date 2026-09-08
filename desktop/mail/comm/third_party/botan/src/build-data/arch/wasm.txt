@@ -1,3 +1,0 @@
-<isa_extensions>
-simd128
-</isa_extensions>

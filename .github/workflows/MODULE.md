@@ -7,7 +7,7 @@ dispatched and reusable test/publication pipelines.
 
 ## Responsibilities
 
-- Run core/browser/Python validation, including Mail XPI packaging and
+- Run core/browser/Python validation, including pinned App source staging and
   preservation of the package-owned runtime during rootfs registration.
 - Build shared Docker/WSL images per architecture.
 - Build and sign independent multi-architecture APT packages/repository.

@@ -1,9 +1,0 @@
-[DEFAULT]
-head = "head.js"
-dupe-manifest = true
-prefs = [
-  "mail.panorama.enabled=true",
-]
-tags = ["panorama"]
-
-["include:xpcshell-shared.toml"]

@@ -1,7 +1,0 @@
-<defines>
-ARIA -> 20170415
-</defines>
-
-<module_info>
-name -> "ARIA"
-</module_info>

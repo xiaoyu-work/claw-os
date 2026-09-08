@@ -1,4 +1,0 @@
-subject:expired.test.test
-extension:extKeyUsage:serverAuth
-extension:subjectAlternativeName:expired.test.test
-validity:20100105-20100106

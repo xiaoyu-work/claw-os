@@ -1,5 +1,0 @@
-<module_info>
-name -> "Password Hashes"
-brief -> "Implementations of password hashing algorithms"
-type -> "Virtual"
-</module_info>

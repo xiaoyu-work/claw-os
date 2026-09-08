@@ -1,7 +1,0 @@
-ac_add_options --enable-project=comm/mail
-ac_add_options --disable-debug-symbols
-ac_add_options --disable-updater
-# An explicit GNU vendor avoids ambiguous Rust targets on native Linux builds.
-ac_add_options --host="$(uname -m)-unknown-linux-gnu"
-ac_add_options --target="$(uname -m)-unknown-linux-gnu"
-mk_add_options MOZ_OBJDIR="$CLAW_MAIL_OBJDIR"

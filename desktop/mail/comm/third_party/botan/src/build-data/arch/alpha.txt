@@ -1,5 +1,0 @@
-
-<aliases>
-axp
-alphaaxp
-</aliases>

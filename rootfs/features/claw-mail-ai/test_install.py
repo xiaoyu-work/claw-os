@@ -19,12 +19,8 @@ def _write(path, content, mode=0o644):
 def _fixture(tmp_path):
     rootfs = tmp_path / "rootfs"
     project = tmp_path / "project"
-    extension = project / "extensions" / "claw-mail-ai"
-    _write(extension / "manifest.json", '{"name": "fixture"}')
-    _write(extension / "README.md", "Mail fixture")
-    for name in ("app.json", "main.py", "server.py", "native_host.py"):
+    for name in ("app.json", "main.py", "server.py", "native_host.py", "README.md"):
         _write(rootfs / "usr/lib/cos/apps/mail-ai" / name, f"installed {name}")
-        _write(project / "apps/mail-ai" / name, f"source must not replace {name}")
     for package in ("claw_os_sdk", "cos_runtime"):
         _write(rootfs / "usr/lib/cos/python" / package / "__init__.py", "installed")
     _write(rootfs / "usr/lib/cos/claw-mail-ai-host", "#!/bin/sh\nexit 0\n", 0o755)
@@ -57,11 +53,13 @@ def test_feature_preserves_the_canonical_package_and_sdk(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     assert _package_state(rootfs) == before
+    assert not Path(env["PROJECT_DIR"]).exists()
+    assert (rootfs / "usr/share/doc/claw-mail-ai/README.md").read_text() == "installed README.md"
     assert not (rootfs / "usr/lib/cos/mail-ai").exists()
     assert (rootfs / "etc/thunderbird/native-messaging-hosts/os.claw.mail_ai.json").is_file()
 
 
-@pytest.mark.parametrize("missing", ["app.json", "main.py", "server.py", "native_host.py"])
+@pytest.mark.parametrize("missing", ["app.json", "main.py", "server.py", "native_host.py", "README.md"])
 def test_feature_refuses_incomplete_installed_mail_package(tmp_path, missing):
     rootfs, env = _fixture(tmp_path)
     (rootfs / "usr/lib/cos/apps/mail-ai" / missing).unlink()

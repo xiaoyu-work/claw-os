@@ -1,8 +1,0 @@
-<module_info>
-name -> "Checksums"
-brief -> "Implementations of checksum algorithms"
-</module_info>
-
-<requires>
-hash
-</requires>

@@ -455,9 +455,6 @@ install -m 755 "$EXTENSION_HOST_BIN" "$AGENT_STAGE/usr/local/bin/claw-extension-
 install -m 755 "$APPROVAL_HELPER_BIN" "$AGENT_STAGE/usr/local/bin/claw-approval-helper"
 install -m 755 "$APP_RUNNER_BIN" "$AGENT_STAGE/usr/local/bin/claw-app-runner"
 install -m 755 "$MAIL_AI_HOST_BIN" "$AGENT_STAGE/usr/lib/cos/claw-mail-ai-host"
-python3 "$SCRIPT_DIR/build-mail-extension.py" \
-    "$PROJECT_DIR/extensions/claw-mail-ai" \
-    "$AGENT_STAGE/usr/lib/thunderbird/distribution/extensions/claw-mail-ai@claw.os.xpi"
 install -m 755 "$SECURITY_FLOOR_BIN" "$AGENT_STAGE/usr/lib/cos/bin/claw-security-floor"
 install -m 755 "$SCRIPT_DIR/common/security-floor-hook" \
     "$AGENT_STAGE/usr/lib/cos/apt/security-floor-hook"
@@ -517,11 +514,13 @@ for app_dir in "$PROJECT_DIR/apps"/*; do
     fi
     cp -a "$app_dir" "$AGENT_STAGE/usr/lib/cos/apps/$app_id"
 done
+external_app_count="$(python3 "$PROJECT_DIR/scripts/app_sources.py" --stage "$AGENT_STAGE")"
 find "$AGENT_STAGE/usr/lib/cos/apps" -name '__pycache__' -type d \
     -exec rm -rf {} + 2>/dev/null || true
 
 source_app_count="$(find "$PROJECT_DIR/apps" -mindepth 2 -maxdepth 2 \
     -name app.json -type f | wc -l)"
+source_app_count=$((source_app_count + external_app_count))
 agent_app_count="$(find "$AGENT_STAGE/usr/lib/cos/apps" -mindepth 2 -maxdepth 2 \
     -name app.json -type f | wc -l)"
 desktop_app_count="$(grep -cve '^[[:space:]]*$' "$DESKTOP_APPS_FILE")"

@@ -1,7 +1,0 @@
-<defines>
-CHACHA -> 20180807
-</defines>
-
-<module_info>
-name -> "ChaCha20"
-</module_info>

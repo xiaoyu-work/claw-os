@@ -1,7 +1,0 @@
-
-family ppc
-
-<aliases>
-powerpc
-ppc
-</aliases>

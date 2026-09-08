@@ -16,7 +16,6 @@
 
 set -euo pipefail
 
-EXT_SRC="$PROJECT_DIR/extensions/claw-mail-ai"
 FEATURE_DIR="$SCRIPT_DIR/features/claw-mail-ai"
 APP_DEST="$ROOTFS/usr/lib/cos/apps/mail-ai"
 
@@ -24,21 +23,17 @@ EXT_ID="claw-mail-ai@claw.os"
 XPI_DEST="$ROOTFS/usr/lib/thunderbird/distribution/extensions/${EXT_ID}.xpi"
 
 # ---------------------------------------------------------------------------
-# 0. Sanity — make sure the source trees we expect exist.
+# 0. Sanity — require the installed package, not product source trees.
 # ---------------------------------------------------------------------------
-for d in "$EXT_SRC" "$APP_DEST" \
+for d in "$APP_DEST" \
     "$ROOTFS/usr/lib/cos/python/claw_os_sdk" \
     "$ROOTFS/usr/lib/cos/python/cos_runtime"; do
     if [ ! -d "$d" ]; then
-        echo "  error: required Mail source/package directory missing: $d" >&2
+        echo "  error: required Mail package directory missing: $d" >&2
         exit 1
     fi
 done
-if [ ! -f "$EXT_SRC/manifest.json" ]; then
-    echo "  error: $EXT_SRC/manifest.json not found" >&2
-    exit 1
-fi
-for file in app.json main.py server.py native_host.py; do
+for file in app.json main.py server.py native_host.py README.md; do
     if [ ! -f "$APP_DEST/$file" ]; then
         echo "  error: claw-os-agent Mail package is incomplete: $APP_DEST/$file" >&2
         exit 1
@@ -69,10 +64,10 @@ fi
 echo "  :: using package-owned Mail host and extension"
 
 # ---------------------------------------------------------------------------
-# 3. Drop the extension documentation.
+# 3. Install the package-owned Mail documentation.
 # ---------------------------------------------------------------------------
 README_DEST="$ROOTFS/usr/share/doc/claw-mail-ai"
 install -d -m 0755 "$README_DEST"
-cp "$EXT_SRC/README.md" "$README_DEST/README.md"
+cp "$APP_DEST/README.md" "$README_DEST/README.md"
 
 echo "  :: claw-mail-ai feature applied"

@@ -62,7 +62,7 @@ editing additional surfaces.
 | Update downgrade protection | `core/src/update/`, `packaging/release-security/policy.json` | `packaging/deb/common/`, maintainer scripts, `packaging/apt-repo/verify-release-security.sh`, `docs/updating.md` |
 | Web desktop or website | `web/src/App.tsx`, `web/MODULE.md` | `web/src/components/`, `web/public/site/`, Pages composition workflow |
 | Desktop component | `desktop/README.md`, `desktop/PROVENANCE.md`, component README | component Cargo/just manifest and license |
-| Mail product source / native engine | `desktop/mail/MODULE.md`, `desktop/mail/README.md` | vendored `comm/mail/`, `comm/mailnews/`, paired platform pin; separate Mozilla build |
+| Migrated App / Mail product source | [`clawos-app`](https://github.com/xiaoyu-work/clawos-app), `packaging/apps.lock.json` | Product UI/business/MCP and native source live there; `scripts/app_sources.py` stages the pinned package payload here |
 | CI workflow | `.github/workflows/` | scripts invoked by the workflow; only `test.yml` runs on pull requests, while publication workflows are manually dispatched or reusable |
 
 ## Development

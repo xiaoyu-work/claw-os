@@ -1357,11 +1357,43 @@ fn a_launch_grant_for_an_unverifiable_launcher_is_refused() {
 // ---------------------------------------------------------------------------
 
 fn native_mail_manifest() -> Manifest {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .join("apps/mail-ai/app.json");
-    Manifest::from_json(&std::fs::read_to_string(path).unwrap()).unwrap()
+    // OS authority fixture; product manifest/handler conformance lives in clawos-app.
+    Manifest::from_json(
+        r#"{
+          "id": "mail-ai",
+          "version": "0.0.0",
+          "name": {"en": "Native Mail authority fixture"},
+          "schema_version": 2,
+          "ai": {
+            "budget": {"monthly_units": 1},
+            "safety": "strict",
+            "origins": ["external-content"]
+          },
+          "operations": {},
+          "mcp": {
+            "entry": "fixture.py",
+            "transport": "stdio",
+            "tools": [{
+              "name": "mail-ai.fixture",
+              "summary": {"en": "Exercise native authority"},
+              "args": [{"name": "body", "kind": "text", "required": true}],
+              "needs": [
+                {
+                  "verb": "ai.chat.untrusted",
+                  "scope": {"kind": "wild"},
+                  "why": {"en": "Exercise the AI ceiling"}
+                },
+                {
+                  "verb": "memory.write",
+                  "scope": {"kind": "fixed", "scope": {"kind": "self-ref", "value": "mail-ai"}},
+                  "why": {"en": "Exercise owner-scoped memory"}
+                }
+              ]
+            }]
+          }
+        }"#,
+    )
+    .unwrap()
 }
 
 #[test]
@@ -1370,10 +1402,7 @@ fn native_mail_caps_use_the_shared_mcp_contract() {
     assert!(manifest.operations.is_empty());
     let caps = native_manifest_caps(&manifest).unwrap();
     assert!(caps.covers(&Cap::new(Verb::AI_CHAT_UNTRUSTED, Scope::Wild)));
-    assert!(caps.covers(&Cap::new(
-        Verb::MEMORY_WRITE,
-        Scope::self_ref("mail-ai")
-    )));
+    assert!(caps.covers(&Cap::new(Verb::MEMORY_WRITE, Scope::self_ref("mail-ai"))));
     assert_eq!(caps.len(), 2);
 }
 
