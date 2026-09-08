@@ -22,30 +22,6 @@ def _load(name):
     ("name", "argv", "expected_args", "expected_kwargs"),
     [
         (
-            "dingtalk",
-            [
-                "hello",
-                "--markdown=false",
-                "--title=--urgent",
-                "--keyword",
-                "Key",
-                "--at-mobiles",
-                "1,2",
-                "--at-user-ids",
-                "u1,u2",
-                "--at-all",
-            ],
-            ("hello",),
-            {
-                "markdown": False,
-                "title": "--urgent",
-                "keyword": "Key",
-                "at_mobiles": ["1", "2"],
-                "at_user_ids": ["u1", "u2"],
-                "at_all": True,
-            },
-        ),
-        (
             "googlechat",
             ["hello", "--recipient", "space", "--title", "Title", "--thread-key", "thread"],
             ("space", "hello", "Title", "thread"),

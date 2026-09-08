@@ -205,6 +205,12 @@ copied. The legacy inbound `cos agent ask` path is not an authenticated
 connector admission API and is not newly authorized by this move. Owner/sender
 binding, service lifecycle and durable replay handling remain pending without
 weakening the App-originated system-Agent restrictions.
+Messaging Channels also owns outbound-only `gateway-dingtalk`, preserving
+send/status, optional HMAC signing, keyword/Markdown/mention handling and the
+existing operations/MCP adapter. Explicit `gateway._shared` imports use pinned
+platform libraries. Existing network/credential/memory grants remain unchanged;
+the egress helper checks the actual destination host. No inbound Agent loop,
+new notification store or delivery lifecycle is introduced.
 The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling
