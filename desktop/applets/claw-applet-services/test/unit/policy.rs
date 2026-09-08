@@ -1,6 +1,16 @@
 use super::*;
 
 #[test]
+fn calendar_scope_is_named_not_wildcard() {
+    let mut command = Command::new("cos");
+    Scope::Name("calendar").append_args(&mut command);
+    assert_eq!(
+        command.as_std().get_args().collect::<Vec<_>>(),
+        ["--name", "calendar"],
+    );
+}
+
+#[test]
 fn parses_allow_decision() {
     assert_eq!(
         parse_decision(

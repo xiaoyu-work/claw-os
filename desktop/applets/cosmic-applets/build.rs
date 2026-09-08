@@ -2,7 +2,13 @@ use std::{env, fs, path::PathBuf};
 use xdgen::{App, Context, FluentString};
 
 fn main() {
+    println!("cargo:rerun-if-changed=../i18n");
+    println!("cargo:rerun-if-changed=../../../build/native-apps/claw-applet-calendar/i18n");
     let ctx = Context::new("../i18n/", "desktop_entries").unwrap();
+    let calendar_ctx = Context::new(
+        "../../../build/native-apps/claw-applet-calendar/i18n/",
+        "desktop_entries",
+    ).unwrap();
     let workspace_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("cosmic-applets is a direct workspace member")
@@ -168,13 +174,19 @@ fn main() {
     ]
     .into_iter()
     .map(|(id, name, comment, keywords)| {
-        let template_path = ["../", name, "/data/", id, ".desktop"].concat();
+        let template_path = if name == "claw-applet-calendar" {
+            format!("../../../build/native-apps/{name}/data/{id}.desktop")
+        } else {
+            format!("../{name}/data/{id}.desktop")
+        };
+        println!("cargo:rerun-if-changed={template_path}");
 
         let app = App::new(FluentString(name))
             .comment(FluentString(comment))
             .keywords(FluentString(keywords));
 
-        (id, app.expand_desktop(&template_path, &ctx).unwrap())
+        let context = if name == "claw-applet-calendar" { &calendar_ctx } else { &ctx };
+        (id, app.expand_desktop(&template_path, context).unwrap())
     })
     .for_each(|(id, contents)| {
         fs::write(desktop_dir.join(format!("{id}.desktop")), contents).unwrap();

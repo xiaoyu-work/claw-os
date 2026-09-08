@@ -22,6 +22,7 @@ shared build helpers.
 | `lib/image-identity.sh` | Image user/identity assertions |
 | `lib/git-readonly.sh` | Read-only Git wrapper for privileged builds |
 | `app_sources.py` | Resolve the immutable App repository pin and stage product-owned package assets |
+| `app_sources.py --native` | Refresh native Calendar library/assets at a stable ignored build path from the current immutable pin |
 
 ## Dependencies
 
@@ -37,3 +38,8 @@ python3 -m pytest -q packaging/deb/tests/test_app_sources.py
 ```
 
 Also run the narrowest consuming target/package command.
+
+`--stage <root>` validates all locked App identities; `--package agent` or
+`--package desktop` preserves the explicit Debian package partition.
+`--app-path <id>` resolves a single source directory for desktop package
+assembly. None of these commands fetches application code at runtime.

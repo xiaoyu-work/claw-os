@@ -131,6 +131,10 @@ cargo test -p cos <test-filter> -- --test-threads=1
 # Browser crate
 cargo test -p cos-browser
 
+# Desktop applets (prepare the immutable product-owned native inputs first)
+python3 scripts/app_sources.py --native
+cargo test --manifest-path desktop/applets/Cargo.toml -p claw-applet-services --lib
+
 # Complete Python suite from the repository root
 PYTHONPATH=claw-os-sdk/python/src:cos-runtime/python/src \
   python3 -m pytest -q apps adapters claw-os-sdk/python/src cos-runtime/python/src

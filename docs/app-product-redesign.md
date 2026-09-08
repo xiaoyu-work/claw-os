@@ -25,7 +25,8 @@ There are no sibling-checkout dependencies or runtime download fallbacks.
 | Mail native source, `mail-ai`, extension UI and product tests/build | Moved to `clawos-app/products/mail`; installed identity, paths and authority preserved |
 | `email` | Moved to `clawos-app/products/mail/apps/email`; existing provider grants and installed identity preserved |
 | `gateway-email` | Moved to `clawos-app/products/mail/apps/gateway/email`; nested installation, identity and grants preserved |
-| `calendar` | Moved to `clawos-app/products/calendar/apps/calendar`; event storage and provider authority unchanged; `panel-calendar` still pending |
+| `calendar` | Moved to `clawos-app/products/calendar/apps/calendar`; event storage and provider authority unchanged |
+| `panel-calendar` | Complete native UI, assets, manifest, tests and build inputs moved to `clawos-app/products/calendar`; OS shell injects a shared policy-gated provider and retains desktop package ownership |
 | `fs` | Moved to `clawos-app/products/files/apps/fs`; all fourteen MCP tools and snapshot authority preserved; native Files UI still pending |
 | `docs` | Moved to `clawos-app/products/files/apps/docs`; four Recoll-backed tools, owner index state and scopes preserved; background indexing remains OS-owned |
 | `search` | Moved to `clawos-app/products/browser/apps/search`; explicit provider choice, two MCP tools and exact credential/network scopes preserved |
@@ -86,9 +87,13 @@ identities. APT remains the installed update path until a separate, complete
 distribution change replaces it.
 
 Native desktop sources must move with their build dependencies and package
-ownership. `panel-calendar` remains here because its UI is statically linked
-into `cosmic-applets` and depends on the shared widget-rail backend. Moving its
-manifest and launcher alone would not complete that App migration.
+ownership. Calendar now exports its full native presentation library and
+assets from the immutable App source pin. The OS `cosmic-applets` host links
+that library against the forked toolkit and injects a typed agenda callback;
+Widget Rail and the host share an OS-owned read-only provider rather than an
+App dependency. Manual and chroot builds prepare the same inputs under
+ignored build storage. The launcher and native shell stay in
+`claw-os-desktop`, not `claw-os-agent`; grants and data remain unchanged.
 
 ## Product contract
 

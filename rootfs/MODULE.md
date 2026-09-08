@@ -31,6 +31,11 @@ Installed Claw OS binaries arrive through packages built from the current
 source. Reuse is allowed only when the complete stamp, artifacts, environment,
 architecture, and feature list match.
 
+Desktop builds prepare the pinned Calendar native App inputs on the host and
+bind `build/native-apps` at the matching relative dependency path inside the
+chroot. The shell, shared services and forked toolkit stay OS-owned; the App
+source cache and generated inputs never enter the installed image.
+
 ## Tests
 
 Validate changed shell scripts with `bash -n`. A real composition requires a

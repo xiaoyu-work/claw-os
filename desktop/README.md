@@ -68,6 +68,15 @@ has moved to `clawos-app`, including Thunderbird provenance and its paired
 Firefox platform dependency. Its Mozilla build is independent of this tree
 and the COSMIC commands below.
 
+Calendar's complete panel UI, translations, desktop entry and icon also live
+in the [Calendar product](https://github.com/xiaoyu-work/clawos-app/tree/main/products/calendar).
+`cosmic-applets` remains the shell host and injects the shared OS agenda
+provider; neither Calendar nor Widget Rail calls another App.
+Applet `just build-*` prepares the exact `packaging/apps.lock.json` source
+under ignored `build/native-apps` before compiling. Image builds prepare it on
+the host and bind the generated inputs into the chroot. The existing toolkit
+patches and desktop Debian package ownership are preserved.
+
 The desktop is built from this tree by `rootfs/features/desktop/install.sh`
 as part of `rootfs/build.sh`. Manual local build:
 
@@ -91,6 +100,15 @@ the repository root workspace contains desktop crates:
 
 ```bash
 cargo test --manifest-path desktop/<component>/Cargo.toml -- --test-threads=1
+```
+
+For direct applets Cargo commands, prepare native inputs first from the
+repository root (repeat after changing the App source lock):
+
+```bash
+python3 scripts/app_sources.py --native
+cargo test --manifest-path desktop/applets/Cargo.toml -p claw-applet-services --lib
+cargo build --manifest-path desktop/applets/Cargo.toml -p cosmic-applets --locked
 ```
 
 ## Modifying

@@ -12,6 +12,10 @@ use std::path::{Path, PathBuf};
 use cosmic::desktop::fde::{DesktopEntry, get_languages_from_env};
 
 fn data_dir(package: &str) -> PathBuf {
+    if package == "claw-applet-calendar" {
+        return Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../build/native-apps/claw-applet-calendar/data");
+    }
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join(package)

@@ -81,11 +81,23 @@ Products migrate individually from this repository to
 [`xiaoyu-work/clawos-app`](https://github.com/xiaoyu-work/clawos-app).
 Mail's native source, `mail-ai`, legacy `email`, restricted `gateway-email`
 delivery and extension UI have moved;
-Calendar's event/provider operations, direct `fs` MCP implementation and
+Calendar's event/provider operations and complete native panel presentation,
+direct `fs` MCP implementation and
 Recoll-backed `docs` tools, explicit-provider Browser `search` and headless
 `web` App have moved as well. The `browser-attached` App, Native Host and MV3
 extension now live in the Browser product too. The reusable `cos-browser`
 engine and privileged attached-browser provider remain here.
+
+The Calendar UI library, localization and assets are materialized from the
+same App source pin into ignored `build/native-apps` by
+`scripts/app_sources.py --native`. Manual applet builds prepare these inputs;
+image builds bind the prepared tree into the chroot. The `cosmic-applets`
+host links this library against the existing forked toolkit and injects its
+typed agenda callback. Shared read-only Calendar access and policy checks
+live in `desktop/applets/claw-applet-services`, not in either App. Widget
+Rail consumes that library independently. `panel-calendar` remains owned by
+the desktop Debian package, with its launcher identity and narrow grant
+unchanged; installed updates remain signed APT packages.
 The Terminal product also owns the `exec` App source; core process authority
 and sandbox enforcement remain in the OS.
 The Containers product owns `container-manager` and its fourteen MCP handlers;

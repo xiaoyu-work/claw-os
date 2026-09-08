@@ -162,9 +162,10 @@ def test_real_app_staging_counts_nested_apps_and_installs_shared_parser(tmp_path
     (project / "scripts/app_sources.py").write_text(
         'from pathlib import Path\n'
         'import sys\n'
-        'app = Path(sys.argv[-1]) / "usr/lib/cos/apps/gateway/email"\n'
-        'app.mkdir(parents=True)\n'
-        '(app / "app.json").write_text(\'{"id":"gateway-email"}\')\n'
+        'if "--stage" in sys.argv:\n'
+        '    app = Path(sys.argv[sys.argv.index("--stage") + 1]) / "usr/lib/cos/apps/gateway/email"\n'
+        '    app.mkdir(parents=True)\n'
+        '    (app / "app.json").write_text(\'{"id":"gateway-email"}\')\n'
         'print(1)\n'
     )
     stage = tmp_path / "stage"
@@ -182,3 +183,105 @@ def test_real_app_staging_counts_nested_apps_and_installs_shared_parser(tmp_path
     assert (stage / "usr/lib/cos/apps/gateway/slack/app.json").is_file()
     assert not (stage / "usr/lib/cos/apps/desktop-app").exists()
     assert (stage / "usr/lib/cos/python/canonical_argv.py").read_text() == "SHARED_PARSER = True\n"
+
+
+def test_native_inputs_follow_lock_updates_without_stale_files(locked_source):
+    root, lock = locked_source
+    upstream = Path(lock["repository"])
+    (upstream / "tools/stage_native.py").write_text(
+        'import json, pathlib, shutil, sys\n'
+        'root = pathlib.Path(sys.argv[sys.argv.index("--root") + 1])\n'
+        'shutil.copytree(pathlib.Path(__file__).parents[1] / "native", root / "claw-applet-calendar")\n'
+        'print(json.dumps(["claw-applet-calendar"]))\n'
+    )
+    native = upstream / "native"
+    native.mkdir()
+    (native / "Cargo.toml").write_text("first")
+    (native / "removed.rs").write_text("old")
+    git = ["git", "-C", str(upstream)]
+
+    def publish():
+        subprocess.run([*git, "add", "tools/stage_native.py", "native"], check=True)
+        subprocess.run([*git, "commit", "--quiet", "-m", "native fixture"], check=True)
+        lock["revision"] = subprocess.check_output([*git, "rev-parse", "HEAD"], text=True).strip()
+        (root / "packaging/apps.lock.json").write_text(json.dumps(lock))
+
+    publish()
+    destination = sources.prepare_native()
+    assert (destination / "claw-applet-calendar/removed.rs").is_file()
+    (native / "removed.rs").unlink()
+    (native / "Cargo.toml").write_text("second")
+    publish()
+    assert sources.prepare_native() == destination
+    assert (destination / "claw-applet-calendar/Cargo.toml").read_text() == "second"
+    assert not (destination / "claw-applet-calendar/removed.rs").exists()
+    assert (destination / "revision").read_text().strip() == lock["revision"]
+    cached = sources.prepare_sources(lock)
+    (cached / "native/Cargo.toml").write_text("tampered")
+    with pytest.raises(RuntimeError, match="modified"):
+        sources.prepare_native()
+
+
+def test_native_manual_image_and_asset_build_paths_agree():
+    applets = ROOT / "desktop/applets"
+    cargo = (applets / "cosmic-applets/Cargo.toml").read_text()
+    assert '../../../build/native-apps/claw-applet-calendar' in cargo
+    just = (applets / "justfile").read_text()
+    assert 'build-debug *args: prepare-apps' in just
+    assert 'python3 ../../scripts/app_sources.py --native' in just
+    assert "(_install_icons calendar-src)" in just
+    assert "_install_calendar" in just.split("install:", 1)[1]
+    script = (ROOT / "rootfs/features/desktop/install.sh").read_text()
+    assert 'CHROOT_NATIVE_APPS="$ROOTFS/build/build/native-apps"' in script
+    assert 'mount --bind "$NATIVE_APP_SOURCES" "$CHROOT_NATIVE_APPS"' in script
+    assert 'CLAW_NATIVE_APPS_PREPARED=1' in script
+    assert 'umount "$CHROOT_NATIVE_APPS"' in script
+    assert '../../../build/native-apps/{name}/data/{id}.desktop' in (
+        applets / "cosmic-applets/build.rs"
+    ).read_text()
+
+
+def test_external_desktop_app_stays_out_of_agent_package(locked_source, tmp_path):
+    root, lock = locked_source
+    upstream = Path(lock["repository"])
+    package = upstream / "products/calendar"
+    app = package / "apps/panel-calendar"
+    app.mkdir(parents=True)
+    (app / "app.json").write_text('{"id":"panel-calendar"}')
+    (package / "package.json").write_text('{"apps":["apps/panel-calendar"]}')
+    (upstream / "tools/stage.py").write_text(
+        'import json, pathlib, shutil, sys\n'
+        'root = pathlib.Path(sys.argv[sys.argv.index("--root") + 1])\n'
+        'ids = sys.argv[sys.argv.index("--apps") + 1:]\n'
+        'if "panel-calendar" in ids:\n'
+        '    source = pathlib.Path(__file__).parents[1] / "products/calendar/apps/panel-calendar"\n'
+        '    shutil.copytree(source, root / "usr/lib/cos/apps/panel-calendar")\n'
+        'print(json.dumps(ids))\n'
+    )
+    git = ["git", "-C", str(upstream)]
+    subprocess.run([*git, "add", "products/calendar", "tools/stage.py"], check=True)
+    subprocess.run([*git, "commit", "--quiet", "-m", "desktop fixture"], check=True)
+    lock["revision"] = subprocess.check_output([*git, "rev-parse", "HEAD"], text=True).strip()
+    lock["products"] = ["calendar"]
+    lock["apps"] = ["panel-calendar"]
+    (root / "packaging/apps.lock.json").write_text(json.dumps(lock))
+    partition = root / "packaging/deb/claw-os-desktop/apps.list"
+    partition.parent.mkdir(parents=True)
+    partition.write_text("panel-calendar\n")
+    assert sources.stage_products(tmp_path / "agent", "agent") == []
+    assert not (tmp_path / "agent/usr/lib/cos/apps/panel-calendar").exists()
+    assert sources.stage_products(tmp_path / "desktop", "desktop") == ["panel-calendar"]
+    assert (tmp_path / "desktop/usr/lib/cos/apps/panel-calendar/app.json").is_file()
+    assert sources.app_path("panel-calendar").name == "panel-calendar"
+    with pytest.raises(ValueError, match="not in the source lock"):
+        sources.app_path("unknown")
+    (root / "scripts").mkdir()
+    shutil.copyfile(ROOT / "scripts/app_sources.py", root / "scripts/app_sources.py")
+    script = (ROOT / "packaging/deb/build-desktop-deb.sh").read_text()
+    block = script[script.index("DESKTOP_APPS_FILE="):script.index("THERMALD_DEP=")]
+    stage = tmp_path / "desktop-deb"
+    subprocess.run(["bash", "-euc", block], check=True, env={
+        **os.environ, "PROJECT_DIR": str(root), "SCRIPT_DIR": str(root / "packaging/deb"),
+        "STAGE_ROOT": str(stage),
+    })
+    assert (stage / "usr/lib/cos/apps/panel-calendar/app.json").is_file()

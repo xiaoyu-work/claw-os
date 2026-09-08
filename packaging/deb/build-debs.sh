@@ -501,8 +501,7 @@ DESKTOP_APPS_FILE="$SCRIPT_DIR/claw-os-desktop/apps.list"
 while IFS= read -r app_id; do
     [ -n "$app_id" ] || continue
     if [ ! -f "$PROJECT_DIR/apps/$app_id/app.json" ]; then
-        echo "error: desktop app listed but missing: $app_id" >&2
-        exit 1
+        python3 "$PROJECT_DIR/scripts/app_sources.py" --app-path "$app_id" >/dev/null
     fi
 done < "$DESKTOP_APPS_FILE"
 for app_dir in "$PROJECT_DIR/apps"/*; do
@@ -516,7 +515,8 @@ for app_dir in "$PROJECT_DIR/apps"/*; do
 done
 install -m 644 "$PROJECT_DIR/apps/canonical_argv.py" \
     "$AGENT_STAGE/usr/lib/cos/python/canonical_argv.py"
-external_app_count="$(python3 "$PROJECT_DIR/scripts/app_sources.py" --stage "$AGENT_STAGE")"
+python3 "$PROJECT_DIR/scripts/app_sources.py" --stage "$AGENT_STAGE" --package agent
+external_app_count="$(python3 "$PROJECT_DIR/scripts/app_sources.py" --count)"
 find "$AGENT_STAGE/usr/lib/cos/apps" -name '__pycache__' -type d \
     -exec rm -rf {} + 2>/dev/null || true
 

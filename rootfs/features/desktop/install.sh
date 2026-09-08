@@ -200,9 +200,15 @@ CHROOT_SRC="$ROOTFS/build/desktop-src"
 CHROOT_CRATES="$ROOTFS/build/crates"
 CHROOT_RUNTIME="$ROOTFS/build/cos-runtime"
 CHROOT_SDK="$ROOTFS/build/claw-os-sdk"
+CHROOT_NATIVE_APPS="$ROOTFS/build/build/native-apps"
+NATIVE_APP_SOURCES="$(python3 "$PROJECT_DIR/scripts/app_sources.py" --native)"
 PROJECT_CRATES="$PROJECT_DIR/crates"
 PROJECT_RUNTIME="$PROJECT_DIR/cos-runtime"
 PROJECT_SDK="$PROJECT_DIR/claw-os-sdk"
+mkdir -p "$CHROOT_NATIVE_APPS"
+if ! mountpoint -q "$CHROOT_NATIVE_APPS"; then
+    mount --bind "$NATIVE_APP_SOURCES" "$CHROOT_NATIVE_APPS"
+fi
 mkdir -p "$CHROOT_SRC"
 if ! mountpoint -q "$CHROOT_SRC"; then
     mount --bind "$DESKTOP_SRC" "$CHROOT_SRC"
@@ -227,6 +233,9 @@ if [ -d "$PROJECT_SDK" ]; then
 fi
 
 cleanup() {
+    umount "$CHROOT_NATIVE_APPS" 2>/dev/null || true
+    rmdir "$CHROOT_NATIVE_APPS" 2>/dev/null || true
+    rmdir "$ROOTFS/build/build" 2>/dev/null || true
     umount "$CHROOT_SDK" 2>/dev/null || true
     rmdir "$CHROOT_SDK" 2>/dev/null || true
     umount "$CHROOT_RUNTIME" 2>/dev/null || true
@@ -261,6 +270,7 @@ echo "  :: building desktop (cold tree: 30–60 minutes)"
 VERGEN_GIT_SHA="$(git_readonly -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || echo unknown)"
 VERGEN_GIT_COMMIT_DATE="$(git_readonly -C "$PROJECT_DIR" log -1 --format=%cs HEAD 2>/dev/null || date -u +%Y-%m-%d)"
 chroot "$ROOTFS" env \
+    CLAW_NATIVE_APPS_PREPARED=1 \
     VERGEN_GIT_SHA="$VERGEN_GIT_SHA" \
     VERGEN_GIT_COMMIT_DATE="$VERGEN_GIT_COMMIT_DATE" \
     DESKTOP_PACKAGE_ROOT="$DESKTOP_PACKAGE_ROOT_CHROOT" \

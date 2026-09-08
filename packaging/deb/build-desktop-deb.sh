@@ -60,14 +60,14 @@ while IFS= read -r app_id; do
     [ -n "$app_id" ] || continue
     app_src="$PROJECT_DIR/apps/$app_id"
     if [ ! -f "$app_src/app.json" ]; then
-        echo "error: desktop app listed but missing: $app_id" >&2
-        exit 1
+        app_src="$(python3 "$PROJECT_DIR/scripts/app_sources.py" --app-path "$app_id")"
     fi
     rm -rf "$STAGE_ROOT/usr/lib/cos/apps/$app_id"
     cp -a "$app_src" "$STAGE_ROOT/usr/lib/cos/apps/$app_id"
 done < "$DESKTOP_APPS_FILE"
 find "$STAGE_ROOT/usr/lib/cos/apps" -name '__pycache__' -type d \
     -exec rm -rf {} + 2>/dev/null || true
+find "$STAGE_ROOT/usr/lib/cos/apps" -name 'test_*.py' -type f -delete
 
 THERMALD_DEP="${THERMALD_PKG:+$THERMALD_PKG, }"
 VAAPI_INTEL_NONFREE_DEP="${VAAPI_INTEL_NONFREE_PKG:+$VAAPI_INTEL_NONFREE_PKG, }"

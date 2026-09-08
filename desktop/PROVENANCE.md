@@ -4,6 +4,13 @@ The [Mail product fork](https://github.com/xiaoyu-work/clawos-app/blob/main/prod
 and its Thunderbird/Mozilla provenance now live in `clawos-app`. The COSMIC
 origin table below covers the components remaining in this repository.
 
+The Calendar panel UI and assets moved with their GPL license and SPDX
+notices to the [Calendar product](https://github.com/xiaoyu-work/clawos-app/blob/main/products/calendar/PROVENANCE.md).
+Its immutable source revision is recorded in `packaging/apps.lock.json`;
+the `cosmic-applets` host still links this product library. Shared Calendar
+read-only data access and policy helpers remain here in
+`applets/claw-applet-services`, extracted without changing their GPL terms.
+
 This directory is a **vendored fork** of the COSMIC Desktop Environment
 by System76. Code was copied (not submodule-linked) on 2026-05-12, and
 **directory names were normalized** to drop the upstream `cosmic-`

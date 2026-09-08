@@ -20,7 +20,7 @@ members = [
     "cosmic-applet-a11y",
     "claw-applet-agent-activity",
     "claw-applet-approval-gate",
-    "claw-applet-calendar",
+    "claw-applet-services",
     "claw-applet-clipboard",
     "claw-applet-widget-rail",
     "cosmic-applets-config",

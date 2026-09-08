@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 mod app;
-pub mod calendar;
+pub use claw_applet_services::{calendar, policy};
 mod localize;
-pub mod policy;
 mod system;
 
 use localize::localize;
