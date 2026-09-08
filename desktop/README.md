@@ -72,6 +72,12 @@ Calendar's complete panel UI, translations, desktop entry and icon also live
 in the [Calendar product](https://github.com/xiaoyu-work/clawos-app/tree/main/products/calendar).
 `cosmic-applets` remains the shell host and injects the shared OS agenda
 provider; neither Calendar nor Widget Rail calls another App.
+Clipboard's complete popup, CopyQ history adapter, translations and desktop
+entry live in the [Clipboard product](https://github.com/xiaoyu-work/clawos-app/tree/main/products/clipboard).
+The shell injects its history-only policy callback through the shared policy
+service, without a Widget Rail dependency or selection-grant expansion.
+The existing `edit-paste-symbolic` icon and CopyQ behavior are unchanged;
+CopyQ history and Wayland selection remain separate backends.
 Applet `just build-*` prepares the exact `packaging/apps.lock.json` source
 under ignored `build/native-apps` before compiling. Image builds prepare it on
 the host and bind the generated inputs into the chroot. The existing toolkit

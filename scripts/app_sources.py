@@ -77,16 +77,38 @@ def prepare_native():
     lock = read_lock()
     source = prepare_sources(lock)
     destination = ROOT / "build/native-apps"
-    component = destination / "claw-applet-calendar"
-    if component.exists():
-        shutil.rmtree(component)
+    products = {}
+    names = set()
+    for product in lock["products"]:
+        package = json.loads((source / "products" / product / "package.json").read_text())
+        components = package.get("native", {})
+        if not isinstance(components, dict):
+            raise ValueError("Invalid native component declarations")
+        for name, relative in components.items():
+            if not re.fullmatch(r"[a-z][a-z0-9-]*", name) or name in names:
+                raise ValueError("Invalid or duplicate native component name")
+            product_root = source / "products" / product
+            if not isinstance(relative, str) or not (
+                product_root / relative
+            ).resolve().is_relative_to(product_root.resolve()):
+                raise ValueError("Native source must belong to the product")
+            names.add(name)
+        if components:
+            products[product] = sorted(components)
     destination.mkdir(parents=True, exist_ok=True)
-    result = subprocess.check_output(
-        [sys.executable, str(source / "tools/stage_native.py"), "calendar",
-         "--root", str(destination)], text=True, cwd=source,
-    )
-    if json.loads(result) != ["claw-applet-calendar"]:
-        raise RuntimeError("Unexpected native Calendar build inputs")
+    for product, components in products.items():
+        for name in components:
+            component = destination / name
+            if component.is_symlink():
+                component.unlink()
+            elif component.exists():
+                shutil.rmtree(component)
+        result = subprocess.check_output(
+            [sys.executable, str(source / "tools/stage_native.py"), product,
+             "--root", str(destination)], text=True, cwd=source,
+        )
+        if json.loads(result) != components:
+            raise RuntimeError(f"Unexpected native build inputs for {product}")
     (destination / "revision").write_text(lock["revision"] + "\n")
     return destination
 

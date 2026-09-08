@@ -4,9 +4,14 @@ use xdgen::{App, Context, FluentString};
 fn main() {
     println!("cargo:rerun-if-changed=../i18n");
     println!("cargo:rerun-if-changed=../../../build/native-apps/claw-applet-calendar/i18n");
+    println!("cargo:rerun-if-changed=../../../build/native-apps/claw-applet-clipboard/i18n");
     let ctx = Context::new("../i18n/", "desktop_entries").unwrap();
     let calendar_ctx = Context::new(
         "../../../build/native-apps/claw-applet-calendar/i18n/",
+        "desktop_entries",
+    ).unwrap();
+    let clipboard_ctx = Context::new(
+        "../../../build/native-apps/claw-applet-clipboard/i18n/",
         "desktop_entries",
     ).unwrap();
     let workspace_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -174,7 +179,7 @@ fn main() {
     ]
     .into_iter()
     .map(|(id, name, comment, keywords)| {
-        let template_path = if name == "claw-applet-calendar" {
+        let template_path = if matches!(name, "claw-applet-calendar" | "claw-applet-clipboard") {
             format!("../../../build/native-apps/{name}/data/{id}.desktop")
         } else {
             format!("../{name}/data/{id}.desktop")
@@ -185,7 +190,11 @@ fn main() {
             .comment(FluentString(comment))
             .keywords(FluentString(keywords));
 
-        let context = if name == "claw-applet-calendar" { &calendar_ctx } else { &ctx };
+        let context = match name {
+            "claw-applet-calendar" => &calendar_ctx,
+            "claw-applet-clipboard" => &clipboard_ctx,
+            _ => &ctx,
+        };
         (id, app.expand_desktop(&template_path, context).unwrap())
     })
     .for_each(|(id, contents)| {

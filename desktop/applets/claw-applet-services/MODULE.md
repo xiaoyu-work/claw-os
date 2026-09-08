@@ -14,6 +14,9 @@ Widget Rail re-exports the library without changing its consumers. The OS
 `cosmic-applets` dispatcher translates events to the product-owned Calendar
 UI's `AgendaProvider` contract. No App invokes another App, and no grant or
 data partition is broadened or combined.
+The Clipboard host also uses this policy client, mapping the product library's
+typed read/write requests only to `Name(history)`. CopyQ implementation belongs
+to the external Clipboard product, not this library or Widget Rail.
 
 From the repository root:
 

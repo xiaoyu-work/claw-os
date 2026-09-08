@@ -26,7 +26,7 @@ claw-applet-approval-gate = { path = "../claw-applet-approval-gate" }
 claw-applet-agent-activity = { path = "../claw-applet-agent-activity" }
 claw-applet-calendar = { path = "../../../build/native-apps/claw-applet-calendar" }
 claw-applet-services = { path = "../claw-applet-services" }
-claw-applet-clipboard = { path = "../claw-applet-clipboard" }
+claw-applet-clipboard = { path = "../../../build/native-apps/claw-applet-clipboard" }
 claw-applet-widget-rail = { path = "../claw-applet-widget-rail" }
 cosmic-panel-button = { path = "../cosmic-panel-button" }
 libcosmic.workspace = true

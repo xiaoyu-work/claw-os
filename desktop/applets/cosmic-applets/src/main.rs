@@ -54,9 +54,32 @@ fn main() -> cosmic::iced::Result {
                 })
             })
         }),
-        "claw-applet-clipboard" => claw_applet_clipboard::run(),
+        "claw-applet-clipboard" => claw_applet_clipboard::run(clipboard_policy),
         "claw-applet-widget-rail" => claw_applet_widget_rail::run(),
         "cosmic-panel-button" => cosmic_panel_button::run(),
         _ => Ok(()),
     }
+}
+
+fn clipboard_policy(
+    permission: claw_applet_clipboard::HistoryPermission,
+) -> claw_applet_clipboard::PolicyFuture {
+    let (verb, scope) = clipboard_request(permission);
+    Box::pin(claw_applet_services::policy::require(verb, scope))
+}
+
+fn clipboard_request(
+    permission: claw_applet_clipboard::HistoryPermission,
+) -> (&'static str, claw_applet_services::policy::Scope<'static>) {
+    use claw_applet_clipboard::HistoryPermission;
+    let verb = match permission {
+        HistoryPermission::Read => "clipboard.read",
+        HistoryPermission::Write => "clipboard.write",
+    };
+    (verb, claw_applet_services::policy::Scope::Name("history"))
+}
+
+#[cfg(test)]
+mod tests {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/main.rs"));
 }

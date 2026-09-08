@@ -191,23 +191,34 @@ def test_native_inputs_follow_lock_updates_without_stale_files(locked_source):
     (upstream / "tools/stage_native.py").write_text(
         'import json, pathlib, shutil, sys\n'
         'root = pathlib.Path(sys.argv[sys.argv.index("--root") + 1])\n'
-        'shutil.copytree(pathlib.Path(__file__).parents[1] / "native", root / "claw-applet-calendar")\n'
-        'print(json.dumps(["claw-applet-calendar"]))\n'
+        'product = sys.argv[1]\n'
+        'shutil.copytree(pathlib.Path(__file__).parents[1] / "products" / product / "native", root / ("claw-applet-" + product))\n'
+        'print(json.dumps(["claw-applet-" + product]))\n'
     )
-    native = upstream / "native"
-    native.mkdir()
+    lock["products"] = ["calendar", "clipboard"]
+    for product in lock["products"]:
+        product_root = upstream / "products" / product
+        (product_root / "native").mkdir(parents=True)
+        (product_root / "native/Cargo.toml").write_text(product)
+        (product_root / "package.json").write_text(json.dumps({
+            "native": {f"claw-applet-{product}": "native"},
+        }))
+    native = upstream / "products/calendar/native"
     (native / "Cargo.toml").write_text("first")
     (native / "removed.rs").write_text("old")
     git = ["git", "-C", str(upstream)]
 
     def publish():
-        subprocess.run([*git, "add", "tools/stage_native.py", "native"], check=True)
+        subprocess.run([*git, "add", "tools/stage_native.py", "products"], check=True)
         subprocess.run([*git, "commit", "--quiet", "-m", "native fixture"], check=True)
         lock["revision"] = subprocess.check_output([*git, "rev-parse", "HEAD"], text=True).strip()
         (root / "packaging/apps.lock.json").write_text(json.dumps(lock))
 
     publish()
     destination = sources.prepare_native()
+    assert (destination / "claw-applet-clipboard/Cargo.toml").read_text() == "clipboard"
+    (destination / "unrelated").mkdir()
+    (destination / "unrelated/keep").write_text("preserve")
     assert (destination / "claw-applet-calendar/removed.rs").is_file()
     (native / "removed.rs").unlink()
     (native / "Cargo.toml").write_text("second")
@@ -215,9 +226,10 @@ def test_native_inputs_follow_lock_updates_without_stale_files(locked_source):
     assert sources.prepare_native() == destination
     assert (destination / "claw-applet-calendar/Cargo.toml").read_text() == "second"
     assert not (destination / "claw-applet-calendar/removed.rs").exists()
+    assert (destination / "unrelated/keep").read_text() == "preserve"
     assert (destination / "revision").read_text().strip() == lock["revision"]
     cached = sources.prepare_sources(lock)
-    (cached / "native/Cargo.toml").write_text("tampered")
+    (cached / "products/calendar/native/Cargo.toml").write_text("tampered")
     with pytest.raises(RuntimeError, match="modified"):
         sources.prepare_native()
 
@@ -226,11 +238,14 @@ def test_native_manual_image_and_asset_build_paths_agree():
     applets = ROOT / "desktop/applets"
     cargo = (applets / "cosmic-applets/Cargo.toml").read_text()
     assert '../../../build/native-apps/claw-applet-calendar' in cargo
+    assert '../../../build/native-apps/claw-applet-clipboard' in cargo
     just = (applets / "justfile").read_text()
     assert 'build-debug *args: prepare-apps' in just
     assert 'python3 ../../scripts/app_sources.py --native' in just
     assert "(_install_icons calendar-src)" in just
     assert "_install_calendar" in just.split("install:", 1)[1]
+    assert "_install_clipboard" in just.split("install:", 1)[1]
+    assert "test -f {{ clipboard-src }}/Cargo.toml" in just
     script = (ROOT / "rootfs/features/desktop/install.sh").read_text()
     assert 'CHROOT_NATIVE_APPS="$ROOTFS/build/build/native-apps"' in script
     assert 'mount --bind "$NATIVE_APP_SOURCES" "$CHROOT_NATIVE_APPS"' in script
@@ -241,38 +256,40 @@ def test_native_manual_image_and_asset_build_paths_agree():
     ).read_text()
 
 
-def test_external_desktop_app_stays_out_of_agent_package(locked_source, tmp_path):
+@pytest.mark.parametrize("product", ["calendar", "clipboard"])
+def test_external_desktop_app_stays_out_of_agent_package(locked_source, tmp_path, product):
     root, lock = locked_source
     upstream = Path(lock["repository"])
-    package = upstream / "products/calendar"
-    app = package / "apps/panel-calendar"
+    app_id = f"panel-{product}"
+    package = upstream / "products" / product
+    app = package / "apps" / app_id
     app.mkdir(parents=True)
-    (app / "app.json").write_text('{"id":"panel-calendar"}')
-    (package / "package.json").write_text('{"apps":["apps/panel-calendar"]}')
+    (app / "app.json").write_text(json.dumps({"id": app_id}))
+    (package / "package.json").write_text(json.dumps({"apps": [f"apps/{app_id}"]}))
     (upstream / "tools/stage.py").write_text(
         'import json, pathlib, shutil, sys\n'
         'root = pathlib.Path(sys.argv[sys.argv.index("--root") + 1])\n'
         'ids = sys.argv[sys.argv.index("--apps") + 1:]\n'
-        'if "panel-calendar" in ids:\n'
-        '    source = pathlib.Path(__file__).parents[1] / "products/calendar/apps/panel-calendar"\n'
-        '    shutil.copytree(source, root / "usr/lib/cos/apps/panel-calendar")\n'
+        f'if "{app_id}" in ids:\n'
+        f'    source = pathlib.Path(__file__).parents[1] / "products/{product}/apps/{app_id}"\n'
+        f'    shutil.copytree(source, root / "usr/lib/cos/apps/{app_id}")\n'
         'print(json.dumps(ids))\n'
     )
     git = ["git", "-C", str(upstream)]
-    subprocess.run([*git, "add", "products/calendar", "tools/stage.py"], check=True)
+    subprocess.run([*git, "add", f"products/{product}", "tools/stage.py"], check=True)
     subprocess.run([*git, "commit", "--quiet", "-m", "desktop fixture"], check=True)
     lock["revision"] = subprocess.check_output([*git, "rev-parse", "HEAD"], text=True).strip()
-    lock["products"] = ["calendar"]
-    lock["apps"] = ["panel-calendar"]
+    lock["products"] = [product]
+    lock["apps"] = [app_id]
     (root / "packaging/apps.lock.json").write_text(json.dumps(lock))
     partition = root / "packaging/deb/claw-os-desktop/apps.list"
     partition.parent.mkdir(parents=True)
-    partition.write_text("panel-calendar\n")
+    partition.write_text(app_id + "\n")
     assert sources.stage_products(tmp_path / "agent", "agent") == []
-    assert not (tmp_path / "agent/usr/lib/cos/apps/panel-calendar").exists()
-    assert sources.stage_products(tmp_path / "desktop", "desktop") == ["panel-calendar"]
-    assert (tmp_path / "desktop/usr/lib/cos/apps/panel-calendar/app.json").is_file()
-    assert sources.app_path("panel-calendar").name == "panel-calendar"
+    assert not (tmp_path / "agent/usr/lib/cos/apps" / app_id).exists()
+    assert sources.stage_products(tmp_path / "desktop", "desktop") == [app_id]
+    assert (tmp_path / "desktop/usr/lib/cos/apps" / app_id / "app.json").is_file()
+    assert sources.app_path(app_id).name == app_id
     with pytest.raises(ValueError, match="not in the source lock"):
         sources.app_path("unknown")
     (root / "scripts").mkdir()
@@ -284,4 +301,34 @@ def test_external_desktop_app_stays_out_of_agent_package(locked_source, tmp_path
         **os.environ, "PROJECT_DIR": str(root), "SCRIPT_DIR": str(root / "packaging/deb"),
         "STAGE_ROOT": str(stage),
     })
-    assert (stage / "usr/lib/cos/apps/panel-calendar/app.json").is_file()
+    assert (stage / "usr/lib/cos/apps" / app_id / "app.json").is_file()
+
+
+@pytest.mark.parametrize("components", [
+    {"../escape": "native"},
+    {"valid": "../escape"},
+    {"valid": 123},
+    ["not-a-map"],
+])
+def test_invalid_native_exports_are_rejected_before_replacement(tmp_path, monkeypatch, components):
+    source = tmp_path / "source"
+    product = source / "products/clipboard"
+    product.mkdir(parents=True)
+    (product / "package.json").write_text(json.dumps({"native": components}))
+    monkeypatch.setattr(sources, "ROOT", tmp_path)
+    monkeypatch.setattr(sources, "read_lock", lambda: {"products": ["clipboard"]})
+    monkeypatch.setattr(sources, "prepare_sources", lambda _: source)
+    with pytest.raises(ValueError, match="native|Native"):
+        sources.prepare_native()
+    assert not (tmp_path / "build/native-apps").exists()
+
+
+def test_duplicate_native_exports_are_rejected(tmp_path, monkeypatch):
+    for product in ("calendar", "clipboard"):
+        root = tmp_path / "products" / product
+        root.mkdir(parents=True)
+        (root / "package.json").write_text('{"native":{"duplicate":"native"}}')
+    monkeypatch.setattr(sources, "read_lock", lambda: {"products": ["calendar", "clipboard"]})
+    monkeypatch.setattr(sources, "prepare_sources", lambda _: tmp_path)
+    with pytest.raises(ValueError, match="duplicate"):
+        sources.prepare_native()

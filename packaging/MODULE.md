@@ -67,9 +67,9 @@ Migrated products live in `xiaoyu-work/clawos-app`, not a second local App
 implementation. `apps.lock.json` pins their published commit. Product-owned
 staging builds the Mail XPI and Python payload; OS packaging retains the native
 authority launcher and distributes these together in `claw-os-agent`.
-External desktop Apps are excluded from Agent staging. `panel-calendar` is
+External desktop Apps are excluded from Agent staging. `panel-calendar` and `panel-clipboard` are
 resolved from the same immutable source pin by desktop package assembly;
-its complete product-owned native UI is linked into `cosmic-applets`.
+their complete product-owned native UIs are linked into `cosmic-applets`.
 `deb/claw-os-desktop/apps.list` remains the package-ownership authority.
 App partition accounting includes nested gateway manifests. Shared gateway
 libraries remain OS-owned, and the canonical argument module is installed in

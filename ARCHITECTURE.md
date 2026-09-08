@@ -88,14 +88,15 @@ Recoll-backed `docs` tools, explicit-provider Browser `search` and headless
 extension now live in the Browser product too. The reusable `cos-browser`
 engine and privileged attached-browser provider remain here.
 
-The Calendar UI library, localization and assets are materialized from the
+The Calendar and Clipboard UI libraries, localization and assets are materialized from the
 same App source pin into ignored `build/native-apps` by
 `scripts/app_sources.py --native`. Manual applet builds prepare these inputs;
 image builds bind the prepared tree into the chroot. The `cosmic-applets`
-host links this library against the existing forked toolkit and injects its
-typed agenda callback. Shared read-only Calendar access and policy checks
+host links these libraries against the existing forked toolkit and injects
+Calendar's typed agenda callback and Clipboard's history policy callback.
+Shared read-only Calendar access and policy checks
 live in `desktop/applets/claw-applet-services`, not in either App. Widget
-Rail consumes that library independently. `panel-calendar` remains owned by
+Rail consumes that library independently. `panel-calendar` and `panel-clipboard` remain owned by
 the desktop Debian package, with its launcher identity and narrow grant
 unchanged; installed updates remain signed APT packages.
 The Terminal product also owns the `exec` App source; core process authority
@@ -206,8 +207,12 @@ grants separate, exact source-file read authority and explicit clear confirmatio
 Primary selection stays opt-in and MIME defaults remain OS-owned. Wayland session
 validation, wl-clipboard execution, bounded content transfer, source descriptors
 and write serialization remain here. No clipboard contents or history are copied.
-Native `panel-clipboard` and its CopyQ history integration remain pending; its
-history scopes are not merged into selection authority.
+The complete native `panel-clipboard` popup, CopyQ adapter/scripts, resources and
+tests are now product-owned. The OS host maps its typed `HistoryPermission`
+requests to `clipboard.read`/`clipboard.write:Name(history)` via shared policy.
+Its existing refresh, restore, delete and confirmed-clear behavior remains
+unchanged. CopyQ history is not unified with Wayland selection, and history
+scopes are not merged into selection authority.
 Messaging Channels owns the `gateway-discord` connector source, preserving
 its operations/MCP adapter, installed nested path and per-App state layout.
 It imports pinned `gateway._shared` libraries explicitly; credential, egress,

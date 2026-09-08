@@ -11,6 +11,13 @@ the `cosmic-applets` host still links this product library. Shared Calendar
 read-only data access and policy helpers remain here in
 `applets/claw-applet-services`, extracted without changing their GPL terms.
 
+Clipboard's complete panel UI, CopyQ adapter, localization and desktop entry
+also moved with the original GPL license/SPDX notices to the
+[Clipboard product](https://github.com/xiaoyu-work/clawos-app/blob/main/products/clipboard/PROVENANCE.md).
+The same immutable pin supplies its native build inputs. The OS shell retains
+only hosting and a typed adapter to the shared history policy service; product
+code no longer imports Widget Rail.
+
 This directory is a **vendored fork** of the COSMIC Desktop Environment
 by System76. Code was copied (not submodule-linked) on 2026-05-12, and
 **directory names were normalized** to drop the upstream `cosmic-`

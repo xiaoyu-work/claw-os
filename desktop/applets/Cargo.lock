@@ -909,7 +909,6 @@ dependencies = [
 name = "claw-applet-clipboard"
 version = "0.1.0"
 dependencies = [
- "claw-applet-widget-rail",
  "i18n-embed",
  "i18n-embed-fl",
  "jiff",
@@ -919,8 +918,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
- "tracing-log",
- "tracing-subscriber",
 ]
 
 [[package]]

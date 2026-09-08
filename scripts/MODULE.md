@@ -22,7 +22,7 @@ shared build helpers.
 | `lib/image-identity.sh` | Image user/identity assertions |
 | `lib/git-readonly.sh` | Read-only Git wrapper for privileged builds |
 | `app_sources.py` | Resolve the immutable App repository pin and stage product-owned package assets |
-| `app_sources.py --native` | Refresh native Calendar library/assets at a stable ignored build path from the current immutable pin |
+| `app_sources.py --native` | Validate and refresh product-declared native libraries/assets (Calendar and Clipboard) at stable ignored build paths from the immutable pin |
 
 ## Dependencies
 
@@ -43,3 +43,6 @@ Also run the narrowest consuming target/package command.
 `--package desktop` preserves the explicit Debian package partition.
 `--app-path <id>` resolves a single source directory for desktop package
 assembly. None of these commands fetches application code at runtime.
+Native preparation validates all declared names and product-local source paths
+before replacement, rejects duplicate exports and only replaces exact declared
+component paths; unrelated build caches are preserved.
