@@ -63,6 +63,7 @@ There are no sibling-checkout dependencies or runtime download fallbacks.
 | `gateway-discord` | Source moved to `clawos-app/products/messaging-channels/apps/gateway/discord`; existing operations/MCP contract, nested install path and state layout preserved; explicit pinned `gateway._shared` imports replace relative lookup; authenticated connector admission/lifecycle and durable replay handling remain pending |
 | `gateway-dingtalk` | Source moved to `clawos-app/products/messaging-channels/apps/gateway/dingtalk`; outbound-only send/status, optional signing, keyword/Markdown/mentions and existing grants preserved; imports use pinned `gateway._shared`; no inbound Agent loop or new state store |
 | `gateway-googlechat` | Source moved to `clawos-app/products/messaging-channels/apps/gateway/googlechat`; outbound text/cardsV2, thread behavior and existing grants preserved; recipient remains informational and cannot retarget the webhook; Python/Rust contract fixtures follow source ownership |
+| `gateway-larksuite` | Source moved to `clawos-app/products/messaging-channels/apps/gateway/larksuite`; text/rich-post/card operations and existing grants preserved; corrected HMAC to the official timestamp-plus-secret key with an empty message; Python argument case moved with the connector |
 | Other products and connectors | Pending their individual paired migrations |
 
 Moving source does not complete a product redesign milestone or merge legacy

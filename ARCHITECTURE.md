@@ -216,6 +216,11 @@ send/status, text/cardsV2 and thread reply-or-create behavior. The configured
 webhook fixes the destination space; `recipient` remains informational only.
 Its contract and grants are unchanged, with pinned shared egress/credential
 libraries and no new inbound Agent route or local state store.
+Outbound-only `gateway-larksuite` also belongs there, preserving text/rich-post/
+interactive-card operations and existing grants. Its old HMAC algorithm is
+corrected to the official custom-bot contract: timestamp-plus-secret key, empty
+message and a seconds timestamp. No unsigned fallback, extra authority or new
+state is introduced; the existing optional unsigned mode is unchanged.
 The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling

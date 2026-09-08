@@ -22,12 +22,6 @@ def _load(name):
     ("name", "argv", "expected_args", "expected_kwargs"),
     [
         (
-            "larksuite",
-            ["hello", "--post", "--title", "Title", "--card", "--card-json", "{}"],
-            ("hello",),
-            {"post": True, "title": "Title", "card": True, "card_json": "{}"},
-        ),
-        (
             "mattermost",
             ["hello", "--recipient", "town-square", "--username", "bot", "--icon-url", "https://x"],
             ("town-square", "hello", "bot", "https://x"),
