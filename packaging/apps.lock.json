@@ -1,7 +1,7 @@
 {
   "version": 1,
   "repository": "https://github.com/xiaoyu-work/clawos-app.git",
-  "revision": "3f670141c3d80b92f781a32f5374f64b91f22d4e",
+  "revision": "2d2e98b34674a1be65b3ca977670c570a2240893",
   "products": ["mail"],
-  "apps": ["mail-ai"]
+  "apps": ["mail-ai", "email"]
 }

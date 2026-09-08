@@ -23,7 +23,8 @@ There are no sibling-checkout dependencies or runtime download fallbacks.
 | Source migration | Status |
 | --- | --- |
 | Mail native source, `mail-ai`, extension UI and product tests/build | Moved to `clawos-app/products/mail`; installed identity, paths and authority preserved |
-| `email` and `gateway-email` | Still here; migrate individually into the same Mail product, not new products |
+| `email` | Moved to `clawos-app/products/mail/apps/email`; existing provider grants and installed identity preserved |
+| `gateway-email` | Still here; migrate into the same Mail product, not a new product |
 | Other products and connectors | Pending their individual paired migrations |
 
 Moving source does not complete a product redesign milestone or merge legacy
