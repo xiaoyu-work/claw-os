@@ -82,7 +82,8 @@ Products migrate individually from this repository to
 Mail's native source, `mail-ai`, legacy `email`, restricted `gateway-email`
 delivery and extension UI have moved;
 Calendar's event/provider operations, direct `fs` MCP implementation and
-Recoll-backed `docs` tools have moved as well. The remaining Apps
+Recoll-backed `docs` tools and explicit-provider Browser `search` have moved
+as well. The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling
 OS checkout. `packaging/apps.lock.json` pins a published App commit, and

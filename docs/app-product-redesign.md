@@ -28,6 +28,7 @@ There are no sibling-checkout dependencies or runtime download fallbacks.
 | `calendar` | Moved to `clawos-app/products/calendar/apps/calendar`; event storage and provider authority unchanged; `panel-calendar` still pending |
 | `fs` | Moved to `clawos-app/products/files/apps/fs`; all fourteen MCP tools and snapshot authority preserved; native Files UI still pending |
 | `docs` | Moved to `clawos-app/products/files/apps/docs`; four Recoll-backed tools, owner index state and scopes preserved; background indexing remains OS-owned |
+| `search` | Moved to `clawos-app/products/browser/apps/search`; explicit provider choice, two MCP tools and exact credential/network scopes preserved; browser UI and session entry points still pending |
 | Other products and connectors | Pending their individual paired migrations |
 
 Moving source does not complete a product redesign milestone or merge legacy

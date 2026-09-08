@@ -281,35 +281,56 @@ fn bundled_conditional_capabilities_are_exact() {
         cap.verb == crate::caps::Verb::SECRET_READ
             && cap.scope == crate::caps::Scope::name("wifi/home")
     }));
+}
 
-    let search = load(&["search"]);
-    let brave = active(
-        search
-            .resolve_needs(
-                "web",
-                &BTreeMap::from([
-                    ("provider".to_string(), serde_json::json!("brave")),
-                    ("query".to_string(), serde_json::json!(["claw"])),
-                ]),
-            )
-            .unwrap(),
-    );
-    let brave_secrets = brave
-        .iter()
-        .filter(|cap| cap.verb == crate::caps::Verb::SECRET_READ)
-        .map(|cap| cap.scope.clone())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        brave_secrets,
-        [crate::caps::Scope::name("default/BRAVE_SEARCH_API_KEY")]
-    );
-    assert!(brave.iter().any(|cap| {
-        cap.verb == crate::caps::Verb::NET_DIAL
-            && cap.scope == crate::caps::Scope::host("api.search.brave.com")
-    }));
-    assert!(brave
-        .iter()
-        .all(|cap| cap.scope != crate::caps::Scope::Wild));
+#[test]
+fn search_mcp_provider_capabilities_are_exact() {
+    use crate::caps::{Scope, Verb};
+
+    let search = Manifest::from_json(
+        &std::fs::read_to_string(app_sources::app_dir("search").join("app.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(search.operations.is_empty());
+    for tool in ["search.web", "search.image"] {
+        for (provider, host, secrets) in [
+            (
+                "brave",
+                "api.search.brave.com",
+                vec![Scope::name("default/BRAVE_SEARCH_API_KEY")],
+            ),
+            (
+                "google",
+                "www.googleapis.com",
+                vec![
+                    Scope::name("default/GOOGLE_SEARCH_API_KEY"),
+                    Scope::name("default/GOOGLE_SEARCH_ENGINE_ID"),
+                ],
+            ),
+        ] {
+            let caps = search
+                .resolve_mcp_tool_needs(
+                    tool,
+                    &BTreeMap::from([
+                        ("provider".to_string(), serde_json::json!(provider)),
+                        ("query".to_string(), serde_json::json!("claw")),
+                    ]),
+                )
+                .unwrap()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+            let scopes = |verb| {
+                caps.iter()
+                    .filter(|cap| cap.verb == verb)
+                    .map(|cap| cap.scope.clone())
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(scopes(Verb::SECRET_READ), secrets, "{tool}: {provider}");
+            assert_eq!(scopes(Verb::NET_DIAL), [Scope::host(host)], "{tool}: {provider}");
+            assert!(caps.iter().all(|cap| cap.scope != Scope::Wild));
+        }
+    }
 }
 
 #[test]

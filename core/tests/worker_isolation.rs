@@ -1562,9 +1562,8 @@ import importlib.util
 spec = importlib.util.spec_from_file_location('app', {main:?})
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
-body, error = mod._request_json('http://api.duckduckgo.com/?q=x')
+body = mod._request_json('http://api.duckduckgo.com/?q=x')
 print('body', body)
-print('error', error)
 import socket
 try:
     socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -1572,8 +1571,8 @@ try:
 except OSError as failure:
     print('direct refused', failure.errno)
 "#,
-        main = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../apps/search/main.py")
+        main = app_sources::app_dir("search")
+            .join("main.py")
             .canonicalize()
             .expect("search main")
             .to_string_lossy(),
@@ -1590,6 +1589,7 @@ except OSError as failure:
         )]),
     );
     let seen = output.stdout_string() + &output.stderr_string();
+    assert!(output.status.success(), "search request failed: {seen}");
     assert!(seen.contains("brokered"), "{seen}");
     assert!(!seen.contains("DIRECT-OPENED"), "{seen}");
     assert!(seen.contains("direct refused"), "{seen}");
@@ -1612,12 +1612,11 @@ import importlib.util
 spec = importlib.util.spec_from_file_location('app', {main:?})
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
-body, error = mod._request_json('http://api.duckduckgo.com/?q=x')
+body = mod._request_json('http://api.duckduckgo.com/?q=x')
 print('body', body)
-print('error', error)
 "#,
-        main = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../apps/search/main.py")
+        main = app_sources::app_dir("search")
+            .join("main.py")
             .canonicalize()
             .expect("search main")
             .to_string_lossy(),
@@ -1634,6 +1633,10 @@ print('error', error)
         )]),
     );
     let seen = output.stdout_string() + &output.stderr_string();
+    assert!(
+        !output.status.success(),
+        "unauthorized redirect succeeded: {seen}"
+    );
     assert!(
         seen.contains("Permission denied") && seen.contains("elsewhere.example"),
         "a redirect to an ungranted host was followed: {seen}"
