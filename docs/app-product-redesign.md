@@ -70,6 +70,7 @@ There are no sibling-checkout dependencies or runtime download fallbacks.
 | `gateway-signal` | Source moved to `clawos-app/products/messaging-channels/apps/gateway/signal`; external REST send/status, phone/group handling and existing grants preserved; backend/account state remain external, private-network access is not automatically authorized and inbound polling remains unimplemented |
 | `gateway-slack` | Source moved to `clawos-app/products/messaging-channels/apps/gateway/slack`; Web API send/status, bot-token precedence, API-level errors and existing grants preserved; Rust manifest fixture follows the immutable source pin, and Socket Mode / Events HTTP remain unimplemented |
 | `gateway-sms` | Source moved to `clawos-app/products/messaging-channels/apps/gateway/sms`; Twilio REST send/status, Basic authentication, phone/Messaging Service sender selection and existing grants preserved; no inbound webhook, delivery callback or state migration added |
+| `gateway-teams` | Source moved to `clawos-app/products/messaging-channels/apps/gateway/teams`; default Adaptive Card, explicit legacy MessageCard and existing grants preserved; recipient remains informational, Python argument cases moved and Rust binding fixture follows the source pin |
 | Other products and connectors | Pending their individual paired migrations |
 
 Moving source does not complete a product redesign milestone or merge legacy

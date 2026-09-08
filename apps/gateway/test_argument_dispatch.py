@@ -63,12 +63,6 @@ def _load(name):
             },
         ),
         (
-            "teams",
-            ["hello", "--recipient", "channel", "--title", "Title", "--legacy"],
-            ("channel", "hello", "Title", True),
-            {},
-        ),
-        (
             "webex",
             ["person@example.com", "hello", "--plain"],
             ("person@example.com", "hello", True),
@@ -134,7 +128,6 @@ def test_list_dispatch_forwards_manifest_options(
 @pytest.mark.parametrize(
     ("name", "argv"),
     [
-        ("teams", ["channel", "hello"]),
         ("ntfy", ["alerts", "hello"]),
         ("webhook", ["https://example.test/hook", "hello"]),
     ],
@@ -154,7 +147,6 @@ def test_removed_leading_positionals_are_rejected(name, argv):
     "name",
     [
         "ntfy",
-        "teams",
         "webhook",
     ],
 )
@@ -167,11 +159,8 @@ def test_one_positional_is_always_message_text(name):
 
     if name == "ntfy":
         assert send.call_args.args[:2] == (None, "hello")
-    elif name == "webhook":
-        assert send.call_args.args[:2] == ("", "hello")
     else:
-        assert send.call_args.args[1] == "hello"
-        assert send.call_args.args[0] == ""
+        assert send.call_args.args[:2] == ("", "hello")
 
 
 def test_ntfy_materialized_server_is_shared_by_send_and_status():

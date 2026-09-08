@@ -249,6 +249,11 @@ the repository move.
 send/status, phone/Messaging Service sender selection and existing grants.
 Credentials and shared egress remain platform-owned. No inbound webhook or
 delivery callback is introduced; API acceptance is not final SMS delivery.
+`gateway-teams` also moves to Messaging Channels, preserving default Adaptive
+Cards, explicit legacy MessageCards and existing grants. Its recipient remains
+informational; only the configured webhook selects the destination. Python
+argument cases move with the product and the Rust binding contract reads the
+immutable source pin. No automatic fallback or inbound service is introduced.
 The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling
