@@ -245,6 +245,10 @@ bot-token precedence and API-level error handling intact. Existing Slack-host,
 credential and self-memory grants are unchanged; status remains authority-free.
 Socket Mode and Events HTTP are still unimplemented, not newly authorized by
 the repository move.
+`gateway-sms` also belongs to Messaging Channels, retaining Twilio REST
+send/status, phone/Messaging Service sender selection and existing grants.
+Credentials and shared egress remain platform-owned. No inbound webhook or
+delivery callback is introduced; API acceptance is not final SMS delivery.
 The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling
