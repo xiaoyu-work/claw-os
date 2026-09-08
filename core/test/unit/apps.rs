@@ -45,12 +45,10 @@ fn operation_schema_preserves_literal_defaults() {
 
 #[test]
 fn fs_mcp_tools_declare_their_optional_path_defaults() {
-    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap();
-    let fs =
-        Manifest::from_json(&std::fs::read_to_string(repository.join("apps/fs/app.json")).unwrap())
-            .unwrap();
+    let fs = Manifest::from_json(
+        &std::fs::read_to_string(app_sources::app_dir("fs").join("app.json")).unwrap(),
+    )
+    .unwrap();
     assert_eq!(
         mcp_tool_for_command(&fs, "ls").unwrap().args[0].default,
         Some(serde_json::json!("."))
@@ -163,7 +161,10 @@ fn known_first_party_schema_drift_is_resolved_in_manifests() {
         ["send", "status"]
     );
 
-    let fs = load(&["fs"]);
+    let fs = Manifest::from_json(
+        &std::fs::read_to_string(app_sources::app_dir("fs").join("app.json")).unwrap(),
+    )
+    .unwrap();
     assert!(is_mcp_only_cli(&fs));
     for command in ["rename", "move", "copy", "read_bytes", "write_bytes"] {
         assert!(

@@ -22,7 +22,7 @@ identities to products, system capabilities or connectors.
 
 Product sources are moving individually to
 [`xiaoyu-work/clawos-app`](https://github.com/xiaoyu-work/clawos-app).
-`mail-ai`, `email`, `gateway-email`, `calendar` and the Mail UI/native source are owned
+`mail-ai`, `email`, `gateway-email`, `calendar`, `fs` and the Mail UI/native source are owned
 there already. Do not recreate a
 local copy: OS package assembly consumes the immutable revision in
 [`packaging/apps.lock.json`](../packaging/apps.lock.json). Source relocation
@@ -68,7 +68,7 @@ does not rename installed App identities or grant additional authority.
 | --- | --- |
 | `<id>/app.json` | App identity and operation/capability contract |
 | `<id>/main.py` | Typed behavior for MCP-only Apps; `run(command, args)` only for unmigrated operations |
-| `fs/server.py` | Direct filesystem MCP handlers; authenticated per-call session ids for snapshots |
+| [`clawos-app/products/files`](https://github.com/xiaoyu-work/clawos-app/tree/main/products/files) | Direct filesystem MCP handlers; authenticated per-call session ids for snapshots |
 | `<id>/test_main.py` | App behavior, validation, and scope tests |
 | `_shared/` | Shared safe filesystem/HTTP/process helpers |
 | `gateway/` | External messaging gateways and shared gateway safety helpers |

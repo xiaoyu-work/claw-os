@@ -1,5 +1,9 @@
 use super::*;
 
+mod app_sources {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/support/app_sources.rs"));
+}
+
 fn parse(s: &str) -> Manifest {
     Manifest::from_json(s).expect("manifest should be valid")
 }
@@ -363,10 +367,9 @@ fn mcp_tool_defaults_feed_arguments_and_capabilities() {
 
 #[test]
 fn fs_mcp_manifest_requires_content_and_scopes_metadata_sidecars() {
-    let manifest = parse(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../apps/fs/app.json"
-    )));
+    let manifest = parse(
+        &std::fs::read_to_string(app_sources::app_dir("fs").join("app.json")).unwrap(),
+    );
     assert!(manifest.operations.is_empty());
     assert_eq!(manifest.mcp.as_ref().unwrap().tools.len(), 14);
     let directory = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
@@ -409,10 +412,9 @@ fn fs_mcp_manifest_requires_content_and_scopes_metadata_sidecars() {
 
 #[test]
 fn fs_mcp_cli_content_binds_without_operations_or_stdin() {
-    let manifest = parse(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../apps/fs/app.json"
-    )));
+    let manifest = parse(
+        &std::fs::read_to_string(app_sources::app_dir("fs").join("app.json")).unwrap(),
+    );
     let paths = crate::caps::args::PathContext {
         home: "/home/test".into(),
         cwd: Some(std::env::current_dir().unwrap().to_str().unwrap().into()),

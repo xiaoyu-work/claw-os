@@ -2,6 +2,10 @@ use super::app_commands::{consent_cmd, create_cmd, install_cmd, stage_app_instal
 use super::*;
 use crate::cli_help::{command_schemas, show_builtin_schema, show_command_schema};
 
+mod app_sources {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/support/app_sources.rs"));
+}
+
 #[test]
 fn browser_bridge_request_is_bounded_and_cannot_assert_a_session() {
     let parsed = parse_browser_bridge_request(Some(b"{\"action\":\"tabs.list\"}")).unwrap();
@@ -1930,8 +1934,10 @@ fn mcp_stdin_is_only_requested_in_the_option_region() {
 
 #[test]
 fn mcp_json_arguments_use_canonical_validation_and_roundtrip_large_content() {
-    let manifest =
-        caps::manifest::Manifest::from_json(include_str!("../../../apps/fs/app.json")).unwrap();
+    let manifest = caps::manifest::Manifest::from_json(
+        &std::fs::read_to_string(app_sources::app_dir("fs").join("app.json")).unwrap(),
+    )
+    .unwrap();
     let marker = ["--args-stdin".to_string()];
     let content = "large text é\0\n".repeat(24 * 1024);
     assert!(content.len() > 128 * 1024);

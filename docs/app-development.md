@@ -279,7 +279,7 @@ directly.
 ### Filesystem MCP contract
 
 The bundled `fs` App is MCP-only: all 14 commands are declared once under
-[`apps/fs/app.json`](../apps/fs/app.json)'s `mcp.tools`, with direct SDK
+[`products/files/apps/fs/app.json`](https://github.com/xiaoyu-work/clawos-app/blob/main/products/files/apps/fs/app.json)'s `mcp.tools`, with direct SDK
 handlers in `server.py` and typed behavior in `main.py`. Human CLI calls use
 the same tools:
 
@@ -741,5 +741,5 @@ format, trust roots, revocation and rollback.
   native-messaging bridge.
 * [`apps/notify/`](../apps/notify/),
   [`apps/kv/`](../apps/kv/),
-  [`apps/fs/`](../apps/fs/) — small bundled apps that double as
+  [`clawos-app/products/files/apps/fs/`](https://github.com/xiaoyu-work/clawos-app/tree/main/products/files/apps/fs) — small bundled apps that double as
   reference templates.
