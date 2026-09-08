@@ -107,7 +107,8 @@ Storage owns `storage-manager`; canonical block-device verification, UDisks2
 execution and offline no-repair checkers remain OS-owned. Observation,
 diagnostic and exact-device mount permissions stay separate.
 Settings owns `accessibility-manager`, `audio-manager` and
-`bluetooth-manager`, `camera-manager`, `display-manager` and `desktop-manager`;
+`bluetooth-manager`, `camera-manager`, `display-manager`, `desktop-manager`
+and `location-manager`;
 user-session validation, COSMIC
 Wayland, AT-SPI, PipeWire/WirePlumber, BlueZ and GStreamer execution remain
 OS-owned. Audio observation,
@@ -121,6 +122,9 @@ owner-bound backup/restore state remain OS-owned.
 Desktop window control retains separate observation/window permissions and
 exact AppID launch authority for restart. Wayland window checks and native
 relaunch stay in the OS, without calling another App's business interface.
+Location retains its existing `device.location` Wild grant and accuracy
+choices; user-bound GeoClue execution and offline timezone suggestions stay
+OS-owned. Suggestions do not change the system timezone.
 Native Settings and other management Apps await
 separate migrations, without combining their provider authority.
 The remaining Apps
