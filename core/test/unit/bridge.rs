@@ -1123,11 +1123,24 @@ fn bundled_removed_aliases_are_rejected() {
         positional.values["output"],
         serde_json::json!(output.to_string_lossy())
     );
+}
 
-    let pkg = load(&["pkg"]);
+#[test]
+fn pkg_search_rejects_removed_short_limit_alias() {
+    let pkg = Manifest::from_json(
+        &std::fs::read_to_string(app_sources::app_dir("pkg").join("app.json")).unwrap(),
+    )
+    .unwrap();
     assert!(bind_operation_args(
         &pkg.operations["search"],
         &["editor".into(), "-n".into(), "3".into()],
     )
     .is_err());
+    let bound = bind_operation_args(
+        &pkg.operations["search"],
+        &["text".into(), "editor".into(), "--limit".into(), "3".into()],
+    )
+    .unwrap();
+    assert_eq!(bound.values["query"], serde_json::json!(["text", "editor"]));
+    assert_eq!(bound.values["limit"], serde_json::json!(3));
 }
