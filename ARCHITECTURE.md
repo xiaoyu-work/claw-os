@@ -196,6 +196,15 @@ validation, wl-clipboard execution, bounded content transfer, source descriptors
 and write serialization remain here. No clipboard contents or history are copied.
 Native `panel-clipboard` and its CopyQ history integration remain pending; its
 history scopes are not merged into selection authority.
+Messaging Channels owns the `gateway-discord` connector source, preserving
+its operations/MCP adapter, installed nested path and per-App state layout.
+It imports pinned `gateway._shared` libraries explicitly; credential, egress,
+memory and process authority plus installed state partition migration remain
+OS-owned. No credentials, configuration or Discord resume/session data are
+copied. The legacy inbound `cos agent ask` path is not an authenticated
+connector admission API and is not newly authorized by this move. Owner/sender
+binding, service lifecycle and durable replay handling remain pending without
+weakening the App-originated system-Agent restrictions.
 The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling

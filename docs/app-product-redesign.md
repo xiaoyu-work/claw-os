@@ -60,6 +60,7 @@ There are no sibling-checkout dependencies or runtime download fallbacks.
 | `log` | Legacy four-tool JSONL implementation moved to `clawos-app/products/events-audit/apps/log`; file layout and read/write grants preserved without copying data; isolated App logs are not the OS audit trail and typed audit-service integration remains pending |
 | `launcher` | Python five-tool App moved to `clawos-app/products/launcher/apps/launcher`; XDG discovery, exact launch/file grants and recent layout preserved; native UI/build and legacy forwarding replacement plus shared catalog/history remain pending |
 | `clipboard-manager` | Five-tool App moved to `clawos-app/products/clipboard/apps/clipboard-manager`; selection read/write, exact source grant, MIME/primary defaults and clear confirmation preserved; Wayland execution stays OS-owned and native panel/CopyQ history integration remains pending |
+| `gateway-discord` | Source moved to `clawos-app/products/messaging-channels/apps/gateway/discord`; existing operations/MCP contract, nested install path and state layout preserved; explicit pinned `gateway._shared` imports replace relative lookup; authenticated connector admission/lifecycle and durable replay handling remain pending |
 | Other products and connectors | Pending their individual paired migrations |
 
 Moving source does not complete a product redesign milestone or merge legacy
