@@ -57,7 +57,7 @@
 //! you see here. See `wire/v2-design.md` for the plan.
 
 use std::ffi::OsStr;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::process::{Command, Stdio};
 
 use serde::de::DeserializeOwned;
@@ -298,6 +298,37 @@ where
     A: IntoIterator,
     A::Item: AsRef<OsStr>,
 {
+    cos_call_json_stdin(family, verb, args, input, false)
+}
+
+/// Preserve an already-connected human stderr terminal while sending business
+/// data on stdin. No terminal is opened or fabricated; headless callers retain
+/// captured diagnostics. The OS still owns all session-bootstrap restrictions.
+#[doc(hidden)]
+pub fn cos_call_json_with_stdin_terminal<A>(
+    family: &str,
+    verb: &str,
+    args: A,
+    input: &[u8],
+) -> Result<serde_json::Value, BridgeError>
+where
+    A: IntoIterator,
+    A::Item: AsRef<OsStr>,
+{
+    cos_call_json_stdin(family, verb, args, input, std::io::stderr().is_terminal())
+}
+
+fn cos_call_json_stdin<A>(
+    family: &str,
+    verb: &str,
+    args: A,
+    input: &[u8],
+    terminal: bool,
+) -> Result<serde_json::Value, BridgeError>
+where
+    A: IntoIterator,
+    A::Item: AsRef<OsStr>,
+{
     if input.len() > APP_ARGS_STDIN_MAX_BYTES {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -305,7 +336,8 @@ where
         )
         .into());
     }
-    cos_call_json_structured_input(family, verb, args, Some(input))
+    let stderr = if terminal { Stdio::inherit() } else { Stdio::piped() };
+    cos_call_json_structured_input(family, verb, args, Some(input), stderr)
         .map_err(StructuredCosError::into_bridge)
 }
 
@@ -435,7 +467,7 @@ where
     A: IntoIterator,
     A::Item: AsRef<OsStr>,
 {
-    cos_call_json_structured_input(family, verb, args, None)
+    cos_call_json_structured_input(family, verb, args, None, Stdio::piped())
 }
 
 fn cos_call_json_structured_input<A>(
@@ -443,6 +475,7 @@ fn cos_call_json_structured_input<A>(
     verb: &str,
     args: A,
     input: Option<&[u8]>,
+    stderr: Stdio,
 ) -> Result<serde_json::Value, StructuredCosError>
 where
     A: IntoIterator,
@@ -454,7 +487,7 @@ where
     for a in args {
         cmd.arg(a);
     }
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.stdout(Stdio::piped()).stderr(stderr);
     cmd.stdin(if input.is_some() {
         Stdio::piped()
     } else {

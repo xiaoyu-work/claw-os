@@ -15,6 +15,7 @@ fn capture_uses_typed_sdk_stdin_and_validates_before_contacting_os() {
     std::env::set_var("CLAW_COS_BIN", &script);
     for path in ["", "relative", "/work/\0bad"] {
         assert!(screenshot(path, true).is_err());
+        assert!(screenshot_from_terminal(path, true).is_err());
     }
     assert!(!dir.path().join("cos.args").exists());
     let cases = [
@@ -44,6 +45,7 @@ fn capture_uses_typed_sdk_stdin_and_validates_before_contacting_os() {
         )
         .unwrap();
         assert_eq!(screenshot("/work/shots", false).is_ok(), ok);
+        assert_eq!(screenshot_from_terminal("/work/shots", false).is_ok(), ok);
     }
     std::fs::write(
         dir.path().join("cos.reply"),

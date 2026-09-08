@@ -5,6 +5,34 @@ use super::*;
 // (notably `caps::enforcement`) that mutate the same variables.
 use crate::caps::test_env_lock::env_lock;
 
+#[test]
+fn capture_stdin_bridge_needs_a_real_human_terminal_or_existing_session() {
+    let _lock = env_lock();
+    let _data = redirect_data_dir();
+    let _session = crate::test_env::TestEnvVarGuard::remove("COS_SESSION");
+    let _app = crate::test_env::TestEnvVarGuard::remove("COS_APP_ID");
+    let _mcp = crate::test_env::TestEnvVarGuard::remove("COS_MCP_SERVER");
+    let args = ["__capture", "screenshot", "--request-stdin"].map(String::from);
+    assert!(bootstrap_user_cli_session_impl(&args, false).is_none());
+    {
+        let _app = crate::test_env::TestEnvVarGuard::set("COS_APP_ID", "cosmic-screenshot");
+        assert!(bootstrap_user_cli_session_impl(&args, true).is_none());
+    }
+    {
+        let _mcp = crate::test_env::TestEnvVarGuard::set("COS_MCP_SERVER", "1");
+        assert!(bootstrap_user_cli_session_impl(&args, true).is_none());
+    }
+    let guard = bootstrap_user_cli_session_impl(&args, true)
+        .expect("the existing human terminal bootstrap remains available");
+    let registry: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(crate::paths::data_dir().join("proc/registry.json")).unwrap(),
+    )
+    .unwrap();
+    let caps = registry["sessions"][0]["caps"].as_array().unwrap();
+    assert!(caps.iter().any(|cap| cap["verb"] == crate::caps::Verb::DESKTOP_CAPTURE.as_str()));
+    drop(guard);
+}
+
 /// Returns a fresh tempdir and sets `COS_DATA_DIR` to point at it.
 /// Restores any previous value when the guard is dropped.
 struct DataDirGuard {

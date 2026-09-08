@@ -65,6 +65,11 @@ with only protocol selectors in argv. Its bounded JSON request travels over
 stdin and is accepted only inside an authenticated App session; `clawd`, not
 the helper, derives browser capabilities and browser-socket authority.
 
+Capture's native human CLI can preserve its connected stderr terminal through
+the SDK while sending the same bounded request on stdin. Headless and MCP calls
+still require an existing authenticated session; no bootstrap permission or
+desktop socket is added by the runtime.
+
 ## Tests
 
 Rust runtime unit tests live under `rust/test/unit/`.

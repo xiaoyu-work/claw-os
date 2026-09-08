@@ -64,6 +64,11 @@ versioned, peer-credential-authenticated AF_UNIX protocol and exclusively owns t
 handoff; bindings do not invoke `cos-agent-ui`, consult `PATH`, or put hints in
 argv/environment/files.
 
+The Rust controlled-primitive stdin transport captures diagnostics by default.
+Its explicit human-terminal variant only inherits an already-connected stderr
+terminal; it never creates a TTY, changes identity, or bypasses the OS bootstrap
+guards. Capture uses it for direct CLI compatibility, never for MCP calls.
+
 ## Tests
 
 Rust SDK unit tests mirror `rust/src/` under `rust/test/unit/`; production files

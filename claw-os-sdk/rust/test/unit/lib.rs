@@ -1,5 +1,33 @@
 use super::*;
 
+#[cfg(unix)]
+#[test]
+fn controlled_stdin_transports_share_bounds_and_wire_decoding() {
+    let dir = tempfile::tempdir().unwrap();
+    let original = std::env::var_os("CLAW_COS_BIN");
+    std::env::set_var("CLAW_COS_BIN", dir.path().join("not-created"));
+    let oversized = vec![b' '; APP_ARGS_STDIN_MAX_BYTES + 1];
+    let ordinary = cos_call_json_with_stdin("capture", "screenshot", ["__capture"], &oversized);
+    let terminal = cos_call_json_with_stdin_terminal("capture", "screenshot", ["__capture"], &oversized);
+    let bin = write_fake_cos(
+        dir.path(),
+        r#"{"ok":true,"wire_version":1,"data":{"cancelled":true,"path":null}}"#,
+        0,
+    );
+    std::env::set_var("CLAW_COS_BIN", bin);
+    let response = cos_call_json_with_stdin("capture", "screenshot", ["__capture"], b"{}");
+    let human = cos_call_json_with_stdin_terminal("capture", "screenshot", ["__capture"], b"{}");
+    match original {
+        Some(value) => std::env::set_var("CLAW_COS_BIN", value),
+        None => std::env::remove_var("CLAW_COS_BIN"),
+    }
+    for error in [ordinary, terminal] {
+        assert!(matches!(error, Err(BridgeError::Io(error))
+            if error.kind() == std::io::ErrorKind::InvalidInput));
+    }
+    assert_eq!(response.unwrap(), human.unwrap());
+}
+
 #[test]
 fn build_command_uses_env_override() {
     std::env::set_var("CLAW_COS_BIN", "/tmp/fake-cos");
