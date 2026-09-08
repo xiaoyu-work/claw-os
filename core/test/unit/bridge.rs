@@ -727,11 +727,8 @@ fn explicit_calendar_provider_selects_only_its_capabilities() {
 
 #[test]
 fn explicit_ntfy_server_drives_exact_host_capability() {
-    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap();
     let manifest = Manifest::from_json(
-        &std::fs::read_to_string(repository.join("apps/gateway/ntfy/app.json")).unwrap(),
+        &std::fs::read_to_string(app_sources::app_dir("gateway/ntfy").join("app.json")).unwrap(),
     )
     .unwrap();
     let operation = &manifest.operations["send"];
@@ -750,11 +747,8 @@ fn explicit_ntfy_server_drives_exact_host_capability() {
 
 #[test]
 fn ntfy_server_is_required_for_every_operation() {
-    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap();
     let manifest = Manifest::from_json(
-        &std::fs::read_to_string(repository.join("apps/gateway/ntfy/app.json")).unwrap(),
+        &std::fs::read_to_string(app_sources::app_dir("gateway/ntfy").join("app.json")).unwrap(),
     )
     .unwrap();
     let send = &manifest.operations["send"];
@@ -1123,6 +1117,33 @@ fn teams_recipient_requires_flag_binding() {
 }
 
 #[test]
+fn ntfy_topic_requires_flag_binding() {
+    let manifest = Manifest::from_json(
+        &std::fs::read_to_string(app_sources::app_dir("gateway/ntfy").join("app.json")).unwrap(),
+    )
+    .unwrap();
+    let operation = &manifest.operations["send"];
+    assert!(bind_operation_args(
+        operation,
+        &[
+            "destination".into(), "hello".into(), "--server".into(),
+            "https://notify.example".into(),
+        ],
+    )
+    .is_err());
+    let canonical = bind_operation_args(
+        operation,
+        &[
+            "hello".into(), "--topic".into(), "destination".into(),
+            "--server".into(), "https://notify.example".into(),
+        ],
+    )
+    .unwrap();
+    assert_eq!(canonical.values["text"], "hello");
+    assert_eq!(canonical.values["topic"], "destination");
+}
+
+#[test]
 fn bundled_removed_aliases_are_rejected() {
     let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -1138,7 +1159,6 @@ fn bundled_removed_aliases_are_rejected() {
     };
     for (app, alias) in [
         ("webhook", "target"),
-        ("ntfy", "topic"),
     ] {
         let manifest = load(&["gateway", app]);
         let operation = &manifest.operations["send"];
@@ -1146,10 +1166,7 @@ fn bundled_removed_aliases_are_rejected() {
             bind_operation_args(operation, &["destination".into(), "hello".into()]).is_err(),
             "{app}"
         );
-        let mut args = vec!["hello".into(), format!("--{alias}"), "destination".into()];
-        if app == "ntfy" {
-            args.extend(["--server".into(), "https://ntfy.example".into()]);
-        }
+        let args = vec!["hello".into(), format!("--{alias}"), "destination".into()];
         let canonical = bind_operation_args(operation, &args).unwrap();
         assert_eq!(canonical.values[alias], "destination", "{app}");
     }

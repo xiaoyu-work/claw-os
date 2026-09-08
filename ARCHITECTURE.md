@@ -274,6 +274,12 @@ identities, retaining stream/topic and private-email routing, API-level results
 and existing grants. This source milestone does not complete authenticated
 inbound admission, supervised lifecycle or durable delivery. Shared egress,
 credentials and state authority remain OS-owned.
+`gateway-ntfy` starts the separate Notification Delivery source group with its
+one-shot send/status contract. Required server arguments still derive exact
+host authority, and stored tokens remain suppressed for the public default
+server. The durable Notification Service, Rust ntfy adapter and deterministic
+dispatcher stay here; they do not call this App. No second notification store,
+DND policy, retry queue or lease mechanism is introduced by the source move.
 The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling

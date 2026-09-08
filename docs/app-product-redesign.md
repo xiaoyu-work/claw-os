@@ -75,6 +75,7 @@ There are no sibling-checkout dependencies or runtime download fallbacks.
 | `gateway-webex` | Source moved to `clawos-app/products/messaging-channels/apps/gateway/webex`; email/room routing, Markdown/plain payloads and existing grants preserved; Python argument case moved, while person-ID autodetection remains unimplemented despite older descriptions |
 | `gateway-whatsapp` | Source moved to `clawos-app/products/messaging-channels/apps/gateway/whatsapp`; Cloud API send/status, existing Graph version, separate sender ID/recipient number and grants preserved; no webhook reception, delivery confirmation or state migration added |
 | `gateway-zulip` | Source moved to `clawos-app/products/messaging-channels/apps/gateway/zulip`; stream/topic and private-email routing, API-level results and existing grants preserved; all fifteen Messaging Channels source identities are relocated, but inbound/lifecycle redesign remains pending |
+| `gateway-ntfy` | Source moved to `clawos-app/products/notification-delivery/apps/gateway/ntfy`; required server/exact host, metadata and auth behavior preserved, including public-default stored-token suppression; durable Notification Service/Rust adapter stay OS-owned and no queue/state is duplicated |
 | Other products and connectors | Pending their individual paired migrations |
 
 Moving source does not complete a product redesign milestone or merge legacy
