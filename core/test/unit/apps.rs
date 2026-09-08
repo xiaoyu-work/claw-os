@@ -400,9 +400,13 @@ fn bundled_schema_exposes_repeatables_choices_and_stdin() {
         operation_schema(&doc.operations["summarize"])["stdin"],
         true
     );
+}
 
+#[test]
+fn googlechat_schema_preserves_recipient_flag_binding() {
     let googlechat = Manifest::from_json(
-        &std::fs::read_to_string(repository.join("apps/gateway/googlechat/app.json")).unwrap(),
+        &std::fs::read_to_string(app_sources::app_dir("gateway/googlechat").join("app.json"))
+            .unwrap(),
     )
     .unwrap();
     let schema = operation_schema(&googlechat.operations["send"]);

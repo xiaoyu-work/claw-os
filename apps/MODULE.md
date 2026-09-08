@@ -30,6 +30,7 @@ Product sources are moving individually to
 `location-manager`, `network-manager`, `power-manager`, `printer-manager`,
 `user-manager`, `security-center`, `firewall-manager`, `usb-guard`, `config-editor`, `systemd`,
 `event-center`, `log`, `launcher`, `clipboard-manager`, `gateway-discord`, `gateway-dingtalk`,
+`gateway-googlechat`,
 the Browser extension/Native Host and Mail UI/native source
 are owned there already.
 Do not recreate a local copy: OS package assembly consumes the immutable revision in

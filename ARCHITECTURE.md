@@ -211,6 +211,11 @@ existing operations/MCP adapter. Explicit `gateway._shared` imports use pinned
 platform libraries. Existing network/credential/memory grants remain unchanged;
 the egress helper checks the actual destination host. No inbound Agent loop,
 new notification store or delivery lifecycle is introduced.
+The same source group now owns outbound-only `gateway-googlechat`, keeping
+send/status, text/cardsV2 and thread reply-or-create behavior. The configured
+webhook fixes the destination space; `recipient` remains informational only.
+Its contract and grants are unchanged, with pinned shared egress/credential
+libraries and no new inbound Agent route or local state store.
 The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling

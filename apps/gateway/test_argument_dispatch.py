@@ -22,12 +22,6 @@ def _load(name):
     ("name", "argv", "expected_args", "expected_kwargs"),
     [
         (
-            "googlechat",
-            ["hello", "--recipient", "space", "--title", "Title", "--thread-key", "thread"],
-            ("space", "hello", "Title", "thread"),
-            {},
-        ),
-        (
             "larksuite",
             ["hello", "--post", "--title", "Title", "--card", "--card-json", "{}"],
             ("hello",),
@@ -152,7 +146,6 @@ def test_list_dispatch_forwards_manifest_options(
 @pytest.mark.parametrize(
     ("name", "argv"),
     [
-        ("googlechat", ["space", "hello"]),
         ("mattermost", ["town-square", "hello"]),
         ("teams", ["channel", "hello"]),
         ("ntfy", ["alerts", "hello"]),
@@ -173,7 +166,6 @@ def test_removed_leading_positionals_are_rejected(name, argv):
 @pytest.mark.parametrize(
     "name",
     [
-        "googlechat",
         "mattermost",
         "ntfy",
         "teams",
@@ -194,15 +186,6 @@ def test_one_positional_is_always_message_text(name):
     else:
         assert send.call_args.args[1] == "hello"
         assert send.call_args.args[0] == ""
-
-
-def test_end_of_options_preserves_flag_shaped_message_text():
-    module = _load("googlechat")
-    with mock.patch.object(
-        module, "_send", return_value={"ok": True}
-    ) as send, mock.patch.object(module.gateway_memory, "remember_send"):
-        module.run("send", ["--", "--literal"])
-    assert send.call_args.args[:2] == ("", "--literal")
 
 
 def test_ntfy_materialized_server_is_shared_by_send_and_status():
