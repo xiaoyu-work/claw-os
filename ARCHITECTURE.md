@@ -269,6 +269,11 @@ does not add it or an inbound service. Its Python argument case moves with sourc
 send/status, the existing Graph version, sender phone-number ID and recipient
 normalization. Grants and credential ownership are unchanged. No webhook
 receiver or delivery confirmation is introduced by the source move.
+`gateway-zulip` completes source relocation of the fifteen Messaging Channels
+identities, retaining stream/topic and private-email routing, API-level results
+and existing grants. This source milestone does not complete authenticated
+inbound admission, supervised lifecycle or durable delivery. Shared egress,
+credentials and state authority remain OS-owned.
 The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling
