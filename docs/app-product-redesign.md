@@ -36,6 +36,7 @@ There are no sibling-checkout dependencies or runtime download fallbacks.
 | `backup-center` | Moved to `clawos-app/products/backup-recovery/apps/backup-center`; seven MCP tools, exact data/credential scopes and destructive confirmation preserved; Restic execution stays OS-owned |
 | `system-snapshot` | Moved to `clawos-app/products/backup-recovery/apps/system-snapshot`; five MCP tools, separate recovery authority and rollback confirmation preserved; snapshot index and backend execution stay OS-owned |
 | `pkg` | Moved to `clawos-app/products/store/apps/pkg`; thirteen existing CLI/MCP operations and permissions preserved; native `cosmic-store` and shared service integration remain pending |
+| `hardware-center` | Moved to `clawos-app/products/diagnostics/apps/hardware-center`; nine MCP tools and named hardware observation scope preserved; privileged collection stays OS-owned |
 | Other products and connectors | Pending their individual paired migrations |
 
 Moving source does not complete a product redesign milestone or merge legacy

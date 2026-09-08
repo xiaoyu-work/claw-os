@@ -24,8 +24,9 @@ Product sources are moving individually to
 [`xiaoyu-work/clawos-app`](https://github.com/xiaoyu-work/clawos-app).
 `mail-ai`, `email`, `gateway-email`, `calendar`, `fs`, `docs`, `search`, `web`,
 `browser-attached`, `exec`, `container-manager`, `backup-center`,
-`system-snapshot`, `pkg`, the Browser extension/Native Host and Mail UI/native source
-are owned there already. Do not recreate a local copy: OS package assembly
+`system-snapshot`, `pkg`, `hardware-center`, the Browser extension/Native Host
+and Mail UI/native source are owned there already. Do not recreate a local
+copy: OS package assembly
 consumes the immutable revision in
 [`packaging/apps.lock.json`](../packaging/apps.lock.json). Source relocation
 does not rename installed App identities or grant additional authority.

@@ -98,6 +98,9 @@ Snapper/Btrfs/LVM execution remain here.
 Store owns the `pkg` CLI/MCP source. Privileged package transactions, audit,
 rollback and installed package state remain OS-owned. The native
 `cosmic-store` UI and replacement of its legacy App forwarding remain pending.
+Diagnostics owns `hardware-center`; hardware collectors and its exact named
+observation authority stay in the OS. Crash and network diagnostic Apps await
+their individual source migrations.
 The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling
