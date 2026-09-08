@@ -231,6 +231,10 @@ selects a channel or direct-message handle in the outgoing webhook payload;
 username/icon overrides and existing grants remain unchanged. Shared egress
 and credential handling stay platform-owned. No inbound endpoint or state store
 is added by relocation.
+`gateway-rocketchat` also moves to Messaging Channels, preserving REST send/status,
+channel/DM targets, separate token/user-id headers and existing grants. Its
+credential precedence, response handling and shared host-gated egress are
+unchanged. No inbound service or local state is added.
 The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling
