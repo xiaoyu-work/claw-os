@@ -34,6 +34,7 @@ use serde::{Deserialize, Serialize};
 use crate::caps::{Cap, ConsentContext, Risk, Scope, ScopeKind, Verb};
 
 pub mod generations;
+pub mod app_policy;
 
 pub use generations::RevocationScope;
 
@@ -1309,6 +1310,15 @@ fn resolve_locked(
     owner_uid: Option<u32>,
 ) -> Result<Resolved, String> {
     validate_approval_id(id)?;
+    if outcome == Outcome::Approved {
+        if let Some(request) = lookup_pending(id) {
+            if request.session.starts_with(app_policy::SESSION_PREFIX) {
+                if duration != Some(GrantDuration::Forever) {
+                    return Err("App permission restoration requires duration forever (until revoked); it does not grant launch authority".into());
+                }
+            }
+        }
+    }
     let pending = pending_dir().join(format!("{id}.json"));
     if let Some(uid) = owner_uid {
         let request =

@@ -62,6 +62,27 @@ fn store() -> Authority {
 }
 
 #[test]
+fn app_permission_revocation_blocks_live_spending_and_retires_only_target_app() {
+    let _lock = crate::test_env::lock_env();
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../build");
+    let dir = tempfile::tempdir_in(root).unwrap();
+    let _env = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", dir.path());
+    let store = store();
+    let (_, target) = store.issue(issuance("policy-target", &[Audience::SystemService])).unwrap();
+    let mut sibling_issue = issuance("policy-sibling", &[Audience::SystemService]);
+    sibling_issue.subject.app_id = Some("other-app".into());
+    let (_, sibling) = store.issue(sibling_issue).unwrap();
+    let presenter = presentation(Audience::SystemService);
+    store.consume(target.id, &[read_cap()], &presenter).unwrap();
+    crate::approvals::app_policy::revoke(current_uid(), "power-manager", read_cap()).unwrap();
+    assert!(store.consume(target.id, &[read_cap()], &presenter).is_err());
+    store.consume(sibling.id, &[read_cap()], &presenter).unwrap();
+    assert_eq!(store.revoke_app(current_uid(), "power-manager"), 1);
+    assert!(store.resolve_session("policy-target", &presenter).is_err());
+    store.consume(sibling.id, &[read_cap()], &presenter).unwrap();
+}
+
+#[test]
 fn a_session_id_alone_resolves_nothing() {
     let store = store();
     let (_handle, _view) = store

@@ -250,6 +250,14 @@ pub const CATALOG: &[CapMeta] = &[
         Risk::High,
     ),
     CapMeta::new(
+        Verb::SYS_PERMISSIONS,
+        ScopeKind::Name,
+        LocalizedStr::new("Manage App permission requests and revocations"),
+        LocalizedStr::new("Inspect owner-visible verified Apps, request trusted restoration, and revoke brokered permissions. Does not approve grants."),
+        "🔐",
+        Risk::High,
+    ),
+    CapMeta::new(
         Verb::SYS_IDENTITY,
         ScopeKind::Name,
         LocalizedStr::new("Manage local users and groups"),

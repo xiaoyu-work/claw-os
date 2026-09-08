@@ -204,6 +204,26 @@ fn publisher_ceiling() -> Ceiling {
     Ceiling::for_tier(crate::provenance::TrustTier::User)
 }
 
+#[test]
+fn owner_app_revocation_is_enforced_before_launch_grants_are_derived() {
+    let _lock = crate::test_env::lock_env();
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../build");
+    let dir = tempfile::tempdir_in(root).unwrap();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", dir.path());
+    let _caps = crate::test_env::TestEnvVarGuard::set("COS_CAPS_DATA_DIR", dir.path());
+    let delegation = launcher_delegation(std::process::id(), 1);
+    let cap = Cap::new(Verb::SYS_OBSERVE, Scope::name("audio"));
+    let plan = || {
+        let mut plan = LaunchPlan::default();
+        plan.inherit([cap.clone()]);
+        plan
+    };
+    authorize_plan(&delegation, plan(), &publisher_ceiling(), "audio-manager").unwrap();
+    crate::approvals::app_policy::revoke(delegation.uid, "audio-manager", cap.clone()).unwrap();
+    assert!(authorize_plan(&delegation, plan(), &publisher_ceiling(), "audio-manager").is_err());
+    authorize_plan(&delegation, plan(), &publisher_ceiling(), "other-app").unwrap();
+}
+
 /// Launcher authority for a synthetic peer process.
 fn authority_for(
     pid: u32,

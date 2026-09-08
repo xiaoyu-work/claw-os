@@ -149,6 +149,7 @@ const BASELINE: &[(Verb, Baseline)] = &[
     (Verb::SYS_CONFIG, Baseline::Denied),
     (Verb::SYS_EVENTS, Baseline::Denied),
     (Verb::SYS_IDENTITY, Baseline::Denied),
+    (Verb::SYS_PERMISSIONS, Baseline::Denied),
     (Verb::SYS_SECURITY, Baseline::Denied),
     (Verb::SYS_STORAGE, Baseline::Denied),
     (Verb::SYS_SERVICE, Baseline::Denied),
@@ -426,6 +427,7 @@ fn is_exact_secret_name(name: &str) -> bool {
 /// these requires an authenticated parent session or an approved
 /// permission grant.
 const LOCAL_LAUNCH_DENIED_VERBS: &[Verb] = &[
+    Verb::SYS_PERMISSIONS,
     Verb::SYS_CONFIG,
     Verb::SYS_PACKAGE,
     Verb::SYS_IDENTITY,

@@ -206,9 +206,19 @@ have moved, along with the complete native Settings workspace, all page and
 subscription crates, original default renderer/toolkit patches, resources,
 translations and configuration schemas. `just settings-build` composes the
 immutable App source under `build/native-apps/cosmic-settings`; Settings Daemon,
-shared toolkit and privileged providers remain here. Native MCP retains only
+shared toolkit and privileged providers remain here. Native MCP retains
 page listing/search and fixed Settings activation under
-`proc.spawn:cosmic-settings`. It cannot inherit the eleven manager identities,
+`proc.spawn:cosmic-settings`, and adds four owner-scoped permission-management
+tools under `sys.permissions:manage`. The Applications UI and MCP share
+`clawd/app_permissions.rs`; the latter reaches it through the authenticated
+App Host/worker system-service route. Native owner UI uses the non-App peer
+route; neither route can approve. The existing root-owned approval generations
+also hold per-owner/App deny gates. Launch derivation and live grant spending
+enforce them; revocation retires that App's live authority. Restoration uses
+the existing trusted polkit approval helper and exact generation-bound durable
+approval, without expanding manifest/trust/caller ceilings. Only fixed,
+broker-mediated permissions are currently changeable; direct resources remain
+explicitly unsupported. Settings cannot inherit the eleven manager identities,
 invoke generic desktop launch, or call other Apps. Human UI adapters use OS
 filesystem/process services and SDK policy/snapshots; original human
 D-Bus/Wayland access is unchanged and unavailable through this MCP catalog.

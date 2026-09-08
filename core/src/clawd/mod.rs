@@ -4,6 +4,7 @@ pub mod agent_client;
 pub mod ai;
 pub mod app_services;
 pub mod app_sessions;
+pub mod app_permissions;
 pub mod audio;
 pub mod audit;
 pub mod authority;

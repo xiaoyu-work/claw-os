@@ -97,8 +97,20 @@ fn ai_chat_admission_is_explicit_and_cannot_admit_app_invocation() {
         assert!(admit(Command::AppServiceCliCall, &granted).is_err());
         assert!(admit(Command::AppSessionRegister, &granted).is_err());
     }
+
     let read = relaying_authority(vec![Cap::new(Verb::FS_READ, Scope::Wild)]);
     assert!(admit(Command::AiChat, &read).is_err());
+}
+
+#[test]
+fn settings_permission_management_relay_is_not_approval_authority() {
+    let granted = relaying_authority(vec![Cap::new(Verb::SYS_PERMISSIONS, Scope::name("manage"))]);
+    admit(Command::SystemAppPermissions, &granted).unwrap();
+    for command in [Command::PermissionApps, Command::PermissionDecide, Command::PermissionRevoke] {
+        assert!(admit(command, &granted).is_err());
+    }
+    let observation = relaying_authority(vec![Cap::new(Verb::SYS_OBSERVE, Scope::Wild)]);
+    assert!(admit(Command::SystemAppPermissions, &observation).is_err());
 }
 
 #[test]
@@ -329,4 +341,61 @@ fn dropping_the_endpoint_removes_the_socket() {
     assert!(socket.exists());
     drop(endpoint);
     assert!(!socket.exists(), "worker authority outlived its launch");
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "multi_thread")]
+async fn settings_request_crosses_the_private_worker_proxy_without_exposing_approval() {
+    use std::os::fd::AsRawFd;
+    use crate::clawd::transport::{frame::PeerStream, peer, ReadOutcome};
+    use crate::clawd::protocol::{encode_response, Request, Response};
+    let _lock = crate::test_env::lock_env();
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../build");
+    let dir = tempfile::tempdir_in(root).unwrap();
+    let _runtime = crate::test_env::TestEnvVarGuard::set("COS_RUNTIME_DIR", dir.path());
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", dir.path().join("data"));
+    let _proxy = crate::test_env::TestEnvVarGuard::remove(crate::extension_host::protocol::BROKER_SOCKET_ENV);
+    let listener = tokio::net::UnixListener::bind(dir.path().join("clawd.sock")).unwrap();
+    peer::enable_credential_passing(listener.as_raw_fd()).unwrap();
+    let uid = unsafe { libc::geteuid() };
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut stream = PeerStream::new(stream).unwrap();
+        let ReadOutcome::Frame(frame) = stream.read_request(crate::clawd::wire::MAX_REQUEST_BYTES).await.unwrap() else {
+            panic!("framed worker relay expected");
+        };
+        assert_eq!(frame.credentials.uid, uid);
+        let request: crate::clawd::wire::InboundRequest = serde_json::from_slice(&frame.body).unwrap();
+        assert_eq!(request.command.as_str(), Command::AppSessionRelay.as_str());
+        assert_eq!(request.params["session_id"], "app-settings-test");
+        assert_eq!(request.params["command"], "system.app-permissions");
+        let params = (Command::SystemAppPermissions.route().decode)(request.params["params"].clone()).unwrap();
+        assert_eq!(params["session"], "app-settings-test");
+        assert_eq!(params["action"], "request");
+        assert_eq!(params["app_id"], "audio-manager");
+        assert!(params.get("owner_uid").is_none());
+        let response = Response::ok(request.id, serde_json::json!({"result":{"status":"pending","id":"ap-fixture","enabled":false}}));
+        stream.write_response(&encode_response(&response).unwrap()).await.unwrap();
+    });
+    let slot = crate::worker::relay_slot();
+    crate::worker::install_relay(&slot, Some("daemon-only-handle".into()));
+    let authority = BrokerAuthority::new("app-settings-test", Some("cosmic-settings".into()),
+        CapSet::from_caps([Cap::new(Verb::SYS_PERMISSIONS, Scope::name("manage"))]), slot);
+    let endpoint = BrokerEndpoint::start(dir.path().join("worker.sock"), authority, uid).unwrap();
+    let socket = endpoint.socket_path().to_path_buf();
+    let response = tokio::task::spawn_blocking(move || crate::clawd::client::request_blocking(
+        socket, Request::build(Command::SystemAppPermissions, serde_json::json!({
+            "session":"app-settings-test", "action":"request", "app_id":"audio-manager",
+            "permission_id":"fixed-capability-key", "reason":"restore audio status"
+        })))).await.unwrap().unwrap();
+    assert!(response.ok, "{response:?}");
+    assert_eq!(response.result.unwrap()["status"], "pending");
+    server.await.unwrap();
+    let socket = endpoint.socket_path().to_path_buf();
+    let refused = tokio::task::spawn_blocking(move || crate::clawd::client::request_blocking(
+        socket, Request::build(Command::PermissionDecide, serde_json::json!({
+            "id":"ap-fixture", "decision":"approve", "owner_uid":uid
+        })))).await.unwrap().unwrap();
+    assert!(!refused.ok);
+    assert_eq!(endpoint.facts()["relayed"], 1);
 }

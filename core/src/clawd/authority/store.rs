@@ -73,6 +73,7 @@ pub enum AuthorityError {
     Revoked,
     /// The grant does not carry a capability the route requires.
     Capability { verb: &'static str, scope: String },
+    AppPolicy(String),
     /// A store ceiling was reached.
     Quota(&'static str),
     /// An attenuation broke a monotonic property.
@@ -102,6 +103,7 @@ impl std::fmt::Display for AuthorityError {
             AuthorityError::Capability { verb, scope } => {
                 write!(f, "capability grant lacks {verb}:{scope}")
             }
+            AuthorityError::AppPolicy(error) => write!(f, "App permission policy refused the operation: {error}"),
             AuthorityError::Quota(bound) => write!(f, "capability grant ceiling reached: {bound}"),
             AuthorityError::Attenuation(error) => write!(f, "{error}"),
             AuthorityError::UnverifiablePrincipal => {
@@ -124,6 +126,7 @@ impl AuthorityError {
             AuthorityError::Expired => "expired",
             AuthorityError::Revoked => "revoked",
             AuthorityError::Capability { .. } => "capability",
+            AuthorityError::AppPolicy(_) => "app_policy",
             AuthorityError::Quota(_) => "quota",
             AuthorityError::Attenuation(_) => "attenuation",
             AuthorityError::UnverifiablePrincipal => "unverifiable_principal",
@@ -501,6 +504,11 @@ impl Authority {
                 });
             }
         }
+        if let Some(app) = grant.subject.app_id.as_deref() {
+            crate::approvals::app_policy::require(
+                grant.principal.uid, app, &CapSet::from_caps(required.iter().cloned()),
+            ).map_err(AuthorityError::AppPolicy)?;
+        }
         let grant = inner
             .grants
             .get_mut(&key)
@@ -545,6 +553,25 @@ impl Authority {
             .map(|grant| grant.id)
             .collect();
         roots.into_iter().map(|id| inner.revoke_lineage(id)).sum()
+    }
+
+    pub fn revoke_app(&self, uid: u32, app: &str) -> usize {
+        let mut inner = self.lock();
+        let roots: Vec<GrantId> = inner.grants.values()
+            .filter(|grant| grant.principal.uid == uid && grant.subject.app_id.as_deref() == Some(app))
+            .map(|grant| grant.id).collect();
+        roots.into_iter().map(|id| inner.revoke_lineage(id)).sum()
+    }
+
+    pub fn app_caps(&self, uid: u32, app: &str) -> CapSet {
+        let mut inner = self.lock();
+        inner.sweep(Instant::now());
+        CapSet::from_caps(inner.by_session.values().filter_map(|key| inner.grants.get(key))
+            .filter(|grant| grant.principal.uid == uid
+                && grant.subject.app_id.as_deref() == Some(app)
+                && grant.subject.session_id.is_some()
+                && grant.principal.is_live())
+            .flat_map(|grant| grant.caps.iter().cloned()))
     }
 
     /// Revoke only the grant that owns the session index and its descendants.

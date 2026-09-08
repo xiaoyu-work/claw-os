@@ -23,6 +23,15 @@ services, and shared libraries. `mcp.access` accepts only `system_agent` and
 cannot access App services or mint system Agent tasks. The broker enforces
 this using authenticated process/session ancestry, not environment flags.
 
+Settings permission management does not delegate target-App capabilities.
+Its manifest declares only `sys.permissions` with fixed scope `manage`;
+the OS restricts the service to the authenticated Settings identity and
+owner. Revocation attenuates declared brokered capabilities at launch and
+live broker spending. Restoration is pending until the trusted human helper
+decides it, and never bypasses the signed manifest or caller's ceiling.
+Dynamic/direct-resource permissions are explicitly unsupported by this first
+management surface; see [installed compatibility and limits](updating.md).
+
 A staged migration is moving Apps off `operations` + `main.py run(command,
 args)` and onto the single `mcp.tools` contract. Until an App migrates it keeps
 its `operations`. Once an App declares **no** `operations` but still exposes an

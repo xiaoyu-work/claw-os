@@ -112,6 +112,11 @@ pub fn decide(params: Value, client: &ClientIdentity) -> Result<Value, String> {
 
     match decision.trim().to_ascii_lowercase().as_str() {
         "approve" | "allow" => {
+            if let Some(request) = approvals::lookup_pending(&id) {
+                if request.session.starts_with(approvals::app_policy::SESSION_PREFIX) {
+                    super::app_permissions::validate_approval(&request)?;
+                }
+            }
             let resolved = approvals::approve_for_owner(
                 &id,
                 duration_from_params(&params)?,
@@ -232,7 +237,7 @@ fn optional_limit(params: &Value) -> Result<usize, String> {
         .map(|limit| limit.unwrap_or(100))
 }
 
-fn required_string(params: &Value, key: &str) -> Result<String, String> {
+pub(super) fn required_string(params: &Value, key: &str) -> Result<String, String> {
     params
         .get(key)
         .and_then(Value::as_str)

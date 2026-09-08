@@ -107,6 +107,8 @@ use serde::{Deserialize, Serialize};
 /// On-disk shape. One file per install, rewritten atomically.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 struct Generations {
+    #[serde(default)]
+    app_permissions: BTreeMap<String, Vec<super::app_policy::Block>>,
     /// `owner -> generation`. Raised by an owner-wide revocation and
     /// used as a floor for every session under that owner.
     #[serde(default)]
@@ -114,6 +116,26 @@ struct Generations {
     /// `owner/session -> generation`.
     #[serde(default)]
     sessions: BTreeMap<String, u32>,
+}
+
+pub(super) fn app_blocks(uid: u32, app: &str) -> Result<Vec<super::app_policy::Block>, String> {
+    Ok(load()?.app_permissions.remove(&format!("{uid}/{app}")).unwrap_or_default())
+}
+
+pub(super) fn block_app_cap(uid: u32, app: &str, cap: crate::caps::Cap) -> Result<super::app_policy::Block, String> {
+    super::ensure_dirs().map_err(|error| format!("approvals dir: {error}"))?;
+    crate::filelock::with_exclusive_path_lock(&super::grant_lock_path(), || {
+        let mut state = load()?;
+        let entries = state.app_permissions.entry(format!("{uid}/{app}")).or_default();
+        let generation = entries.iter().find(|entry| entry.cap == cap)
+            .map_or(0, |entry| entry.generation)
+            .checked_add(1).ok_or("App permission generation exhausted")?;
+        entries.retain(|entry| entry.cap != cap);
+        let block = super::app_policy::Block { cap, generation };
+        entries.push(block.clone());
+        store(&state)?;
+        Ok(block)
+    })
 }
 
 /// Which grants a revocation covers.

@@ -35,6 +35,20 @@ const BROWSER_VALUE_BYTES: usize = 64 * 1024;
 
 pub type NoBody = NoParams;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppPermissions {
+    pub action: Name,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<Token>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_id: Option<Name>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_id: Option<Token>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<Text<4096>>,
+}
+
 // ---------------------------------------------------------------------------
 // Agent tasks
 // ---------------------------------------------------------------------------

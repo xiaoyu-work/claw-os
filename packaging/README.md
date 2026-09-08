@@ -79,6 +79,11 @@ The desktop package keeps its native manifest/binary, page entries, translations
 icons, polkit resources and config defaults. Its eleven management Apps remain
 separate Agent-package identities; source relocation does not move user settings
 or copy settings-daemon/provider authority into the product.
+Permission-management UI/MCP requires the `claw-os-app-permissions-v1`
+virtual service dependency. The Agent package provides it; the Desktop package
+requires it so independent publication cannot silently pair the new UI with
+an old broker. Permission overrides stay in the existing root-owned approval
+generation state, outside App data and signed manifests.
 
 It also creates the empty root-owned `/usr/lib/cos/extensions` registry.
 Executable Agent extension packages placed there remain inactive until their

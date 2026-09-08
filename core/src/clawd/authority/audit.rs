@@ -338,6 +338,7 @@ pub fn record_revoked(scope: &'static str, subject: Option<&str>, retired: usize
     if retired == 0 {
         return;
     }
+
     write(&GrantRevocationAudit {
         ts: chrono::Utc::now(),
         event: "clawd.grant.revoked",
@@ -345,6 +346,23 @@ pub fn record_revoked(scope: &'static str, subject: Option<&str>, retired: usize
         grant: None,
         subject: subject.map(crate::audit_policy::text_digest),
         retired,
+    });
+}
+
+pub fn record_app_permission_revoked(owner_uid: u32, app_id: &str, cap: &Cap, generation: u32, retired: usize) {
+    #[derive(Serialize)]
+    struct PolicyRevocation<'a> {
+        ts: chrono::DateTime<chrono::Utc>,
+        event: &'static str,
+        owner_uid: u32,
+        app_id: &'a str,
+        cap: CapFacts,
+        generation: u32,
+        retired: usize,
+    }
+    write(&PolicyRevocation {
+        ts: chrono::Utc::now(), event: "clawd.app_permission.revoked",
+        owner_uid, app_id, cap: CapFacts::of(cap), generation, retired,
     });
 }
 

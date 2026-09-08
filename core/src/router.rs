@@ -878,6 +878,24 @@ fn dispatch_with_stdin_impl(
         return Ok(Some(value.to_string()));
     }
 
+    if name == "__app-permissions" {
+        if args.len() != 1 {
+            return Err("internal App permission command requires one JSON request".into());
+        }
+        let mut params: serde_json::Value = serde_json::from_str(&args[0])
+            .map_err(|error| format!("invalid App permission request: {error}"))?;
+        if !params.is_object() || params.get("session").is_some() {
+            return Err("App permission request must be an object without caller-supplied session".into());
+        }
+        let command = if let Ok(session) = env::var("COS_SESSION") {
+            params["session"] = json!(session);
+            Command::SystemAppPermissions
+        } else {
+            Command::PermissionApps
+        };
+        return Ok(Some(request_clawd(command, params)?.to_string()));
+    }
+
     if name == "__browser" {
         if args.len() != 3 || args[1] != "request" || args[2] != "--request-stdin" {
             return Err("internal browser bridge requires `request --request-stdin`".to_string());

@@ -11,6 +11,14 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[3]
+
+
+def test_settings_permission_service_is_an_installed_dependency():
+    agent = (ROOT / "packaging/deb/claw-os-agent/control").read_text()
+    desktop = (ROOT / "packaging/deb/claw-os-desktop/control").read_text()
+    assert "claw-os-app-permissions-v1" in next(line for line in agent.splitlines() if line.startswith("Provides:"))
+    assert "claw-os-app-permissions-v1" in next(line for line in desktop.splitlines() if line.startswith("Depends:"))
+
 SPEC = importlib.util.spec_from_file_location("app_sources", ROOT / "scripts" / "app_sources.py")
 sources = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(sources)

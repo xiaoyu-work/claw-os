@@ -21,6 +21,8 @@ const EXPECTED_USER_COMMANDS: &[&str] = &[
     "agent.usage",
     "credential.oauth-refresh",
     "system.audio.control",
+    "system.app-permissions",
+    "permission.apps",
     "system.accessibility.control",
     "system.backup.control",
     "system.bluetooth.control",

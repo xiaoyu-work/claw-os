@@ -100,6 +100,31 @@ identities with their original scopes. User configuration, credentials and
 device/account state are not moved, and Settings Daemon/shared providers stay
 OS-owned. No runtime source download or permission-union migration is added.
 
+Settings' Applications page now manages owner-scoped **brokered** App
+permissions. Its four permission MCP tools require `sys.permissions:manage`,
+not the permissions of the Apps being managed. The desktop package depends
+on `claw-os-app-permissions-v1`, provided by the matching newer Agent package:
+APT cannot install the feature with an old `cos`/`clawd` that lacks its routes.
+Restart Settings after upgrade. Source-only development against an older
+service reports an actionable unavailable-service error; there is no direct
+file-write or older-service fallback.
+
+Existing declared grants remain enabled by default. Revocation persists in
+the existing root-owned approval-generation file and invalidates only the
+target owner's App grants. Restart/retry that App after a change. Restoration
+creates a pending request; the existing polkit approval helper must authorize
+it with duration `forever` (until revoked). This removes only the deny gate:
+the signed manifest, trust ceiling, launcher authority and exact call scopes
+still apply. Revoked policy and approval expiry/generation checks survive
+daemon restarts. An old approval cannot undo a later revocation.
+
+The first version controls fixed broker-mediated observation/device/settings
+permissions. Argument-bound permissions, filesystem mounts, direct network
+egress and native D-Bus/Wayland authority are displayed but cannot be changed;
+those require process/resource containment rather than a broker-only toggle.
+Already-authorized effects are not rolled back. No user data, manifest or
+provider credentials are rewritten.
+
 Updates only ever move forward. An older Claw OS release stays validly signed
 forever, so the signature alone cannot tell a current release from a superseded
 one; see [Downgrade protection](#downgrade-protection) for what stops one being

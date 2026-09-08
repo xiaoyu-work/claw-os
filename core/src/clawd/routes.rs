@@ -857,6 +857,29 @@ routes! {
         audit: &[("limit", FieldRule::Count)],
         run: |c| permissions::pending(c.params, c.client).map_err(BrokerError::from),
     }
+    PermissionApps {
+        name: "permission.apps",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Permission),
+        body: body::AppPermissions,
+        audit: &[("action", FieldRule::Token), ("app_id", FieldRule::Token), ("permission_id", FieldRule::Token)],
+        run: |c| super::app_permissions::control(c.params, c.client, None).await.map_err(BrokerError::from),
+    }
+    SystemAppPermissions {
+        name: "system.app-permissions",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: session(Audience::SystemService),
+        body: body::AppPermissions,
+        audit: &[("session", FieldRule::Token), ("action", FieldRule::Token), ("app_id", FieldRule::Token), ("permission_id", FieldRule::Token)],
+        run: |c| {
+            let authority = c.authority()?;
+            super::app_permissions::control(c.params, c.client, Some(authority)).await.map_err(BrokerError::from)
+        },
+    }
     PermissionRecent {
         name: "permission.recent",
         access: Access::User,

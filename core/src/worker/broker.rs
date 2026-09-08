@@ -401,6 +401,7 @@ fn is_forbidden(command: Command) -> bool {
 fn required_verbs(command: Command) -> &'static [Verb] {
     match command.as_str() {
         "ai.chat" => &[Verb::AI_CHAT, Verb::AI_CHAT_UNTRUSTED],
+        "system.app-permissions" => &[Verb::SYS_PERMISSIONS],
         "system.network.control" => &[Verb::NET_MANAGE],
         "system.network.diagnose" => &[Verb::SYS_OBSERVE, Verb::NET_RESOLVE, Verb::NET_PROBE],
         "system.firewall.control" => &[Verb::NET_FIREWALL],

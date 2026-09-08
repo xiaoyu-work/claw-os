@@ -51,10 +51,8 @@ fn main() {
     let mut params = json!({
         "id": id,
         "decision": decision,
+        "owner_uid": owner_uid,
     });
-    if owner_uid != 0 {
-        params["owner_uid"] = json!(owner_uid);
-    }
     if let Some(duration) = duration {
         params["duration"] = json!(duration);
     }

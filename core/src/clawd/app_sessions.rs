@@ -1515,7 +1515,7 @@ fn worker_floor(tier: Option<u8>) -> u8 {
 // Capability derivation
 // ---------------------------------------------------------------------------
 
-fn installed_app(app_id: &str) -> Result<App, String> {
+pub(super) fn installed_app(app_id: &str) -> Result<App, String> {
     let apps_dir = std::path::PathBuf::from(
         std::env::var("COS_APPS_DIR").unwrap_or_else(|_| "/usr/lib/cos/apps".to_string()),
     );
@@ -1778,6 +1778,7 @@ fn authorize_plan(
     let mut dropped = dropped_caps;
     dropped.extend(dropped_missing);
     record_ceiling_drop(ceiling, app_id, "authorize_plan", &dropped);
+    crate::approvals::app_policy::require(delegation.uid, app_id, &caps)?;
 
     if missing.is_empty() {
         return Ok(caps);

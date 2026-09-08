@@ -88,6 +88,8 @@ original default pages and toolkit patches. Its binary, page desktop entries,
 translations, icons, polkit resources and default config schemas remain in the
 desktop package, as does its separate `cosmic-settings` manifest. Neither
 Settings Daemon/provider code nor user state moves with this product.
+Settings permission management adds the `claw-os-app-permissions-v1` service
+dependency from Desktop to Agent, without forcing synchronized package versions.
 App partition accounting includes nested gateway manifests. Shared gateway
 libraries remain OS-owned, and the canonical argument module is installed in
 `/usr/lib/cos/python` for the packaged legacy App entrypoints.
