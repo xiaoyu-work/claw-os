@@ -42,6 +42,7 @@ There are no sibling-checkout dependencies or runtime download fallbacks.
 | `storage-manager` | Moved to `clawos-app/products/storage/apps/storage-manager`; six MCP tools, canonical device paths and separate observation/diagnostic/mount scopes preserved; UDisks2 and no-repair checkers remain OS-owned |
 | `accessibility-manager` | Moved to `clawos-app/products/settings/apps/accessibility-manager`; five MCP tools, closed toggle/filter choices and separate observation/control scopes preserved; session-bound Wayland/AT-SPI execution stays OS-owned |
 | `audio-manager` | Moved to `clawos-app/products/settings/apps/audio-manager`; ten MCP tools, numeric bounds and separate observation/output/microphone/media-route scopes preserved; PipeWire/WirePlumber execution stays OS-owned |
+| `bluetooth-manager` | Moved to `clawos-app/products/settings/apps/bluetooth-manager`; twelve MCP tools, exact observation/control scopes and stdin-only pairing responses preserved; BlueZ execution and owner-bound pairing sessions stay OS-owned |
 | Other products and connectors | Pending their individual paired migrations |
 
 Moving source does not complete a product redesign milestone or merge legacy
