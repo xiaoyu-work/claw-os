@@ -87,7 +87,8 @@ generation state and durable approval receipts, outside App data and signed
 manifests. Until-revoked restoration does not extend ordinary execution-grant
 lifetimes. Native activation requires the existing owner user-systemd/session
 bus, never removing `NoNewPrivileges` from system services. The compiled
-permission client uses the packaged `/usr/local/bin/cos` explicitly.
+permission and fixed-launch clients use the packaged `/usr/local/bin/cos`
+explicitly.
 
 Native Capture is composed under `build/native-apps/cosmic-screenshot` with
 its original independent portal-client graph. The desktop package retains

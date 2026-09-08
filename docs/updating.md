@@ -131,8 +131,9 @@ still apply. Policy survives process/daemon restarts and remains bound to the
 exact owner/App/capability generation plus owner/session revocation generations.
 An old receipt cannot undo a later revocation and can never be redeemed as
 ordinary execution authority; ordinary execution-grant expiry remains unchanged.
-The native permission client selects `/usr/local/bin/cos` explicitly through
-the shared SDK transport, so sanitized desktop PATH needs no override.
+The native permission and fixed-launch clients select `/usr/local/bin/cos`
+explicitly through the shared SDK transport, so sanitized desktop PATH needs
+no override.
 
 The first version controls fixed broker-mediated observation/device/settings
 permissions. Argument-bound permissions, filesystem mounts, direct network

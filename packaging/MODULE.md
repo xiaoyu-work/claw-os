@@ -90,6 +90,11 @@ desktop package, as does its separate `cosmic-settings` manifest. Neither
 Settings Daemon/provider code nor user state moves with this product.
 Settings permission management adds the `claw-os-app-permissions-v1` service
 dependency from Desktop to Agent, without forcing synchronized package versions.
+Its permission and fixed-launch clients consume the explicit-binary SDK
+transport paired with the lifecycle-corrected Agent provider. Pin updates must
+pass the App revision's product/native CI, including the installed Settings
+fixture with sanitized PATH and no `CLAW_COS_BIN`; see [the package contract](README.md)
+for durable restoration and independent user-session activation.
 Capture's complete native client/resources follow the same immutable pin and
 desktop ownership. `claw-os-capture-v1` is an additional Desktop-to-Agent service
 dependency, not an App identity or a package-version lockstep. The provider
