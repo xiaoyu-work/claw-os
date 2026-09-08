@@ -32,6 +32,34 @@ documents `mach` and prerequisites. The application selection is
 packaging are in progress. No forked binary is installed by this commit.
 The existing COSMIC `desktop/justfile` does not build this Mozilla project.
 
+From the repository root:
+
+```bash
+python3 desktop/mail/build.py prepare
+python3 desktop/mail/build.py bootstrap --application-choice=browser --no-system-changes
+python3 desktop/mail/build.py configure
+python3 desktop/mail/build.py build -j 8
+python3 desktop/mail/build.py package
+```
+
+`browser` is the upstream desktop **toolchain** bootstrap choice, also used by
+Thunderbird's own bootstrap script. `mozconfig` selects the Mail application;
+this is a full source build, not Firefox artifact mode.
+
+The wrapper checks the exact platform revision and refuses tracked platform
+changes or an existing different `comm/` tree. It links the checked-in Mail
+source into `build/mail/gecko/comm`, so rebuilding uses product edits directly.
+Toolchain state and objects live under `build/mail/`. Bootstrap does not install
+system packages with `--no-system-changes`; missing Linux development libraries
+must be supplied separately. The build uses nightly/unofficial branding and
+disables the upstream binary updater; it does not install or alter an existing
+Thunderbird installation.
+
+Run a specific native Mail test after building with
+`python3 desktop/mail/build.py test comm/path/to/test.js`. Wrapper contracts
+alone use `python3 -m pytest -q desktop/mail/test_build.py`; they do not prove
+that the native application builds or runs.
+
 ## Product integration
 
 Changes should go directly into `comm/mail/` and `comm/mailnews/`, reusing the

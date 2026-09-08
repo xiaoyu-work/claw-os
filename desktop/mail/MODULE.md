@@ -15,6 +15,8 @@ extension wrapper.
 | `upstream.json` | Immutable Thunderbird and matching Firefox platform pins |
 | `PROVENANCE.md` | Origin, licensing, trademarks and security-update obligations |
 | `README.md` | Source layout, build status and integration boundary |
+| `build.py`, `mozconfig` | Pinned platform assembly and upstream mach entry point |
+| `test_build.py` | Offline source-pair, no-overwrite and build-invocation contracts |
 | `comm/mail/` | Mail UI, startup, modules and application configuration |
 | `comm/mailnews/` | Account, folder, message-store and compose engine |
 | `comm/build/moz.configure/gecko_source.configure` | Required Firefox platform pairing |
@@ -35,3 +37,9 @@ Use upstream `mach` build and component-specific tests from a Linux filesystem.
 Do not run the whole upstream suite through the repository's Python App runner.
 Keep upstream tests and licenses intact, even when they are not default Claw OS
 CI inputs. See [README.md](README.md) for current build status.
+
+Run build-wrapper contracts from the repository root:
+
+```bash
+python3 -m pytest -q desktop/mail/test_build.py
+```
