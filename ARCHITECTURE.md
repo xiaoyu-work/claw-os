@@ -158,6 +158,13 @@ require it. Sysfs device revalidation, protected-mount/swap checks, udev policy,
 UDisks2 eject, startup reconciliation and owner/revision-bound rollback remain
 OS-owned. All three Security App sources have moved, without merging their
 state, provider authority or UI.
+Maintenance owns `config-editor`'s four MCP tools. Each retains exact target
+`sys.config` authority; validate/apply additionally require exact source
+`fs.read` authority. Apply and restore require explicit confirmation.
+Canonical path checks remain in the App, while the OS owns the supported-target
+validators, bounded reads, nofollow/identity checks, serialized atomic writes
+and durable owner-bound backups. Existing system configuration and backup
+state remain here; the `systemd` App awaits its separate migration.
 The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling
