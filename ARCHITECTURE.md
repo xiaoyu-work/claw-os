@@ -107,11 +107,14 @@ Storage owns `storage-manager`; canonical block-device verification, UDisks2
 execution and offline no-repair checkers remain OS-owned. Observation,
 diagnostic and exact-device mount permissions stay separate.
 Settings owns `accessibility-manager`, `audio-manager` and
-`bluetooth-manager`; user-session validation, COSMIC Wayland, AT-SPI,
-PipeWire/WirePlumber and BlueZ execution remain OS-owned. Audio observation,
+`bluetooth-manager` and `camera-manager`; user-session validation, COSMIC
+Wayland, AT-SPI, PipeWire/WirePlumber, BlueZ and GStreamer execution remain
+OS-owned. Audio observation,
 output, microphone and media-route scopes stay separate. Bluetooth observation
 and control permissions, owner-bound pairing sessions and stdin-only pairing
-responses are preserved. Native Settings and other management Apps await
+responses are preserved. Camera capture retains exact destination write
+authority, node-serial revalidation and non-overwriting image persistence.
+Native Settings and other management Apps await
 separate migrations, without combining their provider authority.
 The remaining Apps
 stay here until their own paired migration. The App
