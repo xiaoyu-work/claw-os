@@ -31,7 +31,7 @@ Product sources are moving individually to
 `user-manager`, `security-center`, `firewall-manager`, `usb-guard`, `config-editor`, `systemd`,
 `event-center`, `log`, `launcher`, `clipboard-manager`, `gateway-discord`, `gateway-dingtalk`,
 `gateway-googlechat`, `gateway-larksuite`, `gateway-matrix`, `gateway-mattermost`,
-`gateway-rocketchat`,
+`gateway-rocketchat`, `gateway-signal`,
 the Browser extension/Native Host and Mail UI/native source
 are owned there already.
 Do not recreate a local copy: OS package assembly consumes the immutable revision in

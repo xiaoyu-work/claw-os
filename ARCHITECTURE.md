@@ -235,6 +235,11 @@ is added by relocation.
 channel/DM targets, separate token/user-id headers and existing grants. Its
 credential precedence, response handling and shared host-gated egress are
 unchanged. No inbound service or local state is added.
+`gateway-signal` also belongs to Messaging Channels, retaining its external
+`signal-cli-rest-api` send/status client, phone/group handling and existing
+grants. The external service and account pairing state are not moved into the
+product. Shared egress still gates private/local endpoints; relocation does
+not authorize the default localhost URL or implement inbound polling.
 The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling
