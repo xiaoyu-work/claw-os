@@ -45,6 +45,7 @@ There are no sibling-checkout dependencies or runtime download fallbacks.
 | `bluetooth-manager` | Moved to `clawos-app/products/settings/apps/bluetooth-manager`; twelve MCP tools, exact observation/control scopes and stdin-only pairing responses preserved; BlueZ execution and owner-bound pairing sessions stay OS-owned |
 | `camera-manager` | Moved to `clawos-app/products/settings/apps/camera-manager`; two MCP tools, bounded PNG/JPEG capture and separate observation/camera/exact-path scopes preserved; PipeWire/GStreamer execution, serial revalidation and non-overwriting persistence stay OS-owned |
 | `display-manager` | Moved to `clawos-app/products/settings/apps/display-manager`; ten MCP tools, exact layout-read scope and explicit apply/restore confirmation preserved; COSMIC output control, backlights and owner-bound backup/restore state stay OS-owned |
+| `desktop-manager` | Moved to `clawos-app/products/settings/apps/desktop-manager`; four MCP tools and separate observation/window/exact-AppID launch scopes preserved; Wayland window checks and native relaunch stay OS-owned, without App-to-App business calls |
 | Other products and connectors | Pending their individual paired migrations |
 
 Moving source does not complete a product redesign milestone or merge legacy
