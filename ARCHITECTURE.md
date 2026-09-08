@@ -106,9 +106,11 @@ its private runtime bridge without direct worker-network access.
 Storage owns `storage-manager`; canonical block-device verification, UDisks2
 execution and offline no-repair checkers remain OS-owned. Observation,
 diagnostic and exact-device mount permissions stay separate.
-Settings owns `accessibility-manager`; user-session validation, COSMIC Wayland
-and AT-SPI execution remain OS-owned. Native Settings and other management
-Apps await separate migrations, without combining their provider authority.
+Settings owns `accessibility-manager` and `audio-manager`; user-session
+validation, COSMIC Wayland, AT-SPI and PipeWire/WirePlumber execution remain
+OS-owned. Audio observation, output, microphone and media-route scopes stay
+separate. Native Settings and other management Apps await separate migrations,
+without combining their provider authority.
 The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling
