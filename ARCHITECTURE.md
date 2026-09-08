@@ -240,6 +240,11 @@ unchanged. No inbound service or local state is added.
 grants. The external service and account pairing state are not moved into the
 product. Shared egress still gates private/local endpoints; relocation does
 not authorize the default localhost URL or implement inbound polling.
+`gateway-slack` also moves to Messaging Channels with its Web API send/status,
+bot-token precedence and API-level error handling intact. Existing Slack-host,
+credential and self-memory grants are unchanged; status remains authority-free.
+Socket Mode and Events HTTP are still unimplemented, not newly authorized by
+the repository move.
 The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling

@@ -68,6 +68,7 @@ There are no sibling-checkout dependencies or runtime download fallbacks.
 | `gateway-mattermost` | Source moved to `clawos-app/products/messaging-channels/apps/gateway/mattermost`; outgoing webhook send/status, channel/DM and username/icon overrides plus existing grants preserved; Python parameter cases moved and Rust recipient binding uses pinned source |
 | `gateway-rocketchat` | Source moved to `clawos-app/products/messaging-channels/apps/gateway/rocketchat`; REST send/status, channel/DM targets, token/user-id headers and existing grants preserved; no inbound service or local state added |
 | `gateway-signal` | Source moved to `clawos-app/products/messaging-channels/apps/gateway/signal`; external REST send/status, phone/group handling and existing grants preserved; backend/account state remain external, private-network access is not automatically authorized and inbound polling remains unimplemented |
+| `gateway-slack` | Source moved to `clawos-app/products/messaging-channels/apps/gateway/slack`; Web API send/status, bot-token precedence, API-level errors and existing grants preserved; Rust manifest fixture follows the immutable source pin, and Socket Mode / Events HTTP remain unimplemented |
 | Other products and connectors | Pending their individual paired migrations |
 
 Moving source does not complete a product redesign milestone or merge legacy

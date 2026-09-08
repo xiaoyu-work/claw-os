@@ -107,19 +107,6 @@ fn bundled_python_entries_do_not_own_operation_schemas() {
 
 #[test]
 fn known_first_party_schema_drift_is_resolved_in_manifests() {
-    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap();
-    let load = |path: &[&str]| {
-        let path = path
-            .iter()
-            .fold(repository.join("apps"), |path, component| {
-                path.join(component)
-            })
-            .join("app.json");
-        Manifest::from_json(&std::fs::read_to_string(path).unwrap()).unwrap()
-    };
-
     let exec = Manifest::from_json(
         &std::fs::read_to_string(app_sources::app_dir("exec").join("app.json")).unwrap(),
     )
@@ -154,16 +141,6 @@ fn known_first_party_schema_drift_is_resolved_in_manifests() {
         Some(serde_json::json!("bash"))
     );
 
-    let slack = load(&["gateway", "slack"]);
-    assert_eq!(
-        slack
-            .operations
-            .keys()
-            .map(String::as_str)
-            .collect::<Vec<_>>(),
-        ["send", "status"]
-    );
-
     let fs = Manifest::from_json(
         &std::fs::read_to_string(app_sources::app_dir("fs").join("app.json")).unwrap(),
     )
@@ -180,6 +157,18 @@ fn known_first_party_schema_drift_is_resolved_in_manifests() {
     assert_eq!(
         mcp_tool_for_command(&fs, "read_bytes").unwrap().args[1].effective_binding(),
         crate::caps::manifest::ArgBinding::Flag
+    );
+}
+
+#[test]
+fn slack_schema_preserves_outbound_only_operations() {
+    let slack = Manifest::from_json(
+        &std::fs::read_to_string(app_sources::app_dir("gateway/slack").join("app.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        slack.operations.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["send", "status"]
     );
 }
 
