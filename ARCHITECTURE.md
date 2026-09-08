@@ -103,6 +103,9 @@ observation, sensitive crash inspection and exact-target network diagnostics
 retain separate permissions. Collectors, coredumps, journal access, debugger
 execution and DNS-pinned network probes stay in the OS; `netdiag` still uses
 its private runtime bridge without direct worker-network access.
+Storage owns `storage-manager`; canonical block-device verification, UDisks2
+execution and offline no-repair checkers remain OS-owned. Observation,
+diagnostic and exact-device mount permissions stay separate.
 The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling

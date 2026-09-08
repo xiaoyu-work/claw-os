@@ -39,6 +39,7 @@ There are no sibling-checkout dependencies or runtime download fallbacks.
 | `hardware-center` | Moved to `clawos-app/products/diagnostics/apps/hardware-center`; nine MCP tools and named hardware observation scope preserved; privileged collection stays OS-owned |
 | `crash-doctor` | Moved to `clawos-app/products/diagnostics/apps/crash-doctor`; three MCP tools, bounded queries, coredump selectors and sensitive crash scope preserved; journals/coredumps/debugger remain OS-owned |
 | `netdiag` | Moved to `clawos-app/products/diagnostics/apps/netdiag`; five MCP tools, exact target scopes, explicit TCP ports and probe budgets preserved; private bridge and host-network provider remain OS-owned |
+| `storage-manager` | Moved to `clawos-app/products/storage/apps/storage-manager`; six MCP tools, canonical device paths and separate observation/diagnostic/mount scopes preserved; UDisks2 and no-repair checkers remain OS-owned |
 | Other products and connectors | Pending their individual paired migrations |
 
 Moving source does not complete a product redesign milestone or merge legacy

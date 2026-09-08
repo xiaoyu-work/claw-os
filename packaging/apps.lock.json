@@ -1,7 +1,7 @@
 {
   "version": 1,
   "repository": "https://github.com/xiaoyu-work/clawos-app.git",
-  "revision": "506281df24a57a06d04b16462a2733a31e92ced2",
-  "products": ["mail", "calendar", "files", "browser", "terminal", "containers", "backup-recovery", "store", "diagnostics"],
-  "apps": ["mail-ai", "email", "gateway-email", "calendar", "fs", "docs", "search", "web", "browser-attached", "exec", "container-manager", "backup-center", "system-snapshot", "pkg", "hardware-center", "crash-doctor", "netdiag"]
+  "revision": "a015a8183c59fae5f3634da5babc5b1b888fd3db",
+  "products": ["mail", "calendar", "files", "browser", "terminal", "containers", "backup-recovery", "store", "diagnostics", "storage"],
+  "apps": ["mail-ai", "email", "gateway-email", "calendar", "fs", "docs", "search", "web", "browser-attached", "exec", "container-manager", "backup-center", "system-snapshot", "pkg", "hardware-center", "crash-doctor", "netdiag", "storage-manager"]
 }
