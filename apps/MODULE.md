@@ -28,7 +28,7 @@ Product sources are moving individually to
 `storage-manager`, `accessibility-manager`, `audio-manager`,
 `bluetooth-manager`, `camera-manager`, `display-manager`, `desktop-manager`,
 `location-manager`, `network-manager`, `power-manager`, `printer-manager`,
-`user-manager`, `security-center`, `firewall-manager`, `usb-guard`, `config-editor`,
+`user-manager`, `security-center`, `firewall-manager`, `usb-guard`, `config-editor`, `systemd`,
 the Browser extension/Native Host and Mail UI/native source
 are owned there already.
 Do not recreate a local copy: OS package assembly consumes the immutable revision in

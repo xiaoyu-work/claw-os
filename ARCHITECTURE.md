@@ -164,7 +164,12 @@ Maintenance owns `config-editor`'s four MCP tools. Each retains exact target
 Canonical path checks remain in the App, while the OS owns the supported-target
 validators, bounded reads, nofollow/identity checks, serialized atomic writes
 and durable owner-bound backups. Existing system configuration and backup
-state remain here; the `systemd` App awaits its separate migration.
+state remain here. Maintenance also owns `systemd`'s seven MCP tools, retaining
+exact-unit `sys.observe` versus `sys.service` grants without introducing a
+confirmation argument. Systemctl execution, serialization and before/after
+state remain OS-owned. Start/stop/enable/disable prepare session inverse-state
+records; restart/reload do not claim reversible rollback. Both Maintenance
+App sources have moved without moving unit files or combining authority.
 The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling
