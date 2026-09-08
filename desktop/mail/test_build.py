@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import tomllib
 
 import pytest
 
@@ -41,6 +42,11 @@ def test_release_pin_matches_the_imported_platform_contract():
     for component in ("thunderbird", "firefox"):
         assert len(pin[component]["revision"]) == 40
     assert "--enable-project=comm/mail" in (HERE / "mozconfig").read_text()
+
+
+def test_native_workspaces_do_not_inherit_claw_rust_dependencies():
+    workspace = tomllib.loads((HERE.parent.parent / "Cargo.toml").read_text())["workspace"]
+    assert {"desktop/mail/comm", "build/mail/gecko"} <= set(workspace["exclude"])
 
 
 def test_prepare_uses_live_product_source_not_another_copy(layout):

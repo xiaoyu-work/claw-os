@@ -26,6 +26,9 @@ extension wrapper.
 The Firefox platform is a pinned build dependency, not a second Mail product.
 Product changes belong in the checked-in `comm/` tree. No git submodule or
 runtime download replaces that tree.
+The root Cargo workspace excludes both this `comm/` tree and `build/mail/gecko`;
+otherwise Cargo can incorrectly inherit Claw dependencies for Mozilla crates
+that upstream deliberately excludes from its own workspace.
 
 Model credentials, AI authorization and system privileges stay behind the
 existing core/SDK boundaries. Importing source does not grant an Agent access
