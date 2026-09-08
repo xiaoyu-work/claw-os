@@ -111,7 +111,10 @@ file-write or older-service fallback.
 
 Existing declared grants remain enabled by default. Revocation persists in
 the existing root-owned approval-generation file and invalidates only the
-target owner's App grants. Restart/retry that App after a change. Restoration
+target owner's App grants. Persistent MCP Hosts compare the owner/App policy
+snapshot and restart before their next admitted call, so retrying after trusted
+restoration does not reuse a revoked launcher handle. Other App processes may
+need restart/retry after a change. Restoration
 creates a pending request; the existing polkit approval helper must authorize
 it with duration `forever` (until revoked). This removes only the deny gate:
 the signed manifest, trust ceiling, launcher authority and exact call scopes

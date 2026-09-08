@@ -7,7 +7,7 @@ use crate::caps::{Cap, CapSet, Verb};
 
 pub const SESSION_PREFIX: &str = "app-permission:";
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Block {
     pub cap: Cap,
     pub generation: u32,

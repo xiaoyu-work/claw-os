@@ -214,7 +214,9 @@ tools under `sys.permissions:manage`. The Applications UI and MCP share
 App Host/worker system-service route. Native owner UI uses the non-App peer
 route; neither route can approve. The existing root-owned approval generations
 also hold per-owner/App deny gates. Launch derivation and live grant spending
-enforce them; revocation retires that App's live authority. Restoration uses
+enforce them; revocation retires that App's live authority. Persistent MCP Hosts
+compare owner/App policy snapshots and restart before the next admitted call
+rather than reusing a revoked launcher handle. Restoration uses
 the existing trusted polkit approval helper and exact generation-bound durable
 approval, without expanding manifest/trust/caller ceilings. Only fixed,
 broker-mediated permissions are currently changeable; direct resources remain

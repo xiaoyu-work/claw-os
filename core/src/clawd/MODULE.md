@@ -42,7 +42,7 @@ and agent tasks.
 | `usage.rs` | Peer-UID-scoped Agent token usage queries |
 | `app_sessions.rs` | App/native/MCP session authority: derives identity and capabilities, plans approvals, issues launch grants, consumes service-bound call tickets |
 | `app_permissions.rs` | Shared Settings permission service: verified declarations, owner/App deny gates, pending restoration, fine-grained revocation; no approval authority |
-| `app_services.rs` | Persistent owner/App service manager, lifecycle policy, capacity/restart control, and single-use call authorization |
+| `app_services.rs` | Persistent owner/App service manager, lifecycle policy, permission-policy snapshot retirement, capacity/restart control, and single-use call authorization |
 | `../extension_host/broker.rs` | Purpose-bound private proxy: verifies SCM credentials, Host/child ancestry, route class, and nearest child session before normal dispatch |
 | `scheduler.rs` | Proactive-scheduler authority: validates `cos cron` / `cos triggers` requests and derives what a job may carry |
 | `notifications.rs` | Notification RPC handlers, due-nudge fanout, and external delivery dispatcher |

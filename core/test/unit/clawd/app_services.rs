@@ -17,6 +17,22 @@ fn context() -> McpCallContext {
 }
 
 #[test]
+fn permission_policy_snapshot_detects_revocation_without_restarting_other_apps() {
+    let _lock = crate::test_env::lock_env();
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../build");
+    let dir = tempfile::tempdir_in(root).unwrap();
+    let _caps = crate::test_env::TestEnvVarGuard::set("COS_CAPS_DATA_DIR", dir.path());
+    let before = crate::approvals::app_policy::blocks(1000, "audio-manager").unwrap();
+    let cap = crate::caps::Cap::new(crate::caps::Verb::SYS_OBSERVE, crate::caps::Scope::name("audio"));
+    crate::approvals::app_policy::revoke(1000, "audio-manager", cap).unwrap();
+    let after = crate::approvals::app_policy::blocks(1000, "audio-manager").unwrap();
+    assert_ne!(before, after);
+    assert_eq!(before, crate::approvals::app_policy::blocks(1001, "audio-manager").unwrap());
+    assert_eq!(before, crate::approvals::app_policy::blocks(1000, "camera-manager").unwrap());
+    assert_eq!(after, crate::approvals::app_policy::blocks(1000, "audio-manager").unwrap());
+}
+
+#[test]
 fn action_digest_binds_every_executable_call_field() {
     let context = context();
     let arguments = serde_json::json!({"folder": "inbox", "limit": 10});

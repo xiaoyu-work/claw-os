@@ -189,6 +189,7 @@ struct ServiceRuntime {
     client: Option<Arc<crate::extension_host::client::ExtensionHostClient>>,
     host_session_id: String,
     package: PackageRef,
+    permission_policy: Vec<crate::approvals::app_policy::Block>,
     expires_at_ms: u64,
     always_on_ready: bool,
     _capacity: CapacityLease,
@@ -304,15 +305,20 @@ impl AppServiceManager {
             };
         let mut slot = slot.lock().await;
         slot.lifecycle = prepared.lifecycle;
+        let permission_policy =
+            crate::approvals::app_policy::blocks(prepared.owner_uid, &prepared.app_id)
+                .map_err(BrokerError::unavailable)?;
         let (retire_runtime, host_exited) =
             slot.runtime.as_mut().map_or((false, false), |runtime| {
                 let package_changed = runtime.package != prepared.package;
+                let policy_changed = runtime.permission_policy != permission_policy;
                 let lease_expiring = runtime.expires_at_ms
                     <= crate::agentd::grant::now_ms()
                         .saturating_add(crate::extension_host::protocol::MAX_REQUEST_TIMEOUT_MS);
-                let host_exited = !package_changed && !lease_expiring && runtime.host_exited();
+                let host_exited =
+                    !package_changed && !policy_changed && !lease_expiring && runtime.host_exited();
                 (
-                    package_changed || lease_expiring || host_exited,
+                    package_changed || policy_changed || lease_expiring || host_exited,
                     host_exited,
                 )
             });
@@ -481,6 +487,8 @@ impl AppServiceManager {
         self: &Arc<Self>,
         spec: &RuntimeSpec,
     ) -> Result<ServiceRuntime, RuntimeStartError> {
+        let permission_policy = crate::approvals::app_policy::blocks(spec.owner_uid, &spec.app_id)
+            .map_err(RuntimeStartError::admission)?;
         let app = current_app(&spec.app_id).map_err(RuntimeStartError::admission)?;
         let package = PackageRef::of(
             app.require_verified()
@@ -722,6 +730,7 @@ impl AppServiceManager {
                     client: None,
                     host_session_id,
                     package,
+                    permission_policy,
                     expires_at_ms,
                     always_on_ready: false,
                     _capacity: capacity,
@@ -739,6 +748,7 @@ impl AppServiceManager {
             client: Some(client),
             host_session_id,
             package,
+            permission_policy,
             expires_at_ms,
             always_on_ready: false,
             _capacity: capacity,
