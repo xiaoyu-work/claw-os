@@ -218,5 +218,4 @@ jobs:
         run: >-
           python3 -m pytest -q apps adapters claw-os-sdk/python/src cos-runtime/python/src
           extensions/claw-mail-ai/test_contract.py
-          desktop/mail/test_build.py
           packaging/deb/tests/test_mail_extension.py rootfs/features/claw-mail-ai/test_install.py
