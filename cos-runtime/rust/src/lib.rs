@@ -19,6 +19,7 @@
 //! | [`fs`]        | `app`       | `cos app fs ...`           |
 //! | [`filesystem`] | system    | controlled text-file provider |
 //! | [`desktop`]   | system     | controlled native editor launch |
+//! | [`capture`]   | system     | owner-scoped screenshot provider |
 //! | [`exec`]      | `app`       | `cos app exec ...`         |
 //! | [`pkg`]       | `app`       | `cos app pkg ...`          |
 //! | [`notify`]    | `app`       | `cos app notify ...`       |
@@ -38,6 +39,7 @@
 pub use claw_os_sdk::{call, call_typed, cos_call_json, BridgeError, Error};
 
 pub mod ask_claw;
+pub mod capture;
 pub mod exec;
 pub mod desktop;
 pub mod filesystem;

@@ -128,6 +128,15 @@ those require process/resource containment rather than a broker-only toggle.
 Already-authorized effects are not rolled back. No user data, manifest or
 provider credentials are rewritten.
 
+The Agent package provides `claw-os-capture-v1`, the typed screenshot service
+for the Capture migration. Non-interactive capture requires an explicit
+`desktop.capture:screen` approval in addition to the existing exact
+output-directory write permission; clipboard and interactive destination
+selection are not part of this broker route. The service launches only the
+matching root-owned native Capture client and refuses an older binary without
+its pipe mode. Source migration will make the Desktop package depend on this
+service; no old permission or App identity is silently transferred.
+
 Updates only ever move forward. An older Claw OS release stays validly signed
 forever, so the signature alone cannot tell a current release from a superseded
 one; see [Downgrade protection](#downgrade-protection) for what stops one being

@@ -795,6 +795,15 @@ pub const CATALOG: &[CapMeta] = &[
         Risk::High,
     ),
 
+    CapMeta::new(
+        Verb::DESKTOP_CAPTURE,
+        ScopeKind::Name,
+        LocalizedStr::new("Capture your screen"),
+        LocalizedStr::new("Capture the desktop through the owner's screenshot portal. The screen scope does not grant clipboard access or permission to save outside the separately authorized directory."),
+        "📸",
+        Risk::High,
+    ),
+
     // -- Attached browser -------------------------------------------------
     // Gates the user's GUI browser (Chromium with the user's profile)
     // when reached through the Claw agent WebExtension + Native Messaging

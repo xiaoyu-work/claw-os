@@ -38,6 +38,7 @@ pub fn supported(verb: Verb) -> bool {
             | Verb::DEVICE_CAMERA
             | Verb::DEVICE_DISPLAY
             | Verb::DESKTOP_WINDOW
+            | Verb::DESKTOP_CAPTURE
             | Verb::DEVICE_LOCATION
             | Verb::NET_MANAGE
             | Verb::SYS_POWER

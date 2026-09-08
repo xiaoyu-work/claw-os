@@ -77,6 +77,20 @@ cross-cutting boundaries rather than hidden implementation details.
 
 ### App source ownership
 
+The OS provides `system.screenshot.capture` for the Capture source migration.
+It accepts only authenticated `cosmic-screenshot` or non-App human sessions, an explicit
+`desktop.capture:screen` grant and an exact output-directory write grant.
+The provider starts only the root-owned native portal client's
+`--portal-capture-stdout` mode in the authenticated owner's session, with a
+closed environment and bounded execution/output. PNG bytes stay inside the
+provider; only a cancellation or saved path returns to the App worker.
+Pinned, non-overwriting `0600` output uses the filesystem provider's durable
+task snapshots. No arbitrary program, source path, clipboard action or
+interactive destination is admitted. Screen permission uses Settings' existing
+owner/App deny gate; no capture-specific permission store is added.
+The service fails explicitly until a
+matching native Capture binary is installed; it never falls back to App calls.
+
 Products migrate individually from this repository to
 [`xiaoyu-work/clawos-app`](https://github.com/xiaoyu-work/clawos-app).
 Mail's native source, `mail-ai`, legacy `email`, restricted `gateway-email`

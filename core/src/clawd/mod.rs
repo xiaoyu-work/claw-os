@@ -12,6 +12,7 @@ pub mod backup;
 pub mod bluetooth;
 pub mod browser;
 pub mod camera;
+pub mod capture;
 pub mod client;
 pub mod client_identity;
 pub mod clipboard;

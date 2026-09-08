@@ -695,6 +695,20 @@ pub struct FilesystemAccess {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ScreenshotCapture {
+    pub session: Token,
+    pub request: ScreenshotRequest,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScreenshotRequest {
+    pub directory: Text<PATH_BYTES>,
+    pub modal: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AiChat {
     pub session: Token,
     pub app_id: Name,

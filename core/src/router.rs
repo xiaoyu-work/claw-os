@@ -494,6 +494,18 @@ fn parse_internal_bridge_request(
     max_bytes: usize,
     service: &str,
 ) -> Result<serde_json::Map<String, Value>, String> {
+    let object = parse_internal_request_object(provided, max_bytes, service)?;
+    if !object.contains_key("action") {
+        return Err(format!("internal {service} request requires action"));
+    }
+    Ok(object)
+}
+
+fn parse_internal_request_object(
+    provided: Option<&[u8]>,
+    max_bytes: usize,
+    service: &str,
+) -> Result<serde_json::Map<String, Value>, String> {
     let owned;
     let bytes = if let Some(provided) = provided {
         provided
@@ -525,9 +537,6 @@ fn parse_internal_bridge_request(
         return Err(format!(
             "internal {service} request must not supply session authority"
         ));
-    }
-    if !object.contains_key("action") {
-        return Err(format!("internal {service} request requires action"));
     }
     Ok(object)
 }
@@ -844,6 +853,20 @@ fn dispatch_with_stdin_impl(
                 "target": target,
                 "value": value_arg,
             }),
+        )?;
+        return Ok(Some(value.to_string()));
+    }
+
+    if name == "__capture" {
+        if args.len() != 3 || args[1] != "screenshot" || args[2] != "--request-stdin" {
+            return Err("internal capture bridge requires `screenshot --request-stdin`".into());
+        }
+        let request = parse_internal_request_object(stdin_data.as_deref(), 8192, "capture")?;
+        let session = env::var("COS_SESSION")
+            .map_err(|_| "internal capture command requires COS_SESSION")?;
+        let value = request_wire_clawd(
+            Command::SystemScreenshotCapture,
+            json!({"session": session, "request": request}),
         )?;
         return Ok(Some(value.to_string()));
     }

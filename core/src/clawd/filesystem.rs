@@ -85,6 +85,7 @@ pub async fn access(params: Value, authority: &Decision, mutation: bool) -> Resu
                 previous,
                 sid.as_ref(),
                 authority.owner_uid(),
+                false,
             )?;
             Ok(json!({"path": path, "bytes": content.as_str().len()}))
         }
@@ -98,6 +99,7 @@ pub async fn access(params: Value, authority: &Decision, mutation: bool) -> Resu
                 Some(previous),
                 sid.as_ref(),
                 authority.owner_uid(),
+                false,
             )?;
             Ok(json!({"replacements": 1}))
         }
@@ -166,7 +168,7 @@ fn mutation_session(authority: &Decision) -> Result<Option<crate::session::Sessi
     Ok(Some(sid))
 }
 
-struct Target {
+pub(super) struct Target {
     path: PathBuf,
     directory: File,
     pinned: PathBuf,
@@ -174,7 +176,7 @@ struct Target {
 }
 
 impl Target {
-    fn open(path: &Path, owner: u32) -> Result<Self, String> {
+    pub(super) fn open(path: &Path, owner: u32) -> Result<Self, String> {
         let _identity = FsIdentityGuard::enter(owner)?;
         let parent = path.parent().ok_or("file path has no parent")?;
         let mut directory = File::open("/").map_err(|e| e.to_string())?;
@@ -233,6 +235,7 @@ impl Target {
         previous: Option<(Vec<u8>, fs::Metadata)>,
         sid: Option<&crate::session::SessionId>,
         owner: u32,
+        create_only: bool,
     ) -> Result<(), String> {
         let parent = self.pinned.parent().ok_or("file path has no parent")?;
         let parent_meta = self.directory.metadata().map_err(|e| e.to_string())?;
@@ -308,9 +311,26 @@ impl Target {
             )
             .map_err(|e| e.to_string())?;
         }
-        staged.persist(&self.pinned).map_err(|e| e.to_string())?;
+        if create_only {
+            staged.persist_noclobber(&self.pinned).map_err(|e| e.to_string())?;
+        } else {
+            staged.persist(&self.pinned).map_err(|e| e.to_string())?;
+        }
         self.directory.sync_all().map_err(|e| e.to_string())?;
         Ok(())
+    }
+
+    pub(super) fn write_new(&self, bytes: &[u8], authority: &Decision) -> Result<(), String> {
+        let _identity = FsIdentityGuard::enter(self.owner)?;
+        let parent = self.path.parent().ok_or("file has no parent")?;
+        let current = fs::metadata(parent).map_err(|e| e.to_string())?;
+        let pinned = self.directory.metadata().map_err(|e| e.to_string())?;
+        if current.dev() != pinned.dev() || current.ino() != pinned.ino() {
+            return Err("capture directory changed during the request".into());
+        }
+        drop(_identity);
+        let sid = mutation_session(authority)?;
+        self.write(bytes, None, sid.as_ref(), self.owner, true)
     }
 }
 

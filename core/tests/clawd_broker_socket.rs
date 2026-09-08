@@ -132,6 +132,25 @@ async fn a_connected_client_is_identified_by_kernel_credentials_on_its_message()
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn screenshot_request_roundtrips_only_typed_parameters() {
+    let bound = bind();
+    let path = bound.path.clone();
+    let server = tokio::spawn(serve_once(bound.listener, |envelope| {
+        let params = (Command::SystemScreenshotCapture.route().decode)(envelope.params).unwrap();
+        assert_eq!(params["request"], json!({"directory":"/work/shots","modal":false}));
+        Response::ok(envelope.id, json!({"cancelled":true,"path":null}))
+    }));
+    let request = Request::build(Command::SystemScreenshotCapture,
+        json!({"session":"capture-session","request":{"directory":"/work/shots","modal":false}}));
+    let reply = tokio::task::spawn_blocking(move || cos::clawd::client::request_blocking(&path, request))
+        .await.unwrap().unwrap();
+    assert_eq!(reply.result.unwrap(), json!({"cancelled":true,"path":null}));
+    let (credentials, request) = server.await.unwrap();
+    assert_eq!(credentials.uid, unsafe { libc::getuid() });
+    assert_eq!(request.command.as_str(), "system.screenshot.capture");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_response_for_another_request_is_refused_by_the_client() {
     let bound = bind();
     let path = bound.path.clone();

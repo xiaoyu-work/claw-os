@@ -2,6 +2,20 @@ use super::app_commands::{consent_cmd, create_cmd, install_cmd, stage_app_instal
 use super::*;
 use crate::cli_help::{command_schemas, show_builtin_schema, show_command_schema};
 
+#[test]
+fn capture_bridge_is_bounded_and_cannot_supply_session_authority() {
+    let request = parse_internal_request_object(
+        Some(br#"{"directory":"/work/shots","modal":true}"#), 8192, "capture",
+    ).unwrap();
+    assert_eq!(request["directory"], "/work/shots");
+    assert!(parse_internal_request_object(
+        Some(br#"{"directory":"/work/shots","modal":true,"session":"forged"}"#), 8192, "capture",
+    ).is_err());
+    assert!(parse_internal_request_object(Some(&vec![b'x'; 8193]), 8192, "capture").is_err());
+    assert!(parse_internal_request_object(Some(b"[]"), 8192, "capture").is_err());
+    assert!(parse_browser_bridge_request(Some(br#"{"directory":"/work/shots"}"#)).is_err());
+}
+
 mod app_sources {
     include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/support/app_sources.rs"));
 }

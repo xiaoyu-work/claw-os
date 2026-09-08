@@ -1391,6 +1391,19 @@ routes! {
             super::filesystem::access(c.params, authority, true).await.map_err(BrokerError::from)
         },
     }
+    SystemScreenshotCapture {
+        name: "system.screenshot.capture",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget { max_in_flight: 2, deadline: Deadline::Uninterruptible },
+        authority: session(Audience::SystemService),
+        body: body::ScreenshotCapture,
+        audit: &[("session", FieldRule::Token), ("request", FieldRule::Size)],
+        run: |c| {
+            let authority = c.authority()?;
+            super::capture::capture(c.params, c.client, authority).await.map_err(BrokerError::from)
+        },
+    }
     SystemDesktopControl {
         name: "system.desktop.control",
         access: Access::User,

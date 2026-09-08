@@ -88,7 +88,19 @@ fn every_admissible_route_is_explicitly_mapped() {
         let error = admit(command, &wide).unwrap_err();
         assert!(error.contains("no admission rule"), "{name}: {error}");
     }
+
 }
+
+#[test]
+fn screenshot_admission_requires_capture_not_file_or_clipboard_authority() {
+    let capture = relaying_authority(vec![Cap::new(Verb::DESKTOP_CAPTURE, Scope::name("screen"))]);
+    admit(Command::SystemScreenshotCapture, &capture).unwrap();
+    for verb in [Verb::FS_WRITE, Verb::CLIPBOARD_WRITE, Verb::DESKTOP_LAUNCH] {
+        let unrelated = relaying_authority(vec![Cap::new(verb, Scope::Wild)]);
+        assert!(admit(Command::SystemScreenshotCapture, &unrelated).is_err());
+    }
+}
+
 #[test]
 fn ai_chat_admission_is_explicit_and_cannot_admit_app_invocation() {
     for verb in [Verb::AI_CHAT, Verb::AI_CHAT_UNTRUSTED] {

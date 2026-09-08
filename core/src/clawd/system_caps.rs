@@ -237,6 +237,7 @@ const BASELINE: &[(Verb, Baseline)] = &[
     // Launching a desktop entry runs an arbitrary program.
     (Verb::DESKTOP_LAUNCH, Baseline::Denied),
     (Verb::DESKTOP_WINDOW, Baseline::Denied),
+    (Verb::DESKTOP_CAPTURE, Baseline::Denied),
     // -- Browser -----------------------------------------------------
     (Verb::BROWSER_TABS_READ, Baseline::Resourceless),
     // Navigation and DOM access are host-addressed fetches.

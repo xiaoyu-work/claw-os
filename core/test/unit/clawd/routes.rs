@@ -34,6 +34,7 @@ const EXPECTED_USER_COMMANDS: &[&str] = &[
     "system.desktop.control",
     "system.filesystem.read",
     "system.filesystem.write",
+    "system.screenshot.capture",
     "system.browser.control",
     "system.display.control",
     "system.events.control",

@@ -415,6 +415,7 @@ fn required_verbs(command: Command) -> &'static [Verb] {
         "system.desktop.control" => &[Verb::DESKTOP_WINDOW, Verb::DESKTOP_LAUNCH],
         "system.filesystem.read" => &[Verb::FS_READ],
         "system.filesystem.write" => &[Verb::FS_WRITE],
+        "system.screenshot.capture" => &[Verb::DESKTOP_CAPTURE],
         "system.browser.control" => &[
             Verb::BROWSER_TABS_READ,
             Verb::BROWSER_NAV,

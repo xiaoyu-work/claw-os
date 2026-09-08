@@ -30,6 +30,7 @@ with Claw OS.
 | `rust/src/fs.rs` | Typed filesystem CLI client; writes send bounded JSON business arguments via `--args-stdin`; binary reads reject truncation |
 | `rust/src/filesystem.rs` | App-safe controlled text-file provider client; complete reads and atomic unique replacements, no App intercall |
 | `rust/src/desktop.rs` | Fixed native editor activation through the controlled desktop provider |
+| `rust/src/capture.rs` | Typed non-interactive screenshot client; SDK stdin, exact destination confirmation, no App invocation or desktop transport |
 | `rust/src/ask_claw.rs` | Typed context serialization, authenticated/readiness-gated Unix sockets, process isolation, and asynchronous child supervision |
 | `README.md` | Boundary and usage |
 

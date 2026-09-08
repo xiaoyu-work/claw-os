@@ -447,7 +447,7 @@ fn launch_exit_error(status: ExitStatus) -> String {
 }
 
 #[derive(Clone)]
-struct DesktopEnvironment {
+pub(super) struct DesktopEnvironment {
     uid: u32,
     gid: u32,
     home: PathBuf,
@@ -459,7 +459,7 @@ struct DesktopEnvironment {
 }
 
 impl DesktopEnvironment {
-    fn for_user(uid: u32, gid: u32, home: PathBuf, peer_pid: u32) -> Result<Self, String> {
+    pub(super) fn for_user(uid: u32, gid: u32, home: PathBuf, peer_pid: u32) -> Result<Self, String> {
         let home_metadata = fs::metadata(&home)
             .map_err(|error| format!("inspect desktop user home {}: {error}", home.display()))?;
         if home_metadata.uid() != uid {
@@ -910,7 +910,7 @@ fn run_user_command_sync(
     })
 }
 
-fn configured_user_command(
+pub(super) fn configured_user_command(
     program: &Path,
     args: &[String],
     environment: &DesktopEnvironment,
