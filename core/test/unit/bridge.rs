@@ -1144,6 +1144,22 @@ fn ntfy_topic_requires_flag_binding() {
 }
 
 #[test]
+fn webhook_target_requires_flag_binding() {
+    let manifest = Manifest::from_json(
+        &std::fs::read_to_string(app_sources::app_dir("gateway/webhook").join("app.json")).unwrap(),
+    )
+    .unwrap();
+    let operation = &manifest.operations["send"];
+    assert!(bind_operation_args(operation, &["destination".into(), "hello".into()]).is_err());
+    let canonical = bind_operation_args(
+        operation,
+        &["hello".into(), "--target".into(), "destination".into()],
+    )
+    .unwrap();
+    assert_eq!(canonical.values["target"], "destination");
+}
+
+#[test]
 fn bundled_removed_aliases_are_rejected() {
     let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -1157,20 +1173,6 @@ fn bundled_removed_aliases_are_rejected() {
             .join("app.json");
         Manifest::from_json(&std::fs::read_to_string(path).unwrap()).unwrap()
     };
-    for (app, alias) in [
-        ("webhook", "target"),
-    ] {
-        let manifest = load(&["gateway", app]);
-        let operation = &manifest.operations["send"];
-        assert!(
-            bind_operation_args(operation, &["destination".into(), "hello".into()]).is_err(),
-            "{app}"
-        );
-        let args = vec!["hello".into(), format!("--{alias}"), "destination".into()];
-        let canonical = bind_operation_args(operation, &args).unwrap();
-        assert_eq!(canonical.values[alias], "destination", "{app}");
-    }
-
     let net = load(&["net"]);
     let output = effective_app_home().join("alias.bin");
     let url = "https://example.test/alias.bin".to_string();

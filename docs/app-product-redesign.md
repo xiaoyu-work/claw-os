@@ -77,6 +77,7 @@ There are no sibling-checkout dependencies or runtime download fallbacks.
 | `gateway-zulip` | Source moved to `clawos-app/products/messaging-channels/apps/gateway/zulip`; stream/topic and private-email routing, API-level results and existing grants preserved; all fifteen Messaging Channels source identities are relocated, but inbound/lifecycle redesign remains pending |
 | `gateway-ntfy` | Source moved to `clawos-app/products/notification-delivery/apps/gateway/ntfy`; required server/exact host, metadata and auth behavior preserved, including public-default stored-token suppression; durable Notification Service/Rust adapter stay OS-owned and no queue/state is duplicated |
 | `gateway-pushover` | Source moved to `clawos-app/products/notification-delivery/apps/gateway/pushover`; exact API host, application/user keys, recipient flag, metadata and emergency constraints preserved; Python argument case moved, while receipt acknowledgement and durable OS-service integration remain separate |
+| `gateway-webhook` | Source moved to `clawos-app/products/notification-delivery/apps/gateway/webhook`; JSON/raw payload, target flag/default lookup, auth precedence and independent HMAC preserved with existing grants and shared egress; argument/egress regressions relocated and Rust fixture pinned; all three delivery source identities moved, not durable-service integration |
 | Other products and connectors | Pending their individual paired migrations |
 
 Moving source does not complete a product redesign milestone or merge legacy
