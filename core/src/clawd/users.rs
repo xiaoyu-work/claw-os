@@ -132,7 +132,7 @@ pub async fn control(
             .as_deref()
             .map(parse_credential_ref)
             .transpose()?;
-        let requested = requested_caps(credential_ref.as_ref());
+        let requested = requested_caps(&action, credential_ref.as_ref());
         let (session, authorized) = authorize_session(authority, &requested)?;
 
         if action == "status" {
@@ -177,7 +177,10 @@ pub async fn control(
     }
 }
 
-fn requested_caps(credential: Option<&(String, String)>) -> Vec<Cap> {
+fn requested_caps(action: &str, credential: Option<&(String, String)>) -> Vec<Cap> {
+    if action == "status" {
+        return vec![Cap::new(Verb::SYS_OBSERVE, Scope::name("identities"))];
+    }
     let mut caps = vec![Cap::new(Verb::SYS_IDENTITY, Scope::name("manage"))];
     if let Some((namespace, name)) = credential {
         caps.push(Cap::new(

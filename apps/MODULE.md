@@ -28,7 +28,8 @@ Product sources are moving individually to
 `storage-manager`, `accessibility-manager`, `audio-manager`,
 `bluetooth-manager`, `camera-manager`, `display-manager`, `desktop-manager`,
 `location-manager`, `network-manager`, `power-manager`, `printer-manager`,
-the Browser extension/Native Host and Mail UI/native source are owned there already.
+`user-manager`, the Browser extension/Native Host and Mail UI/native source
+are owned there already.
 Do not recreate a local copy: OS package assembly consumes the immutable revision in
 [`packaging/apps.lock.json`](../packaging/apps.lock.json). Source relocation
 does not rename installed App identities or grant additional authority.

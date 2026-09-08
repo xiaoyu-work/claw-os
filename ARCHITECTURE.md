@@ -108,7 +108,8 @@ execution and offline no-repair checkers remain OS-owned. Observation,
 diagnostic and exact-device mount permissions stay separate.
 Settings owns `accessibility-manager`, `audio-manager` and
 `bluetooth-manager`, `camera-manager`, `display-manager`, `desktop-manager`,
-`location-manager`, `network-manager`, `power-manager` and `printer-manager`;
+`location-manager`, `network-manager`, `power-manager`, `printer-manager`
+and `user-manager`;
 user-session validation, COSMIC
 Wayland, AT-SPI, PipeWire/WirePlumber, BlueZ and GStreamer execution remain
 OS-owned. Audio observation,
@@ -135,8 +136,12 @@ UPower/logind execution and serialization stay OS-owned.
 Printing keeps separate discovery, queue, print and control grants plus exact
 source-file read authority. CUPS execution, pinned source descriptors and
 job-owner checks remain OS-owned; cancellation still requires confirmation.
-Native Settings and other management Apps await
-separate migrations, without combining their provider authority.
+Identity status requires `sys.observe:identities`, not mutation authority.
+Account changes retain `sys.identity:manage` and password changes additionally
+require exact credential reads. Shadow utilities, account state and owner-bound
+rollback stay OS-owned. All eleven management App sources assigned to Settings
+have moved; native Settings still awaits its full UI/build migration, without
+combining provider authority.
 The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling
