@@ -401,19 +401,30 @@ fn bundled_schema_exposes_repeatables_choices_and_stdin() {
         true
     );
 
-    let usb = load("usb-guard");
-    let authorize = operation_schema(&usb.operations["authorize"]);
-    assert_eq!(
-        authorize["parameters"][2]["required_when"],
-        serde_json::json!({"kind":"arg-equals","arg":"state","value":"off"})
-    );
-
     let googlechat = Manifest::from_json(
         &std::fs::read_to_string(repository.join("apps/gateway/googlechat/app.json")).unwrap(),
     )
     .unwrap();
     let schema = operation_schema(&googlechat.operations["send"]);
     assert_eq!(schema["parameters"][1]["binding"], "flag");
+}
+
+#[test]
+fn usb_authorize_schema_preserves_conditional_confirmation() {
+    let manifest = Manifest::from_json(
+        &std::fs::read_to_string(app_sources::app_dir("usb-guard").join("app.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(is_mcp_only_cli(&manifest));
+    let authorize = tool_schema(mcp_tool_for_command(&manifest, "authorize").unwrap());
+    assert_eq!(
+        authorize["parameters"][2]["required_when"],
+        serde_json::json!({"kind":"arg-equals","arg":"state","value":"off"})
+    );
+    assert_eq!(authorize["parameters"][2]["binding"], "flag");
+    assert_eq!(authorize["parameters"][2]["required"], false);
+    assert_eq!(authorize["parameters"][2]["enum"], serde_json::json!([true]));
+    assert_eq!(authorize["stdin"], false);
 }
 
 #[test]

@@ -787,29 +787,31 @@ fn ntfy_server_is_required_for_every_operation() {
 
 #[test]
 fn usb_conditional_confirmation_is_enforced_by_canonical_binder() {
-    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap();
     let manifest = Manifest::from_json(
-        &std::fs::read_to_string(repository.join("apps/usb-guard/app.json")).unwrap(),
+        &std::fs::read_to_string(app_sources::app_dir("usb-guard").join("app.json")).unwrap(),
     )
     .unwrap();
-    let operation = &manifest.operations["authorize"];
+    let tool = crate::apps::mcp_tool_for_command(&manifest, "authorize").unwrap();
+    let bind = |raw: &[String]| -> Result<BTreeMap<String, serde_json::Value>, String> {
+        let supplied = crate::caps::args::bind_supplied_cli_args(&tool.args, raw)?;
+        manifest
+            .resolve_mcp_tool_args(&tool.name, &supplied)
+            .map_err(|error| error.to_string())
+    };
 
-    let enabled = bind_operation_args(operation, &["1-2".into(), "on".into()]).unwrap();
-    assert!(!enabled.values.contains_key("confirm"));
+    let enabled = bind(&["1-2".into(), "on".into()]).unwrap();
+    assert!(!enabled.contains_key("confirm"));
     assert!(
-        bind_operation_args(operation, &["1-2".into(), "on".into(), "--confirm".into()]).is_err()
+        bind(&["1-2".into(), "on".into(), "--confirm".into()]).is_err()
     );
-    assert!(bind_operation_args(operation, &["1-2".into(), "off".into()]).is_err());
-    assert!(bind_operation_args(
-        operation,
+    assert!(bind(&["1-2".into(), "off".into()]).is_err());
+    assert!(bind(
         &["1-2".into(), "off".into(), "--confirm=false".into()]
     )
     .is_err());
     let disabled =
-        bind_operation_args(operation, &["1-2".into(), "off".into(), "--confirm".into()]).unwrap();
-    assert_eq!(disabled.values["confirm"], serde_json::json!(true));
+        bind(&["1-2".into(), "off".into(), "--confirm".into()]).unwrap();
+    assert_eq!(disabled["confirm"], serde_json::json!(true));
 }
 
 #[test]

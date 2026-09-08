@@ -150,8 +150,14 @@ security report generation stay OS-owned. Security also owns
 `sys.observe:firewall`, while mutations retain `net.firewall:manage`.
 The dedicated nftables table, durable rule revisions, startup reconciliation,
 serialized mutations and owner/revision-bound rollback remain in the OS.
-Clear and restore still require explicit confirmation. USB management awaits
-its own migration; none of these providers share inspection authority.
+Clear and restore still require explicit confirmation.
+Security also owns `usb-guard`'s six MCP tools. USB observation and control
+remain separate (`sys.observe:usb` and `device.usb:control`). Authorization on
+needs no confirmation; authorization off and block/unblock/eject/restore
+require it. Sysfs device revalidation, protected-mount/swap checks, udev policy,
+UDisks2 eject, startup reconciliation and owner/revision-bound rollback remain
+OS-owned. All three Security App sources have moved, without merging their
+state, provider authority or UI.
 The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling

@@ -691,11 +691,8 @@ fn destructive_confirmation_is_required_and_true_before_capability_resolution() 
 
 #[test]
 fn usb_authorize_conditionally_requires_true_confirmation_before_authority() {
-    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap();
     let manifest = Manifest::from_json(
-        &std::fs::read_to_string(repository.join("apps/usb-guard/app.json")).unwrap(),
+        &std::fs::read_to_string(app_sources::app_dir("usb-guard").join("app.json")).unwrap(),
     )
     .unwrap();
     let paths = crate::caps::args::PathContext {
@@ -709,29 +706,39 @@ fn usb_authorize_conditionally_requires_true_confirmation_before_authority() {
         ])
     };
     let enabled = manifest
-        .resolve_operation_call("authorize", &base("on"), &paths)
+        .resolve_mcp_tool_call("usb-guard.authorize", &base("on"), &paths)
         .unwrap();
     assert!(!enabled.values.contains_key("confirm"));
     assert_eq!(enabled.needs[0][0].verb, Verb::DEVICE_USB);
+    assert_eq!(enabled.needs[0][0].scope, Scope::name("control"));
     let mut unnecessary = base("on");
     unnecessary.insert("confirm".to_string(), serde_json::json!(true));
     assert!(manifest
-        .resolve_operation_call("authorize", &unnecessary, &paths)
+        .resolve_mcp_tool_call("usb-guard.authorize", &unnecessary, &paths)
         .is_err());
 
     assert!(manifest
-        .resolve_operation_call("authorize", &base("off"), &paths)
+        .resolve_mcp_tool_call("usb-guard.authorize", &base("off"), &paths)
         .is_err());
     let mut denied = base("off");
-    denied.insert("confirm".to_string(), serde_json::json!(false));
-    assert!(manifest
-        .resolve_operation_call("authorize", &denied, &paths)
-        .is_err());
+    for invalid in [
+        serde_json::json!(false),
+        serde_json::json!(null),
+        serde_json::json!(0),
+        serde_json::json!(1),
+        serde_json::json!("true"),
+    ] {
+        denied.insert("confirm".to_string(), invalid);
+        assert!(manifest
+            .resolve_mcp_tool_call("usb-guard.authorize", &denied, &paths)
+            .is_err());
+    }
     denied.insert("confirm".to_string(), serde_json::json!(true));
     let disabled = manifest
-        .resolve_operation_call("authorize", &denied, &paths)
+        .resolve_mcp_tool_call("usb-guard.authorize", &denied, &paths)
         .unwrap();
     assert_eq!(disabled.needs[0][0].verb, Verb::DEVICE_USB);
+    assert_eq!(disabled.needs[0][0].scope, Scope::name("control"));
 }
 
 #[test]
