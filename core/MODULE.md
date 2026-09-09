@@ -65,10 +65,10 @@ migrated product inputs from the repository root with
 inputs fail with an actionable diagnostic; tests do not download them.
 The helper resolves the lock's distinct `products` and optional `capabilities`
 roots, requires matching source-kind metadata and exact identity/layout, and
-never substitutes local `apps/doc`, `apps/db`, `apps/kv` or `apps/net` for
+never substitutes local `apps/doc`, `apps/db`, `apps/kv`, `apps/net` or `apps/summarize` for
 migrated clients.
 `tests/app_source_fixtures.rs` covers both kinds, missing/duplicate/escaping
-sources and the published Doc/DB/KV manifests, including exact MCP/CLI arguments,
+sources and the published Doc/DB/KV/Net/Summarize manifests, including exact MCP/CLI arguments,
 defaults and separate key/database/whole-store scopes. Signed fixtures in
 `tests/extension_provenance_process.rs` bind the same sources to worker policy;
 DB and KV retain independent owner/App partitions, without neighbouring App or
@@ -79,6 +79,11 @@ Signed fixtures and the real KV session tests bind the manifest-selected
 entrypoint rather than assuming private implementation filenames.
 The KV planner regression verifies distinct key read/write/delete grants and
 fixed whole-store read for list/dump; named-key unions cannot authorize enumeration.
+Summarize's planner checks its fixed wildcard untrusted-AI requirement and
+separate `memory.write:self:summarize`; unrelated memory/model grants do not
+substitute. Its signed fixture retains private App data without provider,
+budget or owner-memory mounts. Offline input/wire fixtures check the exact
+1,000,000-byte AI text limit and reject caller-supplied provider/owner authority.
 These pinned integration inputs are not production core build dependencies.
 
 ```bash

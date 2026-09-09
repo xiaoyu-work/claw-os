@@ -8,6 +8,8 @@ with Claw OS.
 ## Responsibilities
 
 - Perform capability policy checks against the hidden core bridge.
+- Carry bounded source-scoped memory requests to OS authority without an
+  App-local memory store or provider.
 - Provide internal runtime/session helpers consistently across languages.
 - Carry bounded bundled-App requests to daemon-owned browser and network
   providers without exposing privileged host sockets.
@@ -22,6 +24,7 @@ with Claw OS.
 | Path | Role |
 | --- | --- |
 | `python/src/cos_runtime/` | Python policy/runtime helpers |
+| `python/src/cos_runtime/memory.py` | Bundled `remember`/`forget` transport; OS-owned storage and exact memory scopes |
 | `python/src/cos_runtime/_broker_bridge.py` | Shared bounded stdin transport for typed private `cos` bridges |
 | `python/src/cos_runtime/network_diagnostics.py` | Typed client for daemon-owned host-network diagnostics |
 | `python/src/cos_runtime/mcp.py` | Strict bundled-App MCP operation binding |
@@ -45,6 +48,9 @@ Bundled clients can be source-owned by `clawos-app`. DB depends on the
 runtime helpers or providers. The exact platform source pin is reproducible
 but is not an independently published runtime compatibility guarantee; see
 the [bundled-client contract](README.md#bundled-client-contract).
+Summarize consumes the declared `memory.remember` export and public SDK AI,
+not private dispatcher/provider code. Its `self:summarize` memory requests
+remain separate from other identities, and failures must propagate.
 
 Inherited desktop apps keep app-specific `Serialize` context structs in their
 small `claw_glue` modules and call `cos_runtime::ask_claw::launch`. They do not

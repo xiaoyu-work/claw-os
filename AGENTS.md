@@ -52,7 +52,7 @@ editing additional surfaces.
 | Broker wire protocol or a new broker route | `core/src/clawd/routes.rs`, `core/src/clawd/wire/`, `core/src/clawd/transport/` | `client.rs`, every in-repo client, `audit_policy.rs`, `core/tests/clawd_broker_socket.rs` |
 | MCP client/server integration | `core/src/agent/tools/mcp/`, `core/src/config.rs` | tool registry and agent lifecycle attachment |
 | Extension package provenance (App/Skill/MCP signing, trust roots, revocation) | `core/src/provenance/`, `docs/extension-provenance.md` | `core/src/apps.rs`, `core/src/agent/skills/loader.rs`, `core/src/agent/tools/mcp/discover.rs`, `packaging/deb/build-debs.sh` |
-| Python app operation | `apps/<id>/app.json`, `apps/<id>/main.py` | `test_main.py`, `cos_runtime.policy`, app lint |
+| App client/business/MCP operation | External `clawos-app` guide and owning `products/<group>/package.json` or `capabilities/<group>/package.json` | Declared App manifest, entrypoint and tests; versioned SDK/runtime; OS source-pin/package delivery |
 | Bundled App product boundary or source fork | `docs/app-product-redesign.md`, `apps/MODULE.md` | Product UI/backend, manifests, provenance/licenses, native launchers, account/state migration, packaging |
 | Adapter | `adapters/<id>/app.json`, `adapters/<id>/main.py` | adapter tests and external binary dependency |
 | App/SDK wire contract | `claw-os-sdk/wire/`, language SDK package | generated bindings, conformance tests, `publish-sdk-release.yml` |
@@ -106,9 +106,15 @@ Cargo never downloads product fixtures or substitutes local App source for a
 declared external App. The lock's optional `capabilities` list resolves only
 `capabilities/<name>` with `kind: "shared-capability-client"`; `products` and
 native preparation retain business-product ownership. Never recreate a local
-`apps/doc`, `apps/db`, `apps/kv` or `apps/net` fallback or count a shared-capability
+`apps/doc`, `apps/db`, `apps/kv`, `apps/net` or `apps/summarize` fallback or count a shared-capability
 group as a business product. Cross-repository runtime fixtures stage complete payloads
 and invoke manifest-selected entrypoints over public MCP, not private App modules.
+All 75 original App sources now belong to `clawos-app`: 24 business groups and
+four shared-capability groups, with 63 Agent and 12 desktop identities.
+`apps/` retains OS library exports, not original production App manifests.
+Summarize fixtures use isolated synthetic public AI/policy/memory wire, never
+paid/live models. The OS still owns AI consent, budgets, providers and memory
+authority; source completion is not backend/state/identity or release independence.
 
 Rust unit-test bodies live outside production source trees under each crate's
 `test/unit/` directory, mirroring the `src/` path. Production modules contain
@@ -140,7 +146,7 @@ cargo test -p cos-browser
 python3 scripts/app_sources.py --native
 cargo test --manifest-path desktop/applets/Cargo.toml -p claw-applet-services --lib
 
-# Complete Python suite from the repository root
+# OS-owned Python suite; external App tests run in clawos-app
 PYTHONPATH=claw-os-sdk/python/src:cos-runtime/python/src \
   python3 -m pytest -q apps adapters claw-os-sdk/python/src cos-runtime/python/src
 ```
@@ -178,6 +184,12 @@ Documentation-only changes do not require code tests.
 ## Cross-Surface Change Contracts
 
 ### New or changed app operation
+
+Make client changes in the owning `clawos-app` source package, not an OS-local
+copy or ignored composition cache. Compatible changes need no OS implementation
+edit; consuming a new release still requires the declared App-pin/package
+delivery update. Coordinate an OS change only when its public SDK/runtime,
+protocol, authorization or other platform contract actually changes.
 
 1. Update `app.json` operation args and `needs`.
 2. Implement or change the declared entrypoint's handler.

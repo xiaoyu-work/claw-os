@@ -50,6 +50,10 @@ duplicate identities, escaping paths and unlocked Python-library owners fail.
 `doc` resolves to `capabilities/document-engine/apps/doc`, never `apps/doc`.
 `net` resolves to `capabilities/http/apps/net`; its OS policy and shared HTTP
 transport remain separate runtime exports, not copied into the App payload.
+`summarize` resolves to `capabilities/ai-helpers/apps/summarize`; the complete
+client comes from the App pin while AI/policy/memory authority stays OS-owned.
+The lock now covers all 75 original identities (63 Agent, 12 desktop), with no
+original production App manifest under local `apps/`. Shared OS exports remain.
 `db` and `kv` resolve to `capabilities/storage-sdk/apps/<id>`, never their deleted
 local sources or the distinct Storage business product. The source kind changes
 no installed identity, grant ownership or data partition.

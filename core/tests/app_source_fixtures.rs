@@ -22,8 +22,8 @@ fn fixture() -> tempfile::TempDir {
         "packaging/apps.lock.json",
         &json!({
             "version": 1, "revision": REVISION, "products": ["files", "storage"],
-            "capabilities": ["document-engine", "storage-sdk"],
-            "apps": ["fs", "doc", "storage-manager", "db", "kv"],
+            "capabilities": ["document-engine", "storage-sdk", "ai-helpers"],
+            "apps": ["fs", "doc", "storage-manager", "db", "kv", "summarize"],
         }),
     );
     let source = root.path().join("build/app-sources").join(REVISION);
@@ -77,6 +77,21 @@ fn fixture() -> tempfile::TempDir {
         &json!({"id": "kv"}),
     );
     write_json(
+        &source,
+        "capabilities/ai-helpers/package.json",
+        &json!({"kind": "shared-capability-client", "apps": ["apps/summarize"]}),
+    );
+    write_json(
+        &source,
+        "capabilities/ai-helpers/apps/summarize/app.json",
+        &json!({"id": "summarize"}),
+    );
+    write_json(
+        root.path(),
+        "apps/summarize/app.json",
+        &json!({"id": "summarize", "stale": true}),
+    );
+    write_json(
         root.path(),
         "apps/doc/app.json",
         &json!({"id": "doc", "stale": true}),
@@ -115,6 +130,10 @@ fn declared_capability_and_product_resolve_only_their_locked_roots() {
         source.join("capabilities/storage-sdk/apps/kv")
     );
     assert_eq!(
+        app_sources::app_dir_in(root.path(), "summarize"),
+        source.join("capabilities/ai-helpers/apps/summarize")
+    );
+    assert_eq!(
         app_sources::app_dir_in(root.path(), "storage-manager"),
         source.join("products/storage/apps/storage-manager")
     );
@@ -126,6 +145,7 @@ fn missing_locked_capability_never_uses_the_local_os_copy() {
         ("document-engine", "doc"),
         ("storage-sdk", "db"),
         ("storage-sdk", "kv"),
+        ("ai-helpers", "summarize"),
     ] {
         for missing in ["package.json".to_string(), format!("apps/{app}/app.json")] {
             let root = fixture();
@@ -579,4 +599,75 @@ fn published_kv_fixture_preserves_cli_defaults_and_separate_key_and_store_scopes
             .is_err());
     }
     assert!(cos::apps::mcp_tool_for_command(&manifest, "delete").is_err());
+}
+
+#[test]
+fn published_summarize_preserves_cli_ai_consent_and_independent_memory_contract() {
+    use cos::caps::manifest::{AiPolicy, Manifest};
+    use cos::caps::{Cap, Scope, Verb};
+
+    let directory = app_sources::app_dir("summarize");
+    assert!(directory.ends_with("capabilities/ai-helpers/apps/summarize"));
+    let manifest =
+        Manifest::from_json(&std::fs::read_to_string(directory.join("app.json")).unwrap()).unwrap();
+    assert_eq!(manifest.id, "summarize");
+    assert!(cos::apps::is_mcp_only_cli(&manifest));
+    let service = manifest.mcp.as_ref().unwrap();
+    let entry = service
+        .entry
+        .as_deref()
+        .unwrap_or_else(|| manifest.runtime.default_mcp_entry());
+    assert!(directory.join(entry).is_file());
+    assert!(service.access.system_agent);
+    assert!(!service.access.external_agents);
+    assert_eq!(service.tools.len(), 1);
+    let tool = cos::apps::mcp_tool_for_command(&manifest, "run").unwrap();
+    assert_eq!(tool.name, "summarize.run");
+    assert_eq!(cos::apps::tool_schema(tool)["stdin"], false);
+    let supplied = cos::caps::args::bind_supplied_cli_args(
+        &tool.args,
+        &["explicit external text".to_string()],
+    )
+    .unwrap();
+    let paths = cos::caps::args::PathContext {
+        home: directory,
+        cwd: None,
+    };
+    let call = manifest
+        .resolve_mcp_tool_call(&tool.name, &supplied, &paths)
+        .unwrap();
+    assert_eq!(call.values, supplied);
+    assert_eq!(
+        call.needs.into_iter().flatten().collect::<Vec<_>>(),
+        [
+            Cap::new(Verb::AI_CHAT_UNTRUSTED, Scope::Wild),
+            Cap::new(Verb::MEMORY_WRITE, Scope::self_ref("summarize")),
+        ]
+    );
+    let original: AiPolicy = serde_json::from_value(json!({
+        "budget": {"monthly_units": 100000},
+        "safety": "strict", "origins": ["external-content"],
+    }))
+    .unwrap();
+    let consent = cos::ai::consent::Consent::approve(original.clone());
+    assert_eq!(manifest.ai.as_ref().unwrap(), &original);
+    assert_eq!(
+        cos::ai::consent::freshness(manifest.ai.as_ref().unwrap(), &consent),
+        cos::ai::consent::Freshness::Fresh
+    );
+    for value in [
+        json!({}),
+        json!({"text": false}),
+        json!({"text": "input", "path": "/not-read"}),
+        json!({"text": "input", "app_id": "other-app"}),
+        json!({"text": "input", "model": "caller-model"}),
+        json!({"text": "input", "origin": "trusted"}),
+        json!({"text": "input", "max_units": 1}),
+        json!({"text": "input", "session_id": "forged"}),
+    ] {
+        let arguments = serde_json::from_value(value).unwrap();
+        assert!(manifest
+            .resolve_mcp_tool_call(&tool.name, &arguments, &paths)
+            .is_err());
+    }
 }

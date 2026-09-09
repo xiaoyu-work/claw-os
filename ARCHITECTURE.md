@@ -58,7 +58,8 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | Session event journal | Root-owned, MAC-chained record of session lifecycle and privileged mutation brackets; the ordering and recovery authority the other session/audit views project from | `core/src/session/journal/`, `core/src/clawd/journal.rs` |
 | Audit | Hash-chained JSONL events and agent audit/query commands | `core/src/audit.rs`, `core/src/agent/audit_cli.rs` |
 | Notification service | Durable owner/source-scoped user-attention records, bounded native intent, delivery policy, DND, deduplication, retries, and channel leases | `core/src/notifications/`, `core/src/clawd/notifications.rs`, `core/src/clawd/app_notifications.rs` |
-| Apps and adapters | Signed App Mesh manifests and SDK handlers (Python, Node, shell, or binary), with optional human-facing CLI operations and desktop surfaces | `apps/`, `adapters/`, `core/src/apps.rs`, `core/src/bridge.rs` |
+| App client sources | Product UI/business/MCP implementations, manifests and declared entrypoints | External `clawos-app/products/` and `clawos-app/capabilities/` |
+| App/adapter integration | Provenance-gated manifest binding, authenticated App Host/bridge and protocol adapter integration | `adapters/`, `core/src/apps.rs`, `core/src/bridge.rs`, `core/src/worker/` |
 | Extension provenance | Publisher signing, trust roots, package verification, and the shared bounded installer for Apps, Skills, MCP/adapter packages, and Agent extensions | `core/src/provenance/` |
 | Update freshness | Signed release-security manifest, monotonic local security floor, one-use recovery authorizations, and the install/activation/runtime gates that refuse a superseded release | `core/src/update/`, `packaging/release-security/`, `packaging/deb/common/` |
 | SDK/runtime | One public multi-language App SDK, including MCP service APIs, plus internal bundled-App policy helpers | `claw-os-sdk/`, `cos-runtime/` |
@@ -509,8 +510,8 @@ Its declared Files `claw_files` export supplies the same parser in development,
 Doc-only staging and the Agent package. No Files App call or second parser is
 introduced; identical co-staged library payloads are reused and conflicts
 refused. Native preparation stays product-only. Missing or ambiguous declared
-sources never fall back to local OS Apps. This reaches 74/75 source identities:
-24 business product groups plus three capability groups, 62 Agent and 12 desktop
+sources never fall back to local OS Apps. This completes 75/75 original source identities:
+24 business product groups plus four capability groups, 63 Agent and 12 desktop
 identities. Doc's signed schema, six operations, grants, AI budget/safety/origin,
 memory identity and installed state are unchanged.
 
@@ -538,16 +539,30 @@ atomic download behavior and exact endpoint/output needs. The OS still supplies
 transport, sandbox authority and signed installation. No network provider,
 credential store, other App implementation or user state moves with the client.
 
-DB, KV and Net evolve through their manifest/MCP contracts, public SDK API and
+AI Helpers owns the complete `summarize` client at
+`capabilities/ai-helpers/apps/summarize`, not an AI provider or another product's
+gateway. Explicit external text passes through SDK AI under the unchanged
+`summarize` identity, strict policy, 100,000-unit monthly budget and 4,000-unit
+request cap. Summary/usage/budget/review output and bounded summary-memory
+requests remain unchanged. The OS alone owns Agent execution, providers,
+credentials, consent, budgets, safety, audit and `self:summarize` memory storage.
+The manifest now fixes its existing wildcard AI requirement instead of borrowing
+model scopes that cannot satisfy its runtime check; the AI consent snapshot and
+stored grants do not change. Other products call SDK AI directly, never this App.
+See [the compatibility note](docs/updating.md#summarize-source-and-ai-scope-binding).
+
+DB, KV, Net and Summarize evolve through their manifest/MCP contracts, public SDK API and
 [bundled policy export](cos-runtime/README.md#bundled-client-contract), not
 cross-repository imports of private source. OS core builds do not require an
 App checkout; package composition and integration fixtures deliberately use
-the immutable App pin. DB/KV fixtures consume full staged payloads and the
+the immutable App pin. Client fixtures consume full staged payloads and the
 manifest-selected stdio endpoint. Pins establish reproducibility, not complete
 build/release independence: platform source-directory exports, source-package
 staging and OS package publication remain explicit coupling, as described in
 [`packaging/README.md`](packaging/README.md).
-Only `summarize` has not moved.
+No original production App manifest remains under OS `apps/`; shared library
+exports remain OS-owned. This completes source relocation, not backend/state,
+identity consolidation, independent distribution, or boot/upgrade/visual acceptance.
 
 Cross-repository App contract and worker tests select real declared source by
 the same lock through `core/test/support/app_sources.rs`. CI explicitly prepares
@@ -1241,7 +1256,7 @@ immediately. See [`docs/extension-provenance.md`](docs/extension-provenance.md).
 ### App invocation
 
 ```text
-apps/<id>/app.json
+installed $COS_APPS_DIR/<relative-app-path>/app.json
   -> provenance verification and manifest validation
   -> human CLI:
        operation schema -> effective argv -> operation capabilities
@@ -1570,7 +1585,8 @@ fans out to the combined Docker/WSL channel and the independent APT channel.
 | App discovery | `core/src/apps.rs` | Provenance-gated `app.json` loading and schema generation |
 | Extension provenance | `core/src/provenance/` | Package envelope, trust roots, verification, bounded install |
 | Update downgrade protection | `core/src/update/`, `core/src/bin/claw-security-floor.rs` | Signed release manifest, security floor, recovery authorizations |
-| App runtime | `apps/<id>/main.py` | Bundled operation implementation |
+| App client entrypoints | External `clawos-app/products/` and `clawos-app/capabilities/` | Package-declared manifests and entrypoints; no private OS-side filename list |
+| App worker runtime | `core/src/worker/`, `core/src/clawd/app_sessions.rs` | OS-owned activation, isolation and grant derivation |
 | Rootfs build | `rootfs/build.sh` | Feature composition |
 | Profile definitions | `scripts/lib/image-profiles.sh` | Target feature sets |
 | Top-level target build | `build.sh` | WSL/Docker/VM/ISO/Azure dispatcher |

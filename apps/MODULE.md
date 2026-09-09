@@ -2,7 +2,9 @@
 
 ## Purpose
 
-`apps/` contains bundled Apps. The system Agent uses their authenticated MCP
+`apps/` retains OS-owned shared Python exports, not original production App
+manifests. All 75 original App sources live in `clawos-app`, selected by the
+immutable OS package pin. The system Agent uses their authenticated MCP
 tools; optional operations remain the human `cos app` CLI surface. A staged
 migration is moving Apps to an MCP-only contract: an App with no `operations`
 but an `mcp` service serves its human `cos app <id> <command>` surface from
@@ -15,12 +17,12 @@ workflow orchestrator is the built-in system Agent; Apps may use gated AI,
 controlled kernel/system services, and shared libraries.
 
 Follow the [product-centric redesign plan](../docs/app-product-redesign.md)
-before migrating another legacy directory. UI and MCP must share the owning
+for the remaining backend/state/identity work. UI and MCP must share the owning
 product's business implementation; converting a forwarding wrapper to MCP
 alone does not complete a product migration. The plan maps all starting App
 identities to products, system capabilities or connectors.
 
-Product sources are moving individually to
+Original product and shared-capability client sources have moved to
 [`xiaoyu-work/clawos-app`](https://github.com/xiaoyu-work/clawos-app).
 `mail-ai`, `email`, `gateway-email`, `calendar`, `fs`, `docs`, `search`, `web`,
 `browser-attached`, `exec`, `container-manager`, `backup-center`,
@@ -70,13 +72,21 @@ grants; see [the compatibility note](../docs/updating.md#app-data-moves-into-per
 The complete `net` HTTP client now lives at
 `clawos-app/capabilities/http/apps/net`. Its two MCP/CLI tools retain their
 existing arguments, bounds and exact grants; `_shared.safe_http`, policy,
-brokered egress and worker authority remain OS-owned. Only `summarize` remains
-here pending its individual move.
+brokered egress and worker authority remain OS-owned.
+AI Helpers owns the complete `summarize` client at
+`clawos-app/capabilities/ai-helpers/apps/summarize`. Its explicit-text MCP/CLI,
+SDK AI and bounded memory request retain the `summarize` identity and namespace.
+Agent, providers, consent, budgets, safety, audit and memory authority remain
+OS-owned; the fixed AI binding now matches the client's existing wildcard
+check. No consent snapshot, stored grant or user data is transferred.
 Do not recreate a local copy: OS package assembly consumes the immutable revision in
 [`packaging/apps.lock.json`](../packaging/apps.lock.json). Source relocation
 does not rename installed App identities or grant additional authority.
 
-## Responsibilities
+## Consumer Contracts and OS Exports
+
+App-side responsibilities below apply to the external source owners; this
+directory supplies only declared shared libraries and their tests.
 
 - Own every operation, argument, dependency, AI use, and capability need in
   `app.json`; entrypoints must not implement `_schema()` or `__schema__`.
@@ -114,15 +124,16 @@ does not rename installed App identities or grant additional authority.
 
 | Path | Role |
 | --- | --- |
-| `<id>/app.json` | App identity and operation/capability contract |
-| `<id>/main.py` | Typed behavior for MCP-only Apps; `run(command, args)` only for unmigrated operations |
+| External source package `apps/<id>/app.json` | App identity and operation/capability contract |
+| External manifest-selected entrypoint | Typed MCP behavior; optional legacy operations need not imply a `main.py` |
 | [`clawos-app/products/files`](https://github.com/xiaoyu-work/clawos-app/tree/main/products/files) | Direct filesystem MCP handlers; authenticated per-call session ids for snapshots |
 | [`clawos-app/capabilities/document-engine`](https://github.com/xiaoyu-work/clawos-app/tree/main/capabilities/document-engine) | Legacy Doc shared-capability client and declared parser dependency; no local source fallback |
 | [`clawos-app/capabilities/storage-sdk`](https://github.com/xiaoyu-work/clawos-app/tree/main/capabilities/storage-sdk) | Independent DB/SQLite and KV/JSON clients, MCP and tests; no local source, state import or SDK/provider copy |
 | [`clawos-app/capabilities/http`](https://github.com/xiaoyu-work/clawos-app/tree/main/capabilities/http) | Net HTTP client and MCP; policy/transport exports and enforcement remain OS-owned |
-| `<id>/test_main.py` | App behavior, validation, and scope tests |
+| [`clawos-app/capabilities/ai-helpers`](https://github.com/xiaoyu-work/clawos-app/tree/main/capabilities/ai-helpers) | Summarize client/MCP/tests; SDK AI and bundled memory transport, never copied provider authority |
+| External package-declared tests | App behavior, validation, public MCP/wire and scope tests |
 | `_shared/` | Shared safe filesystem/HTTP/process helpers |
-| `gateway/` | External messaging gateways and shared gateway safety helpers |
+| `gateway/_shared/` | OS-owned shared gateway safety/formatting exports; gateway Apps are external |
 | [`../docs/app-development.md`](../docs/app-development.md) | Normative app/manifest development contract |
 
 ## Provenance
@@ -141,7 +152,7 @@ digest-bound developer decision. See
 ## Dependencies
 
 Apps do not import model-provider SDKs or own provider credentials. AI calls go
-through the Claw OS SDK/agent gate. Bundled capability checks use
+through the Claw OS SDK AI gate. Bundled capability checks use
 `cos_runtime.policy`; operation `needs` in `app.json` must match runtime checks.
 Schema/listing paths are generated from `app.json` and must not execute
 `main.py`. Unknown operations are rejected by the kernel before dispatch;
@@ -156,12 +167,12 @@ snapshot ownership are documented in the
 ## Tests
 
 ```bash
+# OS-owned shared helper tests, from this repository root.
 PYTHONPATH=claw-os-sdk/python/src:cos-runtime/python/src \
   python3 -m pytest -q apps
 
-# One app
-PYTHONPATH=claw-os-sdk/python/src:cos-runtime/python/src \
-  python3 -m pytest -q apps/<id>/test_main.py
+# In a standalone clawos-app checkout; its platform lock supplies the libraries.
+python3 tools/test.py --capability ai-helpers
 ```
 
 When available, also run `cos app lint <id>`. Tests should verify that invalid

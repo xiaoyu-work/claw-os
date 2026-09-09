@@ -2,6 +2,36 @@ use super::*;
 use serde_json::json;
 
 #[test]
+fn summary_ai_wire_is_bounded_and_cannot_carry_provider_or_owner_authority() {
+    let base = json!({
+        "session": "synthetic-session", "app_id": "summarize",
+        "origin": "external-content", "prompt": "external text",
+        "system": "summarize data", "max_units": 4000, "tools": [],
+    });
+    let limit = crate::clawd::wire::bounded::FILE_TEXT_MAX_BYTES;
+    assert_eq!(limit, 1_000_000);
+    for field in ["prompt", "system"] {
+        let mut body = base.clone();
+        body[field] = json!("\u{00e9}".repeat(limit / 2));
+        assert!(serde_json::from_value::<AiChat>(body.clone()).is_ok());
+        body[field] = json!(format!("{}x", "\u{00e9}".repeat(limit / 2)));
+        assert!(serde_json::from_value::<AiChat>(body).is_err());
+    }
+    for (field, value) in [
+        ("model", json!("caller-model")),
+        ("provider", json!("caller-provider")),
+        ("owner_uid", json!(0)),
+        ("safety", json!("minimal")),
+        ("max_units", json!(-1)),
+        ("max_units", json!("4000")),
+    ] {
+        let mut body = base.clone();
+        body[field] = value;
+        assert!(serde_json::from_value::<AiChat>(body).is_err());
+    }
+}
+
+#[test]
 fn a_task_submission_is_closed_and_bounded() {
     let ok = json!({
         "prompt": "summarise the journal",

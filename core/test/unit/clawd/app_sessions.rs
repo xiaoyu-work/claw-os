@@ -252,6 +252,66 @@ fn published_kv_planner_keeps_key_grants_distinct_and_requires_whole_store_read(
     }
 }
 
+#[test]
+fn published_summarize_planner_matches_existing_ai_and_memory_checks() {
+    let path = app_sources::app_dir("summarize").join("app.json");
+    let manifest = Manifest::from_json(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let tool = manifest
+        .mcp
+        .as_ref()
+        .unwrap()
+        .tools
+        .iter()
+        .find(|tool| tool.name == "summarize.run")
+        .unwrap();
+    let ai = Cap::new(Verb::AI_CHAT_UNTRUSTED, Scope::Wild);
+    let memory = Cap::new(Verb::MEMORY_WRITE, Scope::self_ref("summarize"));
+    for grants in [
+        vec![ai.clone(), memory.clone()],
+        vec![
+            ai.clone(),
+            Cap::new(Verb::MEMORY_WRITE, Scope::self_ref("other-app")),
+        ],
+        vec![
+            Cap::new(Verb::AI_CHAT_UNTRUSTED, Scope::name("test-model")),
+            memory.clone(),
+        ],
+        vec![Cap::new(Verb::AI_CHAT, Scope::Wild), memory.clone()],
+        vec![memory.clone()],
+    ] {
+        let grants = CapSet::from_caps(grants);
+        let missing = [&ai, &memory]
+            .into_iter()
+            .filter(|cap| !grants.covers(cap))
+            .cloned()
+            .collect::<Vec<_>>();
+        let caller = delegation(grants);
+        let supplied = BTreeMap::from([("text".to_string(), json!("synthetic text"))]);
+        let call = manifest
+            .resolve_mcp_tool_call("summarize.run", &supplied, &caller.paths)
+            .unwrap();
+        assert_eq!(
+            call.needs.iter().flatten().collect::<Vec<_>>(),
+            [&ai, &memory]
+        );
+        let plan = derive_plan(
+            &tool.needs,
+            &call.needs,
+            &caller,
+            &publisher_ceiling(),
+            "summarize",
+        )
+        .unwrap();
+        assert_eq!(plan.caps.iter().count(), 2);
+        assert!(plan.caps.covers(&ai));
+        assert!(plan.caps.covers(&memory));
+        assert!(!plan
+            .caps
+            .covers(&Cap::new(Verb::MEMORY_WRITE, Scope::self_ref("other-app"))));
+        assert_eq!(plan.missing, missing);
+    }
+}
+
 /// Derive and settle a plan the way egister does, so tests exercise
 /// the real authorization path.
 fn operation_caps(

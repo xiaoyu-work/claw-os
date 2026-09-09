@@ -177,11 +177,17 @@ payloads. See [the KV compatibility note](docs/updating.md#app-data-moves-into-p
 `net` is owned by the HTTP capability group. Its two MCP/CLI tools consume the
 OS policy/transport exports; contracts use the public MCP entrypoint rather than
 legacy operation schemas or private client modules.
+`summarize` is owned by AI Helpers, using public SDK AI and the bundled
+policy/memory exports under its own identity, consent and budget. Its fixture
+calls must use isolated synthetic wire peers, never paid/live models.
+All 75 original App sources are external; OS `apps/` retains shared libraries,
+not production App manifests. Source completion is separate from distribution
+and backend/state/identity integration.
 
 ```bash
 python3 scripts/app_sources.py
 
-# Validate explicit source kinds and the published Doc/DB/KV/Net fixtures.
+# Validate explicit source kinds and the published Doc/DB/KV/Net/Summarize fixtures.
 cargo test -p cos --test app_source_fixtures -- --test-threads=1
 
 # Core tests share process-global environment variables.
@@ -190,7 +196,7 @@ cargo test -p cos --test app_source_fixtures -- --test-threads=1
 # Exact CI lint.
 (cd core && cargo clippy -- -D warnings)
 
-# From the repository root.
+# OS-owned Python tests, from the repository root. App tests live in clawos-app.
 PYTHONPATH=claw-os-sdk/python/src:cos-runtime/python/src \
   python3 -m pytest -q apps adapters claw-os-sdk/python/src cos-runtime/python/src
 
@@ -219,7 +225,7 @@ claw-os/
 │       ├── audit.rs       JSONL audit logging
 │       ├── sysinfo.rs     Native system info
 │       └── apps.rs        App manifest discovery
-├── apps/              Remaining Python capability facades and shared helpers
+├── apps/              OS-owned shared Python exports; App clients are external
 ├── rootfs/            Linux rootfs build scripts + overlay
 ├── targets/           Per-distribution build scripts (docker, wsl, iso, vm)
 │   └── docker/          Dockerfiles + build.sh for the docker target

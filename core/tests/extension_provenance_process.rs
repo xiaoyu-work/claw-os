@@ -546,6 +546,99 @@ fn published_kv_signed_fixture_preserves_independent_json_namespace_and_worker_a
     assert!(launch.bind(std::slice::from_ref(&entry)).is_err());
 }
 
+#[test]
+fn published_summarize_signed_fixture_keeps_ai_and_memory_authority_outside_the_worker() {
+    use std::collections::BTreeMap;
+
+    use cos::caps::{Cap, CapSet, Scope, Verb};
+    use cos::worker::derive::{app_session, AppSessionInput, SessionLifetime};
+    use cos::worker::{MountClass, MountMode, NetworkPolicy};
+
+    let fx = Fixture::new("published-summarize");
+    let (launch, entry) = signed_capability_client(&fx, "ai-helpers", "summarize");
+    let directory = launch.dir().to_path_buf();
+    let apps = directory.parent().unwrap();
+    let binding = launch.bind(std::slice::from_ref(&entry)).unwrap();
+    assert_eq!(launch.app_id(), "summarize");
+    let caps = CapSet::from_caps([
+        Cap::new(Verb::AI_CHAT_UNTRUSTED, Scope::Wild),
+        Cap::new(Verb::MEMORY_WRITE, Scope::self_ref("summarize")),
+    ]);
+    let data = fx.root.join("owner-data");
+    let partition = data.join("apps/summarize");
+    let protected = [
+        data.join("agent/memory.db"),
+        data.join("ai_budget.db"),
+        data.join("apps/db/db/existing.db"),
+        data.join("apps/kv/kv.json"),
+        fx.root.join("other-owner/agent/memory.db"),
+    ];
+    for path in &protected {
+        write(path, "unrelated synthetic state");
+    }
+    for lifetime in [SessionLifetime::SingleCall, SessionLifetime::Reusable] {
+        let worker = app_session(AppSessionInput {
+            app_id: launch.app_id(),
+            app_dir: launch.dir(),
+            program: "/usr/bin/python3".into(),
+            argv: vec![directory.join(&entry).to_string_lossy().into_owned()],
+            caps: &caps,
+            authorized_mounts: &[],
+            lifetime,
+            session_id: "summary-fixture",
+            data_dir: data.to_str().unwrap(),
+            apps_dir: apps.to_str().unwrap(),
+            extra_env: BTreeMap::from([(
+                "COS_APP_MANIFEST".into(),
+                directory.join("app.json").to_string_lossy().into_owned(),
+            )]),
+            package_identity: binding.dir_identity(),
+            pinned_entries: binding.entries(),
+            transports: &[],
+        })
+        .unwrap();
+        assert_eq!(worker.env["COS_APP_ID"], "summarize");
+        assert_eq!(worker.env["COS_SESSION"], "summary-fixture");
+        assert_eq!(worker.env["COS_DATA_DIR"], partition.to_str().unwrap());
+        assert_eq!(worker.workdir, partition);
+        assert_eq!(worker.umask, 0o077);
+        assert!(worker.broker);
+        assert!(matches!(worker.network, NetworkPolicy::Denied));
+        let writable = worker
+            .mounts
+            .iter()
+            .filter(|mount| mount.class == MountClass::AppData)
+            .collect::<Vec<_>>();
+        assert_eq!(writable.len(), 1);
+        assert_eq!(writable[0].source, partition);
+        assert_eq!(writable[0].mode, MountMode::ReadWrite);
+        assert!(worker
+            .mounts
+            .iter()
+            .filter(|mount| mount.source.starts_with(&data))
+            .all(|mount| mount.source == partition));
+        assert!(worker
+            .mounts
+            .iter()
+            .filter(|mount| mount.class == MountClass::Package)
+            .all(|mount| mount.mode == MountMode::ReadOnly));
+    }
+    assert_eq!(
+        fs::metadata(&partition).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert!(fs::read_dir(&partition).unwrap().next().is_none());
+    assert!(protected
+        .iter()
+        .all(|path| fs::read_to_string(path).unwrap() == "unrelated synthetic state"));
+    assert!(!data.join("apps/ai-helpers").exists());
+    write(
+        &directory.join(&entry),
+        "raise RuntimeError('modified fixture')\n",
+    );
+    assert!(launch.bind(std::slice::from_ref(&entry)).is_err());
+}
+
 /// A scratch directory with secure ancestry.
 ///
 /// Trust roots require every ancestor up to `/` to be non-symlink,

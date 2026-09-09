@@ -12,6 +12,7 @@ only with the OS and supported only for its bundled/trusted clients:
 | Module (Rust) | Module (Python) | Purpose |
 |---|---|---|
 | `cos_runtime::policy` | `cos_runtime.policy` | Shell out to the hidden policy bridge for self-gating capability enforcement |
+| (not applicable) | `cos_runtime.memory` | Bounded wire-v1 requests to OS-owned memory with exact source-scope authorization; no App-local memory provider |
 | `cos_runtime::fs` | (not applicable) | Route every `fs.*` op through `cos app fs <verb>` so audit / snapshots / caps apply |
 | `cos_runtime::exec` | (not applicable) | Route every `exec.*` op through `cos app exec <verb>` |
 | `cos_runtime::pkg` | (not applicable) | Route `pkg.*` ops similarly |
@@ -41,6 +42,17 @@ contract should not require DB changes; changing the export is an interface
 change that must be coordinated and validated against its consumers. DB's
 cross-repository dispatch fixtures use the public manifest/MCP stdio contract,
 not the SDK's private request handlers.
+
+Summarize consumes the existing `cos_runtime.memory.remember` export, alongside
+policy and public SDK AI. `source="summarize"` requests its own
+`memory.write:self:summarize` namespace; the OS authenticates the session and
+checks that scope rather than trusting the label. Text is bounded to 32 KiB
+by the memory contract. The client records only a bounded first-line note and
+never mounts or implements the owner memory database. Denials raise
+`PermissionDenied`, transport/invalid-response failures raise `MemoryUnavailable`,
+and the App must not return success when the memory request failed.
+This is the existing bundled transport, not a newly public third-party memory
+SDK or permission to import private runtime/provider implementation.
 
 The App repository currently selects these libraries by an exact platform
 source revision. This ensures reproducibility, not an independently published

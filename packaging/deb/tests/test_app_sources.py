@@ -128,6 +128,7 @@ def test_duplicate_group_name_across_kinds_is_rejected(locked_source):
 
 @pytest.fixture(params=[
     ("document-engine", "doc"), ("storage-sdk", "db"), ("storage-sdk", "kv"), ("http", "net"),
+    ("ai-helpers", "summarize"),
 ])
 def capability_source(locked_source, request):
     root, lock = locked_source
@@ -367,16 +368,137 @@ def _app_payload(directory, *, source=False):
     return entries
 
 
+def _assert_summarize_public_wire(app, python, root):
+    data = root / "owner-data/apps/summarize"
+    data.mkdir(parents=True)
+    private = root / "private-inputs"
+    private.mkdir(mode=0o700)
+    protected = [
+        root / "owner-data/agent/memory.db", root / "owner-data/ai_budget.db",
+        root / "owner-data/apps/db/db/existing.db", root / "owner-data/apps/kv/kv.json",
+        root / "other-owner/agent/memory.db",
+    ]
+    for path in protected:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"unrelated synthetic state")
+    summary = "a" * 201 + "\nsecond line\nthird line"
+    response = {
+        "text": summary, "model": "fixture-model", "provider": "fixture-provider",
+        "verb": "ai.chat.untrusted",
+        "usage": {"input_tokens": 10, "output_tokens": 20, "units": 30},
+        "budget": {"period": "2026-09", "units_used": 40, "units_cap": 100000},
+        "review": {"safety": "strict", "prompt_redacted": True},
+    }
+    response_file = root / "response.json"
+    response_file.write_text(json.dumps(response))
+    scenario = root / "scenario.json"
+    scenario.write_text("{}")
+    log = root / "wire.jsonl"
+    peer = root / "cos"
+    peer.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, sys\n"
+        "from pathlib import Path\n"
+        "assert sys.argv[1] == '--wire=1'\n"
+        "assert os.environ['COS_APP_ID'] == 'summarize'\n"
+        "assert os.environ['COS_SESSION'] == 'summary-fixture'\n"
+        "args = sys.argv[2:]\n"
+        "mode = json.loads(Path(os.environ['TEST_SCENARIO']).read_text())\n"
+        "record = {}\n"
+        "if args[:2] == ['__policy', 'check']:\n"
+        "    assert args[2:] == ['ai.chat.untrusted', '--wild'], args\n"
+        "    kind = 'policy'\n"
+        "    result = {'decision': 'deny' if mode.get('policy_deny') else 'allow'}\n"
+        "elif args[:2] == ['ai', 'chat']:\n"
+        "    kind = 'ai'\n"
+        "    options = dict(zip(args[2::2], args[3::2], strict=True))\n"
+        "    assert set(options) == {'--app','--origin','--prompt-file','--system-file','--max-units'}\n"
+        "    assert options['--app'] == 'summarize'\n"
+        "    assert options['--origin'] == 'external-content' and options['--max-units'] == '4000'\n"
+        "    for name in ['prompt', 'system']:\n"
+        "        path = Path(options['--' + name + '-file'])\n"
+        "        assert path.is_relative_to(os.environ['TMPDIR'])\n"
+        "        assert path.stat().st_mode & 0o777 == 0o600\n"
+        "        assert path.parent.stat().st_mode & 0o777 == 0o700\n"
+        "        record[name] = path.read_text(encoding='utf-8')\n"
+        "    result = json.loads(Path(os.environ['TEST_RESPONSE']).read_text())\n"
+        "elif args[:2] == ['__memory', 'remember']:\n"
+        "    kind = 'memory'\n"
+        "    assert len(args) == 4 and args[2] == '--json'\n"
+        "    record['entry'] = json.loads(args[3])\n"
+        "    assert record['entry']['source'] == 'summarize'\n"
+        "    result = {'row_id': 7, 'session_id': 'app:summarize'}\n"
+        "else:\n"
+        "    raise AssertionError(args)\n"
+        "record['kind'] = kind\n"
+        "with open(os.environ['TEST_LOG'], 'a') as output:\n"
+        "    output.write(json.dumps(record) + '\\n')\n"
+        "error = mode.get('ai_error') if kind == 'ai' else ('PERMISSION_DENIED' if kind == 'memory' and mode.get('memory_deny') else None)\n"
+        "if error:\n"
+        "    print(json.dumps({'ok':False,'wire_version':1,'code':error,'error':'synthetic refusal','detail':{'decision':'deny'}}))\n"
+        "    sys.exit(1)\n"
+        "print(json.dumps({'ok':True,'wire_version':1,'data':result}))\n"
+    )
+    peer.chmod(0o755)
+    with mcp_process(app, env={
+        "PATH": os.defpath, "PYTHONPATH": str(python), "CLAW_COS_BIN": str(peer),
+        "COS_DATA_DIR": str(data), "COS_SESSION": "summary-fixture", "TMPDIR": str(private),
+        "TEST_SCENARIO": str(scenario), "TEST_RESPONSE": str(response_file), "TEST_LOG": str(log),
+    }) as rpc:
+        def call(arguments):
+            return rpc("tools/call", authenticated_mcp_params({
+                "name": "summarize.run", "arguments": arguments,
+            }))
+
+        assert [tool["name"] for tool in rpc("tools/list", {})["tools"]] == ["summarize.run"]
+        assert not log.exists()
+        text = "Explicit synthetic input \u00e9"
+        result = call({"text": text})
+        assert not result.get("isError"), result
+        assert result["structuredContent"] == {
+            "summary": summary, "source": "<input>",
+            **{key: response[key] for key in ["model", "provider", "usage", "budget", "review"]},
+        }
+        records = [json.loads(line) for line in log.read_text().splitlines()]
+        assert [record["kind"] for record in records] == ["policy", "ai", "memory"]
+        assert records[1]["prompt"] == text
+        assert records[2]["entry"] == {
+            "source": "summarize", "text": f"Summarised <input>: {'a' * 197}...",
+            "kind": "note", "tags": ["summarize"], "indexable": True,
+        }
+        for arguments in [{}, {"text": ""}, {"text": 3}, {"text": "input", "app_id": "other"}]:
+            before = log.read_bytes()
+            assert call(arguments)["isError"] is True
+            assert log.read_bytes() == before
+        for mode, error, order in [
+            ({"policy_deny": True}, "PermissionDenied", ["policy"]),
+            ({"ai_error": "BUDGET_EXCEEDED"}, "AiBudgetExceeded", ["policy", "ai"]),
+            ({"ai_error": "SAFETY_VIOLATION"}, "AiSafetyViolation", ["policy", "ai"]),
+            ({"ai_error": "PERMISSION_DENIED"}, "AiDenied", ["policy", "ai"]),
+            ({"memory_deny": True}, "PermissionDenied", ["policy", "ai", "memory"]),
+        ]:
+            scenario.write_text(json.dumps(mode))
+            log.write_text("")
+            result = call({"text": text})
+            assert result["isError"] is True
+            assert error in result["content"][0]["text"]
+            assert [json.loads(line)["kind"] for line in log.read_text().splitlines()] == order
+    assert not list(private.iterdir())
+    assert not list(data.iterdir())
+    assert not (data.parent / "ai-helpers").exists()
+    assert all(path.read_bytes() == b"unrelated synthetic state" for path in protected)
+
+
 def test_published_capability_pin_stages_all_partitions_and_real_agent_runtime(tmp_path):
     lock = sources.read_lock()
-    assert lock["capabilities"] == ["document-engine", "storage-sdk", "http"]
+    assert lock["capabilities"] == ["document-engine", "storage-sdk", "http", "ai-helpers"]
     assert len(lock["products"]) == 24
-    assert len(lock["apps"]) == 74
+    assert len(lock["apps"]) == 75
     source = sources.prepare_sources(lock)
     expected = set(lock["apps"])
     desktop = expected & set(sources.desktop_apps())
     assert len(desktop) == 12
-    assert len(expected - desktop) == 62
+    assert len(expected - desktop) == 63
     assert set(sources.stage_products(tmp_path / "all")) == expected
     assert set(sources.stage_products(tmp_path / "agent", "agent")) == expected - desktop
     assert set(sources.stage_products(tmp_path / "desktop", "desktop")) == desktop
@@ -385,11 +507,14 @@ def test_published_capability_pin_stages_all_partitions_and_real_agent_runtime(t
     assert sources.app_path("db") == source / "capabilities/storage-sdk/apps/db"
     assert sources.app_path("kv") == source / "capabilities/storage-sdk/apps/kv"
     assert sources.app_path("net") == source / "capabilities/http/apps/net"
+    assert sources.app_path("summarize") == source / "capabilities/ai-helpers/apps/summarize"
     assert not (ROOT / "apps/doc").exists()
     assert not (ROOT / "apps/db").exists()
     assert not (ROOT / "apps/kv").exists()
     assert not (ROOT / "apps/net").exists()
-    for app_id in ("db", "kv", "net"):
+    assert not (ROOT / "apps/summarize").exists()
+    assert not list((ROOT / "apps").rglob("app.json"))
+    for app_id in ("db", "kv", "net", "summarize"):
         assert app_id not in desktop
         assert not (tmp_path / "desktop/usr/lib/cos/apps" / app_id).exists()
 
@@ -410,11 +535,12 @@ def test_published_capability_pin_stages_all_partitions_and_real_agent_runtime(t
     })
     for app_id, group in (
         ("doc", "document-engine"), ("db", "storage-sdk"), ("kv", "storage-sdk"), ("net", "http"),
+        ("summarize", "ai-helpers"),
     ):
         original = source / "capabilities" / group / "apps" / app_id
         for partition_name in ("all", "agent", "agent-package"):
             installed = tmp_path / partition_name / "usr/lib/cos/apps" / app_id
-            if app_id in {"db", "kv", "net"}:
+            if app_id in {"db", "kv", "net", "summarize"}:
                 assert _app_payload(installed) == _app_payload(original, source=True)
             else:
                 assert {path.name for path in installed.iterdir()} == {"app.json", "main.py", "server.py"}
@@ -427,7 +553,10 @@ def test_published_capability_pin_stages_all_partitions_and_real_agent_runtime(t
     assert len(manifests) == 63
     assert {json.loads(path.read_text())["id"] for path in manifests} == (
         expected - desktop
-    ) | {"summarize"}
+    )
+    _assert_summarize_public_wire(
+        staged / "usr/lib/cos/apps/summarize", python, tmp_path / "summarize-runtime",
+    )
     document = tmp_path / "synthetic.txt"
     document.write_text("immutable capability in the real Agent composition")
     policy = tmp_path / "cos"
@@ -912,9 +1041,9 @@ def test_native_notifications_share_exported_libraries_and_leave_legacy_state_se
     assert "python3 ../../scripts/app_sources.py --native" in panel_just
     status = (ROOT / "docs/app-product-redesign.md").read_text()
     assert "clawos-app/products/notifications" in status
-    assert "**74 of the original 75 identities**" in status
+    assert "**75 of the original 75 identities**" in status
     assert "**24 business product groups**" in status
-    assert "62 Agent-package identities and 12 desktop identities" in status
+    assert "63 Agent-package identities and 12 desktop identities" in status
     assert "products/notifications" in (ROOT / "desktop/PROVENANCE.md").read_text()
     assert "just notifications-build" in (ROOT / "desktop/README.md").read_text()
 
@@ -922,11 +1051,11 @@ def test_native_notifications_share_exported_libraries_and_leave_legacy_state_se
 def test_notify_is_agent_owned_and_preserves_history_without_an_installer_transition():
     lock = sources.read_lock()
     desktop = set(sources.desktop_apps())
-    assert len(lock["apps"]) == 74
+    assert len(lock["apps"]) == 75
     assert len(lock["products"]) == 24
-    assert lock["capabilities"] == ["document-engine", "storage-sdk", "http"]
+    assert lock["capabilities"] == ["document-engine", "storage-sdk", "http", "ai-helpers"]
     assert len(set(lock["apps"]) & desktop) == 12
-    assert len(set(lock["apps"]) - desktop) == 62
+    assert len(set(lock["apps"]) - desktop) == 63
     assert "notify" not in desktop
     assert "cosmic-notifications" in desktop
     assert not (ROOT / "apps/notify").exists()
@@ -937,7 +1066,7 @@ def test_notify_is_agent_owned_and_preserves_history_without_an_installer_transi
     assert "not part of the new service list" in contract
     assert "data.inbox.read" in contract
     assert "warning severity" in contract
-    assert "62 migrated Agent identities plus 12 desktop" in (ROOT / "packaging/MODULE.md").read_text()
+    assert "63 migrated Agent identities plus 12 desktop" in (ROOT / "packaging/MODULE.md").read_text()
 
 
 @pytest.mark.parametrize("export", [

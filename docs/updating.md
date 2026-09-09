@@ -395,6 +395,36 @@ rerunning the setup wizard:
 cos agent setup text --verify-only
 ```
 
+### Summarize source and AI scope binding
+
+The complete `summarize` client now comes from the immutable
+`clawos-app/capabilities/ai-helpers/apps/summarize` source pin. Agent still
+installs `/usr/lib/cos/apps/summarize` through the normal signed OS package;
+there is no runtime Git download or independent updater.
+
+Its implementation, explicit-text MCP/CLI, strict `external-content` AI policy,
+100,000-unit monthly budget and 4,000-unit request cap are unchanged. It still
+returns summary/model/provider/usage/budget/review fields and records only a
+bounded first-line note through OS memory under `self:summarize`. Providers,
+credentials, consent, budgets, safety, audit and memory storage remain OS-owned.
+No App-owned memory store is created and no existing data is read, replayed,
+renamed, merged or migrated by the source update.
+
+The manifest now declares fixed wildcard `ai.chat.untrusted` authority to match
+the client's existing `policy.require(..., wild=True)` check. Its previous
+borrowing wildcard could inherit named-model scopes that did not satisfy that
+runtime check, while rejecting a caller's unbounded AI grant during planning.
+This fixes the binding, not the authorization requirement: named-model-only
+grants still cannot authorize this client. Callers need normal OS authorization
+for its existing wildcard AI requirement and separate
+`memory.write:self:summarize`. No stored grant or AI consent snapshot changes,
+and other products cannot borrow its identity, budget or consent.
+
+This last move completes source ownership of all 75 original App identities,
+not full boot/upgrade/native-visual acceptance, backend/state/identity
+consolidation or independent distribution. Declared source exports, bundled
+`cos_runtime` and App-pin/OS-package delivery remain explicit coupling.
+
 ### App data moves into per-App directories
 
 From the release that isolates App workers, an App no longer receives the

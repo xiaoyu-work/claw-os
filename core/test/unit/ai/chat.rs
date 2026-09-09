@@ -1,6 +1,22 @@
 use super::*;
 
 #[test]
+fn summary_sdk_input_files_obey_the_exact_utf8_byte_limit() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("synthetic-prompt");
+    let limit = crate::clawd::wire::bounded::FILE_TEXT_MAX_BYTES;
+    assert_eq!(limit, 1_000_000);
+    let mut text = "\u{00e9}".repeat(limit / 2);
+    assert_eq!(text.len(), limit);
+    std::fs::write(&path, &text).unwrap();
+    assert_eq!(read_input_file(path.to_str().unwrap()).unwrap(), text);
+    text.push('x');
+    std::fs::write(&path, &text).unwrap();
+    let error = read_input_file(path.to_str().unwrap()).unwrap_err();
+    assert!(error.contains("exceeds the text limit"), "{error}");
+}
+
+#[test]
 fn rejects_missing_app() {
     let err = chat_cmd(&["--prompt".into(), "hi".into()]).unwrap_err();
     assert!(err.contains("--app"), "got: {err}");

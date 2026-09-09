@@ -87,8 +87,8 @@ Co-staging never merges conflicting library trees. Agent still owns
 `/usr/lib/cos/apps/doc`, `/usr/lib/cos/python/claw_files`, SDK/runtime and the
 canonical argument module. All six operations, manifest needs/AI declarations,
 outputs, memory identity and user state remain unchanged. The source lock now
-covers 74/75 identities: 24 business products plus three capability groups, with
-62 migrated Agent and 12 desktop identities; native preparation stays product-only.
+covers 75/75 original identities: 24 business products plus four capability groups, with
+63 migrated Agent and 12 desktop identities; native preparation stays product-only.
 
 Storage SDK supplies independent `db` and `kv` clients from
 `capabilities/storage-sdk/apps/<id>`, not from the distinct Storage business
@@ -98,7 +98,7 @@ Five MCP/CLI tools retain their exact read/write needs and 1,000-returned-row
 bound. Existing files stay at `$COS_DATA_DIR/db/<name>.db` within the same
 owner/App partition; no KV or Agent-memory state is read, imported or merged.
 No SDK/provider or native source is added to the capability payload. The
-installed Agent package still has 63 identities, including one local App;
+installed Agent package still has 63 identities, all from the external App pin;
 Desktop still has 12. Normal signed package updates remain the only installed
 update path; source relocation adds no data transition.
 KV's manifest and MCP-only data implementation install at `/usr/lib/cos/apps/kv`;
@@ -118,12 +118,27 @@ MCP/CLI contracts, exact endpoint/output grants, size bounds and atomic download
 behavior are unchanged. No provider, user data, additional identity or runtime
 source-fetch/update mechanism moves into this capability group.
 
-DB/KV/Net integration fixtures compare the entire staged runtime payload, including
+AI Helpers supplies the complete `summarize` client from
+`capabilities/ai-helpers/apps/summarize`, installed at `/usr/lib/cos/apps/summarize`
+in Agent only. The OS supplies SDK AI and bundled policy/memory exports, not
+copied providers. Its strict external-content AI policy, monthly budget,
+request cap, result shape and `self:summarize` memory namespace remain unchanged.
+The manifest's fixed wildcard AI binding now matches its existing runtime
+check; [the update note](../docs/updating.md#summarize-source-and-ai-scope-binding)
+explains this correction without rewriting grants or AI consent.
+No original production App manifests remain under OS `apps/`; shared helpers
+are retained exports, not additional Apps. Source completion does not establish
+full boot/upgrade acceptance or complete backend/state/identity consolidation.
+
+DB/KV/Net/Summarize integration fixtures compare the entire staged runtime payload, including
 bytes, modes and symlinks, with the pinned source's declared staging exclusions.
 They execute the manifest-selected MCP entrypoint over stdio with installed
 OS libraries, rather than importing private App modules or the SDK dispatcher.
 Signed worker fixtures stage that same complete payload; adding a private
 module or changing the declared entrypoint does not require an OS filename list.
+Summarize's real Agent build-block fixture exercises public MCP and SDK wire
+with synthetic AI/policy/memory responses, including denied consent/budgets,
+safety and memory failures. It does not contact a model or mount owner state.
 
 Native Store is composed under `build/native-apps/cosmic-store`, including its
 original default-feature graph and flathub-stats workspace. The desktop package

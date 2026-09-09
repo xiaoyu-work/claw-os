@@ -25,7 +25,7 @@ this using authenticated process/session ancestry, not environment flags.
 
 Bundled source ownership is independent of the installed App identity.
 Migrated business products live under external `products/`; shared-capability
-clients such as `doc`, `db`, `kv` and `net` live under external `capabilities/`,
+clients `doc`, `db`, `kv`, `net` and `summarize` live under external `capabilities/`,
 explicitly selected
 by the [OS source lock](../packaging/apps.lock.json). This source kind is not
 a manifest runtime/capability kind and grants no authority. Doc consumes a
@@ -37,6 +37,15 @@ exact-key get/set/delete grants and whole-store read requirement for list/dump.
 It uses only its manifest-selected MCP `server.py`, not a fabricated `main.py`;
 its App-owned tests are explicitly selected as `test_server.py`. See the
 [source composition contract](../packaging/README.md).
+AI Helpers owns the Summarize client, not the OS AI gate. It takes explicit
+text and calls SDK AI under `summarize` consent/budget, then requests bounded
+summary memory through the bundled `cos_runtime.memory.remember` export under
+`self:summarize`. Other products use SDK AI directly, not this App or its
+consent. All 75 original App sources are now external; OS `apps/` retains
+declared library exports, not a second production implementation.
+Compatible App changes use versioned public SDK/MCP/wire or declared bundled
+exports. Full staged payload fixtures must select the manifest entrypoint,
+not private App/SDK functions or a mutable sibling source layout.
 
 Settings permission management does not delegate target-App capabilities.
 Its manifest declares only `sys.permissions` with fixed scope `manage`;
