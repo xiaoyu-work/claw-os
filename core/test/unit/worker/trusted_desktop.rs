@@ -31,32 +31,15 @@ fn every_fixed_row_names_exactly_its_system_program() {
 }
 
 #[test]
-fn only_the_notification_row_carries_a_transport() {
-    // Naming a system program and holding the session bus are separate
-    // grants. Eight of the nine native Apps get the first and not the
-    // second, and their launches stay ordinary hostile MCP servers.
+fn native_rows_never_carry_a_desktop_transport() {
     let with_bus: Vec<&str> = ALLOWLIST
         .iter()
         .filter(|row| !row.transports.is_empty())
         .map(|row| row.app_id)
         .collect();
-    assert_eq!(
-        with_bus,
-        vec!["cosmic-notifications"]
-    );
+    assert!(with_bus.is_empty());
     for row in ALLOWLIST {
-        match row.app_id {
-            "cosmic-notifications" => assert_eq!(
-                row.transports,
-                &[Transport::SessionBus],
-                "row `{}` grants more than the session bus",
-                row.app_id
-            ),
-            other => assert!(
-                row.transports.is_empty(),
-                "row `{other}` gained a desktop transport it does not need"
-            ),
-        }
+        assert!(row.transports.is_empty(), "row `{}` gained a desktop transport", row.app_id);
     }
 }
 

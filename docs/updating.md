@@ -16,6 +16,20 @@ This update path applies to:
 
 ## Normal update
 
+Agent provides `claw-os-notifications-v1`; matching Desktop packages depend on
+it. Native `cosmic-notifications` keeps its identity and `ui.notify` grant, but
+MCP 0.2 returns durable `notif-` string IDs rather than D-Bus integers.
+`notify.close` accepts only this App's owner-scoped returned strings; no numeric
+alias database or cross-App close is provided. Absolute icon paths/URLs are
+explicitly unsupported without file authority; theme icon names remain supported.
+Popup expiry and transient flags retain their presentation meaning while core
+activity remains durable under existing retention/DND/delivery preferences.
+SQLite schema v2 adds optional presentation metadata in place without importing
+or deleting legacy `notify` JSON files. That legacy App's state transition is
+still separate work. Local desktop configuration and user history are preserved.
+Upgrade the signed manifest, native binary, panel and delivery bridge together
+and restart the user desktop session; binary-only hot-swap is not a substitute.
+
 Agent provides the versioned `claw-os-media-player-v1` playback adapter for
 newer native Media Player packages. It requires separate exact
 `desktop.media.observe:cosmic-player` and

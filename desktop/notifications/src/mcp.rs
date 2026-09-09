@@ -1,165 +1,179 @@
-//! MCP tool surface for `cosmic-notifications` when launched in
-//! server mode (`COS_MCP_SERVER=1`).
-//!
-//! Important context: the cosmic-notifications **process** is the
-//! freedesktop notification daemon — it *receives* notifications.
-//! In MCP mode we don't run the daemon (we don't want two daemons
-//! on the same session bus). Instead we act as a **client**: the
-//! `notify.post` tool sends an `org.freedesktop.Notifications.Notify`
-//! call to whichever daemon is already running on the session bus.
-//! This is how `cosmic-screenshot` already posts its "saved to …"
-//! notification (see the external Capture product's native `src/main.rs`).
+//! Native notification intent uses the durable OS service, never a worker bus.
 
-use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use claw_os_sdk::mcp::{App, CallContext, Tool, ToolResult};
-use serde_json::{json, Value};
-use zbus::zvariant::Value as ZValue;
-use zbus::Connection;
+use claw_os_sdk::mcp::{App, AppError, CallContext, Tool, ToolResult};
+use serde::Deserialize;
+use serde_json::{Value, json};
 
-#[zbus::proxy(
-    interface = "org.freedesktop.Notifications",
-    default_service = "org.freedesktop.Notifications",
-    default_path = "/org/freedesktop/Notifications"
-)]
-trait Notifications {
-    #[allow(clippy::too_many_arguments)]
-    fn notify(
-        &self,
-        app_name: &str,
-        replaces_id: u32,
-        app_icon: &str,
-        summary: &str,
-        body: &str,
-        actions: &[&str],
-        hints: HashMap<&str, &ZValue<'_>>,
-        expire_timeout: i32,
-    ) -> zbus::Result<u32>;
-
-    fn close_notification(&self, id: u32) -> zbus::Result<()>;
+fn default_sender() -> String {
+    "Claw OS Agent".into()
+}
+fn default_icon() -> String {
+    "com.clawos.Notifications".into()
+}
+fn default_expiry() -> i32 {
+    -1
 }
 
-struct PostTool;
-
-fn sender_name(input: &Value) -> String {
-    input
-        .get("app_name")
-        .and_then(|value| value.as_str())
-        .filter(|value| !value.is_empty())
-        .unwrap_or("Claw OS Agent")
-        .to_string()
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Post {
+    summary: String,
+    #[serde(default)]
+    body: String,
+    #[serde(default = "default_sender")]
+    app_name: String,
+    #[serde(default = "default_icon")]
+    icon: String,
+    #[serde(default = "default_expiry")]
+    expire_ms: i32,
+    #[serde(default)]
+    transient: bool,
+    #[serde(default)]
+    dedupe_key: Option<String>,
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Close {
+    id: String,
+}
+
+fn text(value: &str, max: usize, multiline: bool) -> bool {
+    value.chars().count() <= max
+        && !value.trim().is_empty()
+        && !value
+            .chars()
+            .any(|ch| ch.is_control() && !(multiline && matches!(ch, '\n' | '\r' | '\t')))
+}
+
+fn request(name: &str, input: Value) -> Result<Value, String> {
+    if name == "notify.post" {
+        let mut post: Post =
+            serde_json::from_value(input).map_err(|_| "invalid notification arguments")?;
+        if post.app_name.is_empty() {
+            post.app_name = default_sender();
+        }
+        if !text(&post.summary, 240, false)
+            || (!post.body.is_empty() && !text(&post.body, 4000, true))
+            || !text(&post.app_name, 128, false)
+        {
+            return Err(
+                "summary (240), body (4000), or sender label (128) is invalid or too long".into(),
+            );
+        }
+        if post.expire_ms < -1 {
+            return Err("expire_ms must be -1, 0, or a positive signed 32-bit integer".into());
+        }
+        if post.icon.len() > 128
+            || !post
+                .icon
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+        {
+            return Err("icon must be an icon-theme name, not a path or URL".into());
+        }
+        if post.dedupe_key.as_ref().is_some_and(|key| {
+            key.is_empty()
+                || key.len() > 128
+                || !key.bytes().all(|b| {
+                    b.is_ascii_alphanumeric()
+                        || matches!(b, b'.' | b'_' | b'-' | b':' | b'/' | b'@' | b'+')
+                })
+        }) {
+            return Err("dedupe_key must be a bounded notification identifier".into());
+        }
+        let mut value = json!({
+            "action":"post", "summary":post.summary, "body":post.body, "app_name":post.app_name,
+            "icon":post.icon, "expire_ms":post.expire_ms, "transient":post.transient,
+        });
+        if let Some(key) = post.dedupe_key {
+            value["dedupe_key"] = json!(key);
+        }
+        Ok(value)
+    } else if name == "notify.close" {
+        let close: Close = serde_json::from_value(input).map_err(
+            |_| "id must be the durable string returned by notify.post, not a desktop integer",
+        )?;
+        if !close
+            .id
+            .strip_prefix("notif-")
+            .is_some_and(|id| id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()))
+        {
+            return Err("invalid durable notification id".into());
+        }
+        Ok(json!({"action":"close","id":close.id}))
+    } else {
+        Err("unknown notification operation".into())
+    }
+}
+
+struct NotificationTool(&'static str);
 
 #[async_trait]
-impl Tool for PostTool {
+impl Tool for NotificationTool {
     fn name(&self) -> &'static str {
-        "notify.post"
+        self.0
     }
 
     async fn handle(&self, input: Value, context: CallContext) -> ToolResult {
         if let Err(error) = context.check_cancelled() {
             return ToolResult::error(error.to_string());
         }
-        let summary = match input.get("summary").and_then(|v| v.as_str()) {
-            Some(s) if !s.is_empty() => s.to_string(),
-            _ => return ToolResult::error("missing required field: summary"),
+        let request = match request(self.0, input) {
+            Ok(value) => value.to_string(),
+            Err(error) => return ToolResult::error(error),
         };
-        let body = input
-            .get("body")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
-        let icon = input
-            .get("icon")
-            .and_then(|v| v.as_str())
-            .unwrap_or("com.clawos.Notifications")
-            .to_string();
-        let app = sender_name(&input);
-        let expire_ms = match input.get("expire_ms").and_then(|v| v.as_i64()) {
-            Some(value) => match i32::try_from(value) {
-                Ok(value) => value,
-                Err(_) => return ToolResult::error("expire_ms is outside the supported range"),
+        let deadline = match SystemTime::now().duration_since(UNIX_EPOCH) {
+            Ok(now) => (now.as_millis() as u64 + 5000)
+                .min(context.deadline_unix_ms().unwrap_or(u64::MAX))
+                .to_string(),
+            Err(_) => return ToolResult::error("invalid system clock"),
+        };
+        let call = claw_os_sdk::cos_call_json_async_with_stdin_binary(
+            "/usr/local/bin/cos",
+            "notification",
+            self.0,
+            [
+                "__notifications",
+                "request",
+                "--request-stdin",
+                "--deadline",
+                &deadline,
+            ],
+            request.as_bytes(),
+        );
+        tokio::select! {
+            biased;
+            _ = context.cancelled() => ToolResult::error("notification call cancelled"),
+            result = call => match result {
+                Ok(value) => ToolResult::text(value.to_string()),
+                Err(error) => ToolResult::error(error.to_string()),
             },
-            None => -1,
-        };
-        let transient = input
-            .get("transient")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-
-        let conn = match Connection::session().await {
-            Ok(c) => c,
-            Err(e) => return ToolResult::error(format!("connect session bus: {e}")),
-        };
-        let proxy = match NotificationsProxy::new(&conn).await {
-            Ok(p) => p,
-            Err(e) => return ToolResult::error(format!("create proxy: {e}")),
-        };
-
-        let transient_val = ZValue::Bool(transient);
-        let mut hints: HashMap<&str, &ZValue<'_>> = HashMap::new();
-        if transient {
-            hints.insert("transient", &transient_val);
-        }
-
-        match proxy
-            .notify(&app, 0, &icon, &summary, &body, &[], hints, expire_ms)
-            .await
-        {
-            Ok(id) => ToolResult::text(json!({ "id": id }).to_string()),
-            Err(e) => ToolResult::error(format!("notify call failed: {e}")),
-        }
-    }
-}
-
-struct CloseTool;
-
-#[async_trait]
-impl Tool for CloseTool {
-    fn name(&self) -> &'static str {
-        "notify.close"
-    }
-
-    async fn handle(&self, input: Value, context: CallContext) -> ToolResult {
-        if let Err(error) = context.check_cancelled() {
-            return ToolResult::error(error.to_string());
-        }
-        let id = match input
-            .get("id")
-            .and_then(|v| v.as_u64())
-            .and_then(|value| u32::try_from(value).ok())
-        {
-            Some(n) => n,
-            None => return ToolResult::error("missing or non-integer field: id"),
-        };
-        let conn = match Connection::session().await {
-            Ok(c) => c,
-            Err(e) => return ToolResult::error(format!("connect session bus: {e}")),
-        };
-        let proxy = match NotificationsProxy::new(&conn).await {
-            Ok(p) => p,
-            Err(e) => return ToolResult::error(format!("create proxy: {e}")),
-        };
-        match proxy.close_notification(id).await {
-            Ok(()) => ToolResult::text(json!({ "ok": true }).to_string()),
-            Err(e) => ToolResult::error(format!("close call failed: {e}")),
         }
     }
 }
 
 pub(crate) fn run() -> anyhow::Result<()> {
-    let rt = tokio::runtime::Builder::new_current_thread()
+    tokio::runtime::Builder::new_current_thread()
         .enable_all()
-        .build()?;
-    rt.block_on(async {
-        let mut app = App::from_environment()?;
-        app.bind(Arc::new(PostTool))?;
-        app.bind(Arc::new(CloseTool))?;
-        app.serve_stdio().await
-    })
-    .map_err(|error| anyhow::anyhow!("MCP server exited: {error}"))
+        .build()?
+        .block_on(async {
+            let mut app = App::from_environment()?;
+            if app.id() != "cosmic-notifications" {
+                return Err(AppError::Manifest(
+                    "Notifications requires the cosmic-notifications identity".into(),
+                ));
+            }
+            for name in ["notify.post", "notify.close"] {
+                app.bind(Arc::new(NotificationTool(name)))?;
+            }
+            app.serve_stdio().await
+        })
+        .map_err(|error| anyhow::anyhow!("MCP server exited: {error}"))
 }
 
 #[cfg(test)]

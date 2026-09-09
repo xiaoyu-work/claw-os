@@ -8,18 +8,10 @@
 //! those Apps run as ordinary hostile [`McpServer`](super::TrustTier::McpServer)
 //! workers with no desktop transport at all.
 //!
-//! One of them additionally reaches the desktop over the **session
-//! bus**, because its tool surface is a bus call:
-//!
-//! | App | What the tool actually does |
-//! | --- | --- |
-//! | `cosmic-notifications` | `zbus::Connection::session()` → `org.freedesktop.Notifications` |
-//!
-//! None of them initialises a compositor connection in MCP mode — each
-//! `main()` returns into the MCP server before libcosmic is touched —
-//! so no Wayland socket, no X authority and no GPU node is granted
-//! here. The session bus alone is what makes the difference between a
-//! working tool and a syscall failure.
+//! No current row receives a session bus, Wayland socket, X authority or GPU
+//! node. Each `main()` enters MCP before libcosmic, and desktop operations
+//! cross typed OS services. Notifications uses the durable owner/App-scoped
+//! Notification Service, not a D-Bus client inside the worker.
 //!
 //! Capture names its fixed native executable but carries no transport.
 //! Its MCP uses the typed screenshot service, separately requiring screen
@@ -31,11 +23,8 @@
 //!
 //! ## This is an expanded TCB, deliberately and narrowly
 //!
-//! The session bus is not a narrow capability. A process holding that
-//! socket can talk to every service the owner's session exposes, and
-//! Claw OS has no way to filter method calls inside it. That is the
-//! cost of the transport, and it is why reaching this classification
-//! requires *all* of:
+//! A fixed system executable is still outside the package snapshot. Its
+//! classification therefore requires *all* of:
 //!
 //! 1. the App id is one of the fixed rows in [`ALLOWLIST`], which is
 //!    kernel source, not configuration;
@@ -84,16 +73,13 @@ struct Row {
     /// the only path outside the package this App id can ever execute.
     system_program: &'static str,
     /// Desktop transports the row grants. Empty for every App whose
-    /// tools do not need one, which is most of them.
+    /// tools do not need one, which is every current row.
     transports: &'static [Transport],
 }
 
 /// No transport at all: the row exists only to let this App id name its
 /// own system program.
 const NO_TRANSPORT: &[Transport] = &[];
-
-/// The owner's session bus, and nothing else.
-const SESSION_BUS: &[Transport] = &[Transport::SessionBus];
 
 const ALLOWLIST: &[Row] = &[
     Row {
@@ -139,7 +125,7 @@ const ALLOWLIST: &[Row] = &[
     Row {
         app_id: "cosmic-notifications",
         system_program: "/usr/bin/cosmic-notifications",
-        transports: SESSION_BUS,
+        transports: NO_TRANSPORT,
     },
 ];
 

@@ -45,7 +45,23 @@ To debug issues with asynchronous code, install [tokio-console](https://github.c
 
 ## Claw OS MCP service
 
-The App Host starts `/usr/bin/cosmic-notifications` with
-`COS_MCP_SERVER=1`; this mode acts as a D-Bus notification client rather than
-starting a second daemon. `apps/cosmic-notifications/app.json` owns the tool
-catalog.
+The App Host starts `/usr/bin/cosmic-notifications` with `COS_MCP_SERVER=1`.
+This mode submits bounded intent through `/usr/local/bin/cos` to the
+capability-gated OS Notification Service; it never opens a session bus or starts
+a second daemon. The manifest owns the tool catalog.
+
+MCP 0.2 returns a durable `notif-` string. Closing is restricted to the same
+authenticated App and owner; legacy numeric desktop IDs are explicitly
+unsupported. `app_name` is only a display label. Icons must be theme names, not
+file paths/URLs. `expire_ms` (-1/default, 0/forever, positive signed 32-bit
+milliseconds) controls the popup, not durable activity retention. `transient`
+omits the desktop history copy but never bypasses core durability. Optional
+`dedupe_key` partitions replay within the same App/owner.
+
+The existing OS Agent bridge alone consumes desktop delivery leases. It posts
+plain-text content to the native daemon and maps genuine UI acknowledgement,
+dismissal and durable close updates without another notification store. Native
+freedesktop interoperability remains; numeric IDs are now bound to their D-Bus
+sender, and the panel uses its private connection for user dismissal.
+Existing local desktop DND/configuration remains an additional presentation
+mute. No legacy `notify` JSON history or settings are imported or removed.

@@ -21,7 +21,6 @@ PRAGMA synchronous = FULL;
 PRAGMA busy_timeout = 5000;
 PRAGMA foreign_keys = ON;
 PRAGMA wal_autocheckpoint = 1000;
-PRAGMA user_version = 1;
 
 CREATE TABLE IF NOT EXISTS notifications (
     sequence            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,8 +108,8 @@ impl SqliteNotificationService {
         if let Some(parent) = path.parent() {
             crate::storage::ensure_private_dir(parent)?;
         }
-        let conn = Connection::open(path)?;
-        conn.execute_batch(SCHEMA)?;
+        let mut conn = Connection::open(path)?;
+        initialize(&mut conn)?;
         crate::storage::set_private_file(path)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -118,8 +117,8 @@ impl SqliteNotificationService {
     }
 
     pub fn open_in_memory() -> Result<Self, NotificationError> {
-        let conn = Connection::open_in_memory()?;
-        conn.execute_batch(SCHEMA)?;
+        let mut conn = Connection::open_in_memory()?;
+        initialize(&mut conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
@@ -128,6 +127,26 @@ impl SqliteNotificationService {
     fn lock(&self) -> Result<MutexGuard<'_, Connection>, NotificationError> {
         self.conn.lock().map_err(|_| NotificationError::Poisoned)
     }
+}
+
+fn initialize(conn: &mut Connection) -> Result<(), NotificationError> {
+    let version: u32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if version > 2 {
+        return Err(NotificationError::Invalid(
+            "notification database requires a newer service".into(),
+        ));
+    }
+    conn.execute_batch(SCHEMA)?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let version: u32 = tx.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if version < 2 {
+        tx.execute_batch(
+            "ALTER TABLE notifications ADD COLUMN presentation_json TEXT;
+             PRAGMA user_version = 2;",
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
 }
 
 impl NotificationService for SqliteNotificationService {
@@ -139,6 +158,7 @@ impl NotificationService for SqliteNotificationService {
         draft.validate()?;
         let now = super::now_ms();
         let actions_json = serde_json::to_string(&draft.actions)?;
+        let presentation_json = draft.presentation.as_ref().map(serde_json::to_string).transpose()?;
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let preferences = preferences_tx(&tx, owner_uid)?;
@@ -150,14 +170,15 @@ impl NotificationService for SqliteNotificationService {
                      WHERE owner_uid = ?1 AND dedupe_key = ?2
                        AND state != ?3
                        AND (expires_at_ms IS NULL OR expires_at_ms > ?4)
-                       AND updated_at_ms >= ?5
+                       AND updated_at_ms >= ?5 AND source = ?6
                      ORDER BY updated_at_ms DESC LIMIT 1",
                     params![
                         owner_uid,
                         key,
                         notification_state_code(NotificationState::Dismissed),
                         now,
-                        now - DEDUPE_WINDOW_MS
+                        now - DEDUPE_WINDOW_MS,
+                        draft.source
                     ],
                     |row| row.get::<_, String>(0),
                 )
@@ -174,7 +195,7 @@ impl NotificationService for SqliteNotificationService {
                      expires_at_ms = ?11, actions_json = ?12,
                      state = ?13, read_at_ms = NULL,
                      acknowledged_at_ms = NULL, dismissed_at_ms = NULL,
-                     occurrences = occurrences + 1
+                     occurrences = occurrences + 1, presentation_json = ?16
                  WHERE id = ?14 AND owner_uid = ?15",
                 params![
                     draft.source,
@@ -191,7 +212,8 @@ impl NotificationService for SqliteNotificationService {
                     actions_json,
                     notification_state_code(NotificationState::Unread),
                     id,
-                    owner_uid
+                    owner_uid,
+                    presentation_json
                 ],
             )?;
             (id, "updated")
@@ -202,10 +224,10 @@ impl NotificationService for SqliteNotificationService {
                     id, owner_uid, source, kind, severity, title, body,
                     delivery_policy, dedupe_key, task_id, session_id, job_id,
                     state, occurrences, created_at_ms, updated_at_ms,
-                    expires_at_ms, actions_json
+                    expires_at_ms, actions_json, presentation_json
                  ) VALUES (
                     ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
-                    ?13, 1, ?14, ?14, ?15, ?16
+                    ?13, 1, ?14, ?14, ?15, ?16, ?17
                  )",
                 params![
                     id,
@@ -223,7 +245,8 @@ impl NotificationService for SqliteNotificationService {
                     notification_state_code(NotificationState::Unread),
                     now,
                     draft.expires_at_ms,
-                    actions_json
+                    actions_json,
+                    presentation_json
                 ],
             )?;
             (id, "published")
@@ -269,6 +292,11 @@ impl NotificationService for SqliteNotificationService {
         ids.into_iter()
             .map(|id| load_notification(&conn, owner_uid, &id))
             .collect()
+    }
+
+    fn get(&self, owner_uid: u32, id: &str) -> Result<Notification, NotificationError> {
+        let conn = self.lock()?;
+        load_notification(&conn, owner_uid, id)
     }
 
     fn changes(
@@ -373,7 +401,7 @@ impl NotificationService for SqliteNotificationService {
         if changed == 0 {
             return Err(NotificationError::NotFound);
         }
-        if matches!(mutation, NotificationMutation::Dismiss) {
+        if matches!(mutation, NotificationMutation::Dismiss | NotificationMutation::Acknowledge) {
             tx.execute(
                 "UPDATE notification_deliveries
                  SET state = ?1, next_attempt_at_ms = NULL
@@ -487,7 +515,7 @@ impl NotificationService for SqliteNotificationService {
                  WHERE n.owner_uid = ?1 AND d.channel = ?2
                    AND d.state IN (?3, ?4)
                    AND (d.next_attempt_at_ms IS NULL OR d.next_attempt_at_ms <= ?5)
-                   AND n.state != ?6
+                   AND n.state NOT IN (?6, ?8)
                    AND (n.expires_at_ms IS NULL OR n.expires_at_ms > ?5)
                  ORDER BY n.updated_at_ms ASC
                  LIMIT ?7",
@@ -501,7 +529,8 @@ impl NotificationService for SqliteNotificationService {
                         delivery_state_code(DeliveryState::Failed),
                         now,
                         notification_state_code(NotificationState::Dismissed),
-                        limit as i64
+                        limit as i64,
+                        notification_state_code(NotificationState::Acknowledged)
                     ],
                     |row| {
                         Ok((
@@ -521,7 +550,7 @@ impl NotificationService for SqliteNotificationService {
                  WHERE d.channel = ?1
                    AND d.state IN (?2, ?3)
                    AND (d.next_attempt_at_ms IS NULL OR d.next_attempt_at_ms <= ?4)
-                   AND n.state != ?5
+                   AND n.state NOT IN (?5, ?7)
                    AND (n.expires_at_ms IS NULL OR n.expires_at_ms > ?4)
                  ORDER BY n.updated_at_ms ASC
                  LIMIT ?6",
@@ -534,7 +563,8 @@ impl NotificationService for SqliteNotificationService {
                         delivery_state_code(DeliveryState::Failed),
                         now,
                         notification_state_code(NotificationState::Dismissed),
-                        limit as i64
+                        limit as i64,
+                        notification_state_code(NotificationState::Acknowledged)
                     ],
                     |row| {
                         Ok((
@@ -628,6 +658,7 @@ impl NotificationService for SqliteNotificationService {
                AND EXISTS (
                    SELECT 1 FROM notifications n
                    WHERE n.id = ?5 AND n.owner_uid = ?7
+                     AND n.state NOT IN (?9, ?10)
                )
                AND NOT (state = ?1 AND ?8 = 1)",
             params![
@@ -638,7 +669,9 @@ impl NotificationService for SqliteNotificationService {
                 id,
                 delivery_channel_code(channel),
                 owner_uid,
-                terminal as i64
+                terminal as i64,
+                notification_state_code(NotificationState::Dismissed),
+                notification_state_code(NotificationState::Acknowledged)
             ],
         )?;
         if changed == 0 {
@@ -978,7 +1011,7 @@ fn load_notification(
                     delivery_policy, dedupe_key, task_id, session_id, job_id,
                     state, occurrences, created_at_ms, updated_at_ms,
                     expires_at_ms, read_at_ms, acknowledged_at_ms,
-                    dismissed_at_ms, actions_json
+                    dismissed_at_ms, actions_json, presentation_json
              FROM notifications WHERE id = ?1 AND owner_uid = ?2",
             params![id, owner_uid],
             |row| {
@@ -1005,6 +1038,7 @@ fn load_notification(
                     acknowledged_at_ms: row.get(19)?,
                     dismissed_at_ms: row.get(20)?,
                     actions_json: row.get(21)?,
+                    presentation_json: row.get(22)?,
                 })
             },
         )
@@ -1059,6 +1093,7 @@ struct NotificationRow {
     acknowledged_at_ms: Option<i64>,
     dismissed_at_ms: Option<i64>,
     actions_json: String,
+    presentation_json: Option<String>,
 }
 
 impl NotificationRow {
@@ -1092,6 +1127,7 @@ impl NotificationRow {
             dismissed_at_ms: self.dismissed_at_ms,
             actions: serde_json::from_str::<Vec<NotificationAction>>(&self.actions_json)?,
             deliveries,
+            presentation: self.presentation_json.as_deref().map(serde_json::from_str).transpose()?,
         })
     }
 }

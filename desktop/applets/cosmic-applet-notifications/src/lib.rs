@@ -220,10 +220,10 @@ impl cosmic::Application for Notifications {
                 }
                 self.cards.retain(|c| !c.1.is_empty());
 
-                if let Some(tx) = &self.dbus_sender {
+                if let Some(tx) = &self.notifications_tx {
                     let tx = tx.clone();
                     tokio::spawn(async move {
-                        if let Err(err) = tx.send(subscriptions::dbus::Input::Dismiss(id)).await {
+                        if let Err(err) = tx.send(subscriptions::notifications::Input::Dismiss(id)).await {
                             tracing::error!("{:?}", err);
                         }
                     });
@@ -251,11 +251,11 @@ impl cosmic::Application for Notifications {
                     .position(|c| c.1.iter().any(|notif| app_name == notif.app_name))
                 {
                     for n in self.cards.remove(pos).1 {
-                        if let Some(tx) = &self.dbus_sender {
+                        if let Some(tx) = &self.notifications_tx {
                             let tx = tx.clone();
                             tokio::spawn(async move {
                                 if let Err(err) =
-                                    tx.send(subscriptions::dbus::Input::Dismiss(n.id)).await
+                                    tx.send(subscriptions::notifications::Input::Dismiss(n.id)).await
                                 {
                                     tracing::error!("{:?}", err);
                                 }
@@ -266,11 +266,11 @@ impl cosmic::Application for Notifications {
             }
             Message::ClearAll(None) => {
                 for n in self.cards.drain(..).flat_map(|n| n.1) {
-                    if let Some(tx) = &self.dbus_sender {
+                    if let Some(tx) = &self.notifications_tx {
                         let tx = tx.clone();
                         tokio::spawn(async move {
                             if let Err(err) =
-                                tx.send(subscriptions::dbus::Input::Dismiss(n.id)).await
+                                tx.send(subscriptions::notifications::Input::Dismiss(n.id)).await
                             {
                                 tracing::error!("{:?}", err);
                             }

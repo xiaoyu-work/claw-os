@@ -41,6 +41,11 @@ pub fn run() -> cosmic::iced::Result {
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/app.rs"));
+}
+
 struct CosmicNotifications {
     core: Core,
     active_surface: bool,
@@ -62,7 +67,7 @@ enum Message {
     ActivationToken(Option<String>, u32, Option<ActionId>),
     Dismissed(u32),
     Notification(notifications::Event),
-    Timeout(u32),
+    Timeout(u32, std::time::SystemTime),
     Config(NotificationsConfig),
     PanelConfig(CosmicPanelConfig),
     DockConfig(CosmicPanelConfig),
@@ -102,14 +107,8 @@ impl CosmicNotifications {
             let id = notification.id;
             let sender = sender.clone();
             tokio::spawn(async move {
-                _ = sender.send(notifications::Input::Closed(id, reason));
+                _ = sender.send(notifications::Input::Closed(id, reason)).await;
             });
-        }
-
-        if let Some(sender) = &self.notifications_tx {
-            let sender = sender.clone();
-            let id = notification.id;
-            tokio::spawn(async move { sender.send(notifications::Input::Dismissed(id)).await });
         }
 
         if self.cards.is_empty() && self.active_surface {
@@ -257,13 +256,13 @@ impl CosmicNotifications {
         let mut tasks = vec![if timeout > 0 {
             iced::Task::perform(
                 tokio::time::sleep(Duration::from_millis(timeout as u64)),
-                move |_| cosmic::action::app(Message::Timeout(notification.id)),
+                move |_| cosmic::action::app(Message::Timeout(notification.id, notification.time)),
             )
         } else {
             iced::Task::none()
         }];
 
-        if self.cards.is_empty() && !self.config.do_not_disturb {
+        if self.cards.is_empty() && !self.active_surface && !self.config.do_not_disturb {
             let (anchor, _output) = self.anchor.clone().unwrap_or((Anchor::TOP, None));
             self.active_surface = true;
             tasks.push(get_layer_surface(SctkLayerSurfaceSettings {
@@ -374,13 +373,9 @@ impl CosmicNotifications {
     }
 
     fn replace_notification(&mut self, notification: Notification) -> Task<Message> {
-        if let Some(notif) = self.cards.iter_mut().find(|n| n.id == notification.id) {
-            *notif = notification;
-            Task::none()
-        } else {
-            tracing::error!("Notification not found... pushing instead");
-            self.push_notification(notification)
-        }
+        self.cards.retain(|n| n.id != notification.id);
+        self.hidden.retain(|n| n.id != notification.id);
+        self.push_notification(notification)
     }
 
     fn request_activation(&mut self, i: u32, action: Option<ActionId>) -> Task<Message> {
@@ -537,12 +532,15 @@ impl cosmic::Application for CosmicNotifications {
                     return c;
                 }
             }
-            Message::Timeout(id) => {
-                self.expire(id);
+            Message::Timeout(id, time) => {
+                if self.cards.iter().any(|n| n.id == id && n.time == time) {
+                    self.expire(id);
+                }
                 if self.cards.is_empty() && self.active_surface {
                     self.active_surface = false;
                     return destroy_layer_surface(self.window_id);
                 }
+
             }
             Message::Config(config) => {
                 self.config = config;

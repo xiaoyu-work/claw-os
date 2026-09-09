@@ -29,6 +29,7 @@ fn notification() -> Notification {
         dismissed_at_ms: None,
         actions: Vec::new(),
         deliveries: Vec::new(),
+        presentation: None,
     }
 }
 

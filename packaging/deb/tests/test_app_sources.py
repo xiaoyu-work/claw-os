@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 @pytest.mark.parametrize("service", [
-    "claw-os-app-permissions-v1", "claw-os-capture-v1", "claw-os-media-player-v1",
+    "claw-os-app-permissions-v1", "claw-os-capture-v1", "claw-os-media-player-v1", "claw-os-notifications-v1",
 ])
 def test_brokered_desktop_service_is_an_installed_dependency(service):
     agent = (ROOT / "packaging/deb/claw-os-agent/control").read_text()

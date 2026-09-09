@@ -53,7 +53,7 @@ and a root-owned executed artifact.
 | --- | --- |
 | `policy.rs` | `LaunchPolicy`, tiers, mounts, limits, digest, audit facts |
 | `derive.rs` | Trusted derivation from manifest/caps/runtime |
-| `trusted_desktop.rs` | Fixed vendor table of native Desktop App ids/programs; only the notification row also receives the session bus |
+| `trusted_desktop.rs` | Fixed vendor table of native Desktop App ids/programs; no current row receives a session bus or other desktop transport |
 | `migrate.rs` | One-time move of legacy App state into its partition |
 | `provider.rs` | `WorkerSandbox` seam, availability, fail-closed `prepare` |
 | `linux.rs` | bubblewrap argv, `pre_exec`, rlimits, identity |
@@ -66,6 +66,12 @@ and a root-owned executed artifact.
 | `audit.rs` | Typed, path-free and secret-free launch records |
 
 ## Policy derivation
+
+Notifications is a normal hostile MCP worker. Its original `ui.notify`
+capability admits only bounded post/close intent through the typed OS service,
+not owner-wide notification administration, arbitrary icons/files or a raw bus.
+The existing desktop bridge alone consumes channel leases and returns genuine
+user acknowledgement/dismissal, separately from delivery receipts.
 
 Media Player remains a normal hostile MCP worker, with no session bus or
 GUI transport. Its exact named observation/control grants only admit the

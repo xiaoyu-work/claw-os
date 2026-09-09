@@ -23,10 +23,10 @@ pub fn publish(params: Value, client: &ClientIdentity) -> Result<Value, String> 
     let owner_uid = client.require_uid()?;
     let source = required_string(&params, "source")?;
     if owner_uid != 0
-        && matches!(
+        && (source.starts_with("app:") || matches!(
             source.as_str(),
             "agent" | "approval" | "cron" | "heartbeat" | "nudge" | "trigger"
-        )
+        ))
     {
         return Err(format!("reserved notification source: {source}"));
     }

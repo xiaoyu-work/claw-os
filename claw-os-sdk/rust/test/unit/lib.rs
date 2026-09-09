@@ -2,6 +2,36 @@ use super::*;
 
 #[cfg(unix)]
 #[tokio::test]
+async fn async_stdin_binary_is_bounded_and_keeps_business_text_out_of_argv() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let binary = dir.path().join("cos");
+    let oversized = vec![b'x'; APP_ARGS_STDIN_MAX_BYTES + 1];
+    assert!(matches!(cos_call_json_async_with_stdin_binary(
+        &binary, "notification", "post", ["__notifications"], &oversized,
+    ).await, Err(BridgeError::Io(error)) if error.kind() == std::io::ErrorKind::InvalidInput));
+    std::fs::write(&binary, concat!(
+        "#!/usr/bin/python3\nimport sys,json\n",
+        "assert sys.argv[1:]==['--wire=1','__notifications']\n",
+        "data=json.load(sys.stdin)\n",
+        "print(json.dumps({'wire_version':1,'ok':True,'data':data}))\n",
+    )).unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let result = cos_call_json_async_with_stdin_binary(
+        &binary, "notification", "post", ["__notifications"], br#"{"body":"private text"}"#,
+    ).await.unwrap();
+    assert_eq!(result["body"], "private text");
+    let error_binary = write_fake_cos(
+        dir.path(), r#"{"ok":false,"wire_version":1,"error":"refused","code":"PERMISSION_DENIED"}"#, 1,
+    );
+    let error = cos_call_json_async_with_stdin_binary(
+        error_binary, "notification", "post", ["__notifications"], &vec![b' '; 128 * 1024],
+    ).await.unwrap_err();
+    assert!(error.is_denied(), "an early refusal takes precedence over EPIPE: {error}");
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn async_explicit_binary_preserves_shared_wire_decoding() {
     let dir = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
     let missing = cos_call_json_async_with_binary(

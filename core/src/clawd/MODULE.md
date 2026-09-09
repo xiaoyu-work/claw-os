@@ -46,6 +46,7 @@ and agent tasks.
 | `../extension_host/broker.rs` | Purpose-bound private proxy: verifies SCM credentials, Host/child ancestry, route class, and nearest child session before normal dispatch |
 | `scheduler.rs` | Proactive-scheduler authority: validates `cos cron` / `cos triggers` requests and derives what a job may carry |
 | `notifications.rs` | Notification RPC handlers, due-nudge fanout, and external delivery dispatcher |
+| `app_notifications.rs` | Closed native post/close intent, exact authenticated App/owner/source, `ui.notify`, and durable Notification Service publication |
 | `browser.rs` | Attached-browser provider: exact action capabilities, expected-origin injection, owner socket validation, and bounded Native Messaging frames |
 | `network_diagnostics.rs` | Host-network diagnostic provider: interface/route inspection, bounded DNS resolution, and DNS-pinned TCP probes for the `netdiag` App |
 | `filesystem.rs` | Exact-scope bounded text reads and atomic writes/replacements for App workers; pinned paths, task-owned inverse snapshots, no App dispatch |
@@ -78,6 +79,27 @@ requires root solely for owner-UID dropping; it exercises the installed
 harmless processes, never real Settings, polkit or user grants.
 
 ## Wire Protocol
+
+`system.notification.control` accepts only `cosmic-notifications` sessions and
+the existing `ui.notify` Wild capability. It derives owner, source and session/
+task correlation from broker authority, not MCP metadata or a display label.
+Post validates bounded plain text, theme-only icon names, signed popup timeout
+and flags before any effect; close accepts only a durable `notif-` string owned
+by this source and owner. Numeric D-Bus IDs, absolute icon paths, arbitrary
+sources/actions and service-state fallbacks are refused. Storage failures are
+typed unavailable responses. Worker and App Host relays admit only this typed
+service, never owner-wide notification administration or a session bus.
+
+`notifications_actual_native_worker_durable_delivery_and_owner_bound_ui` is an
+ignored explicit-input fixture: build the native Notifications executable and
+`notification-presentation-fixture`, the desktop bridge's
+`notification-delivery-fixture`, and `cos`; supply the corresponding
+`COS_NOTIFICATIONS_BINARY`, `COS_NOTIFICATIONS_PRESENTER`,
+`COS_NOTIFICATIONS_DELIVERY`, `COS_NOTIFICATIONS_COS` and
+`COS_NOTIFICATIONS_MANIFEST` paths. It exercises the real strict worker,
+authenticated private relay, typed provider, SQLite, desktop consumer and
+native presentation subscription against a private bus and task-local data.
+No real desktop, remote delivery, user history or polkit is involved.
 
 `system.media-player.control` is restricted to `cosmic-player`. Status spends
 `desktop.media.observe:cosmic-player`; the six playback actions spend only

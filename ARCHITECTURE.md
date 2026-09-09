@@ -77,6 +77,21 @@ cross-cutting boundaries rather than hidden implementation details.
 
 ### App source ownership
 
+Native Notifications now uses `system.notification.control`, backed by the
+existing durable Notification Service. Only the authenticated
+`cosmic-notifications` App with `ui.notify` may publish or close its own
+owner/source-scoped records; it has no session bus. Display labels are not
+producer identity. The OS owns SQLite, DND/channel preferences, leases, retries,
+credentials and audit. The existing Agent bridge remains the sole desktop
+consumer, verifies the installed presenter's owner/executable and unique D-Bus
+connection, escapes model body markup, and reflects durable close/ack changes.
+Only genuine UI signals for handles that bridge created mutate core state.
+Freedesktop callers cannot replace/close another sender's numeric handle;
+the trusted panel uses its existing private connection for human dismissal.
+Popup timeout/transient settings affect presentation, not core retention.
+The existing local desktop DND setting remains an additional presentation mute;
+no user settings, legacy `notify` JSON history or identities are consolidated.
+
 The OS exposes `system.media-player.control` for native Media Player clients.
 The seven closed actions address only `cosmic-player`, with independent exact
 `desktop.media.observe` and `desktop.media.control` grants scoped to that

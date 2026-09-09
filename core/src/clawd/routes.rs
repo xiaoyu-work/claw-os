@@ -1404,6 +1404,23 @@ routes! {
             super::capture::capture(c.params, c.client, authority).await.map_err(BrokerError::from)
         },
     }
+    SystemNotificationControl {
+        name: "system.notification.control",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: session(Audience::SystemService),
+        body: body::AppNotificationControl,
+        audit: &[
+            ("session", FieldRule::Token),
+            ("deadline_unix_ms", FieldRule::Count),
+            ("request", FieldRule::Size),
+        ],
+        run: |c| {
+            let authority = c.authority()?;
+            super::app_notifications::control(c.params, c.client, authority)
+        },
+    }
     SystemMediaPlayerControl {
         name: "system.media-player.control",
         access: Access::User,

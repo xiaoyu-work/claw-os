@@ -284,6 +284,32 @@ pub struct NotificationDeliveryComplete {
     pub error_code: Option<Token<128>>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppNotificationControl {
+    pub session: Token,
+    pub deadline_unix_ms: u64,
+    pub request: AppNotificationRequest,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AppNotificationRequest {
+    Post {
+        summary: Text<960>,
+        body: Text<16_000>,
+        app_name: Text<512>,
+        icon: Text<128>,
+        expire_ms: i32,
+        transient: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dedupe_key: Option<Name<128>>,
+    },
+    Close {
+        id: Token<64>,
+    },
+}
+
 // ---------------------------------------------------------------------------
 // Transactions
 // ---------------------------------------------------------------------------

@@ -75,6 +75,9 @@ Media Player uses `cos_call_json_async_with_binary`: it shares the strict wire
 decoder and fixed binary selection, but dropping an MCP call kills/reaps the
 CLI child. The OS deadline and fresh grant gate still govern undispatched work;
 an already accepted playback action cannot be rolled back by cancellation.
+Notifications uses `cos_call_json_async_with_stdin_binary` to keep bounded
+business text off argv while retaining explicit executable selection, shared
+wire errors and cancellation/reaping. It does not convey authority in stdin.
 
 ## Tests
 

@@ -201,6 +201,37 @@ pub struct NotificationAction {
     pub uri: String,
 }
 
+/// Display-only metadata. Neither sender labels nor icons identify a producer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NotificationPresentation {
+    pub app_name: String,
+    pub icon: String,
+    pub expire_ms: i32,
+    pub transient: bool,
+}
+
+impl NotificationPresentation {
+    pub fn validate(&self) -> Result<(), NotificationError> {
+        validate_text("app_name", &self.app_name, 128, false)?;
+        if self.icon.len() > 128
+            || !self.icon.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')
+            })
+        {
+            return Err(NotificationError::Invalid(
+                "icon must be an icon-theme name, not a path or URL".into(),
+            ));
+        }
+        if self.expire_ms < -1 {
+            return Err(NotificationError::Invalid(
+                "expire_ms must be -1, 0, or a positive signed 32-bit integer".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NotificationDraft {
     pub source: String,
@@ -221,6 +252,8 @@ pub struct NotificationDraft {
     pub expires_at_ms: Option<i64>,
     #[serde(default)]
     pub actions: Vec<NotificationAction>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presentation: Option<NotificationPresentation>,
 }
 
 impl NotificationDraft {
@@ -244,6 +277,7 @@ impl NotificationDraft {
             job_id: None,
             expires_at_ms: None,
             actions: Vec::new(),
+            presentation: None,
         }
     }
 
@@ -261,7 +295,12 @@ impl NotificationDraft {
         validate_identifier("source", &self.source, 128)?;
         validate_identifier("kind", &self.kind, 128)?;
         validate_text("title", &self.title, MAX_TITLE_CHARS, false)?;
-        validate_text("body", &self.body, MAX_BODY_CHARS, true)?;
+        if !self.body.is_empty() {
+            validate_text("body", &self.body, MAX_BODY_CHARS, true)?;
+        }
+        if let Some(presentation) = &self.presentation {
+            presentation.validate()?;
+        }
         if let Some(key) = &self.dedupe_key {
             validate_identifier("dedupe_key", key, 192)?;
         }
@@ -345,6 +384,8 @@ pub struct Notification {
     pub actions: Vec<NotificationAction>,
     #[serde(default)]
     pub deliveries: Vec<DeliveryStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presentation: Option<NotificationPresentation>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -492,6 +533,22 @@ pub trait NotificationService: Send + Sync {
         include_dismissed: bool,
         limit: usize,
     ) -> Result<Vec<Notification>, NotificationError>;
+
+    fn get(&self, owner_uid: u32, id: &str) -> Result<Notification, NotificationError>;
+
+    fn mutate_source(
+        &self,
+        owner_uid: u32,
+        source: &str,
+        id: &str,
+        mutation: NotificationMutation,
+    ) -> Result<Notification, NotificationError> {
+        // A record's owner/source are immutable; deduplication includes both.
+        if self.get(owner_uid, id)?.source != source {
+            return Err(NotificationError::NotFound);
+        }
+        self.mutate(owner_uid, id, mutation)
+    }
 
     fn changes(
         &self,

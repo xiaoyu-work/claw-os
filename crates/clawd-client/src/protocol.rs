@@ -33,10 +33,14 @@ pub enum Command {
     NotificationDeliveryClaim,
     #[serde(rename = "notification.delivery.complete")]
     NotificationDeliveryComplete,
+    #[serde(rename = "notification.acknowledge")]
+    NotificationAcknowledge,
+    #[serde(rename = "notification.dismiss")]
+    NotificationDismiss,
 }
 
 impl Command {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 11] = [
         Self::TaskSubmit,
         Self::TaskStream,
         Self::TaskCancel,
@@ -46,6 +50,8 @@ impl Command {
         Self::NotificationSubscribe,
         Self::NotificationDeliveryClaim,
         Self::NotificationDeliveryComplete,
+        Self::NotificationAcknowledge,
+        Self::NotificationDismiss,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -59,6 +65,8 @@ impl Command {
             Self::NotificationSubscribe => "notification.subscribe",
             Self::NotificationDeliveryClaim => "notification.delivery.claim",
             Self::NotificationDeliveryComplete => "notification.delivery.complete",
+            Self::NotificationAcknowledge => "notification.acknowledge",
+            Self::NotificationDismiss => "notification.dismiss",
         }
     }
 }

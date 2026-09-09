@@ -29,6 +29,7 @@ pub enum State {
 #[derive(Debug, Clone)]
 pub enum Input {
     Activated(u32, String),
+    Dismiss(u32),
 }
 
 #[derive(Debug, Clone)]
@@ -108,15 +109,21 @@ pub fn notifications(proxy: NotificationsAppletProxy<'static>) -> Subscription<O
                                     }
                                 }
                                 v = next_input => {
-                                    if let Some(Input::Activated(id, action)) = v {
-                                        if proxy.invoke_action(id, action.clone()).await.is_err() {
-                                            tracing::error!("Failed to invoke action {id} {action}");
-                                        } else {
-                                            tracing::error!("Invoked {action} for {id}");
+                                    match v {
+                                        Some(Input::Activated(id, action)) => {
+                                            if let Err(error) = proxy.invoke_action(id, action).await {
+                                                tracing::error!("Failed to invoke notification action: {error}");
+                                            }
                                         }
-                                    } else {
-                                        tracing::error!("Channel closed, ending notifications subscription");
-                                        state = State::Finished;
+                                        Some(Input::Dismiss(id)) => {
+                                            if let Err(error) = proxy.dismiss(id).await {
+                                                tracing::error!("Failed to dismiss notification: {error}");
+                                            }
+                                        }
+                                        None => {
+                                            tracing::error!("Channel closed, ending notifications subscription");
+                                            state = State::Finished;
+                                        }
                                     }
                                 }
                             }
@@ -151,6 +158,7 @@ pub trait NotificationsApplet {
     ) -> zbus::Result<()>;
 
     fn invoke_action(&self, id: u32, action: String) -> zbus::Result<()>;
+    fn dismiss(&self, id: u32) -> zbus::Result<()>;
 }
 
 pub async fn get_proxy() -> anyhow::Result<NotificationsAppletProxy<'static>> {

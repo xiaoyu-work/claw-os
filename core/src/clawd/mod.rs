@@ -38,6 +38,7 @@ pub mod memory;
 pub mod network;
 pub mod network_diagnostics;
 pub mod notifications;
+pub mod app_notifications;
 pub mod packages;
 pub mod permissions;
 pub mod power;

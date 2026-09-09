@@ -324,10 +324,47 @@ where
     A: IntoIterator,
     A::Item: AsRef<OsStr>,
 {
-    let child = tokio::process::Command::new(binary)
+    cos_call_json_async_input(binary, family, verb, args, None).await
+}
+
+/// Cancellable controlled primitive with an explicit executable and bounded
+/// stdin. Business text never enters argv; errors use the common wire decoder.
+pub async fn cos_call_json_async_with_stdin_binary<A>(
+    binary: impl AsRef<OsStr>,
+    family: &str,
+    verb: &str,
+    args: A,
+    input: &[u8],
+) -> Result<serde_json::Value, BridgeError>
+where
+    A: IntoIterator,
+    A::Item: AsRef<OsStr>,
+{
+    if input.len() > APP_ARGS_STDIN_MAX_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "primitive input exceeds the request limit",
+        ).into());
+    }
+    cos_call_json_async_input(binary, family, verb, args, Some(input)).await
+}
+
+async fn cos_call_json_async_input<A>(
+    binary: impl AsRef<OsStr>,
+    family: &str,
+    verb: &str,
+    args: A,
+    input: Option<&[u8]>,
+) -> Result<serde_json::Value, BridgeError>
+where
+    A: IntoIterator,
+    A::Item: AsRef<OsStr>,
+{
+    use tokio::io::AsyncWriteExt;
+    let mut child = tokio::process::Command::new(binary)
         .arg("--wire=1")
         .args(args)
-        .stdin(Stdio::null())
+        .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
@@ -336,8 +373,18 @@ where
             std::io::ErrorKind::NotFound => BridgeError::BinaryNotFound(error),
             _ => BridgeError::Io(error),
         })?;
-    decode_wire_response(family, verb, child.wait_with_output().await?)
-        .map_err(StructuredCosError::into_bridge)
+    let pipe = child.stdin.take();
+    let write = async {
+        if let Some((input, mut pipe)) = input.zip(pipe) {
+            pipe.write_all(input).await?;
+        }
+        Ok::<_, std::io::Error>(())
+    };
+    let (output, written) = tokio::join!(child.wait_with_output(), write);
+    let result = decode_wire_response(family, verb, output?)
+        .map_err(StructuredCosError::into_bridge)?;
+    written?;
+    Ok(result)
 }
 
 /// Invoke a controlled CLI primitive with bounded business data on stdin.

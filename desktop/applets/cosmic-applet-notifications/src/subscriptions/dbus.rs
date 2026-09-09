@@ -20,7 +20,6 @@ pub enum State {
 
 #[derive(Debug, Clone, Copy)]
 pub enum Input {
-    Dismiss(u32),
     CloseEvent(u32),
 }
 
@@ -81,12 +80,7 @@ pub fn proxy() -> Subscription<Output> {
                                 }
                             };
                         }
-                        State::WaitingForNotificationEvent(proxy, rx) => match rx.recv().await {
-                            Some(Input::Dismiss(id)) => {
-                                if let Err(err) = proxy.close_notification(id).await {
-                                    error!("Failed to close notification: {}", err);
-                                }
-                            }
+                        State::WaitingForNotificationEvent(_proxy, rx) => match rx.recv().await {
                             Some(Input::CloseEvent(id)) => {
                                 _ = output.send(Output::CloseEvent(id)).await;
                             }

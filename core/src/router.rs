@@ -857,6 +857,23 @@ fn dispatch_with_stdin_impl(
         return Ok(Some(value.to_string()));
     }
 
+    if name == "__notifications" {
+        if args.len() != 5 || args[1] != "request"
+            || args[2] != "--request-stdin" || args[3] != "--deadline"
+        {
+            return Err("internal notification bridge requires `request --request-stdin --deadline <unix-ms>`".into());
+        }
+        let request = parse_internal_request_object(stdin_data.as_deref(), 20_000, "notification")?;
+        let deadline = args[4].parse::<u64>().map_err(|_| "invalid notification deadline")?;
+        let session = env::var("COS_SESSION")
+            .map_err(|_| "internal notification command requires COS_SESSION")?;
+        let value = request_wire_clawd(
+            Command::SystemNotificationControl,
+            json!({"session": session, "deadline_unix_ms": deadline, "request": request}),
+        )?;
+        return Ok(Some(value.to_string()));
+    }
+
     if name == "__media-player" {
         if args.len() != 4 || args[2] != "--deadline" {
             return Err("internal Media Player bridge requires `<action> --deadline <unix-ms>`".into());

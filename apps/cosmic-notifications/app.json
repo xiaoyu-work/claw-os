@@ -1,12 +1,12 @@
 {
   "id": "cosmic-notifications",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "schema_version": 2,
   "name": {
     "en": "Notifications"
   },
   "summary": {
-    "en": "Post and dismiss freedesktop notifications through the session D-Bus."
+    "en": "Post durable owner-scoped notifications and dismiss this App's own records through the OS Notification Service."
   },
   "icon": "🔔",
   "runtime": "binary",
@@ -18,7 +18,7 @@
       {
         "name": "notify.post",
         "summary": {
-          "en": "Show a freedesktop notification and return its assigned notification id."
+          "en": "Persist a notification, queue enabled delivery channels, and return its durable string id. Delivery is not user acknowledgement."
         },
         "args": [
           {
@@ -53,7 +53,7 @@
             "required": false,
             "default": "com.clawos.Notifications",
             "label": {
-              "en": "Icon name or absolute path; omitted uses com.clawos.Notifications."
+              "en": "Icon-theme name only (up to 128 ASCII letters, digits, dots, underscores or hyphens). Paths and URLs are unsupported."
             }
           },
           {
@@ -62,7 +62,7 @@
             "required": false,
             "default": -1,
             "label": {
-              "en": "Auto-dismiss timeout in milliseconds; -1 uses the daemon default and 0 never expires."
+              "en": "Popup timeout: -1 uses the desktop default, 0 never expires, positive values are milliseconds (at most 2147483647). Durable OS activity is retained."
             }
           },
           {
@@ -71,7 +71,15 @@
             "required": false,
             "default": false,
             "label": {
-              "en": "Do not retain the popup in notification history."
+              "en": "Omit the desktop history copy. The authoritative OS activity record is still durably retained."
+            }
+          },
+          {
+            "name": "dedupe_key",
+            "kind": "text",
+            "required": false,
+            "label": {
+              "en": "Optional bounded replay key, scoped to this App and owner; repeated posts update one record within 15 minutes."
             }
           }
         ],
@@ -90,15 +98,15 @@
       {
         "name": "notify.close",
         "summary": {
-          "en": "Dismiss a notification by the integer id returned from notify.post."
+          "en": "Dismiss this App's durable notification and close its desktop presentation. Legacy desktop numeric ids are not accepted."
         },
         "args": [
           {
             "name": "id",
-            "kind": "integer",
+            "kind": "text",
             "required": true,
             "label": {
-              "en": "Notification id returned by notify.post."
+              "en": "Durable notif- string id returned by notify.post for this owner and App."
             }
           }
         ],

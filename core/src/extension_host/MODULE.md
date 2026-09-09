@@ -116,6 +116,11 @@ Lifecycle routes are host-only; provider routes are child-only; task,
 scheduler, permission-decision, admin, and App-session routes are never
 available to an extension child.
 
+Native Notifications is admitted only through `system.notification.control`
+under the nearest child App session and `ui.notify`. Owner-wide notification
+list/preferences/delivery/state routes remain unavailable to the Host and its
+children. It needs no desktop transport or notification database mount.
+
 The task binding signed at bootstrap remains immutable. The supervisor stores
 the rolling private-broker deadline separately and returns each renewal over
 the authenticated worker channel; the worker mirrors it in its installed

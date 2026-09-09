@@ -25,6 +25,7 @@ component crates plus Claw-specific agent bridges and applets.
 | `launcher-backend/` | Shared launcher library/service; native frontend is owned by external `clawos-app/products/launcher` |
 | `applets/cosmic-applets/` | Host native libraries; inject Calendar agenda, Clipboard history-policy and Widget Rail typed data callbacks, and generate product-owned desktop entries |
 | `agent/` | Native agent bridge and UI |
+| `agent/bridge/src/notifications.rs` | Single desktop delivery consumer; installed owner/executable-bound presenter, safe plain-text projection, connection-local handles and genuine user state transitions |
 | `agent/protocol/` | Versioned desktop Agent HTTP/SSE presentation contract |
 | `agent/ui/MODULE.md` | Agent UI state ownership, effects, views, and test boundaries |
 | `comp/`, `session/`, `panel/` | Shell/compositor/session surfaces |

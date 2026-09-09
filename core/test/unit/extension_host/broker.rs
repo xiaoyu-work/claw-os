@@ -37,7 +37,11 @@ fn child_proxy_is_an_explicit_session_route_allowlist() {
             );
         assert_eq!(child_route(route), expected, "route {}", route.name);
     }
-    assert_eq!(CHILD_PROVIDER_ROUTES.len(), 37);
+    assert_eq!(CHILD_PROVIDER_ROUTES.len(), 38);
+    assert!(child_route(Command::SystemNotificationControl.route()));
+    assert!(!host_lifecycle_route(Command::SystemNotificationControl));
+    assert!(!child_route(Command::NotificationList.route()));
+    assert!(!child_route(Command::NotificationDismiss.route()));
     assert!(child_route(Command::SystemMediaPlayerControl.route()));
     assert!(!host_lifecycle_route(Command::SystemMediaPlayerControl));
     assert!(child_route(Command::SystemAppPermissions.route()));

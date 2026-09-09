@@ -11,6 +11,69 @@ fn draft(kind: &str) -> NotificationDraft {
 }
 
 #[test]
+fn notification_schema_upgrade_preserves_v1_records_and_is_idempotent() {
+    let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let path = root.path().join("notifications.db");
+    let before = {
+        let service = SqliteNotificationService::open(&path).unwrap();
+        let record = service.publish(7, draft("legacy")).unwrap();
+        service.lock().unwrap().execute_batch(
+            "ALTER TABLE notifications DROP COLUMN presentation_json; PRAGMA user_version = 1;",
+        ).unwrap();
+        record
+    };
+    for _ in 0..2 {
+        let service = SqliteNotificationService::open(&path).unwrap();
+        assert_eq!(service.get(7, &before.id).unwrap(), before);
+        assert_eq!(service.lock().unwrap().query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0)).unwrap(), 2);
+    }
+}
+
+#[test]
+fn deduplication_never_reassigns_a_record_to_another_source() {
+    let service = SqliteNotificationService::open_in_memory().unwrap();
+    let a = service.publish(7, draft("same").dedupe("key")).unwrap();
+    let mut input = draft("same").dedupe("key");
+    input.source = "app:cosmic-notifications".into();
+    let b = service.publish(7, input).unwrap();
+    assert_ne!(a.id, b.id);
+    assert_eq!(service.get(7, &a.id).unwrap().source, a.source);
+    assert!(matches!(service.mutate_source(7, &b.source, &a.id, NotificationMutation::Dismiss),
+        Err(NotificationError::NotFound)));
+}
+
+#[test]
+fn acknowledged_or_closed_records_cannot_be_requeued_by_stale_delivery_receipts() {
+    for mutation in [NotificationMutation::Acknowledge, NotificationMutation::Dismiss] {
+        let service = SqliteNotificationService::open_in_memory().unwrap();
+        let record = service.publish(7, draft("race")).unwrap();
+        let claim = service.claim_deliveries(Some(7), DeliveryChannel::Desktop, 10, 1).unwrap();
+        assert_eq!(claim.len(), 1);
+        service.mutate(7, &record.id, mutation).unwrap();
+        let completed = service.complete_delivery(7, &record.id, DeliveryChannel::Desktop,
+            DeliveryResult::Failed { error_code: "late".into(), retry_at_ms: 0 }).unwrap();
+        assert_eq!(completed.deliveries.iter().find(|d| d.channel == DeliveryChannel::Desktop).unwrap().state,
+            DeliveryState::Suppressed);
+        assert!(service.claim_deliveries(Some(7), DeliveryChannel::Desktop, 10, 1).unwrap().is_empty());
+    }
+}
+
+#[test]
+fn expired_lease_retries_only_for_the_same_owner_and_keeps_unread_state() {
+    let service = SqliteNotificationService::open_in_memory().unwrap();
+    let record = service.publish(7, draft("lease")).unwrap();
+    assert_eq!(service.claim_deliveries(Some(7), DeliveryChannel::Desktop, 10, 5000).unwrap().len(), 1);
+    service.lock().unwrap().execute(
+        "UPDATE notification_deliveries SET next_attempt_at_ms = 0 WHERE notification_id = ?1",
+        params![record.id],
+    ).unwrap();
+    assert!(service.claim_deliveries(Some(8), DeliveryChannel::Desktop, 10, 5000).unwrap().is_empty());
+    let retried = service.claim_deliveries(Some(7), DeliveryChannel::Desktop, 10, 5000).unwrap();
+    assert_eq!(retried[0].attempts, 2);
+    assert_eq!(retried[0].notification.state, NotificationState::Unread);
+}
+
+#[test]
 fn muted_kind_is_persisted_without_delivery_work() {
     let service = SqliteNotificationService::open_in_memory().unwrap();
     let preferences = NotificationPreferences {

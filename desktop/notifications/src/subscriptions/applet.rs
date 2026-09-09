@@ -128,6 +128,11 @@ pub struct NotificationsApplet {
 
 #[interface(name = "com.clawos.NotificationsApplet")]
 impl NotificationsApplet {
+    pub async fn dismiss(&self, id: u32) -> zbus::fdo::Result<()> {
+        self.tx.send(Input::AppletDismissed(id)).await
+            .map_err(|_| zbus::fdo::Error::Failed("notification UI is unavailable".into()))
+    }
+
     #[zbus(signal)]
     pub async fn notify(
         signal_ctxt: &SignalEmitter<'_>,

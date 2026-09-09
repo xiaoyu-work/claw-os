@@ -14,6 +14,19 @@ user interfaces consume them without relying on model behavior.
   retry leases.
 - Provide channel-neutral delivery claims and the ntfy adapter.
 
+Native `cosmic-notifications` submits bounded intent through
+`clawd/app_notifications.rs`. The service stores display-only sender, theme
+icon, popup timeout and transient metadata, never caller-provided authority.
+The additive SQLite v1 → v2 upgrade preserves every existing record and
+preference; the wire notification schema remains backwards-compatible v1.
+Owner and source are immutable and jointly partition deduplication.
+Acknowledgement/dismissal suppress pending deliveries; a stale receipt cannot
+requeue terminal records. Delivery success never implies user acknowledgement.
+
+The existing Agent desktop bridge remains the sole desktop delivery consumer.
+Its connection-local numeric handles are not durable IDs or an alias store.
+Legacy `notify` JSON history remains untouched pending its explicit transition.
+
 ## Key Files
 
 | Path | Role |

@@ -45,7 +45,7 @@ impl Conns {
                 .and_then(|conn| {
                     conn.serve_at(
                         "/org/freedesktop/Notifications",
-                        Notifications(tx.clone(), NonZeroU32::new(1).unwrap(), Vec::new()),
+                        Notifications::new(tx.clone()),
                     )
                     .ok()
                 })
@@ -157,12 +157,11 @@ impl Machine<Waiting> {
                             .interface::<_, Notifications>("/org/freedesktop/Notifications")
                             .await
                         {
-                            _ = Notifications::notification_closed(
-                                iface_ref.signal_emitter(),
-                                id,
-                                reason as u32,
-                            )
-                            .await;
+                            if iface_ref.get_mut().await.owners.remove(&id).is_some() {
+                                _ = Notifications::notification_closed(
+                                    iface_ref.signal_emitter(), id, reason as u32,
+                                ).await;
+                            }
                         }
                     }
                     Input::Notification(notification) => {
@@ -173,22 +172,8 @@ impl Machine<Waiting> {
                     }
                     Input::CloseNotification(id) => {
                         _ = self.output.send(Event::CloseNotification(id)).await;
-
-                        let object_server = conns.notifications.object_server();
-                        let Ok(iface_ref) = object_server
-                            .interface::<_, Notifications>("/org/freedesktop/Notifications")
-                            .await
-                        else {
-                            continue;
-                        };
-                        if let Err(err) =
-                            Notifications::notification_closed(iface_ref.signal_emitter(), id, 3)
-                                .await
-                        {
-                            error!("Failed to signal close notification {}", err);
-                        }
                     }
-                    Input::Dismissed(id) => {
+                    Input::AppletDismissed(id) => {
                         let object_server = conns.notifications.object_server();
                         let Ok(iface_ref) = object_server
                             .interface::<_, Notifications>("/org/freedesktop/Notifications")
@@ -196,11 +181,13 @@ impl Machine<Waiting> {
                         else {
                             continue;
                         };
-                        if let Err(err) =
-                            Notifications::notification_closed(iface_ref.signal_emitter(), id, 2)
-                                .await
-                        {
-                            error!("Failed to signal dismissed notification {}", err);
+                        if iface_ref.get_mut().await.owners.remove(&id).is_some() {
+                            _ = self.output.send(Event::CloseNotification(id)).await;
+                            if let Err(err) = Notifications::notification_closed(
+                                iface_ref.signal_emitter(), id, 2,
+                            ).await {
+                                error!("Failed to signal dismissed notification {}", err);
+                            }
                         }
                     }
                     Input::AppletConn(c) => {
@@ -212,7 +199,7 @@ impl Machine<Waiting> {
                             continue;
                         };
                         let mut iface = iface_ref.get_mut().await;
-                        iface.2.push(c);
+                        iface.applets.push(c);
                     }
                     Input::AppletActivated { id, action } => {
                         if let Err(err) = self
@@ -249,7 +236,7 @@ pub enum Input {
     Replace(Notification),
     CloseNotification(u32),
     Closed(u32, CloseReason),
-    Dismissed(u32),
+    AppletDismissed(u32),
     AppletConn(Connection),
 }
 
@@ -278,14 +265,53 @@ pub fn notifications() -> Subscription<Event> {
     })
 }
 
-pub struct Notifications(Sender<Input>, NonZeroU32, Vec<Connection>);
+#[cfg(test)]
+mod tests {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/subscriptions/notifications.rs"));
+}
+
+pub struct Notifications {
+    tx: Sender<Input>,
+    next: NonZeroU32,
+    applets: Vec<Connection>,
+    owners: HashMap<u32, String>,
+}
+
+impl Notifications {
+    pub fn new(tx: Sender<Input>) -> Self {
+        Self { tx, next: NonZeroU32::new(1).unwrap(), applets: Vec::new(), owners: HashMap::new() }
+    }
+
+    fn allocate(&mut self, sender: &str, replaces: u32) -> zbus::fdo::Result<(u32, bool)> {
+        if let Some(owner) = self.owners.get(&replaces) {
+            if owner != sender {
+                return Err(zbus::fdo::Error::AccessDenied("notification belongs to another sender".into()));
+            }
+            return Ok((replaces, true));
+        }
+        if self.owners.len() >= 4096 {
+            return Err(zbus::fdo::Error::LimitsExceeded("too many active notifications".into()));
+        }
+        loop {
+            let id = self.next.get();
+            self.next = self.next.checked_add(1).unwrap_or(NonZeroU32::new(1).unwrap());
+            if let std::collections::hash_map::Entry::Vacant(entry) = self.owners.entry(id) {
+                entry.insert(sender.into());
+                return Ok((id, false));
+            }
+        }
+    }
+}
 
 #[interface(name = "org.freedesktop.Notifications")]
 impl Notifications {
-    async fn close_notification(&self, id: u32) {
-        if let Err(err) = self.0.send(Input::CloseNotification(id)).await {
-            tracing::error!("Failed to send close notification: {}", err);
+    async fn close_notification(&self, id: u32, #[zbus(header)] header: zbus::message::Header<'_>) -> zbus::fdo::Result<()> {
+        let sender = header.sender().ok_or_else(|| zbus::fdo::Error::AccessDenied("missing sender".into()))?;
+        if self.owners.get(&id).is_some_and(|owner| owner != sender.as_str()) {
+            return Err(zbus::fdo::Error::AccessDenied("notification belongs to another sender".into()));
         }
+        self.tx.send(Input::CloseNotification(id)).await
+            .map_err(|_| zbus::fdo::Error::Failed("notification UI is unavailable".into()))
     }
 
     /// "action-icons"	Supports using icons instead of text for displaying actions. Using icons for actions must be enabled on a per-notification basis using the "action-icons" hint.
@@ -348,20 +374,10 @@ impl Notifications {
         actions: Vec<&str>,
         hints: HashMap<&str, zbus::zvariant::Value<'_>>,
         expire_timeout: i32,
-    ) -> u32 {
-        let id = if replaces_id == 0 {
-            let id = self.1;
-            self.1 = match self.1.checked_add(1) {
-                Some(id) => id,
-                None => {
-                    tracing::warn!("Notification ID overflowed");
-                    NonZeroU32::new(1).unwrap()
-                }
-            };
-            id.get()
-        } else {
-            replaces_id
-        };
+        #[zbus(header)] header: zbus::message::Header<'_>,
+    ) -> zbus::fdo::Result<u32> {
+        let sender = header.sender().ok_or_else(|| zbus::fdo::Error::AccessDenied("missing sender".into()))?;
+        let (id, replacing) = self.allocate(sender.as_str(), replaces_id)?;
         let hints_clone = hints
             .iter()
             .filter_map(|(k, v)| Some((*k, v.try_clone().ok()?)))
@@ -378,8 +394,8 @@ impl Notifications {
         );
 
         if !n.transient() {
-            let mut new_conns = Vec::with_capacity(self.2.len());
-            for c in self.2.drain(..) {
+            let mut new_conns = Vec::with_capacity(self.applets.len());
+            for c in self.applets.drain(..) {
                 let object_server = c.object_server();
                 let Ok(Ok(iface_ref)) = tokio::time::timeout(
                     tokio::time::Duration::from_millis(100),
@@ -416,22 +432,24 @@ impl Notifications {
                 }
                 new_conns.push(c);
             }
-            self.2 = new_conns;
+            self.applets = new_conns;
         }
 
         if let Err(err) = self
-            .0
-            .send(if replaces_id == 0 {
-                Input::Notification(n)
-            } else {
+            .tx
+            .send(if replacing {
                 Input::Replace(n)
+            } else {
+                Input::Notification(n)
             })
             .await
         {
             tracing::error!("Failed to send notification: {}", err);
+            self.owners.remove(&id);
+            return Err(zbus::fdo::Error::Failed("notification UI is unavailable".into()));
         }
 
-        id
+        Ok(id)
     }
 
     #[zbus(signal)]

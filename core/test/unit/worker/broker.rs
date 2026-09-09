@@ -92,6 +92,21 @@ fn every_admissible_route_is_explicitly_mapped() {
 }
 
 #[test]
+fn notification_intent_requires_ui_notify_not_owner_wide_notification_access() {
+    let granted = relaying_authority(vec![Cap::unscoped(Verb::UI_NOTIFY)]);
+    admit(Command::SystemNotificationControl, &granted).unwrap();
+    for command in [
+        Command::NotificationList, Command::NotificationPublish,
+        Command::NotificationAcknowledge, Command::NotificationDismiss,
+        Command::NotificationDeliveryClaim,
+    ] {
+        assert!(admit(command, &granted).is_err(), "{command:?}");
+    }
+    let unrelated = relaying_authority(vec![Cap::unscoped(Verb::SYS_OBSERVE)]);
+    assert!(admit(Command::SystemNotificationControl, &unrelated).is_err());
+}
+
+#[test]
 fn media_player_relay_requires_a_media_verb_not_other_desktop_authority() {
     for verb in [Verb::DESKTOP_MEDIA_OBSERVE, Verb::DESKTOP_MEDIA_CONTROL] {
         let granted = relaying_authority(vec![Cap::new(verb, Scope::name("cosmic-player"))]);
