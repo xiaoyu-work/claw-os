@@ -48,6 +48,8 @@ optional `capabilities` list. Group names are unique across kinds. Each kind
 resolves only its declared root and matching package metadata; missing sources,
 duplicate identities, escaping paths and unlocked Python-library owners fail.
 `doc` resolves to `capabilities/document-engine/apps/doc`, never `apps/doc`.
+`net` resolves to `capabilities/http/apps/net`; its OS policy and shared HTTP
+transport remain separate runtime exports, not copied into the App payload.
 `db` and `kv` resolve to `capabilities/storage-sdk/apps/<id>`, never their deleted
 local sources or the distinct Storage business product. The source kind changes
 no installed identity, grant ownership or data partition.

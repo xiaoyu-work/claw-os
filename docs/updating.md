@@ -402,6 +402,13 @@ owner's data root. `COS_DATA_DIR` is its own directory,
 `<data-root>/apps/<app-id>`, created `0700`, and no other App's directory or
 owner-private store is inside its sandbox.
 
+The source-only relocation of `net` to `clawos-app/capabilities/http/apps/net`
+preserves `/usr/lib/cos/apps/net` in the signed Agent package. Its two MCP/CLI
+contracts, exact endpoint/output needs, size limits and download behavior are
+unchanged. The OS supplies policy, SDK/runtime, `_shared.safe_http` and brokered
+egress separately. There is no new local store, data migration, provider copy,
+runtime source download or independent updater.
+
 The source-only relocation of `db` to
 `clawos-app/capabilities/storage-sdk/apps/db` adds no data transition.
 Its signed Agent-package identity and five MCP/CLI tools are unchanged;

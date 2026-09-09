@@ -810,23 +810,32 @@ fn usb_conditional_confirmation_is_enforced_by_canonical_binder() {
 
 #[test]
 fn canonical_url_is_materialized_in_child_argv_before_authority() {
-    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap();
+    let directory = app_sources::app_dir("net");
     let manifest = Manifest::from_json(
-        &std::fs::read_to_string(repository.join("apps/net/app.json")).unwrap(),
+        &std::fs::read_to_string(directory.join("app.json")).unwrap(),
     )
     .unwrap();
-    let operation = &manifest.operations["fetch"];
-    let bound =
-        bind_operation_args(operation, &["https://exam\u{ad}ple.com:/path".into()]).unwrap();
+    let tool = crate::apps::mcp_tool_for_command(&manifest, "fetch").unwrap();
+    let supplied = crate::caps::args::bind_supplied_cli_args(
+        &tool.args,
+        &["https://exam\u{ad}ple.com:/path".into()],
+    )
+    .unwrap();
+    let call = manifest
+        .resolve_mcp_tool_call(
+            &tool.name,
+            &supplied,
+            &crate::caps::args::PathContext {
+                home: directory,
+                cwd: None,
+            },
+        )
+        .unwrap();
     assert_eq!(
-        bound.values["url"],
+        call.values["url"],
         serde_json::json!("https://example.com/path")
     );
-    assert_eq!(bound.argv[0], "https://example.com/path");
-    let needs = manifest.resolve_needs("fetch", &bound.values).unwrap();
-    assert_eq!(needs[0][0].scope, Scope::host("example.com:443"));
+    assert_eq!(call.needs[0][0].scope, Scope::host("example.com:443"));
 }
 
 #[test]

@@ -67,7 +67,11 @@ Its independent identity and `$COS_DATA_DIR/kv.json` remain unchanged, with
 locked coherent updates and private atomic commits. List/dump require explicit
 whole-store read authority, while get/set/delete retain distinct exact-key
 grants; see [the compatibility note](../docs/updating.md#app-data-moves-into-per-app-directories).
-Only `net` and `summarize` remain here pending their individual moves.
+The complete `net` HTTP client now lives at
+`clawos-app/capabilities/http/apps/net`. Its two MCP/CLI tools retain their
+existing arguments, bounds and exact grants; `_shared.safe_http`, policy,
+brokered egress and worker authority remain OS-owned. Only `summarize` remains
+here pending its individual move.
 Do not recreate a local copy: OS package assembly consumes the immutable revision in
 [`packaging/apps.lock.json`](../packaging/apps.lock.json). Source relocation
 does not rename installed App identities or grant additional authority.
@@ -115,6 +119,7 @@ does not rename installed App identities or grant additional authority.
 | [`clawos-app/products/files`](https://github.com/xiaoyu-work/clawos-app/tree/main/products/files) | Direct filesystem MCP handlers; authenticated per-call session ids for snapshots |
 | [`clawos-app/capabilities/document-engine`](https://github.com/xiaoyu-work/clawos-app/tree/main/capabilities/document-engine) | Legacy Doc shared-capability client and declared parser dependency; no local source fallback |
 | [`clawos-app/capabilities/storage-sdk`](https://github.com/xiaoyu-work/clawos-app/tree/main/capabilities/storage-sdk) | Independent DB/SQLite and KV/JSON clients, MCP and tests; no local source, state import or SDK/provider copy |
+| [`clawos-app/capabilities/http`](https://github.com/xiaoyu-work/clawos-app/tree/main/capabilities/http) | Net HTTP client and MCP; policy/transport exports and enforcement remain OS-owned |
 | `<id>/test_main.py` | App behavior, validation, and scope tests |
 | `_shared/` | Shared safe filesystem/HTTP/process helpers |
 | `gateway/` | External messaging gateways and shared gateway safety helpers |

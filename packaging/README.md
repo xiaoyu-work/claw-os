@@ -87,8 +87,8 @@ Co-staging never merges conflicting library trees. Agent still owns
 `/usr/lib/cos/apps/doc`, `/usr/lib/cos/python/claw_files`, SDK/runtime and the
 canonical argument module. All six operations, manifest needs/AI declarations,
 outputs, memory identity and user state remain unchanged. The source lock now
-covers 73/75 identities: 24 business products plus two capability groups, with
-61 migrated Agent and 12 desktop identities; native preparation stays product-only.
+covers 74/75 identities: 24 business products plus three capability groups, with
+62 migrated Agent and 12 desktop identities; native preparation stays product-only.
 
 Storage SDK supplies independent `db` and `kv` clients from
 `capabilities/storage-sdk/apps/<id>`, not from the distinct Storage business
@@ -98,7 +98,7 @@ Five MCP/CLI tools retain their exact read/write needs and 1,000-returned-row
 bound. Existing files stay at `$COS_DATA_DIR/db/<name>.db` within the same
 owner/App partition; no KV or Agent-memory state is read, imported or merged.
 No SDK/provider or native source is added to the capability payload. The
-installed Agent package still has 63 identities, including two local Apps;
+installed Agent package still has 63 identities, including one local App;
 Desktop still has 12. Normal signed package updates remain the only installed
 update path; source relocation adds no data transition.
 KV's manifest and MCP-only data implementation install at `/usr/lib/cos/apps/kv`;
@@ -110,7 +110,15 @@ List/dump now require fixed whole-store read authority instead of borrowing
 named-key grants; get/set/delete keep separate exact-key needs and no stored
 grant changes. See [the update contract](../docs/updating.md#app-data-moves-into-per-app-directories).
 
-DB/KV integration fixtures compare the entire staged runtime payload, including
+HTTP supplies `net` from `capabilities/http/apps/net` at the same immutable pin.
+Its original manifest, HTTP implementation and MCP server install at
+`/usr/lib/cos/apps/net`; the OS separately supplies `_shared.safe_http`,
+SDK/runtime, policy, egress enforcement and worker isolation. Existing two
+MCP/CLI contracts, exact endpoint/output grants, size bounds and atomic download
+behavior are unchanged. No provider, user data, additional identity or runtime
+source-fetch/update mechanism moves into this capability group.
+
+DB/KV/Net integration fixtures compare the entire staged runtime payload, including
 bytes, modes and symlinks, with the pinned source's declared staging exclusions.
 They execute the manifest-selected MCP entrypoint over stdio with installed
 OS libraries, rather than importing private App modules or the SDK dispatcher.

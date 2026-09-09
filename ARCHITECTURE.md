@@ -509,8 +509,8 @@ Its declared Files `claw_files` export supplies the same parser in development,
 Doc-only staging and the Agent package. No Files App call or second parser is
 introduced; identical co-staged library payloads are reused and conflicts
 refused. Native preparation stays product-only. Missing or ambiguous declared
-sources never fall back to local OS Apps. This reaches 73/75 source identities:
-24 business product groups plus two capability groups, 61 Agent and 12 desktop
+sources never fall back to local OS Apps. This reaches 74/75 source identities:
+24 business product groups plus three capability groups, 62 Agent and 12 desktop
 identities. Doc's signed schema, six operations, grants, AI budget/safety/origin,
 memory identity and installed state are unchanged.
 
@@ -531,7 +531,14 @@ Get/set/delete retain exact-key read/write/delete authority. List/dump explicitl
 require fixed whole-store read authority, not borrowed named-key grants; see
 [the compatibility note](docs/updating.md#app-data-moves-into-per-app-directories).
 
-DB and KV evolve through their manifest/MCP contracts, public SDK API and
+HTTP owns the complete `net` client at `capabilities/http/apps/net`. The two
+existing MCP/CLI tools keep their request validation, bounded responses,
+atomic download behavior and exact endpoint/output needs. The OS still supplies
+`_shared.safe_http`, SDK/runtime, per-hop host/port authorization, brokered
+transport, sandbox authority and signed installation. No network provider,
+credential store, other App implementation or user state moves with the client.
+
+DB, KV and Net evolve through their manifest/MCP contracts, public SDK API and
 [bundled policy export](cos-runtime/README.md#bundled-client-contract), not
 cross-repository imports of private source. OS core builds do not require an
 App checkout; package composition and integration fixtures deliberately use
@@ -540,7 +547,7 @@ manifest-selected stdio endpoint. Pins establish reproducibility, not complete
 build/release independence: platform source-directory exports, source-package
 staging and OS package publication remain explicit coupling, as described in
 [`packaging/README.md`](packaging/README.md).
-Only `net` and `summarize` have not moved.
+Only `summarize` has not moved.
 
 Cross-repository App contract and worker tests select real declared source by
 the same lock through `core/test/support/app_sources.rs`. CI explicitly prepares

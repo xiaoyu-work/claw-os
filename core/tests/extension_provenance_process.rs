@@ -194,10 +194,14 @@ fn published_doc_signed_fixture_preserves_manifest_and_worker_authority() {
     assert!(launch.bind(&["server.py".into()]).is_err());
 }
 
-fn signed_storage_client(fx: &Fixture, app_id: &str) -> (cos::bridge::AppLaunch, String) {
+fn signed_capability_client(
+    fx: &Fixture,
+    group: &str,
+    app_id: &str,
+) -> (cos::bridge::AppLaunch, String) {
     let directory = app_stage::capability(
         &app_sources::app_dir(app_id),
-        "storage-sdk",
+        group,
         app_id,
         &fx.root.join("stage"),
     );
@@ -238,6 +242,91 @@ fn signed_storage_client(fx: &Fixture, app_id: &str) -> (cos::bridge::AppLaunch,
 }
 
 #[test]
+fn published_net_signed_fixture_preserves_scoped_egress_and_output_authority() {
+    use std::collections::BTreeMap;
+
+    use cos::caps::{Cap, CapSet, Scope, Verb};
+    use cos::worker::derive::{app_session, AppSessionInput, SessionLifetime};
+    use cos::worker::{Endpoint, MountClass, MountMode, NetworkPolicy};
+
+    let fx = Fixture::new("published-net");
+    let (launch, entry) = signed_capability_client(&fx, "http", "net");
+    let directory = launch.dir().to_path_buf();
+    let apps = directory.parent().unwrap();
+    app_stage::shared_python(apps);
+    let binding = launch.bind(std::slice::from_ref(&entry)).unwrap();
+    let data = fx.root.join("owner-data");
+    let output = fx.root.join("downloads/result.bin");
+    fs::create_dir_all(output.parent().unwrap()).unwrap();
+    let caps = CapSet::from_caps([
+        Cap::new(Verb::NET_DIAL, Scope::host("example.test:8080")),
+        Cap::new(Verb::FS_WRITE, Scope::path(output.to_string_lossy())),
+    ]);
+    let mounts = cos::worker::derive::authorize_granted_path_mounts(&caps).unwrap();
+    let derive = |lifetime| {
+        app_session(AppSessionInput {
+            app_id: launch.app_id(),
+            app_dir: launch.dir(),
+            program: "/usr/bin/python3".into(),
+            argv: vec![directory.join(&entry).to_string_lossy().into_owned()],
+            caps: &caps,
+            authorized_mounts: &mounts,
+            lifetime,
+            session_id: "net-fixture",
+            data_dir: data.to_str().unwrap(),
+            apps_dir: apps.to_str().unwrap(),
+            extra_env: BTreeMap::from([(
+                "COS_APP_MANIFEST".into(),
+                directory.join("app.json").to_string_lossy().into_owned(),
+            )]),
+            package_identity: binding.dir_identity(),
+            pinned_entries: binding.entries(),
+            transports: &[],
+        })
+    };
+    assert!(derive(SessionLifetime::Reusable).is_err());
+    let worker = derive(SessionLifetime::SingleCall).unwrap();
+    assert_eq!(worker.env["COS_APP_ID"], "net");
+    assert_eq!(
+        worker.env["COS_DATA_DIR"],
+        data.join("apps/net").to_str().unwrap()
+    );
+    assert_eq!(worker.env["COS_EGRESS_ENDPOINTS"], "example.test:8080");
+    assert_eq!(
+        worker.network,
+        NetworkPolicy::Brokered {
+            endpoints: vec![Endpoint::new("example.test", 8080)],
+        }
+    );
+    let output_mounts = worker
+        .mounts
+        .iter()
+        .filter(|mount| mount.class == MountClass::Output)
+        .collect::<Vec<_>>();
+    assert_eq!(output_mounts.len(), 1);
+    assert_eq!(output_mounts[0].source, mounts[0].source);
+    assert_eq!(
+        output_mounts[0].expect_identity,
+        Some((mounts[0].device, mounts[0].inode))
+    );
+    assert_eq!(output_mounts[0].mode, MountMode::ReadWrite);
+    assert!(worker
+        .mounts
+        .iter()
+        .filter(|mount| mount.class == MountClass::Package)
+        .all(|mount| mount.mode == MountMode::ReadOnly));
+    assert!(worker
+        .mounts
+        .iter()
+        .any(|mount| mount.source == apps.join("_shared") && mount.mode == MountMode::ReadOnly));
+    write(
+        &directory.join(&entry),
+        "raise RuntimeError('modified fixture')\n",
+    );
+    assert!(launch.bind(std::slice::from_ref(&entry)).is_err());
+}
+
+#[test]
 fn published_db_signed_fixture_preserves_worker_identity_and_existing_namespace() {
     use std::collections::BTreeMap;
     use std::os::unix::fs::MetadataExt;
@@ -246,7 +335,7 @@ fn published_db_signed_fixture_preserves_worker_identity_and_existing_namespace(
     use cos::worker::derive::{app_session, AppSessionInput, SessionLifetime};
 
     let fx = Fixture::new("published-db");
-    let (launch, entry) = signed_storage_client(&fx, "db");
+    let (launch, entry) = signed_capability_client(&fx, "storage-sdk", "db");
     let directory = launch.dir().to_path_buf();
     let apps = directory.parent().unwrap().to_path_buf();
     let binding = launch.bind(std::slice::from_ref(&entry)).unwrap();
@@ -353,7 +442,7 @@ fn published_kv_signed_fixture_preserves_independent_json_namespace_and_worker_a
     use cos::worker::derive::{app_session, AppSessionInput, SessionLifetime};
 
     let fx = Fixture::new("published-kv");
-    let (launch, entry) = signed_storage_client(&fx, "kv");
+    let (launch, entry) = signed_capability_client(&fx, "storage-sdk", "kv");
     let directory = launch.dir().to_path_buf();
     let apps = directory.parent().unwrap();
     let shared = app_stage::shared_python(apps);

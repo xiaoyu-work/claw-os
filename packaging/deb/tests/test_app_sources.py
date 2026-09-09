@@ -127,7 +127,7 @@ def test_duplicate_group_name_across_kinds_is_rejected(locked_source):
 
 
 @pytest.fixture(params=[
-    ("document-engine", "doc"), ("storage-sdk", "db"), ("storage-sdk", "kv"),
+    ("document-engine", "doc"), ("storage-sdk", "db"), ("storage-sdk", "kv"), ("http", "net"),
 ])
 def capability_source(locked_source, request):
     root, lock = locked_source
@@ -369,14 +369,14 @@ def _app_payload(directory, *, source=False):
 
 def test_published_capability_pin_stages_all_partitions_and_real_agent_runtime(tmp_path):
     lock = sources.read_lock()
-    assert lock["capabilities"] == ["document-engine", "storage-sdk"]
+    assert lock["capabilities"] == ["document-engine", "storage-sdk", "http"]
     assert len(lock["products"]) == 24
-    assert len(lock["apps"]) == 73
+    assert len(lock["apps"]) == 74
     source = sources.prepare_sources(lock)
     expected = set(lock["apps"])
     desktop = expected & set(sources.desktop_apps())
     assert len(desktop) == 12
-    assert len(expected - desktop) == 61
+    assert len(expected - desktop) == 62
     assert set(sources.stage_products(tmp_path / "all")) == expected
     assert set(sources.stage_products(tmp_path / "agent", "agent")) == expected - desktop
     assert set(sources.stage_products(tmp_path / "desktop", "desktop")) == desktop
@@ -384,10 +384,12 @@ def test_published_capability_pin_stages_all_partitions_and_real_agent_runtime(t
     assert sources.app_path("doc") == source / "capabilities/document-engine/apps/doc"
     assert sources.app_path("db") == source / "capabilities/storage-sdk/apps/db"
     assert sources.app_path("kv") == source / "capabilities/storage-sdk/apps/kv"
+    assert sources.app_path("net") == source / "capabilities/http/apps/net"
     assert not (ROOT / "apps/doc").exists()
     assert not (ROOT / "apps/db").exists()
     assert not (ROOT / "apps/kv").exists()
-    for app_id in ("db", "kv"):
+    assert not (ROOT / "apps/net").exists()
+    for app_id in ("db", "kv", "net"):
         assert app_id not in desktop
         assert not (tmp_path / "desktop/usr/lib/cos/apps" / app_id).exists()
 
@@ -407,12 +409,12 @@ def test_published_capability_pin_stages_all_partitions_and_real_agent_runtime(t
         "AGENT_STAGE": str(staged),
     })
     for app_id, group in (
-        ("doc", "document-engine"), ("db", "storage-sdk"), ("kv", "storage-sdk"),
+        ("doc", "document-engine"), ("db", "storage-sdk"), ("kv", "storage-sdk"), ("net", "http"),
     ):
         original = source / "capabilities" / group / "apps" / app_id
         for partition_name in ("all", "agent", "agent-package"):
             installed = tmp_path / partition_name / "usr/lib/cos/apps" / app_id
-            if app_id in {"db", "kv"}:
+            if app_id in {"db", "kv", "net"}:
                 assert _app_payload(installed) == _app_payload(original, source=True)
             else:
                 assert {path.name for path in installed.iterdir()} == {"app.json", "main.py", "server.py"}
@@ -425,7 +427,7 @@ def test_published_capability_pin_stages_all_partitions_and_real_agent_runtime(t
     assert len(manifests) == 63
     assert {json.loads(path.read_text())["id"] for path in manifests} == (
         expected - desktop
-    ) | {"net", "summarize"}
+    ) | {"summarize"}
     document = tmp_path / "synthetic.txt"
     document.write_text("immutable capability in the real Agent composition")
     policy = tmp_path / "cos"
@@ -447,6 +449,37 @@ def test_published_capability_pin_stages_all_partitions_and_real_agent_runtime(t
     payload = json.loads(result.stdout)
     assert payload["library"] == str(parser)
     assert payload["result"]["content"] == document.read_text()
+
+    net = staged / "usr/lib/cos/apps/net"
+    net_manifest = json.loads((net / "app.json").read_text())
+    (net / net_manifest["mcp"]["entry"]).rename(net / "http_mcp.py")
+    net_manifest["mcp"]["entry"] = "http_mcp.py"
+    (net / "app.json").write_text(json.dumps(net_manifest))
+    denied_policy = tmp_path / "deny-cos"
+    denied_policy.write_text(
+        '#!/bin/sh\n'
+        'test "$1:$2:$3" = "--wire=1:__policy:check" || exit 99\n'
+        'printf \'%s\\n\' \'{"ok":true,"wire_version":1,"data":{"decision":"deny"}}\'\n'
+    )
+    denied_policy.chmod(0o755)
+    output = tmp_path / "not-downloaded.bin"
+    with mcp_process(net, env={
+        "PATH": os.defpath,
+        "PYTHONPATH": os.pathsep.join([str(python), str(staged / "usr/lib/cos/apps")]),
+        "COS_DATA_DIR": str(tmp_path / "net-data"), "CLAW_COS_BIN": str(denied_policy),
+    }) as request:
+        catalog = request("tools/list", {})
+        assert {tool["name"] for tool in catalog["tools"]} == {"net.fetch", "net.download"}
+        for name, arguments in [
+            ("fetch", {"url": "http://example.test:8080/resource"}),
+            ("download", {"url": "http://example.test:8080/resource", "output": str(output)}),
+        ]:
+            result = request("tools/call", authenticated_mcp_params({
+                "name": f"net.{name}", "arguments": arguments,
+            }))
+            assert result["isError"] is True
+            assert "PermissionDenied" in result["content"][0]["text"]
+    assert not output.exists()
 
     data = tmp_path / "owner-data/apps/db"
     database = data / "db/inventory.db"
@@ -879,9 +912,9 @@ def test_native_notifications_share_exported_libraries_and_leave_legacy_state_se
     assert "python3 ../../scripts/app_sources.py --native" in panel_just
     status = (ROOT / "docs/app-product-redesign.md").read_text()
     assert "clawos-app/products/notifications" in status
-    assert "**73 of the original 75 identities**" in status
+    assert "**74 of the original 75 identities**" in status
     assert "**24 business product groups**" in status
-    assert "61 Agent-package identities and 12 desktop identities" in status
+    assert "62 Agent-package identities and 12 desktop identities" in status
     assert "products/notifications" in (ROOT / "desktop/PROVENANCE.md").read_text()
     assert "just notifications-build" in (ROOT / "desktop/README.md").read_text()
 
@@ -889,11 +922,11 @@ def test_native_notifications_share_exported_libraries_and_leave_legacy_state_se
 def test_notify_is_agent_owned_and_preserves_history_without_an_installer_transition():
     lock = sources.read_lock()
     desktop = set(sources.desktop_apps())
-    assert len(lock["apps"]) == 73
+    assert len(lock["apps"]) == 74
     assert len(lock["products"]) == 24
-    assert lock["capabilities"] == ["document-engine", "storage-sdk"]
+    assert lock["capabilities"] == ["document-engine", "storage-sdk", "http"]
     assert len(set(lock["apps"]) & desktop) == 12
-    assert len(set(lock["apps"]) - desktop) == 61
+    assert len(set(lock["apps"]) - desktop) == 62
     assert "notify" not in desktop
     assert "cosmic-notifications" in desktop
     assert not (ROOT / "apps/notify").exists()
@@ -904,7 +937,7 @@ def test_notify_is_agent_owned_and_preserves_history_without_an_installer_transi
     assert "not part of the new service list" in contract
     assert "data.inbox.read" in contract
     assert "warning severity" in contract
-    assert "61 migrated Agent identities plus 12 desktop" in (ROOT / "packaging/MODULE.md").read_text()
+    assert "62 migrated Agent identities plus 12 desktop" in (ROOT / "packaging/MODULE.md").read_text()
 
 
 @pytest.mark.parametrize("export", [

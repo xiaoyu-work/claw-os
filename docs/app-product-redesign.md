@@ -23,22 +23,23 @@ There are no sibling-checkout dependencies or runtime download fallbacks.
 Paired commits describe source cutover, not a permanent requirement for every
 feature. Compatible App business changes should not require OS implementation
 edits, and OS refactors behind SDK/runtime/protocol exports should not require
-App rewrites. DB/KV integration exercises manifest-selected MCP stdio endpoints
+App rewrites. DB/KV/Net integration exercises manifest-selected MCP stdio endpoints
 and complete staged payloads instead of private SDK/App internals.
 This does not establish independent distribution: current library source
 exports, bundled-runtime compatibility and App-pin/OS-package delivery remain
 explicit contracts and release coupling; see
 [`packaging/README.md`](../packaging/README.md).
 
-Source migration now covers **73 of the original 75 identities** across
-**24 business product groups** plus **2 shared-capability source groups**:
-61 Agent-package identities and 12 desktop identities.
+Source migration now covers **74 of the original 75 identities** across
+**24 business product groups** plus **3 shared-capability source groups**:
+62 Agent-package identities and 12 desktop identities.
 This count includes native Notifications and `notify`, not their OS service
 or shared libraries. `doc` now belongs to the explicitly declared Document
 Engine capability-client group, not a new Documents business product. `db` and
-`kv` belong to Storage SDK, separate from the Storage business product.
-The two remaining source identities are `net` and `summarize`;
-their eventual moves remain shared-capability groups, not new business products.
+`kv` belong to Storage SDK, separate from the Storage business product. `net`
+belongs to the HTTP client group, with transport and authority still OS-owned.
+The remaining source identity is `summarize`; its eventual move remains a
+shared-capability group, not a new business product.
 Source ownership does not complete M2, backend/state consolidation, identity
 and consent cutovers, or visual/installed-image acceptance.
 
@@ -60,6 +61,7 @@ and consent cutovers, or visual/installed-image acceptance.
 | `doc` | Complete legacy facade, unchanged manifest/server and tests moved to `clawos-app/capabilities/document-engine/apps/doc`, explicitly a shared-capability client. Its declared dependency consumes Files' single `claw_files` parser export in tests and Agent/Doc-only staging without calling Files Apps. Six operations, CLI bindings, outputs, existing grants, AI safety/budget/origin and `doc` memory identity remain unchanged; no user state moves |
 | `db` | Complete manifest, SQLite implementation, MCP server and tests moved to `clawos-app/capabilities/storage-sdk/apps/db`, explicitly a shared-capability client, not a new business product or privileged SDK/provider. Five MCP/CLI tools, exact grants, SQL/name boundaries, single-statement commits, 1,000-returned-row bound and `$COS_DATA_DIR/db/<name>.db` remain unchanged. No App calls, KV/Agent-memory merge, user-data import or new state transition |
 | `kv` | Complete MCP-only manifest, server/data implementation and `test_server.py` moved to `clawos-app/capabilities/storage-sdk/apps/kv`, without inventing a main module or copying OS SDK/provider code. Five tool/CLI shapes and independent `$COS_DATA_DIR/kv.json` persist; cache invalidation, locked read-modify-replace, failed-write handling and private atomic writes are corrected. List/dump explicitly require whole-store read rather than borrowed named-key grants; exact-key get/set/delete and stored grants remain separate. No DB/Storage/Agent-memory merge, App call or user-data transition |
+| `net` | Complete unchanged HTTP implementation, manifest and typed MCP server moved to `clawos-app/capabilities/http/apps/net` with existing unit tests and staged public MCP/CONNECT contracts. Two tool/CLI shapes, exact host/port and output grants, request/response/download bounds and failure behavior remain unchanged. `_shared.safe_http`, SDK/runtime and egress enforcement stay OS-owned; no other App calls, copied providers, new state or runtime source downloads |
 | `docs` | Moved to `clawos-app/products/files/apps/docs`; four Recoll-backed tools, owner index state and scopes preserved; background indexing remains OS-owned |
 | `search` | Moved to `clawos-app/products/browser/apps/search`; explicit provider choice, two MCP tools and exact credential/network scopes preserved |
 | `web` | Moved to `clawos-app/products/browser/apps/web`; existing five-operation CLI/MCP adapter and AI gate preserved; reusable `cos-browser` engine remains OS-owned |
@@ -112,7 +114,7 @@ and consent cutovers, or visual/installed-image acceptance.
 | `gateway-pushover` | Source moved to `clawos-app/products/notification-delivery/apps/gateway/pushover`; exact API host, application/user keys, recipient flag, metadata and emergency constraints preserved; Python argument case moved, while receipt acknowledgement and durable OS-service integration remain separate |
 | `gateway-webhook` | Source moved to `clawos-app/products/notification-delivery/apps/gateway/webhook`; JSON/raw payload, target flag/default lookup, auth precedence and independent HMAC preserved with existing grants and shared egress; argument/egress regressions relocated and Rust fixture pinned; all three delivery source identities moved, not durable-service integration |
 | `gateway-homeassistant` | Source moved to `clawos-app/products/home-integration/apps/gateway/homeassistant`; REST send/call/status and grants preserved, canonical list parsing fixed for flag-shaped text/options; external server, device state and automation engine not imported, and private endpoint access is not enabled |
-| Remaining two identities listed above | Pending their individual paired source migrations |
+| Remaining identity listed above | Pending its paired source migration |
 
 Moving source does not complete a product redesign milestone or merge legacy
 identities. APT remains the installed update path until a separate, complete
@@ -226,7 +228,7 @@ runtime capability, grant union, identity deprecation or backend/data redesign.
 | --- | --- | --- |
 | Document engine | `doc` | Source moved to the shared-capability client group; it consumes Files' declared parsing/conversion library. Existing Doc AI remains under the `doc` identity; product-specific AI stays with its consuming product. |
 | Storage SDK | `db`, `kv` | Both clients have moved to `capabilities/storage-sdk`. Existing owner/App SQLite and JSON namespaces and grants stay independent from one another, the Storage business product and Agent memory; no privileged SDK/provider is copied. |
-| HTTP | `net` | Controlled network interface with exact destination authority. |
+| HTTP | `net` | Source moved to `capabilities/http`; the unchanged client consumes the OS shared transport and policy exports, with exact per-hop destination and output authority. |
 | AI gate/helpers | `summarize` | Shared AI capability used under the consuming product's identity and budget. |
 
 ### Connectors

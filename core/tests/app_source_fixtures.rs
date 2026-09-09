@@ -375,6 +375,108 @@ fn published_db_fixture_preserves_mcp_cli_arguments_and_exact_database_scopes() 
 }
 
 #[test]
+fn published_net_fixture_preserves_mcp_bindings_and_exact_destination_scopes() {
+    use cos::caps::{Cap, Scope, Verb};
+
+    let directory = app_sources::app_dir("net");
+    assert!(directory.ends_with("capabilities/http/apps/net"));
+    let manifest = cos::caps::manifest::Manifest::from_json(
+        &std::fs::read_to_string(directory.join("app.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(cos::apps::is_mcp_only_cli(&manifest));
+    let service = manifest.mcp.as_ref().unwrap();
+    assert!(service.access.system_agent);
+    assert!(!service.access.external_agents);
+    assert_eq!(
+        service
+            .tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>(),
+        ["net.fetch", "net.download"],
+    );
+    let entry = service
+        .entry
+        .as_deref()
+        .unwrap_or_else(|| manifest.runtime.default_mcp_entry());
+    assert!(directory.join(entry).is_file());
+    let paths = cos::caps::args::PathContext {
+        home: directory.clone(),
+        cwd: None,
+    };
+    let fetch = cos::apps::mcp_tool_for_command(&manifest, "fetch").unwrap();
+    let supplied = cos::caps::args::bind_supplied_cli_args(
+        &fetch.args,
+        &[
+            "https://exam\u{ad}ple.test:/resource".into(),
+            "--header".into(),
+            "X-First: one".into(),
+            "--header=X-Second: two".into(),
+        ],
+    )
+    .unwrap();
+    let call = manifest
+        .resolve_mcp_tool_call(&fetch.name, &supplied, &paths)
+        .unwrap();
+    assert_eq!(call.values["url"], "https://example.test/resource");
+    assert_eq!(
+        call.values["header"],
+        json!(["X-First: one", "X-Second: two"])
+    );
+    assert_eq!(call.values["method"], "GET");
+    assert_eq!(call.values["timeout"], 30);
+    assert_eq!(
+        call.needs.into_iter().flatten().collect::<Vec<_>>(),
+        [Cap::new(Verb::NET_DIAL, Scope::host("example.test:443"))]
+    );
+    let output = tempfile::tempdir().unwrap();
+    let destination = output.path().join("download.bin");
+    let download = cos::apps::mcp_tool_for_command(&manifest, "download").unwrap();
+    let schema = cos::apps::tool_schema(download);
+    assert_eq!(schema["parameters"][1]["required"], true);
+    assert_eq!(schema["parameters"][1]["binding"], "positional");
+    assert_eq!(schema["stdin"], false);
+    let call = manifest
+        .resolve_mcp_tool_call(
+            &download.name,
+            &serde_json::from_value(json!({
+                "url": "http://example.test:8080/resource", "output": destination,
+            }))
+            .unwrap(),
+            &paths,
+        )
+        .unwrap();
+    assert_eq!(
+        call.needs.into_iter().flatten().collect::<Vec<_>>(),
+        [
+            Cap::new(Verb::NET_DIAL, Scope::host("example.test:8080")),
+            Cap::new(Verb::FS_WRITE, Scope::path(destination.to_string_lossy())),
+        ]
+    );
+    assert!(manifest
+        .resolve_mcp_tool_call(
+            &download.name,
+            &serde_json::from_value(json!({
+                "url": "https://example.test/resource",
+            }))
+            .unwrap(),
+            &paths
+        )
+        .is_err());
+    assert!(manifest
+        .resolve_mcp_tool_call(
+            &fetch.name,
+            &serde_json::from_value(json!({
+                "url": "https://example.test/resource", "method": "PATCH",
+            }))
+            .unwrap(),
+            &paths
+        )
+        .is_err());
+}
+
+#[test]
 fn published_kv_fixture_preserves_cli_defaults_and_separate_key_and_store_scopes() {
     use cos::caps::manifest::ScopeBinding;
     use cos::caps::{Cap, Scope, Verb};

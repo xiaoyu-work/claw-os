@@ -65,7 +65,8 @@ migrated product inputs from the repository root with
 inputs fail with an actionable diagnostic; tests do not download them.
 The helper resolves the lock's distinct `products` and optional `capabilities`
 roots, requires matching source-kind metadata and exact identity/layout, and
-never substitutes local `apps/doc`, `apps/db` or `apps/kv` for migrated clients.
+never substitutes local `apps/doc`, `apps/db`, `apps/kv` or `apps/net` for
+migrated clients.
 `tests/app_source_fixtures.rs` covers both kinds, missing/duplicate/escaping
 sources and the published Doc/DB/KV manifests, including exact MCP/CLI arguments,
 defaults and separate key/database/whole-store scopes. Signed fixtures in

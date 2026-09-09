@@ -106,8 +106,8 @@ Cargo never downloads product fixtures or substitutes local App source for a
 declared external App. The lock's optional `capabilities` list resolves only
 `capabilities/<name>` with `kind: "shared-capability-client"`; `products` and
 native preparation retain business-product ownership. Never recreate a local
-`apps/doc`, `apps/db` or `apps/kv` fallback or count a shared-capability group as
-a business product. Cross-repository runtime fixtures stage complete payloads
+`apps/doc`, `apps/db`, `apps/kv` or `apps/net` fallback or count a shared-capability
+group as a business product. Cross-repository runtime fixtures stage complete payloads
 and invoke manifest-selected entrypoints over public MCP, not private App modules.
 
 Rust unit-test bodies live outside production source trees under each crate's

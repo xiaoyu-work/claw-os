@@ -118,8 +118,8 @@ or provider source is packaged. Native history/settings and legacy `notify`
 JSON are not migrated. Binary-only hot-swap is refused.
 The `notify` Python source/descriptor/client comes from the same product pin
 but stays exclusively in Agent. It uses that package's SDK/service, not the
-native App. The partition is 61 migrated Agent identities plus 12 desktop
-identities; all 73 belong to 24 business product groups plus two explicitly
+native App. The partition is 62 migrated Agent identities plus 12 desktop
+identities; all 74 belong to 24 business product groups plus three explicitly
 shared-capability source groups. Historical JSON is preserved in its
 old namespace and excluded from new service lists, never copied into payloads
 or automatically imported at installation/launch.
@@ -145,12 +145,19 @@ namespace are unchanged. KV preserves `$COS_DATA_DIR/kv.json` and exact-key
 read/write/delete grants; its list/dump authority correction and persistence
 fixes are documented in [updating](../docs/updating.md#app-data-moves-into-per-app-directories).
 No App data is imported or joined with Agent memory.
-Agent still contains 63 total identities (61 external and two local);
+Agent still contains 63 total identities (62 external and one local);
 Desktop still contains 12. The real package-block fixture checks exact identities
 and full payload bytes/modes/symlinks, then runs DB/KV manifest-selected MCP over
 stdio through installed SDK/runtime and OS helper exports. It covers KV restart,
 multiple writers, private atomic replacement, corrupt-state errors and namespace
 isolation without importing App internals or fixing a list of private filenames.
+
+HTTP supplies `net` from `capabilities/http/apps/net` to Agent only. The full
+payload is compared with its immutable source, and the real Agent build-block
+fixture invokes the manifest-selected MCP entrypoint through installed OS
+libraries. The unchanged client keeps both command shapes and exact needs.
+The OS retains `_shared.safe_http`, policy, egress enforcement and signing;
+no provider, SDK, user state or independent updater enters the App payload.
 
 ## Tests
 

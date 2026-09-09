@@ -61,14 +61,12 @@ fn fs_mcp_tools_declare_their_optional_path_defaults() {
 
 #[test]
 fn bundled_apps_declare_their_optional_path_defaults() {
-    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap();
     let net = Manifest::from_json(
-        &std::fs::read_to_string(repository.join("apps/net/app.json")).unwrap(),
+        &std::fs::read_to_string(app_sources::app_dir("net").join("app.json")).unwrap(),
     )
     .unwrap();
-    let output = &net.operations["download"].args[1];
+    assert!(is_mcp_only_cli(&net));
+    let output = &mcp_tool_for_command(&net, "download").unwrap().args[1];
     assert!(output.required);
     assert_eq!(
         output.effective_binding(),
@@ -348,7 +346,7 @@ fn bundled_schema_exposes_repeatables_choices_and_stdin() {
     };
 
     let net = load("net");
-    let schema = operation_schema(&net.operations["fetch"]);
+    let schema = tool_schema(mcp_tool_for_command(&net, "fetch").unwrap());
     let header = schema["parameters"]
         .as_array()
         .unwrap()
@@ -358,7 +356,7 @@ fn bundled_schema_exposes_repeatables_choices_and_stdin() {
     assert_eq!(header["type"], "array");
     assert_eq!(header["items"]["type"], "string");
     assert_eq!(header["repeatable"], true);
-    let download = operation_schema(&net.operations["download"]);
+    let download = tool_schema(mcp_tool_for_command(&net, "download").unwrap());
     assert_eq!(download["parameters"][1]["required"], true);
     assert_eq!(download["parameters"][1]["binding"], "positional");
 

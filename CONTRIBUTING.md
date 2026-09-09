@@ -174,11 +174,14 @@ and their existing owner/App SQLite and JSON namespaces. No migrated source
 is loaded from a local OS copy. KV has only its manifest-selected MCP entrypoint,
 not a `main.py`; runtime fixtures use public stdio calls and complete staged
 payloads. See [the KV compatibility note](docs/updating.md#app-data-moves-into-per-app-directories).
+`net` is owned by the HTTP capability group. Its two MCP/CLI tools consume the
+OS policy/transport exports; contracts use the public MCP entrypoint rather than
+legacy operation schemas or private client modules.
 
 ```bash
 python3 scripts/app_sources.py
 
-# Validate explicit source kinds and the published Doc/DB/KV fixtures.
+# Validate explicit source kinds and the published Doc/DB/KV/Net fixtures.
 cargo test -p cos --test app_source_fixtures -- --test-threads=1
 
 # Core tests share process-global environment variables.
