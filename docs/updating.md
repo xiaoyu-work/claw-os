@@ -27,6 +27,10 @@ refused rather than redirected to another player. Missing or ambiguous
 instances are explicit errors. Accepted playback commands are not reversible
 by cancellation, but discovery, dispatch authorization and execution are
 deadline-bounded. No media, configuration or state is migrated.
+The complete native source and resources now come from the immutable Media
+Player product pin. Desktop retains its binary/descriptor/resources and
+depends on Agent's versioned adapter. Update the signed manifest with the
+binary; binary-only hot-swap cannot provide the new grants and is refused.
 
 Run these commands inside the installed Claw OS system:
 

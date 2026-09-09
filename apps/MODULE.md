@@ -37,7 +37,12 @@ Product sources are moving individually to
 the Browser extension/Native Host, Mail UI/native source and complete Calendar/Clipboard/Widget Rail panel sources
 are owned there already. Complete native Launcher, Editor and Files sources
 and descriptors are external too, as are complete native Terminal, Store and
-Settings and Capture. Capture preserves `cosmic-screenshot`, its complete
+Settings, Capture and Media Player. Media Player preserves `cosmic-player`,
+its complete original native UI/MPRIS/resources and independent renderer
+graph. Seven MCP tools operate the same live native state through an
+owner/executable-bound OS adapter with separate observation/control grants,
+no worker bus, no synthetic cache and no other-player fallback.
+Capture preserves `cosmic-screenshot`, its complete
 native portal client/resources and original build; non-interactive CLI/MCP
 share the OS screenshot service under separate screen/exact-output grants,
 without a worker session bus or another App call. Settings preserves its separate page-discovery/fixed-launch identity,

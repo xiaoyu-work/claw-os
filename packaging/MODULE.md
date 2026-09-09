@@ -101,6 +101,13 @@ dependency, not an App identity or a package-version lockstep. The provider
 owns bounded owner-session capture and non-overwriting private output; the
 native worker no longer holds the session bus. Screenshots/configuration and
 the shared interactive portal are not copied into the product or packages.
+Media Player's full native UI/MPRIS/resources and original renderer also follow
+the immutable App pin. Its descriptor and executable stay desktop-owned;
+`claw-os-media-player-v1` is an additional Desktop-to-Agent service dependency.
+The provider controls only the authenticated owner's installed Player and
+reads its live state under separate exact grants; no worker bus is granted.
+Source/partition tests cover the generated native path, versioned service and
+refusal of unsafe binary-only hot-swap.
 App partition accounting includes nested gateway manifests. Shared gateway
 libraries remain OS-owned, and the canonical argument module is installed in
 `/usr/lib/cos/python` for the packaged legacy App entrypoints.

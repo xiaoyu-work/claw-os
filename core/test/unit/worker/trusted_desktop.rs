@@ -31,9 +31,9 @@ fn every_fixed_row_names_exactly_its_system_program() {
 }
 
 #[test]
-fn only_the_two_bus_rows_carry_a_transport() {
+fn only_the_notification_row_carries_a_transport() {
     // Naming a system program and holding the session bus are separate
-    // grants. Seven of the nine native Apps get the first and not the
+    // grants. Eight of the nine native Apps get the first and not the
     // second, and their launches stay ordinary hostile MCP servers.
     let with_bus: Vec<&str> = ALLOWLIST
         .iter()
@@ -42,11 +42,11 @@ fn only_the_two_bus_rows_carry_a_transport() {
         .collect();
     assert_eq!(
         with_bus,
-        vec!["cosmic-player", "cosmic-notifications"]
+        vec!["cosmic-notifications"]
     );
     for row in ALLOWLIST {
         match row.app_id {
-            "cosmic-player" | "cosmic-notifications" => assert_eq!(
+            "cosmic-notifications" => assert_eq!(
                 row.transports,
                 &[Transport::SessionBus],
                 "row `{}` grants more than the session bus",
@@ -344,7 +344,6 @@ fn a_socket_swapped_after_resolution_is_a_different_inode() {
     // Recreate the socket at the same path. The provider pins by
     // `(dev, ino)`, so the launch it was resolved for can no longer
     // bind it — this is the fact that makes the pin meaningful.
-    drop(listener);
     std::fs::remove_file(&bus).unwrap();
     let _second_listener = std::os::unix::net::UnixListener::bind(&bus).expect("second bus");
     let second = verify_bus_socket(&bus, &dir, uid).expect("resolve again");
@@ -353,6 +352,9 @@ fn a_socket_swapped_after_resolution_is_a_different_inode() {
         "a replaced socket kept the same identity"
     );
 
+    // Keep the unlinked object live until comparison: an inode may otherwise
+    // be immediately recycled, which does not model two distinct live sockets.
+    drop(listener);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

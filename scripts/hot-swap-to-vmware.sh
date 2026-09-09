@@ -14,6 +14,7 @@
 #   cosmic-edit            — build/native-apps/cosmic-edit, target/release/cosmic-edit
 #   cosmic-term            — build/native-apps/cosmic-term, target/release/cosmic-term
 #   cosmic-initial-setup   — desktop/initial-setup, target/release/cosmic-initial-setup
+#   cosmic-player          — refused: update its paired signed Agent/Desktop packages
 #
 # Options:
 #   --no-build      Skip cargo build; use whatever is already in target/release
@@ -66,6 +67,10 @@ done
 # target → "<cargo_dir>|<binary>|<install_path>"
 target_spec() {
   case "$1" in
+    cosmic-player)
+      echo "Media Player requires its signed manifest and claw-os-media-player-v1; update paired Agent/Desktop packages, not only the binary." >&2
+      return 1
+      ;;
     cos)                   echo ".|cos|/usr/bin/cos" ;;
     cos-agent-ui)          echo "desktop/agent|cos-agent-ui|/usr/bin/cos-agent-ui" ;;
     cos-agent-bridge)      echo "desktop/agent|cos-agent-bridge|/usr/bin/cos-agent-bridge" ;;

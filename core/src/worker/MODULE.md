@@ -53,7 +53,7 @@ and a root-owned executed artifact.
 | --- | --- |
 | `policy.rs` | `LaunchPolicy`, tiers, mounts, limits, digest, audit facts |
 | `derive.rs` | Trusted derivation from manifest/caps/runtime |
-| `trusted_desktop.rs` | Fixed vendor table of native Desktop App ids, their system programs, and the few that also need the session bus |
+| `trusted_desktop.rs` | Fixed vendor table of native Desktop App ids/programs; only the notification row also receives the session bus |
 | `migrate.rs` | One-time move of legacy App state into its partition |
 | `provider.rs` | `WorkerSandbox` seam, availability, fail-closed `prepare` |
 | `linux.rs` | bubblewrap argv, `pre_exec`, rlimits, identity |
@@ -66,6 +66,13 @@ and a root-owned executed artifact.
 | `audit.rs` | Typed, path-free and secret-free launch records |
 
 ## Policy derivation
+
+Media Player remains a normal hostile MCP worker, with no session bus or
+GUI transport. Its exact named observation/control grants only admit the
+typed OS media route; the owner/App-bound provider rechecks them at dispatch.
+The real native fixture in `clawd::media_player` exercises derived strict
+policy, this module's actual private relay, typed authority and live native
+MPRIS state without touching the user's session.
 
 Mounts come from the capabilities the authority already granted:
 

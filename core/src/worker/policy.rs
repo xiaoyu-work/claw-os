@@ -50,8 +50,9 @@ pub enum TrustTier {
     /// operation worker must never receive.
     DesktopSurface,
     /// A vendor-shipped App session server that cannot do its job
-    /// without one exact desktop transport — the session bus for MPRIS,
-    /// the screenshot portal, or `org.freedesktop.Notifications`.
+    /// without one exact desktop transport — currently the session bus
+    /// for `org.freedesktop.Notifications`. Player and Capture use typed
+    /// OS services instead and receive no desktop transport.
     ///
     /// Sandboxed exactly like [`TrustTier::McpServer`]: private
     /// namespaces, the strict syscall filter, a resource governor, no

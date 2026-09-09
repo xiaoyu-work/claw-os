@@ -13,7 +13,9 @@ import pytest
 ROOT = Path(__file__).resolve().parents[3]
 
 
-@pytest.mark.parametrize("service", ["claw-os-app-permissions-v1", "claw-os-capture-v1"])
+@pytest.mark.parametrize("service", [
+    "claw-os-app-permissions-v1", "claw-os-capture-v1", "claw-os-media-player-v1",
+])
 def test_brokered_desktop_service_is_an_installed_dependency(service):
     agent = (ROOT / "packaging/deb/claw-os-agent/control").read_text()
     desktop = (ROOT / "packaging/deb/claw-os-desktop/control").read_text()
@@ -278,6 +280,7 @@ def test_native_manual_image_and_asset_build_paths_agree():
     ("store", "cosmic-store"),
     ("settings", "cosmic-settings"),
     ("capture", "cosmic-screenshot"),
+    ("media-player", "cosmic-player"),
 ])
 def test_external_desktop_app_stays_out_of_agent_package(locked_source, tmp_path, product, app_id):
     root, lock = locked_source
@@ -357,7 +360,7 @@ def test_duplicate_native_exports_are_rejected(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize(("product", "component"), [
     ("launcher", "launcher"), ("editor", "edit"), ("files", "files"), ("terminal", "term"),
-    ("store", "store"), ("settings", "settings"), ("capture", "screenshot"),
+    ("store", "store"), ("settings", "settings"), ("capture", "screenshot"), ("player", "player"),
 ])
 def test_standalone_app_uses_external_source_and_matching_chroot_layout(product, component):
     just = (ROOT / "desktop/justfile").read_text()
@@ -415,4 +418,33 @@ def test_desktop_build_prepares_once_and_propagates_prepared_inputs(tmp_path):
     assert calls.count("store-build") == 1
     assert calls.count("settings-build") == 1
     assert calls.count("capture-build") == 1
+    assert calls.count("player-build") == 1
     assert calls.count("applets/build-release") == 1
+
+
+def test_media_player_is_package_only_for_hot_swap(tmp_path):
+    result = subprocess.run(
+        ["bash", str(ROOT / "scripts/hot-swap-to-vmware.sh"), "--no-build", "cosmic-player"],
+        env={**os.environ, "QCOW": str(tmp_path / "must-not-be-opened.qcow2")},
+        capture_output=True, text=True,
+    )
+    assert result.returncode != 0
+    assert "Media Player requires its signed manifest and claw-os-media-player-v1" in result.stderr
+    assert "qcow2 missing" not in result.stderr
+
+
+def test_native_player_source_status_and_package_identity_are_consistent():
+    lock = sources.read_lock()
+    assert "media-player" in lock["products"]
+    assert lock["apps"].count("cosmic-player") == 1
+    assert "cosmic-player" in sources.desktop_apps()
+    assert not (ROOT / "desktop/player").exists()
+    assert not (ROOT / "apps/cosmic-player").exists()
+    status = (ROOT / "docs/app-product-redesign.md").read_text()
+    assert f"**{len(lock['apps'])} of the original 75 identities**" in status
+    desktop = len(set(lock["apps"]) & set(sources.desktop_apps()))
+    assert f"{len(lock['apps']) - desktop} Agent-package identities and {desktop} desktop identities" in status
+    assert f"**{len(lock['products'])} product groups**" in status
+    assert "clawos-app/products/media-player" in status
+    assert "products/media-player" in (ROOT / "desktop/PROVENANCE.md").read_text()
+    assert "just player-build" in (ROOT / "desktop/README.md").read_text()

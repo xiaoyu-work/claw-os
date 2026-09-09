@@ -811,9 +811,12 @@ dpkg-deb -Znone --root-owner-group --build "$CONTROL_STAGE" "$CONTROL_DEB" >/dev
     || fail "the security epoch must be readable from the built package"
 [ "$(dpkg-deb --field "$CONTROL_DEB" XB-Claw-Os-Abi)" = "$POLICY_ABI" ] \
     || fail "the ABI generation must be readable from the built package"
-[ "$(dpkg-deb --field "$CONTROL_DEB" Provides)" = "claw-os-abi-$POLICY_ABI" ] \
-    || fail "the ABI virtual package must be declared"
-ok "the security epoch and ABI generation survive into the built package"
+for service in "claw-os-abi-$POLICY_ABI" claw-os-app-permissions-v1 \
+    claw-os-capture-v1 claw-os-media-player-v1; do
+    dpkg-deb --field "$CONTROL_DEB" Provides | tr ', ' '\n' | grep -Fxq "$service" \
+        || fail "the $service virtual package must be declared"
+done
+ok "the security epoch, ABI and versioned desktop services survive into the built package"
 
 # ---------------------------------------------------------------------------
 # 15. Signing fails closed.

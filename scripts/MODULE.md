@@ -22,7 +22,7 @@ shared build helpers.
 | `lib/image-identity.sh` | Image user/identity assertions |
 | `lib/git-readonly.sh` | Read-only Git wrapper for privileged builds |
 | `app_sources.py` | Resolve the immutable App repository pin and stage product-owned package assets |
-| `app_sources.py --native` | Validate and refresh product-declared native libraries/assets (Calendar, Clipboard, Widget Rail), standalone Launcher/Editor/Files/Terminal/Store/Capture and nested Settings workspace at stable ignored build paths from the immutable pin |
+| `app_sources.py --native` | Validate and refresh product-declared native libraries/assets (Calendar, Clipboard, Widget Rail), standalone Launcher/Editor/Files/Terminal/Store/Capture/Media Player and nested Settings workspace at stable ignored build paths from the immutable pin |
 
 ## Dependencies
 
@@ -46,3 +46,5 @@ assembly. None of these commands fetches application code at runtime.
 Native preparation validates all declared names and product-local source paths
 before replacement, rejects duplicate exports and only replaces exact declared
 component paths; unrelated build caches are preserved.
+Media Player is refused by the binary-only VMware hot-swap helper: its signed
+manifest and versioned Agent service must advance through paired package updates.

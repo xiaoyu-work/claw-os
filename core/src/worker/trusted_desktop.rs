@@ -8,12 +8,11 @@
 //! those Apps run as ordinary hostile [`McpServer`](super::TrustTier::McpServer)
 //! workers with no desktop transport at all.
 //!
-//! Two of them additionally reach the desktop over the **session
-//! bus**, because their tool surface is a bus call:
+//! One of them additionally reaches the desktop over the **session
+//! bus**, because its tool surface is a bus call:
 //!
 //! | App | What the tool actually does |
 //! | --- | --- |
-//! | `cosmic-player` | `zbus::Connection::session()` → MPRIS2 on the active player |
 //! | `cosmic-notifications` | `zbus::Connection::session()` → `org.freedesktop.Notifications` |
 //!
 //! None of them initialises a compositor connection in MCP mode — each
@@ -26,6 +25,9 @@
 //! Its MCP uses the typed screenshot service, separately requiring screen
 //! and exact-directory write authority. Only the OS provider starts the
 //! bounded owner-session portal client.
+//! Player likewise carries no desktop transport. Its seven MCP tools reach
+//! only the OS's owner/App-bound Media Player adapter, with separate exact
+//! observation and control grants.
 //!
 //! ## This is an expanded TCB, deliberately and narrowly
 //!
@@ -127,7 +129,7 @@ const ALLOWLIST: &[Row] = &[
     Row {
         app_id: "cosmic-player",
         system_program: "/usr/bin/cosmic-player",
-        transports: SESSION_BUS,
+        transports: NO_TRANSPORT,
     },
     Row {
         app_id: "cosmic-screenshot",

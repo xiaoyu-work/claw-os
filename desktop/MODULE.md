@@ -37,6 +37,7 @@ component crates plus Claw-specific agent bridges and applets.
 | [external Store](https://github.com/xiaoyu-work/clawos-app/tree/main/products/store) | Complete native Store UI/MCP/resources and flathub-stats workspace; `just store-build`; OS keeps fixed activation, policy and package transaction authority |
 | [external Settings](https://github.com/xiaoyu-work/clawos-app/tree/main/products/settings) | Complete nested Settings workspace/UI/MCP/resources; `just settings-build`; OS keeps services and fixed activation with the original separate grant |
 | [external Capture](https://github.com/xiaoyu-work/clawos-app/tree/main/products/capture) | Complete native portal client/MCP/resources; `just capture-build`; OS retains the shared interactive portal, session/capture authority and durable output |
+| [external Media Player](https://github.com/xiaoyu-work/clawos-app/tree/main/products/media-player) | Complete native UI/MPRIS/MCP/resources; `just player-build`; shared live native state, with exact owner-bound observation/control authority retained by OS |
 
 ## Dependencies
 
@@ -44,6 +45,14 @@ Desktop processes communicate with core through stable CLI, HTTP/SSE, DBus,
 Wayland, SDK, or MCP boundaries. Preserve licenses and avoid pulling privileged
 agent logic into GPL desktop processes. Component workspaces remain independent
 of the root Rust workspace.
+
+`just player-build` prepares `build/native-apps/cosmic-player` from the same
+immutable pin, preserving its original GStreamer/libcosmic renderer, lock and
+optional features. UI/MCP share native playback, not a second cache or an
+arbitrary external MPRIS player. Player MCP has no desktop transport and uses
+the fixed scoped OS media service. Its binary, descriptor and resources remain
+desktop-owned; native process/fixture tests are product-owned, and OS tests
+cover owner/executable identity, grants, worker relay and dispatch gating.
 
 `just launcher-build` prepares and builds the immutable external native
 Launcher under `build/native-apps/cosmic-launcher`, linking OS toolkit,

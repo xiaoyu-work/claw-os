@@ -87,7 +87,19 @@ authorization gate follows discovery. No matching Player, multiple instances,
 owner mismatch or spoofing is an explicit error, never an arbitrary-player
 fallback. The provider reads live native MPRIS state, holds no playback cache,
 launches no App and opens no media URL. The service is exported by Agent as
-`claw-os-media-player-v1`; native product consumption is pinned separately.
+`claw-os-media-player-v1`; Desktop depends on that versioned service.
+
+The complete 110-file native Player fork, descriptor, 72 locales, thumbnailer,
+desktop/metainfo files, icons and independent locked renderer now live in
+`clawos-app/products/media-player`. `just player-build` consumes immutable
+inputs at `build/native-apps/cosmic-player`; no production source remains at
+`desktop/player`. The native UI publishes its live playback state through its
+own MPRIS backend, and all seven MCP calls address that same state. Stop and
+empty/ended playback status are corrected without replacing the original UI.
+The worker has no session bus, media files, GUI transport or second playback
+cache. The cancellable explicit-binary SDK uses `/usr/local/bin/cos`.
+Installed identities and user state stay unchanged. Private-bus/strict-worker
+acceptance does not claim interactive Wayland or real-device playback.
 
 Capture's complete native portal client, manifest, localization, resources,
 tests and original standalone build now live in `clawos-app/products/capture`.

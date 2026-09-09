@@ -1778,6 +1778,83 @@ fn every_shipped_mcp_app_resolves_its_entry_and_its_calls() {
 }
 
 #[test]
+fn media_player_signed_manifest_has_seven_exact_brokered_calls() {
+    let _lock = crate::test_env::lock_env();
+    let root = crate::test_env::secure_scratch_dir("player-manifest");
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", root.join("data"));
+    let directory = root.join("cosmic-player");
+    std::fs::create_dir(&directory).unwrap();
+    std::fs::copy(
+        app_sources::app_dir("cosmic-player").join("app.json"),
+        directory.join("app.json"),
+    )
+    .unwrap();
+    crate::test_env::install_test_trust();
+    crate::test_env::sign_test_package(
+        &directory,
+        crate::provenance::PackageKind::App,
+        "cosmic-player",
+    );
+    let trust = crate::provenance::trust_store();
+    let options = crate::provenance::VerifyOptions::new(crate::provenance::PackageKind::App)
+        .expect_id("cosmic-player");
+    let package = crate::provenance::verify::verify_package(&directory, &options, &trust).unwrap();
+    let text = package.manifest_text().unwrap();
+    let manifest = crate::caps::manifest::Manifest::from_json(&text).unwrap();
+    let paths = crate::caps::args::PathContext {
+        home: std::path::PathBuf::from("/home/tester"),
+        cwd: None,
+    };
+    let tools = &manifest.mcp.as_ref().unwrap().tools;
+    let expected = [
+        "player.play",
+        "player.pause",
+        "player.stop",
+        "player.next",
+        "player.previous",
+        "player.toggle",
+        "player.status",
+    ];
+    assert_eq!(tools.len(), expected.len());
+    for name in expected {
+        assert!(tools
+            .iter()
+            .any(|tool| tool.name == name && tool.args.is_empty()));
+        let call = manifest
+            .resolve_mcp_tool_call(name, &BTreeMap::new(), &paths)
+            .unwrap();
+        let caps: Vec<_> = call.needs.into_iter().flatten().collect();
+        assert_eq!(
+            caps,
+            vec![crate::caps::Cap::new(
+                if name == "player.status" {
+                    crate::caps::Verb::DESKTOP_MEDIA_OBSERVE
+                } else {
+                    crate::caps::Verb::DESKTOP_MEDIA_CONTROL
+                },
+                crate::caps::Scope::name("cosmic-player"),
+            )]
+        );
+        assert_eq!(
+            classify_app_call("cosmic-player", &caps),
+            CallPlacement::Reusable
+        );
+    }
+    let mut missing_reason: serde_json::Value = serde_json::from_str(&text).unwrap();
+    missing_reason["mcp"]["tools"][0]["needs"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("why");
+    assert!(crate::caps::manifest::Manifest::from_json(&missing_reason.to_string()).is_err());
+
+    let mut tampered: serde_json::Value = serde_json::from_str(&text).unwrap();
+    tampered["mcp"]["tools"][0]["needs"] = serde_json::json!([]);
+    std::fs::write(directory.join("app.json"), tampered.to_string()).unwrap();
+    assert!(crate::provenance::verify::verify_package(&directory, &options, &trust).is_err());
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn every_shipped_native_desktop_app_names_its_kernel_row() {
     // The nine native Desktop Apps are the only shipped manifests that
     // may name a program outside their package, and each must name

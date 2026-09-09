@@ -289,12 +289,20 @@ outlives the call, and the reusable server never sees it.
 
 ### Desktop transports
 
-Two bundled Apps expose their tool surface as a session server and
-reach the desktop over the **session bus**: `cosmic-player` (MPRIS) and
-`cosmic-notifications` (`org.freedesktop.Notifications`). None of them
-initialises a compositor connection in MCP mode, so no Wayland socket,
+One bundled App exposes its tool surface as a session server and
+reaches the desktop over the **session bus**: `cosmic-notifications`
+(`org.freedesktop.Notifications`). It does not initialise a compositor
+connection in MCP mode, so no Wayland socket,
 X authority or GPU node is granted — the session bus alone is the
 difference between a working tool and a syscall failure.
+
+`cosmic-player` retains its fixed vendor-verified native executable row but
+no desktop transport. Its seven tools use `system.media-player.control` with
+separate exact `desktop.media.observe:cosmic-player` and
+`desktop.media.control:cosmic-player` grants. The OS verifies the owner,
+installed executable/PID and unique MPRIS connection before a fresh dispatch
+gate. UI and MCP share live native state; missing, ambiguous or spoofed
+instances fail rather than selecting another player.
 
 `cosmic-screenshot` retains its fixed, vendor-verified native executable row
 but no desktop transport. Its immutable Capture product uses the typed
@@ -304,7 +312,7 @@ owner-session portal helper and persists private PNG output; MCP cannot select
 an interactive destination, clipboard output, source file or arbitrary program.
 The normal human portal UI and notifications remain separate from this worker.
 
-They run in the `TrustedDesktopSession` tier: sandboxed exactly like
+The bus-using notification server runs in the `TrustedDesktopSession` tier: sandboxed exactly like
 any other hostile stdio server — private namespaces, strict seccomp, a
 resource governor, no egress, no host paths — plus one bind mount of
 the exact session-bus socket, at a fixed private sandbox path

@@ -99,6 +99,15 @@ The shared interactive portal and installed screenshots/configuration remain
 OS/user-owned. No Capture binary or native resources enter the headless Agent
 payload, and normal signed package updates remain the only installed update path.
 
+Media Player is composed at `build/native-apps/cosmic-player` with its full
+native source and original locked renderer. Desktop owns `/usr/bin/cosmic-player`,
+the `com.clawos.Player` resources/thumbnailer and the seven-tool descriptor;
+Agent provides the required `claw-os-media-player-v1` adapter. Observation and
+control require separate exact grants and operate only this owner's installed
+native Player. There is no worker bus or second playback state. Replace the
+signed manifest and matching packages together; binary-only hot-swap is refused.
+No Player binary/resources or test-fixture executable enter the headless payload.
+
 It also creates the empty root-owned `/usr/lib/cos/extensions` registry.
 Executable Agent extension packages placed there remain inactive until their
 signed id is selected in user configuration; see

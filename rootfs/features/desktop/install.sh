@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # rootfs/features/desktop/install.sh — build the claw-os desktop from
-# source (vendored under PROJECT_DIR/desktop) and wire it up so the rootfs
+# shell source (PROJECT_DIR/desktop) plus pinned native App inputs, so the rootfs
 # boots into a Wayland login.
 #
 # Target distro: Debian 13 "trixie" (kernel 6.12 LTS, PipeWire 1.4, Mesa 24).
@@ -192,7 +192,8 @@ fi
 #    And cos-runtime itself pulls in `claw-os-sdk = { path =
 #    "../../claw-os-sdk/rust" }` (the public app-developer SDK that
 #    cos-runtime layers audit/caps on top of). Bind-mount that one too
-#    or cargo dies in the desktop crates with "failed to read
+#    Media Player uses this public SDK directly. Without this mount
+#    cargo dies in composed native crates with "failed to read
 #    /build/claw-os-sdk/rust/Cargo.toml".
 # ---------------------------------------------------------------------------
 CHROOT_SRC="$ROOTFS/build/desktop"
@@ -263,7 +264,7 @@ chroot "$ROOTFS" bash -c '
 '
 
 echo "  :: building desktop (cold tree: 30–60 minutes)"
-# Several desktop crates (greeter, player) use `vergen` in their build.rs to
+# Several desktop crates (greeter and composed Player) use `vergen` in build.rs to
 # embed VERGEN_GIT_SHA / VERGEN_GIT_COMMIT_DATE at compile time. The chroot
 # has no .git so vergen fails. Pre-compute on the host and pass through.
 VERGEN_GIT_SHA="$(git_readonly -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || echo unknown)"

@@ -20,11 +20,11 @@ OS-repository commit: publish the product commit first, then pin that exact
 revision in [`packaging/apps.lock.json`](../packaging/apps.lock.json).
 There are no sibling-checkout dependencies or runtime download fallbacks.
 
-Source migration now covers **67 of the original 75 identities** across
-**22 product groups**: 57 Agent-package identities and 10 desktop identities.
-This count includes Capture, not its new OS service or permission scope.
-The eight remaining source identities are `cosmic-player`,
-`cosmic-notifications`, `notify`, `db`, `doc`, `kv`, `net` and `summarize`.
+Source migration now covers **68 of the original 75 identities** across
+**23 product groups**: 57 Agent-package identities and 11 desktop identities.
+This count includes Media Player, not its OS helper or two permission scopes.
+The seven remaining source identities are `cosmic-notifications`, `notify`,
+`db`, `doc`, `kv`, `net` and `summarize`.
 Source ownership does not complete M2, backend/state consolidation, identity
 and consent cutovers, or visual/installed-image acceptance.
 
@@ -40,6 +40,7 @@ and consent cutovers, or visual/installed-image acceptance.
 | `cosmic-files` | Complete native UI/library/companion, resources and original locked build moved to Files; shared filesystem/Recoll/parser and SDK AI replace App calls; identities and existing UI/MCP data remain separate |
 | Previously completed native slices: `widget-rail`, `cosmic-launcher`, `cosmic-edit`, `cosmic-term`, `cosmic-store`, `cosmic-settings` | Complete sources/resources/builds already moved to Desktop Widgets, Launcher, Editor, Terminal, Store and Settings; source ownership remains distinct from backend/data/visual cutovers |
 | `cosmic-screenshot` | Complete native portal client, all 99 original native files, 72 locales, eight icons, descriptor and original locked release build moved to Capture; UI remains in the shared OS portal; non-interactive CLI/MCP share the typed OS service with separate screen/output grants, no worker session bus or App call; IDs and screenshots/configuration stay unchanged |
+| `cosmic-player` | All 110 original native files, 72 locales, descriptor, resources and original renderer/optional graph moved to `clawos-app/products/media-player`; UI/MCP share actual native playback through an owner/executable-bound OS adapter with separate exact observe/control grants, no worker bus and no other-player fallback; Stop/status are corrected; identities and user state remain unchanged |
 | `docs` | Moved to `clawos-app/products/files/apps/docs`; four Recoll-backed tools, owner index state and scopes preserved; background indexing remains OS-owned |
 | `search` | Moved to `clawos-app/products/browser/apps/search`; explicit provider choice, two MCP tools and exact credential/network scopes preserved |
 | `web` | Moved to `clawos-app/products/browser/apps/web`; existing five-operation CLI/MCP adapter and AI gate preserved; reusable `cos-browser` engine remains OS-owned |
@@ -92,7 +93,7 @@ and consent cutovers, or visual/installed-image acceptance.
 | `gateway-pushover` | Source moved to `clawos-app/products/notification-delivery/apps/gateway/pushover`; exact API host, application/user keys, recipient flag, metadata and emergency constraints preserved; Python argument case moved, while receipt acknowledgement and durable OS-service integration remain separate |
 | `gateway-webhook` | Source moved to `clawos-app/products/notification-delivery/apps/gateway/webhook`; JSON/raw payload, target flag/default lookup, auth precedence and independent HMAC preserved with existing grants and shared egress; argument/egress regressions relocated and Rust fixture pinned; all three delivery source identities moved, not durable-service integration |
 | `gateway-homeassistant` | Source moved to `clawos-app/products/home-integration/apps/gateway/homeassistant`; REST send/call/status and grants preserved, canonical list parsing fixed for flag-shaped text/options; external server, device state and automation engine not imported, and private endpoint access is not enabled |
-| Remaining eight identities listed above | Pending their individual paired source migrations |
+| Remaining seven identities listed above | Pending their individual paired source migrations |
 
 Moving source does not complete a product redesign milestone or merge legacy
 identities. APT remains the installed update path until a separate, complete

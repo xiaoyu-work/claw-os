@@ -39,7 +39,6 @@ desktop/
 ├── initial-setup/          First-run wizard
 │
 ├── settings-daemon/        Backend for system settings
-├── player/                 Media player
 │
 ├── toolkit/                UI toolkit (iced-based, MPL-2.0; upstream libcosmic)
 ├── protocols/              Custom Wayland protocols
@@ -55,6 +54,18 @@ desktop/
 ```
 
 ## Building
+
+The complete [Media Player product](https://github.com/xiaoyu-work/clawos-app/tree/main/products/media-player)
+is built with `just player-build` from the immutable App pin at
+`build/native-apps/cosmic-player`. All 110 original native files, 72 locales,
+thumbnailer, desktop/metainfo files, icons, license and original standalone
+renderer/optional graph move together. Its native UI and seven MCP tools
+share live playback through the fixed owner/executable-bound OS adapter;
+workers get no session bus. Status and controls need separate exact grants.
+The desktop package owns its binary, descriptor and resources and depends on
+Agent's `claw-os-media-player-v1`. Installed identities and user media/state
+are unchanged; no player, spoofing or ambiguous instances fail explicitly.
+Private-bus fixtures are not interactive Wayland or real-device acceptance.
 
 The complete [Capture product](https://github.com/xiaoyu-work/clawos-app/tree/main/products/capture)
 is built with `just capture-build` from the immutable App pin at

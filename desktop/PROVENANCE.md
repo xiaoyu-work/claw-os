@@ -48,7 +48,7 @@ upstream identifiers; rename them before any commercial release.
 | `notifications/` | github.com/pop-os/cosmic-notifications | `a899bfbc6715` | GPL-3.0 |
 | `osd/` | github.com/pop-os/cosmic-osd | `c57df29816e9` | GPL-3.0 |
 | `panel/` | github.com/pop-os/cosmic-panel | `2358f0473bf6` | GPL-3.0 |
-| `player/` | github.com/pop-os/cosmic-player | `d1f63c570c76` | GPL-3.0 |
+| [external Media Player](https://github.com/xiaoyu-work/clawos-app/tree/main/products/media-player/native) | github.com/pop-os/cosmic-player | `d1f63c570c76` | GPL-3.0; complete native source/resources pinned through `packaging/apps.lock.json` |
 | `protocols/` | github.com/pop-os/cosmic-protocols | `c253ec1d6804` | ? |
 | `randr/` | github.com/pop-os/cosmic-randr | `6e8e795970fa` | MPL-2.0 |
 | [external Capture](https://github.com/xiaoyu-work/clawos-app/tree/main/products/capture/native) | github.com/pop-os/cosmic-screenshot | `b917c631d155` | GPL-3.0; complete native client/resources pinned through `packaging/apps.lock.json` |
@@ -102,6 +102,13 @@ The following files at the root of `desktop/` came from
 - Single CI, single release tag, single `git clone` for contributors.
 
 ## License obligations
+
+Media Player's complete 110-file native fork, original license, 72 locales,
+resources and standalone build graph moved to the
+[Media Player product](https://github.com/xiaoyu-work/clawos-app/blob/main/products/media-player/PROVENANCE.md).
+The immutable App pin supplies corresponding source for its desktop-owned
+binary. The original renderer/toolkit graph and public desktop identity remain;
+OS owner-session authority is not copied into the product.
 
 Capture's complete native portal client, original license, 72 Fluent locales,
 eight icons and all original build inputs moved to the
