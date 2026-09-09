@@ -496,6 +496,8 @@ const ADMIN_VERBS: &[Verb] = &[
     Verb::DEVICE_USB,
     Verb::DESKTOP_WINDOW,
     Verb::DESKTOP_CAPTURE,
+    Verb::DESKTOP_MEDIA_OBSERVE,
+    Verb::DESKTOP_MEDIA_CONTROL,
     Verb::BROWSER_TABS_READ,
     Verb::BROWSER_NAV,
     Verb::BROWSER_DOM_READ,

@@ -238,6 +238,8 @@ const BASELINE: &[(Verb, Baseline)] = &[
     (Verb::DESKTOP_LAUNCH, Baseline::Denied),
     (Verb::DESKTOP_WINDOW, Baseline::Denied),
     (Verb::DESKTOP_CAPTURE, Baseline::Denied),
+    (Verb::DESKTOP_MEDIA_OBSERVE, Baseline::Denied),
+    (Verb::DESKTOP_MEDIA_CONTROL, Baseline::Denied),
     // -- Browser -----------------------------------------------------
     (Verb::BROWSER_TABS_READ, Baseline::Resourceless),
     // Navigation and DOM access are host-addressed fetches.

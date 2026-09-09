@@ -167,6 +167,8 @@ pub fn supported(verb: Verb) -> bool {
             | Verb::DEVICE_DISPLAY
             | Verb::DESKTOP_WINDOW
             | Verb::DESKTOP_CAPTURE
+            | Verb::DESKTOP_MEDIA_OBSERVE
+            | Verb::DESKTOP_MEDIA_CONTROL
             | Verb::DEVICE_LOCATION
             | Verb::NET_MANAGE
             | Verb::SYS_POWER

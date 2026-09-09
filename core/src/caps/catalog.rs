@@ -804,6 +804,23 @@ pub const CATALOG: &[CapMeta] = &[
         Risk::High,
     ),
 
+    CapMeta::new(
+        Verb::DESKTOP_MEDIA_OBSERVE,
+        ScopeKind::Name,
+        LocalizedStr::new("Read Media Player playback"),
+        LocalizedStr::new("Read live playback status and track metadata, including its URL, from this owner's native cosmic-player instance. Does not inspect other players."),
+        "🎵",
+        Risk::Medium,
+    ),
+    CapMeta::new(
+        Verb::DESKTOP_MEDIA_CONTROL,
+        ScopeKind::Name,
+        LocalizedStr::new("Control Media Player playback"),
+        LocalizedStr::new("Play, pause, stop or change tracks in this owner's native cosmic-player instance. Does not launch programs, open media URLs or control other players."),
+        "🎵",
+        Risk::Medium,
+    ),
+
     // -- Attached browser -------------------------------------------------
     // Gates the user's GUI browser (Chromium with the user's profile)
     // when reached through the Claw agent WebExtension + Native Messaging

@@ -50,6 +50,7 @@ const CHILD_PROVIDER_ROUTES: &[Command] = &[
     Command::SystemFilesystemRead,
     Command::SystemFilesystemWrite,
     Command::SystemScreenshotCapture,
+    Command::SystemMediaPlayerControl,
     Command::SystemDisplayControl,
     Command::SystemEventsControl,
     Command::SystemFirewallControl,

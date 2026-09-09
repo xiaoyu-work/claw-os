@@ -132,6 +132,26 @@ async fn a_connected_client_is_identified_by_kernel_credentials_on_its_message()
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn media_player_request_preserves_action_deadline_and_kernel_peer() {
+    let bound = bind();
+    let path = bound.path.clone();
+    let server = tokio::spawn(serve_once(bound.listener, |envelope| {
+        let params = (Command::SystemMediaPlayerControl.route().decode)(envelope.params).unwrap();
+        assert_eq!(params["action"], "status");
+        assert_eq!(params["deadline_unix_ms"], 123456);
+        Response::ok(envelope.id, json!({"status":"Paused","title":"fixture"}))
+    }));
+    let request = Request::build(Command::SystemMediaPlayerControl,
+        json!({"session":"media-session","action":"status","deadline_unix_ms":123456}));
+    let reply = tokio::task::spawn_blocking(move || cos::clawd::client::request_blocking(&path, request))
+        .await.unwrap().unwrap();
+    assert_eq!(reply.result.unwrap()["title"], "fixture");
+    let (credentials, request) = server.await.unwrap();
+    assert_eq!(credentials.uid, unsafe { libc::getuid() });
+    assert_eq!(request.command.as_str(), "system.media-player.control");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn screenshot_request_roundtrips_only_typed_parameters() {
     let bound = bind();
     let path = bound.path.clone();

@@ -50,6 +50,7 @@ and agent tasks.
 | `network_diagnostics.rs` | Host-network diagnostic provider: interface/route inspection, bounded DNS resolution, and DNS-pinned TCP probes for the `netdiag` App |
 | `filesystem.rs` | Exact-scope bounded text reads and atomic writes/replacements for App workers; pinned paths, task-owned inverse snapshots, no App dispatch |
 | `capture.rs` | App-bound non-interactive screenshot service; fixed native portal client, owner session, screen plus exact output grants, bounded PNG, pinned non-overwriting persistence |
+| `media_player.rs`, `media_player/mpris.rs` | Fixed Media Player adapter; separate exact observation/control grants, authenticated owner bus and native executable/unique-name binding, fresh dispatch authorization and deadlines |
 | `desktop.rs` | Owner desktop service; Files reveals only its fixed target; Terminal, Store and Settings open only their fixed binaries with an optional directory/package/page under their original independent process-spawn grants |
 | `desktop/settings.rs` | Fixed Settings user-service activation; authenticated owner manager, closed GUI environment, independent lifetime and startup acknowledgement without weakening daemon/worker NoNewPrivileges |
 | `client_identity.rs` | Peer/owner identity and synchronous thread-local filesystem credentials; trusted owner primary/supplementary groups, distinct from extension execution GID, with restoration on every exit |
@@ -77,6 +78,30 @@ requires root solely for owner-UID dropping; it exercises the installed
 harmless processes, never real Settings, polkit or user grants.
 
 ## Wire Protocol
+
+`system.media-player.control` is restricted to `cosmic-player`. Status spends
+`desktop.media.observe:cosmic-player`; the six playback actions spend only
+`desktop.media.control:cosmic-player`. Both require explicit consent and
+support the existing Settings deny gate. The fixed helper runs with the
+owner's UID, no supplementary groups or GUI environment, inherited
+NoNewPrivileges, a five-second ceiling and a root-parent socket. After
+discovery it waits for a fresh broker grant check before dispatch. Only the
+installed native executable's owner/PID-bound MPRIS endpoint is eligible;
+missing, spoofed or multiple instances fail closed. No media is opened and
+no other player is selected. Accepted playback actions cannot be rolled back
+by a later cancellation.
+
+Private-bus unit tests cover exact scopes, owner/executable identity, all
+seven actions, live UI metadata, missing/ambiguous instances and a withdrawn
+dispatch gate. The ignored
+`media_player_actual_native_mcp_crosses_worker_relay` test takes explicitly
+built `COS_MEDIA_PLAYER_BINARY`, `COS_MEDIA_PLAYER_MPRIS_FIXTURE`,
+`COS_MEDIA_PLAYER_MANIFEST` and `COS_MEDIA_PLAYER_COS` inputs and exercises
+the real strict worker, private relay, typed authority and native backend.
+`core/test/support/media_player_helper.py` separately exercises the installed
+executable and actual dropped-owner helper under a private mount namespace;
+run its documented command as root. Neither fixture uses live user media or
+the user's bus. These checks do not claim interactive Wayland acceptance.
 
 `/run/cos/clawd.sock` carries broker protocol v2 over the `CBK1` framing: one length-prefixed frame per
 message, one request per connection, then close. The header is `CBK1`, a kind

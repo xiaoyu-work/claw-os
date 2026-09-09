@@ -21,6 +21,12 @@ The `cos` kernel performs capability checks when public SDK operations run.
 Native Apps expose agent-callable tools through `claw_os_sdk::mcp`; MCP is a
 module of this SDK rather than a separate developer package.
 
+Installed native clients can use `cos_call_json_async_with_binary` with an
+absolute OS CLI path and select it against `CallContext::cancelled()`. It uses
+the shared strict wire decoder and kills its CLI child when dropped, without
+consulting `PATH` or `CLAW_COS_BIN`. Cancellation does not undo an action the
+OS already accepted and never replaces broker capability checks.
+
 The generic `call`/`call_typed` transport is for authenticated human CLI and
 desktop clients, not App-to-App calls. Broker admission rejects App processes
 and App-owned agents even if they hold invoke grants. App code uses gated AI,

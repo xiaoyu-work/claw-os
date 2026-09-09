@@ -1404,6 +1404,23 @@ routes! {
             super::capture::capture(c.params, c.client, authority).await.map_err(BrokerError::from)
         },
     }
+    SystemMediaPlayerControl {
+        name: "system.media-player.control",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget { max_in_flight: 4, deadline: Deadline::Uninterruptible },
+        authority: session(Audience::SystemService),
+        body: body::MediaPlayerControl,
+        audit: &[
+            ("session", FieldRule::Token),
+            ("action", FieldRule::Enum(&["status", "play", "pause", "stop", "next", "previous", "toggle"])),
+            ("deadline_unix_ms", FieldRule::Count),
+        ],
+        run: |c| {
+            let authority = c.authority()?;
+            super::media_player::control(c.params, c.client, authority).await.map_err(BrokerError::from)
+        },
+    }
     SystemDesktopControl {
         name: "system.desktop.control",
         access: Access::User,

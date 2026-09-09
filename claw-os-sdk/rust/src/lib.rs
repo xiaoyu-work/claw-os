@@ -310,6 +310,36 @@ where
     .map_err(StructuredCosError::into_bridge)
 }
 
+/// Async counterpart of [`cos_call_json_with_binary`], with identical wire
+/// decoding. Dropping the future kills the CLI child, so MCP cancellation and
+/// deadlines do not leave a blocking client behind. This cannot undo an action
+/// the OS already accepted; the OS still owns dispatch authorization.
+pub async fn cos_call_json_async_with_binary<A>(
+    binary: impl AsRef<OsStr>,
+    family: &str,
+    verb: &str,
+    args: A,
+) -> Result<serde_json::Value, BridgeError>
+where
+    A: IntoIterator,
+    A::Item: AsRef<OsStr>,
+{
+    let child = tokio::process::Command::new(binary)
+        .arg("--wire=1")
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::NotFound => BridgeError::BinaryNotFound(error),
+            _ => BridgeError::Io(error),
+        })?;
+    decode_wire_response(family, verb, child.wait_with_output().await?)
+        .map_err(StructuredCosError::into_bridge)
+}
+
 /// Invoke a controlled CLI primitive with bounded business data on stdin.
 /// Uses the same wire envelope/error decoder as [`cos_call_json`].
 pub fn cos_call_json_with_stdin<A>(

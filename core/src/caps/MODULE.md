@@ -57,3 +57,8 @@ cargo test -p cos caps:: -- --test-threads=1
 
 Changes require containment/normalization tests plus an end-to-end consumer or
 enforcement test.
+
+Media Player's status and six playback controls use separate
+`desktop.media.observe` / `desktop.media.control` name scopes, fixed to
+`cosmic-player`. Neither is ambient authority or session-bus access.
+Their provider and private-bus tests are under `clawd/media_player`.

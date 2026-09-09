@@ -42,6 +42,17 @@ fn caps_for(owner: &Owner) -> CapSet {
 /// `clawd`, so a global path scope hands it the daemon's view of the
 /// whole machine. The baseline is bounded to the owner's own roots.
 #[test]
+fn media_player_metadata_and_playback_both_require_explicit_consent() {
+    let _lock = lock_env();
+    let owner = owner();
+    let caps = caps_for(&owner);
+    for verb in [Verb::DESKTOP_MEDIA_OBSERVE, Verb::DESKTOP_MEDIA_CONTROL] {
+        assert!(!caps.covers(&Cap::new(verb, Scope::name("cosmic-player"))));
+        assert!(!caps.covers(&Cap::new(verb, Scope::Wild)));
+    }
+}
+
+#[test]
 fn system_agent_caps_bound_paths_to_owner_roots() {
     let _lock = lock_env();
     let owner = owner();

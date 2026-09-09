@@ -77,6 +77,18 @@ cross-cutting boundaries rather than hidden implementation details.
 
 ### App source ownership
 
+The OS exposes `system.media-player.control` for native Media Player clients.
+The seven closed actions address only `cosmic-player`, with independent exact
+`desktop.media.observe` and `desktop.media.control` grants scoped to that
+identity. Both are denied by default. A bounded OS subprocess enters only the
+authenticated owner's session bus, verifies the installed D-Bus service and
+native Player executable/PID, and pins its unique connection. A fresh broker
+authorization gate follows discovery. No matching Player, multiple instances,
+owner mismatch or spoofing is an explicit error, never an arbitrary-player
+fallback. The provider reads live native MPRIS state, holds no playback cache,
+launches no App and opens no media URL. The service is exported by Agent as
+`claw-os-media-player-v1`; native product consumption is pinned separately.
+
 Capture's complete native portal client, manifest, localization, resources,
 tests and original standalone build now live in `clawos-app/products/capture`.
 `just capture-build` composes the immutable App pin under

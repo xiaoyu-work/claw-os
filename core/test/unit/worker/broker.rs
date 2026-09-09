@@ -92,6 +92,19 @@ fn every_admissible_route_is_explicitly_mapped() {
 }
 
 #[test]
+fn media_player_relay_requires_a_media_verb_not_other_desktop_authority() {
+    for verb in [Verb::DESKTOP_MEDIA_OBSERVE, Verb::DESKTOP_MEDIA_CONTROL] {
+        let granted = relaying_authority(vec![Cap::new(verb, Scope::name("cosmic-player"))]);
+        admit(Command::SystemMediaPlayerControl, &granted).unwrap();
+        assert!(admit(Command::SystemDesktopControl, &granted).is_err());
+    }
+    for verb in [Verb::DESKTOP_LAUNCH, Verb::DEVICE_MEDIA_ROUTE, Verb::SYS_OBSERVE] {
+        let unrelated = relaying_authority(vec![Cap::new(verb, Scope::name("cosmic-player"))]);
+        assert!(admit(Command::SystemMediaPlayerControl, &unrelated).is_err());
+    }
+}
+
+#[test]
 fn screenshot_admission_requires_capture_not_file_or_clipboard_authority() {
     let capture = relaying_authority(vec![Cap::new(Verb::DESKTOP_CAPTURE, Scope::name("screen"))]);
     admit(Command::SystemScreenshotCapture, &capture).unwrap();

@@ -10,6 +10,18 @@ fn main() {
     cos::agentd::guard::mark_broker_process();
     cos::storage::set_private_umask();
     let raw_args = std::env::args().skip(1).collect::<Vec<_>>();
+    if raw_args.first().is_some_and(|arg| arg == "--media-player-helper") {
+        match cos::clawd::media_player::helper(&raw_args[1..]) {
+            Ok(value) => {
+                println!("{value}");
+                return;
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                std::process::exit(1);
+            }
+        }
+    }
     if raw_args
         .first()
         .is_some_and(|arg| arg == "--desktop-wayland-helper")

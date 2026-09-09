@@ -709,6 +709,40 @@ pub struct ScreenshotRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct MediaPlayerControl {
+    pub session: Token,
+    pub action: MediaPlayerAction,
+    pub deadline_unix_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaPlayerAction {
+    Status,
+    Play,
+    Pause,
+    Stop,
+    Next,
+    Previous,
+    Toggle,
+}
+
+impl MediaPlayerAction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Status => "status",
+            Self::Play => "play",
+            Self::Pause => "pause",
+            Self::Stop => "stop",
+            Self::Next => "next",
+            Self::Previous => "previous",
+            Self::Toggle => "toggle",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AiChat {
     pub session: Token,
     pub app_id: Name,

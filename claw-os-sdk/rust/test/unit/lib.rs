@@ -1,6 +1,60 @@
 use super::*;
 
 #[cfg(unix)]
+#[tokio::test]
+async fn async_explicit_binary_preserves_shared_wire_decoding() {
+    let dir = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let missing = cos_call_json_async_with_binary(
+        dir.path().join("missing"), "media-player", "status", ["__media-player", "status"],
+    ).await;
+    assert!(matches!(missing, Err(BridgeError::BinaryNotFound(_))));
+    for (body, code, accepted) in [
+        (r#"{"ok":true,"wire_version":1,"data":{"status":"Paused"}}"#, 0, true),
+        (r#"{"ok":false,"wire_version":1,"error":"refused","code":"PERMISSION_DENIED"}"#, 1, false),
+        (r#"{"status":"Paused"}"#, 0, false),
+        (r#"{"ok":true,"wire_version":1,"data":{}}"#, 1, false),
+    ] {
+        let binary = write_fake_cos(dir.path(), body, code);
+        let sync = cos_call_json_with_binary(&binary, "media-player", "status", ["__media-player", "status"]);
+        let result = cos_call_json_async_with_binary(&binary, "media-player", "status", ["__media-player", "status"]).await;
+        assert_eq!(result.is_ok(), accepted);
+        assert_eq!(format!("{result:?}"), format!("{sync:?}"));
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn async_explicit_binary_cancellation_kills_and_reaps_the_cli() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::Duration;
+    let dir = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let binary = dir.path().join("cos");
+    let marker = dir.path().join("started");
+    std::fs::write(&binary, "#!/usr/bin/python3\nimport os,sys,time\nassert sys.argv[1:3]==['--wire=1','probe']\nwith open(sys.argv[3], 'w') as out: out.write(str(os.getpid()))\ntime.sleep(60)\n").unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let started = marker.clone();
+    let task = tokio::spawn(async move {
+        cos_call_json_async_with_binary(binary, "media-player", "status", ["probe", marker.to_str().unwrap()]).await
+    });
+    let seen = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let Ok(pid) = std::fs::read_to_string(&started) {
+                if let Ok(pid) = pid.parse::<u32>() { break pid; }
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }).await;
+    task.abort();
+    let _ = task.await;
+    let pid = seen.expect("CLI must start before cancellation");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while std::path::Path::new(&format!("/proc/{pid}")).exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }).await.expect("cancelled CLI must be killed and reaped");
+}
+
+#[cfg(unix)]
 #[test]
 fn explicit_binary_uses_shared_transport_without_path_or_override() {
     let dir = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();

@@ -71,6 +71,10 @@ guards. Capture uses it for direct CLI compatibility, never for MCP calls.
 Installed Settings uses the explicit-binary variant for `/usr/local/bin/cos`;
 it does not depend on launcher PATH or a process-wide environment mutation.
 Generic SDK clients still honor `CLAW_COS_BIN` and otherwise resolve `cos` on PATH.
+Media Player uses `cos_call_json_async_with_binary`: it shares the strict wire
+decoder and fixed binary selection, but dropping an MCP call kills/reaps the
+CLI child. The OS deadline and fresh grant gate still govern undispatched work;
+an already accepted playback action cannot be rolled back by cancellation.
 
 ## Tests
 

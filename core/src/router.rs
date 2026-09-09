@@ -857,6 +857,23 @@ fn dispatch_with_stdin_impl(
         return Ok(Some(value.to_string()));
     }
 
+    if name == "__media-player" {
+        if args.len() != 4 || args[2] != "--deadline" {
+            return Err("internal Media Player bridge requires `<action> --deadline <unix-ms>`".into());
+        }
+        let action: crate::clawd::wire::requests::MediaPlayerAction =
+            serde_json::from_value(json!(args[1]))
+                .map_err(|_| "invalid Media Player action")?;
+        let deadline = args[3].parse::<u64>().map_err(|_| "invalid Media Player deadline")?;
+        let session = env::var("COS_SESSION")
+            .map_err(|_| "internal Media Player command requires COS_SESSION")?;
+        let value = request_wire_clawd(
+            Command::SystemMediaPlayerControl,
+            json!({"session": session, "action": action, "deadline_unix_ms": deadline}),
+        )?;
+        return Ok(Some(value.to_string()));
+    }
+
     if name == "__capture" {
         if args.len() != 3 || args[1] != "screenshot" || args[2] != "--request-stdin" {
             return Err("internal capture bridge requires `screenshot --request-stdin`".into());

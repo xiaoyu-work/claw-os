@@ -5,7 +5,7 @@ Priority: optional
 Architecture: __ARCH__
 Maintainer: Claw OS <noreply@github.com>
 Homepage: https://github.com/xiaoyu-work/claw-os
-Provides: claw-os-abi-__ABI__, claw-os-app-permissions-v1, claw-os-capture-v1
+Provides: claw-os-abi-__ABI__, claw-os-app-permissions-v1, claw-os-capture-v1, claw-os-media-player-v1
 Breaks: claw-os-base (<< __MIN_BASE__), claw-os-desktop (<< __MIN_DESKTOP__)
 XB-Claw-Os-Security-Epoch: __SECURITY_EPOCH__
 XB-Claw-Os-Abi: __ABI__

@@ -16,6 +16,18 @@ This update path applies to:
 
 ## Normal update
 
+Agent provides the versioned `claw-os-media-player-v1` playback adapter for
+newer native Media Player packages. It requires separate exact
+`desktop.media.observe:cosmic-player` and
+`desktop.media.control:cosmic-player` consent; old unscoped MPRIS access does
+not confer either grant. It only observes/controls an already-running native
+Player for the authenticated owner. Restart the native Player after an update
+to replace its executable and MPRIS registration; a retired executable is
+refused rather than redirected to another player. Missing or ambiguous
+instances are explicit errors. Accepted playback commands are not reversible
+by cancellation, but discovery, dispatch authorization and execution are
+deadline-bounded. No media, configuration or state is migrated.
+
 Run these commands inside the installed Claw OS system:
 
 ```bash
