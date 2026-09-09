@@ -65,9 +65,12 @@ migrated product inputs from the repository root with
 inputs fail with an actionable diagnostic; tests do not download them.
 The helper resolves the lock's distinct `products` and optional `capabilities`
 roots, requires matching source-kind metadata and exact identity/layout, and
-never substitutes local `apps/doc` for the migrated Document Engine client.
+never substitutes local `apps/doc` or `apps/db` for the migrated capability clients.
 `tests/app_source_fixtures.rs` covers both kinds, missing/duplicate/escaping
-sources and the published Doc manifest.
+sources and the published Doc/DB manifests, including DB's exact MCP/CLI
+arguments and read/write scopes. Signed fixtures in
+`tests/extension_provenance_process.rs` bind the same sources to worker policy;
+DB keeps its original owner/App data partition without KV or Agent-memory mounts.
 
 ```bash
 # Narrow test or module

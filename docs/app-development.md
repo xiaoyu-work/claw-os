@@ -25,11 +25,13 @@ this using authenticated process/session ancestry, not environment flags.
 
 Bundled source ownership is independent of the installed App identity.
 Migrated business products live under external `products/`; shared-capability
-clients such as `doc` live under external `capabilities/`, explicitly selected
+clients such as `doc` and `db` live under external `capabilities/`, explicitly selected
 by the [OS source lock](../packaging/apps.lock.json). This source kind is not
 a manifest runtime/capability kind and grants no authority. Doc consumes a
 declared Files parser library, not a Files App. Its six operations and existing
-AI/memory identity remain unchanged; see the
+AI/memory identity remain unchanged. DB retains its five direct MCP/CLI tools,
+exact database read/write scopes and existing owner/App SQLite namespace,
+separate from KV and Agent memory; see the
 [source composition contract](../packaging/README.md).
 
 Settings permission management does not delegate target-App capabilities.

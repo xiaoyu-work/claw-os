@@ -106,7 +106,8 @@ Cargo never downloads product fixtures or substitutes local App source for a
 declared external App. The lock's optional `capabilities` list resolves only
 `capabilities/<name>` with `kind: "shared-capability-client"`; `products` and
 native preparation retain business-product ownership. Never recreate a local
-`apps/doc` fallback or count a shared-capability group as a business product.
+`apps/doc` or `apps/db` fallback or count a shared-capability group as a business
+product.
 
 Rust unit-test bodies live outside production source trees under each crate's
 `test/unit/` directory, mirroring the `src/` path. Production modules contain

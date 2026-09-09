@@ -402,6 +402,14 @@ owner's data root. `COS_DATA_DIR` is its own directory,
 `<data-root>/apps/<app-id>`, created `0700`, and no other App's directory or
 owner-private store is inside its sandbox.
 
+The source-only relocation of `db` to
+`clawos-app/capabilities/storage-sdk/apps/db` adds no data transition.
+Its signed Agent-package identity and five MCP/CLI tools are unchanged;
+SQLite files remain at `$COS_DATA_DIR/db/<name>.db`, normally
+`<data-root>/apps/db/db/<name>.db`. Existing grants are not widened or joined
+with KV, and neither KV state nor Agent memory is imported. The OS-owned
+pre-isolation migration below remains unchanged.
+
 The state bundled Apps wrote before that — `calendar/`, `db/`, `kv.json`,
 `launcher/`, `logs/`, `notifications.json`, `trash/`, the `exec` App's captured
 `proc/stdout.*` and `proc/stderr.*`, and each gateway's

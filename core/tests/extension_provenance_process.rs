@@ -191,6 +191,144 @@ fn published_doc_signed_fixture_preserves_manifest_and_worker_authority() {
     assert!(launch.bind(&["server.py".into()]).is_err());
 }
 
+#[test]
+fn published_db_signed_fixture_preserves_worker_identity_and_existing_namespace() {
+    use std::collections::BTreeMap;
+    use std::os::unix::fs::MetadataExt;
+
+    use cos::caps::{Cap, CapSet, Scope, Verb};
+    use cos::worker::derive::{app_session, AppSessionInput, SessionLifetime};
+
+    let fx = Fixture::new("published-db");
+    let source = app_sources::app_dir("db");
+    let apps = fx.root.join("apps");
+    let directory = apps.join("db");
+    fs::create_dir_all(&directory).unwrap();
+    for name in ["app.json", "main.py", "server.py"] {
+        fs::copy(source.join(name), directory.join(name)).unwrap();
+    }
+    let original = fs::read_to_string(source.join("app.json")).unwrap();
+    let declaration: serde_json::Value = serde_json::from_str(&original).unwrap();
+    sign::sign_directory(
+        &directory,
+        &sign::SignRequest {
+            kind: PackageKind::App,
+            id: "db".to_string(),
+            version: declaration["version"].as_str().unwrap().to_string(),
+            manifest_schema: "2".to_string(),
+            manifest_path: "app.json".to_string(),
+            entrypoints: vec!["main.py".to_string(), "server.py".to_string()],
+            resources: vec![],
+        },
+        &fx.key,
+    )
+    .unwrap();
+    fx.activate();
+    let package = verify::verify_package(
+        &directory,
+        &VerifyOptions::new(PackageKind::App).expect_id("db"),
+        &fx.store(),
+    )
+    .unwrap();
+    assert_eq!(package.manifest_text().unwrap(), original);
+    let launch = cos::bridge::AppLaunch::new(Arc::new(package)).unwrap();
+    let binding = launch
+        .bind(&["main.py".into(), "server.py".into()])
+        .unwrap();
+    assert_eq!(launch.app_id(), "db");
+    assert!(cos::apps::is_mcp_only_cli(launch.manifest()));
+    assert_eq!(launch.manifest().mcp.as_ref().unwrap().tools.len(), 5);
+
+    let data = fx.root.join("owner-data");
+    let partition = data.join("apps/db");
+    let database = partition.join("db/personal.db");
+    fs::create_dir_all(database.parent().unwrap()).unwrap();
+    let connection = rusqlite::Connection::open(&database).unwrap();
+    connection
+        .execute_batch("CREATE TABLE items (value TEXT); INSERT INTO items VALUES ('existing');")
+        .unwrap();
+    connection.close().unwrap();
+    let bytes = fs::read(&database).unwrap();
+    let identity = fs::metadata(&database).unwrap();
+    let neighbours = [
+        data.join("apps/kv/kv.json"),
+        data.join("agent/memory.db"),
+        fx.root.join("other-owner/apps/db/db/personal.db"),
+    ];
+    for neighbour in &neighbours {
+        write(neighbour, "unrelated private state");
+    }
+
+    for verb in [Verb::DATA_DB_READ, Verb::DATA_DB_WRITE] {
+        let caps = CapSet::from_caps([Cap::new(verb, Scope::name("personal"))]);
+        for lifetime in [SessionLifetime::SingleCall, SessionLifetime::Reusable] {
+            let worker = app_session(AppSessionInput {
+                app_id: launch.app_id(),
+                app_dir: launch.dir(),
+                program: "/usr/bin/python3".into(),
+                argv: vec![directory.join("server.py").to_string_lossy().into_owned()],
+                caps: &caps,
+                authorized_mounts: &[],
+                lifetime,
+                session_id: "db-fixture",
+                data_dir: data.to_str().unwrap(),
+                apps_dir: apps.to_str().unwrap(),
+                extra_env: BTreeMap::from([(
+                    "COS_APP_MANIFEST".into(),
+                    directory.join("app.json").to_string_lossy().into_owned(),
+                )]),
+                package_identity: binding.dir_identity(),
+                pinned_entries: binding.entries(),
+                transports: &[],
+            })
+            .unwrap();
+            assert_eq!(worker.env["COS_APP_ID"], "db");
+            assert_eq!(worker.env["COS_SESSION"], "db-fixture");
+            assert_eq!(worker.env["COS_DATA_DIR"], partition.to_str().unwrap());
+            assert_eq!(worker.workdir, partition);
+            assert_eq!(
+                fs::metadata(&partition).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+            assert!(matches!(worker.network, cos::worker::NetworkPolicy::Denied));
+            let mounts = worker
+                .mounts
+                .iter()
+                .filter(|mount| mount.class == cos::worker::MountClass::AppData)
+                .collect::<Vec<_>>();
+            assert_eq!(mounts.len(), 1);
+            assert_eq!(mounts[0].source, partition);
+            assert_eq!(mounts[0].mode, cos::worker::MountMode::ReadWrite);
+            assert!(worker
+                .mounts
+                .iter()
+                .filter(|mount| mount.source.starts_with(&data))
+                .all(|mount| mount.source == partition));
+            assert!(worker
+                .mounts
+                .iter()
+                .filter(|mount| mount.class == cos::worker::MountClass::Package)
+                .all(|mount| mount.mode == cos::worker::MountMode::ReadOnly));
+        }
+    }
+    assert_eq!(fs::read(&database).unwrap(), bytes);
+    let after = fs::metadata(&database).unwrap();
+    assert_eq!((after.dev(), after.ino()), (identity.dev(), identity.ino()));
+    for neighbour in &neighbours {
+        assert_eq!(
+            fs::read_to_string(neighbour).unwrap(),
+            "unrelated private state"
+        );
+    }
+    assert!(!data.join("apps/storage-sdk").exists());
+    assert!(!data.join("db").exists());
+    write(
+        &directory.join("server.py"),
+        "raise RuntimeError('modified fixture')\n",
+    );
+    assert!(launch.bind(&["server.py".into()]).is_err());
+}
+
 /// A scratch directory with secure ancestry.
 ///
 /// Trust roots require every ancestor up to `/` to be non-symlink,

@@ -5,10 +5,13 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sqlite3
 import subprocess
 import sys
 
 import pytest
+
+from test_support import authenticated_mcp_params
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -122,17 +125,18 @@ def test_duplicate_group_name_across_kinds_is_rejected(locked_source):
         sources.read_lock()
 
 
-@pytest.fixture
-def capability_source(locked_source):
+@pytest.fixture(params=[("document-engine", "doc"), ("storage-sdk", "db")])
+def capability_source(locked_source, request):
     root, lock = locked_source
     upstream = Path(lock["repository"])
-    group = upstream / "capabilities/document-engine"
-    app = group / "apps/doc"
+    group_name, app_id = request.param
+    group = upstream / "capabilities" / group_name
+    app = group / "apps" / app_id
     app.mkdir(parents=True)
     (group / "package.json").write_text(json.dumps({
-        "kind": "shared-capability-client", "apps": ["apps/doc"],
+        "kind": "shared-capability-client", "apps": [f"apps/{app_id}"],
     }))
-    (app / "app.json").write_text('{"id":"doc"}')
+    (app / "app.json").write_text(json.dumps({"id": app_id}))
     (upstream / "tools/stage.py").write_text(
         'import json, pathlib, shutil, sys\n'
         'kind = sys.argv[sys.argv.index("--kind") + 1] if "--kind" in sys.argv else "product"\n'
@@ -149,11 +153,11 @@ def capability_source(locked_source):
         'print(json.dumps(installed))\n'
     )
     git = ["git", "-C", str(upstream)]
-    subprocess.run([*git, "add", "capabilities/document-engine", "tools/stage.py"], check=True)
+    subprocess.run([*git, "add", f"capabilities/{group_name}", "tools/stage.py"], check=True)
     subprocess.run([*git, "commit", "--quiet", "-m", "capability fixture"], check=True)
     lock["revision"] = subprocess.check_output([*git, "rev-parse", "HEAD"], text=True).strip()
-    lock["capabilities"] = ["document-engine"]
-    lock["apps"].append("doc")
+    lock["capabilities"] = [group_name]
+    lock["apps"].append(app_id)
     (root / "packaging/apps.lock.json").write_text(json.dumps(lock))
     partition = root / "packaging/deb/claw-os-desktop/apps.list"
     partition.parent.mkdir(parents=True)
@@ -163,47 +167,50 @@ def capability_source(locked_source):
 
 def test_capability_uses_its_explicit_immutable_root_and_agent_partition(capability_source, tmp_path):
     root, lock = capability_source
-    assert sources.declared_sources(lock) == [("product", "mail"), ("capability", "document-engine")]
-    assert sources.stage_products(tmp_path / "all") == ["mail-ai", "doc"]
-    assert sources.stage_products(tmp_path / "agent", "agent") == ["mail-ai", "doc"]
+    group, app_id = lock["capabilities"][0], lock["apps"][-1]
+    assert sources.declared_sources(lock) == [("product", "mail"), ("capability", group)]
+    assert sources.stage_products(tmp_path / "all") == ["mail-ai", app_id]
+    assert sources.stage_products(tmp_path / "agent", "agent") == ["mail-ai", app_id]
     assert sources.stage_products(tmp_path / "desktop", "desktop") == []
-    assert sources.app_path("doc") == (
-        root / "build/app-sources" / lock["revision"] / "capabilities/document-engine/apps/doc"
+    assert sources.app_path(app_id) == (
+        root / "build/app-sources" / lock["revision"] / "capabilities" / group / "apps" / app_id
     )
-    assert not (tmp_path / "desktop/usr/lib/cos/apps/doc").exists()
+    assert not (tmp_path / "desktop/usr/lib/cos/apps" / app_id).exists()
 
 
 def test_missing_capability_never_uses_local_os_or_product_source(capability_source, monkeypatch):
     root, lock = capability_source
+    group, app_id = lock["capabilities"][0], lock["apps"][-1]
     source = sources.prepare_sources(lock)
-    for alternate in (root / "apps/doc", source / "products/document-engine/apps/doc"):
+    for alternate in (root / "apps" / app_id, source / "products" / group / "apps" / app_id):
         alternate.mkdir(parents=True)
-        (alternate / "app.json").write_text('{"id":"doc"}')
-    (source / "capabilities/document-engine/package.json").unlink()
+        (alternate / "app.json").write_text(json.dumps({"id": app_id}))
+    (source / "capabilities" / group / "package.json").unlink()
     monkeypatch.setattr(sources, "prepare_sources", lambda _: source)
     with pytest.raises(RuntimeError, match="Locked capability source package is missing"):
-        sources.app_path("doc")
+        sources.app_path(app_id)
 
 
 @pytest.mark.parametrize("change", ["kind", "duplicate", "traversal", "missing", "native", "dependency"])
 def test_capability_contract_errors_fail_before_staging(capability_source, monkeypatch, tmp_path, change):
     _, lock = capability_source
+    group, app_id = lock["capabilities"][0], lock["apps"][-1]
     source = sources.prepare_sources(lock)
-    path = source / "capabilities/document-engine/package.json"
+    path = source / "capabilities" / group / "package.json"
     package = json.loads(path.read_text())
     if change == "kind":
         package["kind"] = "product"
     elif change == "duplicate":
-        package["apps"].append("apps/doc")
+        package["apps"].append(f"apps/{app_id}")
     elif change == "traversal":
-        package["apps"] = ["apps/../doc"]
+        package["apps"] = [f"apps/../{app_id}"]
     elif change == "missing":
         package["apps"] = ["apps/missing"]
     elif change == "native":
         package["native"] = {}
     else:
         package["python_dependencies"] = [
-            {"kind": "product", "name": "unlocked", "library": "claw_files", "apps": ["doc"]},
+            {"kind": "product", "name": "unlocked", "library": "claw_files", "apps": [app_id]},
         ]
     path.write_text(json.dumps(package))
     monkeypatch.setattr(sources, "prepare_sources", lambda _: source)
@@ -217,7 +224,7 @@ def test_native_preparation_does_not_invent_capability_components(capability_sou
     destination = sources.prepare_native()
     assert (destination / "revision").read_text().strip() == lock["revision"]
     assert json.loads((destination / "native-libraries.json").read_text())["libraries"] == {}
-    assert not (destination / "document-engine").exists()
+    assert not (destination / lock["capabilities"][0]).exists()
     assert not (destination / "doc").exists()
 
 
@@ -338,20 +345,24 @@ def test_real_app_staging_counts_nested_apps_and_installs_shared_parser(tmp_path
 
 def test_published_capability_pin_stages_all_partitions_and_real_agent_runtime(tmp_path):
     lock = sources.read_lock()
-    assert lock["capabilities"] == ["document-engine"]
+    assert lock["capabilities"] == ["document-engine", "storage-sdk"]
     assert len(lock["products"]) == 24
-    assert len(lock["apps"]) == 71
+    assert len(lock["apps"]) == 72
     source = sources.prepare_sources(lock)
     expected = set(lock["apps"])
     desktop = expected & set(sources.desktop_apps())
     assert len(desktop) == 12
-    assert len(expected - desktop) == 59
+    assert len(expected - desktop) == 60
     assert set(sources.stage_products(tmp_path / "all")) == expected
     assert set(sources.stage_products(tmp_path / "agent", "agent")) == expected - desktop
     assert set(sources.stage_products(tmp_path / "desktop", "desktop")) == desktop
     assert not (tmp_path / "desktop/usr/lib/cos/python/claw_files").exists()
     assert sources.app_path("doc") == source / "capabilities/document-engine/apps/doc"
+    assert sources.app_path("db") == source / "capabilities/storage-sdk/apps/db"
     assert not (ROOT / "apps/doc").exists()
+    assert not (ROOT / "apps/db").exists()
+    assert "db" not in desktop
+    assert not (tmp_path / "desktop/usr/lib/cos/apps/db").exists()
 
     staged = tmp_path / "agent-package"
     python = staged / "usr/lib/cos/python"
@@ -368,12 +379,21 @@ def test_published_capability_pin_stages_all_partitions_and_real_agent_runtime(t
         **os.environ, "PROJECT_DIR": str(ROOT), "SCRIPT_DIR": str(ROOT / "packaging/deb"),
         "AGENT_STAGE": str(staged),
     })
-    app = staged / "usr/lib/cos/apps/doc"
-    for name in ("app.json", "main.py", "server.py"):
-        assert (app / name).read_bytes() == (sources.app_path("doc") / name).read_bytes()
+    for app_id, group in (("doc", "document-engine"), ("db", "storage-sdk")):
+        original = source / "capabilities" / group / "apps" / app_id
+        for partition_name in ("all", "agent", "agent-package"):
+            installed = tmp_path / partition_name / "usr/lib/cos/apps" / app_id
+            assert {path.name for path in installed.iterdir()} == {"app.json", "main.py", "server.py"}
+            for name in ("app.json", "main.py", "server.py"):
+                assert (installed / name).read_bytes() == (original / name).read_bytes()
+                assert (installed / name).stat().st_mode == (original / name).stat().st_mode
     parser = python / "claw_files/document.py"
     assert parser.read_bytes() == (source / "products/files/python/claw_files/document.py").read_bytes()
-    assert len(list((staged / "usr/lib/cos/apps").rglob("app.json"))) == 63
+    manifests = list((staged / "usr/lib/cos/apps").rglob("app.json"))
+    assert len(manifests) == 63
+    assert {json.loads(path.read_text())["id"] for path in manifests} == (
+        expected - desktop
+    ) | {"kv", "net", "summarize"}
     document = tmp_path / "synthetic.txt"
     document.write_text("immutable capability in the real Agent composition")
     policy = tmp_path / "cos"
@@ -388,13 +408,106 @@ def test_published_capability_pin_stages_all_partitions_and_real_agent_runtime(t
          "import json; import main; import claw_files.document as library; "
          "print(json.dumps({'library':library.__file__, 'result':main.run('read', "
          f"[{str(document)!r}])}}))"],
-        cwd=app, capture_output=True, text=True, check=True, timeout=20,
+        cwd=staged / "usr/lib/cos/apps/doc", capture_output=True, text=True, check=True, timeout=20,
         env={"PATH": os.defpath, "PYTHONPATH": str(python),
              "PYTHONDONTWRITEBYTECODE": "1", "CLAW_COS_BIN": str(policy)},
     )
     payload = json.loads(result.stdout)
     assert payload["library"] == str(parser)
     assert payload["result"]["content"] == document.read_text()
+
+    data = tmp_path / "owner-data/apps/db"
+    database = data / "db/inventory.db"
+    database.parent.mkdir(parents=True)
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE items (value TEXT)")
+        connection.execute("INSERT INTO items VALUES ('existing state')")
+    identity = (database.stat().st_dev, database.stat().st_ino)
+    neighbours = [
+        tmp_path / "owner-data/apps/kv/kv.json",
+        tmp_path / "owner-data/agent/memory.db",
+        tmp_path / "other-owner/apps/db/db/inventory.db",
+    ]
+    for neighbour in neighbours:
+        neighbour.parent.mkdir(parents=True, exist_ok=True)
+        neighbour.write_bytes(b"unrelated private state")
+    db_policy = tmp_path / "db-policy"
+    db_policy.write_text(
+        '#!/bin/sh\n'
+        'test "$1:$2:$3" = "--wire=1:__policy:check" || exit 99\n'
+        'test "$COS_APP_ID:$COS_SESSION" = "db:db-fixture" || exit 98\n'
+        'case "$4:$5:$6" in\n'
+        '  data.db.read:--name:inventory|data.db.write:--name:inventory) decision=allow;;\n'
+        '  *) decision=deny;;\n'
+        'esac\n'
+        'printf \'{"ok":true,"wire_version":1,"data":{"decision":"%s"}}\\n\' "$decision"\n'
+    )
+    db_policy.chmod(0o755)
+    calls = [
+        ("query", {"database": "inventory", "sql": "SELECT value FROM items"}),
+        ("exec", {"database": "inventory", "sql": "UPDATE items SET value = 'updated state'"}),
+        ("query", {"database": "inventory", "sql": "SELECT value FROM items"}),
+        ("query", {
+            "database": "inventory",
+            "sql": "WITH RECURSIVE seq(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM seq WHERE n<1001) SELECT n FROM seq",
+        }),
+        ("schema", {"database": "inventory", "table": "items"}),
+        ("tables", {"database": "inventory"}),
+        ("exec", {"database": "other", "sql": "CREATE TABLE denied (value)"}),
+        ("databases", {}),
+        ("query", {"database": "inventory", "sql": "DELETE FROM items"}),
+    ]
+    db_app = staged / "usr/lib/cos/apps/db"
+    result = subprocess.run(
+        [sys.executable, "-c", """
+import json, sys
+import claw_os_sdk.mcp as sdk
+import cos_runtime.policy as policy
+import main, server
+results = [server.app._handle_request("tools/call", call, True) for call in json.load(sys.stdin)]
+print(json.dumps({"sdk": sdk.__file__, "policy": policy.__file__, "app": server.__file__,
+                  "db_dir": main.DB_DIR, "results": results}))
+"""],
+        input=json.dumps([
+            authenticated_mcp_params({"name": f"db.{command}", "arguments": arguments})
+            for command, arguments in calls
+        ]),
+        cwd=db_app, capture_output=True, text=True, check=True, timeout=20,
+        env={"PATH": os.defpath, "PYTHONPATH": str(python), "COS_DATA_DIR": str(data),
+             "COS_APP_MANIFEST": str(db_app / "app.json"), "COS_APP_ID": "db",
+             "COS_SESSION": "db-fixture", "CLAW_COS_BIN": str(db_policy),
+             "PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1"},
+    )
+    payload = json.loads(result.stdout)
+    assert payload["sdk"] == str(python / "claw_os_sdk/mcp.py")
+    assert payload["policy"] == str(python / "cos_runtime/policy.py")
+    assert payload["app"] == str(db_app / "server.py")
+    assert payload["db_dir"] == str(data / "db")
+    results = payload["results"]
+    assert results[0]["structuredContent"] == {
+        "database": "inventory", "columns": ["value"], "rows": [["existing state"]], "count": 1,
+    }
+    assert results[1]["structuredContent"]["rows_affected"] == 1
+    assert results[2]["structuredContent"]["rows"] == [["updated state"]]
+    assert results[3]["structuredContent"] == {
+        "database": "inventory", "columns": ["n"], "rows": [[i] for i in range(1, 1001)],
+        "count": 1000, "truncated": True, "total_rows": 1001,
+    }
+    assert results[4]["structuredContent"] == {
+        "database": "inventory", "table": "items", "schema": "CREATE TABLE items (value TEXT)",
+    }
+    assert results[5]["structuredContent"] == {"database": "inventory", "tables": ["items"]}
+    for denied in results[6:8]:
+        assert denied["isError"] is True
+        assert "PermissionDenied" in denied["content"][0]["text"]
+    assert results[8]["isError"] is True
+    assert "database query failed" in results[8]["content"][0]["text"]
+    with sqlite3.connect(database) as connection:
+        assert connection.execute("SELECT value FROM items").fetchall() == [("updated state",)]
+    assert (database.stat().st_dev, database.stat().st_ino) == identity
+    assert [path.name for path in database.parent.iterdir()] == ["inventory.db"]
+    assert all(neighbour.read_bytes() == b"unrelated private state" for neighbour in neighbours)
+    assert not (data.parent / "storage-sdk").exists()
 
 
 def test_native_inputs_follow_lock_updates_without_stale_files(locked_source):
@@ -671,9 +784,9 @@ def test_native_notifications_share_exported_libraries_and_leave_legacy_state_se
     assert "python3 ../../scripts/app_sources.py --native" in panel_just
     status = (ROOT / "docs/app-product-redesign.md").read_text()
     assert "clawos-app/products/notifications" in status
-    assert "**71 of the original 75 identities**" in status
+    assert "**72 of the original 75 identities**" in status
     assert "**24 business product groups**" in status
-    assert "59 Agent-package identities and 12 desktop identities" in status
+    assert "60 Agent-package identities and 12 desktop identities" in status
     assert "products/notifications" in (ROOT / "desktop/PROVENANCE.md").read_text()
     assert "just notifications-build" in (ROOT / "desktop/README.md").read_text()
 
@@ -681,11 +794,11 @@ def test_native_notifications_share_exported_libraries_and_leave_legacy_state_se
 def test_notify_is_agent_owned_and_preserves_history_without_an_installer_transition():
     lock = sources.read_lock()
     desktop = set(sources.desktop_apps())
-    assert len(lock["apps"]) == 71
+    assert len(lock["apps"]) == 72
     assert len(lock["products"]) == 24
-    assert lock["capabilities"] == ["document-engine"]
+    assert lock["capabilities"] == ["document-engine", "storage-sdk"]
     assert len(set(lock["apps"]) & desktop) == 12
-    assert len(set(lock["apps"]) - desktop) == 59
+    assert len(set(lock["apps"]) - desktop) == 60
     assert "notify" not in desktop
     assert "cosmic-notifications" in desktop
     assert not (ROOT / "apps/notify").exists()
@@ -696,7 +809,7 @@ def test_notify_is_agent_owned_and_preserves_history_without_an_installer_transi
     assert "not part of the new service list" in contract
     assert "data.inbox.read" in contract
     assert "warning severity" in contract
-    assert "59 migrated Agent identities plus 12 desktop" in (ROOT / "packaging/MODULE.md").read_text()
+    assert "60 migrated Agent identities plus 12 desktop" in (ROOT / "packaging/MODULE.md").read_text()
 
 
 @pytest.mark.parametrize("export", [

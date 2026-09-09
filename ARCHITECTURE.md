@@ -65,7 +65,7 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | Browser and semantic services | Obscura browser stack, `cos-browser`, embedding and semantic-search services | `crates/obscura-*`, `crates/cos-browser`, `crates/claw-*` |
 | Desktop | Product desktop fork and native UI clients communicating through stable OS boundaries; the Agent UI and bridge share a versioned presentation protocol | `desktop/`, `desktop/agent/protocol/` |
 | Migrated App products | Product UI, business implementation, MCP and upstream source live in a separate repository; Mail native build and product cutover remain in progress | [`clawos-app`](https://github.com/xiaoyu-work/clawos-app), `packaging/apps.lock.json` |
-| Shared-capability clients | Legacy facades are explicitly separate from business products; Document Engine owns `doc` while privileged providers and SDK stay in the OS | External `clawos-app/capabilities/`, `packaging/apps.lock.json` |
+| Shared-capability clients | Legacy facades are explicitly separate from business products; Document Engine owns `doc` and Storage SDK owns `db`, while privileged providers and SDK stay in the OS | External `clawos-app/capabilities/`, `packaging/apps.lock.json` |
 | Image composition | Reusable rootfs features and profile definitions | `rootfs/`, `scripts/lib/image-profiles.sh` |
 | Web desktop | React/Vite Linux desktop whose browser opens the embedded marketing site; independently built before Pages composition | `web/`, `.github/workflows/publish-website.yml` |
 | Distribution | WSL/Docker/VM/ISO/Azure packaging, Debian packages, signed APT repo, releases | `targets/`, `packaging/`, `.github/workflows/` |
@@ -509,11 +509,20 @@ Its declared Files `claw_files` export supplies the same parser in development,
 Doc-only staging and the Agent package. No Files App call or second parser is
 introduced; identical co-staged library payloads are reused and conflicts
 refused. Native preparation stays product-only. Missing or ambiguous declared
-sources never fall back to local OS Apps. This reaches 71/75 source identities:
-24 business product groups plus one capability group, 59 Agent and 12 desktop
+sources never fall back to local OS Apps. This reaches 72/75 source identities:
+24 business product groups plus two capability groups, 60 Agent and 12 desktop
 identities. Doc's signed schema, six operations, grants, AI budget/safety/origin,
-memory identity and installed state are unchanged; the other four capability
-identities have not moved.
+memory identity and installed state are unchanged.
+
+Storage SDK owns only `db` at `capabilities/storage-sdk/apps/db`, separate from
+the Storage business product. Its unchanged manifest, SQLite implementation
+and direct MCP server preserve five MCP/CLI tools, exact database read/write
+scopes, safe names, read-only connections, SQL authorizers, single-statement
+commits and the 1,000-returned-row bound. Agent still installs
+`/usr/lib/cos/apps/db`; data stays at `$COS_DATA_DIR/db/<name>.db` inside the
+same owner/App partition. KV and Agent memory remain separate. No SDK/provider,
+grant union, data import or new state transition moves with the source.
+`kv`, `net` and `summarize` have not moved.
 
 Cross-repository App contract and worker tests select real declared source by
 the same lock through `core/test/support/app_sources.rs`. CI explicitly prepares

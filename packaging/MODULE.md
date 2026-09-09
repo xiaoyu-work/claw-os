@@ -118,9 +118,9 @@ or provider source is packaged. Native history/settings and legacy `notify`
 JSON are not migrated. Binary-only hot-swap is refused.
 The `notify` Python source/descriptor/client comes from the same product pin
 but stays exclusively in Agent. It uses that package's SDK/service, not the
-native App. The partition is 59 migrated Agent identities plus 12 desktop
-identities; all 71 belong to 24 business product groups plus one explicitly
-shared-capability source group. Historical JSON is preserved in its
+native App. The partition is 60 migrated Agent identities plus 12 desktop
+identities; all 72 belong to 24 business product groups plus two explicitly
+shared-capability source groups. Historical JSON is preserved in its
 old namespace and excluded from new service lists, never copied into payloads
 or automatically imported at installation/launch.
 App partition accounting includes nested gateway manifests. Shared gateway
@@ -136,6 +136,15 @@ identity/state moves. Agent assembly removes bytecode and resulting empty
 directories from its staged local tree before adding pinned Apps, so old
 cache-only source directories cannot shadow migrated payloads. Source and
 dependency caches are left untouched.
+
+Storage SDK supplies only `db` from `capabilities/storage-sdk/apps/db`, separate
+from the Storage business product. The immutable source contributes exactly
+`app.json`, `main.py` and `server.py` to `/usr/lib/cos/apps/db` in Agent, with
+no SDK/provider, native assets or user state. Its five tools, existing grants
+and `$COS_DATA_DIR/db/<name>.db` namespace are unchanged; KV and Agent memory
+stay separate. Agent still contains 63 total identities (60 external and three
+local); Desktop still contains 12. The real package-block fixture checks these
+exact identities and runs staged DB through the installed SDK/runtime.
 
 ## Tests
 

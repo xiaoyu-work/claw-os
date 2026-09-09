@@ -77,8 +77,19 @@ Co-staging never merges conflicting library trees. Agent still owns
 `/usr/lib/cos/apps/doc`, `/usr/lib/cos/python/claw_files`, SDK/runtime and the
 canonical argument module. All six operations, manifest needs/AI declarations,
 outputs, memory identity and user state remain unchanged. The source lock now
-covers 71/75 identities: 24 business products plus one capability group, with
-59 migrated Agent and 12 desktop identities; native preparation stays product-only.
+covers 72/75 identities: 24 business products plus two capability groups, with
+60 migrated Agent and 12 desktop identities; native preparation stays product-only.
+
+Storage SDK supplies only `db` from `capabilities/storage-sdk/apps/db`, not
+from the distinct Storage business product. Its original manifest, SQLite
+implementation and MCP server install unchanged at `/usr/lib/cos/apps/db`.
+Five MCP/CLI tools retain their exact read/write needs and 1,000-returned-row
+bound. Existing files stay at `$COS_DATA_DIR/db/<name>.db` within the same
+owner/App partition; no KV or Agent-memory state is read, imported or merged.
+No SDK/provider or native source is added to the capability payload. The
+installed Agent package still has 63 identities, including three local Apps;
+Desktop still has 12. Normal signed package updates remain the only installed
+update path; source relocation adds no data transition.
 
 Native Store is composed under `build/native-apps/cosmic-store`, including its
 original default-feature graph and flathub-stats workspace. The desktop package
