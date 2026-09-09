@@ -169,13 +169,16 @@ cache; Cargo itself does not download fixtures. The lock's optional
 `capabilities` groups resolve only explicitly marked shared-capability clients,
 not business products or local-source fallbacks. `doc` is owned by the external
 Document Engine group; its declared Files parser is staged in the Agent package.
-`db` is owned by Storage SDK, with unchanged MCP/CLI schemas and its existing
-owner/App SQLite namespace. Neither source is loaded from a local OS copy.
+`db` and `kv` are owned by Storage SDK, with separate identities, exact scopes
+and their existing owner/App SQLite and JSON namespaces. No migrated source
+is loaded from a local OS copy. KV has only its manifest-selected MCP entrypoint,
+not a `main.py`; runtime fixtures use public stdio calls and complete staged
+payloads. See [the KV compatibility note](docs/updating.md#app-data-moves-into-per-app-directories).
 
 ```bash
 python3 scripts/app_sources.py
 
-# Validate explicit source kinds and the published Doc/DB fixtures.
+# Validate explicit source kinds and the published Doc/DB/KV fixtures.
 cargo test -p cos --test app_source_fixtures -- --test-threads=1
 
 # Core tests share process-global environment variables.

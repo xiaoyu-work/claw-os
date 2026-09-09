@@ -23,7 +23,7 @@ fn fixture() -> tempfile::TempDir {
         &json!({
             "version": 1, "revision": REVISION, "products": ["files", "storage"],
             "capabilities": ["document-engine", "storage-sdk"],
-            "apps": ["fs", "doc", "storage-manager", "db"],
+            "apps": ["fs", "doc", "storage-manager", "db", "kv"],
         }),
     );
     let source = root.path().join("build/app-sources").join(REVISION);
@@ -63,13 +63,18 @@ fn fixture() -> tempfile::TempDir {
         &source,
         "capabilities/storage-sdk/package.json",
         &json!({
-            "kind": "shared-capability-client", "apps": ["apps/db"],
+            "kind": "shared-capability-client", "apps": ["apps/db", "apps/kv"],
         }),
     );
     write_json(
         &source,
         "capabilities/storage-sdk/apps/db/app.json",
         &json!({"id": "db"}),
+    );
+    write_json(
+        &source,
+        "capabilities/storage-sdk/apps/kv/app.json",
+        &json!({"id": "kv"}),
     );
     write_json(
         root.path(),
@@ -80,6 +85,11 @@ fn fixture() -> tempfile::TempDir {
         root.path(),
         "apps/db/app.json",
         &json!({"id": "db", "stale": true}),
+    );
+    write_json(
+        root.path(),
+        "apps/kv/app.json",
+        &json!({"id": "kv", "stale": true}),
     );
     root
 }
@@ -101,6 +111,10 @@ fn declared_capability_and_product_resolve_only_their_locked_roots() {
         source.join("capabilities/storage-sdk/apps/db")
     );
     assert_eq!(
+        app_sources::app_dir_in(root.path(), "kv"),
+        source.join("capabilities/storage-sdk/apps/kv")
+    );
+    assert_eq!(
         app_sources::app_dir_in(root.path(), "storage-manager"),
         source.join("products/storage/apps/storage-manager")
     );
@@ -108,7 +122,11 @@ fn declared_capability_and_product_resolve_only_their_locked_roots() {
 
 #[test]
 fn missing_locked_capability_never_uses_the_local_os_copy() {
-    for (group, app) in [("document-engine", "doc"), ("storage-sdk", "db")] {
+    for (group, app) in [
+        ("document-engine", "doc"),
+        ("storage-sdk", "db"),
+        ("storage-sdk", "kv"),
+    ] {
         for missing in ["package.json".to_string(), format!("apps/{app}/app.json")] {
             let root = fixture();
             std::fs::remove_file(root.path().join(format!(
@@ -329,6 +347,7 @@ fn published_db_fixture_preserves_mcp_cli_arguments_and_exact_database_scopes() 
             assert_eq!(argument["required"], true);
             assert_eq!(argument["type"], "string");
         }
+
         let argv = argv.into_iter().map(String::from).collect::<Vec<_>>();
         let supplied = cos::caps::args::bind_supplied_cli_args(&tool.args, &argv).unwrap();
         let expected: BTreeMap<String, Value> = serde_json::from_value(expected).unwrap();
@@ -353,4 +372,109 @@ fn published_db_fixture_preserves_mcp_cli_arguments_and_exact_database_scopes() 
             .is_err());
     }
     assert!(cos::apps::mcp_tool_for_command(&manifest, "execute").is_err());
+}
+
+#[test]
+fn published_kv_fixture_preserves_cli_defaults_and_separate_key_and_store_scopes() {
+    use cos::caps::manifest::ScopeBinding;
+    use cos::caps::{Cap, Scope, Verb};
+
+    let directory = app_sources::app_dir("kv");
+    assert!(directory.ends_with("capabilities/storage-sdk/apps/kv"));
+    let manifest = cos::caps::manifest::Manifest::from_json(
+        &std::fs::read_to_string(directory.join("app.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(manifest.id, "kv");
+    assert!(cos::apps::is_mcp_only_cli(&manifest));
+    let service = manifest.mcp.as_ref().unwrap();
+    let entry = service
+        .entry
+        .as_deref()
+        .unwrap_or_else(|| manifest.runtime.default_mcp_entry());
+    assert!(directory.join(entry).is_file());
+    assert!(service.access.system_agent);
+    assert!(!service.access.external_agents);
+    assert_eq!(
+        service
+            .tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>(),
+        ["kv.get", "kv.set", "kv.del", "kv.list", "kv.dump"]
+    );
+    let paths = cos::caps::args::PathContext {
+        home: directory.clone(),
+        cwd: None,
+    };
+    for (command, argv, values, required) in [
+        (
+            "get",
+            vec!["alpha"],
+            json!({"key": "alpha"}),
+            Cap::new(Verb::DATA_KV_READ, Scope::name("alpha")),
+        ),
+        (
+            "set",
+            vec!["alpha", "value"],
+            json!({"key": "alpha", "value": "value"}),
+            Cap::new(Verb::DATA_KV_WRITE, Scope::name("alpha")),
+        ),
+        (
+            "del",
+            vec!["alpha"],
+            json!({"key": "alpha"}),
+            Cap::new(Verb::DATA_KV_DELETE, Scope::name("alpha")),
+        ),
+        (
+            "list",
+            vec![],
+            json!({"pattern": "*"}),
+            Cap::new(Verb::DATA_KV_READ, Scope::Wild),
+        ),
+        (
+            "list",
+            vec!["alpha*"],
+            json!({"pattern": "alpha*"}),
+            Cap::new(Verb::DATA_KV_READ, Scope::Wild),
+        ),
+        (
+            "dump",
+            vec![],
+            json!({}),
+            Cap::new(Verb::DATA_KV_READ, Scope::Wild),
+        ),
+    ] {
+        let tool = cos::apps::mcp_tool_for_command(&manifest, command).unwrap();
+        let argv = argv.into_iter().map(String::from).collect::<Vec<_>>();
+        let supplied = cos::caps::args::bind_supplied_cli_args(&tool.args, &argv).unwrap();
+        let effective = manifest
+            .resolve_mcp_tool_call(&tool.name, &supplied, &paths)
+            .unwrap();
+        assert_eq!(serde_json::to_value(effective.values).unwrap(), values);
+        assert_eq!(
+            effective.needs.into_iter().flatten().collect::<Vec<_>>(),
+            [required]
+        );
+        if matches!(command, "list" | "dump") {
+            assert!(matches!(
+                tool.needs[0].scope,
+                ScopeBinding::Fixed { scope: Scope::Wild }
+            ));
+        }
+    }
+    for (tool, arguments) in [
+        ("kv.get", json!({})),
+        ("kv.get", json!({"key": 42})),
+        ("kv.set", json!({"key": "alpha", "value": false})),
+        ("kv.del", json!({"key": "alpha", "session_id": "forged"})),
+        ("kv.list", json!({"pattern": []})),
+        ("kv.dump", json!({"key": "extra"})),
+    ] {
+        let supplied = serde_json::from_value(arguments).unwrap();
+        assert!(manifest
+            .resolve_mcp_tool_call(tool, &supplied, &paths)
+            .is_err());
+    }
+    assert!(cos::apps::mcp_tool_for_command(&manifest, "delete").is_err());
 }

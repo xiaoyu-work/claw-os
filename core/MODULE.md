@@ -65,15 +65,19 @@ migrated product inputs from the repository root with
 inputs fail with an actionable diagnostic; tests do not download them.
 The helper resolves the lock's distinct `products` and optional `capabilities`
 roots, requires matching source-kind metadata and exact identity/layout, and
-never substitutes local `apps/doc` or `apps/db` for the migrated capability clients.
+never substitutes local `apps/doc`, `apps/db` or `apps/kv` for migrated clients.
 `tests/app_source_fixtures.rs` covers both kinds, missing/duplicate/escaping
-sources and the published Doc/DB manifests, including DB's exact MCP/CLI
-arguments and read/write scopes. Signed fixtures in
+sources and the published Doc/DB/KV manifests, including exact MCP/CLI arguments,
+defaults and separate key/database/whole-store scopes. Signed fixtures in
 `tests/extension_provenance_process.rs` bind the same sources to worker policy;
-DB keeps its original owner/App data partition without KV or Agent-memory mounts.
-DB's signed fixture checks the prepared cache's exact Git revision/cleanliness,
-invokes its declared staging CLI without downloads, and binds the entrypoint
-from the manifest rather than assuming private implementation filenames.
+DB and KV retain independent owner/App partitions, without neighbouring App or
+Agent-memory mounts. `test/support/app_stage.rs` reuses the declared staging CLI,
+checks the prepared cache's exact Git revision/cleanliness without downloads,
+and supplies the OS-owned shared Python library separately from App payloads.
+Signed fixtures and the real KV session tests bind the manifest-selected
+entrypoint rather than assuming private implementation filenames.
+The KV planner regression verifies distinct key read/write/delete grants and
+fixed whole-store read for list/dump; named-key unions cannot authorize enumeration.
 These pinned integration inputs are not production core build dependencies.
 
 ```bash

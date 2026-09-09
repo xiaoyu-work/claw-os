@@ -166,6 +166,92 @@ fn daemon_plan_skips_inactive_calendar_provider_needs() {
     assert!(plan.missing.is_empty());
 }
 
+#[test]
+fn published_kv_planner_keeps_key_grants_distinct_and_requires_whole_store_read() {
+    let path = app_sources::app_dir("kv").join("app.json");
+    let manifest = Manifest::from_json(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let service = manifest.mcp.as_ref().unwrap();
+    for (tool_name, arguments, required) in [
+        (
+            "kv.get",
+            json!({"key": "alpha"}),
+            Cap::new(Verb::DATA_KV_READ, Scope::name("alpha")),
+        ),
+        (
+            "kv.set",
+            json!({"key": "alpha", "value": "value"}),
+            Cap::new(Verb::DATA_KV_WRITE, Scope::name("alpha")),
+        ),
+        (
+            "kv.del",
+            json!({"key": "alpha"}),
+            Cap::new(Verb::DATA_KV_DELETE, Scope::name("alpha")),
+        ),
+        (
+            "kv.list",
+            json!({}),
+            Cap::new(Verb::DATA_KV_READ, Scope::Wild),
+        ),
+        (
+            "kv.list",
+            json!({"pattern": "alpha*"}),
+            Cap::new(Verb::DATA_KV_READ, Scope::Wild),
+        ),
+        (
+            "kv.dump",
+            json!({}),
+            Cap::new(Verb::DATA_KV_READ, Scope::Wild),
+        ),
+    ] {
+        let tool = service
+            .tools
+            .iter()
+            .find(|tool| tool.name == tool_name)
+            .unwrap();
+        let supplied = serde_json::from_value(arguments).unwrap();
+        for grants in [
+            CapSet::from_caps([required.clone()]),
+            CapSet::from_caps([Cap::new(Verb::DATA_KV_READ, Scope::Wild)]),
+            CapSet::from_caps([Cap::new(Verb::DATA_DB_READ, Scope::Wild)]),
+            CapSet::from_caps([Cap::new(required.verb, Scope::name("other"))]),
+            CapSet::from_caps([
+                Cap::new(Verb::DATA_KV_READ, Scope::name("alpha")),
+                Cap::new(Verb::DATA_KV_READ, Scope::name("beta")),
+            ]),
+            CapSet::from_caps([
+                Cap::new(Verb::DATA_KV_WRITE, Scope::name("alpha")),
+                Cap::new(Verb::DATA_KV_DELETE, Scope::name("alpha")),
+            ]),
+        ] {
+            let allowed = grants.covers(&required);
+            let delegation = delegation(grants);
+            let effective = manifest
+                .resolve_mcp_tool_call(tool_name, &supplied, &delegation.paths)
+                .unwrap();
+            assert_eq!(
+                effective.needs.iter().flatten().collect::<Vec<_>>(),
+                [&required]
+            );
+            let plan = derive_plan(
+                &tool.needs,
+                &effective.needs,
+                &delegation,
+                &publisher_ceiling(),
+                "kv",
+            )
+            .unwrap();
+            assert_eq!(plan.caps.iter().collect::<Vec<_>>(), [&required]);
+            assert_eq!(plan.missing.is_empty(), allowed, "{tool_name}");
+            if !allowed {
+                assert_eq!(plan.missing.as_slice(), std::slice::from_ref(&required));
+            }
+            if tool_name == "kv.list" && supplied.is_empty() {
+                assert_eq!(effective.values["pattern"], "*");
+            }
+        }
+    }
+}
+
 /// Derive and settle a plan the way egister does, so tests exercise
 /// the real authorization path.
 fn operation_caps(

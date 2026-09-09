@@ -126,7 +126,9 @@ def test_duplicate_group_name_across_kinds_is_rejected(locked_source):
         sources.read_lock()
 
 
-@pytest.fixture(params=[("document-engine", "doc"), ("storage-sdk", "db")])
+@pytest.fixture(params=[
+    ("document-engine", "doc"), ("storage-sdk", "db"), ("storage-sdk", "kv"),
+])
 def capability_source(locked_source, request):
     root, lock = locked_source
     upstream = Path(lock["repository"])
@@ -369,22 +371,25 @@ def test_published_capability_pin_stages_all_partitions_and_real_agent_runtime(t
     lock = sources.read_lock()
     assert lock["capabilities"] == ["document-engine", "storage-sdk"]
     assert len(lock["products"]) == 24
-    assert len(lock["apps"]) == 72
+    assert len(lock["apps"]) == 73
     source = sources.prepare_sources(lock)
     expected = set(lock["apps"])
     desktop = expected & set(sources.desktop_apps())
     assert len(desktop) == 12
-    assert len(expected - desktop) == 60
+    assert len(expected - desktop) == 61
     assert set(sources.stage_products(tmp_path / "all")) == expected
     assert set(sources.stage_products(tmp_path / "agent", "agent")) == expected - desktop
     assert set(sources.stage_products(tmp_path / "desktop", "desktop")) == desktop
     assert not (tmp_path / "desktop/usr/lib/cos/python/claw_files").exists()
     assert sources.app_path("doc") == source / "capabilities/document-engine/apps/doc"
     assert sources.app_path("db") == source / "capabilities/storage-sdk/apps/db"
+    assert sources.app_path("kv") == source / "capabilities/storage-sdk/apps/kv"
     assert not (ROOT / "apps/doc").exists()
     assert not (ROOT / "apps/db").exists()
-    assert "db" not in desktop
-    assert not (tmp_path / "desktop/usr/lib/cos/apps/db").exists()
+    assert not (ROOT / "apps/kv").exists()
+    for app_id in ("db", "kv"):
+        assert app_id not in desktop
+        assert not (tmp_path / "desktop/usr/lib/cos/apps" / app_id).exists()
 
     staged = tmp_path / "agent-package"
     python = staged / "usr/lib/cos/python"
@@ -401,11 +406,13 @@ def test_published_capability_pin_stages_all_partitions_and_real_agent_runtime(t
         **os.environ, "PROJECT_DIR": str(ROOT), "SCRIPT_DIR": str(ROOT / "packaging/deb"),
         "AGENT_STAGE": str(staged),
     })
-    for app_id, group in (("doc", "document-engine"), ("db", "storage-sdk")):
+    for app_id, group in (
+        ("doc", "document-engine"), ("db", "storage-sdk"), ("kv", "storage-sdk"),
+    ):
         original = source / "capabilities" / group / "apps" / app_id
         for partition_name in ("all", "agent", "agent-package"):
             installed = tmp_path / partition_name / "usr/lib/cos/apps" / app_id
-            if app_id == "db":
+            if app_id in {"db", "kv"}:
                 assert _app_payload(installed) == _app_payload(original, source=True)
             else:
                 assert {path.name for path in installed.iterdir()} == {"app.json", "main.py", "server.py"}
@@ -418,7 +425,7 @@ def test_published_capability_pin_stages_all_partitions_and_real_agent_runtime(t
     assert len(manifests) == 63
     assert {json.loads(path.read_text())["id"] for path in manifests} == (
         expected - desktop
-    ) | {"kv", "net", "summarize"}
+    ) | {"net", "summarize"}
     document = tmp_path / "synthetic.txt"
     document.write_text("immutable capability in the real Agent composition")
     policy = tmp_path / "cos"
@@ -517,6 +524,85 @@ def test_published_capability_pin_stages_all_partitions_and_real_agent_runtime(t
     assert [path.name for path in database.parent.iterdir()] == ["inventory.db"]
     assert all(neighbour.read_bytes() == b"unrelated private state" for neighbour in neighbours)
     assert not (data.parent / "storage-sdk").exists()
+
+    kv_data = tmp_path / "kv-owner-data/apps/kv"
+    kv_data.mkdir(parents=True)
+    store = kv_data / "kv.json"
+    original = b'{\n  "kept": "existing state", "empty": ""\n}\n'
+    store.write_bytes(original)
+    kv_neighbours = [
+        tmp_path / "kv-owner-data/apps/db/db/existing.db",
+        tmp_path / "kv-owner-data/apps/storage-manager/state",
+        tmp_path / "kv-owner-data/agent/memory.db",
+        tmp_path / "kv-other-owner/apps/kv/kv.json",
+    ]
+    for neighbour in kv_neighbours:
+        neighbour.parent.mkdir(parents=True, exist_ok=True)
+        neighbour.write_bytes(b"unrelated private state")
+    kv_app = staged / "usr/lib/cos/apps/kv"
+    environment = {
+        "PATH": os.defpath, "PYTHONPATH": os.pathsep.join([str(python), str(kv_app.parent)]),
+        "COS_DATA_DIR": str(kv_data), "COS_SESSION": "kv-fixture",
+    }
+
+    def kv_call(request, command, arguments=None):
+        return request("tools/call", authenticated_mcp_params({
+            "name": f"kv.{command}", "arguments": arguments or {},
+        }))
+
+    with (
+        store.open("rb") as old,
+        mcp_process(kv_app, env=environment) as first,
+        mcp_process(kv_app, env=environment) as second,
+    ):
+        identity = os.fstat(old.fileno())
+        catalog = first("tools/list", {})["tools"]
+        assert [tool["name"] for tool in catalog] == [
+            "kv.get", "kv.set", "kv.del", "kv.list", "kv.dump",
+        ]
+        assert catalog[3]["inputSchema"]["properties"]["pattern"]["default"] == "*"
+        assert kv_call(first, "get", {"key": "kept"})["content"][0]["text"] == "existing state"
+        assert kv_call(second, "dump")["structuredContent"] == {
+            "count": 2, "data": {"kept": "existing state", "empty": ""},
+        }
+        assert store.read_bytes() == original
+        for peer, key, value in ((first, "left", "one"), (second, "right", "two")):
+            assert kv_call(peer, "set", {"key": key, "value": value})["structuredContent"] == {
+                "key": key, "value": value,
+            }
+        assert kv_call(first, "list")["structuredContent"] == {
+            "pattern": "*", "keys": ["empty", "kept", "left", "right"],
+        }
+        assert kv_call(second, "list", {"pattern": "l*"})["structuredContent"] == {
+            "pattern": "l*", "keys": ["left"],
+        }
+        assert kv_call(first, "del", {"key": "left"})["structuredContent"] == {
+            "key": "left", "deleted": True,
+        }
+        assert kv_call(second, "get", {"key": "left"})["content"][0]["text"] == ""
+        assert old.read() == original
+        assert (store.stat().st_dev, store.stat().st_ino) != (identity.st_dev, identity.st_ino)
+        for command, arguments in [
+            ("get", {"key": 42}), ("set", {"key": "bad", "value": False}),
+            ("dump", {"session_id": "forged"}),
+        ]:
+            assert kv_call(first, command, arguments)["isError"] is True
+    expected = {"kept": "existing state", "empty": "", "right": "two"}
+    assert json.loads(store.read_text()) == expected
+    assert store.stat().st_mode & 0o777 == 0o600
+    assert (kv_data / "kv.json.lock").stat().st_mode & 0o777 == 0o600
+    assert {path.name for path in kv_data.iterdir()} == {"kv.json", "kv.json.lock"}
+    with mcp_process(kv_app, env=environment) as restarted:
+        assert kv_call(restarted, "dump")["structuredContent"] == {"count": 3, "data": expected}
+        store.write_bytes(b'{"corrupt": false}')
+        for command, arguments in [("dump", {}), ("set", {"key": "new", "value": "value"})]:
+            result = kv_call(restarted, command, arguments)
+            assert result["isError"] is True
+            assert "kv store must contain only string keys and values" in result["content"][0]["text"]
+            assert store.read_bytes() == b'{"corrupt": false}'
+    assert all(neighbour.read_bytes() == b"unrelated private state" for neighbour in kv_neighbours)
+    assert not (kv_data.parent / "storage-sdk").exists()
+    assert not (tmp_path / "kv-owner-data/kv.json").exists()
 
 
 def test_native_inputs_follow_lock_updates_without_stale_files(locked_source):
@@ -793,9 +879,9 @@ def test_native_notifications_share_exported_libraries_and_leave_legacy_state_se
     assert "python3 ../../scripts/app_sources.py --native" in panel_just
     status = (ROOT / "docs/app-product-redesign.md").read_text()
     assert "clawos-app/products/notifications" in status
-    assert "**72 of the original 75 identities**" in status
+    assert "**73 of the original 75 identities**" in status
     assert "**24 business product groups**" in status
-    assert "60 Agent-package identities and 12 desktop identities" in status
+    assert "61 Agent-package identities and 12 desktop identities" in status
     assert "products/notifications" in (ROOT / "desktop/PROVENANCE.md").read_text()
     assert "just notifications-build" in (ROOT / "desktop/README.md").read_text()
 
@@ -803,11 +889,11 @@ def test_native_notifications_share_exported_libraries_and_leave_legacy_state_se
 def test_notify_is_agent_owned_and_preserves_history_without_an_installer_transition():
     lock = sources.read_lock()
     desktop = set(sources.desktop_apps())
-    assert len(lock["apps"]) == 72
+    assert len(lock["apps"]) == 73
     assert len(lock["products"]) == 24
     assert lock["capabilities"] == ["document-engine", "storage-sdk"]
     assert len(set(lock["apps"]) & desktop) == 12
-    assert len(set(lock["apps"]) - desktop) == 60
+    assert len(set(lock["apps"]) - desktop) == 61
     assert "notify" not in desktop
     assert "cosmic-notifications" in desktop
     assert not (ROOT / "apps/notify").exists()
@@ -818,7 +904,7 @@ def test_notify_is_agent_owned_and_preserves_history_without_an_installer_transi
     assert "not part of the new service list" in contract
     assert "data.inbox.read" in contract
     assert "warning severity" in contract
-    assert "60 migrated Agent identities plus 12 desktop" in (ROOT / "packaging/MODULE.md").read_text()
+    assert "61 migrated Agent identities plus 12 desktop" in (ROOT / "packaging/MODULE.md").read_text()
 
 
 @pytest.mark.parametrize("export", [

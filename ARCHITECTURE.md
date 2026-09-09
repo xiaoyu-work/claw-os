@@ -509,30 +509,38 @@ Its declared Files `claw_files` export supplies the same parser in development,
 Doc-only staging and the Agent package. No Files App call or second parser is
 introduced; identical co-staged library payloads are reused and conflicts
 refused. Native preparation stays product-only. Missing or ambiguous declared
-sources never fall back to local OS Apps. This reaches 72/75 source identities:
-24 business product groups plus two capability groups, 60 Agent and 12 desktop
+sources never fall back to local OS Apps. This reaches 73/75 source identities:
+24 business product groups plus two capability groups, 61 Agent and 12 desktop
 identities. Doc's signed schema, six operations, grants, AI budget/safety/origin,
 memory identity and installed state are unchanged.
 
-Storage SDK owns only `db` at `capabilities/storage-sdk/apps/db`, separate from
-the Storage business product. Its unchanged manifest, SQLite implementation
+Storage SDK owns `db` and `kv` at `capabilities/storage-sdk/apps/`, separate from
+the Storage business product. DB's unchanged manifest, SQLite implementation
 and direct MCP server preserve five MCP/CLI tools, exact database read/write
 scopes, safe names, read-only connections, SQL authorizers, single-statement
 commits and the 1,000-returned-row bound. Agent still installs
 `/usr/lib/cos/apps/db`; data stays at `$COS_DATA_DIR/db/<name>.db` inside the
 same owner/App partition. KV and Agent memory remain separate. No SDK/provider,
 grant union, data import or new state transition moves with the source.
+KV's complete MCP-only manifest, server/data logic and tests live alongside DB,
+but retain the independent `kv` identity and `$COS_DATA_DIR/kv.json` string map.
+KV consumes the declared OS `_shared.atomic` library export; it does not copy a
+privileged provider or SDK. Cache refresh and locked private atomic replacement
+prevent stale reads, lost concurrent writes and publication of failed writes.
+Get/set/delete retain exact-key read/write/delete authority. List/dump explicitly
+require fixed whole-store read authority, not borrowed named-key grants; see
+[the compatibility note](docs/updating.md#app-data-moves-into-per-app-directories).
 
-DB evolves through its manifest/MCP contract, public SDK API and
+DB and KV evolve through their manifest/MCP contracts, public SDK API and
 [bundled policy export](cos-runtime/README.md#bundled-client-contract), not
 cross-repository imports of private source. OS core builds do not require an
 App checkout; package composition and integration fixtures deliberately use
-the immutable App pin. DB fixtures consume full staged payloads and the
+the immutable App pin. DB/KV fixtures consume full staged payloads and the
 manifest-selected stdio endpoint. Pins establish reproducibility, not complete
 build/release independence: platform source-directory exports, source-package
 staging and OS package publication remain explicit coupling, as described in
 [`packaging/README.md`](packaging/README.md).
-`kv`, `net` and `summarize` have not moved.
+Only `net` and `summarize` have not moved.
 
 Cross-repository App contract and worker tests select real declared source by
 the same lock through `core/test/support/app_sources.rs`. CI explicitly prepares

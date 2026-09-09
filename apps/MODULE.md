@@ -60,8 +60,14 @@ remain under the legacy `doc` identity and existing grants. Storage SDK's `db`
 client now lives at `clawos-app/capabilities/storage-sdk/apps/db`, not in the
 Storage business product. Its unchanged five MCP/CLI tools, SQLite implementation,
 read/write needs and `$COS_DATA_DIR/db/<name>.db` namespace stay separate from
-KV and Agent memory. `kv`, `net` and `summarize` remain here pending their
-individual moves.
+KV and Agent memory. KV's complete MCP-only manifest, `server.py` and
+`test_server.py` now live alongside DB under
+`clawos-app/capabilities/storage-sdk/apps/kv`; no `main.py` is required.
+Its independent identity and `$COS_DATA_DIR/kv.json` remain unchanged, with
+locked coherent updates and private atomic commits. List/dump require explicit
+whole-store read authority, while get/set/delete retain distinct exact-key
+grants; see [the compatibility note](../docs/updating.md#app-data-moves-into-per-app-directories).
+Only `net` and `summarize` remain here pending their individual moves.
 Do not recreate a local copy: OS package assembly consumes the immutable revision in
 [`packaging/apps.lock.json`](../packaging/apps.lock.json). Source relocation
 does not rename installed App identities or grant additional authority.
@@ -108,7 +114,7 @@ does not rename installed App identities or grant additional authority.
 | `<id>/main.py` | Typed behavior for MCP-only Apps; `run(command, args)` only for unmigrated operations |
 | [`clawos-app/products/files`](https://github.com/xiaoyu-work/clawos-app/tree/main/products/files) | Direct filesystem MCP handlers; authenticated per-call session ids for snapshots |
 | [`clawos-app/capabilities/document-engine`](https://github.com/xiaoyu-work/clawos-app/tree/main/capabilities/document-engine) | Legacy Doc shared-capability client and declared parser dependency; no local source fallback |
-| [`clawos-app/capabilities/storage-sdk`](https://github.com/xiaoyu-work/clawos-app/tree/main/capabilities/storage-sdk) | Legacy DB shared-capability client and SQLite contract tests; no local source, state import or SDK/provider copy |
+| [`clawos-app/capabilities/storage-sdk`](https://github.com/xiaoyu-work/clawos-app/tree/main/capabilities/storage-sdk) | Independent DB/SQLite and KV/JSON clients, MCP and tests; no local source, state import or SDK/provider copy |
 | `<id>/test_main.py` | App behavior, validation, and scope tests |
 | `_shared/` | Shared safe filesystem/HTTP/process helpers |
 | `gateway/` | External messaging gateways and shared gateway safety helpers |

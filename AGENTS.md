@@ -106,8 +106,9 @@ Cargo never downloads product fixtures or substitutes local App source for a
 declared external App. The lock's optional `capabilities` list resolves only
 `capabilities/<name>` with `kind: "shared-capability-client"`; `products` and
 native preparation retain business-product ownership. Never recreate a local
-`apps/doc` or `apps/db` fallback or count a shared-capability group as a business
-product.
+`apps/doc`, `apps/db` or `apps/kv` fallback or count a shared-capability group as
+a business product. Cross-repository runtime fixtures stage complete payloads
+and invoke manifest-selected entrypoints over public MCP, not private App modules.
 
 Rust unit-test bodies live outside production source trees under each crate's
 `test/unit/` directory, mirroring the `src/` path. Production modules contain
@@ -152,8 +153,10 @@ Documentation-only changes do not require code tests.
   using `git add -A`.
 - Keep public SDK code in `claw-os-sdk`; `cos-runtime` is for bundled apps and
   internal policy helpers.
-- Apps declare operations and scopes in `app.json`; implementation belongs in
-  `main.py`. Schema inspection must not execute app entrypoint code.
+- Apps declare operations/MCP tools and scopes in `app.json`; implementation
+  belongs in the declared entrypoint and its modules. MCP-only Apps such as KV
+  need neither `main.py` nor legacy operations. Schema inspection must not
+  execute app entrypoint code.
 - Apps never call model-provider SDKs directly. AI access goes through the
   Claw OS SDK/agent gate so consent, budgets, logging, and provider ownership
   remain centralized.
@@ -177,9 +180,9 @@ Documentation-only changes do not require code tests.
 ### New or changed app operation
 
 1. Update `app.json` operation args and `needs`.
-2. Implement or change the `main.py` handler.
+2. Implement or change the declared entrypoint's handler.
 3. Validate untrusted args before the policy check.
-4. Update `test_main.py`.
+4. Update the App's behavior tests (`test_main.py` or explicitly declared tests).
 5. Run `cos app lint <id>` when the binary is available.
 
 ### New or changed capability

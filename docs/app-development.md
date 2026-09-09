@@ -25,13 +25,16 @@ this using authenticated process/session ancestry, not environment flags.
 
 Bundled source ownership is independent of the installed App identity.
 Migrated business products live under external `products/`; shared-capability
-clients such as `doc` and `db` live under external `capabilities/`, explicitly selected
+clients such as `doc`, `db` and `kv` live under external `capabilities/`, explicitly selected
 by the [OS source lock](../packaging/apps.lock.json). This source kind is not
 a manifest runtime/capability kind and grants no authority. Doc consumes a
 declared Files parser library, not a Files App. Its six operations and existing
 AI/memory identity remain unchanged. DB retains its five direct MCP/CLI tools,
 exact database read/write scopes and existing owner/App SQLite namespace,
-separate from KV and Agent memory; see the
+separate from KV and Agent memory. KV keeps its own string-map JSON namespace,
+exact-key get/set/delete grants and whole-store read requirement for list/dump.
+It uses only its manifest-selected MCP `server.py`, not a fabricated `main.py`;
+its App-owned tests are explicitly selected as `test_server.py`. See the
 [source composition contract](../packaging/README.md).
 
 Settings permission management does not delegate target-App capabilities.
@@ -760,6 +763,6 @@ format, trust roots, revocation and rollback.
   worked example of a non-trivial app with a Chromium extension and a
   native-messaging bridge.
 * [`apps/notify/`](../apps/notify/),
-  [`apps/kv/`](../apps/kv/),
+  [`clawos-app/capabilities/storage-sdk/apps/kv/`](https://github.com/xiaoyu-work/clawos-app/tree/main/capabilities/storage-sdk/apps/kv),
   [`clawos-app/products/files/apps/fs/`](https://github.com/xiaoyu-work/clawos-app/tree/main/products/files/apps/fs) — small bundled apps that double as
   reference templates.

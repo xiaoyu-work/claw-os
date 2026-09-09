@@ -87,24 +87,33 @@ Co-staging never merges conflicting library trees. Agent still owns
 `/usr/lib/cos/apps/doc`, `/usr/lib/cos/python/claw_files`, SDK/runtime and the
 canonical argument module. All six operations, manifest needs/AI declarations,
 outputs, memory identity and user state remain unchanged. The source lock now
-covers 72/75 identities: 24 business products plus two capability groups, with
-60 migrated Agent and 12 desktop identities; native preparation stays product-only.
+covers 73/75 identities: 24 business products plus two capability groups, with
+61 migrated Agent and 12 desktop identities; native preparation stays product-only.
 
-Storage SDK supplies only `db` from `capabilities/storage-sdk/apps/db`, not
-from the distinct Storage business product. Its original manifest, SQLite
+Storage SDK supplies independent `db` and `kv` clients from
+`capabilities/storage-sdk/apps/<id>`, not from the distinct Storage business
+product. DB's original manifest, SQLite
 implementation and MCP server install unchanged at `/usr/lib/cos/apps/db`.
 Five MCP/CLI tools retain their exact read/write needs and 1,000-returned-row
 bound. Existing files stay at `$COS_DATA_DIR/db/<name>.db` within the same
 owner/App partition; no KV or Agent-memory state is read, imported or merged.
 No SDK/provider or native source is added to the capability payload. The
-installed Agent package still has 63 identities, including three local Apps;
+installed Agent package still has 63 identities, including two local Apps;
 Desktop still has 12. Normal signed package updates remain the only installed
 update path; source relocation adds no data transition.
+KV's manifest and MCP-only data implementation install at `/usr/lib/cos/apps/kv`;
+its string map remains at `$COS_DATA_DIR/kv.json` in the independent `kv`
+partition. No `main.py` is invented. The OS supplies `_shared.atomic` as a
+separate library export, alongside SDK/runtime. KV fixes stale caches, lost
+concurrent updates, failed-write cache publication and non-private replacement.
+List/dump now require fixed whole-store read authority instead of borrowing
+named-key grants; get/set/delete keep separate exact-key needs and no stored
+grant changes. See [the update contract](../docs/updating.md#app-data-moves-into-per-app-directories).
 
-DB integration fixtures compare the entire staged runtime payload, including
+DB/KV integration fixtures compare the entire staged runtime payload, including
 bytes, modes and symlinks, with the pinned source's declared staging exclusions.
 They execute the manifest-selected MCP entrypoint over stdio with installed
-OS libraries, rather than importing DB's private modules or the SDK dispatcher.
+OS libraries, rather than importing private App modules or the SDK dispatcher.
 Signed worker fixtures stage that same complete payload; adding a private
 module or changing the declared entrypoint does not require an OS filename list.
 

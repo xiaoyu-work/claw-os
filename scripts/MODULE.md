@@ -48,8 +48,9 @@ optional `capabilities` list. Group names are unique across kinds. Each kind
 resolves only its declared root and matching package metadata; missing sources,
 duplicate identities, escaping paths and unlocked Python-library owners fail.
 `doc` resolves to `capabilities/document-engine/apps/doc`, never `apps/doc`.
-`db` resolves to `capabilities/storage-sdk/apps/db`, never `apps/db` or the
-distinct Storage business product. The source kind changes no installed identity.
+`db` and `kv` resolve to `capabilities/storage-sdk/apps/<id>`, never their deleted
+local sources or the distinct Storage business product. The source kind changes
+no installed identity, grant ownership or data partition.
 Native preparation validates capability metadata but composes only products,
 so shared clients cannot invent desktop/native package ownership.
 Native preparation validates all declared names and product-local source paths

@@ -4,6 +4,10 @@ mod app_sources {
     include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/support/app_sources.rs"));
 }
 
+mod app_stage {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/support/app_stage.rs"));
+}
+
 fn env_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     LOCK.lock().unwrap_or_else(|p| p.into_inner())
@@ -70,33 +74,16 @@ fn write_kv_app(root: &Path) {
     crate::test_env::sign_test_package(&dir, crate::provenance::PackageKind::App, "kv");
 }
 
-/// Copy the in-tree `apps/kv` package into a scratch root and sign it.
-///
-/// The repository checkout is not an approved package root, so an
-/// in-tree App is quarantined by design. Tests that need to *run* one
-/// stage a signed copy instead of weakening the gate.
-fn signed_copy_of_repo_apps() -> std::path::PathBuf {
-    let source = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .join("apps");
-    let root = std::env::temp_dir().join(format!(
-        "cos-session-apps-{}",
-        uuid::Uuid::new_v4().simple()
-    ));
-    std::fs::create_dir_all(&root).unwrap();
-    let kv_src = source.join("kv");
-    if !kv_src.join("server.py").is_file() {
-        return source;
-    }
-    // `_shared` is the sibling helper tree the App imports at runtime;
-    // it is mounted read-only next to the package, not part of it.
-    let shared = source.join("_shared");
-    if shared.is_dir() {
-        copy_tree(&shared, &root.join("_shared"));
-    }
-    let kv_dst = root.join("kv");
-    copy_tree(&kv_src, &kv_dst);
+/// Stage the complete immutable KV payload and OS-owned library export, then sign it.
+fn signed_copy_of_repo_apps() -> tempfile::TempDir {
+    let root = tempfile::tempdir().unwrap();
+    let kv_dst = app_stage::capability(
+        &app_sources::app_dir("kv"),
+        "storage-sdk",
+        "kv",
+        root.path(),
+    );
+    app_stage::shared_python(kv_dst.parent().unwrap());
     crate::test_env::sign_test_package(&kv_dst, crate::provenance::PackageKind::App, "kv");
     root
 }
@@ -124,20 +111,6 @@ fn test_call_context() -> crate::agent::tools::app_gateway::McpCallContext {
             id: "test-session".to_string(),
             owner_uid: 1000,
         },
-    }
-}
-
-fn copy_tree(src: &Path, dst: &Path) {
-    std::fs::create_dir_all(dst).unwrap();
-    for entry in std::fs::read_dir(src).unwrap().filter_map(Result::ok) {
-        let from = entry.path();
-        let to = dst.join(entry.file_name());
-        let meta = std::fs::symlink_metadata(&from).unwrap();
-        if meta.is_dir() {
-            copy_tree(&from, &to);
-        } else if meta.is_file() {
-            std::fs::copy(&from, &to).unwrap();
-        }
     }
 }
 
@@ -298,32 +271,18 @@ fn hosted_app_results_are_wrapped_as_untrusted_model_data() {
     assert!(content.contains("ignore prior instructions"), "{content}");
 }
 
-/// Spawn the real `apps/kv` server via [`open_session`], drive it
+/// Spawn the pinned KV server via [`open_session`], drive it
 /// across multiple calls, and verify session state persists. This
 /// is the canonical proof that the **App → MCP server** wiring
 /// (manifest schema + Python SDK + kernel bring-up + bridge)
-/// works end to end. We use `COS_CAPS_MODE=permissive` so the
-/// test doesn't need to set up role grants; the caps-gate
-/// codepath is still exercised — `crate::caps::require` is
-/// called for every tool, it just allows through.
+/// works end to end. This uses an isolated synthetic Admin session;
+/// restricted key/whole-store grants are covered by the broker planner tests.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pilot_kv_e2e_call_chain() {
     let _g = env_lock();
     require_sandbox!();
-    let apps_dir = signed_copy_of_repo_apps();
-    if !apps_dir.join("kv").join("server.py").is_file() {
-        eprintln!("skip pilot_kv_e2e: {} not present", apps_dir.display());
-        return;
-    }
-
-    if std::process::Command::new("python3")
-        .arg("--version")
-        .output()
-        .is_err()
-    {
-        eprintln!("skip pilot_kv_e2e: python3 not on PATH");
-        return;
-    }
+    let staged = signed_copy_of_repo_apps();
+    let apps_dir = staged.path().join("usr/lib/cos/apps");
 
     let data = tempfile::tempdir().unwrap();
     let prev_apps = std::env::var("COS_APPS_DIR").ok();
@@ -341,11 +300,7 @@ async fn pilot_kv_e2e_call_chain() {
     let _ = close_session("kv").await;
 
     let opened = open_session("kv", "kv.set").await.expect("open kv");
-    assert!(
-        opened.1 >= 5,
-        "kv should advertise ≥5 tools, got {}",
-        opened.1
-    );
+    assert_eq!(opened.1, 5);
 
     // 1) set, get — verify in-memory state survives.
     let r = opened
@@ -429,22 +384,8 @@ async fn pilot_kv_e2e_call_chain() {
 async fn open_race_single_child() {
     let _g = env_lock();
     require_sandbox!();
-    let apps_dir = signed_copy_of_repo_apps();
-    if !apps_dir.join("kv").join("server.py").is_file() {
-        eprintln!(
-            "skip open_race_single_child: {} not present",
-            apps_dir.display()
-        );
-        return;
-    }
-    if std::process::Command::new("python3")
-        .arg("--version")
-        .output()
-        .is_err()
-    {
-        eprintln!("skip open_race_single_child: python3 not on PATH");
-        return;
-    }
+    let staged = signed_copy_of_repo_apps();
+    let apps_dir = staged.path().join("usr/lib/cos/apps");
 
     let data = tempfile::tempdir().unwrap();
     let prev_apps = std::env::var("COS_APPS_DIR").ok();
@@ -500,15 +441,8 @@ async fn injected_app_root_is_used_for_discovery_and_execution() {
     // A signed copy, not the checkout: the repository tree is not an
     // approved package root, so an in-tree App is quarantined by
     // design and could not be opened from either root.
-    let injected_root = signed_copy_of_repo_apps();
-    if !injected_root.join("kv").join("server.py").is_file()
-        || std::process::Command::new("python3")
-            .arg("--version")
-            .output()
-            .is_err()
-    {
-        return;
-    }
+    let staged = signed_copy_of_repo_apps();
+    let injected_root = staged.path().join("usr/lib/cos/apps");
 
     let temp = tempfile::tempdir().unwrap();
     let ambient_root = temp.path().join("ambient-apps");
@@ -527,7 +461,7 @@ async fn injected_app_root_is_used_for_discovery_and_execution() {
         .await
         .expect("open from injected root");
 
-    assert!(opened.1 >= 5);
+    assert_eq!(opened.1, 5);
     assert!(crate::apps::find(&ambient_root, "kv").is_none());
     assert!(close_session_at("kv", &injected_root).await);
 }

@@ -410,6 +410,29 @@ SQLite files remain at `$COS_DATA_DIR/db/<name>.db`, normally
 with KV, and neither KV state nor Agent memory is imported. The OS-owned
 pre-isolation migration below remains unchanged.
 
+KV's source now belongs to `clawos-app/capabilities/storage-sdk/apps/kv`,
+installed by the same signed Agent package at `/usr/lib/cos/apps/kv`. Its
+identity, five MCP/CLI tools, string-map JSON format and `$COS_DATA_DIR/kv.json`
+path remain unchanged, normally `<data-root>/apps/kv/kv.json`. Source relocation
+does not read, replay or migrate user data. KV is not Agent memory and shares
+neither data nor grants with DB or the Storage business product.
+
+The KV client corrects stale cached reads and lost updates between live workers:
+read-modify-replace holds one exclusive lock, cached state is published only
+after a successful commit, and new store/lock files request `0600`. Reads preserve
+existing JSON bytes; explicit writes still use the OS atomic-replacement helper.
+Malformed UTF-8/JSON or non-string state is reported, never reset or silently
+repaired. This does not add a stronger crash-durability guarantee than that
+existing helper.
+
+Get/set/delete retain distinct exact-key read/write/delete grants. List/dump
+enumerate the whole namespace, so their manifests now require fixed
+whole-store `data.kv.read` authority. The old borrowed wildcard could inherit
+named-key grants without filtering output, while rejecting an unbounded caller
+grant. A list pattern or union of named keys no longer authorizes enumeration.
+Existing grants are not rewritten or widened; callers without whole-store read
+must use exact-key reads or obtain normal OS consent for that authority.
+
 The state bundled Apps wrote before that — `calendar/`, `db/`, `kv.json`,
 `launcher/`, `logs/`, `notifications.json`, `trash/`, the `exec` App's captured
 `proc/stdout.*` and `proc/stderr.*`, and each gateway's

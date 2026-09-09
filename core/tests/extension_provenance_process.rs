@@ -27,6 +27,9 @@ use cos::provenance::verify::{self, VerifyOptions};
 #[path = "../test/support/app_sources.rs"]
 mod app_sources;
 
+#[path = "../test/support/app_stage.rs"]
+mod app_stage;
+
 #[test]
 fn published_doc_signed_fixture_preserves_manifest_and_worker_authority() {
     use std::collections::BTreeMap;
@@ -191,68 +194,14 @@ fn published_doc_signed_fixture_preserves_manifest_and_worker_authority() {
     assert!(launch.bind(&["server.py".into()]).is_err());
 }
 
-#[test]
-fn published_db_signed_fixture_preserves_worker_identity_and_existing_namespace() {
-    use std::collections::BTreeMap;
-    use std::os::unix::fs::MetadataExt;
-
-    use cos::caps::{Cap, CapSet, Scope, Verb};
-    use cos::worker::derive::{app_session, AppSessionInput, SessionLifetime};
-
-    let fx = Fixture::new("published-db");
-    let source = app_sources::app_dir("db");
-    let git = |args: &[&str]| {
-        let output = std::process::Command::new("git")
-            .arg("-C")
-            .arg(&source)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "{output:?}");
-        String::from_utf8(output.stdout).unwrap().trim().to_string()
-    };
-    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    let lock: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(repository.join("packaging/apps.lock.json")).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(
-        git(&["rev-parse", "HEAD"]),
-        lock["revision"].as_str().unwrap()
+fn signed_storage_client(fx: &Fixture, app_id: &str) -> (cos::bridge::AppLaunch, String) {
+    let directory = app_stage::capability(
+        &app_sources::app_dir(app_id),
+        "storage-sdk",
+        app_id,
+        &fx.root.join("stage"),
     );
-    let dirty = git(&["status", "--porcelain", "--untracked-files=all"]);
-    assert!(
-        dirty.is_empty(),
-        "locked App fixture cache is modified: {dirty}"
-    );
-    let pinned = PathBuf::from(git(&["rev-parse", "--show-toplevel"]));
-    let staged = fx.root.join("stage");
-    let output = std::process::Command::new("python3")
-        .arg(pinned.join("tools/stage.py"))
-        .args([
-            "storage-sdk",
-            "--kind",
-            "capability",
-            "--apps",
-            "db",
-            "--root",
-        ])
-        .arg(&staged)
-        .env("PYTHONDONTWRITEBYTECODE", "1")
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{output:?}");
-    assert_eq!(
-        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
-        serde_json::json!(["db"])
-    );
-    let apps = staged.join("usr/lib/cos/apps");
-    let directory = apps.join("db");
-    let original = fs::read_to_string(source.join("app.json")).unwrap();
-    assert_eq!(
-        fs::read_to_string(directory.join("app.json")).unwrap(),
-        original
-    );
+    let original = fs::read_to_string(directory.join("app.json")).unwrap();
     let declaration = cos::caps::manifest::Manifest::from_json(&original).unwrap();
     let entry = declaration
         .mcp
@@ -266,7 +215,7 @@ fn published_db_signed_fixture_preserves_worker_identity_and_existing_namespace(
         &directory,
         &sign::SignRequest {
             kind: PackageKind::App,
-            id: "db".to_string(),
+            id: app_id.to_string(),
             version: declaration.version.clone(),
             manifest_schema: "2".to_string(),
             manifest_path: "app.json".to_string(),
@@ -279,12 +228,27 @@ fn published_db_signed_fixture_preserves_worker_identity_and_existing_namespace(
     fx.activate();
     let package = verify::verify_package(
         &directory,
-        &VerifyOptions::new(PackageKind::App).expect_id("db"),
+        &VerifyOptions::new(PackageKind::App).expect_id(app_id),
         &fx.store(),
     )
     .unwrap();
     assert_eq!(package.manifest_text().unwrap(), original);
     let launch = cos::bridge::AppLaunch::new(Arc::new(package)).unwrap();
+    (launch, entry)
+}
+
+#[test]
+fn published_db_signed_fixture_preserves_worker_identity_and_existing_namespace() {
+    use std::collections::BTreeMap;
+    use std::os::unix::fs::MetadataExt;
+
+    use cos::caps::{Cap, CapSet, Scope, Verb};
+    use cos::worker::derive::{app_session, AppSessionInput, SessionLifetime};
+
+    let fx = Fixture::new("published-db");
+    let (launch, entry) = signed_storage_client(&fx, "db");
+    let directory = launch.dir().to_path_buf();
+    let apps = directory.parent().unwrap().to_path_buf();
     let binding = launch.bind(std::slice::from_ref(&entry)).unwrap();
     assert_eq!(launch.app_id(), "db");
     assert!(cos::apps::is_mcp_only_cli(launch.manifest()));
@@ -373,6 +337,119 @@ fn published_db_signed_fixture_preserves_worker_identity_and_existing_namespace(
     }
     assert!(!data.join("apps/storage-sdk").exists());
     assert!(!data.join("db").exists());
+    write(
+        &directory.join(&entry),
+        "raise RuntimeError('modified fixture')\n",
+    );
+    assert!(launch.bind(std::slice::from_ref(&entry)).is_err());
+}
+
+#[test]
+fn published_kv_signed_fixture_preserves_independent_json_namespace_and_worker_authority() {
+    use std::collections::BTreeMap;
+    use std::os::unix::fs::MetadataExt;
+
+    use cos::caps::{Cap, CapSet, Scope, Verb};
+    use cos::worker::derive::{app_session, AppSessionInput, SessionLifetime};
+
+    let fx = Fixture::new("published-kv");
+    let (launch, entry) = signed_storage_client(&fx, "kv");
+    let directory = launch.dir().to_path_buf();
+    let apps = directory.parent().unwrap();
+    let shared = app_stage::shared_python(apps);
+    let binding = launch.bind(std::slice::from_ref(&entry)).unwrap();
+    assert_eq!(launch.app_id(), "kv");
+    assert!(cos::apps::is_mcp_only_cli(launch.manifest()));
+    assert_eq!(launch.manifest().mcp.as_ref().unwrap().tools.len(), 5);
+
+    let data = fx.root.join("owner-data");
+    let partition = data.join("apps/kv");
+    let store = partition.join("kv.json");
+    let original = "{\n  \"kept\": \"existing state\", \"empty\": \"\"\n}\n";
+    write(&store, original);
+    let identity = fs::metadata(&store).unwrap();
+    let neighbours = [
+        data.join("apps/db/db/existing.db"),
+        data.join("apps/storage-manager/state"),
+        data.join("agent/memory.db"),
+        fx.root.join("other-owner/apps/kv/kv.json"),
+    ];
+    for neighbour in &neighbours {
+        write(neighbour, "unrelated private state");
+    }
+    for cap in [
+        Cap::new(Verb::DATA_KV_READ, Scope::name("kept")),
+        Cap::new(Verb::DATA_KV_WRITE, Scope::name("kept")),
+        Cap::new(Verb::DATA_KV_DELETE, Scope::name("kept")),
+        Cap::new(Verb::DATA_KV_READ, Scope::Wild),
+    ] {
+        let caps = CapSet::from_caps([cap]);
+        for lifetime in [SessionLifetime::SingleCall, SessionLifetime::Reusable] {
+            let worker = app_session(AppSessionInput {
+                app_id: launch.app_id(),
+                app_dir: launch.dir(),
+                program: "/usr/bin/python3".into(),
+                argv: vec![directory.join(&entry).to_string_lossy().into_owned()],
+                caps: &caps,
+                authorized_mounts: &[],
+                lifetime,
+                session_id: "kv-fixture",
+                data_dir: data.to_str().unwrap(),
+                apps_dir: apps.to_str().unwrap(),
+                extra_env: BTreeMap::from([(
+                    "COS_APP_MANIFEST".into(),
+                    directory.join("app.json").to_string_lossy().into_owned(),
+                )]),
+                package_identity: binding.dir_identity(),
+                pinned_entries: binding.entries(),
+                transports: &[],
+            })
+            .unwrap();
+            assert_eq!(worker.env["COS_APP_ID"], "kv");
+            assert_eq!(worker.env["COS_SESSION"], "kv-fixture");
+            assert_eq!(worker.env["COS_DATA_DIR"], partition.to_str().unwrap());
+            assert_eq!(worker.workdir, partition);
+            assert_eq!(worker.umask, 0o077);
+            assert_eq!(
+                fs::metadata(&partition).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+            assert!(matches!(worker.network, cos::worker::NetworkPolicy::Denied));
+            let mounts = worker
+                .mounts
+                .iter()
+                .filter(|mount| mount.class == cos::worker::MountClass::AppData)
+                .collect::<Vec<_>>();
+            assert_eq!(mounts.len(), 1);
+            assert_eq!(mounts[0].source, partition);
+            assert_eq!(mounts[0].mode, cos::worker::MountMode::ReadWrite);
+            assert!(worker
+                .mounts
+                .iter()
+                .filter(|mount| mount.source.starts_with(&data))
+                .all(|mount| mount.source == partition));
+            assert!(worker
+                .mounts
+                .iter()
+                .filter(|mount| mount.class == cos::worker::MountClass::Package)
+                .all(|mount| mount.mode == cos::worker::MountMode::ReadOnly));
+            let library = worker
+                .mounts
+                .iter()
+                .find(|mount| mount.source == shared)
+                .unwrap();
+            assert_eq!(library.mode, cos::worker::MountMode::ReadOnly);
+            assert_eq!(library.class, cos::worker::MountClass::Runtime);
+        }
+    }
+    assert_eq!(fs::read_to_string(&store).unwrap(), original);
+    let after = fs::metadata(&store).unwrap();
+    assert_eq!((after.dev(), after.ino()), (identity.dev(), identity.ino()));
+    assert!(neighbours
+        .iter()
+        .all(|path| fs::read_to_string(path).unwrap() == "unrelated private state"));
+    assert!(!data.join("apps/storage-sdk").exists());
+    assert!(!data.join("kv.json").exists());
     write(
         &directory.join(&entry),
         "raise RuntimeError('modified fixture')\n",
