@@ -9,9 +9,10 @@ store := '../build/native-apps/cosmic-store/justfile'
 settings := '../build/native-apps/cosmic-settings/justfile'
 capture := '../build/native-apps/cosmic-screenshot/justfile'
 player := '../build/native-apps/cosmic-player/justfile'
+notifications := '../build/native-apps/cosmic-notifications/justfile'
 
 prepare-native-apps:
-    if [ "${CLAW_NATIVE_APPS_PREPARED:-0}" = 1 ]; then test -f {{ launcher }} && test -f {{ editor }} && test -f {{ files }} && test -f {{ terminal }} && test -f {{ store }} && test -f {{ settings }} && test -f {{ capture }} && test -f {{ player }}; else python3 ../scripts/app_sources.py --native; fi
+    if [ "${CLAW_NATIVE_APPS_PREPARED:-0}" = 1 ]; then test -f {{ launcher }} && test -f {{ editor }} && test -f {{ files }} && test -f {{ terminal }} && test -f {{ store }} && test -f {{ settings }} && test -f {{ capture }} && test -f {{ player }} && test -f {{ notifications }}; else python3 ../scripts/app_sources.py --native; fi
 
 launcher-build: prepare-native-apps
     {{ just }} --justfile {{ launcher }} build-release --locked
@@ -37,6 +38,9 @@ capture-build: prepare-native-apps
 player-build: prepare-native-apps
     {{ just }} --justfile {{ player }} build-release --locked
 
+notifications-build: prepare-native-apps
+    {{ just }} --justfile {{ notifications }} build-release --locked
+
 [default]
 build: prepare-native-apps
     #!/usr/bin/env bash
@@ -53,7 +57,7 @@ build: prepare-native-apps
     {{ just }} idle/build-release
     {{ just }} initial-setup/build-release
     {{ just }} launcher-build
-    {{ just }} notifications/build-release
+    {{ just }} notifications-build
     {{ just }} osd/build-release
     {{ just }} panel/build-release
     {{ just }} player-build
@@ -82,7 +86,7 @@ install rootdir="" prefix="/usr/local": build
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} idle/install
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} initial-setup/install
     {{ just }} --justfile {{ launcher }} rootdir={{rootdir}} prefix={{prefix}} install
-    {{ just }} rootdir={{rootdir}} prefix={{prefix}} notifications/install
+    {{ just }} --justfile {{ notifications }} rootdir={{rootdir}} prefix={{prefix}} install
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} osd/install
     {{ just }} rootdir={{rootdir}} prefix={{prefix}} panel/install
     {{ just }} --justfile {{ player }} rootdir={{rootdir}} prefix={{prefix}} install
@@ -126,7 +130,7 @@ clean:
     rm -rf ../build/native-apps/cosmic-launcher/target
     rm -rf panel/target
     rm -rf ../build/native-apps/cosmic-player/target
-    rm -rf notifications/target
+    rm -rf ../build/native-apps/cosmic-notifications/target
     rm -rf osd/target
     rm -rf randr/target
     rm -rf ../build/native-apps/cosmic-screenshot/target

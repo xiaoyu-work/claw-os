@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tomllib
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -73,12 +74,37 @@ def stage_products(destination, package=None):
     return installed
 
 
+def native_libraries(package, product_root):
+    exports = package.get("native_libraries", {})
+    if not isinstance(exports, dict):
+        raise ValueError("Invalid native library declarations")
+    result = {}
+    for name, export in exports.items():
+        if not re.fullmatch(r"[a-z][a-z0-9-]*", name) or not isinstance(export, dict) or set(export) != {"component", "path"}:
+            raise ValueError("Invalid native library declaration")
+        component, relative = export["component"], export["path"]
+        if not isinstance(component, str) or component not in package.get("native", {}) or not isinstance(relative, str) or not re.fullmatch(
+            r"[a-z][a-z0-9_-]*(/[a-z][a-z0-9_-]*)*", relative
+        ):
+            raise ValueError("Native library must belong to its declared component")
+        root = (product_root / package["native"][component]).resolve()
+        library = (root / relative).resolve()
+        if not root.is_relative_to(product_root.resolve()) or not library.is_relative_to(root):
+            raise ValueError("Native library must belong to its product component")
+        manifest = tomllib.loads((library / "Cargo.toml").read_text())
+        if manifest.get("package", {}).get("name") != name:
+            raise ValueError("Native library identity does not match its manifest")
+        result[name] = f"{component}/{relative}"
+    return result
+
+
 def prepare_native():
     lock = read_lock()
     source = prepare_sources(lock)
     destination = ROOT / "build/native-apps"
     products = {}
     names = set()
+    libraries = {}
     for product in lock["products"]:
         package = json.loads((source / "products" / product / "package.json").read_text())
         components = package.get("native", {})
@@ -93,6 +119,10 @@ def prepare_native():
             ).resolve().is_relative_to(product_root.resolve()):
                 raise ValueError("Native source must belong to the product")
             names.add(name)
+        exports = native_libraries(package, source / "products" / product)
+        if libraries.keys() & exports.keys():
+            raise ValueError("Duplicate native library export")
+        libraries.update(exports)
         if components:
             products[product] = sorted(components)
     destination.mkdir(parents=True, exist_ok=True)
@@ -110,6 +140,9 @@ def prepare_native():
         if json.loads(result) != components:
             raise RuntimeError(f"Unexpected native build inputs for {product}")
     (destination / "revision").write_text(lock["revision"] + "\n")
+    (destination / "native-libraries.json").write_text(json.dumps({
+        "revision": lock["revision"], "libraries": libraries,
+    }, indent=2) + "\n")
     return destination
 
 

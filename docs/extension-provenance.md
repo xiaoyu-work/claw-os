@@ -289,12 +289,19 @@ outlives the call, and the reusable server never sees it.
 
 ### Desktop transports
 
-One bundled App exposes its tool surface as a session server and
-reaches the desktop over the **session bus**: `cosmic-notifications`
-(`org.freedesktop.Notifications`). It does not initialise a compositor
-connection in MCP mode, so no Wayland socket,
-X authority or GPU node is granted — the session bus alone is the
-difference between a working tool and a syscall failure.
+No current native App row receives a session bus, Wayland socket, X authority
+or GPU node. The fixed vendor table permits only each App's installed
+executable; MCP enters before desktop initialization.
+
+`cosmic-notifications` uses `system.notification.control` under its existing
+`ui.notify` grant. The broker derives owner/App/source and persists through the
+Notification Service before enabled delivery. It admits neither owner-wide
+notification administration nor arbitrary icon paths. Durable string IDs
+explicitly replace MCP desktop integers. The existing OS bridge alone presents
+notifications, verifies the native presenter's owner/executable/connection,
+and distinguishes genuine user acknowledgement from delivery and retirement.
+Product code owns the complete frontend/config/util sources, not core state
+or authority. Legacy `notify` JSON state remains a separate transition.
 
 `cosmic-player` retains its fixed vendor-verified native executable row but
 no desktop transport. Its seven tools use `system.media-player.control` with
@@ -312,17 +319,14 @@ owner-session portal helper and persists private PNG output; MCP cannot select
 an interactive destination, clipboard output, source file or arbitrary program.
 The normal human portal UI and notifications remain separate from this worker.
 
-The bus-using notification server runs in the `TrustedDesktopSession` tier: sandboxed exactly like
-any other hostile stdio server — private namespaces, strict seccomp, a
-resource governor, no egress, no host paths — plus one bind mount of
-the exact session-bus socket, at a fixed private sandbox path
-(`/run/cos/session-bus`). The directory holding the real socket is
-never exposed, and neither is its host path: the worker's
-`DBUS_SESSION_BUS_ADDRESS` names the sandbox path, so nothing about the
-owner's uid or runtime-directory layout crosses the boundary.
+Native MCP remains an ordinary hostile stdio worker: private namespaces,
+strict seccomp, resource limits, no egress, no display mounts and only its
+typed route-filtered broker proxy. No currently classified package enables
+the dormant `TrustedDesktopSession` transport implementation.
 
-The socket is authenticated before it is bound, from facts rather than
-from the environment:
+The retained transport code, if explicitly enabled by a future reviewed kernel
+row, would authenticate an exact socket before binding it at the fixed private
+`/run/cos/session-bus` path. Its existing fail-closed invariants are:
 
 * the owner uid comes from the launch identity, never from a variable,
   and root is refused outright;
@@ -347,14 +351,15 @@ from the environment:
 Any failure grants **no** transport. There is no fallback mount and no
 best-effort address.
 
-**The session bus is an expanded TCB, and it is not filtered.** A
+**A session bus would expand the TCB and would not be filtered.** A
 process holding that socket can talk to every service the owner's
 session exposes, and Claw OS does not inspect method calls inside it.
-That is why the classification is not something a package can ask for.
-`worker::trusted_desktop::classify` grants it only when *all* of these
+Neither a transport nor the fixed executable classification is something a
+package can ask for. `worker::trusted_desktop::classify` accepts the installed
+executable only when *all* of these
 hold:
 
-1. the App id is one of three fixed rows in kernel source;
+1. the App id is in the fixed kernel-source table;
 2. the package verified through **vendor** provenance — package-manager
    trust under an approved system root, not a publisher signature;
 3. the package directory is under an approved vendor root *and* every
@@ -367,8 +372,8 @@ hold:
 A manifest field, a developer grant, a publisher-signed package that
 calls itself `cosmic-player`, a bind alias onto an approved root, and
 the App id on its own are each insufficient. Anything that fails leaves
-the App an ordinary `McpServer` with no transport, and its tools fail
-with a clear error rather than silently gaining reach. Revocation
+an absolute out-of-package entry unlaunchable rather than silently granting
+reach. Current successful classifications also return no transport. Revocation
 evicts and kills the worker like any other package. The reuse identity
 carries the resolved socket's inode, so a session whose bus was
 replaced — the login session restarted — is relaunched rather than

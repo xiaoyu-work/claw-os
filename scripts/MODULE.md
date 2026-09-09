@@ -22,7 +22,7 @@ shared build helpers.
 | `lib/image-identity.sh` | Image user/identity assertions |
 | `lib/git-readonly.sh` | Read-only Git wrapper for privileged builds |
 | `app_sources.py` | Resolve the immutable App repository pin and stage product-owned package assets |
-| `app_sources.py --native` | Validate and refresh product-declared native libraries/assets (Calendar, Clipboard, Widget Rail), standalone Launcher/Editor/Files/Terminal/Store/Capture/Media Player and nested Settings workspace at stable ignored build paths from the immutable pin |
+| `app_sources.py --native` | Validate and refresh product-declared native libraries/assets, standalone Launcher/Editor/Files/Terminal/Store/Capture/Media Player/Notifications and nested Settings workspace at stable ignored build paths from the immutable pin |
 
 ## Dependencies
 
@@ -46,5 +46,14 @@ assembly. None of these commands fetches application code at runtime.
 Native preparation validates all declared names and product-local source paths
 before replacement, rejects duplicate exports and only replaces exact declared
 component paths; unrelated build caches are preserved.
+Nested `native_libraries` exports require exact Cargo identity and a path
+inside their declared product component. Duplicate names and escapes are
+rejected before replacement. `native-libraries.json` records the resolved
+library paths and full source revision for consumers/assembly validation.
+Notifications exports its config/util crates for the OS applet and panel;
+the original daemon and all its build inputs are composed, not recreated under
+the deleted production `desktop/notifications` path.
 Media Player is refused by the binary-only VMware hot-swap helper: its signed
 manifest and versioned Agent service must advance through paired package updates.
+Notifications is refused for the same reason and also requires its matching
+native presenter/desktop bridge to restart together.

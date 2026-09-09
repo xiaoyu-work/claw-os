@@ -38,6 +38,11 @@ source cache and generated inputs never enter the installed image.
 The source mounts preserve the repository-relative `desktop`, SDK/runtime
 and `build/native-apps` layout, including standalone Launcher/Editor/Files/Terminal/Store/Capture/Media Player
 and nested Settings workspace dependencies.
+Notifications' standalone daemon and exported config/util crates use that
+same layout; image preparation verifies both libraries before binding the
+native tree. The applet/panel retain their own toolkit graphs and the
+daemon retains its independent original graph. Its descriptor/binary remain
+desktop-owned; durable service state and legacy `notify` JSON are not image inputs.
 Capture keeps its original portal-client graph rather than inheriting the
 shell renderer; its binary/resources remain desktop-package assets while
 the shared portal and capture authority stay OS-owned.

@@ -1569,7 +1569,6 @@ dependencies = [
 [[package]]
 name = "cosmic-notifications-config"
 version = "0.1.0"
-source = "git+https://github.com/pop-os/cosmic-notifications#dbd0658f0dc2671f32f514261bd9b3fa664264bd"
 dependencies = [
  "cosmic-config",
  "serde",
@@ -1578,7 +1577,6 @@ dependencies = [
 [[package]]
 name = "cosmic-notifications-util"
 version = "0.1.0"
-source = "git+https://github.com/pop-os/cosmic-notifications#dbd0658f0dc2671f32f514261bd9b3fa664264bd"
 dependencies = [
  "fast_image_resize",
  "libcosmic",
@@ -2415,9 +2413,9 @@ checksum = "dd2e7510819d6fbf51a5545c8f922716ecfb14df168a3242f7d33e0239efe6a1"
 
 [[package]]
 name = "fast_image_resize"
-version = "5.5.0"
+version = "6.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fbc7fe45cf92b43817ff62a3723e862b85bd1d06288f63007f7645d1d2f7a060"
+checksum = "e9c50201dc184ba6553da1695aac20a042efffbe2d84542cee31917c86c3ab1e"
 dependencies = [
  "cfg-if",
  "document-features",

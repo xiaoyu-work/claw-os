@@ -29,6 +29,11 @@ or deleting legacy `notify` JSON files. That legacy App's state transition is
 still separate work. Local desktop configuration and user history are preserved.
 Upgrade the signed manifest, native binary, panel and delivery bridge together
 and restart the user desktop session; binary-only hot-swap is not a substitute.
+The full native source and both exported presentation libraries now come from
+the immutable Notifications product pin. Evicted history handles are reclaimed;
+bridge-owned popups close on bridge disconnect while durable activity stays
+unread. Ordinary freedesktop lifetime is unchanged. Rebuilding source does not
+consolidate the old JSON history or establish visual/full-image acceptance.
 
 Agent provides the versioned `claw-os-media-player-v1` playback adapter for
 newer native Media Player packages. It requires separate exact

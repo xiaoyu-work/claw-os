@@ -709,7 +709,6 @@ dependencies = [
 [[package]]
 name = "cosmic-notifications-config"
 version = "0.1.0"
-source = "git+https://github.com/pop-os/cosmic-notifications#a899bfbc6715c36b1f02d7a0f4d3601a3ea0295f"
 dependencies = [
  "cosmic-config",
  "serde",

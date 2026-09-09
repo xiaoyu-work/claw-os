@@ -207,12 +207,14 @@ async fn notifications_actual_native_worker_durable_delivery_and_owner_bound_ui(
         loop {
             let (stream, _) = listener.accept().await.unwrap();
             let mut stream = PeerStream::new(stream).unwrap();
-            let ReadOutcome::Frame(frame) = stream
+            let outcome = stream
                 .read_request(crate::clawd::wire::MAX_REQUEST_BYTES)
                 .await
-                .unwrap()
-            else {
-                panic!("notification fixture frame")
+                .unwrap();
+            let frame = match outcome {
+                ReadOutcome::Frame(frame) => frame,
+                ReadOutcome::Closed => continue,
+                ReadOutcome::Legacy => panic!("notification fixture used legacy framing"),
             };
             let client = ClientIdentity::from_peer(peer::verify(frame.credentials).unwrap());
             assert_eq!(client.uid, Some(uid));
@@ -261,10 +263,18 @@ async fn notifications_actual_native_worker_durable_delivery_and_owner_bound_ui(
                 Ok(value) => Response::ok(request.id, value),
                 Err(error) => Response::error(request.id, error.kind.code(), error.message),
             };
-            stream
+            if let Err(error) = stream
                 .write_response(&encode_response(&response).unwrap())
                 .await
-                .unwrap();
+            {
+                assert!(
+                    matches!(
+                        error.kind(),
+                        std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
+                    ),
+                    "unexpected fixture response error: {error}"
+                );
+            }
         }
     });
     let address = format!("unix:path={}/bus", root_path.display());
@@ -567,6 +577,66 @@ async fn notifications_actual_native_worker_durable_delivery_and_owner_bound_ui(
         NotificationState::Dismissed,
     )
     .await;
+    let disconnected = result(
+        rpc(
+            &mut writer,
+            &mut reader,
+            9,
+            "tools/call",
+            call(
+                "notify.post",
+                json!({"summary":"Survives bridge restart","expire_ms":0}),
+            ),
+        )
+        .await,
+    );
+    let shown = rendered(&mut ui_output).await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let record = service
+                .get(uid, disconnected["id"].as_str().unwrap())
+                .unwrap();
+            if record.deliveries.iter().any(|delivery| {
+                delivery.channel == DeliveryChannel::Desktop
+                    && delivery.state == DeliveryState::Delivered
+            }) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("desktop delivery receipt before bridge restart");
+    delivery.kill().await.unwrap();
+    delivery.wait().await.unwrap();
+    loop {
+        let value: Value = serde_json::from_str(&line(&mut ui_output).await).unwrap();
+        if value["closed"] == shown["id"] {
+            break;
+        }
+    }
+    assert_eq!(
+        service
+            .get(uid, disconnected["id"].as_str().unwrap())
+            .unwrap()
+            .state,
+        NotificationState::Unread,
+        "bridge loss retires only its presentation, never durable acknowledgement"
+    );
+    delivery = start(&bridge).arg(&presenter).spawn().unwrap();
+    let mut restarted_output = tokio::io::BufReader::new(delivery.stdout.take().unwrap()).lines();
+    assert_eq!(line(&mut restarted_output).await, "ready");
+    let closed = result(
+        rpc(
+            &mut writer,
+            &mut reader,
+            10,
+            "tools/call",
+            call("notify.close", json!({"id":disconnected["id"]})),
+        )
+        .await,
+    );
+    assert_eq!(closed["state"], "dismissed");
     for process in [&mut worker, &mut delivery, &mut ui, &mut bus] {
         process.kill().await.unwrap();
         process.wait().await.unwrap();

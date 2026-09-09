@@ -11,7 +11,7 @@ use futures::StreamExt;
 use serde::Deserialize;
 use serde_json::json;
 use zbus::zvariant::Value as ZValue;
-use zbus::{fdo::DBusProxy, names::BusName, Connection};
+use zbus::{Connection, fdo::DBusProxy, names::BusName};
 
 use crate::state::AppState;
 
@@ -161,7 +161,7 @@ pub(crate) async fn run_connection(
                     }
                     Some("NotificationClosed") => {
                         let (id, reason): (u32, u32) = signal.body().deserialize()?;
-                        (reason == 2).then_some((id, Command::NotificationDismiss))
+                        close_action(&mut visible, id, reason)
                     }
                     _ => None,
                 };
@@ -216,6 +216,21 @@ fn plain_body(value: &str) -> String {
         .replace('>', "&gt;")
 }
 
+fn close_action(
+    visible: &mut HashMap<String, u32>,
+    id: u32,
+    reason: u32,
+) -> Option<(u32, Command)> {
+    match reason {
+        2 => Some((id, Command::NotificationDismiss)),
+        1 | 3 => {
+            visible.retain(|_, value| *value != id);
+            None
+        }
+        _ => None,
+    }
+}
+
 async fn post(
     proxy: &NotificationsProxy<'_>,
     notification: &Notification,
@@ -224,7 +239,12 @@ async fn post(
     let presentation = notification.presentation.as_ref();
     let urgency = ZValue::U8(urgency(&notification.severity));
     let transient = ZValue::Bool(presentation.is_some_and(|value| value.transient));
-    let hints = HashMap::from([("urgency", &urgency), ("transient", &transient)]);
+    let connection_bound = ZValue::Bool(true);
+    let hints = HashMap::from([
+        ("urgency", &urgency),
+        ("transient", &transient),
+        ("x-claw-connection-bound", &connection_bound),
+    ]);
     proxy
         .notify(
             presentation.map_or("Claw OS Agent", |value| &value.app_name),

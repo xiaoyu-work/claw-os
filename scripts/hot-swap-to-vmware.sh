@@ -15,6 +15,7 @@
 #   cosmic-term            — build/native-apps/cosmic-term, target/release/cosmic-term
 #   cosmic-initial-setup   — desktop/initial-setup, target/release/cosmic-initial-setup
 #   cosmic-player          — refused: update its paired signed Agent/Desktop packages
+#   cosmic-notifications   — refused: update its paired signed Agent/Desktop packages
 #
 # Options:
 #   --no-build      Skip cargo build; use whatever is already in target/release
@@ -67,6 +68,10 @@ done
 # target → "<cargo_dir>|<binary>|<install_path>"
 target_spec() {
   case "$1" in
+    cosmic-notifications)
+      echo "Notifications requires its signed manifest and claw-os-notifications-v1; update paired Agent/Desktop packages and restart the desktop, not only the binary." >&2
+      return 1
+      ;;
     cosmic-player)
       echo "Media Player requires its signed manifest and claw-os-media-player-v1; update paired Agent/Desktop packages, not only the binary." >&2
       return 1

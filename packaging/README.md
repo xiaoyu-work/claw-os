@@ -108,6 +108,18 @@ native Player. There is no worker bus or second playback state. Replace the
 signed manifest and matching packages together; binary-only hot-swap is refused.
 No Player binary/resources or test-fixture executable enter the headless payload.
 
+Notifications is composed at `build/native-apps/cosmic-notifications`, including
+the full original daemon, config/util crates and standalone default/optional
+graph. Desktop owns `/usr/bin/cosmic-notifications` and its MCP descriptor;
+its panel/applets link the same explicitly exported product libraries.
+Agent provides `claw-os-notifications-v1`, preserving authoritative SQLite,
+owner/source validation, DND/preferences, audit and delivery leases/retries.
+MCP 0.2 uses durable strings instead of desktop integer IDs and explicitly
+rejects icon paths/URLs; popup timeout/transient metadata does not bypass
+durability. Update the signed desktop payload and compatible Agent together,
+then restart the desktop; binary-only hot-swap is refused. No fixture binary,
+new user-data store or legacy `notify` JSON import enters either payload.
+
 It also creates the empty root-owned `/usr/lib/cos/extensions` registry.
 Executable Agent extension packages placed there remain inactive until their
 signed id is selected in user configuration; see

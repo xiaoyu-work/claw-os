@@ -57,7 +57,7 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | Memory and sessions | SQLite/FTS memory, semantic recall, session/message persistence, curation, and checkpoints | `core/src/agent/memory/`, `core/src/session/`, `core/src/checkpoint.rs` |
 | Session event journal | Root-owned, MAC-chained record of session lifecycle and privileged mutation brackets; the ordering and recovery authority the other session/audit views project from | `core/src/session/journal/`, `core/src/clawd/journal.rs` |
 | Audit | Hash-chained JSONL events and agent audit/query commands | `core/src/audit.rs`, `core/src/agent/audit_cli.rs` |
-| Notification service | Durable owner-scoped user-attention records, delivery policy, DND, deduplication, retries, and channel leases | `core/src/notifications/`, `core/src/clawd/notifications.rs` |
+| Notification service | Durable owner/source-scoped user-attention records, bounded native intent, delivery policy, DND, deduplication, retries, and channel leases | `core/src/notifications/`, `core/src/clawd/notifications.rs`, `core/src/clawd/app_notifications.rs` |
 | Apps and adapters | Signed App Mesh manifests and SDK handlers (Python, Node, shell, or binary), with optional human-facing CLI operations and desktop surfaces | `apps/`, `adapters/`, `core/src/apps.rs`, `core/src/bridge.rs` |
 | Extension provenance | Publisher signing, trust roots, package verification, and the shared bounded installer for Apps, Skills, MCP/adapter packages, and Agent extensions | `core/src/provenance/` |
 | Update freshness | Signed release-security manifest, monotonic local security floor, one-use recovery authorizations, and the install/activation/runtime gates that refuse a superseded release | `core/src/update/`, `packaging/release-security/`, `packaging/deb/common/` |
@@ -77,6 +77,18 @@ cross-cutting boundaries rather than hidden implementation details.
 
 ### App source ownership
 
+The complete native Notifications fork, both shared presentation crates,
+descriptor, license and original build now live in
+`clawos-app/products/notifications`. `just notifications-build` consumes the
+immutable App pin at `build/native-apps/cosmic-notifications`; no production
+source remains at `desktop/notifications`. Applet and panel manifests link
+the explicitly exported config/util libraries from that same composition,
+preserving their own toolkit graphs. Native sources/fixture executables never
+enter the Agent payload. Desktop owns the binary and signed descriptor and
+depends on Agent's `claw-os-notifications-v1`. MCP uses the fixed installed
+SDK stdin client and durable string IDs, with explicit integer/icon-path
+compatibility refusals. Source ownership is not legacy-data or visual acceptance.
+
 Native Notifications now uses `system.notification.control`, backed by the
 existing durable Notification Service. Only the authenticated
 `cosmic-notifications` App with `ui.notify` may publish or close its own
@@ -91,6 +103,11 @@ the trusted panel uses its existing private connection for human dismissal.
 Popup timeout/transient settings affect presentation, not core retention.
 The existing local desktop DND setting remains an additional presentation mute;
 no user settings, legacy `notify` JSON history or identities are consolidated.
+Popup-history eviction retires presentation handles without acknowledgement.
+The bridge opts its own popups into sender-local connection lifetime, so its
+crash/disconnect closes orphan presentations while durable activity survives.
+External freedesktop clients keep their ordinary lifetime and cannot use that
+hint to affect another sender or core record.
 
 The OS exposes `system.media-player.control` for native Media Player clients.
 The seven closed actions address only `cosmic-player`, with independent exact

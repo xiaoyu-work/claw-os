@@ -33,7 +33,6 @@ desktop/
 ├── workspaces/             Workspaces / Overview
 ├── bg/                     Wallpaper daemon
 ├── osd/                    On-screen display (volume/brightness toasts)
-├── notifications/          Notification center
 ├── idle/                   Idle / lock manager
 ├── randr/                  Multi-monitor control
 ├── initial-setup/          First-run wizard
@@ -54,6 +53,21 @@ desktop/
 ```
 
 ## Building
+
+The complete [Notifications product](https://github.com/xiaoyu-work/clawos-app/tree/main/products/notifications)
+is built with `just notifications-build` from the immutable App pin at
+`build/native-apps/cosmic-notifications`. All 40 original native files, both
+configuration/util crates, GPL license, original git toolkit/panel and optional
+systemd graph move together; this fork has no standalone icon or locale tree.
+The OS applet and panel link the explicitly exported config/util crates from
+the same generated inputs, not another App's handlers or a second vendored copy.
+The desktop package retains the native binary/descriptor and depends on
+Agent's `claw-os-notifications-v1`. MCP has no session bus and uses durable
+owner/source-scoped OS records; one desktop delivery consumer renders them,
+reflects close/ack state, and binds numeric presentation handles to senders.
+Eviction/disconnect retires presentations without acknowledging durable data.
+Native settings and legacy `notify` JSON history remain unchanged; private-bus
+and UI-model tests are not interactive Wayland/full-image acceptance.
 
 The complete [Media Player product](https://github.com/xiaoyu-work/clawos-app/tree/main/products/media-player)
 is built with `just player-build` from the immutable App pin at

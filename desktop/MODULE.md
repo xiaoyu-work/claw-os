@@ -39,6 +39,7 @@ component crates plus Claw-specific agent bridges and applets.
 | [external Settings](https://github.com/xiaoyu-work/clawos-app/tree/main/products/settings) | Complete nested Settings workspace/UI/MCP/resources; `just settings-build`; OS keeps services and fixed activation with the original separate grant |
 | [external Capture](https://github.com/xiaoyu-work/clawos-app/tree/main/products/capture) | Complete native portal client/MCP/resources; `just capture-build`; OS retains the shared interactive portal, session/capture authority and durable output |
 | [external Media Player](https://github.com/xiaoyu-work/clawos-app/tree/main/products/media-player) | Complete native UI/MPRIS/MCP/resources; `just player-build`; shared live native state, with exact owner-bound observation/control authority retained by OS |
+| [external Notifications](https://github.com/xiaoyu-work/clawos-app/tree/main/products/notifications) | Complete Layer Shell UI/MCP/config/util/build; `just notifications-build`; authoritative owner/source state and the single delivery consumer stay OS-owned |
 
 ## Dependencies
 
@@ -46,6 +47,14 @@ Desktop processes communicate with core through stable CLI, HTTP/SSE, DBus,
 Wayland, SDK, or MCP boundaries. Preserve licenses and avoid pulling privileged
 agent logic into GPL desktop processes. Component workspaces remain independent
 of the root Rust workspace.
+
+Notifications config/util crates are explicitly exported product libraries,
+linked by `applets/cosmic-applet-notifications` and `panel/cosmic-panel-bin`
+from `build/native-apps/cosmic-notifications`. Their manual and chroot builds
+prepare/validate the same immutable inputs. The original daemon graph is built
+separately, not unified with the applet renderer. Connection-local handles and
+popup retirement are presentation, never a second durable notification store.
+Legacy `notify` JSON and all local settings remain separate.
 
 `just player-build` prepares `build/native-apps/cosmic-player` from the same
 immutable pin, preserving its original GStreamer/libcosmic renderer, lock and

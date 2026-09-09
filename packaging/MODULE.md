@@ -108,6 +108,14 @@ The provider controls only the authenticated owner's installed Player and
 reads its live state under separate exact grants; no worker bus is granted.
 Source/partition tests cover the generated native path, versioned service and
 refusal of unsafe binary-only hot-swap.
+Notifications' complete native source, config/util libraries and descriptor
+follow the same immutable pin. Desktop owns the binary and manifest and links
+the product libraries into its panel/applets; Agent owns the versioned
+`claw-os-notifications-v1` durable service. Worker intent retains `ui.notify`
+without a session bus, file-icon access, or owner-wide notification control.
+Its original installer supplies only the native binary; no fixture executable
+or provider source is packaged. Native history/settings and legacy `notify`
+JSON are not migrated. Binary-only hot-swap is refused.
 App partition accounting includes nested gateway manifests. Shared gateway
 libraries remain OS-owned, and the canonical argument module is installed in
 `/usr/lib/cos/python` for the packaged legacy App entrypoints.

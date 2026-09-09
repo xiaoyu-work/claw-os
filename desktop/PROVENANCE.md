@@ -45,7 +45,7 @@ upstream identifiers; rename them before any commercial release.
 | `initial-setup/` | github.com/pop-os/cosmic-initial-setup | `24a9b1ee0d11` | GPL-3.0 |
 | [external Launcher](https://github.com/xiaoyu-work/clawos-app/tree/main/products/launcher/native) | github.com/pop-os/cosmic-launcher | `1e57708e5af9` | GPL-3.0; pinned through `packaging/apps.lock.json` |
 | `launcher-backend/` | github.com/pop-os/launcher | `5b8685107166` | MPL-2.0 |
-| `notifications/` | github.com/pop-os/cosmic-notifications | `a899bfbc6715` | GPL-3.0 |
+| [external Notifications](https://github.com/xiaoyu-work/clawos-app/tree/main/products/notifications/native) | github.com/pop-os/cosmic-notifications | `a899bfbc6715` | GPL-3.0; complete daemon/config/util/build source pinned through `packaging/apps.lock.json` |
 | `osd/` | github.com/pop-os/cosmic-osd | `c57df29816e9` | GPL-3.0 |
 | `panel/` | github.com/pop-os/cosmic-panel | `2358f0473bf6` | GPL-3.0 |
 | [external Media Player](https://github.com/xiaoyu-work/clawos-app/tree/main/products/media-player/native) | github.com/pop-os/cosmic-player | `d1f63c570c76` | GPL-3.0; complete native source/resources pinned through `packaging/apps.lock.json` |
@@ -102,6 +102,15 @@ The following files at the root of `desktop/` came from
 - Single CI, single release tag, single `git clone` for contributors.
 
 ## License obligations
+
+Notifications' complete original 40-file native fork, nested configuration/util
+crates, GPL license and standalone optional/default graph moved to the
+[Notifications product](https://github.com/xiaoyu-work/clawos-app/blob/main/products/notifications/PROVENANCE.md).
+Its new native tests/presentation fixture moved with it. The immutable App pin
+provides corresponding source for both the desktop daemon and shared libraries
+linked by the OS panel/applets; it does not copy privileged notification state
+or providers into GPL product code. Session startup and panel resources remain
+OS-owned, and no user data/configuration or legacy JSON history is relocated.
 
 Media Player's complete 110-file native fork, original license, 72 locales,
 resources and standalone build graph moved to the

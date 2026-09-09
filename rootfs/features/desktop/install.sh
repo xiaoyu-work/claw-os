@@ -192,7 +192,7 @@ fi
 #    And cos-runtime itself pulls in `claw-os-sdk = { path =
 #    "../../claw-os-sdk/rust" }` (the public app-developer SDK that
 #    cos-runtime layers audit/caps on top of). Bind-mount that one too
-#    Media Player uses this public SDK directly. Without this mount
+#    Media Player and Notifications use this public SDK directly. Without this mount
 #    cargo dies in composed native crates with "failed to read
 #    /build/claw-os-sdk/rust/Cargo.toml".
 # ---------------------------------------------------------------------------
@@ -202,6 +202,8 @@ CHROOT_RUNTIME="$ROOTFS/build/cos-runtime"
 CHROOT_SDK="$ROOTFS/build/claw-os-sdk"
 CHROOT_NATIVE_APPS="$ROOTFS/build/build/native-apps"
 NATIVE_APP_SOURCES="$(python3 "$PROJECT_DIR/scripts/app_sources.py" --native)"
+test -f "$NATIVE_APP_SOURCES/cosmic-notifications/cosmic-notifications-config/Cargo.toml"
+test -f "$NATIVE_APP_SOURCES/cosmic-notifications/cosmic-notifications-util/Cargo.toml"
 PROJECT_CRATES="$PROJECT_DIR/crates"
 PROJECT_RUNTIME="$PROJECT_DIR/cos-runtime"
 PROJECT_SDK="$PROJECT_DIR/claw-os-sdk"

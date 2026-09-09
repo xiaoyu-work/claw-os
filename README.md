@@ -69,6 +69,13 @@ Together, the system-level agent, persistent memory, local-first model runtime,
 scoped permission model, cross-app session store, audit trail, and app SDK form
 one integrated agent-native OS layer.
 
+Application products are developed in
+[`clawos-app`](https://github.com/xiaoyu-work/clawos-app) and composed into signed
+OS packages from an immutable source pin. Native Notifications now lives there
+with its complete UI/MCP/config/util source; Claw OS retains notification
+authority, durable state and delivery. The [migration plan](docs/app-product-redesign.md)
+distinguishes source ownership from pending legacy data and visual cutovers.
+
 ## Quick Start
 
 <details>

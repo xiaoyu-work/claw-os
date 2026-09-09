@@ -281,6 +281,7 @@ def test_native_manual_image_and_asset_build_paths_agree():
     ("settings", "cosmic-settings"),
     ("capture", "cosmic-screenshot"),
     ("media-player", "cosmic-player"),
+    ("notifications", "cosmic-notifications"),
 ])
 def test_external_desktop_app_stays_out_of_agent_package(locked_source, tmp_path, product, app_id):
     root, lock = locked_source
@@ -361,6 +362,7 @@ def test_duplicate_native_exports_are_rejected(tmp_path, monkeypatch):
 @pytest.mark.parametrize(("product", "component"), [
     ("launcher", "launcher"), ("editor", "edit"), ("files", "files"), ("terminal", "term"),
     ("store", "store"), ("settings", "settings"), ("capture", "screenshot"), ("player", "player"),
+    ("notifications", "notifications"),
 ])
 def test_standalone_app_uses_external_source_and_matching_chroot_layout(product, component):
     just = (ROOT / "desktop/justfile").read_text()
@@ -419,6 +421,7 @@ def test_desktop_build_prepares_once_and_propagates_prepared_inputs(tmp_path):
     assert calls.count("settings-build") == 1
     assert calls.count("capture-build") == 1
     assert calls.count("player-build") == 1
+    assert calls.count("notifications-build") == 1
     assert calls.count("applets/build-release") == 1
 
 
@@ -431,6 +434,82 @@ def test_media_player_is_package_only_for_hot_swap(tmp_path):
     assert result.returncode != 0
     assert "Media Player requires its signed manifest and claw-os-media-player-v1" in result.stderr
     assert "qcow2 missing" not in result.stderr
+
+
+def test_notifications_is_package_only_for_hot_swap(tmp_path):
+    result = subprocess.run(
+        ["bash", str(ROOT / "scripts/hot-swap-to-vmware.sh"), "--no-build", "cosmic-notifications"],
+        env={**os.environ, "QCOW": str(tmp_path / "must-not-be-opened.qcow2")},
+        capture_output=True, text=True,
+    )
+    assert result.returncode != 0
+    assert "Notifications requires its signed manifest and claw-os-notifications-v1" in result.stderr
+    assert "qcow2 missing" not in result.stderr
+
+
+def test_native_notifications_share_exported_libraries_and_leave_legacy_state_separate():
+    lock = sources.read_lock()
+    assert lock["apps"].count("cosmic-notifications") == 1
+    assert "notifications" in lock["products"]
+    assert not (ROOT / "desktop/notifications").exists()
+    assert not (ROOT / "apps/cosmic-notifications").exists()
+    assert (ROOT / "apps/notify/main.py").is_file()
+    assert "notify" not in lock["apps"]
+    applet = (ROOT / "desktop/applets/cosmic-applet-notifications/Cargo.toml").read_text()
+    panel = (ROOT / "desktop/panel/cosmic-panel-bin/Cargo.toml").read_text()
+    for library in ("cosmic-notifications-config", "cosmic-notifications-util"):
+        assert f'../../../build/native-apps/cosmic-notifications/{library}' in applet
+        assert f'cosmic-notifications/{library}/Cargo.toml' in (
+            ROOT / "rootfs/features/desktop/install.sh"
+        ).read_text()
+    assert "../../../build/native-apps/cosmic-notifications/cosmic-notifications-config" in panel
+    assert 'git = "https://github.com/pop-os/cosmic-notifications"' not in applet + panel
+    panel_just = (ROOT / "desktop/panel/justfile").read_text()
+    assert "build-debug *args: prepare-apps" in panel_just
+    assert "check *args: prepare-apps" in panel_just
+    assert "python3 ../../scripts/app_sources.py --native" in panel_just
+    status = (ROOT / "docs/app-product-redesign.md").read_text()
+    assert "clawos-app/products/notifications" in status
+    assert "**69 of the original 75 identities**" in status
+    assert "**24 product groups**" in status
+    assert "57 Agent-package identities and 12 desktop identities" in status
+    assert "products/notifications" in (ROOT / "desktop/PROVENANCE.md").read_text()
+    assert "just notifications-build" in (ROOT / "desktop/README.md").read_text()
+
+
+@pytest.mark.parametrize("export", [
+    {"component": "other", "path": "public"},
+    {"component": "daemon", "path": "../outside"},
+    {"component": "daemon", "path": "/private"},
+    {"component": [], "path": "public"},
+    {"component": "daemon", "path": "public", "authority": True},
+])
+def test_invalid_public_native_libraries_are_refused_before_replacement(tmp_path, monkeypatch, export):
+    product = tmp_path / "source/products/notifications"
+    product.mkdir(parents=True)
+    (product / "package.json").write_text(json.dumps({
+        "native": {"daemon": "native"}, "native_libraries": {"public-library": export},
+    }))
+    monkeypatch.setattr(sources, "ROOT", tmp_path)
+    monkeypatch.setattr(sources, "read_lock", lambda: {"products": ["notifications"]})
+    monkeypatch.setattr(sources, "prepare_sources", lambda _: tmp_path / "source")
+    with pytest.raises(ValueError, match="native|Native"):
+        sources.prepare_native()
+    assert not (tmp_path / "build/native-apps").exists()
+
+
+def test_native_library_paths_and_cargo_identity_are_bound_to_the_product(tmp_path):
+    library = tmp_path / "native/public"
+    library.mkdir(parents=True)
+    (library / "Cargo.toml").write_text('[package]\nname = "public-library"\n')
+    package = {
+        "native": {"daemon": "native"},
+        "native_libraries": {"public-library": {"component": "daemon", "path": "public"}},
+    }
+    assert sources.native_libraries(package, tmp_path) == {"public-library": "daemon/public"}
+    (library / "Cargo.toml").write_text('[package]\nname = "another-library"\n')
+    with pytest.raises(ValueError, match="identity"):
+        sources.native_libraries(package, tmp_path)
 
 
 def test_native_player_source_status_and_package_identity_are_consistent():
