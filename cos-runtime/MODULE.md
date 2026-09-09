@@ -40,6 +40,12 @@ Only bundled/trusted apps depend on `cos-runtime`. Third-party apps use
 `claw-os-sdk`. Policy helper errors are surfaced; missing `cos` or a denied
 decision never silently becomes allow.
 
+Bundled clients can be source-owned by `clawos-app`. DB depends on the
+`cos_runtime.policy.require` export and wire-v1 decision contract, not private
+runtime helpers or providers. The exact platform source pin is reproducible
+but is not an independently published runtime compatibility guarantee; see
+the [bundled-client contract](README.md#bundled-client-contract).
+
 Inherited desktop apps keep app-specific `Serialize` context structs in their
 small `claw_glue` modules and call `cos_runtime::ask_claw::launch`. They do not
 name the Agent UI executable, construct activation flags, or assemble JSON.

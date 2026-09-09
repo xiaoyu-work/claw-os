@@ -71,6 +71,10 @@ sources and the published Doc/DB manifests, including DB's exact MCP/CLI
 arguments and read/write scopes. Signed fixtures in
 `tests/extension_provenance_process.rs` bind the same sources to worker policy;
 DB keeps its original owner/App data partition without KV or Agent-memory mounts.
+DB's signed fixture checks the prepared cache's exact Git revision/cleanliness,
+invokes its declared staging CLI without downloads, and binds the entrypoint
+from the manifest rather than assuming private implementation filenames.
+These pinned integration inputs are not production core build dependencies.
 
 ```bash
 # Narrow test or module

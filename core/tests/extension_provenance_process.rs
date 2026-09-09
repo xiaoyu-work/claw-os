@@ -201,23 +201,76 @@ fn published_db_signed_fixture_preserves_worker_identity_and_existing_namespace(
 
     let fx = Fixture::new("published-db");
     let source = app_sources::app_dir("db");
-    let apps = fx.root.join("apps");
+    let git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&source)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    };
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let lock: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(repository.join("packaging/apps.lock.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        git(&["rev-parse", "HEAD"]),
+        lock["revision"].as_str().unwrap()
+    );
+    let dirty = git(&["status", "--porcelain", "--untracked-files=all"]);
+    assert!(
+        dirty.is_empty(),
+        "locked App fixture cache is modified: {dirty}"
+    );
+    let pinned = PathBuf::from(git(&["rev-parse", "--show-toplevel"]));
+    let staged = fx.root.join("stage");
+    let output = std::process::Command::new("python3")
+        .arg(pinned.join("tools/stage.py"))
+        .args([
+            "storage-sdk",
+            "--kind",
+            "capability",
+            "--apps",
+            "db",
+            "--root",
+        ])
+        .arg(&staged)
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
+        serde_json::json!(["db"])
+    );
+    let apps = staged.join("usr/lib/cos/apps");
     let directory = apps.join("db");
-    fs::create_dir_all(&directory).unwrap();
-    for name in ["app.json", "main.py", "server.py"] {
-        fs::copy(source.join(name), directory.join(name)).unwrap();
-    }
     let original = fs::read_to_string(source.join("app.json")).unwrap();
-    let declaration: serde_json::Value = serde_json::from_str(&original).unwrap();
+    assert_eq!(
+        fs::read_to_string(directory.join("app.json")).unwrap(),
+        original
+    );
+    let declaration = cos::caps::manifest::Manifest::from_json(&original).unwrap();
+    let entry = declaration
+        .mcp
+        .as_ref()
+        .unwrap()
+        .entry
+        .as_deref()
+        .unwrap_or_else(|| declaration.runtime.default_mcp_entry())
+        .to_string();
     sign::sign_directory(
         &directory,
         &sign::SignRequest {
             kind: PackageKind::App,
             id: "db".to_string(),
-            version: declaration["version"].as_str().unwrap().to_string(),
+            version: declaration.version.clone(),
             manifest_schema: "2".to_string(),
             manifest_path: "app.json".to_string(),
-            entrypoints: vec!["main.py".to_string(), "server.py".to_string()],
+            entrypoints: vec![entry.clone()],
             resources: vec![],
         },
         &fx.key,
@@ -232,9 +285,7 @@ fn published_db_signed_fixture_preserves_worker_identity_and_existing_namespace(
     .unwrap();
     assert_eq!(package.manifest_text().unwrap(), original);
     let launch = cos::bridge::AppLaunch::new(Arc::new(package)).unwrap();
-    let binding = launch
-        .bind(&["main.py".into(), "server.py".into()])
-        .unwrap();
+    let binding = launch.bind(std::slice::from_ref(&entry)).unwrap();
     assert_eq!(launch.app_id(), "db");
     assert!(cos::apps::is_mcp_only_cli(launch.manifest()));
     assert_eq!(launch.manifest().mcp.as_ref().unwrap().tools.len(), 5);
@@ -266,7 +317,7 @@ fn published_db_signed_fixture_preserves_worker_identity_and_existing_namespace(
                 app_id: launch.app_id(),
                 app_dir: launch.dir(),
                 program: "/usr/bin/python3".into(),
-                argv: vec![directory.join("server.py").to_string_lossy().into_owned()],
+                argv: vec![directory.join(&entry).to_string_lossy().into_owned()],
                 caps: &caps,
                 authorized_mounts: &[],
                 lifetime,
@@ -323,10 +374,10 @@ fn published_db_signed_fixture_preserves_worker_identity_and_existing_namespace(
     assert!(!data.join("apps/storage-sdk").exists());
     assert!(!data.join("db").exists());
     write(
-        &directory.join("server.py"),
+        &directory.join(&entry),
         "raise RuntimeError('modified fixture')\n",
     );
-    assert!(launch.bind(&["server.py".into()]).is_err());
+    assert!(launch.bind(std::slice::from_ref(&entry)).is_err());
 }
 
 /// A scratch directory with secure ancestry.

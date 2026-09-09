@@ -1,5 +1,6 @@
 """Pinned external App inputs must not create an unsigned runtime fallback."""
 
+import fnmatch
 import importlib.util
 import json
 import os
@@ -11,7 +12,7 @@ import sys
 
 import pytest
 
-from test_support import authenticated_mcp_params
+from test_support import authenticated_mcp_params, mcp_process
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -343,6 +344,27 @@ def test_real_app_staging_counts_nested_apps_and_installs_shared_parser(tmp_path
     assert (stage / "usr/lib/cos/python/canonical_argv.py").read_text() == "SHARED_PARSER = True\n"
 
 
+def _app_payload(directory, *, source=False):
+    entries = {}
+    for path in [directory, *sorted(directory.rglob("*"))]:
+        relative = path.relative_to(directory)
+        if source and any(
+            part in {"__pycache__", ".pytest_cache"} or fnmatch.fnmatch(part, "test_*.py")
+            for part in relative.parts
+        ):
+            continue
+        if path.is_symlink():
+            value = ("symlink", os.readlink(path))
+        elif path.is_file():
+            value = ("file", path.read_bytes())
+        elif path.is_dir():
+            value = ("directory",)
+        else:
+            raise AssertionError(f"Unsupported App payload entry: {path}")
+        entries[relative] = (path.lstat().st_mode, value)
+    return entries
+
+
 def test_published_capability_pin_stages_all_partitions_and_real_agent_runtime(tmp_path):
     lock = sources.read_lock()
     assert lock["capabilities"] == ["document-engine", "storage-sdk"]
@@ -383,10 +405,13 @@ def test_published_capability_pin_stages_all_partitions_and_real_agent_runtime(t
         original = source / "capabilities" / group / "apps" / app_id
         for partition_name in ("all", "agent", "agent-package"):
             installed = tmp_path / partition_name / "usr/lib/cos/apps" / app_id
-            assert {path.name for path in installed.iterdir()} == {"app.json", "main.py", "server.py"}
-            for name in ("app.json", "main.py", "server.py"):
-                assert (installed / name).read_bytes() == (original / name).read_bytes()
-                assert (installed / name).stat().st_mode == (original / name).stat().st_mode
+            if app_id == "db":
+                assert _app_payload(installed) == _app_payload(original, source=True)
+            else:
+                assert {path.name for path in installed.iterdir()} == {"app.json", "main.py", "server.py"}
+                for name in ("app.json", "main.py", "server.py"):
+                    assert (installed / name).read_bytes() == (original / name).read_bytes()
+                    assert (installed / name).stat().st_mode == (original / name).stat().st_mode
     parser = python / "claw_files/document.py"
     assert parser.read_bytes() == (source / "products/files/python/claw_files/document.py").read_bytes()
     manifests = list((staged / "usr/lib/cos/apps").rglob("app.json"))
@@ -458,32 +483,16 @@ def test_published_capability_pin_stages_all_partitions_and_real_agent_runtime(t
         ("query", {"database": "inventory", "sql": "DELETE FROM items"}),
     ]
     db_app = staged / "usr/lib/cos/apps/db"
-    result = subprocess.run(
-        [sys.executable, "-c", """
-import json, sys
-import claw_os_sdk.mcp as sdk
-import cos_runtime.policy as policy
-import main, server
-results = [server.app._handle_request("tools/call", call, True) for call in json.load(sys.stdin)]
-print(json.dumps({"sdk": sdk.__file__, "policy": policy.__file__, "app": server.__file__,
-                  "db_dir": main.DB_DIR, "results": results}))
-"""],
-        input=json.dumps([
-            authenticated_mcp_params({"name": f"db.{command}", "arguments": arguments})
+    with mcp_process(db_app, env={
+        "PATH": os.defpath, "PYTHONPATH": str(python), "COS_DATA_DIR": str(data),
+        "COS_SESSION": "db-fixture", "CLAW_COS_BIN": str(db_policy),
+    }) as request:
+        results = [
+            request("tools/call", authenticated_mcp_params({
+                "name": f"db.{command}", "arguments": arguments,
+            }))
             for command, arguments in calls
-        ]),
-        cwd=db_app, capture_output=True, text=True, check=True, timeout=20,
-        env={"PATH": os.defpath, "PYTHONPATH": str(python), "COS_DATA_DIR": str(data),
-             "COS_APP_MANIFEST": str(db_app / "app.json"), "COS_APP_ID": "db",
-             "COS_SESSION": "db-fixture", "CLAW_COS_BIN": str(db_policy),
-             "PYTHONDONTWRITEBYTECODE": "1", "PYTHONNOUSERSITE": "1"},
-    )
-    payload = json.loads(result.stdout)
-    assert payload["sdk"] == str(python / "claw_os_sdk/mcp.py")
-    assert payload["policy"] == str(python / "cos_runtime/policy.py")
-    assert payload["app"] == str(db_app / "server.py")
-    assert payload["db_dir"] == str(data / "db")
-    results = payload["results"]
+        ]
     assert results[0]["structuredContent"] == {
         "database": "inventory", "columns": ["value"], "rows": [["existing state"]], "count": 1,
     }

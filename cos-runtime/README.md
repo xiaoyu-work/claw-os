@@ -4,11 +4,10 @@
 > need this crate / package. If you only want to **call** the system LLM or
 > expose tools to the agent, use [`claw-os-sdk`](../claw-os-sdk/) instead.
 
-This directory holds the helpers the claw-os kernel uses to talk to the apps
-it bundles under `apps/*` and to the cosmic desktop GUI binaries under
-`desktop/*`. The split exists because the public SDK should be small,
-documented, and AI-focused, whereas the runtime here is OS implementation
-detail:
+This directory holds OS-owned helpers for bundled clients, including clients
+whose complete source now lives in `clawos-app`. The split exists because the
+public SDK is independently published, whereas this runtime is distributed
+only with the OS and supported only for its bundled/trusted clients:
 
 | Module (Rust) | Module (Python) | Purpose |
 |---|---|---|
@@ -23,8 +22,32 @@ detail:
 | (not applicable) | `cos_runtime.browser_bridge` | Send attached-browser actions to the daemon-owned typed provider over a bounded private stdin bridge |
 | (not applicable) | `cos_runtime.network_diagnostics` | Send host-network inspection and bounded probe requests to the daemon-owned typed provider |
 
-These modules talk wire-v1 too, but they're the *kernel side* of that wire —
-the consumers are the bundled apps in this repo, not external apps.
+These modules talk wire-v1 to OS authority. Their consumers are bundled
+clients, not arbitrary third-party apps; repository location does not confer
+permission to copy providers or bypass the broker.
+
+## Bundled-client contract
+
+DB imports the existing Python `cos_runtime.policy.require` export for
+exact-name or wildcard capability checks. It returns `None` on allow and
+raises `PermissionDenied` or `PolicyUnavailable` on refusal or transport
+failure. The helper uses the wire-v1 policy decision envelope; the inherited
+OS session and process ancestry, not caller-supplied labels, determine
+authority. The client must not turn these errors into allow.
+
+That bundled export is a dependency boundary, not permission to import its
+private helpers or core implementation. Refactors behind the export and wire
+contract should not require DB changes; changing the export is an interface
+change that must be coordinated and validated against its consumers. DB's
+cross-repository dispatch fixtures use the public manifest/MCP stdio contract,
+not the SDK's private request handlers.
+
+The App repository currently selects these libraries by an exact platform
+source revision. This ensures reproducibility, not an independently published
+runtime package, general third-party compatibility promise, or complete
+release decoupling. Development tooling still knows the exported source
+directories, and installed delivery still uses the OS package. See
+[`packaging/README.md`](../packaging/README.md) for that distribution boundary.
 
 ## Why a separate crate / package
 

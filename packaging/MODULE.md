@@ -139,12 +139,14 @@ dependency caches are left untouched.
 
 Storage SDK supplies only `db` from `capabilities/storage-sdk/apps/db`, separate
 from the Storage business product. The immutable source contributes exactly
-`app.json`, `main.py` and `server.py` to `/usr/lib/cos/apps/db` in Agent, with
+the complete declared runtime payload to `/usr/lib/cos/apps/db` in Agent, with
 no SDK/provider, native assets or user state. Its five tools, existing grants
 and `$COS_DATA_DIR/db/<name>.db` namespace are unchanged; KV and Agent memory
 stay separate. Agent still contains 63 total identities (60 external and three
 local); Desktop still contains 12. The real package-block fixture checks these
-exact identities and runs staged DB through the installed SDK/runtime.
+exact identities and full payload bytes/modes/symlinks, then runs DB's
+manifest-selected MCP entrypoint over stdio through the installed SDK/runtime.
+It does not import App internals or require a fixed list of private filenames.
 
 ## Tests
 

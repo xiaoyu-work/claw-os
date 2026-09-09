@@ -259,7 +259,11 @@ fn published_db_fixture_preserves_mcp_cli_arguments_and_exact_database_scopes() 
     assert_eq!(manifest.id, "db");
     assert!(cos::apps::is_mcp_only_cli(&manifest));
     let service = manifest.mcp.as_ref().unwrap();
-    assert_eq!(service.entry.as_deref(), Some("server.py"));
+    let entry = service
+        .entry
+        .as_deref()
+        .unwrap_or_else(|| manifest.runtime.default_mcp_entry());
+    assert!(directory.join(entry).is_file());
     assert!(service.access.system_agent);
     assert!(!service.access.external_agents);
     assert_eq!(
@@ -349,6 +353,4 @@ fn published_db_fixture_preserves_mcp_cli_arguments_and_exact_database_scopes() 
             .is_err());
     }
     assert!(cos::apps::mcp_tool_for_command(&manifest, "execute").is_err());
-    assert!(directory.join("main.py").is_file());
-    assert!(directory.join("server.py").is_file());
 }

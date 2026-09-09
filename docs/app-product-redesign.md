@@ -20,6 +20,16 @@ OS-repository commit: publish the product commit first, then pin that exact
 revision in [`packaging/apps.lock.json`](../packaging/apps.lock.json).
 There are no sibling-checkout dependencies or runtime download fallbacks.
 
+Paired commits describe source cutover, not a permanent requirement for every
+feature. Compatible App business changes should not require OS implementation
+edits, and OS refactors behind SDK/runtime/protocol exports should not require
+App rewrites. DB integration now exercises its manifest-selected MCP stdio
+endpoint and complete staged payload instead of private SDK/App internals.
+This does not establish independent distribution: current library source
+exports, bundled-runtime compatibility and App-pin/OS-package delivery remain
+explicit contracts and release coupling; see
+[`packaging/README.md`](../packaging/README.md).
+
 Source migration now covers **72 of the original 75 identities** across
 **24 business product groups** plus **2 shared-capability source groups**:
 60 Agent-package identities and 12 desktop identities.
@@ -101,7 +111,7 @@ and consent cutovers, or visual/installed-image acceptance.
 | `gateway-pushover` | Source moved to `clawos-app/products/notification-delivery/apps/gateway/pushover`; exact API host, application/user keys, recipient flag, metadata and emergency constraints preserved; Python argument case moved, while receipt acknowledgement and durable OS-service integration remain separate |
 | `gateway-webhook` | Source moved to `clawos-app/products/notification-delivery/apps/gateway/webhook`; JSON/raw payload, target flag/default lookup, auth precedence and independent HMAC preserved with existing grants and shared egress; argument/egress regressions relocated and Rust fixture pinned; all three delivery source identities moved, not durable-service integration |
 | `gateway-homeassistant` | Source moved to `clawos-app/products/home-integration/apps/gateway/homeassistant`; REST send/call/status and grants preserved, canonical list parsing fixed for flag-shaped text/options; external server, device state and automation engine not imported, and private endpoint access is not enabled |
-| Remaining four identities listed above | Pending their individual paired source migrations |
+| Remaining three identities listed above | Pending their individual paired source migrations |
 
 Moving source does not complete a product redesign milestone or merge legacy
 identities. APT remains the installed update path until a separate, complete

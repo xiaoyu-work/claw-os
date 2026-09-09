@@ -61,6 +61,16 @@ enforcement, the native launcher and package signing. Product source changes
 are released by updating this pin and publishing the normal OS packages;
 installed systems do not fetch executable code from Git.
 
+A compatible App business change needs no OS core implementation change.
+The remaining coupling is explicit source composition and release delivery:
+package metadata and the staging CLI are build contracts, development selects
+SDK/runtime source-directory exports at an immutable platform revision, and
+installed changes still require an App-pin/package release here. Bundled
+`cos_runtime` is not an independently published third-party SDK. Paired
+migration commits are cutover choreography, not a requirement to edit both
+implementations for every future feature. Pins alone do not prove complete
+decoupling.
+
 Native Files is composed under `build/native-apps/cosmic-files`, preserving
 both executables and resources in the desktop package. Files also exports the
 shared `claw_files.document` parsing/conversion library into the Agent package;
@@ -90,6 +100,13 @@ No SDK/provider or native source is added to the capability payload. The
 installed Agent package still has 63 identities, including three local Apps;
 Desktop still has 12. Normal signed package updates remain the only installed
 update path; source relocation adds no data transition.
+
+DB integration fixtures compare the entire staged runtime payload, including
+bytes, modes and symlinks, with the pinned source's declared staging exclusions.
+They execute the manifest-selected MCP entrypoint over stdio with installed
+OS libraries, rather than importing DB's private modules or the SDK dispatcher.
+Signed worker fixtures stage that same complete payload; adding a private
+module or changing the declared entrypoint does not require an OS filename list.
 
 Native Store is composed under `build/native-apps/cosmic-store`, including its
 original default-feature graph and flathub-stats workspace. The desktop package

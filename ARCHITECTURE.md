@@ -522,6 +522,16 @@ commits and the 1,000-returned-row bound. Agent still installs
 `/usr/lib/cos/apps/db`; data stays at `$COS_DATA_DIR/db/<name>.db` inside the
 same owner/App partition. KV and Agent memory remain separate. No SDK/provider,
 grant union, data import or new state transition moves with the source.
+
+DB evolves through its manifest/MCP contract, public SDK API and
+[bundled policy export](cos-runtime/README.md#bundled-client-contract), not
+cross-repository imports of private source. OS core builds do not require an
+App checkout; package composition and integration fixtures deliberately use
+the immutable App pin. DB fixtures consume full staged payloads and the
+manifest-selected stdio endpoint. Pins establish reproducibility, not complete
+build/release independence: platform source-directory exports, source-package
+staging and OS package publication remain explicit coupling, as described in
+[`packaging/README.md`](packaging/README.md).
 `kv`, `net` and `summarize` have not moved.
 
 Cross-repository App contract and worker tests select real declared source by
