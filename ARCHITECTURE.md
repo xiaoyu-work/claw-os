@@ -90,8 +90,8 @@ SDK stdin client and durable string IDs, with explicit integer/icon-path
 compatibility refusals. Source ownership is not legacy-data or visual acceptance.
 
 Native Notifications now uses `system.notification.control`, backed by the
-existing durable Notification Service. Only the authenticated
-`cosmic-notifications` App with `ui.notify` may publish or close its own
+existing durable Notification Service. Native post/close require the authenticated
+`cosmic-notifications` App with `ui.notify` and address only its own
 owner/source-scoped records; it has no session bus. Display labels are not
 producer identity. The OS owns SQLite, DND/channel preferences, leases, retries,
 credentials and audit. The existing Agent bridge remains the sole desktop
@@ -109,7 +109,10 @@ crash/disconnect closes orphan presentations while durable activity survives.
 External freedesktop clients keep their ordinary lifetime and cannot use that
 hint to affect another sender or core record.
 
-The same typed service also supports `notify` send/list, with a distinct
+The complete `notify` Python facade/manifest/tests now also live in
+`clawos-app/products/notifications/apps/notify`, consumed at the immutable App
+pin and shipped in Agent rather than Desktop. No production copy remains
+under `apps/notify`. The same typed service supports its send/list, with a distinct
 `app:notify` producer and exact action-to-App authorization. Send keeps
 `ui.notify`; list independently requires `data.inbox.read` and exposes only
 that owner's notify-produced records, not the owner's entire activity feed.

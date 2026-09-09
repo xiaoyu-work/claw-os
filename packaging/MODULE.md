@@ -116,6 +116,12 @@ without a session bus, file-icon access, or owner-wide notification control.
 Its original installer supplies only the native binary; no fixture executable
 or provider source is packaged. Native history/settings and legacy `notify`
 JSON are not migrated. Binary-only hot-swap is refused.
+The `notify` Python source/descriptor/client comes from the same product pin
+but stays exclusively in Agent. It uses that package's SDK/service, not the
+native App. The partition is 58 migrated Agent identities plus 12 desktop
+identities; all 70 share 24 product groups. Historical JSON is preserved in its
+old namespace and excluded from new service lists, never copied into payloads
+or automatically imported at installation/launch.
 App partition accounting includes nested gateway manifests. Shared gateway
 libraries remain OS-owned, and the canonical argument module is installed in
 `/usr/lib/cos/python` for the packaged legacy App entrypoints.

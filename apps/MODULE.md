@@ -36,8 +36,12 @@ Product sources are moving individually to
 `gateway-pushover`, `gateway-webhook`, `gateway-homeassistant`, `panel-calendar`, `panel-clipboard`, `widget-rail`,
 the Browser extension/Native Host, Mail UI/native source and complete Calendar/Clipboard/Widget Rail panel sources
 are owned there already. Complete native Launcher, Editor and Files sources
-and descriptors are external too, as are complete native Terminal, Store and
-Settings, Capture and Media Player. Media Player preserves `cosmic-player`,
+and descriptors are external too, as are complete native Terminal, Store,
+Settings, Capture, Media Player and Notifications. The `notify` Python facade
+is also owned by Notifications: send/list use the OS service with separate
+grants and an owner/source-scoped projection. Historical JSON stays untouched
+and is not imported or included in new lists; no App-local backend remains.
+Native and legacy producer identities are not merged. Media Player preserves `cosmic-player`,
 its complete original native UI/MPRIS/resources and independent renderer
 graph. Seven MCP tools operate the same live native state through an
 owner/executable-bound OS adapter with separate observation/control grants,

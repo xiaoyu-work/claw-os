@@ -466,6 +466,79 @@ fn mcp_only_cli_command_lookup_and_schema() {
 }
 
 #[test]
+fn notify_product_cli_aliases_input_bindings_and_distinct_grants_are_preserved() {
+    use crate::caps::{Cap, Scope, Verb};
+    let manifest = Manifest::from_json(
+        &std::fs::read_to_string(app_sources::app_dir("notify").join("app.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(is_mcp_only_cli(&manifest));
+    let send = mcp_tool_for_command(&manifest, "send").unwrap();
+    let list = mcp_tool_for_command(&manifest, "list").unwrap();
+    assert_eq!(send.name, "notify.send");
+    assert_eq!(list.name, "notify.list");
+    assert!(mcp_tool_for_command(&manifest, "post").is_err());
+    assert!(mcp_tool_for_command(&manifest, "close").is_err());
+    let values = crate::caps::args::bind_cli_args(
+        &send.args,
+        &["Plain message".into(), "--urgent".into()],
+    )
+    .unwrap();
+    assert_eq!(values["message"], "Plain message");
+    assert_eq!(values["urgent"], true);
+    assert_eq!(
+        manifest
+            .resolve_mcp_tool_needs(&send.name, &values)
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>(),
+        vec![Cap::unscoped(Verb::UI_NOTIFY)]
+    );
+    let values = crate::caps::args::bind_cli_args(&list.args, &[]).unwrap();
+    assert_eq!(values["limit"], 20);
+    assert_eq!(
+        manifest
+            .resolve_mcp_tool_needs(&list.name, &values)
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>(),
+        vec![Cap::new(Verb::DATA_INBOX_READ, Scope::Wild)]
+    );
+    assert_eq!(tool_schema(send)["parameters"][0]["binding"], "positional");
+    assert_eq!(tool_schema(send)["parameters"][1]["binding"], "flag");
+    assert_eq!(tool_schema(list)["parameters"][0]["type"], "integer");
+    assert_eq!(tool_schema(list)["parameters"][0]["binding"], "flag");
+    for args in [
+        vec!["--owner-uid".into(), "0".into()],
+        vec!["--limit".into(), "true".into()],
+    ] {
+        assert!(crate::caps::args::bind_cli_args(&list.args, &args).is_err());
+    }
+    let paths = crate::caps::args::PathContext {
+        home: "/home/tester".into(),
+        cwd: None,
+    };
+    for field in [
+        "owner_uid",
+        "source",
+        "session",
+        "session_id",
+        "task_id",
+        "confirm",
+    ] {
+        assert!(manifest
+            .resolve_mcp_tool_call(
+                &list.name,
+                &std::collections::BTreeMap::from([(field.into(), json!("forged"))]),
+                &paths,
+            )
+            .is_err());
+    }
+}
+
+#[test]
 fn an_operation_app_is_not_treated_as_mcp_only() {
     // Staged migration: an App that still declares operations keeps the legacy
     // CLI dispatch even when it also exposes an mcp service.

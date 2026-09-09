@@ -40,7 +40,10 @@ consolidate the old JSON history or establish visual/full-image acceptance.
 
 The `notify` 0.2 service contract retains `notify.send(message, urgent=false)`
 and `notify.list(limit=20)`, but new operations use only the authoritative OS
-Notification Service. Messages are nonempty plain text, at most 4000 Unicode
+Notification Service. Its complete source/manifest/client/tests now come from
+the immutable Notifications product pin; Agent still owns
+`/usr/lib/cos/apps/notify`, its SDK and service. There is no runtime Git download
+or native-App dependency. Messages are nonempty plain text, at most 4000 Unicode
 characters, without control characters other than newline/tab/CR; invalid input
 is rejected, not truncated. Urgent means warning severity with Immediate
 delivery, not permission to bypass DND. Both modes respect user delivery policy.

@@ -53,6 +53,9 @@ library paths and full source revision for consumers/assembly validation.
 Notifications exports its config/util crates for the OS applet and panel;
 the original daemon and all its build inputs are composed, not recreated under
 the deleted production `desktop/notifications` path.
+Its `notify` Python facade is staged separately into Agent, never into the
+native/Desktop payload. No `apps/notify` production copy or history-import
+step is recreated by source preparation.
 Media Player is refused by the binary-only VMware hot-swap helper: its signed
 manifest and versioned Agent service must advance through paired package updates.
 Notifications is refused for the same reason and also requires its matching

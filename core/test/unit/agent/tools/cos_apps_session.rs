@@ -1677,11 +1677,11 @@ async fn a_resource_bearing_call_runs_in_its_own_worker_and_leaves_nothing_behin
 // The shipped MCP Apps
 // ---------------------------------------------------------------------------
 
-/// Every App bundled in this repository that ships an `mcp` block:
-/// the sample key/value App plus the nine native Desktop entries the
-/// kernel's fixed table names.
-const SHIPPED_MCP_APPS: &[&str] = &[
-    "kv",
+/// Representative Python facades, whose entrypoints stay inside their packages.
+const SHIPPED_PYTHON_MCP_APPS: &[&str] = &["kv", "notify"];
+
+/// All nine native Desktop entries named by the kernel's fixed table.
+const SHIPPED_NATIVE_MCP_APPS: &[&str] = &[
     "cosmic-files",
     "cosmic-edit",
     "cosmic-store",
@@ -1713,7 +1713,7 @@ fn every_shipped_mcp_app_resolves_its_entry_and_its_calls() {
         home: std::path::PathBuf::from("/home/tester"),
         cwd: None,
     };
-    for &id in SHIPPED_MCP_APPS {
+    for &id in SHIPPED_PYTHON_MCP_APPS.iter().chain(SHIPPED_NATIVE_MCP_APPS) {
         let manifest = shipped_manifest(id);
         let service = manifest
             .mcp
@@ -1861,7 +1861,7 @@ fn every_shipped_native_desktop_app_names_its_kernel_row() {
     // exactly the one the kernel table holds for it. A manifest that
     // drifted off its row would be refused at launch, so catching it
     // here is the difference between a build failure and a dead tool.
-    for &id in &SHIPPED_MCP_APPS[1..] {
+    for &id in SHIPPED_NATIVE_MCP_APPS {
         let manifest = shipped_manifest(id);
         let entry = manifest
             .mcp

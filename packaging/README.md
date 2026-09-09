@@ -119,6 +119,11 @@ rejects icon paths/URLs; popup timeout/transient metadata does not bypass
 durability. Update the signed desktop payload and compatible Agent together,
 then restart the desktop; binary-only hot-swap is refused. No fixture binary,
 new user-data store or legacy `notify` JSON import enters either payload.
+The complete `notify` Python facade now comes from the same product revision,
+but `/usr/lib/cos/apps/notify` belongs only to Agent. Its separate send/list
+grants address `app:notify` through the OS service and installed Python SDK.
+There is no dependency on calling the native App, no new storage directory,
+and no historical-data import. See [the explicit compatibility decision](../docs/updating.md#legacy-notify-service-transition).
 
 It also creates the empty root-owned `/usr/lib/cos/extensions` registry.
 Executable Agent extension packages placed there remain inactive until their

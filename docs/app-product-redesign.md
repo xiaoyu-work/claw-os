@@ -20,11 +20,12 @@ OS-repository commit: publish the product commit first, then pin that exact
 revision in [`packaging/apps.lock.json`](../packaging/apps.lock.json).
 There are no sibling-checkout dependencies or runtime download fallbacks.
 
-Source migration now covers **69 of the original 75 identities** across
-**24 product groups**: 57 Agent-package identities and 12 desktop identities.
-This count includes native Notifications, not its OS service or shared libraries.
-The six remaining source identities are `notify`, `db`, `doc`, `kv`, `net`
-and `summarize`.
+Source migration now covers **70 of the original 75 identities** across
+**24 product groups**: 58 Agent-package identities and 12 desktop identities.
+This count includes native Notifications and `notify`, not their OS service
+or shared libraries. The five remaining source identities are `db`, `doc`,
+`kv`, `net` and `summarize`; they remain shared-capability source groups, not
+new business products.
 Source ownership does not complete M2, backend/state consolidation, identity
 and consent cutovers, or visual/installed-image acceptance.
 
@@ -42,6 +43,7 @@ and consent cutovers, or visual/installed-image acceptance.
 | `cosmic-screenshot` | Complete native portal client, all 99 original native files, 72 locales, eight icons, descriptor and original locked release build moved to Capture; UI remains in the shared OS portal; non-interactive CLI/MCP share the typed OS service with separate screen/output grants, no worker session bus or App call; IDs and screenshots/configuration stay unchanged |
 | `cosmic-player` | All 110 original native files, 72 locales, descriptor, resources and original renderer/optional graph moved to `clawos-app/products/media-player`; UI/MCP share actual native playback through an owner/executable-bound OS adapter with separate exact observe/control grants, no worker bus and no other-player fallback; Stop/status are corrected; identities and user state remain unchanged |
 | `cosmic-notifications` | All 40 original native files, nested config/util crates, GPL license, original toolkit/optional graph, descriptor and added native tests/fixture moved to `clawos-app/products/notifications`; isolated MCP submits owner/App-bound durable OS intent under the existing `ui.notify` grant; one OS consumer presents and closes notifications with safe sender-bound handles and real acknowledgement; durable string IDs explicitly replace desktop integers; legacy `notify` JSON and user settings remain unchanged |
+| `notify` | Complete Python source, manifest, server and tests moved to `clawos-app/products/notifications/apps/notify`; new send/list use only the existing OS Notification Service with distinct `app:notify` authority, separate send/read grants, warning-level urgency respecting DND, durable IDs and full source-scoped totals. Historical JSON stays in its existing namespace, never read/imported/rewritten/replayed and explicitly excluded from new lists; no App-local store remains |
 | `docs` | Moved to `clawos-app/products/files/apps/docs`; four Recoll-backed tools, owner index state and scopes preserved; background indexing remains OS-owned |
 | `search` | Moved to `clawos-app/products/browser/apps/search`; explicit provider choice, two MCP tools and exact credential/network scopes preserved |
 | `web` | Moved to `clawos-app/products/browser/apps/web`; existing five-operation CLI/MCP adapter and AI gate preserved; reusable `cos-browser` engine remains OS-owned |
@@ -176,7 +178,7 @@ groups, not a proposal to replace 75 Apps with 28 new App packages.
 | Target | Starting App IDs | Implementation disposition |
 | --- | --- | --- |
 | Launcher | `cosmic-launcher`, `launcher` | Shared application catalog, launch behavior and shell presentation. |
-| Notifications | `cosmic-notifications`, `notify` | Existing core Notification Service is authoritative; remove the separate App JSON store through an explicit state decision. |
+| Notifications | `cosmic-notifications`, `notify` | Core Notification Service is authoritative for new operations; both sources now belong to Notifications. The explicit state decision preserves historical JSON in place, excludes it from new lists and performs no import/replay. Producer identities and grants remain separate. |
 | Clipboard | `clipboard-manager`, `panel-clipboard` | One clipboard service and permission boundary, with panel presentation. |
 | Settings | `cosmic-settings`, `accessibility-manager`, `audio-manager`, `bluetooth-manager`, `camera-manager`, `display-manager`, `desktop-manager`, `location-manager`, `network-manager`, `power-manager`, `printer-manager`, `user-manager` | Settings organizes pages; independent system providers retain exact scopes. Do not create a super-privileged Settings process. |
 | Maintenance | `config-editor`, `systemd` | Typed configuration and service-management operations; no standalone forwarding Apps. |

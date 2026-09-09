@@ -91,6 +91,93 @@ async fn wait_state(
     .expect("durable notification transition");
 }
 
+async fn notification_broker(
+    root: &PathBuf,
+    uid: u32,
+    calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+) -> tokio::task::JoinHandle<()> {
+    let listener = tokio::net::UnixListener::bind(root.join("clawd.sock")).unwrap();
+    peer::enable_credential_passing(listener.as_raw_fd()).unwrap();
+    tokio::spawn(async move {
+        loop {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut stream = PeerStream::new(stream).unwrap();
+            let outcome = stream
+                .read_request(crate::clawd::wire::MAX_REQUEST_BYTES)
+                .await
+                .unwrap();
+            let frame = match outcome {
+                ReadOutcome::Frame(frame) => frame,
+                ReadOutcome::Closed => continue,
+                ReadOutcome::Legacy => panic!("notification fixture used legacy framing"),
+            };
+            let client = ClientIdentity::from_peer(peer::verify(frame.credentials).unwrap());
+            assert_eq!(client.uid, Some(uid));
+            let request: crate::clawd::wire::InboundRequest =
+                serde_json::from_slice(&frame.body).unwrap();
+            let command = Command::parse(request.command.as_str()).unwrap();
+            let params = (command.route().decode)(request.params).unwrap();
+            let value = if command == Command::AppSessionRelay {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                assert_eq!(params["command"], "system.notification.control");
+                let route = Command::SystemNotificationControl.route();
+                let body = (route.decode)(params["params"].clone()).unwrap();
+                match authorize_relayed(
+                    params["handle"].as_str().unwrap(),
+                    params["session_id"].as_str().unwrap(),
+                    route.name,
+                    &route.authority,
+                    &body,
+                    &client,
+                )
+                .await
+                {
+                    Ok(Some(authority)) => control(body, &client, &authority)
+                        .map(|value| json!({"result":value})),
+                    Ok(None) => Err(BrokerError::authorization("missing notification authority")),
+                    Err(error) => Err(BrokerError::authorization(error.to_string())),
+                }
+            } else {
+                let value = match command {
+                    Command::NotificationDeliveryClaim => {
+                        crate::clawd::notifications::claim_deliveries(params, &client)
+                    }
+                    Command::NotificationDeliveryComplete => {
+                        crate::clawd::notifications::complete_delivery(params, &client)
+                    }
+                    Command::NotificationSubscribe => {
+                        crate::clawd::notifications::subscribe(params, &client).await
+                    }
+                    Command::NotificationAcknowledge => {
+                        crate::clawd::notifications::acknowledge(params, &client)
+                    }
+                    Command::NotificationDismiss => {
+                        crate::clawd::notifications::dismiss(params, &client)
+                    }
+                    _ => panic!("unexpected notification fixture route: {command}"),
+                };
+                value.map_err(BrokerError::from)
+            };
+            let response = match value {
+                Ok(value) => Response::ok(request.id, value),
+                Err(error) => Response::error(request.id, error.kind.code(), error.message),
+            };
+            if let Err(error) = stream
+                .write_response(&encode_response(&response).unwrap())
+                .await
+            {
+                assert!(
+                    matches!(
+                        error.kind(),
+                        std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
+                    ),
+                    "unexpected fixture response error: {error}"
+                );
+            }
+        }
+    })
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires native Notifications, native presentation fixture, desktop delivery fixture and cos"]
 async fn notifications_actual_native_worker_durable_delivery_and_owner_bound_ui() {
@@ -201,82 +288,7 @@ async fn notifications_actual_native_worker_durable_delivery_and_owner_bound_ui(
         })
         .unwrap();
     crate::worker::install_relay(&slot, Some(relay.into_wire()));
-    let listener = tokio::net::UnixListener::bind(root_path.join("clawd.sock")).unwrap();
-    peer::enable_credential_passing(listener.as_raw_fd()).unwrap();
-    let server = tokio::spawn(async move {
-        loop {
-            let (stream, _) = listener.accept().await.unwrap();
-            let mut stream = PeerStream::new(stream).unwrap();
-            let outcome = stream
-                .read_request(crate::clawd::wire::MAX_REQUEST_BYTES)
-                .await
-                .unwrap();
-            let frame = match outcome {
-                ReadOutcome::Frame(frame) => frame,
-                ReadOutcome::Closed => continue,
-                ReadOutcome::Legacy => panic!("notification fixture used legacy framing"),
-            };
-            let client = ClientIdentity::from_peer(peer::verify(frame.credentials).unwrap());
-            assert_eq!(client.uid, Some(uid));
-            let request: crate::clawd::wire::InboundRequest =
-                serde_json::from_slice(&frame.body).unwrap();
-            let command = Command::parse(request.command.as_str()).unwrap();
-            let params = (command.route().decode)(request.params).unwrap();
-            let value = if command == Command::AppSessionRelay {
-                assert_eq!(params["command"], "system.notification.control");
-                let route = Command::SystemNotificationControl.route();
-                let body = (route.decode)(params["params"].clone()).unwrap();
-                let authority = authorize_relayed(
-                    params["handle"].as_str().unwrap(),
-                    params["session_id"].as_str().unwrap(),
-                    route.name,
-                    &route.authority,
-                    &body,
-                    &client,
-                )
-                .await
-                .unwrap()
-                .unwrap();
-                control(body, &client, &authority).map(|value| json!({"result":value}))
-            } else {
-                let value = match command {
-                    Command::NotificationDeliveryClaim => {
-                        crate::clawd::notifications::claim_deliveries(params, &client)
-                    }
-                    Command::NotificationDeliveryComplete => {
-                        crate::clawd::notifications::complete_delivery(params, &client)
-                    }
-                    Command::NotificationSubscribe => {
-                        crate::clawd::notifications::subscribe(params, &client).await
-                    }
-                    Command::NotificationAcknowledge => {
-                        crate::clawd::notifications::acknowledge(params, &client)
-                    }
-                    Command::NotificationDismiss => {
-                        crate::clawd::notifications::dismiss(params, &client)
-                    }
-                    _ => panic!("unexpected notification fixture route: {command}"),
-                };
-                value.map_err(BrokerError::from)
-            };
-            let response = match value {
-                Ok(value) => Response::ok(request.id, value),
-                Err(error) => Response::error(request.id, error.kind.code(), error.message),
-            };
-            if let Err(error) = stream
-                .write_response(&encode_response(&response).unwrap())
-                .await
-            {
-                assert!(
-                    matches!(
-                        error.kind(),
-                        std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
-                    ),
-                    "unexpected fixture response error: {error}"
-                );
-            }
-        }
-    });
+    let server = notification_broker(&root_path, uid, Default::default()).await;
     let address = format!("unix:path={}/bus", root_path.display());
     let mut bus = tokio::process::Command::new("dbus-daemon")
         .args([
@@ -647,3 +659,8 @@ async fn notifications_actual_native_worker_durable_delivery_and_owner_bound_ui(
     authority().revoke(relay_grant.id);
     drop(prepared.resources);
 }
+
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/test/unit/clawd/app_notifications/legacy_worker.rs"
+));

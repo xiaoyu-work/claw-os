@@ -113,6 +113,16 @@ authenticated private relay, typed provider, SQLite, desktop consumer and
 native presentation subscription against a private bus and task-local data.
 No real desktop, remote delivery, user history or polkit is involved.
 
+`notifications_signed_notify_worker_persists_and_shares_native_delivery` also
+takes `COS_NOTIFY_PACKAGE`, the staged Python App directory. It signs and
+verifies that complete payload, pins its entries and live package identity,
+then runs the actual MCP/SDK/CLI through the strict worker/private broker.
+It derives the separate grants from the signed manifest, refuses wrong grants
+and forged fields, restarts both worker and private daemon, preserves both old
+JSON namespaces without reading them, and verifies real native presentation,
+acknowledgement and dismissal. It shares the native fixture's broker and
+delivery consumer rather than implementing another notification provider.
+
 `system.media-player.control` is restricted to `cosmic-player`. Status spends
 `desktop.media.observe:cosmic-player`; the six playback actions spend only
 `desktop.media.control:cosmic-player`. Both require explicit consent and

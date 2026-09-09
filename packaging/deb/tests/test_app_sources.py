@@ -453,8 +453,8 @@ def test_native_notifications_share_exported_libraries_and_leave_legacy_state_se
     assert "notifications" in lock["products"]
     assert not (ROOT / "desktop/notifications").exists()
     assert not (ROOT / "apps/cosmic-notifications").exists()
-    assert (ROOT / "apps/notify/main.py").is_file()
-    assert "notify" not in lock["apps"]
+    assert not (ROOT / "apps/notify").exists()
+    assert lock["apps"].count("notify") == 1
     applet = (ROOT / "desktop/applets/cosmic-applet-notifications/Cargo.toml").read_text()
     panel = (ROOT / "desktop/panel/cosmic-panel-bin/Cargo.toml").read_text()
     for library in ("cosmic-notifications-config", "cosmic-notifications-util"):
@@ -470,11 +470,31 @@ def test_native_notifications_share_exported_libraries_and_leave_legacy_state_se
     assert "python3 ../../scripts/app_sources.py --native" in panel_just
     status = (ROOT / "docs/app-product-redesign.md").read_text()
     assert "clawos-app/products/notifications" in status
-    assert "**69 of the original 75 identities**" in status
+    assert "**70 of the original 75 identities**" in status
     assert "**24 product groups**" in status
-    assert "57 Agent-package identities and 12 desktop identities" in status
+    assert "58 Agent-package identities and 12 desktop identities" in status
     assert "products/notifications" in (ROOT / "desktop/PROVENANCE.md").read_text()
     assert "just notifications-build" in (ROOT / "desktop/README.md").read_text()
+
+
+def test_notify_is_agent_owned_and_preserves_history_without_an_installer_transition():
+    lock = sources.read_lock()
+    desktop = set(sources.desktop_apps())
+    assert len(lock["apps"]) == 70
+    assert len(lock["products"]) == 24
+    assert len(set(lock["apps"]) & desktop) == 12
+    assert len(set(lock["apps"]) - desktop) == 58
+    assert "notify" not in desktop
+    assert "cosmic-notifications" in desktop
+    assert not (ROOT / "apps/notify").exists()
+    migration = (ROOT / "core/src/worker/migrate.rs").read_text()
+    assert '("notify", &[Legacy::File("notifications.json")])' not in migration
+    contract = (ROOT / "docs/updating.md").read_text()
+    assert "Historical JSON is preserved, not imported" in contract
+    assert "not part of the new service list" in contract
+    assert "data.inbox.read" in contract
+    assert "warning severity" in contract
+    assert "58 migrated Agent identities plus 12 desktop" in (ROOT / "packaging/MODULE.md").read_text()
 
 
 @pytest.mark.parametrize("export", [
