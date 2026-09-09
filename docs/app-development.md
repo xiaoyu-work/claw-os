@@ -23,6 +23,15 @@ services, and shared libraries. `mcp.access` accepts only `system_agent` and
 cannot access App services or mint system Agent tasks. The broker enforces
 this using authenticated process/session ancestry, not environment flags.
 
+Bundled source ownership is independent of the installed App identity.
+Migrated business products live under external `products/`; shared-capability
+clients such as `doc` live under external `capabilities/`, explicitly selected
+by the [OS source lock](../packaging/apps.lock.json). This source kind is not
+a manifest runtime/capability kind and grants no authority. Doc consumes a
+declared Files parser library, not a Files App. Its six operations and existing
+AI/memory identity remain unchanged; see the
+[source composition contract](../packaging/README.md).
+
 Settings permission management does not delegate target-App capabilities.
 Its manifest declares only `sys.permissions` with fixed scope `manage`;
 the OS restricts the service to the authenticated Settings identity and

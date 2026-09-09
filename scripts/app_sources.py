@@ -11,19 +11,23 @@ import tomllib
 
 
 ROOT = Path(__file__).resolve().parents[1]
+SOURCE_ROOTS = {"product": "products", "capability": "capabilities"}
+PACKAGE_KINDS = {"product": "product", "capability": "shared-capability-client"}
 
 
 def read_lock():
     lock = json.loads((ROOT / "packaging" / "apps.lock.json").read_text())
     if lock["version"] != 1 or not re.fullmatch(r"[0-9a-f]{40}", lock["revision"]):
         raise ValueError("App sources require a version-1 lock with a full Git revision")
-    for field in ("products", "apps"):
-        values = lock[field]
-        if not isinstance(values, list) or not values or any(
+    for field in ("products", "capabilities", "apps"):
+        values = lock.get(field, []) if field == "capabilities" else lock[field]
+        if not isinstance(values, list) or (not values and field != "capabilities") or any(
             not isinstance(value, str) or not re.fullmatch(r"[a-z][a-z0-9-]*", value)
             for value in values
         ) or len(set(values)) != len(values):
             raise ValueError(f"Invalid or duplicate {field} in App source lock")
+    if set(lock["products"]) & set(lock.get("capabilities", [])):
+        raise ValueError("Duplicate source group across products and capabilities")
     return lock
 
 
@@ -49,6 +53,70 @@ def prepare_sources(lock):
     return destination
 
 
+def declared_sources(lock):
+    return [
+        (kind, name)
+        for kind, field in SOURCE_ROOTS.items()
+        for name in lock.get(field, [])
+    ]
+
+
+def source_packages(lock, source):
+    declared = declared_sources(lock)
+    packages = []
+    for kind, name in declared:
+        root = source / SOURCE_ROOTS[kind] / name
+        if not root.resolve().is_relative_to((source / SOURCE_ROOTS[kind]).resolve()):
+            raise ValueError("Locked source package escapes its declared kind")
+        manifest = root / "package.json"
+        if not manifest.is_file():
+            raise RuntimeError(f"Locked {kind} source package is missing: {name}")
+        package = json.loads(manifest.read_text())
+        if not isinstance(package, dict) or package.get("kind", "product") != PACKAGE_KINDS[kind]:
+            raise ValueError("Package kind does not match the OS source lock")
+        if kind == "capability" and any(
+            key.startswith("native") or key == "extension" for key in package
+        ):
+            raise ValueError("Shared capability clients cannot declare native product assets")
+        dependencies = package.get("python_dependencies", [])
+        if not isinstance(dependencies, list) or any(
+            not isinstance(dependency, dict)
+            or (dependency.get("kind"), dependency.get("name")) not in declared
+            for dependency in dependencies
+        ):
+            raise ValueError("Python library dependencies must belong to locked source groups")
+        packages.append((kind, name, root, package))
+    return packages
+
+
+def locked_app_paths(lock, source):
+    apps = {}
+    for _, _, root, package in source_packages(lock, source):
+        relatives = package.get("apps")
+        if not isinstance(relatives, list) or not relatives:
+            raise ValueError("Locked source package requires an explicit App list")
+        for relative in relatives:
+            if not isinstance(relative, str) or not re.fullmatch(
+                r"apps/[a-z][a-z0-9-]*(/[a-z][a-z0-9-]*)*", relative
+            ):
+                raise ValueError("Invalid locked App source layout")
+            app = root / relative
+            if not app.resolve().is_relative_to(root.resolve()):
+                raise ValueError("Locked App source escapes its declared package")
+            manifest = app / "app.json"
+            if not manifest.is_file():
+                raise RuntimeError(f"Locked App source is missing: {relative}")
+            app_id = json.loads(manifest.read_text())["id"]
+            if app_id != "-".join(Path(relative).parts[1:]):
+                raise ValueError("Locked App identity does not match its source layout")
+            if app_id in apps:
+                raise ValueError(f"Duplicate locked App source identity: {app_id}")
+            apps[app_id] = app
+    if sorted(apps) != sorted(lock["apps"]):
+        raise RuntimeError("Declared App identities do not match the OS source lock")
+    return apps
+
+
 def desktop_apps():
     return (ROOT / "packaging/deb/claw-os-desktop/apps.list").read_text().split()
 
@@ -56,16 +124,18 @@ def desktop_apps():
 def stage_products(destination, package=None):
     lock = read_lock()
     source = prepare_sources(lock)
+    locked_app_paths(lock, source)
     installed = []
     selected = lock["apps"]
     if package:
         desktop = set(desktop_apps())
         selected = [app for app in selected if (app in desktop) == (package == "desktop")]
-    for product in lock["products"]:
+    for kind, product in declared_sources(lock):
+        source_kind = ["--kind", kind] if kind != "product" else []
         selection = ["--apps", *selected] if package else []
         result = subprocess.check_output(
             [sys.executable, str(source / "tools" / "stage.py"),
-             product, "--root", str(destination.resolve()), *selection],
+             product, "--root", str(destination.resolve()), *source_kind, *selection],
             cwd=source, text=True,
         )
         installed.extend(json.loads(result))
@@ -105,21 +175,21 @@ def prepare_native():
     products = {}
     names = set()
     libraries = {}
-    for product in lock["products"]:
-        package = json.loads((source / "products" / product / "package.json").read_text())
+    for kind, product, product_root, package in source_packages(lock, source):
+        if kind != "product":
+            continue
         components = package.get("native", {})
         if not isinstance(components, dict):
             raise ValueError("Invalid native component declarations")
         for name, relative in components.items():
             if not re.fullmatch(r"[a-z][a-z0-9-]*", name) or name in names:
                 raise ValueError("Invalid or duplicate native component name")
-            product_root = source / "products" / product
             if not isinstance(relative, str) or not (
                 product_root / relative
             ).resolve().is_relative_to(product_root.resolve()):
                 raise ValueError("Native source must belong to the product")
             names.add(name)
-        exports = native_libraries(package, source / "products" / product)
+        exports = native_libraries(package, product_root)
         if libraries.keys() & exports.keys():
             raise ValueError("Duplicate native library export")
         libraries.update(exports)
@@ -151,14 +221,7 @@ def app_path(app_id):
     if app_id not in lock["apps"]:
         raise ValueError(f"App is not in the source lock: {app_id}")
     source = prepare_sources(lock)
-    for product in lock["products"]:
-        root = source / "products" / product
-        package = json.loads((root / "package.json").read_text())
-        for relative in package["apps"]:
-            app = root / relative
-            if json.loads((app / "app.json").read_text())["id"] == app_id:
-                return app
-    raise RuntimeError(f"Locked App source is missing: {app_id}")
+    return locked_app_paths(lock, source)[app_id]
 
 
 if __name__ == "__main__":

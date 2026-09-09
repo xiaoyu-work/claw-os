@@ -24,6 +24,173 @@ use cos::provenance::trust::{
 };
 use cos::provenance::verify::{self, VerifyOptions};
 
+#[path = "../test/support/app_sources.rs"]
+mod app_sources;
+
+#[test]
+fn published_doc_signed_fixture_preserves_manifest_and_worker_authority() {
+    use std::collections::BTreeMap;
+
+    use cos::caps::{Cap, CapSet, Scope, Verb};
+    use cos::worker::derive::{app_session, AppSessionInput, SessionLifetime};
+
+    let fx = Fixture::new("published-doc");
+    let source = app_sources::app_dir("doc");
+    let apps = fx.root.join("apps");
+    let directory = apps.join("doc");
+    fs::create_dir_all(&directory).unwrap();
+    for name in ["app.json", "main.py", "server.py"] {
+        fs::copy(source.join(name), directory.join(name)).unwrap();
+    }
+    let original = fs::read_to_string(source.join("app.json")).unwrap();
+    let declaration: serde_json::Value = serde_json::from_str(&original).unwrap();
+    sign::sign_directory(
+        &directory,
+        &sign::SignRequest {
+            kind: PackageKind::App,
+            id: "doc".to_string(),
+            version: declaration["version"].as_str().unwrap().to_string(),
+            manifest_schema: "2".to_string(),
+            manifest_path: "app.json".to_string(),
+            entrypoints: vec!["main.py".to_string(), "server.py".to_string()],
+            resources: vec![],
+        },
+        &fx.key,
+    )
+    .unwrap();
+    fx.activate();
+    let trust = fx.store();
+    let options = VerifyOptions::new(PackageKind::App).expect_id("doc");
+    let package = verify::verify_package(&directory, &options, &trust).unwrap();
+    assert_eq!(package.manifest_text().unwrap(), original);
+    let launch = cos::bridge::AppLaunch::new(Arc::new(package)).unwrap();
+    let binding = launch
+        .bind(&["main.py".into(), "server.py".into()])
+        .unwrap();
+    assert_eq!(launch.app_id(), "doc");
+    assert_eq!(launch.manifest().operations.len(), 6);
+    assert_eq!(launch.manifest().mcp.as_ref().unwrap().tools.len(), 6);
+
+    let document = fx.root.join("synthetic.json");
+    write(&document, r#"[{"text":"untrusted document"}]"#);
+    let paths = cos::caps::args::PathContext {
+        home: fx.root.clone(),
+        cwd: None,
+    };
+    for (name, verb) in [("doc.read", Verb::FS_READ), ("doc.info", Verb::FS_META)] {
+        let call = launch
+            .manifest()
+            .resolve_mcp_tool_call(
+                name,
+                &BTreeMap::from([("path".into(), serde_json::json!(document))]),
+                &paths,
+            )
+            .unwrap();
+        assert_eq!(
+            call.needs.into_iter().flatten().collect::<Vec<_>>(),
+            vec![Cap::new(verb, Scope::path(document.to_string_lossy()))]
+        );
+    }
+    for name in ["doc.summarize", "doc.explain", "doc.rewrite"] {
+        let call = launch
+            .manifest()
+            .resolve_mcp_tool_call(
+                name,
+                &BTreeMap::from([("text".into(), serde_json::json!(["untrusted document"]))]),
+                &paths,
+            )
+            .unwrap();
+        let caps = call.needs.into_iter().flatten().collect::<Vec<_>>();
+        assert!(caps.contains(&Cap::new(Verb::AI_CHAT_UNTRUSTED, Scope::Wild)));
+        assert_eq!(
+            caps.iter()
+                .filter(|cap| cap.verb == Verb::MEMORY_WRITE)
+                .count(),
+            usize::from(name == "doc.summarize")
+        );
+        for cap in caps.iter().filter(|cap| cap.verb == Verb::MEMORY_WRITE) {
+            assert_eq!(cap.scope, Scope::SelfRef("doc".into()));
+        }
+        assert!(!caps.iter().any(|cap| cap.verb == Verb::FS_READ));
+    }
+    let convert = launch
+        .manifest()
+        .resolve_mcp_tool_call(
+            "doc.convert",
+            &BTreeMap::from([
+                ("path".into(), serde_json::json!(document)),
+                ("to".into(), serde_json::json!("csv")),
+            ]),
+            &paths,
+        )
+        .unwrap();
+    assert!(
+        convert
+            .needs
+            .into_iter()
+            .flatten()
+            .any(|cap| cap == Cap::new(Verb::FS_WRITE, Scope::Wild)),
+        "source relocation must not silently change the legacy write grant"
+    );
+
+    let caps = CapSet::from_caps([Cap::new(
+        Verb::FS_READ,
+        Scope::path(document.to_string_lossy()),
+    )]);
+    let mounts = cos::worker::derive::authorize_granted_path_mounts(&caps).unwrap();
+    let data = fx.root.join("data");
+    let derive = |lifetime| {
+        app_session(AppSessionInput {
+            app_id: launch.app_id(),
+            app_dir: launch.dir(),
+            program: "/usr/bin/python3".into(),
+            argv: vec![directory.join("server.py").to_string_lossy().into_owned()],
+            caps: &caps,
+            authorized_mounts: &mounts,
+            lifetime,
+            session_id: "doc-fixture",
+            data_dir: data.to_str().unwrap(),
+            apps_dir: apps.to_str().unwrap(),
+            extra_env: BTreeMap::from([(
+                "COS_APP_MANIFEST".into(),
+                directory.join("app.json").to_string_lossy().into_owned(),
+            )]),
+            package_identity: binding.dir_identity(),
+            pinned_entries: binding.entries(),
+            transports: &[],
+        })
+    };
+    assert!(derive(SessionLifetime::Reusable).is_err());
+    let worker = derive(SessionLifetime::SingleCall).unwrap();
+    assert_eq!(worker.env["COS_APP_ID"], "doc");
+    assert_eq!(worker.env["COS_SESSION"], "doc-fixture");
+    assert_eq!(
+        worker.env["COS_APP_MANIFEST"],
+        directory.join("app.json").to_str().unwrap()
+    );
+    assert!(matches!(worker.network, cos::worker::NetworkPolicy::Denied));
+    let resource = worker
+        .mounts
+        .iter()
+        .find(|mount| mount.source == document)
+        .unwrap();
+    assert_eq!(resource.mode, cos::worker::MountMode::ReadOnly);
+    assert_eq!(
+        resource.expect_identity,
+        Some((mounts[0].device, mounts[0].inode))
+    );
+    assert!(worker
+        .mounts
+        .iter()
+        .filter(|mount| mount.class == cos::worker::MountClass::Package)
+        .all(|mount| mount.mode == cos::worker::MountMode::ReadOnly));
+    write(
+        &directory.join("server.py"),
+        "raise RuntimeError('modified fixture')\n",
+    );
+    assert!(launch.bind(&["server.py".into()]).is_err());
+}
+
 /// A scratch directory with secure ancestry.
 ///
 /// Trust roots require every ancestor up to `/` to be non-symlink,

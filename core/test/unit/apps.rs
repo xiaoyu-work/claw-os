@@ -174,18 +174,6 @@ fn slack_schema_preserves_outbound_only_operations() {
 
 #[test]
 fn bundled_conditional_capabilities_are_exact() {
-    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap();
-    let load = |path: &[&str]| {
-        let path = path
-            .iter()
-            .fold(repository.join("apps"), |path, component| {
-                path.join(component)
-            })
-            .join("app.json");
-        Manifest::from_json(&std::fs::read_to_string(path).unwrap()).unwrap()
-    };
     let active = |caps: Vec<Vec<crate::caps::Cap>>| caps.into_iter().flatten().collect::<Vec<_>>();
 
     let calendar = Manifest::from_json(
@@ -229,7 +217,10 @@ fn bundled_conditional_capabilities_are_exact() {
         .iter()
         .any(|cap| { cap.scope == crate::caps::Scope::name("default/MICROSOFT_ACCESS_TOKEN") }));
 
-    let doc = load(&["doc"]);
+    let doc = Manifest::from_json(
+        &std::fs::read_to_string(app_sources::app_dir("doc").join("app.json")).unwrap(),
+    )
+    .unwrap();
     let stdin = active(doc.resolve_needs("summarize", &BTreeMap::new()).unwrap());
     assert!(stdin
         .iter()
@@ -349,12 +340,9 @@ fn search_mcp_provider_capabilities_are_exact() {
 
 #[test]
 fn bundled_schema_exposes_repeatables_choices_and_stdin() {
-    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap();
     let load = |id: &str| {
         Manifest::from_json(
-            &std::fs::read_to_string(repository.join("apps").join(id).join("app.json")).unwrap(),
+            &std::fs::read_to_string(app_sources::app_dir(id).join("app.json")).unwrap(),
         )
         .unwrap()
     };

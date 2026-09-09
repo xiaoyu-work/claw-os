@@ -58,15 +58,23 @@ Project-wide rules are in [`../ARCHITECTURE.md`](../ARCHITECTURE.md).
 
 ## Tests
 
-Product contract and worker integration cases use
+App contract and worker integration cases use
 `test/support/app_sources.rs` to select source by the OS App lock. Prepare
 migrated product inputs from the repository root with
 `python3 scripts/app_sources.py` before running these cases. Missing pinned
 inputs fail with an actionable diagnostic; tests do not download them.
+The helper resolves the lock's distinct `products` and optional `capabilities`
+roots, requires matching source-kind metadata and exact identity/layout, and
+never substitutes local `apps/doc` for the migrated Document Engine client.
+`tests/app_source_fixtures.rs` covers both kinds, missing/duplicate/escaping
+sources and the published Doc manifest.
 
 ```bash
 # Narrow test or module
 cargo test -p cos <test-filter> -- --test-threads=1
+
+# Immutable product/capability fixture resolution.
+cargo test -p cos --test app_source_fixtures -- --test-threads=1
 
 # Full core suite
 (cd core && cargo test -- --test-threads=1)

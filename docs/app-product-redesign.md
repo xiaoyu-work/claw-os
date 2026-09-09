@@ -20,12 +20,14 @@ OS-repository commit: publish the product commit first, then pin that exact
 revision in [`packaging/apps.lock.json`](../packaging/apps.lock.json).
 There are no sibling-checkout dependencies or runtime download fallbacks.
 
-Source migration now covers **70 of the original 75 identities** across
-**24 product groups**: 58 Agent-package identities and 12 desktop identities.
+Source migration now covers **71 of the original 75 identities** across
+**24 business product groups** plus **1 shared-capability source group**:
+59 Agent-package identities and 12 desktop identities.
 This count includes native Notifications and `notify`, not their OS service
-or shared libraries. The five remaining source identities are `db`, `doc`,
-`kv`, `net` and `summarize`; they remain shared-capability source groups, not
-new business products.
+or shared libraries. `doc` now belongs to the explicitly declared Document
+Engine capability-client group, not a new Documents business product.
+The four remaining source identities are `db`, `kv`, `net` and `summarize`;
+their eventual moves remain shared-capability groups, not new business products.
 Source ownership does not complete M2, backend/state consolidation, identity
 and consent cutovers, or visual/installed-image acceptance.
 
@@ -44,6 +46,7 @@ and consent cutovers, or visual/installed-image acceptance.
 | `cosmic-player` | All 110 original native files, 72 locales, descriptor, resources and original renderer/optional graph moved to `clawos-app/products/media-player`; UI/MCP share actual native playback through an owner/executable-bound OS adapter with separate exact observe/control grants, no worker bus and no other-player fallback; Stop/status are corrected; identities and user state remain unchanged |
 | `cosmic-notifications` | All 40 original native files, nested config/util crates, GPL license, original toolkit/optional graph, descriptor and added native tests/fixture moved to `clawos-app/products/notifications`; isolated MCP submits owner/App-bound durable OS intent under the existing `ui.notify` grant; one OS consumer presents and closes notifications with safe sender-bound handles and real acknowledgement; durable string IDs explicitly replace desktop integers; legacy `notify` JSON and user settings remain unchanged |
 | `notify` | Complete Python source, manifest, server and tests moved to `clawos-app/products/notifications/apps/notify`; new send/list use only the existing OS Notification Service with distinct `app:notify` authority, separate send/read grants, warning-level urgency respecting DND, durable IDs and full source-scoped totals. Historical JSON stays in its existing namespace, never read/imported/rewritten/replayed and explicitly excluded from new lists; no App-local store remains |
+| `doc` | Complete legacy facade, unchanged manifest/server and tests moved to `clawos-app/capabilities/document-engine/apps/doc`, explicitly a shared-capability client. Its declared dependency consumes Files' single `claw_files` parser export in tests and Agent/Doc-only staging without calling Files Apps. Six operations, CLI bindings, outputs, existing grants, AI safety/budget/origin and `doc` memory identity remain unchanged; no user state moves |
 | `docs` | Moved to `clawos-app/products/files/apps/docs`; four Recoll-backed tools, owner index state and scopes preserved; background indexing remains OS-owned |
 | `search` | Moved to `clawos-app/products/browser/apps/search`; explicit provider choice, two MCP tools and exact credential/network scopes preserved |
 | `web` | Moved to `clawos-app/products/browser/apps/web`; existing five-operation CLI/MCP adapter and AI gate preserved; reusable `cos-browser` engine remains OS-owned |
@@ -96,7 +99,7 @@ and consent cutovers, or visual/installed-image acceptance.
 | `gateway-pushover` | Source moved to `clawos-app/products/notification-delivery/apps/gateway/pushover`; exact API host, application/user keys, recipient flag, metadata and emergency constraints preserved; Python argument case moved, while receipt acknowledgement and durable OS-service integration remain separate |
 | `gateway-webhook` | Source moved to `clawos-app/products/notification-delivery/apps/gateway/webhook`; JSON/raw payload, target flag/default lookup, auth precedence and independent HMAC preserved with existing grants and shared egress; argument/egress regressions relocated and Rust fixture pinned; all three delivery source identities moved, not durable-service integration |
 | `gateway-homeassistant` | Source moved to `clawos-app/products/home-integration/apps/gateway/homeassistant`; REST send/call/status and grants preserved, canonical list parsing fixed for flag-shaped text/options; external server, device state and automation engine not imported, and private endpoint access is not enabled |
-| Remaining six identities listed above | Pending their individual paired source migrations |
+| Remaining four identities listed above | Pending their individual paired source migrations |
 
 Moving source does not complete a product redesign milestone or merge legacy
 identities. APT remains the installed update path until a separate, complete
@@ -197,9 +200,18 @@ remains separate from this native source/build migration.
 
 ### Shared capabilities
 
+Source composition uses the optional `capabilities` list in the version-1
+App lock, independently of `products`. Each entry resolves only
+`capabilities/<name>/package.json` with `kind: "shared-capability-client"`;
+product commands/native builds keep their existing ownership. Duplicate names,
+escaping paths, missing declared sources and conflicting library payloads fail
+closed. Installed App IDs remain explicitly listed and partitioned by the same
+Agent/Desktop package contract. This is reusable source composition, not a new
+runtime capability, grant union, identity deprecation or backend/data redesign.
+
 | Target | Starting App IDs | Implementation disposition |
 | --- | --- | --- |
-| Document engine | `doc` | Shared parsing and conversion; product-specific AI stays with the consuming product. |
+| Document engine | `doc` | Source moved to the shared-capability client group; it consumes Files' declared parsing/conversion library. Existing Doc AI remains under the `doc` identity; product-specific AI stays with its consuming product. |
 | Storage SDK | `db`, `kv` | Owner/App-scoped storage; not a global App database or Agent-memory substitute. |
 | HTTP | `net` | Controlled network interface with exact destination authority. |
 | AI gate/helpers | `summarize` | Shared AI capability used under the consuming product's identity and budget. |

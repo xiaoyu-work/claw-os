@@ -149,11 +149,19 @@ is introduced.
 Files follows the same immutable native source composition, preserving
 `/usr/bin/cosmic-files`, `/usr/bin/cosmic-files-applet`, its descriptor and
 desktop resources in `claw-os-desktop`. The Agent package owns the shared
-`claw_files.document` parser used by the remaining Document App; it arrives
+`claw_files.document` parser used by the Document Engine client; it arrives
 through the same signed package, never a runtime download. Files metadata
 declares its tag-sidecar parent read; reveal uses only `com.clawos.Files`
 desktop authority, and summary memory is `self:cosmic-files` rather than
 `self:doc`. Existing grants are not unioned or silently transferred.
+
+The legacy `doc` source now comes from the explicitly declared
+`capabilities/document-engine` group at that same immutable App pin. This is
+source ownership only, not a Documents business product or identity retirement.
+The signed Agent package continues to install `/usr/lib/cos/apps/doc` and its
+declared Files parser library. Six operations, CLI bindings, grants, AI
+budget/safety/origin, `doc` summary-memory identity and user state do not
+change; there is no new updater, data import or implicit grant transfer.
 
 Terminal now follows the same immutable native source composition. The signed
 desktop package still owns `/usr/bin/cosmic-term`, its descriptor and

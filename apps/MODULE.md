@@ -50,8 +50,14 @@ Capture preserves `cosmic-screenshot`, its complete
 native portal client/resources and original build; non-interactive CLI/MCP
 share the OS screenshot service under separate screen/exact-output grants,
 without a worker session bus or another App call. Settings preserves its separate page-discovery/fixed-launch identity,
-not a union of the eleven managers' grants. The remaining Document App shares Files'
-staged `claw_files.document` parsing/conversion library, not an App interface.
+not a union of the eleven managers' grants. Document Engine's `doc` facade,
+unchanged manifest/server and tests now live at
+`clawos-app/capabilities/document-engine/apps/doc`, explicitly declared as a
+shared-capability client rather than a business product. Its named dependency
+shares Files' staged `claw_files.document` parser, not an App interface.
+Doc-only staging includes that export without installing Files Apps; AI/memory
+remain under the legacy `doc` identity and existing grants. `db`, `kv`, `net`
+and `summarize` remain here pending their individual moves.
 Do not recreate a local copy: OS package assembly consumes the immutable revision in
 [`packaging/apps.lock.json`](../packaging/apps.lock.json). Source relocation
 does not rename installed App identities or grant additional authority.
@@ -97,6 +103,7 @@ does not rename installed App identities or grant additional authority.
 | `<id>/app.json` | App identity and operation/capability contract |
 | `<id>/main.py` | Typed behavior for MCP-only Apps; `run(command, args)` only for unmigrated operations |
 | [`clawos-app/products/files`](https://github.com/xiaoyu-work/clawos-app/tree/main/products/files) | Direct filesystem MCP handlers; authenticated per-call session ids for snapshots |
+| [`clawos-app/capabilities/document-engine`](https://github.com/xiaoyu-work/clawos-app/tree/main/capabilities/document-engine) | Legacy Doc shared-capability client and declared parser dependency; no local source fallback |
 | `<id>/test_main.py` | App behavior, validation, and scope tests |
 | `_shared/` | Shared safe filesystem/HTTP/process helpers |
 | `gateway/` | External messaging gateways and shared gateway safety helpers |

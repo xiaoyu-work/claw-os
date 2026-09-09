@@ -21,7 +21,7 @@ shared build helpers.
 | `lib/package-version.sh` | Monotonic Debian package version |
 | `lib/image-identity.sh` | Image user/identity assertions |
 | `lib/git-readonly.sh` | Read-only Git wrapper for privileged builds |
-| `app_sources.py` | Resolve the immutable App repository pin and stage product-owned package assets |
+| `app_sources.py` | Resolve the immutable App repository pin and stage explicitly kinded product/capability assets |
 | `app_sources.py --native` | Validate and refresh product-declared native libraries/assets, standalone Launcher/Editor/Files/Terminal/Store/Capture/Media Player/Notifications and nested Settings workspace at stable ignored build paths from the immutable pin |
 
 ## Dependencies
@@ -43,6 +43,13 @@ Also run the narrowest consuming target/package command.
 `--package desktop` preserves the explicit Debian package partition.
 `--app-path <id>` resolves a single source directory for desktop package
 assembly. None of these commands fetches application code at runtime.
+The version-1 lock retains nonempty `products`/`apps` lists and accepts an
+optional `capabilities` list. Group names are unique across kinds. Each kind
+resolves only its declared root and matching package metadata; missing sources,
+duplicate identities, escaping paths and unlocked Python-library owners fail.
+`doc` resolves to `capabilities/document-engine/apps/doc`, never `apps/doc`.
+Native preparation validates capability metadata but composes only products,
+so shared clients cannot invent desktop/native package ownership.
 Native preparation validates all declared names and product-local source paths
 before replacement, rejects duplicate exports and only replaces exact declared
 component paths; unrelated build caches are preserved.

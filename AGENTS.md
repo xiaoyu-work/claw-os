@@ -62,7 +62,7 @@ editing additional surfaces.
 | Update downgrade protection | `core/src/update/`, `packaging/release-security/policy.json` | `packaging/deb/common/`, maintainer scripts, `packaging/apt-repo/verify-release-security.sh`, `docs/updating.md` |
 | Web desktop or website | `web/src/App.tsx`, `web/MODULE.md` | `web/src/components/`, `web/public/site/`, Pages composition workflow |
 | Desktop component | `desktop/README.md`, `desktop/PROVENANCE.md`, component README | component Cargo/just manifest and license; external native Apps via `scripts/app_sources.py --native`; Media Player uses `just player-build` and `core/src/clawd/media_player.rs` for authority |
-| Migrated App / Mail product source | [`clawos-app`](https://github.com/xiaoyu-work/clawos-app), `packaging/apps.lock.json` | Product UI/business/MCP and native source live there; `scripts/app_sources.py` stages the pinned package payload here |
+| Migrated App / shared-capability source | [`clawos-app`](https://github.com/xiaoyu-work/clawos-app), `packaging/apps.lock.json` | Product UI/business/MCP/native source and explicitly kinded capability clients live there; `scripts/app_sources.py` stages the pinned payload here |
 | CI workflow | `.github/workflows/` | scripts invoked by the workflow; only `test.yml` runs on pull requests, while publication workflows are manually dispatched or reusable |
 
 ## Development
@@ -103,7 +103,10 @@ environment variables must run serially when combined.
 Tests that exercise a migrated product use the immutable App source pin.
 Run `python3 scripts/app_sources.py` before those tests (CI does this explicitly).
 Cargo never downloads product fixtures or substitutes local App source for a
-declared external product.
+declared external App. The lock's optional `capabilities` list resolves only
+`capabilities/<name>` with `kind: "shared-capability-client"`; `products` and
+native preparation retain business-product ownership. Never recreate a local
+`apps/doc` fallback or count a shared-capability group as a business product.
 
 Rust unit-test bodies live outside production source trees under each crate's
 `test/unit/` directory, mirroring the `src/` path. Production modules contain

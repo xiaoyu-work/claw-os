@@ -22,8 +22,8 @@ Debian packages and a signed multi-architecture APT repository.
 | Path | Role |
 | --- | --- |
 | `deb/build-debs.sh` | Package staging and `.deb` assembly |
-| `apps.lock.json` | Immutable clawos-app source revision and expected product/App payload |
-| `../scripts/app_sources.py` | Fetch pinned product sources and stage their package-owned payload |
+| `apps.lock.json` | Immutable clawos-app revision, distinct product/capability groups and exact App payload |
+| `../scripts/app_sources.py` | Fetch pinned, explicitly kinded sources and stage their package-owned payload |
 | External Files `python/claw_files/` | Shared document parsing/conversion staged in the Agent package; native Files embeds the same source, and both executables stay desktop-owned |
 | `../tools/install-browser-agent.sh` | Manual Browser extension/Native Host deployment from the same product pin |
 | `deb/tests/test_app_sources.py` | Immutable source/cache, payload identity, and OS native-launcher ownership |
@@ -118,13 +118,24 @@ or provider source is packaged. Native history/settings and legacy `notify`
 JSON are not migrated. Binary-only hot-swap is refused.
 The `notify` Python source/descriptor/client comes from the same product pin
 but stays exclusively in Agent. It uses that package's SDK/service, not the
-native App. The partition is 58 migrated Agent identities plus 12 desktop
-identities; all 70 share 24 product groups. Historical JSON is preserved in its
+native App. The partition is 59 migrated Agent identities plus 12 desktop
+identities; all 71 belong to 24 business product groups plus one explicitly
+shared-capability source group. Historical JSON is preserved in its
 old namespace and excluded from new service lists, never copied into payloads
 or automatically imported at installation/launch.
 App partition accounting includes nested gateway manifests. Shared gateway
 libraries remain OS-owned, and the canonical argument module is installed in
 `/usr/lib/cos/python` for the packaged legacy App entrypoints.
+
+Document Engine owns `doc` under the external `capabilities/` root; the lock's
+optional `capabilities` list is distinct from `products`. Its explicit named
+Files parser dependency ships in Agent alongside Doc even for Doc-only staging.
+Identical library co-staging is accepted; conflicting bytes/modes/symlinks or
+extra files are refused, not merged. No public SDK/provider or installed
+identity/state moves. Agent assembly removes bytecode and resulting empty
+directories from its staged local tree before adding pinned Apps, so old
+cache-only source directories cannot shadow migrated payloads. Source and
+dependency caches are left untouched.
 
 ## Tests
 

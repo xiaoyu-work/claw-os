@@ -65,6 +65,7 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | Browser and semantic services | Obscura browser stack, `cos-browser`, embedding and semantic-search services | `crates/obscura-*`, `crates/cos-browser`, `crates/claw-*` |
 | Desktop | Product desktop fork and native UI clients communicating through stable OS boundaries; the Agent UI and bridge share a versioned presentation protocol | `desktop/`, `desktop/agent/protocol/` |
 | Migrated App products | Product UI, business implementation, MCP and upstream source live in a separate repository; Mail native build and product cutover remain in progress | [`clawos-app`](https://github.com/xiaoyu-work/clawos-app), `packaging/apps.lock.json` |
+| Shared-capability clients | Legacy facades are explicitly separate from business products; Document Engine owns `doc` while privileged providers and SDK stay in the OS | External `clawos-app/capabilities/`, `packaging/apps.lock.json` |
 | Image composition | Reusable rootfs features and profile definitions | `rootfs/`, `scripts/lib/image-profiles.sh` |
 | Web desktop | React/Vite Linux desktop whose browser opens the embedded marketing site; independently built before Pages composition | `web/`, `.github/workflows/publish-website.yml` |
 | Distribution | WSL/Docker/VM/ISO/Azure packaging, Debian packages, signed APT repo, releases | `targets/`, `packaging/`, `.github/workflows/` |
@@ -223,7 +224,7 @@ live in `clawos-app/products/files`, composed at `build/native-apps/cosmic-files
 with their original locked toolkit patches. Native UI/MCP embed the same
 product filesystem, owner-scoped Recoll and shared document parsing sources;
 the SDK/runtime still provide policy, snapshots, AI consent/budget/audit and
-memory authority. The remaining Document App imports the same parser from
+memory authority. The Document Engine capability client imports the same parser from
 the Agent package's `claw_files.document` library. Native reveal admits only
 `cosmic-files` to its fixed `com.clawos.Files` target with exact metadata scope.
 Summary memory is Files-owned; metadata's sidecar needs an explicit parent
@@ -495,12 +496,26 @@ The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling
 OS checkout. `packaging/apps.lock.json` pins a published App commit, and
-`scripts/app_sources.py` invokes its product-owned staging during OS package
+`scripts/app_sources.py` invokes its kind-aware staging during OS package
 assembly. Installed execution still uses the existing authenticated package,
 App Host, capabilities and SDK; it never follows a Git branch or downloads
 product code at runtime. The OS retains native authority launchers and services.
 
-Cross-repository App contract and worker tests select real product source by
+The lock's `products` list remains the business-product source composition;
+optional `capabilities` entries resolve only `capabilities/<name>` packages
+explicitly marked `shared-capability-client`. Document Engine owns the complete
+legacy `doc` facade and owning-client MCP bridge, not a new business product.
+Its declared Files `claw_files` export supplies the same parser in development,
+Doc-only staging and the Agent package. No Files App call or second parser is
+introduced; identical co-staged library payloads are reused and conflicts
+refused. Native preparation stays product-only. Missing or ambiguous declared
+sources never fall back to local OS Apps. This reaches 71/75 source identities:
+24 business product groups plus one capability group, 59 Agent and 12 desktop
+identities. Doc's signed schema, six operations, grants, AI budget/safety/origin,
+memory identity and installed state are unchanged; the other four capability
+identities have not moved.
+
+Cross-repository App contract and worker tests select real declared source by
 the same lock through `core/test/support/app_sources.rs`. CI explicitly prepares
 that source with `scripts/app_sources.py` before Cargo runs. Tests do not fetch
 code themselves or substitute an old local implementation for a migrated App.

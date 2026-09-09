@@ -515,10 +515,12 @@ for app_dir in "$PROJECT_DIR/apps"/*; do
 done
 install -m 644 "$PROJECT_DIR/apps/canonical_argv.py" \
     "$AGENT_STAGE/usr/lib/cos/python/canonical_argv.py"
-python3 "$PROJECT_DIR/scripts/app_sources.py" --stage "$AGENT_STAGE" --package agent
-external_app_count="$(python3 "$PROJECT_DIR/scripts/app_sources.py" --count)"
+# Retired source directories containing only bytecode must not shadow pinned Apps.
 find "$AGENT_STAGE/usr/lib/cos/apps" -name '__pycache__' -type d \
     -exec rm -rf {} + 2>/dev/null || true
+find "$AGENT_STAGE/usr/lib/cos/apps" -depth -mindepth 1 -type d -empty -delete
+python3 "$PROJECT_DIR/scripts/app_sources.py" --stage "$AGENT_STAGE" --package agent
+external_app_count="$(python3 "$PROJECT_DIR/scripts/app_sources.py" --count)"
 
 source_app_count="$(find "$PROJECT_DIR/apps" -mindepth 2 \
     -name app.json -type f | wc -l)"

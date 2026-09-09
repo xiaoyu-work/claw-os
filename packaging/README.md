@@ -52,8 +52,9 @@ independent desktop release. It adds no Thunderbird runtime dependency;
 desktop/rootfs registration enables it when Thunderbird is installed.
 
 [`apps.lock.json`](apps.lock.json) pins an immutable published App repository
-commit and the expected product/App IDs. `scripts/app_sources.py` fetches that
-revision into `build/app-sources/` and invokes product-owned payload staging.
+commit, business `products`, optional shared-client `capabilities`, and the
+exact installed App IDs. `scripts/app_sources.py` fetches that revision into
+`build/app-sources/` and invokes explicitly kinded payload staging.
 Package builds reject modified caches and unexpected App IDs; there is no
 moving-branch or sibling-checkout fallback. The OS still owns capability
 enforcement, the native launcher and package signing. Product source changes
@@ -63,9 +64,21 @@ installed systems do not fetch executable code from Git.
 Native Files is composed under `build/native-apps/cosmic-files`, preserving
 both executables and resources in the desktop package. Files also exports the
 shared `claw_files.document` parsing/conversion library into the Agent package;
-the remaining Document App and native Files use this one implementation.
+the Document Engine client and native Files use this one implementation.
 The native executable embeds its product helpers and uses installed OS
 SDK/runtime libraries, not mutable App entrypoints.
+
+Document Engine's complete legacy `doc` source lives at the pinned
+`capabilities/document-engine/apps/doc`, with `kind: "shared-capability-client"`
+package metadata. This is not a Documents business product or a new runtime
+identity. The group's declared dependency selects Files' named `claw_files`
+export for tests and staging, including Doc-only staging without Files Apps.
+Co-staging never merges conflicting library trees. Agent still owns
+`/usr/lib/cos/apps/doc`, `/usr/lib/cos/python/claw_files`, SDK/runtime and the
+canonical argument module. All six operations, manifest needs/AI declarations,
+outputs, memory identity and user state remain unchanged. The source lock now
+covers 71/75 identities: 24 business products plus one capability group, with
+59 migrated Agent and 12 desktop identities; native preparation stays product-only.
 
 Native Store is composed under `build/native-apps/cosmic-store`, including its
 original default-feature graph and flathub-stats workspace. The desktop package

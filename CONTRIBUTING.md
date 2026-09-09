@@ -163,12 +163,18 @@ COS_APPS_DIR=./apps COS_DATA_DIR=/tmp/cos-data ./core/target/debug/cos fs ls .
 
 ### Run Tests
 
-From the repository root, prepare the immutable product inputs used by App
+From the repository root, prepare the immutable product/capability inputs used by App
 contract and worker integration tests. This validates the source lock and
-cache; Cargo itself does not download product fixtures.
+cache; Cargo itself does not download fixtures. The lock's optional
+`capabilities` groups resolve only explicitly marked shared-capability clients,
+not business products or local-source fallbacks. `doc` is owned by the external
+Document Engine group; its declared Files parser is staged in the Agent package.
 
 ```bash
 python3 scripts/app_sources.py
+
+# Validate explicit source kinds and the published Doc fixture.
+cargo test -p cos --test app_source_fixtures -- --test-threads=1
 
 # Core tests share process-global environment variables.
 (cd core && cargo test -- --test-threads=1)
@@ -205,7 +211,7 @@ claw-os/
 │       ├── audit.rs       JSONL audit logging
 │       ├── sysinfo.rs     Native system info
 │       └── apps.rs        App manifest discovery
-├── apps/              Python apps (fs, web, db, doc, etc.)
+├── apps/              Remaining Python capability facades and shared helpers
 ├── rootfs/            Linux rootfs build scripts + overlay
 ├── targets/           Per-distribution build scripts (docker, wsl, iso, vm)
 │   └── docker/          Dockerfiles + build.sh for the docker target
