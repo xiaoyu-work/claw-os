@@ -107,6 +107,19 @@ fn notification_intent_requires_ui_notify_not_owner_wide_notification_access() {
 }
 
 #[test]
+fn notification_inbox_grant_admits_only_the_typed_source_scoped_provider() {
+    let granted = relaying_authority(vec![Cap::new(Verb::DATA_INBOX_READ, Scope::Wild)]);
+    admit(Command::SystemNotificationControl, &granted).unwrap();
+    for command in [
+        Command::NotificationList, Command::NotificationPublish,
+        Command::NotificationAcknowledge, Command::NotificationDismiss,
+        Command::NotificationDeliveryClaim,
+    ] {
+        assert!(admit(command, &granted).is_err(), "{command:?}");
+    }
+}
+
+#[test]
 fn media_player_relay_requires_a_media_verb_not_other_desktop_authority() {
     for verb in [Verb::DESKTOP_MEDIA_OBSERVE, Verb::DESKTOP_MEDIA_CONTROL] {
         let granted = relaying_authority(vec![Cap::new(verb, Scope::name("cosmic-player"))]);

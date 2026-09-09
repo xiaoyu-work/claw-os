@@ -11,6 +11,68 @@ fn draft(kind: &str) -> NotificationDraft {
 }
 
 #[test]
+fn source_page_counts_the_full_scope_and_keeps_publication_order() {
+    let service = SqliteNotificationService::open_in_memory().unwrap();
+    let mut rows = Vec::new();
+    for _ in 0..105 {
+        rows.push(service.publish(7, draft("owned")).unwrap());
+    }
+    service.publish(8, draft("foreign-owner")).unwrap();
+    let mut foreign = draft("foreign-source");
+    foreign.source = "app:another".into();
+    service.publish(7, foreign).unwrap();
+    service.mutate(7, &rows[0].id, NotificationMutation::Read).unwrap();
+    service.mutate(7, &rows[104].id, NotificationMutation::Dismiss).unwrap();
+    let page = service.list_source(7, "test", 20).unwrap();
+    assert_eq!(page.total, 105);
+    assert_eq!(page.notifications.len(), 20);
+    assert_eq!(page.notifications[0].id, rows[104].id);
+    assert_eq!(page.notifications[0].state, NotificationState::Dismissed);
+    assert_eq!(page.notifications[19].id, rows[85].id);
+    assert_eq!(service.list_source(9, "test", 20).unwrap().total, 0);
+    assert_eq!(service.list_source(7, "not-test", 20).unwrap().total, 0);
+    service.lock().unwrap().execute(
+        "UPDATE notifications SET expires_at_ms = 0 WHERE id = ?1",
+        params![rows[104].id],
+    ).unwrap();
+    let page = service.list_source(7, "test", 20).unwrap();
+    assert_eq!(page.total, 104);
+    assert_eq!(page.notifications[0].id, rows[103].id);
+}
+
+#[test]
+fn source_page_count_and_rows_share_one_snapshot_across_connections() {
+    let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let path = root.path().join("snapshot.db");
+    let reader = SqliteNotificationService::open(&path).unwrap();
+    let writer = SqliteNotificationService::open(path).unwrap();
+    let started = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let child_started = started.clone();
+    let child = std::thread::spawn(move || {
+        child_started.wait();
+        for index in 1..=100 {
+            let mut input = draft("snapshot");
+            input.body = index.to_string();
+            writer.publish(7, input).unwrap();
+        }
+    });
+    started.wait();
+    loop {
+        let page = reader.list_source(7, "test", 1).unwrap();
+        if let Some(row) = page.notifications.first() {
+            assert_eq!(row.body.parse::<u64>().unwrap(), page.total);
+        } else {
+            assert_eq!(page.total, 0);
+        }
+        if child.is_finished() {
+            break;
+        }
+    }
+    child.join().unwrap();
+    assert_eq!(reader.list_source(7, "test", 1).unwrap().total, 100);
+}
+
+#[test]
 fn notification_schema_upgrade_preserves_v1_records_and_is_idempotent() {
     let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
     let path = root.path().join("notifications.db");

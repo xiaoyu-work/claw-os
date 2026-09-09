@@ -76,7 +76,6 @@ pub(crate) const LEGACY_APP_STATE: &[(&str, &[Legacy])] = &[
     ("kv", &[Legacy::File("kv.json")]),
     ("launcher", &[Legacy::Dir("launcher")]),
     ("log", &[Legacy::Dir("logs")]),
-    ("notify", &[Legacy::File("notifications.json")]),
     (
         "exec",
         &[Legacy::FilesIn {

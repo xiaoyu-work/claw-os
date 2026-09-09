@@ -65,6 +65,35 @@ fn no_table_entry_can_select_kernel_state() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn notify_history_is_preserved_in_place_without_inspection_or_namespace_migration() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    assert!(!LEGACY_APP_STATE.iter().any(|(app, _)| *app == "notify"));
+    let root = fixtures::Root::new("notify-preservation");
+    let legacy = root.write("notifications.json", "old arbitrary non-JSON bytes");
+    let partition = root.partition("notify");
+    let private = root.write("apps/notify/notifications.json", "[old schema]");
+    for path in [&legacy, &private] {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o400)).unwrap();
+    }
+    let before: Vec<_> = [&legacy, &private].iter().map(|path| {
+        let meta = std::fs::metadata(path).unwrap();
+        (meta.ino(), meta.uid(), meta.gid(), meta.mode(), meta.mtime(), meta.atime())
+    }).collect();
+    for _ in 0..2 {
+        migrate_legacy_state(root.path(), &partition, "notify").unwrap();
+    }
+    for (path, previous) in [&legacy, &private].iter().zip(before) {
+        let meta = std::fs::metadata(path).unwrap();
+        assert_eq!((meta.ino(), meta.uid(), meta.gid(), meta.mode(), meta.mtime(), meta.atime()), previous);
+    }
+    assert!(!partition.join(MARKER).exists());
+    assert_eq!(std::fs::read_to_string(legacy).unwrap(), "old arbitrary non-JSON bytes");
+    assert_eq!(std::fs::read_to_string(private).unwrap(), "[old schema]");
+}
+
 #[test]
 fn the_guard_refuses_the_kernel_registry_however_it_is_named() {
     // Directly, as a whole file...

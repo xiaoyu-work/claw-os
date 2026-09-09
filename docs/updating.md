@@ -26,7 +26,8 @@ Popup expiry and transient flags retain their presentation meaning while core
 activity remains durable under existing retention/DND/delivery preferences.
 SQLite schema v2 adds optional presentation metadata in place without importing
 or deleting legacy `notify` JSON files. That legacy App's state transition is
-still separate work. Local desktop configuration and user history are preserved.
+an explicit preservation boundary described below. Local desktop configuration
+and user history are preserved.
 Upgrade the signed manifest, native binary, panel and delivery bridge together
 and restart the user desktop session; binary-only hot-swap is not a substitute.
 The full native source and both exported presentation libraries now come from
@@ -34,6 +35,45 @@ the immutable Notifications product pin. Evicted history handles are reclaimed;
 bridge-owned popups close on bridge disconnect while durable activity stays
 unread. Ordinary freedesktop lifetime is unchanged. Rebuilding source does not
 consolidate the old JSON history or establish visual/full-image acceptance.
+
+### Legacy Notify service transition
+
+The `notify` 0.2 service contract retains `notify.send(message, urgent=false)`
+and `notify.list(limit=20)`, but new operations use only the authoritative OS
+Notification Service. Messages are nonempty plain text, at most 4000 Unicode
+characters, without control characters other than newline/tab/CR; invalid input
+is rejected, not truncated. Urgent means warning severity with Immediate
+delivery, not permission to bypass DND. Both modes respect user delivery policy.
+
+Send returns `{id,message,urgent,timestamp}`; IDs now use durable `notif-...`
+strings instead of eight-character legacy IDs. The timestamp remains UTC
+creation time to seconds, without a suffix. List accepts integer 1..100
+(booleans are invalid), returns newest-published-first records and a full
+retained, unexpired `total`, not just the limited batch length. Rows retain
+`read` and add `state`; `read` is true for read, acknowledged or dismissed.
+Delivery alone leaves it false. `ui.notify` and `data.inbox.read` remain separate
+grants. List is deliberately limited to the authenticated owner's
+`app:notify` producer, not native, task or other-App notifications.
+The native App cannot close notify-produced records by guessing their IDs.
+
+**Historical JSON is preserved, not imported.** Neither new operation reads,
+rewrites, deletes, changes ownership/mode, dual-writes, backfills or replays
+`notifications.json`, even if it contains malformed or obsolete data. It is
+not part of the new service list, and an unavailable service is an error,
+never an empty-list or JSON fallback. No history importer/browser is installed.
+The worker's old automatic `notify` file move is disabled.
+
+The old filename was relative to the launcher's actual `COS_DATA_DIR`.
+Worker launches partition a data root as `<data-root>/apps/notify`; ordinary
+owner roots default to `~/.local/share/cos` (or the configured owner data
+root). App service Hosts instead supply their private `<host-control>/data`
+root before that partitioning. Earlier unpartitioned launches may have left
+the file directly in their old data root. This update does not search for or
+relocate any such file, nor extend the normal lifetime of ephemeral Host
+namespaces. Already-preserved private history stays where it exists; only new
+OS records are durable across App/service restarts.
+
+### Media Player compatibility
 
 Agent provides the versioned `claw-os-media-player-v1` playback adapter for
 newer native Media Player packages. It requires separate exact

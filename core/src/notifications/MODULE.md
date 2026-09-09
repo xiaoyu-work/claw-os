@@ -25,7 +25,13 @@ requeue terminal records. Delivery success never implies user acknowledgement.
 
 The existing Agent desktop bridge remains the sole desktop delivery consumer.
 Its connection-local numeric handles are not durable IDs or an alias store.
-Legacy `notify` JSON history remains untouched pending its explicit transition.
+The distinct `notify` send/list service intents use source `app:notify`, not
+the native producer's authority. `list_source` returns one transactional
+owner/source snapshot with newest-publication-first rows and a full retained,
+unexpired total, including read/acknowledged/dismissed records. Urgent sends
+use warning severity and never the critical DND bypass.
+Historical `notify` JSON is deliberately not read, imported, replayed or moved;
+the worker's automatic legacy-state move no longer selects it.
 
 ## Key Files
 

@@ -16,7 +16,22 @@ mod worker {
     ));
 }
 
+mod legacy {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/clawd/app_notifications/legacy.rs"
+    ));
+}
+
 fn decision(app: &str, allowed: bool) -> Decision {
+    decision_with_caps(app, if allowed {
+        vec![Cap::unscoped(Verb::UI_NOTIFY)]
+    } else {
+        vec![]
+    })
+}
+
+fn decision_with_caps(app: &str, caps: Vec<Cap>) -> Decision {
     let uid = unsafe { libc::geteuid() };
     let session = format!("notify-{}", uuid::Uuid::new_v4().simple());
     let (_, view) = authority()
@@ -26,11 +41,7 @@ fn decision(app: &str, allowed: bool) -> Decision {
             binding: Binding::ProcessTree,
             subject: Subject::session(&session).with_app(Some(app.into())),
             audience: AudienceSet::one(Audience::SystemService),
-            caps: crate::caps::CapSet::from_caps(if allowed {
-                vec![Cap::unscoped(Verb::UI_NOTIFY)]
-            } else {
-                vec![]
-            }),
+            caps: crate::caps::CapSet::from_caps(caps),
             lifetime: Duration::from_secs(60),
             uses: Uses::Unbounded,
             index_session: true,

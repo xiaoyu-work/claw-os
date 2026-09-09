@@ -51,7 +51,7 @@ claw-os-sdk/
 │   ├── README.md
 │   └── src/claw_os_sdk/
 │       ├── __init__.py
-│       ├── ai.py, tools.py, mcp.py, claw_os_session.py
+│       ├── ai.py, tools.py, mcp.py, kernel.py, claw_os_session.py
 │       └── generated.py
 │
 ├── node/                Node SDK (npm package `@claw-os/sdk`)

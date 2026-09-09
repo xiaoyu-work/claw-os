@@ -33,6 +33,7 @@ def handle_summarize(args):
 | `claw_os_sdk.tools`     | `cos ai tool <name>` — fulfil catalog tools the model proposed.        |
 | `claw_os_sdk.gui`       | Desktop GUI bootstrap and kernel-provided launch context.              |
 | `claw_os_sdk.mcp`       | Manifest-bound App MCP server, call context, progress, and cancellation. |
+| `claw_os_sdk.kernel`    | Explicit installed-CLI stdin transport with shared wire errors and cancellation. |
 | `claw_os_sdk.claw_os_session` | Read / observe `COS_SESSION` from inside an app.                 |
 | `claw_os_sdk.generated` | TypedDicts generated from `wire/v1/*.schema.json`.                     |
 
@@ -67,6 +68,22 @@ versioned call context; caller identity never comes from tool arguments.
 The runtime validates arguments and applies manifest defaults before calling
 the handler. `report_progress()` is a no-op when the caller did not request
 progress.
+
+## Controlled primitive transport
+
+`kernel.call_json_with_stdin_binary(binary, args, data, *,
+deadline_unix_ms, check_cancelled=None)` sends bounded bytes to an explicit
+absolute CLI path (installed Claw OS uses `/usr/local/bin/cos`).
+`args` is the complete primitive argv; the SDK adds `--wire=1`. Pass the
+authenticated MCP context's `raise_if_cancelled` callback and no later than
+its deadline. The inherited broker session supplies authority, never stdin,
+caller labels or environment changes.
+
+It returns a decoded object or raises `KernelDenied` with the original
+structured `.payload`, or `KernelUnavailable` for transport/decode failures.
+Cancellation and deadlines kill/reap the CLI, but cannot undo an already
+accepted OS mutation. Do not automatically retry an indeterminate mutation.
+This helper is not an App dispatcher or a capability grant.
 
 ## AI support
 

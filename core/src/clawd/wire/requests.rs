@@ -308,6 +308,13 @@ pub enum AppNotificationRequest {
     Close {
         id: Token<64>,
     },
+    Send {
+        message: Text<16_000>,
+        urgent: bool,
+    },
+    List {
+        limit: u32,
+    },
 }
 
 // ---------------------------------------------------------------------------

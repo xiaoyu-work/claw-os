@@ -38,6 +38,7 @@ Rust, Python, Node, and Go bindings.
 | `go/` | Go public SDK |
 | `python/src/claw_os_sdk/generated.py` | Generated Python wire bindings |
 | `python/src/claw_os_sdk/mcp.py` | Manifest-bound MCP server, progress, and cooperative cancellation |
+| `python/src/claw_os_sdk/kernel.py` | Explicit installed-binary stdin transport, inherited broker session, strict shared wire errors, deadlines and cancellation/reaping |
 | `../.github/workflows/publish-sdk-release.yml` | GitHub-only multi-language SDK release |
 
 `cos-runtime/` is a separate internal package for bundled apps; public apps
@@ -78,6 +79,12 @@ an already accepted playback action cannot be rolled back by cancellation.
 Notifications uses `cos_call_json_async_with_stdin_binary` to keep bounded
 business text off argv while retaining explicit executable selection, shared
 wire errors and cancellation/reaping. It does not convey authority in stdin.
+The Python equivalent is
+`kernel.call_json_with_stdin_binary(binary, args, data, deadline_unix_ms=...,
+check_cancelled=...)`. Callers provide the complete primitive argv and pass
+the MCP context's cancellation check, not identity metadata or a new session.
+It uses the existing wire decoder and never mutates PATH/environment.
+Cancelled or timed-out accepted mutations are not automatically retried.
 
 ## Tests
 

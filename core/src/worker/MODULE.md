@@ -68,8 +68,10 @@ and a root-owned executed artifact.
 ## Policy derivation
 
 Notifications is a normal hostile MCP worker. Its original `ui.notify`
-capability admits only bounded post/close intent through the typed OS service,
-not owner-wide notification administration, arbitrary icons/files or a raw bus.
+capability admits bounded native post/close or `notify` send intent; the
+separate `data.inbox.read` capability admits `notify` list. The typed OS
+provider rechecks the exact action/App/capability matrix. Neither admits
+owner-wide notification administration, arbitrary icons/files or a raw bus.
 The existing desktop bridge alone consumes channel leases and returns genuine
 user acknowledgement/dismissal, separately from delivery receipts.
 
@@ -114,6 +116,12 @@ same path. The owner's data root itself — credentials, sessions, the
 journal, every other App's partition — is never mounted, and the
 read-only `_shared` library directories the bundled Apps import are the
 only other part of the apps tree a launch receives.
+
+Notify's historical `notifications.json` is intentionally excluded from the
+automatic state-move table. Existing files stay in their original namespace,
+including a pre-worker data root or an already-created `apps/notify`
+partition; no parser, importer, replay or ownership/mode rewrite runs.
+The new service intents own no App-local notification store.
 
 State a bundled App wrote before isolation is brought forward once, by
 `migrate.rs`, before its first sandboxed launch. The paths are a fixed

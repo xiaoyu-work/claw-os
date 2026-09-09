@@ -109,6 +109,16 @@ crash/disconnect closes orphan presentations while durable activity survives.
 External freedesktop clients keep their ordinary lifetime and cannot use that
 hint to affect another sender or core record.
 
+The same typed service also supports `notify` send/list, with a distinct
+`app:notify` producer and exact action-to-App authorization. Send keeps
+`ui.notify`; list independently requires `data.inbox.read` and exposes only
+that owner's notify-produced records, not the owner's entire activity feed.
+The service defines full source totals and stable publication ordering.
+Warning-level urgency respects DND. Its Python SDK transport preserves the
+broker session/deadline/cancellation without App-local storage or another App
+call. Legacy JSON is preserved in place, excluded from new lists, never
+automatically moved/imported/replayed; see [updating](docs/updating.md).
+
 The OS exposes `system.media-player.control` for native Media Player clients.
 The seven closed actions address only `cosmic-player`, with independent exact
 `desktop.media.observe` and `desktop.media.control` grants scoped to that

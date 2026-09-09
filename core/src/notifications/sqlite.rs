@@ -8,7 +8,8 @@ use super::{
     ChangeBatch, DeliveryChannel, DeliveryClaim, DeliveryPolicy, DeliveryResult, DeliveryState,
     DeliveryStatus, Notification, NotificationAction, NotificationChange, NotificationDraft,
     NotificationError, NotificationMutation, NotificationPreferences, NotificationService,
-    NotificationState, Severity, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT, SCHEMA_VERSION,
+    NotificationState, Severity, SourceNotificationPage, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT,
+    SCHEMA_VERSION,
 };
 
 const DEDUPE_WINDOW_MS: i64 = 15 * 60 * 1_000;
@@ -292,6 +293,50 @@ impl NotificationService for SqliteNotificationService {
         ids.into_iter()
             .map(|id| load_notification(&conn, owner_uid, &id))
             .collect()
+    }
+
+    fn list_source(
+        &self,
+        owner_uid: u32,
+        source: &str,
+        limit: usize,
+    ) -> Result<SourceNotificationPage, NotificationError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction()?;
+        let now = super::now_ms();
+        let total = tx.query_row(
+            "SELECT COUNT(*) FROM notifications
+             WHERE owner_uid = ?1 AND source = ?2
+               AND (expires_at_ms IS NULL OR expires_at_ms > ?3)",
+            params![owner_uid, source, now],
+            |row| {
+                let count = row.get::<_, i64>(0)?;
+                u64::try_from(count)
+                    .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, count))
+            },
+        )?;
+        let mut statement = tx.prepare(
+            "SELECT id FROM notifications
+             WHERE owner_uid = ?1 AND source = ?2
+               AND (expires_at_ms IS NULL OR expires_at_ms > ?3)
+             ORDER BY sequence DESC LIMIT ?4",
+        )?;
+        let ids = statement
+            .query_map(
+                params![owner_uid, source, now, normalize_limit(limit) as i64],
+                |row| row.get::<_, String>(0),
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(statement);
+        let notifications = ids
+            .into_iter()
+            .map(|id| load_notification(&tx, owner_uid, &id))
+            .collect::<Result<Vec<_>, _>>()?;
+        tx.commit()?;
+        Ok(SourceNotificationPage {
+            notifications,
+            total,
+        })
     }
 
     fn get(&self, owner_uid: u32, id: &str) -> Result<Notification, NotificationError> {

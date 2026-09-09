@@ -520,6 +520,12 @@ pub enum DeliveryResult {
     },
 }
 
+#[derive(Debug, Clone)]
+pub struct SourceNotificationPage {
+    pub notifications: Vec<Notification>,
+    pub total: u64,
+}
+
 pub trait NotificationService: Send + Sync {
     fn publish(
         &self,
@@ -533,6 +539,15 @@ pub trait NotificationService: Send + Sync {
         include_dismissed: bool,
         limit: usize,
     ) -> Result<Vec<Notification>, NotificationError>;
+
+    /// One snapshot of retained, unexpired records from an exact owner/source,
+    /// newest publication first, including read and terminal states.
+    fn list_source(
+        &self,
+        owner_uid: u32,
+        source: &str,
+        limit: usize,
+    ) -> Result<SourceNotificationPage, NotificationError>;
 
     fn get(&self, owner_uid: u32, id: &str) -> Result<Notification, NotificationError>;
 

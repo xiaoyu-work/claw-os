@@ -46,7 +46,7 @@ and agent tasks.
 | `../extension_host/broker.rs` | Purpose-bound private proxy: verifies SCM credentials, Host/child ancestry, route class, and nearest child session before normal dispatch |
 | `scheduler.rs` | Proactive-scheduler authority: validates `cos cron` / `cos triggers` requests and derives what a job may carry |
 | `notifications.rs` | Notification RPC handlers, due-nudge fanout, and external delivery dispatcher |
-| `app_notifications.rs` | Closed native post/close intent, exact authenticated App/owner/source, `ui.notify`, and durable Notification Service publication |
+| `app_notifications.rs` | Closed native post/close and legacy-facade send/list, exact App/action/owner/source grants, and durable Notification Service publication/query |
 | `browser.rs` | Attached-browser provider: exact action capabilities, expected-origin injection, owner socket validation, and bounded Native Messaging frames |
 | `network_diagnostics.rs` | Host-network diagnostic provider: interface/route inspection, bounded DNS resolution, and DNS-pinned TCP probes for the `netdiag` App |
 | `filesystem.rs` | Exact-scope bounded text reads and atomic writes/replacements for App workers; pinned paths, task-owned inverse snapshots, no App dispatch |
@@ -80,15 +80,27 @@ harmless processes, never real Settings, polkit or user grants.
 
 ## Wire Protocol
 
-`system.notification.control` accepts only `cosmic-notifications` sessions and
-the existing `ui.notify` Wild capability. It derives owner, source and session/
-task correlation from broker authority, not MCP metadata or a display label.
+`system.notification.control` has an exact App/action matrix:
+`cosmic-notifications` post/close require `ui.notify` Wild; `notify` send
+requires `ui.notify` Wild and list requires `data.inbox.read` Wild.
+Neither App can use the other's actions, and read does not imply send.
+It derives owner, source and session/task correlation from broker authority,
+not MCP metadata or a display label.
 Post validates bounded plain text, theme-only icon names, signed popup timeout
 and flags before any effect; close accepts only a durable `notif-` string owned
 by this source and owner. Numeric D-Bus IDs, absolute icon paths, arbitrary
 sources/actions and service-state fallbacks are refused. Storage failures are
 typed unavailable responses. Worker and App Host relays admit only this typed
 service, never owner-wide notification administration or a session bus.
+
+Notify send accepts 1..4000 plain-text characters and a strict urgency boolean.
+Urgent is warning severity, not critical, and both modes use the normal
+Immediate policy subject to DND/channel preferences. List accepts 1..100 and
+projects only the owner's `app:notify` source (not native/task/other-App rows).
+It returns durable IDs, full message, urgency, UTC creation timestamp without
+a suffix, coarse `read` (state is not unread), explicit state and the complete
+retained, unexpired source total. Reads do not reorder publication history.
+No service intent reads or migrates legacy `notifications.json`.
 
 `notifications_actual_native_worker_durable_delivery_and_owner_bound_ui` is an
 ignored explicit-input fixture: build the native Notifications executable and
