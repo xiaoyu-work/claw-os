@@ -1,0 +1,13 @@
+{
+  "schema": "claw.app-platform/v1",
+  "version": "1.0.0",
+  "runtime_abi": 1,
+  "exports": {
+    "python-sdk": "claw-os-sdk/python/src",
+    "python-runtime": "cos-runtime/python/src",
+    "rust-sdk": "claw-os-sdk/rust",
+    "rust-runtime": "cos-runtime/rust",
+    "ui-toolkit": "desktop/toolkit",
+    "launcher-client": "desktop/launcher-backend"
+  }
+}

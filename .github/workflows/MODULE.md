@@ -28,6 +28,7 @@ dispatched and reusable test/publication pipelines.
 | `publish-website.yml` | Website-only manual publication |
 | `publish-apt-repo.yml` | Internal web/APT artifact composition and Pages deployment |
 | `publish-sdk-release.yml` | GitHub SDK artifacts and synchronized language tags |
+| `publish-app-platform.yml` | Manually published versioned SDK/runtime/toolkit development artifact for independent App builds |
 | `release.yml` | Umbrella test + all publication channels |
 
 ## Dependencies

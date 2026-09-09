@@ -56,6 +56,7 @@ editing additional surfaces.
 | Bundled App product boundary or source fork | `docs/app-product-redesign.md`, `apps/MODULE.md` | Product UI/backend, manifests, provenance/licenses, native launchers, account/state migration, packaging |
 | Adapter | `adapters/<id>/app.json`, `adapters/<id>/main.py` | adapter tests and external binary dependency |
 | App/SDK wire contract | `claw-os-sdk/wire/`, language SDK package | generated bindings, conformance tests, `publish-sdk-release.yml` |
+| App development platform release | `packaging/app-platform.json`, `scripts/app_platform.py`, `docs/app-platform.md` | Versioned SDK/runtime/toolkit exports; `publish-app-platform.yml`; never App helpers or private OS providers |
 | Rootfs composition | `scripts/lib/image-profiles.sh`, `rootfs/build.sh`, `rootfs/features/` | target build script and package contents |
 | WSL or Docker image | `.github/workflows/build-docker-and-wsl.yml`, `targets/wsl/`, `targets/docker/` | shared rootfs profile |
 | Debian/APT package | `packaging/deb/`, `packaging/apt-repo/` | `publish-*-package.yml`, rootfs package-install features |

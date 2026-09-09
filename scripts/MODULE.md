@@ -21,6 +21,7 @@ shared build helpers.
 | `lib/package-version.sh` | Monotonic Debian package version |
 | `lib/image-identity.sh` | Image user/identity assertions |
 | `lib/git-readonly.sh` | Read-only Git wrapper for privileged builds |
+| `app_platform.py` | Reproducible, versioned SDK/runtime/toolkit development artifact; excludes App helpers and OS providers |
 | `app_sources.py` | Resolve the immutable App repository pin and stage explicitly kinded product/capability assets |
 | `app_sources.py --native` | Validate and refresh product-declared native libraries/assets, standalone Launcher/Editor/Files/Terminal/Store/Capture/Media Player/Notifications and nested Settings workspace at stable ignored build paths from the immutable pin |
 
@@ -34,6 +35,7 @@ under sudo.
 
 ```bash
 bash -n scripts/*.sh scripts/lib/*.sh
+python3 -m pytest -q scripts/tests/test_app_platform.py
 python3 -m pytest -q packaging/deb/tests/test_app_sources.py
 ```
 

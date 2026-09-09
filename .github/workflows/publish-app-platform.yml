@@ -1,0 +1,60 @@
+name: Publish App Development Platform
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version declared in packaging/app-platform.json"
+        required: true
+        default: "1.0.0"
+        type: string
+
+concurrency:
+  group: claw-os-app-platform-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    env:
+      PLATFORM_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          lfs: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test development artifact contract
+        run: |
+          python3 -m pip install pytest
+          python3 -m pytest -q scripts/tests/test_app_platform.py
+      - name: Build immutable development artifact
+        run: python3 scripts/app_platform.py --version "$PLATFORM_VERSION"
+      - name: Retain development artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: claw-os-app-platform-${{ inputs.version }}
+          path: build/app-platform-release/*
+          if-no-files-found: error
+      - name: Publish versioned SDK libraries
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="app-platform-v$PLATFORM_VERSION"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "error: App platform version is already published" >&2
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$tag" -m "Claw OS App development platform $PLATFORM_VERSION"
+          git push origin "refs/tags/$tag"
+          gh release create "$tag" build/app-platform-release/* \
+            --verify-tag --latest=false \
+            --title "App development platform $PLATFORM_VERSION" \
+            --notes "Versioned SDK/runtime/toolkit development libraries. This is not an OS image or an installed App update."

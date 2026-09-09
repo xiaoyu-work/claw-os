@@ -40,6 +40,7 @@ Rust, Python, Node, and Go bindings.
 | `python/src/claw_os_sdk/mcp.py` | Manifest-bound MCP server, progress, and cooperative cancellation |
 | `python/src/claw_os_sdk/kernel.py` | Explicit installed-binary stdin transport, inherited broker session, strict shared wire errors, deadlines and cancellation/reaping |
 | `../.github/workflows/publish-sdk-release.yml` | GitHub-only multi-language SDK release |
+| `../docs/app-platform.md` | Versioned first-party development artifact containing SDK/runtime/native library exports, never App support or private OS providers |
 
 `cos-runtime/` is a separate internal package for bundled apps; public apps
 must not depend on its policy/runtime internals.
