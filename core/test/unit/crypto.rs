@@ -45,6 +45,53 @@ fn sha256_streaming_matches_oneshot() {
     assert_eq!(streamed, oneshot);
 }
 
+#[test]
+fn sha256_large_update_retains_only_a_partial_block() {
+    let mut hash = Sha256Stream::new();
+    let capacity = hash.buffer.capacity();
+    hash.update(b"prefix");
+    hash.update(&vec![0x5a; 64 * 1024 + 7]);
+    assert_eq!(hash.buffer.len(), 13);
+    assert_eq!(hash.buffer.capacity(), capacity);
+}
+
+#[test]
+fn sha256_block_boundaries_match_independent_reference() {
+    let data: Vec<u8> = (0..269)
+        .map(|index| ((index * 37 + 11) % 256) as u8)
+        .collect();
+    let expected = "ecca5850bf7677fe53f2e00a87b2a49f24665848bcb1ef6ba86dd195a966627b";
+    for split in 0..=data.len() {
+        let mut hash = Sha256Stream::new();
+        hash.update(&data[..split]);
+        hash.update(&[]);
+        hash.update(&data[split..]);
+        assert_eq!(hash.finalize_hex(), expected, "split {split}");
+    }
+    for size in [1, 2, 7, 55, 56, 63, 64, 65, 127, 128, 129, 269] {
+        let mut hash = Sha256Stream::new();
+        let capacity = hash.buffer.capacity();
+        for chunk in data.chunks(size) {
+            hash.update(chunk);
+            assert!(hash.buffer.len() < 64);
+            assert_eq!(hash.buffer.capacity(), capacity);
+        }
+        assert_eq!(hash.finalize_hex(), expected, "chunk size {size}");
+    }
+}
+
+#[test]
+fn sha256_million_a_matches_nist_vector_in_one_call_and_chunks() {
+    let data = vec![b'a'; 1_000_000];
+    let expected = "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0";
+    assert_eq!(sha256_hex(&data), expected);
+    let mut hash = Sha256Stream::new();
+    for chunk in data.chunks(4093) {
+        hash.update(chunk);
+    }
+    assert_eq!(hash.finalize_hex(), expected);
+}
+
 // RFC 4231 HMAC-SHA-256 test vectors — the spec's official
 // conformance set.
 

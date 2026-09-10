@@ -11,10 +11,9 @@
 //! * stay reproducible — no surprise CVE / breaking-change churn from
 //!   a low-level dep we touch from the kernel hot path.
 //!
-//! These implementations are correctness-first, not perf-first. They
-//! are appropriate for occasional signing / verification (a handful
-//! of signatures per request, an archive hash per install). Don't put
-//! them in tight loops.
+//! Streaming updates process complete input blocks directly and retain only
+//! an incomplete block, so large package inputs take linear work without an
+//! input-sized hash buffer. The compression and digest formats stay unchanged.
 
 #![allow(dead_code)]
 
@@ -48,14 +47,26 @@ impl Sha256Stream {
         }
     }
 
-    pub fn update(&mut self, data: &[u8]) {
-        self.total_bits = self.total_bits.wrapping_add((data.len() as u64) * 8);
-        self.buffer.extend_from_slice(data);
-        while self.buffer.len() >= 64 {
-            let block: [u8; 64] = self.buffer[..64].try_into().unwrap();
+    pub fn update(&mut self, mut data: &[u8]) {
+        self.total_bits = self
+            .total_bits
+            .wrapping_add((data.len() as u64).wrapping_mul(8));
+        if !self.buffer.is_empty() {
+            let taken = (64 - self.buffer.len()).min(data.len());
+            self.buffer.extend_from_slice(&data[..taken]);
+            data = &data[taken..];
+            if self.buffer.len() < 64 {
+                return;
+            }
+            let block: [u8; 64] = self.buffer.as_slice().try_into().unwrap();
             self.compress(&block);
-            self.buffer.drain(..64);
+            self.buffer.clear();
         }
+        let (blocks, remainder) = data.as_chunks::<64>();
+        for block in blocks {
+            self.compress(block);
+        }
+        self.buffer.extend_from_slice(remainder);
     }
 
     pub fn finalize_bytes(mut self) -> [u8; 32] {
@@ -204,8 +215,5 @@ pub fn hmac_sha256_hex(key: &[u8], data: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/test/unit/crypto.rs"
-    ));
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/crypto.rs"));
 }

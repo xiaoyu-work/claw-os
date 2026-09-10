@@ -39,6 +39,7 @@ persistence, and structured primitive dispatch.
 | `src/provenance/` | Compiled-root signature verification and immutable package snapshots |
 | `src/agent/` | Agent CLI, runtime, tools, LLM providers, memory, and web UI |
 | `src/caps/` | Capability catalog, scopes, manifests, and enforcement |
+| `src/crypto.rs` | SHA-256/HMAC helpers with linear streaming updates and bounded partial-block buffering |
 | `src/worker/` | Shared hostile-worker sandbox: launch policy, Linux provider, per-launch brokers |
 | `src/apps.rs` | `app.json` discovery and side-effect-free schema generation |
 | `src/bridge/local.rs` | Protected in-process Root App registration; held package review and owner/App deny checks before session creation |
