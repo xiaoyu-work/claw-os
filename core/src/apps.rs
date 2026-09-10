@@ -8,6 +8,8 @@ use serde_json::{json, Value};
 use crate::caps::manifest::{Arg, ArgKind, Manifest, McpTool, Operation};
 use crate::provenance::{self, PackageKind, VerifiedPackage, VerifyOptions};
 
+pub mod permission_review;
+
 /// An app manifest loaded from `app.json`. There is one manifest format
 /// — [`caps::manifest::Manifest`](crate::caps::manifest::Manifest) — and
 /// the loader rejects anything that doesn't validate.

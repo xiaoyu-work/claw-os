@@ -81,7 +81,7 @@ pub(crate) fn show_apps(
         "apps": app_list,
         "total": app_list.len(),
         "quarantined": quarantined,
-        "hint": "Run: cos app <name> for app details, cos app <name> <command> [args] to execute. Scaffold a new App with: cos app create <id> [--kind cli|desktop|both]. Install an App with: cos app install <source-dir>",
+        "hint": "Run: cos app <name> for app details, cos app <name> <command> [args] to execute. Scaffold a new App with: cos app create <id> [--kind cli|desktop|both]. Review verified permission requests without installing: cos app install <source-dir> --review. Install with permission disclosure: cos app install <source-dir>. Installation does not grant the requested permissions.",
     });
     Ok(Some(output.to_string()))
 }

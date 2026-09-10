@@ -1,4 +1,7 @@
-use super::app_commands::{consent_cmd, create_cmd, install_cmd, stage_app_install_with_rename};
+use super::app_commands::{
+    consent_cmd, create_cmd, install_cmd, stage_app_install_with_rename,
+    stage_app_install_with_review,
+};
 use super::*;
 use crate::cli_help::{command_schemas, show_builtin_schema, show_command_schema};
 
@@ -861,7 +864,7 @@ fn install_generates_desktop_entry_for_gui_app() {
     let prev_share = std::env::var_os("COS_APPLICATIONS_DIR");
     std::env::set_var("COS_APPS_DIR", &dst);
     std::env::set_var("COS_APPLICATIONS_DIR", &apps_share);
-    let v = parse(install_cmd(&[src.display().to_string()]).unwrap());
+    let v = parse(install_cmd(&[src.display().to_string(), "--yes".into()]).unwrap());
     match prev_apps {
         Some(x) => std::env::set_var("COS_APPS_DIR", x),
         None => std::env::remove_var("COS_APPS_DIR"),
@@ -908,7 +911,7 @@ fn install_skips_desktop_entry_for_headless_app() {
     let prev_share = std::env::var_os("COS_APPLICATIONS_DIR");
     std::env::set_var("COS_APPS_DIR", &dst);
     std::env::set_var("COS_APPLICATIONS_DIR", &apps_share);
-    let v = parse(install_cmd(&[src.display().to_string()]).unwrap());
+    let v = parse(install_cmd(&[src.display().to_string(), "--yes".into()]).unwrap());
     match prev_apps {
         Some(x) => std::env::set_var("COS_APPS_DIR", x),
         None => std::env::remove_var("COS_APPS_DIR"),
@@ -934,6 +937,156 @@ fn install_skips_desktop_entry_for_headless_app() {
 fn install_requires_source() {
     let err = install_cmd(&[]).unwrap_err();
     assert!(err.contains("usage:"), "got: {err}");
+}
+
+#[test]
+fn install_review_only_reports_permissions_without_publishing() {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("source");
+    let destination = root.path().join("installed");
+    write_min_app(
+        &source,
+        "review",
+        r#"{
+            "id": "review", "version": "1.0.0", "name": {"en": "Review"},
+            "operations": {
+                "fetch": {
+                    "label": {"en": "Fetch"},
+                    "args": [{"name": "url", "kind": "text", "required": true}],
+                    "needs": [{
+                        "verb": "net.dial",
+                        "scope": {"kind": "from-arg", "arg": "url", "transform": "url-host"},
+                        "why": {"en": "Connect to the selected service"}
+                    }]
+                }
+            }
+        }"#,
+    );
+    let previous = std::env::var_os("COS_APPS_DIR");
+    std::env::set_var("COS_APPS_DIR", &destination);
+    let result = install_cmd(&[
+        source.display().to_string(),
+        "--review".into(),
+        "--yes".into(),
+    ]);
+    match previous {
+        Some(value) => std::env::set_var("COS_APPS_DIR", value),
+        None => std::env::remove_var("COS_APPS_DIR"),
+    }
+    let result = parse(result.unwrap());
+    assert_eq!(result["installed"], false);
+    assert_eq!(result["review_only"], true);
+    assert_eq!(result["permission_review"]["permissions_granted"], false);
+    assert_eq!(
+        result["permission_review"]["permissions"][0]["verb"],
+        "net.dial"
+    );
+    assert_eq!(
+        result["permission_review"]["permissions"][0]["scope"]["kind"],
+        "from-arg"
+    );
+    assert!(result["provenance"].is_object());
+    assert!(!destination.exists());
+}
+
+#[test]
+fn install_review_cannot_trust_unsigned_metadata_via_dev_flag() {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("source");
+    let destination = root.path().join("installed");
+    write_unsigned_app(
+        &source,
+        "unsigned-review",
+        r#"{"id":"unsigned-review","version":"1.0.0","name":{"en":"Unverified"}}"#,
+    );
+    let previous = std::env::var_os("COS_APPS_DIR");
+    std::env::set_var("COS_APPS_DIR", &destination);
+    let result = install_cmd(&[
+        source.display().to_string(),
+        "--review".into(),
+        "--dev-trust".into(),
+    ]);
+    match previous {
+        Some(value) => std::env::set_var("COS_APPS_DIR", value),
+        None => std::env::remove_var("COS_APPS_DIR"),
+    }
+    assert!(result.is_err());
+    assert!(!destination.exists());
+}
+
+#[test]
+fn install_cancelled_permission_review_preserves_old_version() {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("source");
+    let installed = root.path().join("installed").join("cancelled");
+    write_min_app(
+        &installed,
+        "cancelled",
+        r#"{"id":"cancelled","version":"1.0.0","name":{"en":"Existing"}}"#,
+    );
+    write_min_app(
+        &source,
+        "cancelled",
+        r#"{"id":"cancelled","version":"2.0.0","name":{"en":"Replacement"}}"#,
+    );
+    let old_manifest = std::fs::read(installed.join("app.json")).unwrap();
+    let error = stage_app_install_with_review(&source, &installed, true, "cancelled", &mut |app| {
+        assert!(app.is_verified());
+        assert_eq!(
+            std::fs::read(installed.join("app.json")).unwrap(),
+            old_manifest
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&app.dir).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
+        Err("operator declined permission review".into())
+    })
+    .unwrap_err();
+    assert!(error.contains("operator declined"));
+    assert_eq!(
+        std::fs::read(installed.join("app.json")).unwrap(),
+        old_manifest
+    );
+    assert!(install_scratch_entries(installed.parent().unwrap(), "cancelled").is_empty());
+}
+
+#[test]
+fn install_rejects_package_substitution_during_permission_review() {
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("source");
+    let installed = root.path().join("installed").join("substitution");
+    write_min_app(
+        &installed,
+        "substitution",
+        r#"{"id":"substitution","version":"1.0.0","name":{"en":"Existing"}}"#,
+    );
+    write_min_app(
+        &source,
+        "substitution",
+        r#"{"id":"substitution","version":"2.0.0","name":{"en":"Replacement"}}"#,
+    );
+    let old_manifest = std::fs::read(installed.join("app.json")).unwrap();
+    let error =
+        stage_app_install_with_review(&source, &installed, true, "substitution", &mut |app| {
+            std::fs::write(app.dir.join("main.py"), "# substituted after review\n").unwrap();
+            reseal_app(&app.dir, "substitution");
+            Ok(())
+        })
+        .unwrap_err();
+    assert!(
+        error.contains("changed during permission review"),
+        "{error}"
+    );
+    assert_eq!(
+        std::fs::read(installed.join("app.json")).unwrap(),
+        old_manifest
+    );
+    assert!(install_scratch_entries(installed.parent().unwrap(), "substitution").is_empty());
 }
 
 #[test]
@@ -1115,7 +1268,7 @@ fn install_rejects_unknown_tool_in_manifest() {
 }
 
 #[test]
-fn install_copies_app_without_ai_block_and_skips_consent() {
+fn install_copies_non_ai_app_with_permission_disclosure() {
     let pid = std::process::id();
     let src = std::env::temp_dir().join(format!("cos-install-noai-src-{pid}"));
     let dst = std::env::temp_dir().join(format!("cos-install-noai-dst-{pid}"));
@@ -1133,7 +1286,7 @@ fn install_copies_app_without_ai_block_and_skips_consent() {
 
     let prev_apps = std::env::var_os("COS_APPS_DIR");
     std::env::set_var("COS_APPS_DIR", &dst);
-    let v = parse(install_cmd(&[src.display().to_string()]).unwrap());
+    let v = parse(install_cmd(&[src.display().to_string(), "--yes".into()]).unwrap());
     match prev_apps {
         Some(x) => std::env::set_var("COS_APPS_DIR", x),
         None => std::env::remove_var("COS_APPS_DIR"),
@@ -1143,6 +1296,8 @@ fn install_copies_app_without_ai_block_and_skips_consent() {
     assert_eq!(v["app"], "calc");
     assert_eq!(v["copied"], true);
     assert_eq!(v["consent"]["needed"], false);
+    assert_eq!(v["permission_review"]["permissions_granted"], false);
+    assert_eq!(v["permission_review"]["permissions"], json!([]));
     assert!(dst.join("calc").join("app.json").is_file());
     assert!(dst.join("calc").join("main.py").is_file());
 
@@ -1179,7 +1334,14 @@ fn install_no_consent_defers_consent_for_ai_app() {
     let prev_cfg = std::env::var_os("COS_USER_CONFIG_DIR");
     std::env::set_var("COS_APPS_DIR", &dst);
     std::env::set_var("COS_USER_CONFIG_DIR", &cfg);
-    let v = parse(install_cmd(&[src.display().to_string(), "--no-consent".into()]).unwrap());
+    let v = parse(
+        install_cmd(&[
+            src.display().to_string(),
+            "--no-consent".into(),
+            "--yes".into(),
+        ])
+        .unwrap(),
+    );
     match prev_apps {
         Some(x) => std::env::set_var("COS_APPS_DIR", x),
         None => std::env::remove_var("COS_APPS_DIR"),
@@ -1193,6 +1355,11 @@ fn install_no_consent_defers_consent_for_ai_app() {
     assert_eq!(v["consent"]["needed"], true);
     assert_eq!(v["consent"]["granted"], false);
     assert_eq!(v["consent"]["deferred"], true);
+    assert_eq!(v["permission_review"]["permissions_granted"], false);
+    assert_eq!(
+        v["permission_review"]["ai_policy"]["budget"]["monthly_units"],
+        100
+    );
     assert!(dst.join("summ").join("app.json").is_file());
 
     let _ = std::fs::remove_dir_all(&src);
@@ -1201,7 +1368,7 @@ fn install_no_consent_defers_consent_for_ai_app() {
 }
 
 #[test]
-fn install_yes_grants_consent_for_ai_app() {
+fn install_yes_does_not_grant_ai_consent() {
     let pid = std::process::id();
     let src = std::env::temp_dir().join(format!("cos-install-yes-src-{pid}"));
     let dst = std::env::temp_dir().join(format!("cos-install-yes-dst-{pid}"));
@@ -1240,8 +1407,10 @@ fn install_yes_grants_consent_for_ai_app() {
 
     assert_eq!(v["installed"], true);
     assert_eq!(v["consent"]["needed"], true);
-    assert_eq!(v["consent"]["granted"], true);
-    assert!(v["consent"]["approved_at"].is_string());
+    assert_eq!(v["consent"]["granted"], false);
+    assert_eq!(v["consent"]["deferred"], true);
+    assert_eq!(v["permission_review"]["permissions_granted"], false);
+    assert!(v["consent"].get("approved_at").is_none());
 
     let _ = std::fs::remove_dir_all(&src);
     let _ = std::fs::remove_dir_all(&dst);
@@ -1302,7 +1471,8 @@ fn install_force_replaces_existing_install() {
 
     let prev_apps = std::env::var_os("COS_APPS_DIR");
     std::env::set_var("COS_APPS_DIR", &dst);
-    let v = parse(install_cmd(&[src.display().to_string(), "--force".into()]).unwrap());
+    let v =
+        parse(install_cmd(&[src.display().to_string(), "--force".into(), "--yes".into()]).unwrap());
     match prev_apps {
         Some(x) => std::env::set_var("COS_APPS_DIR", x),
         None => std::env::remove_var("COS_APPS_DIR"),
@@ -1492,7 +1662,14 @@ fn install_same_path_keeps_development_tree_in_place() {
 
     let prev_apps = std::env::var_os("COS_APPS_DIR");
     std::env::set_var("COS_APPS_DIR", &root);
-    let value = parse(install_cmd(&[source.display().to_string(), "--force".into()]).unwrap());
+    let value = parse(
+        install_cmd(&[
+            source.display().to_string(),
+            "--force".into(),
+            "--yes".into(),
+        ])
+        .unwrap(),
+    );
     match prev_apps {
         Some(x) => std::env::set_var("COS_APPS_DIR", x),
         None => std::env::remove_var("COS_APPS_DIR"),

@@ -41,6 +41,8 @@ persistence, and structured primitive dispatch.
 | `src/caps/` | Capability catalog, scopes, manifests, and enforcement |
 | `src/worker/` | Shared hostile-worker sandbox: launch policy, Linux provider, per-launch brokers |
 | `src/apps.rs` | `app.json` discovery and side-effect-free schema generation |
+| `src/apps/permission_review.rs` | OS-catalog permission disclosure and comparison contract; not authorization |
+| `src/router/app_commands.rs` | Authenticated install preview, pre-publication permission review and atomic App replacement |
 | `src/audit.rs` | Hash-chained audit persistence |
 | `src/audit_policy.rs` | Per-command/per-tool allowlist every durable audit projection applies |
 | `src/session/` | Session storage and lifecycle |

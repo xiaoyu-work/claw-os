@@ -60,6 +60,7 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | Notification service | Durable owner/source-scoped user-attention records, bounded native intent, delivery policy, DND, deduplication, retries, and channel leases | `core/src/notifications/`, `core/src/clawd/notifications.rs`, `core/src/clawd/app_notifications.rs` |
 | App client sources | Product UI/business/MCP implementations, manifests and declared entrypoints | External `clawos-app/products/` and `clawos-app/capabilities/` |
 | App/adapter integration | Provenance-gated manifest binding, authenticated App Host/bridge and protocol adapter integration | `adapters/`, `core/src/apps.rs`, `core/src/bridge.rs`, `core/src/worker/` |
+| App permission disclosure | OS-catalog review of authenticated manifest needs and execution surfaces, with a permission-contract digest; directory installs review before publication and never grant capabilities | `core/src/apps/permission_review.rs`, `core/src/router/app_commands.rs` |
 | Extension provenance | Publisher signing, trust roots, package verification, and the shared bounded installer for Apps, Skills, MCP/adapter packages, and Agent extensions | `core/src/provenance/` |
 | Update freshness | Signed release-security manifest, monotonic local security floor, one-use recovery authorizations, and the install/activation/runtime gates that refuse a superseded release | `core/src/update/`, `packaging/release-security/`, `packaging/deb/common/` |
 | SDK/runtime | One public multi-language App SDK, including MCP service APIs, plus internal bundled-App policy helpers | `claw-os-sdk/`, `cos-runtime/` |
@@ -79,6 +80,23 @@ definitions, then to providers; authorization and persistence remain explicit
 cross-cutting boundaries rather than hidden implementation details.
 
 ### App source ownership
+
+The App architecture is converging on plugin-style extension contracts, not a
+second Plugin identity or a `plugin` manifest flag. App UI, binaries, business
+logic and resources remain product-owned. The OS owns authenticated hosting,
+resource authorization, trusted decisions and system services. Multiple Apps
+may provide the same function; a default handler is a routing preference,
+not exclusive access or a permission grant. Existing fixed-product runtime
+and desktop integration paths still require that common-contract cutover.
+
+`cos app install --review` authenticates a package and projects every declared
+operation/MCP permission, conditional scope, AI policy and execution surface.
+Normal directory installation shows this review before publication and checks
+the package again after confirmation. `--yes` acknowledges installation only
+and defers AI consent. Store/package-channel delivery, first-use presentation
+and protected persistent review decisions are not established by this CLI
+implementation; those consumers must converge on the same OS contract rather
+than adding App-owned approval logic.
 
 The complete native Notifications fork, both shared presentation crates,
 descriptor, license and original build now live in

@@ -627,12 +627,46 @@ and ship an app
 | `cos app <id> <op> --schema` | Schema for one op. |
 | `cos app lint [<id>]` | Refuse apps that import provider SDKs directly. Run on every app if no id given. |
 | `cos app tool list [<id>]` | Show the manifest-declared MCP tools this App exposes through the private Gateway. |
-| `cos app install <dir> [--force] [--no-consent] [--yes] [--dev-trust]` | Validate the manifest, verify the package's provenance envelope, copy into `$COS_APPS_DIR/<id>/`, and (unless `--no-consent`) walk through the AI consent prompt. Copying is skipped only when the source resolves to that exact destination path. `--dev-trust` is the only route that installs unsigned content and records a persistent, digest-bound developer decision. |
+| `cos app install <dir> --review` | Verify the package and return its requested permissions, scopes, conditions, AI policy and execution surfaces as JSON, without installing or granting anything. |
+| `cos app install <dir> [--force] [--no-consent] [--yes] [--dev-trust]` | Authenticate and disclose the App's permission requests before confirming and publishing into `$COS_APPS_DIR/<id>/`. `--yes` acknowledges installation, never AI or capability grants. `--no-consent` defers AI consent but does not hide the permission review. Copying is skipped only when source and destination are the same directory. `--dev-trust` still requires a separate interactive, digest-bound developer decision. |
 | `cos app consent list` | Which apps you have granted AI consent to. |
 | `cos app consent show <id>` | Display the manifest's AI block. |
 | `cos app consent grant <id> [--yes]` | Grant AI consent. |
 | `cos app consent revoke <id>` | Revoke it. |
 | `cos app consent path <id>` | Print the consent record path. |
+
+### Installation permission review
+
+The OS builds the review from the authenticated manifest, covering both
+`operations.*.needs` and `mcp.tools[].needs`. Capability names, explanations and
+risk levels come from the OS catalog; the App's explanation is shown separately
+as its reason for requesting access. Conditional requests are disclosed even
+when the corresponding feature is not currently used. Argument-derived scopes
+remain unresolved until invocation: listing a file or host parameter is not
+permission to access every file or host.
+
+The review also lists the declared desktop surface, MCP lifecycle and external
+Agent access, and the AI policy. Its `contract_digest` describes the
+permission-related contract, including argument constraints, conditions and
+execution surfaces. It excludes the App version and capability-purpose text,
+so changing release numbers or explanations alone does not imply a permission
+change. The digest is a comparison key, **not an approval token or a grant**.
+
+Every directory installation displays this review before publishing, including
+`--force`, `--yes`, `--no-consent` and in-place installs. Without `--yes`, the
+operator confirms installation interactively. Automation can inspect `--review`
+first and explicitly acknowledge installation with `--yes`; the returned
+`permission_review.permissions_granted` remains `false`. Installation with
+`--yes` now defers AI consent rather than approving it. Normal capability
+checks and separate AI consent still apply when the App is used.
+
+The installer re-verifies the package after review and rejects a changed
+package before replacing the old installation. Cancelling review leaves the
+previous version untouched. The shared projection is in
+[`apps/permission_review.rs`](../core/src/apps/permission_review.rs).
+Store, package-channel and first-use consent integration remain separate
+rollout work; a CLI review does not establish that those paths already present
+the same UI or persist a user decision.
 
 ## 9. Environment variables
 
@@ -733,9 +767,10 @@ cos app lint ~/my-apps/hello         # static check
 cos provenance sign --kind app --id hello --version 1.0.0 \
     --path ~/my-apps/hello --key ~/.secrets/my-publisher.json \
     --entrypoint main.py             # bind the whole tree to your key
-cos app install ~/my-apps/hello      # verify provenance + copy into $COS_APPS_DIR
-# If the manifest has an `ai` block, the installer prompts for consent
-# (skip with --no-consent and run `cos app consent grant hello` later).
+cos app install ~/my-apps/hello --review  # inspect verified requests without installing
+cos app install ~/my-apps/hello      # review permissions, confirm, then publish
+# Installation does not grant capabilities. AI consent is a separate prompt.
+# --no-consent defers that AI prompt; --yes never grants AI consent.
 cos app hello say                    # now lives under /usr/lib/cos/apps/hello/
 ```
 

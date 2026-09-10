@@ -55,10 +55,9 @@ pub(super) fn dispatch_app(
         return tool_cmd(&args[1..], &discovered);
     }
 
-    // Special: `cos app install <source>` — validate a manifest,
-    // install the App tree under apps_dir(), and (unless --no-consent)
-    // walk the operator through the AI consent prompt. Lives in the
-    // `app` namespace because it is an admin operation against the
+    // Special: `cos app install <source>` — authenticate and review the
+    // permission requests before publishing the App. AI consent is separate.
+    // Lives in the `app` namespace because it is an admin operation against the
     // App layer — no AI gate involved.
     if app_name == "install" {
         return install_cmd(&args[1..]);
@@ -431,7 +430,7 @@ fn walk_py(dir: &Path, f: &mut dyn FnMut(&Path, &str)) {
     }
 }
 
-/// `cos app install <source-dir> [--yes] [--no-consent] [--force]`
+/// `cos app install <source-dir> [--review] [--yes] [--no-consent] [--force]`
 ///
 /// Validates an App manifest, copies the App tree under `apps_dir()`,
 /// and (unless `--no-consent`) walks the operator through the AI
@@ -462,20 +461,20 @@ fn walk_py(dir: &Path, f: &mut dyn FnMut(&Path, &str)) {
 ///     backup until the staged tree has been published. A failed
 ///     publish restores the backup.
 ///
-/// Consent:
-///   * Apps without an `ai` block have nothing to consent to and the
-///     install completes after the copy.
-///   * Apps with an `ai` block prompt interactively unless `--yes`
-///     (auto-grant) or `--no-consent` (defer; operator must run
-///     `cos app consent grant <id>` later).
+/// Permission disclosure happens after verification and before publication,
+/// including for non-AI Apps, replacement installs and deferred AI consent.
+/// `--review` returns the authenticated request without installing anything.
+/// `--yes` acknowledges installation only; it never grants AI consent.
 pub(super) fn install_cmd(args: &[String]) -> Result<Option<String>, String> {
     let source_arg = args
         .iter()
         .find(|a| !a.starts_with("--"))
         .cloned()
         .ok_or_else(|| {
-            "usage: cos app install <source-dir> [--yes] [--no-consent] [--force]".to_string()
+            "usage: cos app install <source-dir> [--review] [--yes] [--no-consent] [--force]"
+                .to_string()
         })?;
+    let review_only = args.iter().any(|a| a == "--review");
     let auto_yes = args.iter().any(|a| a == "--yes");
     let no_consent = args.iter().any(|a| a == "--no-consent");
     let force = args.iter().any(|a| a == "--force");
@@ -517,14 +516,50 @@ pub(super) fn install_cmd(args: &[String]) -> Result<Option<String>, String> {
         .map(|(a, b)| a == b)
         .unwrap_or(false);
 
+    if review_only {
+        let trust = if same_path {
+            TreeTrust::Installed
+        } else {
+            TreeTrust::SignatureOnly
+        };
+        let app = validate_install_tree(&source, &manifest.id, "reviewed app", trust, false)?;
+        let review = apps::permission_review::PermissionReview::from_manifest(&app.manifest)?;
+        return Ok(Some(
+            json!({
+                "app": app.manifest.id,
+                "installed": false,
+                "review_only": true,
+                "provenance": app.provenance_facts(),
+                "permission_review": review,
+            })
+            .to_string(),
+        ));
+    }
+
+    let mut permission_review = None;
+    let mut review_permissions = |candidate: &apps::App| {
+        let review = review_install_permissions(candidate, auto_yes)?;
+        permission_review = Some(review);
+        Ok(())
+    };
     if same_path {
-        manifest = validate_install_tree(
+        let app = validate_install_tree(
             &source,
             &manifest.id,
             "in-place app",
             TreeTrust::Installed,
             dev_trust,
         )?;
+        review_permissions(&app)?;
+        let current = validate_install_tree(
+            &source,
+            &manifest.id,
+            "reviewed in-place app",
+            TreeTrust::Installed,
+            dev_trust,
+        )?;
+        require_unchanged_review(&app, &current)?;
+        manifest = app.manifest;
         copied = false;
     } else {
         if path_entry_exists(&dest)
@@ -536,7 +571,14 @@ pub(super) fn install_cmd(args: &[String]) -> Result<Option<String>, String> {
                 dest.display()
             ));
         }
-        manifest = stage_app_install(&source, &dest, force, &manifest.id, dev_trust)?;
+        manifest = stage_app_install(
+            &source,
+            &dest,
+            force,
+            &manifest.id,
+            dev_trust,
+            &mut review_permissions,
+        )?;
         copied = true;
     }
 
@@ -558,6 +600,8 @@ pub(super) fn install_cmd(args: &[String]) -> Result<Option<String>, String> {
         "copied": copied,
         "in_place": same_path,
         "provenance": provenance,
+        "permission_review": permission_review
+            .ok_or("App installation completed without a permission review")?,
     });
 
     // If the app declares a `desktop` surface, emit a freedesktop
@@ -586,11 +630,12 @@ pub(super) fn install_cmd(args: &[String]) -> Result<Option<String>, String> {
         return Ok(Some(envelope.to_string()));
     }
 
-    if no_consent {
+    if no_consent || auto_yes {
         envelope["consent"] = json!({
             "needed": true,
             "granted": false,
             "deferred": true,
+            "reason": "installation_does_not_grant_ai_consent",
             "hint": format!("Run `cos app consent grant {}` to approve.", manifest.id),
         });
         return Ok(Some(envelope.to_string()));
@@ -631,6 +676,79 @@ pub(super) fn install_cmd(args: &[String]) -> Result<Option<String>, String> {
         "path": consent::consent_path(&manifest.id).display().to_string(),
     });
     Ok(Some(envelope.to_string()))
+}
+
+fn review_install_permissions(
+    app: &apps::App,
+    auto_yes: bool,
+) -> Result<apps::permission_review::PermissionReview, String> {
+    use std::io::{BufRead, IsTerminal, Write};
+
+    let review = apps::permission_review::PermissionReview::from_manifest(&app.manifest)?;
+    let mut stderr = std::io::stderr().lock();
+    if let Some(reason) = app.quarantine_reason() {
+        writeln!(
+            stderr,
+            "Unverified development source; separate developer trust is still required: {}",
+            serde_json::to_string(reason)
+                .map_err(|error| format!("format development trust warning: {error}"))?,
+        )
+        .map_err(|error| format!("display development trust warning: {error}"))?;
+    } else {
+        writeln!(stderr, "Verified package: {}", app.provenance_facts())
+            .map_err(|error| format!("display App publisher identity: {error}"))?;
+    }
+    writeln!(stderr, "{}", review.format_for_review()?)
+        .map_err(|error| format!("display App permission review: {error}"))?;
+    stderr
+        .flush()
+        .map_err(|error| format!("flush App permission review: {error}"))?;
+    if auto_yes {
+        return Ok(review);
+    }
+    if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
+        return Err(
+            "App installation requires permission review confirmation. Use --review to inspect \
+             the authenticated request, or explicitly acknowledge installation with --yes. \
+             Neither option grants the requested permissions."
+                .to_string(),
+        );
+    }
+    write!(
+        stderr,
+        "Install this App without granting its requested permissions? [y/N] "
+    )
+    .map_err(|error| format!("display App installation confirmation: {error}"))?;
+    stderr
+        .flush()
+        .map_err(|error| format!("flush App installation confirmation: {error}"))?;
+    let mut answer = String::new();
+    std::io::stdin()
+        .lock()
+        .read_line(&mut answer)
+        .map_err(|error| format!("read App installation confirmation: {error}"))?;
+    if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+        return Err(
+            "App installation cancelled; the existing installation was not replaced".into(),
+        );
+    }
+    Ok(review)
+}
+
+fn require_unchanged_review(reviewed: &apps::App, current: &apps::App) -> Result<(), String> {
+    let reviewed_manifest = serde_json::to_value(&reviewed.manifest)
+        .map_err(|error| format!("serialize reviewed App manifest: {error}"))?;
+    let current_manifest = serde_json::to_value(&current.manifest)
+        .map_err(|error| format!("serialize current App manifest: {error}"))?;
+    if reviewed_manifest != current_manifest
+        || reviewed.provenance_facts() != current.provenance_facts()
+    {
+        return Err(
+            "App package changed during permission review; review the new package before installing"
+                .into(),
+        );
+    }
+    Ok(())
 }
 
 /// `cos app create <id> [--kind cli|desktop|both] [--dir <parent>]
@@ -985,7 +1103,7 @@ fn validate_install_tree(
     description: &str,
     trust_mode: TreeTrust,
     allow_unsigned: bool,
-) -> Result<apps::AppManifest, String> {
+) -> Result<apps::App, String> {
     // Structural bounds run before anything is trusted: an untrusted
     // bundle must not be able to smuggle symlinks, hardlinks, special
     // files, traversal or case-colliding names into a live install.
@@ -1042,7 +1160,7 @@ fn validate_install_tree(
             "{description} lint failed for `{expected_id}`: {details}"
         ));
     }
-    Ok(manifest)
+    Ok(app)
 }
 
 /// Copy, validate, and durably publish an App tree.
@@ -1057,6 +1175,7 @@ fn stage_app_install(
     force: bool,
     expected_id: &str,
     allow_unsigned: bool,
+    review: &mut dyn FnMut(&apps::App) -> Result<(), String>,
 ) -> Result<apps::AppManifest, String> {
     stage_app_install_with_ops(
         source,
@@ -1064,9 +1183,23 @@ fn stage_app_install(
         force,
         expected_id,
         allow_unsigned,
-        |from, to| fs::rename(from, to),
-        atomic_exchange,
+        review,
+        (
+            |from: &Path, to: &Path| fs::rename(from, to),
+            atomic_exchange,
+        ),
     )
+}
+
+#[cfg(test)]
+pub(super) fn stage_app_install_with_review(
+    source: &Path,
+    dest: &Path,
+    force: bool,
+    expected_id: &str,
+    review: &mut dyn FnMut(&apps::App) -> Result<(), String>,
+) -> Result<apps::AppManifest, String> {
+    stage_app_install(source, dest, force, expected_id, false, review)
 }
 
 /// The rename-only path keeps rollback failures deterministic in unit
@@ -1088,8 +1221,8 @@ where
         force,
         expected_id,
         true,
-        rename,
-        |_staging, _dest| Ok(false),
+        &mut |_| Ok(()),
+        (rename, |_staging: &Path, _dest: &Path| Ok(false)),
     )
 }
 
@@ -1099,13 +1232,14 @@ fn stage_app_install_with_ops<R, E>(
     force: bool,
     expected_id: &str,
     allow_unsigned: bool,
-    mut rename: R,
-    mut exchange: E,
+    review: &mut dyn FnMut(&apps::App) -> Result<(), String>,
+    operations: (R, E),
 ) -> Result<apps::AppManifest, String>
 where
     R: FnMut(&Path, &Path) -> io::Result<()>,
     E: FnMut(&Path, &Path) -> io::Result<bool>,
 {
+    let (mut rename, mut exchange) = operations;
     let parent = dest
         .parent()
         .ok_or_else(|| format!("install destination `{}` has no parent", dest.display()))?;
@@ -1114,12 +1248,20 @@ where
 
     let token = uuid::Uuid::new_v4();
     let staging = parent.join(format!(".{expected_id}.install-staging-{token}"));
-    fs::create_dir(&staging).map_err(|e| format!("create staging {}: {e}", staging.display()))?;
+    let mut builder = fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder
+        .create(&staging)
+        .map_err(|e| format!("create staging {}: {e}", staging.display()))?;
     let _staging_guard = InstallStagingGuard(staging.clone());
 
     copy_dir_recursive(source, &staging)
         .map_err(|e| format!("copy {} -> {}: {e}", source.display(), staging.display()))?;
-    let manifest = validate_install_tree(
+    let app = validate_install_tree(
         &staging,
         expected_id,
         "staged app",
@@ -1128,6 +1270,16 @@ where
     )?;
     sync_install_tree(&staging)
         .map_err(|e| format!("fsync staged app {}: {e}", staging.display()))?;
+    review(&app)?;
+    let current = validate_install_tree(
+        &staging,
+        expected_id,
+        "reviewed staged app",
+        TreeTrust::SignatureOnly,
+        allow_unsigned,
+    )?;
+    require_unchanged_review(&app, &current)?;
+    let manifest = app.manifest;
 
     let destination_exists = path_entry_exists(dest)
         .map_err(|e| format!("inspect destination {}: {e}", dest.display()))?;
