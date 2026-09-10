@@ -6,6 +6,21 @@ fn catalog_matches_verb_table() {
 }
 
 #[test]
+fn regional_capabilities_do_not_reinterpret_existing_configuration_or_identity() {
+    for (verb, risk) in [
+        (Verb::SYS_LOCALE, Risk::High),
+        (Verb::SYS_LANGUAGE, Risk::Medium),
+        (Verb::SYS_HOSTNAME, Risk::High),
+    ] {
+        let meta = lookup(verb).unwrap();
+        assert_eq!(meta.scope_kind, ScopeKind::Name);
+        assert_eq!(meta.risk, risk);
+    }
+    assert_eq!(lookup(Verb::SYS_CONFIG).unwrap().scope_kind, ScopeKind::Path);
+    assert_eq!(lookup(Verb::SYS_IDENTITY).unwrap().risk, Risk::Critical);
+}
+
+#[test]
 fn public_app_schema_tracks_the_capability_catalog_without_enabling_ai_bypass() {
     let schema: serde_json::Value = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),

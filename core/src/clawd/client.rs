@@ -91,6 +91,7 @@ fn transport_error(fault: Fault) -> String {
 
 fn requires_root_peer(command: super::routes::Command) -> bool {
     command == super::routes::Command::AppSessionRegister
+        || command == super::routes::Command::SystemRegionalSettingsControl
         || command.as_str().starts_with("system.review.")
 }
 

@@ -45,6 +45,7 @@ pub mod system_review;
 pub mod power;
 pub mod printer;
 pub mod protocol;
+pub mod regional_settings;
 pub mod routes;
 pub mod scheduler;
 pub mod security;

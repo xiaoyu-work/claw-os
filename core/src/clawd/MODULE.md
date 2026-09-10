@@ -57,6 +57,7 @@ and agent tasks.
 | `desktop/settings.rs` | Fixed Settings user-service activation; authenticated owner manager, closed GUI environment, independent lifetime and startup acknowledgement without weakening daemon/worker NoNewPrivileges |
 | `client_identity.rs` | Peer/owner identity and synchronous thread-local filesystem credentials; trusted owner primary/supplementary groups, distinct from extension execution GID, with restoration on every exit |
 | `users.rs` | User Manager provider: status requires `sys.observe:identities`; mutations require `sys.identity:manage`, with exact secret reads for passwords; OS-owned account state and rollback |
+| `regional_settings/` | Closed locale/owner-language/static-hostname service; three separate exact grants, authenticated owner, root-owned D-Bus backends and confirmed/indeterminate outcomes |
 | `system_caps.rs` | System capability derivation |
 | `session_scope.rs` | Trusted-session override and its owner-policy clamp |
 | Service modules | One privileged capability provider per domain |
@@ -80,6 +81,30 @@ requires root solely for owner-UID dropping; it exercises the installed
 harmless processes, never real Settings, polkit or user grants.
 
 ## Wire Protocol
+
+`system.regional-settings.control` is available to authenticated sessions and
+their existing private Host provider relay, never as a Host lifecycle action.
+It requests only `sys.locale:system`, `sys.language:self`, or
+`sys.hostname:static`, without App-name, publisher or Admin-bootstrap exceptions.
+Inputs are closed and validated before authority/backend access. System locale
+and the owner's AccountsService language are independent writes; setters
+require fresh live capability spending and uncached matching readback.
+See the [wire contract](../../../claw-os-sdk/wire/v1/regional-settings.md).
+
+Run the focused normal-user suite from the repository root:
+
+```bash
+cargo test -p cos --lib -- regional_settings caps::catalog caps::role caps::verb --test-threads=1
+```
+
+The ignored
+`clawd::regional_settings::dbus::tests::root_private_bus_exact_effects_refusals_and_ambiguous_results`
+must be run explicitly as root against the built unit-test binary with
+`--exact --ignored --test-threads=1`. It starts only a private `dbus-daemon`
+and synthetic locale1/hostname1/AccountsService objects, with task-local
+authority/audit data. It must never point at the live system bus.
+Native Settings still requires declared/admitted GUI needs; these fixtures
+do not accept its broad polkit payload or prove Wayland/GUI bootstrap.
 
 `system.notification.control` has an exact App/action matrix:
 `cosmic-notifications` post/close require `ui.notify` Wild; `notify` send

@@ -61,6 +61,21 @@ fn admin_can_install_packages() {
 }
 
 #[test]
+fn regional_verbs_do_not_expand_lower_role_bundles_or_create_unscoped_grants() {
+    for verb in [Verb::SYS_LOCALE, Verb::SYS_LANGUAGE, Verb::SYS_HOSTNAME] {
+        for role in [
+            Role::Observer, Role::Worker, Role::Curator, Role::Connector,
+            Role::Automator, Role::AgentHost,
+        ] {
+            assert!(!role.verbs().contains(&verb));
+        }
+        assert!(Role::Admin.verbs().contains(&verb));
+        assert!(!Role::Admin.caps_with_scopes(None, None, None)
+            .iter().any(|cap| cap.verb == verb));
+    }
+}
+
+#[test]
 fn clipboard_access_is_not_granted_below_admin() {
     for role in [
         Role::Observer,

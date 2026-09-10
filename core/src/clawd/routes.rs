@@ -1870,6 +1870,26 @@ routes! {
     usb_guard::control(c.params, c.client, authority).await.map_err(BrokerError::from)
         },
     }
+    SystemRegionalSettingsControl {
+        name: "system.regional-settings.control",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: session(Audience::SystemService),
+        body: body::RegionalSettingsControl,
+        audit: &[
+            ("session", FieldRule::Token),
+            ("action", FieldRule::Token),
+            ("lang", FieldRule::Identifier),
+            ("region", FieldRule::Identifier),
+            ("languages", FieldRule::Identifier),
+            ("hostname", FieldRule::Identifier),
+        ],
+        run: |c| {
+            let authority = c.authority()?;
+            super::regional_settings::control(c.params, c.client, authority).await
+        },
+    }
     SystemUsersControl {
         name: "system.users.control",
         access: Access::User,

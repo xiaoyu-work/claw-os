@@ -163,6 +163,15 @@ broker session/deadline/cancellation without App-local storage or another App
 call. Legacy JSON is preserved in place, excluded from new lists, never
 automatically moved/imported/replayed; see [updating](docs/updating.md).
 
+The OS also owns the [regional settings service](claw-os-sdk/wire/v1/regional-settings.md):
+validated session requests spend separate `sys.locale:system`,
+`sys.language:self` and `sys.hostname:static` capabilities before invoking
+root-owned locale1, the authenticated owner's AccountsService object, or
+hostname1. Settings uses the public SDK bridge and matching OS readbacks,
+not a direct privileged setter or App-owned approval. System defaults and
+owner preferences are independent, non-atomic effects. No broad polkit policy,
+GUI authority bootstrap or account-administration permission is inherited.
+
 The OS exposes `system.media-player.control` for native Media Player clients.
 The seven closed actions address only `cosmic-player`, with independent exact
 `desktop.media.observe` and `desktop.media.control` grants scoped to that

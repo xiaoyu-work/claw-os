@@ -954,6 +954,13 @@ fn dispatch_with_stdin_impl(
         return Ok(Some(value.to_string()));
     }
 
+    if name == "__regional-settings" {
+        let params = crate::clawd::regional_settings::cli_request(&args[1..])
+            .map_err(|error| system_wire_failure(error.kind.code(), &error.message))?;
+        let value = request_wire_clawd(Command::SystemRegionalSettingsControl, params)?;
+        return Ok(Some(value.to_string()));
+    }
+
     if name == "__app-permissions" {
         let args = &args[1..];
         if args.len() != 1 {

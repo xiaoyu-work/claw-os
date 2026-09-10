@@ -123,6 +123,12 @@ binds each action to its exact App and producer. Owner-wide notification
 list/preferences/delivery/state routes remain unavailable to the Host and its
 children. It needs no desktop transport or notification database mount.
 
+Regional mutations use only `system.regional-settings.control` under the
+nearest child session. Admission does not mint its independent
+`sys.locale:system`, `sys.language:self` or `sys.hostname:static` grants.
+The provider derives the owner from authenticated identity and performs fresh
+capability spending; no owner/path/command or polkit approval route is exposed.
+
 The task binding signed at bootstrap remains immutable. The supervisor stores
 the rolling private-broker deadline separately and returns each renewal over
 the authenticated worker channel; the worker mirrors it in its installed

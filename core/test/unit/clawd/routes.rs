@@ -50,6 +50,7 @@ const EXPECTED_USER_COMMANDS: &[&str] = &[
     "system.package.restore",
     "system.power.control",
     "system.printer.control",
+    "system.regional-settings.control",
     "system.security.inspect",
     "system.service.control",
     "system.service.restore",

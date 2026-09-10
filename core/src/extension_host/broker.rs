@@ -64,6 +64,7 @@ const CHILD_PROVIDER_ROUTES: &[Command] = &[
     Command::SystemPackageRestore,
     Command::SystemPowerControl,
     Command::SystemPrinterControl,
+    Command::SystemRegionalSettingsControl,
     Command::SystemSecurityInspect,
     Command::SystemServiceControl,
     Command::SystemServiceRestore,
