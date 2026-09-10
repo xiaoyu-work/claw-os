@@ -41,6 +41,26 @@ async fn leaf_discovery_includes_the_shared_cli_schema() {
         .any(|parameter| parameter["name"] == "checkpoint_id"));
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn activity_discovery_is_read_only_and_does_not_grant_model_control() {
+    let _lock = crate::test_env::lock_env();
+    let data = tempfile::tempdir().unwrap();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", data.path());
+    let result = parse(
+        CosHelp
+            .exec(json!({"path": ["activity", "complete"]}))
+            .await,
+    );
+    assert_eq!(result["found"], true);
+    assert_eq!(result["model_callable"], false);
+    assert!(result["parameters"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|parameter| parameter["name"] == "--note" && parameter["required"] == true));
+    assert!(!data.path().join("activities.db").exists());
+}
+
 #[tokio::test]
 async fn rejects_flags_operands_and_hidden_routes() {
     let tool = CosHelp;

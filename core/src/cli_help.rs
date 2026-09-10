@@ -172,6 +172,11 @@ impl Param {
 pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandSchema>)> {
     vec![
         (
+            "activity",
+            "Owner-scoped goals shared by terminal, Web, and desktop",
+            activity_schemas(),
+        ),
+        (
             "checkpoint",
             "OverlayFS snapshot system",
             vec![
@@ -532,6 +537,123 @@ pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandS
             }],
         ),
     ]
+}
+
+fn activity_schemas() -> Vec<CommandSchema> {
+    let metadata = |goal_required| {
+        vec![
+            Param::flag("--goal", "string", goal_required, "Desired outcome"),
+            Param::flag("--criteria", "string", false, "How goal achievement will be confirmed"),
+            Param::flag(
+                "--boundaries",
+                "string",
+                false,
+                "Planning constraints; does not grant additional permissions",
+            ),
+            Param::flag(
+                "--resource",
+                "string",
+                false,
+                "LABEL=REFERENCE (repeatable; replaces the resource list)",
+            ),
+        ]
+    };
+    let id = || Param::positional("id", "uuid", true, "Activity ID");
+    let mut create = vec![Param::positional("title", "string", true, "Activity title")];
+    create.extend(metadata(true));
+    let mut update = vec![
+        id(),
+        Param::flag("--title", "string", false, "Replacement title"),
+    ];
+    update.extend(metadata(false));
+    update.push(Param::flag(
+        "--clear-resources",
+        "bool",
+        false,
+        "Remove references without deleting the referenced data",
+    ));
+    let mut schemas = vec![
+        CommandSchema {
+            command: "create",
+            description: "Create a persistent Activity without starting a task",
+            params: create,
+            example: "cos activity create \"Release v2\" --goal \"Publish next Friday\"",
+        },
+        CommandSchema {
+            command: "list",
+            description: "List only the authenticated owner's Activities",
+            params: vec![
+                Param::flag(
+                    "--state",
+                    "enum:active|paused|completed|cancelled",
+                    false,
+                    "Filter by Activity lifecycle state",
+                ),
+                Param::flag("--limit", "integer", false, "Maximum records, 1-100 (default 50)"),
+            ],
+            example: "cos activity list --state active",
+        },
+        CommandSchema {
+            command: "show",
+            description: "Read a shared Activity view with bounded recent job results",
+            params: vec![
+                id(),
+                Param::flag("--limit", "integer", false, "Maximum related jobs, 1-100 (default 50)"),
+            ],
+            example: "cos activity show 00000000-0000-4000-8000-000000000001",
+        },
+        CommandSchema {
+            command: "update",
+            description: "Change supplied fields of an active or paused Activity",
+            params: update,
+            example: "cos activity update 00000000-0000-4000-8000-000000000001 --criteria \"Release is available\"",
+        },
+        CommandSchema {
+            command: "run",
+            description: "Submit durable work using the Activity goal or an explicit prompt",
+            params: vec![
+                id(),
+                Param::positional("prompt", "string", false, "Work request (default: Activity goal)"),
+                Param::flag("--session", "string", false, "Continue an associated session"),
+                Param::flag("--max-turns", "integer", false, "Positive per-job model-turn limit"),
+            ],
+            example: "cos activity run 00000000-0000-4000-8000-000000000001 \"Prepare a release draft\"",
+        },
+        CommandSchema {
+            command: "complete",
+            description: "Explicitly confirm that the goal has been achieved",
+            params: vec![
+                id(),
+                Param::flag("--note", "string", true, "User confirmation of the achieved outcome"),
+            ],
+            example: "cos activity complete 00000000-0000-4000-8000-000000000001 --note \"Reviewed and published\"",
+        },
+    ];
+    for (command, description, example) in [
+        (
+            "pause",
+            "Prevent future work without undoing in-flight effects",
+            "cos activity pause 00000000-0000-4000-8000-000000000001",
+        ),
+        (
+            "resume",
+            "Resume or explicitly reopen an Activity",
+            "cos activity resume 00000000-0000-4000-8000-000000000001",
+        ),
+        (
+            "cancel",
+            "End an Activity without claiming that its goal was achieved",
+            "cos activity cancel 00000000-0000-4000-8000-000000000001",
+        ),
+    ] {
+        schemas.push(CommandSchema {
+            command,
+            description,
+            params: vec![id()],
+            example,
+        });
+    }
+    schemas
 }
 
 fn command_schema_value(app_name: &str, command: &str) -> Result<Value, String> {

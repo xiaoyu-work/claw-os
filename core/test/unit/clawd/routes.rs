@@ -6,6 +6,12 @@ use serde_json::json;
 const EXPECTED_USER_COMMANDS: &[&str] = &[
     "daemon.health",
     "daemon.status",
+    "activity.create",
+    "activity.list",
+    "activity.get",
+    "activity.update",
+    "activity.transition",
+    "activity.run",
     "task.submit",
     "task.list",
     "task.get",
@@ -244,6 +250,38 @@ fn a_peer_without_credentials_reaches_no_route_at_all() {
 }
 
 #[test]
+fn activity_routes_record_identity_and_sizes_not_private_planning_text() {
+    let private_text = "private-activity-planning-content";
+    for command in [
+        Command::ActivityCreate,
+        Command::ActivityList,
+        Command::ActivityGet,
+        Command::ActivityUpdate,
+        Command::ActivityTransition,
+        Command::ActivityRun,
+    ] {
+        let route = command.route();
+        assert_eq!(route.authority.subject, SubjectSource::Peer);
+        let facts = crate::audit_policy::request_facts_for_route(
+            route.name,
+            route.audit_fields,
+            &json!({
+                "id": "00000000-0000-4000-8000-000000000001",
+                "title": private_text,
+                "goal": private_text,
+                "boundaries": private_text,
+                "completion_criteria": private_text,
+                "completion_note": private_text,
+                "prompt": private_text,
+                "resources": [{"label": private_text, "reference": private_text}],
+            }),
+        );
+        let recorded = serde_json::to_string(&facts).unwrap();
+        assert!(!recorded.contains(private_text), "{}", route.name);
+    }
+}
+
+#[test]
 fn every_route_has_a_finite_concurrency_budget() {
     for route in ROUTES {
         assert!(
@@ -281,6 +319,8 @@ fn mutating_routes_are_never_cancelled_mid_flight() {
 #[test]
 fn read_only_routes_are_classified_as_queries() {
     for name in [
+        "activity.list",
+        "activity.get",
         "daemon.health",
         "daemon.status",
         "task.list",
@@ -306,6 +346,10 @@ fn read_only_routes_are_classified_as_queries() {
 #[test]
 fn state_changing_routes_are_classified_as_mutations() {
     for name in [
+        "activity.create",
+        "activity.update",
+        "activity.transition",
+        "activity.run",
         "task.submit",
         "task.cancel",
         "task.retry",

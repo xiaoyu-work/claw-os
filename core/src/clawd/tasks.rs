@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 use tokio::time::sleep;
 
-use crate::agent::service::{Job, JobStatus, Store};
+use crate::agent::service::{load_activity, resolve_activity_id, Job, JobStatus, Store};
 use crate::caps::Role;
 use crate::session::{self, SessionOrigin};
 
@@ -18,15 +18,6 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
         // silently running the model as root.
         return Err(crate::agentd::spawn::ROOT_OWNER_REFUSAL.to_string());
     }
-    // The same canonical, ownership-checked home every other
-    // system-agent policy derivation uses, so the capabilities stamped
-    // here and the ceiling applied at execution cannot disagree.
-    let owner_home = super::system_caps::verified_owner_home(owner_uid)?;
-    let owner_gid = client
-        .gid
-        .ok_or_else(|| "clawd peer gid is unavailable".to_string())?;
-    crate::storage::ensure_owner_agent_state_dir(owner_uid, owner_gid)
-        .map_err(|err| format!("prepare owner agent state: {err}"))?;
     let prompt = required_string(&params, "prompt")?;
     let context = params
         .get("context")
@@ -55,6 +46,24 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
         .get("use_memory")
         .and_then(Value::as_bool)
         .unwrap_or(true);
+    let requested_activity = optional_activity_id(&params)?;
+    let session_meta = session_id
+        .as_deref()
+        .map(|session_id| task_session_meta(session_id, owner_uid))
+        .transpose()?;
+    let activity_id = resolve_task_activity(
+        owner_uid,
+        session_meta.as_ref(),
+        requested_activity.as_deref(),
+    )?;
+    // Activity admission precedes session creation, capability refresh, and
+    // queue publication. Its planning fields never supply capabilities.
+    let owner_home = super::system_caps::verified_owner_home(owner_uid)?;
+    let owner_gid = client
+        .gid
+        .ok_or_else(|| "clawd peer gid is unavailable".to_string())?;
+    crate::storage::ensure_owner_agent_state_dir(owner_uid, owner_gid)
+        .map_err(|err| format!("prepare owner agent state: {err}"))?;
     let store = Store::open_default().map_err(|err| err.to_string())?;
     let session_id = match session_id {
         Some(session_id) => {
@@ -64,7 +73,7 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
         None => Some(create_task_session(&prompt, owner_uid, &owner_home)?),
     };
     let job = store
-        .submit_with_context_and_memory(
+        .submit_with_activity(
             prompt,
             context,
             branch_context,
@@ -73,6 +82,7 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
             use_memory,
             Some(owner_uid),
             Some(owner_home.to_string_lossy().into_owned()),
+            activity_id,
         )
         .map_err(|err| err.to_string())?;
     Ok(job_value(job))
@@ -106,16 +116,18 @@ fn configure_task_session(
     Ok(())
 }
 
-fn prepare_task_session(
+fn task_session_meta(
     session_id: &str,
     owner_uid: u32,
-    owner_home: &std::path::Path,
-) -> Result<(), String> {
+) -> Result<session::SessionMeta, String> {
     let sid = session_id
         .parse::<session::SessionId>()
         .map_err(|err| format!("invalid task session id: {err}"))?;
     let meta =
         session::get_meta(&sid).map_err(|_| format!("task session not found: {session_id}"))?;
+    if meta.id != sid {
+        return Err(format!("task session metadata has a different id: {session_id}"));
+    }
     // The capabilities below are re-derived for `owner_uid`, and the
     // conversation history is read from that uid's memory database, so
     // the recorded owner has to be the same account — including for
@@ -131,7 +143,15 @@ fn prepare_task_session(
     if meta.creator_runtime.as_deref() != Some("clawd") {
         return Err(format!("session is not a system-agent task: {session_id}"));
     }
+    Ok(meta)
+}
 
+fn prepare_task_session(
+    session_id: &str,
+    owner_uid: u32,
+    owner_home: &std::path::Path,
+) -> Result<(), String> {
+    let sid = task_session_meta(session_id, owner_uid)?.id;
     let caps = super::system_caps::system_agent_caps(owner_uid, owner_home);
     session::set_caps(&sid, &caps).map_err(|err| format!("refresh task capabilities: {err}"))?;
     // A resumed task is ambient conversation, never an unattended
@@ -141,6 +161,15 @@ fn prepare_task_session(
         meta.origin = Some(SessionOrigin::SystemAgentTask);
     })
     .map_err(|err| format!("refresh task provenance: {err}"))
+}
+
+fn resolve_task_activity(
+    owner_uid: u32,
+    session_meta: Option<&session::SessionMeta>,
+    requested: Option<&str>,
+) -> Result<Option<String>, String> {
+    let inherited = session_meta.and_then(|meta| meta.activity_id.as_deref());
+    resolve_activity_id(owner_uid, inherited, requested).map_err(|error| error.to_string())
 }
 
 fn preview(value: &str, max: usize) -> String {
@@ -153,7 +182,12 @@ fn preview(value: &str, max: usize) -> String {
 }
 
 pub fn list(params: Value, client: &ClientIdentity) -> Result<Value, String> {
-    let store = Store::open_default().map_err(|err| err.to_string())?;
+    let activity_id = optional_activity_id(&params)?;
+    let activity_id = activity_id
+        .as_deref()
+        .map(|id| load_activity(client.require_uid()?, id).map_err(|error| error.to_string()))
+        .transpose()?
+        .map(|activity| activity.id);
     let owner_uid = owner_filter(client)?;
     let status = optional_status(&params)?;
     let limit = optional_limit(&params)?;
@@ -161,62 +195,37 @@ pub fn list(params: Value, client: &ClientIdentity) -> Result<Value, String> {
         .get("summary")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let store = Store::open_default().map_err(|err| err.to_string())?;
     let mut jobs = Vec::new();
 
-    match status {
-        Some(JobStatus::Pending) => collect_jobs(
-            &store,
-            JobStatus::Pending,
-            status,
-            limit,
-            owner_uid,
-            &mut jobs,
-        )?,
-        Some(JobStatus::Running) => collect_jobs(
-            &store,
-            JobStatus::Running,
-            status,
-            limit,
-            owner_uid,
-            &mut jobs,
-        )?,
-        Some(JobStatus::WaitingApproval) => collect_jobs(
-            &store,
-            JobStatus::WaitingApproval,
-            status,
-            limit,
-            owner_uid,
-            &mut jobs,
-        )?,
-        Some(JobStatus::Ok | JobStatus::Error | JobStatus::Cancelled) => {
-            collect_jobs(&store, JobStatus::Ok, status, limit, owner_uid, &mut jobs)?
-        }
-        None => {
-            collect_jobs(
-                &store,
+    if let Some(activity_id) = activity_id.as_deref() {
+        jobs = store
+            .list_for_activity(
+                client.require_uid()?,
+                activity_id,
+                if status.is_some() { usize::MAX } else { limit },
+            )
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .filter(|job| status.is_none_or(|status| job.status == status))
+            .take(limit)
+            .map(job_value)
+            .collect();
+    } else {
+        let buckets: &[JobStatus] = match status {
+            Some(JobStatus::Pending) => &[JobStatus::Pending],
+            Some(JobStatus::Running) => &[JobStatus::Running],
+            Some(JobStatus::WaitingApproval) => &[JobStatus::WaitingApproval],
+            Some(JobStatus::Ok | JobStatus::Error | JobStatus::Cancelled) => &[JobStatus::Ok],
+            None => &[
                 JobStatus::Pending,
-                None,
-                limit,
-                owner_uid,
-                &mut jobs,
-            )?;
-            collect_jobs(
-                &store,
                 JobStatus::Running,
-                None,
-                limit,
-                owner_uid,
-                &mut jobs,
-            )?;
-            collect_jobs(
-                &store,
                 JobStatus::WaitingApproval,
-                None,
-                limit,
-                owner_uid,
-                &mut jobs,
-            )?;
-            collect_jobs(&store, JobStatus::Ok, None, limit, owner_uid, &mut jobs)?;
+                JobStatus::Ok,
+            ],
+        };
+        for &bucket in buckets {
+            collect_jobs(&store, bucket, status, limit, owner_uid, &mut jobs)?;
         }
     }
 
@@ -368,6 +377,7 @@ pub fn cancel(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     Ok(json!({
         "id": job.id,
         "status": job.status,
+        "activity_id": job.activity_id,
         "cancelled": false,
         "reason": "task is already terminal",
     }))
@@ -397,12 +407,22 @@ pub fn retry(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     if owner_uid == 0 {
         return Err(crate::agentd::spawn::ROOT_OWNER_REFUSAL.to_string());
     }
+    let session_meta = original
+        .session_id
+        .as_deref()
+        .map(|session_id| task_session_meta(session_id, owner_uid))
+        .transpose()?;
+    let activity_id = resolve_task_activity(
+        client.require_uid()?,
+        session_meta.as_ref(),
+        original.activity_id.as_deref(),
+    )?;
     let owner_home = super::system_caps::verified_owner_home(owner_uid)?;
     if let Some(session_id) = original.session_id.as_deref() {
         prepare_task_session(session_id, owner_uid, &owner_home)?;
     }
     let retried = store
-        .submit_with_context_and_memory(
+        .submit_with_activity(
             original.prompt,
             original.context,
             original.branch_context,
@@ -411,6 +431,7 @@ pub fn retry(params: Value, client: &ClientIdentity) -> Result<Value, String> {
             original.use_memory,
             Some(owner_uid),
             Some(owner_home.to_string_lossy().into_owned()),
+            activity_id,
         )
         .map_err(|err| err.to_string())?;
     Ok(job_value(retried))
@@ -514,6 +535,7 @@ fn task_summary_value(job: &Value) -> Value {
         "started_at": job.get("started_at").cloned().unwrap_or(Value::Null),
         "finished_at": job.get("finished_at").cloned().unwrap_or(Value::Null),
         "session_id": job.get("session_id").cloned().unwrap_or(Value::Null),
+        "activity_id": job.get("activity_id").cloned().unwrap_or(Value::Null),
         "waiting_on": job.get("waiting_on").cloned().unwrap_or_else(|| json!([])),
         "cancel_requested": job
             .get("cancel_requested_at")
@@ -561,4 +583,12 @@ fn required_string(params: &Value, key: &str) -> Result<String, String> {
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
         .ok_or_else(|| format!("missing required string parameter: {key}"))
+}
+
+fn optional_activity_id(params: &Value) -> Result<Option<String>, String> {
+    match params.get("activity_id") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(id)) if !id.trim().is_empty() => Ok(Some(id.clone())),
+        Some(_) => Err("activity_id must be a non-empty string".to_string()),
+    }
 }

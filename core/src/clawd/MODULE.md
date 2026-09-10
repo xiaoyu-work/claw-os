@@ -12,6 +12,8 @@ and agent tasks.
 - Dispatch privileged services and app/MCP session operations.
 - Own task ownership/lease, durable approval waits, retry, and task
   lifecycle RPC.
+- Expose one owner-scoped Activity lifecycle and task/session projection for
+  terminal-only, Web, and native desktop clients.
 - Expose owner-scoped approval views used by the Agent Web control center;
   permission decisions still cross the polkit helper.
 - Expose owner-scoped notification publication, subscription, state, and
@@ -32,6 +34,7 @@ and agent tasks.
 | `authority/` | The capability authority: grants, opaque handles, attenuation, the route middleware and its audit facts |
 | `agent_client.rs` | Client RPC for agent task submit/result/cancel/status |
 | `tasks.rs` | Task queue, summary/list, cancel, retry, and session continuity |
+| `activities.rs` | Shared Activity CRUD/lifecycle, related-job views, and submission through the existing task path |
 | `usage.rs` | Peer-UID-scoped Agent token usage queries |
 | `app_sessions.rs` | App/native/MCP session authority: derives identity and capabilities, plans approvals, issues launch grants |
 | `scheduler.rs` | Proactive-scheduler authority: validates `cos cron` / `cos triggers` requests and derives what a job may carry |

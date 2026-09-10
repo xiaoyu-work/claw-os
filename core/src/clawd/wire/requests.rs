@@ -35,6 +35,102 @@ const NOTIFICATION_BODY_BYTES: usize = 16 * 1024;
 pub type NoBody = NoParams;
 
 // ---------------------------------------------------------------------------
+// Activities
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityResource {
+    pub label: Text<240>,
+    pub reference: Text<4096>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(transparent)]
+pub struct ActivityResources(Vec<ActivityResource>);
+
+impl<'de> Deserialize<'de> for ActivityResources {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let resources = Vec::<ActivityResource>::deserialize(deserializer)?;
+        if resources.len() > 32 {
+            return Err(serde::de::Error::custom(
+                "activity resource list exceeds its maximum length",
+            ));
+        }
+        Ok(Self(resources))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityCreate {
+    pub title: Text<240>,
+    pub goal: Text<16384>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_criteria: Option<Text<8192>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundaries: Option<Text<8192>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resources: Option<ActivityResources>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityList {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<crate::activities::ActivityState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityGet {
+    pub id: Token,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityUpdate {
+    pub id: Token,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<Text<240>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<Text<16384>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_criteria: Option<Text<8192>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundaries: Option<Text<8192>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resources: Option<ActivityResources>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityTransition {
+    pub id: Token,
+    pub state: crate::activities::ActivityState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_note: Option<Text<8192>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityRun {
+    pub id: Token,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<Text<PROMPT_BYTES>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<Token>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_turns: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub use_memory: Option<bool>,
+}
+
+// ---------------------------------------------------------------------------
 // Agent tasks
 // ---------------------------------------------------------------------------
 
@@ -42,6 +138,8 @@ pub type NoBody = NoParams;
 #[serde(deny_unknown_fields)]
 pub struct TaskSubmit {
     pub prompt: Text<PROMPT_BYTES>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity_id: Option<Token>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<Text<PROMPT_BYTES>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -57,6 +155,8 @@ pub struct TaskSubmit {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TaskList {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity_id: Option<Token>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<Token>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

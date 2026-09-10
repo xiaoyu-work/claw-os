@@ -15,8 +15,24 @@ pub const MAX_REQUEST_ID_BYTES: usize = 64;
 /// Routes used by unprivileged desktop consumers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Command {
+    #[serde(rename = "activity.create")]
+    ActivityCreate,
+    #[serde(rename = "activity.list")]
+    ActivityList,
+    #[serde(rename = "activity.get")]
+    ActivityGet,
+    #[serde(rename = "activity.update")]
+    ActivityUpdate,
+    #[serde(rename = "activity.transition")]
+    ActivityTransition,
+    #[serde(rename = "activity.run")]
+    ActivityRun,
     #[serde(rename = "task.submit")]
     TaskSubmit,
+    #[serde(rename = "task.get")]
+    TaskGet,
+    #[serde(rename = "task.retry")]
+    TaskRetry,
     #[serde(rename = "task.stream")]
     TaskStream,
     #[serde(rename = "task.cancel")]
@@ -36,8 +52,16 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 17] = [
+        Self::ActivityCreate,
+        Self::ActivityList,
+        Self::ActivityGet,
+        Self::ActivityUpdate,
+        Self::ActivityTransition,
+        Self::ActivityRun,
         Self::TaskSubmit,
+        Self::TaskGet,
+        Self::TaskRetry,
         Self::TaskStream,
         Self::TaskCancel,
         Self::MemorySessions,
@@ -50,7 +74,15 @@ impl Command {
 
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::ActivityCreate => "activity.create",
+            Self::ActivityList => "activity.list",
+            Self::ActivityGet => "activity.get",
+            Self::ActivityUpdate => "activity.update",
+            Self::ActivityTransition => "activity.transition",
+            Self::ActivityRun => "activity.run",
             Self::TaskSubmit => "task.submit",
+            Self::TaskGet => "task.get",
+            Self::TaskRetry => "task.retry",
             Self::TaskStream => "task.stream",
             Self::TaskCancel => "task.cancel",
             Self::MemorySessions => "memory.sessions",

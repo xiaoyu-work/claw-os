@@ -35,6 +35,7 @@ fn meta_round_trip_full() {
         role: Some(Role::Automator),
         credential_tier: Some(Role::Automator.credential_tier()),
         owner_uid: Some(1000),
+        activity_id: Some("d3fa14e6-ae1b-459a-8230-13e7d26eb211".to_string()),
         origin: Some(SessionOrigin::CronDelegation),
         parent_session: Some(SessionId::generate()),
         status: Status::Running,
@@ -76,4 +77,21 @@ fn budget_skips_none_fields_in_json() {
     assert!(json.contains("tokens"));
     assert!(!json.contains("wall_seconds"));
     assert!(!json.contains("mutations"));
+}
+
+#[test]
+fn legacy_session_metadata_has_no_activity_association() {
+    let legacy = serde_json::json!({
+        "id": SessionId::generate(),
+        "purpose": "old session",
+        "status": "pending",
+        "created_at": "2026-01-01T00:00:00Z",
+    });
+    let meta: SessionMeta = serde_json::from_value(legacy).unwrap();
+    assert!(meta.activity_id.is_none());
+    assert!(serde_json::to_value(&meta)
+        .unwrap()
+        .get("activity_id")
+        .is_none());
+    assert!(SessionMeta::fresh(SessionId::generate(), "").activity_id.is_none());
 }

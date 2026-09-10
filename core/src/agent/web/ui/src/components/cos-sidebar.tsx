@@ -21,6 +21,7 @@ import {
   ShieldCheck,
   Settings,
   Sun,
+  Target,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -60,6 +61,7 @@ const NAV_ITEMS: Array<{
   href: string;
 }> = [
   { key: "chat", label: "Chat", icon: MessageSquare, href: "/chat" },
+  { key: "activities", label: "Activities", icon: Target, href: "/activities" },
   { key: "tasks", label: "Tasks", icon: ListTodo, href: "/tasks" },
   { key: "approvals", label: "Approvals", icon: ShieldCheck, href: "/approvals" },
   { key: "inbox", label: "Inbox", icon: Inbox, href: "/inbox" },

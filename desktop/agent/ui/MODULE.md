@@ -10,6 +10,7 @@ versioned desktop Agent protocol without importing clawd or core models.
 | Module | Ownership |
 | --- | --- |
 | `src/main.rs` | Application assembly, top-level message routing, subscriptions, and startup |
+| `src/activities.rs` | Activity list/detail widgets, unsaved metadata/work forms, and generation-aware reduction of fetched responses; no lifecycle authority or persistence |
 | `src/session.rs` | Local sessions, history reconciliation, retry branches, and transcript models |
 | `src/stream_state.rs` | Generation-aware stream reduction, terminal states, cancellation, and stale-event rejection |
 | `src/bridge_state.rs` | Bridge connection, model availability, failure, and reconnect state |
@@ -24,6 +25,20 @@ State modules do not call one another through a service locator or global
 mutable state. `main.rs` composes their typed transitions and dispatches
 effects. The stream reducer is the only owner of active, terminal, cancelled,
 and stale stream-event handling.
+
+The standalone sidebar exposes Activities without changing the private
+chat/voice overlay. Activity requests go through the same owner-scoped broker
+service used by `cos activity`, via the bridge's versioned presentation DTOs.
+Activity work uses durable `activity.run`, never the cancel-on-disconnect chat
+stream. Job results cannot change goal state locally; explicit completion
+requires the user's confirmation note. Pending approvals link to associated
+sessions and remain decisions for the existing Approval Gate. Resource
+references are displayed as inert text, and boundaries grant no capabilities.
+
+The reducer keeps at most one request for the current generation. Navigation
+invalidates stale responses without cancelling backend work. Visible views
+poll every five seconds; edits, in-flight requests and visible request errors
+suspend automatic refresh. Async calls remain in `effects.rs` and `bridge.rs`.
 
 ## Dependencies
 
@@ -52,6 +67,11 @@ The install target and runtime launch target are both fixed at
 Private-access unit tests mirror production modules under `test/unit/`.
 
 ```bash
+cargo test --manifest-path desktop/agent/Cargo.toml -p cos-agent-ui activit -- --test-threads=1
 cargo test --manifest-path desktop/agent/Cargo.toml -p cos-agent-ui
 cargo clippy --manifest-path desktop/agent/Cargo.toml -p cos-agent-ui -- -D warnings
 ```
+
+The matching `../protocol/` and `../bridge/` Activity tests cover additive v1
+DTO defaults, owner-input rejection, schema translation, pending-approval
+scoping, authenticated routes and explicit broker errors.

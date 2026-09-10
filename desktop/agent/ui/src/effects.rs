@@ -4,6 +4,9 @@ use cosmic::app::Task;
 use futures::future::{AbortRegistration, Abortable};
 
 use crate::Message;
+use crate::activities::{
+    Action as ActivityAction, Request as ActivityRequest, Response as ActivityResponse,
+};
 use crate::bridge::{
     BridgeEndpoint, ChatRequest, cancel_task, ensure_bridge_endpoint, fetch_history, fetch_models,
     fetch_sessions, session_exists,
@@ -39,6 +42,50 @@ pub(crate) fn fetch_sessions_task(endpoint: BridgeEndpoint) -> Task<Message> {
                 .map_err(|error| format!("{error:#}"))
         },
         |result| cosmic::Action::App(Message::SessionsFetched(result)),
+    )
+}
+
+pub(crate) fn activity_task(endpoint: BridgeEndpoint, request: ActivityRequest) -> Task<Message> {
+    let generation = request.generation;
+    Task::perform(
+        async move {
+            use crate::bridge;
+            let result = match request.action {
+                ActivityAction::List(state) => {
+                    bridge::fetch_activities(endpoint, state).await.map(ActivityResponse::List)
+                }
+                ActivityAction::Get(id) => bridge::fetch_activity(endpoint, &id)
+                    .await
+                    .map(|detail| ActivityResponse::Detail(Box::new(detail))),
+                ActivityAction::Create(body) => bridge::create_activity(endpoint, body)
+                    .await
+                    .map(|activity| ActivityResponse::Saved(Box::new(activity))),
+                ActivityAction::Update(id, body) => bridge::update_activity(endpoint, &id, body)
+                    .await
+                    .map(|activity| ActivityResponse::Saved(Box::new(activity))),
+                ActivityAction::Transition(id, body) => {
+                    bridge::transition_activity(endpoint, &id, body)
+                        .await
+                        .map(|activity| ActivityResponse::Saved(Box::new(activity)))
+                }
+                ActivityAction::Run(id, body) => bridge::run_activity(endpoint, &id, body)
+                    .await
+                    .map(ActivityResponse::Work),
+                ActivityAction::CancelJob(id) => bridge::cancel_activity_job(endpoint, &id)
+                    .await
+                    .map(ActivityResponse::JobCancellation),
+                ActivityAction::RetryJob(id) => bridge::retry_activity_job(endpoint, &id)
+                    .await
+                    .map(ActivityResponse::Work),
+            };
+            result.map_err(|error| format!("{error:#}"))
+        },
+        move |result| {
+            cosmic::Action::App(Message::Activities(crate::activities::Message::Loaded {
+                generation,
+                result,
+            }))
+        },
     )
 }
 

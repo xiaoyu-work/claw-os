@@ -16,6 +16,7 @@ import { NotificationProvider, useNotifications } from "@/lib/notifications";
 import { navigate, useRoute } from "@/lib/router";
 
 import { ChatPage } from "@/pages/chat";
+import { ActivitiesPage } from "@/pages/activities";
 import { TasksPage } from "@/pages/tasks";
 import { ApprovalsPage } from "@/pages/approvals";
 import { EventsPage } from "@/pages/inbox";
@@ -72,6 +73,7 @@ function Header() {
 }
 
 function routeTitle(route: string): string {
+  if (route.startsWith("/activities")) return "Activities";
   if (route.startsWith("/tasks")) return "Tasks";
   if (route.startsWith("/approvals")) return "Approvals";
   if (route.startsWith("/inbox")) return "Inbox";
@@ -84,6 +86,7 @@ function routeTitle(route: string): string {
 
 function Router({ meta }: { meta: any }) {
   const route = useRoute();
+  if (route.startsWith("/activities")) return <ActivitiesPage />;
   if (route.startsWith("/tasks")) return <TasksPage />;
   if (route.startsWith("/approvals")) return <ApprovalsPage />;
   if (route.startsWith("/inbox")) return <NotificationsPage />;

@@ -1,6 +1,8 @@
 //! Anti-corruption translation from clawd's generic JSON envelopes into the
 //! stable desktop presentation protocol.
 
+pub mod activities;
+
 use cos_agent_protocol::{
     CancelResponse, DeltaPayload, DonePayload, HistoryResponse, SessionSummary, StreamEvent,
     TaskStarted, ToolResultPayload, ToolStartPayload, ToolUsePayload, ToolUseStartPayload,

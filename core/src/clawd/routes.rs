@@ -37,7 +37,7 @@ use super::wire::bounded::MAX_WAIT_MS;
 use super::wire::requests as body;
 use super::wire::{Fault, RequestId};
 use super::{
-    accessibility, app_sessions, audio, backup, bluetooth, camera, clipboard, config_editor,
+    accessibility, activities, app_sessions, audio, backup, bluetooth, camera, clipboard, config_editor,
     containers, context, context_events, crash, credentials, desktop, display, event_center,
     firewall, hardware, journal as journal_ops, location, memory, network, notifications, packages,
     permissions, power, printer, scheduler, security, snapshots, storage, system_journal, systemd,
@@ -472,6 +472,74 @@ routes! {
     }
 
     // -----------------------------------------------------------------
+    // Activities: owner-scoped work records, not authority.
+    // -----------------------------------------------------------------
+    ActivityCreate {
+        name: "activity.create",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Task),
+        body: body::ActivityCreate,
+        audit: &[("title", FieldRule::Size), ("goal", FieldRule::Size)],
+        run: |c| activities::create(c.params, c.client),
+    }
+    ActivityList {
+        name: "activity.list",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Task),
+        body: body::ActivityList,
+        audit: &[("state", FieldRule::Token), ("limit", FieldRule::Count)],
+        run: |c| activities::list(c.params, c.client),
+    }
+    ActivityGet {
+        name: "activity.get",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Task),
+        body: body::ActivityGet,
+        audit: &[("id", FieldRule::Token), ("limit", FieldRule::Count)],
+        run: |c| activities::get(c.params, c.client),
+    }
+    ActivityUpdate {
+        name: "activity.update",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Task),
+        body: body::ActivityUpdate,
+        audit: &[("id", FieldRule::Token)],
+        run: |c| activities::update(c.params, c.client),
+    }
+    ActivityTransition {
+        name: "activity.transition",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Task),
+        body: body::ActivityTransition,
+        audit: &[("id", FieldRule::Token), ("state", FieldRule::Token)],
+        run: |c| activities::transition(c.params, c.client),
+    }
+    ActivityRun {
+        name: "activity.run",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Task),
+        body: body::ActivityRun,
+        audit: &[
+            ("id", FieldRule::Token),
+            ("session_id", FieldRule::Token),
+            ("max_turns", FieldRule::Count),
+            ("prompt", FieldRule::Size),
+        ],
+        run: |c| activities::run(c.params, c.client).await,
+    }
+    // -----------------------------------------------------------------
     // Agent tasks
     // -----------------------------------------------------------------
     TaskSubmit {
@@ -483,6 +551,7 @@ routes! {
         body: body::TaskSubmit,
         audit: &[
             ("session_id", FieldRule::Token),
+            ("activity_id", FieldRule::Token),
             ("max_turns", FieldRule::Count),
             ("prompt", FieldRule::Size),
         ],
@@ -495,7 +564,7 @@ routes! {
         budget: Budget::query(),
         authority: peer(Audience::Task),
         body: body::TaskList,
-        audit: &[("status", FieldRule::Token)],
+        audit: &[("status", FieldRule::Token), ("activity_id", FieldRule::Token)],
         run: |c| tasks::list(c.params, c.client).map_err(BrokerError::from),
     }
     TaskGet {

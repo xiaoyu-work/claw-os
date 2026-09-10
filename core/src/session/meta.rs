@@ -191,6 +191,10 @@ pub struct SessionMeta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_uid: Option<u32>,
 
+    /// Optional planning association, not a source of capabilities.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity_id: Option<String>,
+
     /// Trusted issuer that minted this session's capabilities. Only a
     /// daemon-side authority writes it, and only a root-owned record
     /// may be believed. `None` means "no delegation".
@@ -230,6 +234,7 @@ impl SessionMeta {
             role: None,
             credential_tier: None,
             owner_uid: None,
+            activity_id: None,
             origin: None,
             parent_session: None,
             status: Status::Pending,

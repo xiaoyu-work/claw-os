@@ -26,6 +26,7 @@ persistence, and structured primitive dispatch.
 | `src/bin/claw-agentd.rs` | Unprivileged agent worker entry |
 | `src/clawd/server.rs` | IPC broker, identity checks, RPC dispatch, audit hook |
 | `src/agentd/` | Broker/runtime process split: privilege drop, job grants, worker supervision, consent mediation |
+| `src/activities/`, `src/clawd/activities.rs`, `src/activity.rs` | Shared Activity service/provider, owner-scoped broker, and terminal presentation; also consumed by Web/native desktop |
 | `src/agent/` | Agent CLI, runtime, tools, LLM providers, memory, and web UI |
 | `src/caps/` | Capability catalog, scopes, manifests, and enforcement |
 | `src/worker/` | Shared hostile-worker sandbox: launch policy, Linux provider, per-launch brokers |

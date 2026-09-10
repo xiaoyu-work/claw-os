@@ -1494,6 +1494,7 @@ fn dispatch_with_stdin_impl(
 
     // Built-in OS primitives
     match name.as_str() {
+        "activity" => dispatch_builtin(args, "activity", crate::activity::run),
         "sys" => dispatch_builtin(args, "sys", sysinfo::run),
         "service" => dispatch_builtin(args, "service", service::run),
         "checkpoint" => dispatch_builtin(args, "checkpoint", checkpoint::run),

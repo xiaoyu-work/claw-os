@@ -47,6 +47,7 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | Tool/capability layer | Model-visible tool registry, guardrails, MCP attachment, scope checks, and approval boundaries | `core/src/agent/tools/`, `core/src/caps/` |
 | Credential service | Validated credential identities, cryptography and master-key ownership, encrypted atomic persistence, authorization, refresh lifecycle, OAuth flows, and stable CLI facade | `core/src/credential/` |
 | Memory and sessions | SQLite/FTS memory, semantic recall, session/message persistence, curation, and checkpoints | `core/src/agent/memory/`, `core/src/session/`, `core/src/checkpoint.rs` |
+| Activities | Desktop-independent persistent user goals, explicit completion, planning metadata, and owner-scoped task/session projections | `core/src/activities/`, `core/src/clawd/activities.rs`, `core/src/activity.rs` |
 | Session event journal | Root-owned, MAC-chained record of session lifecycle and privileged mutation brackets; the ordering and recovery authority the other session/audit views project from | `core/src/session/journal/`, `core/src/clawd/journal.rs` |
 | Audit | Hash-chained JSONL events and agent audit/query commands | `core/src/audit.rs`, `core/src/agent/audit_cli.rs` |
 | Notification service | Durable owner-scoped user-attention records, delivery policy, DND, deduplication, retries, and channel leases | `core/src/notifications/`, `core/src/clawd/notifications.rs` |
@@ -251,6 +252,37 @@ a worker lease lapses, or a deadline passes.
 
 `core/src/caps/` remains the vocabulary: verbs, scopes, catalog, manifests and
 the `require` gate. It describes authority; the broker authority decides it.
+
+### Activities across terminal and desktop
+
+```text
+cos activity / Agent Web / native desktop Agent
+  -> authenticated activity.* broker route
+  -> owner-scoped ActivityService
+  -> private activities.db
+       |
+       +-- activity.run -> ordinary task.submit -> claw-agentd
+       +-- activity.get -> associated job/session projection
+```
+
+`core/src/activities/` owns the definition and SQLite provider. Neither depends
+on a graphical session or the model loop. `core/src/activity.rs` is the terminal
+client; Web and native desktop adapters expose the same broker state rather
+than maintaining local lifecycle or persistence logic. Root has no implicit
+cross-owner Activity view.
+
+An Activity is a long-lived goal; a Job is one execution attempt; a Session
+retains conversation and capability context. Associations are optional for
+backward compatibility. Associated work records a snapshot of Activity planning
+context through the existing transient-context path, not a rewritten canonical
+prompt. Activity text never grants authority. Pausing gates later work without
+undoing in-flight effects, and goal completion requires explicit user
+confirmation instead of being inferred from a successful Job or final answer.
+
+Activity mutations retain the broker's normal authorization, bounded decoding,
+audit projection and journal bracketing. Related job results are projections
+from the existing task store, not a second copy of its state. See
+[`docs/activities.md`](docs/activities.md) for commands and the initial scope.
 
 ### Agent ask/chat turn
 

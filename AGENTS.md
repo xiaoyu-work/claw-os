@@ -37,6 +37,7 @@ editing additional surfaces.
 | Task | Start here | Commonly coupled files |
 | --- | --- | --- |
 | `cos` CLI command or primitive | `core/src/main.rs`, `core/src/router.rs` | The primitive module, `core/src/clawd/`, inline Rust tests |
+| Activity goal/lifecycle or presentation | `core/src/activities/`, `core/src/clawd/activities.rs`, `docs/activities.md` | `core/src/activity.rs`, task/session associations, Agent Web, `desktop/agent/`; one shared backend for headless and desktop |
 | Agent ask/chat loop | `core/src/agent/runtime/loop_.rs`, `core/src/agent/runtime/turn.rs` | `prompt/`, `tools/`, `memory/`, `llm/` |
 | Agent worker process / broker isolation | `core/src/agentd/`, `core/src/bin/claw-agentd.rs` | `clawd/server.rs`, `agent/service.rs`, `clawd.service`, `packaging/deb/build-debs.sh` |
 | LLM provider or model setup | `core/src/agent/llm/providers/`, `core/src/agent/llm/registry.rs`, `core/src/agent/setup.rs` | `types.rs`, `accumulate.rs`, streaming and non-streaming tests |
@@ -194,6 +195,16 @@ separate from audit and context-event journals, publish only after the source
 state transition is durable, and cover deduplication, DND, retries, owner
 isolation, and acknowledgement in tests. Background delivery must not depend
 on an LLM choosing to invoke a notification tool.
+
+### New or changed Activity behavior
+
+Activities have one desktop-independent core service and owner-scoped broker
+contract. Terminal, Web and native desktop clients are presentations, never
+separate lifecycle or persistence authorities. Keep optional task/session
+associations backward compatible; an execution completing never proves that
+the Activity goal was achieved. Preserve explicit completion confirmation and
+the existing capability, approval, task-cancellation and audit boundaries.
+Update [`docs/activities.md`](docs/activities.md) with user-facing changes.
 
 ### LLM provider change
 

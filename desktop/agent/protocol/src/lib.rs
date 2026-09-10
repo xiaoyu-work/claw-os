@@ -4,10 +4,12 @@
 //! or clawd/core models. The bridge translates those lower-level models into
 //! this contract before data crosses the loopback HTTP boundary.
 
+mod activities;
 mod http;
 mod stream;
 mod version;
 
+pub use activities::*;
 pub use http::*;
 pub use stream::*;
 pub use version::*;

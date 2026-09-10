@@ -87,3 +87,28 @@ fn upgrade_restart_can_only_be_claimed_once() {
     assert!(claim_upgrade_restart(&attempted));
     assert!(!claim_upgrade_restart(&attempted));
 }
+
+#[test]
+fn activity_requests_authenticate_negotiate_and_escape_resource_identity() {
+    let endpoint = endpoint(1, 2);
+    let (request, selected) = activity_request(
+        &endpoint,
+        reqwest::Method::POST,
+        &["activities", "id/with?query#fragment", "run"],
+    ).unwrap();
+    let request = request.json(&ActivityRunRequest {
+        prompt: Some("Continue".into()),
+        session_id: Some("session-1".into()),
+        ..ActivityRunRequest::default()
+    }).build().unwrap();
+    assert_eq!(selected, ProtocolVersion(1));
+    assert_eq!(request.headers()[PROTOCOL_VERSION_HEADER], "1");
+    assert_eq!(request.headers()["authorization"], format!("Bearer {TOKEN}"));
+    assert_eq!(request.url().host_str(), Some("127.0.0.1"));
+    assert_eq!(request.url().path_segments().unwrap().count(), 4);
+    assert!(request.url().query().is_none());
+    assert!(request.url().fragment().is_none());
+    let body: ActivityRunRequest =
+        serde_json::from_slice(request.body().unwrap().as_bytes().unwrap()).unwrap();
+    assert_eq!(body.session_id.as_deref(), Some("session-1"));
+}

@@ -17,6 +17,21 @@ pub type NamespaceEntry = (&'static str, &'static str, Vec<CommandEntry>);
 pub fn builtin_namespaces() -> Vec<NamespaceEntry> {
     vec![
         (
+            "activity",
+            "Persistent user goals shared by terminal, Web, and desktop",
+            vec![
+                ("create", "Create an Activity with a goal and completion criteria"),
+                ("list", "List the authenticated owner's Activities"),
+                ("show", "Show an Activity and its related jobs, sessions, and resources"),
+                ("update", "Edit an active or paused Activity"),
+                ("run", "Submit a durable job for an active Activity"),
+                ("pause", "Pause future work without undoing in-flight effects"),
+                ("resume", "Resume or explicitly reopen an Activity"),
+                ("complete", "Confirm goal achievement with an explicit note"),
+                ("cancel", "End an Activity without claiming its goal was achieved"),
+            ],
+        ),
+        (
             "sys",
             "System information - hardware, OS, environment, resources, and live Linux telemetry",
             vec![

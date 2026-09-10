@@ -7,6 +7,10 @@
  * Routes:
  *   #/                       → chat (default)
  *   #/chat                   → chat
+ *   #/chat/:id               → existing session
+ *   #/activities             → shared Activity list
+ *   #/activities/new         → create an Activity
+ *   #/activities/:id         → Activity goal, work, and explicit state controls
  *   #/tasks                  → tasks
  *   #/approvals              → approvals
  *   #/inbox                  → notification inbox

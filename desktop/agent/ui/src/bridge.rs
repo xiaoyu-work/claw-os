@@ -10,8 +10,10 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 pub use cos_agent_protocol::{
-    BridgeEndpoint, ChatRequest, ErrorEnvelope, HistoryMessage, ModelsResponse, SessionSummary,
-    StreamEvent, ToolCallView, ToolResultView,
+    ActivityCreateRequest, ActivityDetailResponse, ActivityListQuery, ActivityListResponse,
+    ActivityRunRequest, ActivityState, ActivityTransitionRequest, ActivityUpdateRequest,
+    ActivityView, ActivityWorkResponse, BridgeEndpoint, CancelResponse, ChatRequest, ErrorEnvelope,
+    HistoryMessage, ModelsResponse, SessionSummary, StreamEvent, ToolCallView, ToolResultView,
 };
 use cos_agent_protocol::{PROTOCOL_VERSION_HEADER, ProtocolMetadata, ProtocolVersion};
 use reqwest::header::HeaderMap;
@@ -361,6 +363,116 @@ pub async fn cancel_task(endpoint: BridgeEndpoint, task_id: &str) -> Result<()> 
         return Err(response_error(response, &url).await);
     }
     Ok(())
+}
+
+fn activity_request(
+    endpoint: &BridgeEndpoint,
+    method: reqwest::Method,
+    segments: &[&str],
+) -> Result<(reqwest::RequestBuilder, ProtocolVersion)> {
+    let mut url = url::Url::parse(&bridge_url(endpoint, "/api/"))?;
+    url.path_segments_mut()
+        .map_err(|_| anyhow!("invalid bridge URL"))?
+        .pop_if_empty()
+        .extend(segments);
+    let request = reqwest::Client::builder()
+        .timeout(Duration::from_secs(40))
+        .build()
+        .context("building Activities client")?
+        .request(method, url)
+        .bearer_auth(&endpoint.token);
+    versioned_request(request, endpoint)
+}
+
+async fn activity_response<T: serde::de::DeserializeOwned>(
+    request: reqwest::RequestBuilder,
+    selected: ProtocolVersion,
+) -> Result<T> {
+    let response = request.send().await.context("requesting Activities")?;
+    validate_response_protocol(&response, selected)?;
+    if !response.status().is_success() {
+        let url = response.url().to_string();
+        return Err(response_error(response, &url).await);
+    }
+    response
+        .json()
+        .await
+        .context("decoding Activities presentation response")
+}
+
+pub async fn fetch_activities(
+    endpoint: BridgeEndpoint,
+    state: Option<ActivityState>,
+) -> Result<ActivityListResponse> {
+    let (request, selected) = activity_request(&endpoint, reqwest::Method::GET, &["activities"])?;
+    activity_response(
+        request.query(&ActivityListQuery {
+            state,
+            limit: Some(100),
+        }),
+        selected,
+    )
+    .await
+}
+
+pub async fn fetch_activity(endpoint: BridgeEndpoint, id: &str) -> Result<ActivityDetailResponse> {
+    let (request, selected) = activity_request(&endpoint, reqwest::Method::GET, &["activities", id])?;
+    activity_response(request, selected).await
+}
+
+pub async fn create_activity(
+    endpoint: BridgeEndpoint,
+    body: ActivityCreateRequest,
+) -> Result<ActivityView> {
+    let (request, selected) = activity_request(&endpoint, reqwest::Method::POST, &["activities"])?;
+    activity_response(request.json(&body), selected).await
+}
+
+pub async fn update_activity(
+    endpoint: BridgeEndpoint,
+    id: &str,
+    body: ActivityUpdateRequest,
+) -> Result<ActivityView> {
+    let (request, selected) = activity_request(&endpoint, reqwest::Method::PATCH, &["activities", id])?;
+    activity_response(request.json(&body), selected).await
+}
+
+pub async fn transition_activity(
+    endpoint: BridgeEndpoint,
+    id: &str,
+    body: ActivityTransitionRequest,
+) -> Result<ActivityView> {
+    let (request, selected) = activity_request(
+        &endpoint,
+        reqwest::Method::POST,
+        &["activities", id, "transition"],
+    )?;
+    activity_response(request.json(&body), selected).await
+}
+
+pub async fn run_activity(
+    endpoint: BridgeEndpoint,
+    id: &str,
+    body: ActivityRunRequest,
+) -> Result<ActivityWorkResponse> {
+    let (request, selected) = activity_request(
+        &endpoint,
+        reqwest::Method::POST,
+        &["activities", id, "run"],
+    )?;
+    activity_response(request.json(&body), selected).await
+}
+
+pub async fn cancel_activity_job(endpoint: BridgeEndpoint, id: &str) -> Result<CancelResponse> {
+    let (request, selected) =
+        activity_request(&endpoint, reqwest::Method::POST, &["chat", id, "cancel"])?;
+    activity_response(request, selected).await
+}
+
+pub async fn retry_activity_job(endpoint: BridgeEndpoint, id: &str) -> Result<ActivityWorkResponse> {
+    let (request, selected) =
+        activity_request(&endpoint, reqwest::Method::POST, &["tasks", id, "retry"])?;
+    activity_response(request, selected).await
 }
 
 pub fn versioned_request(

@@ -1,0 +1,449 @@
+use super::*;
+
+fn detail(id: &str, state: ActivityState) -> ActivityDetailResponse {
+    ActivityDetailResponse {
+        activity: ActivityView {
+            id: id.into(),
+            title: "Prepare a release".into(),
+            goal: "Publish a verified release".into(),
+            state,
+            completion_criteria: "Tests and review".into(),
+            boundaries: "Ask before publishing".into(),
+            resources: vec![ActivityResource {
+                label: "Notes".into(),
+                reference: "notes.txt".into(),
+            }],
+            completion_note: None,
+            created_at: "2026-09-10T12:00:00Z".into(),
+            updated_at: "2026-09-10T12:00:00Z".into(),
+        },
+        jobs: vec![ActivityJobView {
+            id: "job-1".into(),
+            status: "ok".into(),
+            title: "Release checks".into(),
+            session_id: Some("session-1".into()),
+            created_at: "2026-09-10T12:00:00Z".into(),
+            finished_at: Some("2026-09-10T12:01:00Z".into()),
+            response: Some("Checks passed".into()),
+            error: None,
+            waiting_on: vec![],
+        }],
+        sessions: vec!["session-1".into()],
+        pending_approvals: vec![],
+        approvals_error: None,
+    }
+}
+
+fn ready(state: ActivityState) -> Activities {
+    crate::localize::localize();
+    Activities {
+        visible: true,
+        selected: Some("activity-1".into()),
+        detail: Some(detail("activity-1", state)),
+        ..Activities::default()
+    }
+}
+
+fn finish(
+    state: &mut Activities,
+    request: Request,
+    response: Result<Response, String>,
+) -> Option<Request> {
+    state.update(
+        Message::Loaded {
+            generation: request.generation,
+            result: response,
+        },
+        true,
+    )
+}
+
+#[test]
+fn activity_creation_waits_for_backend_identity_and_fetches_detail() {
+    let mut state = ready(ActivityState::Active);
+    state.update(Message::New, true);
+    state.update(Message::Field(Field::Title, "New goal".into()), true);
+    state.update(Message::Field(Field::Goal, "Do the work".into()), true);
+    let request = state.update(Message::Save, true).unwrap();
+    assert!(matches!(&request.action, Action::Create(body) if body.title == "New goal"));
+    assert!(state.list.is_empty());
+    assert!(state.detail.is_none());
+    assert!(state.selected.is_none());
+
+    let fetched = detail("backend-created-id", ActivityState::Active);
+    let next = finish(
+        &mut state,
+        request,
+        Ok(Response::Saved(Box::new(fetched.activity.clone()))),
+    )
+    .unwrap();
+    assert!(matches!(&next.action, Action::Get(id) if id == "backend-created-id"));
+    assert!(state.detail.is_none());
+    finish(&mut state, next, Ok(Response::Detail(Box::new(fetched))));
+    assert_eq!(
+        state.detail.as_ref().unwrap().activity.id,
+        "backend-created-id"
+    );
+}
+
+#[test]
+fn successful_job_never_marks_the_goal_complete() {
+    let mut state = ready(ActivityState::Active);
+    let request = state.update(Message::Run, true).unwrap();
+    assert!(matches!(&request.action, Action::Run(id, _) if id == "activity-1"));
+    assert!(
+        state.update(Message::Run, true).is_none(),
+        "no duplicate admission while pending"
+    );
+    let next = finish(
+        &mut state,
+        request,
+        Ok(Response::Work(ActivityWorkResponse {
+            id: "job-2".into(),
+            status: "ok".into(),
+            session_id: Some("session-2".into()),
+            activity_id: Some("activity-1".into()),
+        })),
+    )
+    .unwrap();
+    assert!(matches!(&next.action, Action::Get(id) if id == "activity-1"));
+    assert_eq!(
+        state.detail.as_ref().unwrap().activity.state,
+        ActivityState::Active
+    );
+    finish(
+        &mut state,
+        next,
+        Ok(Response::Detail(Box::new(detail(
+            "activity-1",
+            ActivityState::Active,
+        )))),
+    );
+    assert_eq!(
+        state.detail.as_ref().unwrap().activity.state,
+        ActivityState::Active
+    );
+    assert!(
+        state
+            .detail
+            .as_ref()
+            .unwrap()
+            .activity
+            .completion_note
+            .is_none()
+    );
+}
+
+#[test]
+fn completion_requires_a_user_note_and_never_applies_optimistically() {
+    let mut state = ready(ActivityState::Active);
+    assert!(
+        state
+            .update(Message::Transition(ActivityState::Completed), true)
+            .is_none()
+    );
+    assert!(state.error.is_some());
+    state.update(
+        Message::Field(Field::CompletionNote, "I checked every result".into()),
+        true,
+    );
+    let request = state
+        .update(Message::Transition(ActivityState::Completed), true)
+        .unwrap();
+    assert!(matches!(&request.action, Action::Transition(_, body)
+        if body.state == ActivityState::Completed
+        && body.completion_note.as_deref() == Some("I checked every result")));
+    assert_eq!(
+        state.detail.as_ref().unwrap().activity.state,
+        ActivityState::Active
+    );
+    finish(&mut state, request, Err("completion refused".into()));
+    assert_eq!(
+        state.detail.as_ref().unwrap().activity.state,
+        ActivityState::Active
+    );
+    assert_eq!(state.completion_note, "I checked every result");
+    assert_eq!(state.error.as_deref(), Some("completion refused"));
+    assert!(
+        !state.should_poll(),
+        "a refresh must not erase the failure banner"
+    );
+}
+
+#[test]
+fn pause_resume_cancel_and_reopen_are_requests_not_local_transitions() {
+    for (initial, target) in [
+        (ActivityState::Active, ActivityState::Paused),
+        (ActivityState::Paused, ActivityState::Active),
+        (ActivityState::Active, ActivityState::Cancelled),
+        (ActivityState::Completed, ActivityState::Active),
+        (ActivityState::Cancelled, ActivityState::Active),
+    ] {
+        let mut state = ready(initial);
+        let request = state.update(Message::Transition(target), true).unwrap();
+        assert!(matches!(request.action, Action::Transition(_, body) if body.state == target));
+        assert_eq!(state.detail.as_ref().unwrap().activity.state, initial);
+        assert_eq!(state.detail.as_ref().unwrap().jobs[0].status, "ok");
+    }
+}
+
+#[test]
+fn leaving_the_view_discards_late_responses_without_cancelling_durable_work() {
+    let mut state = ready(ActivityState::Active);
+    let request = state.update(Message::Run, true).unwrap();
+    state.hide();
+    assert!(!state.is_visible());
+    assert!(!state.should_poll());
+    assert!(state.pending.is_none());
+    assert!(
+        finish(
+            &mut state,
+            request,
+            Ok(Response::Work(ActivityWorkResponse {
+                id: "durable-job".into(),
+                status: "running".into(),
+                activity_id: Some("activity-1".into()),
+                session_id: None,
+            }))
+        )
+        .is_none()
+    );
+    assert!(state.notice.is_none());
+    let refresh = state.update(Message::Show, true).unwrap();
+    assert!(matches!(refresh.action, Action::Get(id) if id == "activity-1"));
+}
+
+#[test]
+fn stale_results_and_errors_cannot_overwrite_new_selection() {
+    let mut state = ready(ActivityState::Active);
+    let old = state.update(Message::Refresh, true).unwrap();
+    let current = state
+        .update(Message::Open("activity-2".into()), true)
+        .unwrap();
+    finish(&mut state, old.clone(), Err("old transport failure".into()));
+    assert!(state.error.is_none());
+    assert!(state.pending.is_some());
+    finish(
+        &mut state,
+        current,
+        Ok(Response::Detail(Box::new(detail(
+            "activity-2",
+            ActivityState::Paused,
+        )))),
+    );
+    finish(
+        &mut state,
+        old,
+        Ok(Response::Detail(Box::new(detail(
+            "activity-1",
+            ActivityState::Completed,
+        )))),
+    );
+    assert_eq!(state.detail.as_ref().unwrap().activity.id, "activity-2");
+    assert_eq!(
+        state.detail.as_ref().unwrap().activity.state,
+        ActivityState::Paused
+    );
+}
+
+#[test]
+fn wrong_response_identity_and_shape_are_visible_errors() {
+    let mut state = ready(ActivityState::Active);
+    let request = state.update(Message::Refresh, true).unwrap();
+    finish(
+        &mut state,
+        request,
+        Ok(Response::Detail(Box::new(detail(
+            "other",
+            ActivityState::Completed,
+        )))),
+    );
+    assert!(state.error.is_some());
+    assert_eq!(state.detail.as_ref().unwrap().activity.id, "activity-1");
+    let request = state.update(Message::Refresh, true).unwrap();
+    finish(
+        &mut state,
+        request,
+        Ok(Response::List(ActivityListResponse::default())),
+    );
+    assert!(state.error.is_some());
+    assert_eq!(
+        state.detail.as_ref().unwrap().activity.state,
+        ActivityState::Active
+    );
+}
+
+#[test]
+fn edits_preserve_inert_resources_and_refresh_never_overwrites_forms() {
+    let mut state = ready(ActivityState::Paused);
+    state.update(Message::Edit, true);
+    state.update(Message::Field(Field::Goal, "Revised goal".into()), true);
+    state.update(
+        Message::ResourceReference(0, "javascript:never-execute-this".into()),
+        true,
+    );
+    assert!(!state.should_poll());
+    assert!(state.update(Message::Tick, true).is_none());
+    assert!(state.update(Message::Refresh, true).is_none());
+    let request = state.update(Message::Save, true).unwrap();
+    let Action::Update(id, body) = &request.action else {
+        panic!("edits must go to the shared update route");
+    };
+    assert_eq!(id, "activity-1");
+    assert_eq!(body.goal.as_deref(), Some("Revised goal"));
+    assert_eq!(
+        body.resources.as_ref().unwrap()[0].reference,
+        "javascript:never-execute-this"
+    );
+    assert_eq!(
+        state.detail.as_ref().unwrap().activity.goal,
+        "Publish a verified release"
+    );
+    finish(&mut state, request, Err("update refused".into()));
+    assert_eq!(state.form.as_ref().unwrap().goal, "Revised goal");
+    assert!(state.error.is_some());
+}
+
+#[test]
+fn continuation_uses_only_fetched_sessions_and_does_not_claim_authority() {
+    let mut state = ready(ActivityState::Active);
+    state.update(Message::UseSession(Some("unrelated".into())), true);
+    assert!(state.continue_session.is_none());
+    state.update(Message::UseSession(Some("session-1".into())), true);
+    state.update(
+        Message::Field(Field::Prompt, "Continue the checks".into()),
+        true,
+    );
+    let request = state.update(Message::Run, true).unwrap();
+    let Action::Run(_, body) = request.action else {
+        panic!("expected Activity run")
+    };
+    assert_eq!(body.session_id.as_deref(), Some("session-1"));
+    assert_eq!(body.prompt.as_deref(), Some("Continue the checks"));
+    let value = serde_json::to_value(body).unwrap();
+    assert!(value.get("owner_uid").is_none());
+    assert!(value.get("caps").is_none());
+    assert!(
+        value.get("boundaries").is_none(),
+        "planning context is assembled by the backend"
+    );
+    assert!(state.session_title("unrelated").is_none());
+}
+
+#[test]
+fn job_controls_are_separate_from_the_activity_lifecycle() {
+    let mut state = ready(ActivityState::Cancelled);
+    assert!(
+        state
+            .update(Message::CancelJob("unknown".into()), true)
+            .is_none()
+    );
+    let request = state
+        .update(Message::CancelJob("job-1".into()), true)
+        .unwrap();
+    assert!(matches!(&request.action, Action::CancelJob(id) if id == "job-1"));
+    let next = finish(
+        &mut state,
+        request,
+        Ok(Response::JobCancellation(CancelResponse {
+            id: "job-1".into(),
+            status: "running".into(),
+            cancelled: false,
+            cancel_requested: true,
+            reason: None,
+        })),
+    )
+    .unwrap();
+    assert!(matches!(next.action, Action::Get(_)));
+    assert_eq!(
+        state.detail.as_ref().unwrap().activity.state,
+        ActivityState::Cancelled
+    );
+    assert_eq!(state.detail.as_ref().unwrap().jobs[0].status, "ok");
+}
+
+#[test]
+fn disconnected_work_is_an_error_without_fake_admission() {
+    let mut state = ready(ActivityState::Active);
+    assert!(state.update(Message::Run, false).is_none());
+    assert!(state.error.is_some());
+    assert!(state.pending.is_none());
+    assert!(state.notice.is_none());
+    assert_eq!(state.detail.as_ref().unwrap().jobs.len(), 1);
+}
+
+#[test]
+fn refresh_does_not_swallow_work_or_completion_drafts() {
+    let mut state = ready(ActivityState::Active);
+    let request = state.update(Message::Refresh, true).unwrap();
+    state.update(Message::Field(Field::Prompt, "Next step".into()), true);
+    state.update(
+        Message::Field(Field::CompletionNote, "Verified the result".into()),
+        true,
+    );
+    finish(
+        &mut state,
+        request,
+        Ok(Response::Detail(Box::new(detail(
+            "activity-1",
+            ActivityState::Active,
+        )))),
+    );
+    assert_eq!(state.prompt, "Next step");
+    assert_eq!(state.completion_note, "Verified the result");
+    assert!(!state.should_poll());
+    let request = state.update(Message::Run, true).unwrap();
+    state.update(Message::Field(Field::Prompt, "Different step".into()), true);
+    assert_eq!(
+        state.prompt, "Next step",
+        "mutating requests retain their form snapshot"
+    );
+    finish(&mut state, request, Err("submission refused".into()));
+    assert_eq!(state.prompt, "Next step");
+}
+
+#[test]
+fn switching_to_chat_preserves_unsent_forms_but_does_not_replay_pending_saves() {
+    let mut state = ready(ActivityState::Active);
+    state.update(Message::Edit, true);
+    state.update(Message::Field(Field::Goal, "Unsaved goal".into()), true);
+    state.hide();
+    assert!(state.update(Message::Show, true).is_none());
+    assert_eq!(state.form.as_ref().unwrap().goal, "Unsaved goal");
+
+    let request = state.update(Message::Save, true).unwrap();
+    state.hide();
+    assert!(state.form.is_none());
+    finish(
+        &mut state,
+        request,
+        Ok(Response::Saved(Box::new(
+            detail("activity-1", ActivityState::Active).activity,
+        ))),
+    );
+    assert!(matches!(
+        state.update(Message::Show, true).unwrap().action,
+        Action::Get(_)
+    ));
+}
+
+#[test]
+fn native_views_build_for_list_forms_and_all_backend_states() {
+    for activity_state in [
+        ActivityState::Active,
+        ActivityState::Paused,
+        ActivityState::Completed,
+        ActivityState::Cancelled,
+    ] {
+        let mut state = ready(activity_state);
+        let _ = state.view(true);
+        if editable(activity_state) {
+            state.update(Message::Edit, true);
+            let _ = state.view(true);
+        }
+        state.clear_detail();
+        let _ = state.view(false);
+        state.update(Message::New, true);
+        let _ = state.view(true);
+    }
+}

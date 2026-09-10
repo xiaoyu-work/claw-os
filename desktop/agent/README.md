@@ -21,12 +21,14 @@ desktop/agent/
 │       ├── notifications.rs # clawd delivery lease → session D-Bus popup
 │       └── routes/
 │           ├── chat.rs     # POST /api/chat   (SSE stream)
+│           ├── activities.rs # shared Activity service + durable work admission
 │           ├── sessions.rs # GET/DELETE /api/sessions[/:id]
 │           ├── models.rs   # GET /api/models
 │           └── voice.rs    # POST /api/voice/upload → configured STT provider
 └── ui/                     # cos-agent-ui — native libcosmic chat
     ├── src/
     │   ├── main.rs         #   Application assembly, routing, subscription
+    │   ├── activities.rs   #   Fetched Activity views, forms and request generations
     │   ├── session.rs      #   Session/history domain and reconciliation
     │   ├── stream_state.rs #   Generation-aware stream/cancel reducer
     │   ├── bridge_state.rs #   Connection/model lifecycle state
@@ -73,8 +75,10 @@ of the user's session bus.
 
 The bridge and approval applet share `crates/clawd-client` for canonical
 `CLAWD_SOCKET` discovery (`COS_CLAWD_SOCKET` remains a compatibility alias),
-v1 request IDs/envelopes, `CBK1` length-prefixed framing, deadlines, bounds,
-and typed transport/protocol errors.
+v2 broker envelopes and request correlation, `CBK1` length-prefixed framing,
+deadlines, bounds, and typed transport/protocol errors. This broker wire
+version is independent of the desktop HTTP/SSE presentation protocol v1.
+The additive Activity routes leave both versions unchanged.
 
 The UI and bridge both compile against `protocol/` (`cos-agent-protocol`).
 That crate exclusively owns the desktop presentation contract: endpoint DTOs,
@@ -87,7 +91,8 @@ emits only protocol types. The UI does not deserialize clawd or core models.
 Within the UI, lifecycle state is split by invariant owner. `main.rs` routes
 typed messages among session, stream, bridge, voice, and overlay state;
 `effects.rs` performs transport work; and `views.rs` only reads state and emits
-messages. Stream generations and cancellation remain centralized in
+messages. The Activities reducer and its read-only widgets live together in
+`activities.rs`. Stream generations and cancellation remain centralized in
 `stream_state.rs`, so stale events cannot mutate a newer request.
 
 Tool input is the protocol's only intentionally open JSON field. Tool schemas
@@ -128,6 +133,34 @@ The UI install and desktop package recipes target
 `/usr/local/bin/cos-agent-ui` and install the
 cross-language SDK entry point at `/usr/local/bin/cos-ask-claw-launcher`;
 private context launches accept no executable override or `PATH` lookup.
+
+## Activities
+
+The standalone Agent window has an **Activities** entry above Sessions. It
+lists the same owner-scoped goals as `cos activity` and the Agent Web client;
+there is no desktop Activity database or separate lifecycle implementation.
+The compact private overlay remains chat/voice-only.
+
+Create or edit a title, goal, completion criteria, boundaries and resource
+references; inspect associated jobs, their bounded result previews, sessions,
+and pending approvals. References are inert text. Boundaries are planning data,
+not capability grants. Permission decisions remain in the existing desktop
+Approval Gate; session links open the existing conversation view.
+
+Pause/resume, cancel/reopen and completion are explicit broker requests.
+Completion requires a nonempty user confirmation; neither a successful job
+nor an answer completes a goal. Pausing or cancelling a goal does not undo or
+cancel its in-flight jobs; their separate Stop/Retry controls use the task API.
+
+**Start / continue work** calls `activity.run`, not the chat SSE endpoint.
+Once admitted, the job survives closing the view or window. A session can be
+selected for continuation, or work can start in a new session. The UI only
+holds fetched DTOs, unsaved forms and request state. It refreshes while visible
+(every five seconds), suspends polling during edits or pending requests, and
+ignores stale-generation responses. Failures are visible and do not synthesize
+success; approval-queue failures are reported separately from the goal detail.
+Reconnect re-discovers the authenticated bridge without replaying a mutation.
+See the shared [Activity contract](../../docs/activities.md).
 
 ## Endpoint discovery
 
@@ -174,6 +207,13 @@ the prior non-disruptive `start` behavior.
 | `GET /api/health` | Plain-text `ok`; version is negotiated in headers |
 | `POST /api/chat` | `ChatRequest`; typed SSE events below |
 | `POST /api/chat/:task_id/cancel` | `CancelResponse` / `ErrorEnvelope` |
+| `GET /api/activities?state=…&limit=…` | `ActivityListQuery` → `ActivityListResponse`; `activity.list` |
+| `POST /api/activities` | `ActivityCreateRequest` → `ActivityView`; `activity.create` |
+| `GET /api/activities/:id` | `ActivityDetailResponse`; `activity.get` plus associated `permission.pending` projections |
+| `PATCH /api/activities/:id` | `ActivityUpdateRequest` → `ActivityView`; `activity.update` |
+| `POST /api/activities/:id/transition` | `ActivityTransitionRequest` → `ActivityView`; `activity.transition` |
+| `POST /api/activities/:id/run` | `ActivityRunRequest` → `ActivityWorkResponse`; durable `activity.run` |
+| `POST /api/tasks/:task_id/retry` | `ActivityWorkResponse`; `task.retry` |
 | `GET /api/sessions` | `Vec<SessionSummary>` / `ErrorEnvelope` |
 | `GET /api/sessions/:id` | `SessionSummary` / `ErrorEnvelope` |
 | `DELETE /api/sessions/:id` | `ErrorEnvelope` (not implemented) |
@@ -187,6 +227,13 @@ The chat stream covers `task`, `delta` (`text` remains a decode alias),
 `tool_input_delta` compatibility event, while the bridge continues suppressing
 live tool arguments. Unknown future event names are ignored by v1 clients;
 malformed known events fail decoding.
+
+Activity endpoints use the same bearer authentication, v1 negotiation, and
+typed error envelopes as chat. Request DTOs accept no owner or capability
+fields: clawd derives ownership from the bridge's kernel identity. The
+translation module validates the broker's Activity schema and removes owner
+internals and private job fields before emitting presentation DTOs. Additive
+job/session/approval fields have defaults within presentation protocol v1.
 
 ## License
 

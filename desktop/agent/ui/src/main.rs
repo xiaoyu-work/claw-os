@@ -19,6 +19,7 @@ use futures::future::AbortHandle;
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
+mod activities;
 mod bridge;
 mod bridge_state;
 mod effects;
@@ -66,6 +67,8 @@ impl CosmicFlags for Flags {
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    Activities(activities::Message),
+    OpenActivitySession(String),
     EditorAction(text_editor::Action),
     SetPrompt(String),
     Submit,
@@ -116,6 +119,7 @@ pub struct App {
     flags: Flags,
     overlay: OverlayState,
     bridge: BridgeState,
+    activities: activities::Activities,
     sessions: SessionState,
     stream: StreamState,
     input: text_editor::Content,
@@ -149,6 +153,7 @@ impl Application for App {
             flags: flags.clone(),
             overlay: OverlayState::new(flags.overlay, flags.context.clone(), flags.query.is_some()),
             bridge: BridgeState::connecting(),
+            activities: activities::Activities::default(),
             sessions: SessionState::default(),
             stream: StreamState::default(),
             input: text_editor::Content::with_text(flags.query.as_deref().unwrap_or_default()),
@@ -190,6 +195,8 @@ impl Application for App {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::Activities(message) => self.update_activities(message),
+            Message::OpenActivitySession(id) => self.open_activity_session(id),
             Message::EditorAction(action) => {
                 if !self.voice.is_active() {
                     self.input.perform(action);
@@ -375,6 +382,7 @@ impl Application for App {
                 if !self.sessions.select(index) {
                     return Task::none();
                 }
+                self.activities.hide();
                 self.error = None;
                 Task::batch([self.maybe_fetch_history(index), scroll_to_bottom()])
             }
@@ -382,6 +390,7 @@ impl Application for App {
                 if self.stream.is_active() {
                     return Task::none();
                 }
+                self.activities.hide();
                 self.sessions.new_session();
                 self.input = text_editor::Content::new();
                 self.error = None;
@@ -451,6 +460,9 @@ impl Application for App {
                 let mut tasks = vec![effects::fetch_models_task(endpoint.clone())];
                 if !self.flags.overlay {
                     tasks.push(effects::fetch_sessions_task(endpoint));
+                    if self.activities.is_visible() {
+                        tasks.push(self.update_activities(activities::Message::Refresh));
+                    }
                 }
                 if self
                     .active_session()
@@ -531,6 +543,15 @@ impl Application for App {
                 cosmic::iced::time::every(Duration::from_millis(100)).map(|_| Message::VoiceTick),
             );
         }
+        if !self.flags.overlay
+            && self.bridge.endpoint().is_some()
+            && self.activities.should_poll()
+        {
+            subscriptions.push(
+                cosmic::iced::time::every(Duration::from_secs(5))
+                    .map(|_| Message::Activities(activities::Message::Tick)),
+            );
+        }
         if self.bridge.endpoint().is_none() && !self.bridge.is_connecting() {
             subscriptions.push(
                 cosmic::iced::time::every(Duration::from_secs(3)).map(|_| Message::BridgeTick),
@@ -552,6 +573,51 @@ impl Application for App {
 }
 
 impl App {
+    fn update_activities(&mut self, message: activities::Message) -> Task<Message> {
+        if self.flags.overlay
+            || (matches!(message, activities::Message::Show)
+                && (self.stream.is_active() || self.voice.is_active()))
+        {
+            return Task::none();
+        }
+        let endpoint = self.bridge.endpoint().cloned();
+        match (self.activities.update(message, endpoint.is_some()), endpoint) {
+            (Some(request), Some(endpoint)) => effects::activity_task(endpoint, request),
+            _ => Task::none(),
+        }
+    }
+
+    fn open_activity_session(&mut self, id: String) -> Task<Message> {
+        if self.flags.overlay {
+            return Task::none();
+        }
+        let Some(title) = self.activities.session_title(&id) else {
+            return Task::none();
+        };
+        self.sessions.merge_remote(vec![SessionSummary {
+            id: id.clone(),
+            title,
+            last_ts_ms: None,
+            message_count: 0,
+        }]);
+        let index = self
+            .sessions
+            .iter()
+            .position(|session| session.remote_id.as_deref() == Some(&id));
+        let Some(index) = index else {
+            return Task::none();
+        };
+        if (!self.stream.is_active() || self.stream.session_index() != Some(index))
+            && let Some(session) = self.sessions.get_mut(index)
+        {
+            session.history = HistoryState::NotLoaded;
+        }
+        self.sessions.select(index);
+        self.activities.hide();
+        self.error = None;
+        Task::batch([self.maybe_fetch_history(index), scroll_to_bottom()])
+    }
+
     fn active_session(&self) -> Option<&LocalSession> {
         self.sessions.active()
     }

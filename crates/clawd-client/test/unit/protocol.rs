@@ -3,6 +3,28 @@ use crate::{ErrorCode, RemoteError};
 use serde_json::json;
 
 #[test]
+fn activity_commands_have_stable_names_and_round_trip() {
+    for (command, name) in [
+        (Command::ActivityCreate, "activity.create"),
+        (Command::ActivityList, "activity.list"),
+        (Command::ActivityGet, "activity.get"),
+        (Command::ActivityUpdate, "activity.update"),
+        (Command::ActivityTransition, "activity.transition"),
+        (Command::ActivityRun, "activity.run"),
+        (Command::TaskGet, "task.get"),
+        (Command::TaskRetry, "task.retry"),
+    ] {
+        assert_eq!(command.as_str(), name);
+        assert!(Command::ALL.contains(&command));
+        assert_eq!(serde_json::to_value(command).unwrap(), json!(name));
+        assert_eq!(
+            serde_json::from_value::<Command>(json!(name)).unwrap(),
+            command
+        );
+    }
+}
+
+#[test]
 fn requests_are_closed_typed_envelopes_with_fresh_bounded_ids() {
     let first = Request::new(Command::TaskSubmit, json!({"prompt": "hello"}));
     let second = Request::new(Command::TaskSubmit, json!({"prompt": "hello"}));

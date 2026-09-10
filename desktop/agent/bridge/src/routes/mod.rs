@@ -13,6 +13,7 @@ use axum::{
 
 use crate::state::AppState;
 
+mod activities;
 mod chat;
 mod models;
 mod sessions;
@@ -27,6 +28,11 @@ pub fn api() -> Router<AppState> {
         .route("/health", get(|| async { "ok" }))
         .route("/chat", post(chat::stream_chat))
         .route("/chat/:task_id/cancel", post(chat::cancel_chat))
+        .route("/activities", get(activities::list).post(activities::create))
+        .route("/activities/:id", get(activities::get).patch(activities::update))
+        .route("/activities/:id/transition", post(activities::transition))
+        .route("/activities/:id/run", post(activities::run))
+        .route("/tasks/:task_id/retry", post(activities::retry_job))
         .route("/sessions", get(sessions::list))
         .route(
             "/sessions/:id",

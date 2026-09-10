@@ -260,3 +260,102 @@ async fn bytes_written_before_the_daemon_accepts_still_carry_credentials() {
     assert_eq!(frame.credentials.uid, unsafe { libc::getuid() });
     sender.join().expect("sender thread");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn terminal_and_desktop_activity_clients_share_the_same_persistent_backend() {
+    use cos::clawd::client_identity::ClientIdentity;
+    use cos::clawd::routes::RouteCall;
+    use cos::clawd::state::DaemonState;
+
+    struct EnvGuard(&'static str, Option<std::ffi::OsString>);
+    impl EnvGuard {
+        fn set(name: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let previous = std::env::var_os(name);
+            std::env::set_var(name, value);
+            Self(name, previous)
+        }
+    }
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match self.1.take() {
+                Some(previous) => std::env::set_var(self.0, previous),
+                None => std::env::remove_var(self.0),
+            }
+        }
+    }
+
+    let bound = bind();
+    let data = tempfile::tempdir().unwrap();
+    let _data = EnvGuard::set("COS_DATA_DIR", data.path());
+    let _socket = EnvGuard::set("CLAWD_SOCKET", &bound.path);
+    let desktop = clawd_client::Client::new(bound.path.clone());
+    let state = DaemonState::new().unwrap();
+    let server = tokio::spawn(async move {
+        for _ in 0..4 {
+            let (stream, _) = bound.listener.accept().await.unwrap();
+            let mut stream = PeerStream::new(stream).unwrap();
+            let ReadOutcome::Frame(frame) = stream.read_request(MAX_REQUEST_BYTES).await.unwrap()
+            else {
+                panic!("expected broker frame");
+            };
+            let peer = ClientIdentity::from_peer(peer::verify(frame.credentials).unwrap());
+            let request: InboundRequest = serde_json::from_slice(&frame.body).unwrap();
+            let route = Command::parse(request.command.as_str()).unwrap().route();
+            assert!(route.name.starts_with("activity."));
+            route.authorize(&peer).unwrap();
+            let params = (route.decode)(request.params).unwrap();
+            let result = (route.handler)(RouteCall {
+                state: &state,
+                client: &peer,
+                params,
+                authority: None,
+            })
+            .await;
+            let response = match result {
+                Ok(value) => Response::ok(request.id, value),
+                Err(error) => route.errors.response(request.id, error),
+            };
+            stream
+                .write_response(&encode_response(&response).unwrap())
+                .await
+                .unwrap();
+        }
+        // Keep the temporary socket directory alive for every request.
+        drop(bound._dir);
+    });
+
+    let created = tokio::task::spawn_blocking(|| {
+        cos::activity::run(
+            "create",
+            &[
+                "Release v2".to_string(),
+                "--goal".to_string(),
+                "Publish on Friday".to_string(),
+            ],
+        )
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    let id = created["id"].as_str().unwrap().to_string();
+    let listed = desktop
+        .call(clawd_client::Command::ActivityList, json!({}))
+        .await
+        .unwrap();
+    assert_eq!(listed["activities"], json!([created]));
+    let paused = desktop
+        .call(
+            clawd_client::Command::ActivityTransition,
+            json!({"id": id, "state": "paused"}),
+        )
+        .await
+        .unwrap();
+    let shown = tokio::task::spawn_blocking(move || cos::activity::run("show", &[id]))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(shown["activity"], paused);
+    assert_eq!(shown["activity"]["state"], "paused");
+    assert_eq!(shown["activity"]["owner_uid"], unsafe { libc::getuid() });
+    server.await.unwrap();
+}

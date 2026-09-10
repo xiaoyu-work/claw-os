@@ -2,6 +2,50 @@ use super::*;
 use serde_json::json;
 
 #[test]
+fn activity_requests_are_closed_bounded_and_never_choose_an_owner() {
+    let create = json!({
+        "title": "Release v2",
+        "goal": "Publish on Friday",
+        "resources": [{"label": "Draft", "reference": "/home/user/release.md"}],
+    });
+    assert!(serde_json::from_value::<ActivityCreate>(create.clone()).is_ok());
+    let mut forged = create.clone();
+    forged["owner_uid"] = json!(0);
+    assert!(serde_json::from_value::<ActivityCreate>(forged).is_err());
+    let mut oversized = create.clone();
+    oversized["goal"] = json!("x".repeat(16385));
+    assert!(serde_json::from_value::<ActivityCreate>(oversized).is_err());
+    let mut flood = create.clone();
+    flood["resources"] = json!(vec![json!({"label": "x", "reference": "x"}); 33]);
+    assert!(serde_json::from_value::<ActivityCreate>(flood).is_err());
+    let mut hidden_authority = create;
+    hidden_authority["resources"][0]["capabilities"] = json!(["fs.write:*"]);
+    assert!(serde_json::from_value::<ActivityCreate>(hidden_authority).is_err());
+    assert!(serde_json::from_value::<ActivityTransition>(
+        json!({"id": "activity-1", "state": "automatically_verified"}),
+    )
+    .is_err());
+    assert!(serde_json::from_value::<ActivityRun>(
+        json!({"id": "activity-1", "grant": "unexpected"}),
+    )
+    .is_err());
+}
+
+#[test]
+fn activity_linkage_is_additive_to_legacy_task_requests() {
+    let legacy: TaskSubmit = serde_json::from_value(json!({"prompt": "hello"})).unwrap();
+    assert!(legacy.activity_id.is_none());
+    assert!(serde_json::to_value(legacy).unwrap().get("activity_id").is_none());
+    let linked: TaskSubmit = serde_json::from_value(json!({
+        "prompt": "prepare the release",
+        "activity_id": "00000000-0000-4000-8000-000000000001",
+    }))
+    .unwrap();
+    assert!(linked.activity_id.is_some());
+    assert!(serde_json::from_value::<TaskList>(json!({"activity_id": "../foreign"})).is_err());
+}
+
+#[test]
 fn a_task_submission_is_closed_and_bounded() {
     let ok = json!({
         "prompt": "summarise the journal",

@@ -9,6 +9,8 @@
     clippy::type_complexity
 )]
 
+pub mod activities;
+pub mod activity;
 pub mod agent;
 pub mod agentd;
 pub mod ai;

@@ -29,6 +29,17 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/auth/token", post(routes::auth::token))
         .route("/api/meta", get(routes::meta::handler))
         .route("/api/chat", post(routes::chat::handler))
+        .route(
+            "/api/activities",
+            get(routes::activities::list).post(routes::activities::create),
+        )
+        .route("/api/activities/{id}", get(routes::activities::get))
+        .route("/api/activities/{id}/update", post(routes::activities::update))
+        .route(
+            "/api/activities/{id}/transition",
+            post(routes::activities::transition),
+        )
+        .route("/api/activities/{id}/run", post(routes::activities::run))
         .route("/api/sessions", get(routes::sessions::list))
         .route("/api/sessions/{id}", get(routes::sessions::detail))
         .route("/api/sessions/{id}/history", get(routes::sessions::history))
