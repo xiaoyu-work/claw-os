@@ -158,6 +158,9 @@ selections are separate actions delegated to the existing approval authority;
 App-policy restoration remains a non-execution receipt.
 The core and shared clients require a root Unix peer for this route family,
 so selecting a user-owned socket cannot forge an approved response.
+The core client also requires UID 0 on the actual `app_session.register`
+connection, including a Host's Root-owned private broker. Registration
+refusals preserve their structured review details for the existing controller.
 
 `system.review.pending` merges the owner's App reviews and existing capability
 requests. Every route returns the shared `clawd-client::system_review` DTO.

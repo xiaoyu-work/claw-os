@@ -10,6 +10,10 @@ use crate::caps::{Cap, CapSet, Scope, Verb};
 use crate::clawd::routes::Command as ClawdCommand;
 use crate::proc::{deregister_session, register_session, SessionInfo};
 
+mod local;
+
+use local::use_clawd_backend as use_clawd_app_session_backend;
+
 pub(crate) fn app_runner_path() -> std::path::PathBuf {
     if let Some(path) = std::env::var_os("CLAW_APP_RUNNER_BIN") {
         return path.into();
@@ -527,7 +531,6 @@ impl AppIdentitySession {
             .transpose()
             .map_err(|error| format!("resolve `{operation}` capabilities: {error}"))?;
         let local_ceiling = ceiling.clone();
-        let package = launch.package_ref();
         let session = Self::start(
             app_id,
             LaunchRequest::Operation {
@@ -535,7 +538,7 @@ impl AppIdentitySession {
                 args: &effective_args,
             },
             Some(ceiling),
-            package,
+            launch,
             |parent_caps| match declared {
                 Some(declared) => {
                     let caps = constrained_operation_caps(
@@ -557,12 +560,11 @@ impl AppIdentitySession {
         let ceiling = launch.ceiling();
         let local_ceiling = ceiling.clone();
         let manifest = launch.manifest().clone();
-        let package = launch.package_ref();
         Self::start(
             app_id,
             LaunchRequest::Gui { exec },
             Some(ceiling),
-            package,
+            launch,
             move |parent_caps| {
                 let needs = manifest
                     .operations
@@ -582,7 +584,7 @@ impl AppIdentitySession {
             launch.app_id(),
             LaunchRequest::Mcp { tool },
             Some(launch.ceiling()),
-            launch.package_ref(),
+            launch,
             |_| Ok(CapSet::new()),
         )
     }
@@ -593,18 +595,25 @@ impl AppIdentitySession {
     /// authority: when the daemon mints the session it re-derives the
     /// launcher's identity and the App's capabilities itself, and only
     /// ever uses the reported parent capabilities to narrow the result.
-    /// `local_caps` is therefore consulted solely for the in-process
-    /// backend, which already runs as trusted code.
+    /// Local registration consults `local_caps` after protected owner
+    /// review; a broker registration always adopts the daemon's grants.
     fn start<F>(
         app_id: &str,
         request: LaunchRequest<'_>,
         ceiling: Option<crate::provenance::Ceiling>,
-        package: crate::provenance::runtime::PackageRef,
+        launch: &AppLaunch,
         local_caps: F,
     ) -> Result<Self, String>
     where
         F: FnOnce(&CapSet) -> Result<CapSet, String>,
     {
+        if app_id != launch.app_id() {
+            return Err(format!(
+                "requested App identity `{app_id}` does not match verified App `{}`",
+                launch.app_id()
+            ));
+        }
+        let clawd_backend = use_clawd_app_session_backend()?;
         let (parent, parent_caps) = Self::parent_identity()?;
         if parent.app_id.is_some() {
             return Err(
@@ -618,29 +627,23 @@ impl AppIdentitySession {
             return Err(format!("parent session cannot invoke `{}`", invoke.scope));
         }
 
-        // Derived on both paths: the daemon mints the session, and the
-        // launcher still needs the same set to build the sandbox that
-        // session will run inside.
-        let caps = local_caps(&parent_caps)?;
-
-        if use_clawd_app_session_backend() {
+        if clawd_backend {
+            let caps = local_caps(&parent_caps)?;
             return Self::register_with_clawd(
                 app_id,
                 &request,
                 parent_caps,
                 caps,
                 ceiling.as_ref(),
-                &package,
+                &launch.package_ref(),
             );
         }
         Self::register_local(
             &parent,
-            app_id,
-            &request.command(app_id),
-            request.session_group(),
-            caps,
+            launch,
+            &request,
             parent_caps,
-            package,
+            local_caps,
         )
     }
 
@@ -676,7 +679,7 @@ impl AppIdentitySession {
             }
         }
 
-        // A launch that needs consent is answered with the ids of the
+        // A launch that needs capability consent is answered with the ids of the
         // requests the daemon filed. This process stays alive and waits,
         // then retries over the same connection identity, so the user
         // never has to rerun anything and no secret has to travel.
@@ -685,7 +688,7 @@ impl AppIdentitySession {
             Err(error) => {
                 let ids = approval_requests(&error);
                 if ids.is_empty() {
-                    return Err(error.message);
+                    return Err(error.into());
                 }
                 wait_for_approvals(&ids)?;
                 clawd_request(ClawdCommand::AppSessionRegister, params).map_err(String::from)?
@@ -749,26 +752,29 @@ impl AppIdentitySession {
         })
     }
 
-    fn register_local(
+    fn register_local<F>(
         parent: &SessionInfo,
-        app_id: &str,
-        command: &str,
-        group: &str,
-        caps: CapSet,
+        launch: &AppLaunch,
+        request: &LaunchRequest<'_>,
         parent_caps: CapSet,
-        package: crate::provenance::runtime::PackageRef,
-    ) -> Result<Self, String> {
+        local_caps: F,
+    ) -> Result<Self, String>
+    where
+        F: FnOnce(&CapSet) -> Result<CapSet, String>,
+    {
+        let caps = local::authorize(launch, parent, &parent_caps, local_caps)?;
+        let app_id = launch.app_id();
         let session_id = format!("app-{}", uuid::Uuid::new_v4().simple());
         let info = SessionInfo {
             session_id: session_id.clone(),
             // Bound to the actual child immediately after spawn. App sessions
             // with pid=0 are denied by caps enforcement during this window.
             pid: 0,
-            command: vec![command.to_string()],
+            command: vec![request.command(app_id)],
             started_at: chrono::Utc::now().to_rfc3339(),
             stdout_path: String::new(),
             stderr_path: String::new(),
-            group: Some(group.to_string()),
+            group: Some(request.session_group().to_string()),
             parent: Some(parent.session_id.clone()),
             workdir: std::env::current_dir()
                 .ok()
@@ -799,7 +805,7 @@ impl AppIdentitySession {
                 proc_data_dir: crate::paths::proc_data_dir(),
             },
             parent_caps: Some(parent_caps),
-            package,
+            package: launch.package_ref(),
             granted_caps: caps,
             relay: crate::worker::relay_slot(),
         })
@@ -1191,36 +1197,39 @@ fn set_app_session_transient_call(
     }
 }
 
-fn use_clawd_app_session_backend() -> bool {
-    #[cfg(test)]
-    if std::env::var_os("COS_TEST_LOCAL_APP_SESSIONS").is_some() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        crate::paths::current_owner_uid_override().is_none() && unsafe { libc::geteuid() } != 0
-    }
-    #[cfg(not(unix))]
-    {
-        false
-    }
-}
-
 /// A failed broker call plus whatever structured payload the daemon
 /// attached for this caller only.
 struct ClawdCallError {
+    code: Option<String>,
     message: String,
     data: Option<serde_json::Value>,
 }
 
+impl From<crate::clawd::protocol::BrokerError> for ClawdCallError {
+    fn from(error: crate::clawd::protocol::BrokerError) -> Self {
+        Self {
+            code: Some(error.kind.code().to_string()),
+            message: error.message,
+            data: error.data,
+        }
+    }
+}
+
 impl From<ClawdCallError> for String {
     fn from(error: ClawdCallError) -> String {
-        error.message
+        error.to_string()
     }
 }
 
 impl std::fmt::Display for ClawdCallError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let (Some(code), Some(data)) = (&self.code, &self.data) {
+            return write!(
+                f,
+                "{}",
+                crate::errors::error_with_details(code, &self.message, data.clone())
+            );
+        }
         f.write_str(&self.message)
     }
 }
@@ -1234,17 +1243,18 @@ fn clawd_request(
         crate::clawd::protocol::Request::build(command, params),
     )
     .map_err(|error| ClawdCallError {
+        code: None,
         message: error.to_string(),
         data: None,
     })?;
     if response.ok {
         Ok(response.result.unwrap_or(serde_json::Value::Null))
     } else {
-        let (message, data) = match response.error {
-            Some(error) => (error.message, error.data),
-            None => (format!("clawd {command} failed"), None),
+        let (code, message, data) = match response.error {
+            Some(error) => (Some(error.code), error.message, error.data),
+            None => (None, format!("clawd {command} failed"), None),
         };
-        Err(ClawdCallError { message, data })
+        Err(ClawdCallError { code, message, data })
     }
 }
 
@@ -1268,6 +1278,9 @@ pub(crate) fn cancel_pending_approval_wait() {
 /// reported any. Ids are not authority — they only say which decisions
 /// this launcher needs.
 fn approval_requests(error: &ClawdCallError) -> Vec<String> {
+    if error.code.as_deref() != Some("not_authorized") {
+        return Vec::new();
+    }
     error
         .data
         .as_ref()

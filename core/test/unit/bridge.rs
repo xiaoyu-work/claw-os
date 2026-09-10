@@ -396,6 +396,7 @@ fn operation_defaults_and_explicit_args_bind_the_same_argv_and_narrow_caps() {
 #[test]
 fn approval_request_ids_are_read_only_from_a_typed_approval_denial() {
     let denial = ClawdCallError {
+        code: Some("not_authorized".into()),
         message: "launcher cannot delegate sys.identity:name:accounts; awaiting approval".into(),
         data: Some(serde_json::json!({
             "status": "approval_required",
@@ -403,6 +404,13 @@ fn approval_request_ids_are_read_only_from_a_typed_approval_denial() {
         })),
     };
     assert_eq!(approval_requests(&denial), vec!["ap-1", "ap-2"]);
+
+    let wrong_code = ClawdCallError {
+        code: Some("internal_error".into()),
+        message: denial.message.clone(),
+        data: denial.data.clone(),
+    };
+    assert!(approval_requests(&wrong_code).is_empty());
 
     // Any other failure is terminal: the launcher must not start waiting.
     for data in [
@@ -412,6 +420,7 @@ fn approval_request_ids_are_read_only_from_a_typed_approval_denial() {
         Some(serde_json::json!({"status": "other", "approval_requests": ["ap-1"]})),
     ] {
         let error = ClawdCallError {
+            code: Some("not_authorized".into()),
             message: "nope".into(),
             data,
         };

@@ -65,6 +65,36 @@ and a root-owned executed artifact.
 | `runtime.rs` | Private per-launch runtime directory |
 | `audit.rs` | Typed, path-free and secret-free launch records |
 
+## Protected App registration
+
+[`bridge::local`](../bridge/local.rs) checks the existing protected owner/App
+review before in-process Root registration derives capabilities or writes a
+session. It uses the held verified package, the trusted routed owner and the
+authenticated non-App parent; the existing owner/App deny gate remains in
+force after review. No caller flag, comparison digest or copied grant store
+substitutes for that controller.
+
+Ordinary non-root launchers and supervised Hosts use the authenticated broker;
+non-root owner overrides cannot select a local path. Activation-review
+refusals retain their broker code and private `system_review_required` details
+for the existing controller. They do not cause a local approval or a request
+through the daemon's own public socket. Existing capability-approval waiting
+is unchanged. The explicit local unit-fixture branch remains test-only.
+
+This guard does not change native entry selection, the fixed absolute-entry
+table, existing launch bindings or the legacy native-host route. Those
+migrations are separate from protected review.
+
+```bash
+cargo test -p cos --lib -- bridge::local::tests clawd::client::tests --test-threads=1
+```
+
+The ignored `root_local_registration_requires_protected_owner_review` fixture
+requires UID 0 and creates its own private `/run` mount namespace before using
+the canonical routed registry and temporary review/home state. It runs no App
+code and never uses real user state or the installed broker. Use a distinct
+`CARGO_TARGET_DIR` for each source snapshot.
+
 ## Policy derivation
 
 Notifications is a normal hostile MCP worker. Its original `ui.notify`

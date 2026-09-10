@@ -41,6 +41,7 @@ persistence, and structured primitive dispatch.
 | `src/caps/` | Capability catalog, scopes, manifests, and enforcement |
 | `src/worker/` | Shared hostile-worker sandbox: launch policy, Linux provider, per-launch brokers |
 | `src/apps.rs` | `app.json` discovery and side-effect-free schema generation |
+| `src/bridge/local.rs` | Protected in-process Root App registration; held package review and owner/App deny checks before session creation |
 | `src/apps/permission_review.rs` | OS-catalog permission disclosure and comparison contract; not authorization |
 | `src/approvals/system_review.rs` | Private owner-bound review records, revocation generations and single-use confirmation; never capability grants |
 | `src/approvals/presentation.rs` | Protected monotonic display revisions and strict owner-scoped reads of existing capability requests; never authorization |
