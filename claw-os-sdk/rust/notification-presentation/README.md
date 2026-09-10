@@ -6,8 +6,8 @@ client declarations. It does not depend on a product, toolkit or authority
 provider. The existing `rust-sdk` development export includes this companion
 crate; consumers depend on `claw-notification-presentation`.
 
-Initial publication is pending. This definition alone does not activate a
-presenter: OS consumers and matching Apps must use the same hardened contract.
+This definition alone does not activate a presenter. OS consumers and matching
+Apps must use the same hardened contract.
 
 Any authenticated presenter selected by the generic Host may implement it.
 Selection is not exclusivity or permission. The protocol supplies no App-ID,
