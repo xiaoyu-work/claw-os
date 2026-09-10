@@ -800,6 +800,21 @@ this while writing the manifest:
 * **GUI.** Display and GPU transports are granted only to a
   `desktop.exec` launch, never to a headless operation.
 
+GUI capability derivation currently uses manifest-fixed and wildcard
+`operations.*.needs` constrained by the authenticated launcher's existing
+authority. Argument-bound needs cannot be resolved at GUI startup, and MCP
+tool needs are not automatically unioned into a GUI grant. Missing high-risk
+authority is not turned into an implicit GUI approval. Merely adding a
+`desktop` block or a package-local native binary therefore does not authorize
+its privileged GUI features.
+
+Display transport availability is not proof of separate clipboard or
+layer-shell enforcement. The committed selection hooks are only a foundation;
+authenticated instance binding, write checks and verified resource retirement
+must be integrated before those controls can be presented as effective.
+An App-side permission preflight is not a substitute for enforcement on the
+actual desktop or backend resource.
+
 ## 11. Ship it
 
 Once the app does what you want:
