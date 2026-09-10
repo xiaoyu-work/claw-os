@@ -108,6 +108,16 @@ async fn exchange_on_stream(
 ) -> Result<Response, ClientError> {
     use tokio::io::AsyncWriteExt;
 
+    if request.command.requires_root_peer() {
+        let uid = stream
+            .peer_cred()
+            .map_err(ClientError::ReviewPeerCredentials)?
+            .uid();
+        if uid != 0 {
+            return Err(ClientError::UntrustedReviewPeer { uid });
+        }
+    }
+
     let body = serde_json::to_vec(&request).map_err(ClientError::Encode)?;
     let maximum = config.max_request_bytes.min(u32::MAX as usize);
     if body.len() > maximum {

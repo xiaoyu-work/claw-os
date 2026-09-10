@@ -464,8 +464,30 @@ fn walk_py(dir: &Path, f: &mut dyn FnMut(&Path, &str)) {
 /// Permission disclosure happens after verification and before publication,
 /// including for non-AI Apps, replacement installs and deferred AI consent.
 /// `--review` returns the authenticated request without installing anything.
-/// `--yes` acknowledges installation only; it never grants AI consent.
+/// `--yes` can use existing OS confirmation, never replace first review or
+/// grant AI consent. Developer trust remains a separate interactive decision.
 pub(super) fn install_cmd(args: &[String]) -> Result<Option<String>, String> {
+    install_cmd_with_confirmation(args, &mut |app, source, auto_yes, dev_trust| {
+        if dev_trust {
+            review_install_permissions(app, auto_yes).map(|review| (review, None))
+        } else {
+            super::system_review::confirm_install(app, source, auto_yes)
+                .map(|(review, id)| (review, Some(id)))
+        }
+    })
+}
+
+type InstallConfirmation<'a> = dyn FnMut(
+    &apps::App,
+    &Path,
+    bool,
+    bool,
+) -> Result<(apps::permission_review::PermissionReview, Option<String>), String> + 'a;
+
+fn install_cmd_with_confirmation(
+    args: &[String],
+    confirm: &mut InstallConfirmation<'_>,
+) -> Result<Option<String>, String> {
     let source_arg = args
         .iter()
         .find(|a| !a.starts_with("--"))
@@ -537,9 +559,11 @@ pub(super) fn install_cmd(args: &[String]) -> Result<Option<String>, String> {
     }
 
     let mut permission_review = None;
+    let mut system_review_id = None;
     let mut review_permissions = |candidate: &apps::App| {
-        let review = review_install_permissions(candidate, auto_yes)?;
+        let (review, id) = confirm(candidate, &source, auto_yes, dev_trust)?;
         permission_review = Some(review);
+        system_review_id = id;
         Ok(())
     };
     if same_path {
@@ -602,6 +626,7 @@ pub(super) fn install_cmd(args: &[String]) -> Result<Option<String>, String> {
         "provenance": provenance,
         "permission_review": permission_review
             .ok_or("App installation completed without a permission review")?,
+        "system_review_id": system_review_id,
     });
 
     // If the app declares a `desktop` surface, emit a freedesktop
@@ -676,6 +701,14 @@ pub(super) fn install_cmd(args: &[String]) -> Result<Option<String>, String> {
         "path": consent::consent_path(&manifest.id).display().to_string(),
     });
     Ok(Some(envelope.to_string()))
+}
+
+#[cfg(test)]
+pub(super) fn install_cmd_with_test_confirmation(args: &[String]) -> Result<Option<String>, String> {
+    install_cmd_with_confirmation(args, &mut |app, _source, _auto_yes, _dev_trust| {
+        apps::permission_review::PermissionReview::from_manifest(&app.manifest)
+            .map(|review| (review, None))
+    })
 }
 
 fn review_install_permissions(

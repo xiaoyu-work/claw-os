@@ -41,6 +41,7 @@ pub mod notifications;
 pub mod app_notifications;
 pub mod packages;
 pub mod permissions;
+pub mod system_review;
 pub mod power;
 pub mod printer;
 pub mod protocol;

@@ -7,6 +7,38 @@ mod unix {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::UnixStream;
 
+    #[test]
+    fn system_review_commands_require_a_root_broker_peer() {
+        for command in [
+            Command::SystemReviewPrepare,
+            Command::SystemReviewPending,
+            Command::SystemReviewShow,
+            Command::SystemReviewConsume,
+            Command::SystemReviewCancel,
+        ] {
+            assert!(command.requires_root_peer());
+        }
+        assert!(!Command::PermissionPending.requires_root_peer());
+    }
+
+    #[tokio::test]
+    async fn user_owned_review_peer_is_rejected_without_sending_a_frame() {
+        let (client, mut server) = UnixStream::pair().unwrap();
+        let uid = client.peer_cred().unwrap().uid();
+        if uid == 0 {
+            return;
+        }
+        let error = exchange_on_stream(
+            client,
+            Request::new(Command::SystemReviewPending, json!({"limit": 100})),
+            config(Duration::from_secs(1)),
+        ).await.unwrap_err();
+        assert!(matches!(error, ClientError::UntrustedReviewPeer { uid: peer } if peer == uid));
+        let mut bytes = Vec::new();
+        server.read_to_end(&mut bytes).await.unwrap();
+        assert!(bytes.is_empty());
+    }
+
     fn config(read_timeout: Duration) -> ClientConfig {
         ClientConfig {
             connect_timeout: Duration::from_secs(1),

@@ -42,6 +42,7 @@ and agent tasks.
 | `usage.rs` | Peer-UID-scoped Agent token usage queries |
 | `app_sessions.rs` | App/native/MCP session authority: derives identity and capabilities, plans approvals, issues launch grants, consumes service-bound call tickets |
 | `app_permissions.rs` | Shared Settings permission service: verified declarations, owner/App deny gates, pending durable restoration, fine-grained revocation; no approval authority |
+| `system_review.rs` | Owner-scoped App install/activation review requests, fresh package verification, root-only helper decisions and one-use confirmation |
 | `app_services.rs` | Persistent owner/App service manager, lifecycle policy, permission-policy snapshot retirement, capacity/restart control, and single-use call authorization |
 | `../extension_host/broker.rs` | Purpose-bound private proxy: verifies SCM credentials, Host/child ancestry, route class, and nearest child session before normal dispatch |
 | `scheduler.rs` | Proactive-scheduler authority: validates `cos cron` / `cos triggers` requests and derives what a job may carry |
@@ -146,6 +147,21 @@ the real strict worker, private relay, typed authority and native backend.
 executable and actual dropped-owner helper under a private mount namespace;
 run its documented command as root. Neither fixture uses live user media or
 the user's bus. These checks do not claim interactive Wayland acceptance.
+
+System review records live under the existing root-owned approvals root.
+`system.review.prepare` re-verifies the source using the authenticated owner's
+filesystem identity and compiled trust roots; request JSON cannot choose an
+owner or assert approval. Only the privileged OS helper may call
+`system.review.decide`, and confirmation is consumed separately before App
+publication. Review requests and decisions carry no capability grants.
+The core and shared clients require a root Unix peer for this route family,
+so selecting a user-owned socket cannot forge an approved response.
+
+App operation/GUI registration, native-host registration and prepared MCP
+calls require an owner review before capability settlement. Unreviewed
+`always-on` services are not started automatically. Service maintenance retires
+stale review/permission-policy snapshots; this does not claim instantaneous
+revocation of every direct resource or complete granular policy controls.
 
 `/run/cos/clawd.sock` carries broker protocol v2 over the `CBK1` framing: one length-prefixed frame per
 message, one request per connection, then close. The header is `CBK1`, a kind

@@ -499,6 +499,14 @@ impl AppServiceManager {
                 "App package changed before service startup",
             ));
         }
+        if !crate::approvals::system_review::has_accepted(
+            spec.owner_uid,
+            app.require_verified().map_err(RuntimeStartError::admission)?,
+        ).map_err(RuntimeStartError::admission)? {
+            return Err(RuntimeStartError::admission(
+                "App service requires the owner's OS permission review",
+            ));
+        }
         let lifecycle = app
             .manifest
             .mcp
@@ -843,6 +851,19 @@ impl AppServiceManager {
             let Ok(verified) = app.require_verified() else {
                 continue;
             };
+            match crate::approvals::system_review::has_accepted(owner_uid, verified) {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(error) => {
+                    tracing::warn!(
+                        owner = owner_uid,
+                        app = %app_id,
+                        %error,
+                        "cannot establish App review before background activation"
+                    );
+                    continue;
+                }
+            }
             let spec = RuntimeSpec {
                 owner_uid,
                 app_id,
@@ -977,18 +998,44 @@ impl AppServiceManager {
                     .await
                     .unwrap_or(false);
             let current_contract = current_app(&key.app_id).ok().and_then(|app| {
-                let package = PackageRef::of(app.require_verified().ok()?);
+                let verified = app.require_verified().ok()?;
+                match crate::approvals::system_review::has_accepted(key.owner_uid, verified) {
+                    Ok(true) => {}
+                    Ok(false) => return None,
+                    Err(error) => {
+                        tracing::warn!(
+                            owner = key.owner_uid,
+                            app = %key.app_id,
+                            %error,
+                            "App review state unavailable; retiring its service"
+                        );
+                        return None;
+                    }
+                }
+                let package = PackageRef::of(verified);
                 let lifecycle = app.manifest.mcp.as_ref()?.lifecycle;
                 Some((package, lifecycle))
             });
+            let current_policy = crate::approvals::app_policy::blocks(key.owner_uid, &key.app_id)
+                .map_err(|error| {
+                    tracing::warn!(
+                        owner = key.owner_uid,
+                        app = %key.app_id,
+                        %error,
+                        "App permission policy unavailable; retiring its service"
+                    );
+                    error
+                });
             let (retire_runtime, host_exited) = match slot.runtime.as_mut() {
                 None => (false, false),
                 Some(runtime) => {
                     let lease_expired = runtime.expires_at_ms <= crate::agentd::grant::now_ms();
                     let contract_changed =
                         current_contract.as_ref() != Some(&(runtime.package.clone(), lifecycle));
+                    let policy_changed =
+                        current_policy.as_ref().ok() != Some(&runtime.permission_policy);
                     let expected_retirement =
-                        lease_expired || contract_changed || idle || app_stopped;
+                        lease_expired || contract_changed || policy_changed || idle || app_stopped;
                     let host_exited = !expected_retirement && runtime.host_exited();
                     (expected_retirement || host_exited, host_exited)
                 }

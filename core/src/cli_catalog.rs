@@ -17,6 +17,16 @@ pub type NamespaceEntry = (&'static str, &'static str, Vec<CommandEntry>);
 pub fn builtin_namespaces() -> Vec<NamespaceEntry> {
     vec![
         (
+            "review",
+            "OS-owned App permission review; confirmation is not a capability grant",
+            vec![
+                ("pending", "List the current user's pending system reviews"),
+                ("show", "Display one authenticated system review"),
+                ("approve", "Confirm a review through the interactive OS approval helper"),
+                ("deny", "Cancel one of the current user's pending system reviews"),
+            ],
+        ),
+        (
             "sys",
             "System information - hardware, OS, environment, resources, and live Linux telemetry",
             vec![

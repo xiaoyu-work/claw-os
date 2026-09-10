@@ -35,6 +35,7 @@ use crate::caps::{Cap, ConsentContext, Risk, Scope, ScopeKind, Verb};
 
 pub mod generations;
 pub mod app_policy;
+pub mod system_review;
 
 pub use generations::RevocationScope;
 

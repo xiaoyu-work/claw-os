@@ -847,6 +847,66 @@ routes! {
     // -----------------------------------------------------------------
     // Permissions
     // -----------------------------------------------------------------
+    SystemReviewPrepare {
+        name: "system.review.prepare",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Permission),
+        body: body::SystemReviewPrepare,
+        audit: &[("expected_package", FieldRule::Size)],
+        run: |c| super::system_review::prepare(c.params, c.client).await,
+    }
+    SystemReviewPending {
+        name: "system.review.pending",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Permission),
+        body: body::PermissionList,
+        audit: &[("limit", FieldRule::Count)],
+        run: |c| super::system_review::pending(c.params, c.client).await,
+    }
+    SystemReviewShow {
+        name: "system.review.show",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Permission),
+        body: body::SystemReviewId,
+        audit: &[("id", FieldRule::Token)],
+        run: |c| super::system_review::show(c.params, c.client).await,
+    }
+    SystemReviewDecide {
+        name: "system.review.decide",
+        access: Access::Root,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Permission),
+        body: body::SystemReviewDecide,
+        audit: &[("id", FieldRule::Token), ("owner_uid", FieldRule::Count), ("decision", FieldRule::Token)],
+        run: |c| super::system_review::decide(c.params, c.client).await,
+    }
+    SystemReviewConsume {
+        name: "system.review.consume",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Permission),
+        body: body::SystemReviewConsume,
+        audit: &[("id", FieldRule::Token), ("expected_package", FieldRule::Size)],
+        run: |c| super::system_review::consume(c.params, c.client).await,
+    }
+    SystemReviewCancel {
+        name: "system.review.cancel",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Permission),
+        body: body::SystemReviewId,
+        audit: &[("id", FieldRule::Token)],
+        run: |c| super::system_review::cancel(c.params, c.client).await,
+    }
     PermissionPending {
         name: "permission.pending",
         access: Access::User,
@@ -1046,7 +1106,6 @@ routes! {
         run: |c| {
             app_sessions::register_native(c.params, c.client)
                 .await
-                .map_err(BrokerError::from)
         },
     }
     McpSessionRegister {

@@ -3424,9 +3424,20 @@ fn e2e_install_parent_session(session_id: &str) {
 #[cfg(unix)]
 fn e2e_installed_package(app_id: &str) -> crate::provenance::runtime::PackageRef {
     let app = installed_app(app_id).expect("installed App");
-    crate::provenance::runtime::PackageRef::of(
-        app.require_verified().expect("verified App package"),
-    )
+    let package = app.require_verified().expect("verified App package");
+    let review = crate::approvals::system_review::submit(
+        E2E_UID,
+        crate::approvals::system_review::ReviewKind::AppActivation,
+        package,
+        "isolated App authority fixture".into(),
+    ).expect("fixture review");
+    if review.state == crate::approvals::system_review::ReviewState::Pending {
+        crate::approvals::system_review::decide(E2E_UID, &review.id, true, Some(package))
+            .expect("fixture user decision");
+    }
+    crate::approvals::system_review::consume(E2E_UID, &review.id, package)
+        .expect("fixture review confirmation");
+    crate::provenance::runtime::PackageRef::of(package)
 }
 
 #[cfg(unix)]

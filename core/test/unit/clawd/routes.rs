@@ -74,6 +74,11 @@ const EXPECTED_USER_COMMANDS: &[&str] = &[
     // reach. It is `Access::User` because the launcher is unprivileged.
     "app_session.relay",
     "permission.pending",
+    "system.review.prepare",
+    "system.review.pending",
+    "system.review.show",
+    "system.review.consume",
+    "system.review.cancel",
     "permission.recent",
     "permission.status",
     "permission.request",
@@ -113,6 +118,7 @@ const EXPECTED_ROOT_COMMANDS: &[&str] = &[
     "context.update",
     "journal.mutation.resolve",
     "permission.revoke",
+    "system.review.decide",
 ];
 
 const EXPECTED_PRIVATE_TASK_HOST_COMMANDS: &[&str] = &["app_service.call"];

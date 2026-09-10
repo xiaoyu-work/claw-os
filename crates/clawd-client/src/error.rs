@@ -4,6 +4,10 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum ClientError {
+    #[error("system review requires the root OS broker, not peer uid {uid}")]
+    UntrustedReviewPeer { uid: u32 },
+    #[error("cannot authenticate the system review broker peer")]
+    ReviewPeerCredentials(#[source] std::io::Error),
     #[error("{variable} is set but empty")]
     EmptySocketConfiguration { variable: &'static str },
     #[error("clawd Unix socket transport is unavailable on this platform")]

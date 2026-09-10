@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
@@ -14,14 +14,14 @@ use crate::caps::manifest::{
 use crate::caps::{catalog, Risk, Verb};
 use crate::i18n::LocalizedText;
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PermissionUse {
     pub entry: String,
     pub purpose: LocalizedText,
     pub arguments: Vec<Arg>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RequestedPermission {
     pub verb: Verb,
     pub label: String,
@@ -32,13 +32,13 @@ pub struct RequestedPermission {
     pub uses: Vec<PermissionUse>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ServiceDisclosure {
     pub lifecycle: McpLifecycle,
     pub access: McpAccess,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PermissionReview {
     pub schema_version: u32,
     pub app_id: String,

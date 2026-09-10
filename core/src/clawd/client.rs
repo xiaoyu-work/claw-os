@@ -99,6 +99,16 @@ pub fn request_blocking(
     let mut stream = StdUnixStream::connect(socket_path.as_ref()).map_err(|err| {
         ClientError::before_dispatch(format!("failed to connect to clawd socket: {err}"))
     })?;
+    if request.command.as_str().starts_with("system.review.") {
+        require_root_review_peer(&stream)?;
+        let timeout = Some(std::time::Duration::from_secs(120));
+        stream.set_read_timeout(timeout).map_err(|error| {
+            ClientError::before_dispatch(format!("set review read deadline: {error}"))
+        })?;
+        stream.set_write_timeout(timeout).map_err(|error| {
+            ClientError::before_dispatch(format!("set review write deadline: {error}"))
+        })?;
+    }
     let body =
         encode_request(&request).map_err(|err| ClientError::before_dispatch(err.to_string()))?;
     frame::write_request_blocking(&mut stream, &body).map_err(|err| {
@@ -109,6 +119,46 @@ pub fn request_blocking(
         .map_err(ClientError::after_dispatch)?;
     let response = decode(&response).map_err(ClientError::after_dispatch)?;
     check(&request, response).map_err(ClientError::after_dispatch)
+}
+
+#[cfg(target_os = "linux")]
+fn require_root_review_peer(stream: &std::os::unix::net::UnixStream) -> Result<(), ClientError> {
+    use std::os::fd::AsRawFd;
+
+    let mut credentials = libc::ucred {
+        pid: 0,
+        uid: u32::MAX,
+        gid: u32::MAX,
+    };
+    let expected_length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    let mut length = expected_length;
+    let result = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            std::ptr::addr_of_mut!(credentials).cast(),
+            &mut length,
+        )
+    };
+    if result != 0 || length != expected_length {
+        return Err(ClientError::before_dispatch(
+            "could not authenticate the OS system-review broker",
+        ));
+    }
+    if credentials.uid != 0 {
+        return Err(ClientError::before_dispatch(
+            "system review requires a root OS broker; a user-selected socket is not approval authority",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn require_root_review_peer(_stream: &std::os::unix::net::UnixStream) -> Result<(), ClientError> {
+    Err(ClientError::before_dispatch(
+        "protected system reviews require Linux",
+    ))
 }
 
 #[cfg(not(unix))]
@@ -130,6 +180,19 @@ pub async fn request(
         .map_err(|err| {
             ClientError::before_dispatch(format!("failed to connect to clawd socket: {err}"))
         })?;
+    if request.command.as_str().starts_with("system.review.") {
+        let uid = stream
+            .peer_cred()
+            .map_err(|error| {
+                ClientError::before_dispatch(format!("authenticate review broker: {error}"))
+            })?
+            .uid();
+        if uid != 0 {
+            return Err(ClientError::before_dispatch(
+                "system review requires a root OS broker",
+            ));
+        }
+    }
     let body =
         encode_request(&request).map_err(|err| ClientError::before_dispatch(err.to_string()))?;
     frame::write_request_async(&mut stream, &body)

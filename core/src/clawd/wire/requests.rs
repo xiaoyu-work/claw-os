@@ -396,6 +396,35 @@ pub struct PermissionRevoke {
     pub session: Option<Token>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SystemReviewPrepare {
+    pub source: Text<PATH_BYTES>,
+    pub expected_package: Structured,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SystemReviewId {
+    pub id: Token,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SystemReviewDecide {
+    pub id: Token,
+    pub owner_uid: u32,
+    pub decision: Name,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SystemReviewConsume {
+    pub id: Token,
+    pub source: Text<PATH_BYTES>,
+    pub expected_package: Structured,
+}
+
 // ---------------------------------------------------------------------------
 // App / MCP sessions
 // ---------------------------------------------------------------------------

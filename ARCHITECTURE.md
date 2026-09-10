@@ -91,12 +91,18 @@ and desktop integration paths still require that common-contract cutover.
 
 `cos app install --review` authenticates a package and projects every declared
 operation/MCP permission, conditional scope, AI policy and execution surface.
-Normal directory installation shows this review before publication and checks
-the package again after confirmation. `--yes` acknowledges installation only
-and defers AI consent. Store/package-channel delivery, first-use presentation
-and protected persistent review decisions are not established by this CLI
-implementation; those consumers must converge on the same OS contract rather
-than adding App-owned approval logic.
+Ordinary directory installation now creates a protected owner-scoped review in
+the OS approvals root. The terminal presenter obtains a decision through the
+privileged OS helper, and the installer consumes confirmation against the
+verified package before publication. `--yes` cannot replace first review or
+grant AI consent. Clients verify the broker's root Unix peer; a returned JSON
+flag or comparison digest is not approval authority.
+
+Brokered App registrations and prepared MCP calls require owner review, while
+unreviewed background services remain inactive. Store/package-channel delivery,
+the final shared native presentation, generic local-launch cutover and complete
+per-resource allow/ask/deny enforcement still need integration. Those consumers
+must converge on the same OS contract rather than adding App-owned approvals.
 
 The complete native Notifications fork, both shared presentation crates,
 descriptor, license and original build now live in

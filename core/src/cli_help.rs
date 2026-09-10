@@ -203,6 +203,36 @@ impl Param {
 pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandSchema>)> {
     vec![
         (
+            "review",
+            "Owner-scoped OS review requests, not capability grants",
+            vec![
+                CommandSchema {
+                    command: "pending",
+                    description: "List the user's pending OS reviews",
+                    params: vec![],
+                    example: "cos review pending",
+                },
+                CommandSchema {
+                    command: "show",
+                    description: "Display the authenticated App and its permission requests",
+                    params: vec![Param::positional("id", "string", true, "System review ID")],
+                    example: "cos review show rv-0123456789abcdef0123456789abcdef",
+                },
+                CommandSchema {
+                    command: "approve",
+                    description: "Human-only confirmation through the privileged OS helper",
+                    params: vec![Param::positional("id", "string", true, "System review ID")],
+                    example: "cos review approve rv-0123456789abcdef0123456789abcdef",
+                },
+                CommandSchema {
+                    command: "deny",
+                    description: "Cancel an owner-scoped system review without granting authority",
+                    params: vec![Param::positional("id", "string", true, "System review ID")],
+                    example: "cos review deny rv-0123456789abcdef0123456789abcdef",
+                },
+            ],
+        ),
+        (
             "checkpoint",
             "OverlayFS snapshot system",
             vec![

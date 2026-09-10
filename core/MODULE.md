@@ -42,6 +42,9 @@ persistence, and structured primitive dispatch.
 | `src/worker/` | Shared hostile-worker sandbox: launch policy, Linux provider, per-launch brokers |
 | `src/apps.rs` | `app.json` discovery and side-effect-free schema generation |
 | `src/apps/permission_review.rs` | OS-catalog permission disclosure and comparison contract; not authorization |
+| `src/approvals/system_review.rs` | Private owner-bound review records, revocation generations and single-use confirmation; never capability grants |
+| `src/clawd/system_review.rs` | Root-broker review preparation, pending/show, privileged decisions and confirmation consumption |
+| `src/router/system_review.rs` | Terminal review presentation and trusted-helper decisions; no local approval state |
 | `src/router/app_commands.rs` | Authenticated install preview, pre-publication permission review and atomic App replacement |
 | `src/audit.rs` | Hash-chained audit persistence |
 | `src/audit_policy.rs` | Per-command/per-tool allowlist every durable audit projection applies |

@@ -335,6 +335,7 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
         }
     };
     plan.require(caller_invoke.clone(), &delegation);
+    super::system_review::require_app_review(uid, &app, &delegation.requester)?;
     let grant_caps = authorize_plan(&delegation, plan, &ceiling, &app_id)?;
     let caps = target_session_caps(grant_caps.clone(), &caller_invoke);
 
@@ -404,7 +405,7 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
     }))
 }
 
-pub async fn register_native(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+pub async fn register_native(params: Value, client: &ClientIdentity) -> Result<Value, BrokerError> {
     let app_id = required_string(&params, "app_id")?;
     require_trusted_native_launcher(client)?;
     let uid = client.require_uid()?;
@@ -421,6 +422,11 @@ pub async fn register_native(params: Value, client: &ClientIdentity) -> Result<V
     let ceiling = app_ceiling(&app)?;
     let caps = native_manifest_caps(&app.manifest)?;
     let caps = clamp_to_ceiling(&ceiling, &app_id, &caps, "register_native");
+    super::system_review::require_app_review(
+        uid,
+        &app,
+        &requester_identity(uid, launcher.pid, launcher.start_time_ticks),
+    )?;
     let session_id = format!("app-{}", uuid::Uuid::new_v4().simple());
     let role = Role::Worker;
     let info = SessionInfo {
@@ -458,7 +464,7 @@ pub async fn register_native(params: Value, client: &ClientIdentity) -> Result<V
         Ok(handle) => handle,
         Err(error) => {
             remove_session_row(uid, home, &session_id).await;
-            return Err(error);
+            return Err(error.into());
         }
     };
     crate::provenance::runtime::register(uid, &session_id, &package);
@@ -830,6 +836,7 @@ fn finalize_prepared_app_service_call(
     )?;
     let invoke = crate::agent::tools::app_gateway::invoke_cap(app_id, tool)?;
     plan.require(invoke.clone(), delegation);
+    super::system_review::require_app_review(uid, app, &delegation.requester)?;
     let authorized = authorize_plan(delegation, plan, &ceiling, app_id)?;
     let package = crate::provenance::runtime::PackageRef::of(app.require_verified()?);
     let deadline_ms = context

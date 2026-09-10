@@ -628,7 +628,11 @@ and ship an app
 | `cos app lint [<id>]` | Refuse apps that import provider SDKs directly. Run on every app if no id given. |
 | `cos app tool list [<id>]` | Show the manifest-declared MCP tools this App exposes through the private Gateway. |
 | `cos app install <dir> --review` | Verify the package and return its requested permissions, scopes, conditions, AI policy and execution surfaces as JSON, without installing or granting anything. |
-| `cos app install <dir> [--force] [--no-consent] [--yes] [--dev-trust]` | Authenticate and disclose the App's permission requests before confirming and publishing into `$COS_APPS_DIR/<id>/`. `--yes` acknowledges installation, never AI or capability grants. `--no-consent` defers AI consent but does not hide the permission review. Copying is skipped only when source and destination are the same directory. `--dev-trust` still requires a separate interactive, digest-bound developer decision. |
+| `cos app install <dir> [--force] [--no-consent] [--yes] [--dev-trust]` | Authenticate and disclose the App's permission requests before publishing into `$COS_APPS_DIR/<id>/`. Ordinary installs require an OS review decision; `--yes` can use existing OS confirmation but cannot replace first review or grant capabilities/AI consent. `--no-consent` only defers AI consent. Copying is skipped only when source and destination are the same directory. `--dev-trust` retains its separate interactive, digest-bound development-trust workflow. |
+| `cos review pending` | List the current user's pending OS review requests. |
+| `cos review show <id>` | Display one owner-scoped review and its authenticated permission disclosure. |
+| `cos review approve <id>` | Present and confirm a review through the interactive OS privileged helper; not a capability grant. |
+| `cos review deny <id>` | Cancel the current user's pending review through the owner-scoped OS route, without a privilege prompt or capability grant. |
 | `cos app consent list` | Which apps you have granted AI consent to. |
 | `cos app consent show <id>` | Display the manifest's AI block. |
 | `cos app consent grant <id> [--yes]` | Grant AI consent. |
@@ -652,21 +656,38 @@ execution surfaces. It excludes the App version and capability-purpose text,
 so changing release numbers or explanations alone does not imply a permission
 change. The digest is a comparison key, **not an approval token or a grant**.
 
-Every directory installation displays this review before publishing, including
-`--force`, `--yes`, `--no-consent` and in-place installs. Without `--yes`, the
-operator confirms installation interactively. Automation can inspect `--review`
-first and explicitly acknowledge installation with `--yes`; the returned
-`permission_review.permissions_granted` remains `false`. Installation with
-`--yes` now defers AI consent rather than approving it. Normal capability
-checks and separate AI consent still apply when the App is used.
+Ordinary directory installation creates an owner-scoped OS request before
+publishing, including `--force`, `--yes`, `--no-consent` and in-place installs.
+A terminal presenter sends the user's decision through the installed
+`claw-approval-helper --system-review`, authenticated by polkit. Without an
+interactive terminal or a previous matching OS decision, installation returns
+an explicit pending-review error and does not replace the existing App.
+`--yes` never substitutes for first review. Automation may reuse a previously
+consumed decision only for the same owner, App, publisher, trust tier and
+permission-related contract under the current revocation generation.
+
+Review clients authenticate the Unix broker peer as root before sending
+requests. A configured user-owned socket, returned JSON, request ID or contract
+digest cannot become approval authority. Confirmation is consumed once against
+the freshly verified package. A consumed confirmation records the user's
+decision, not proof that a subsequent filesystem publication succeeded.
+`permission_review.permissions_granted` remains `false`; normal capabilities
+and separate AI consent still govern App effects.
 
 The installer re-verifies the package after review and rejects a changed
 package before replacing the old installation. Cancelling review leaves the
 previous version untouched. The shared projection is in
 [`apps/permission_review.rs`](../core/src/apps/permission_review.rs).
-Store, package-channel and first-use consent integration remain separate
-rollout work; a CLI review does not establish that those paths already present
-the same UI or persist a user decision.
+Brokered operation/GUI/native registration and prepared MCP calls also require
+owner review before activation, including preinstalled Apps. Unreviewed
+background services are not warmed automatically. Existing App permission
+denials remain in effect after installation confirmation.
+
+The terminal controller and protected records are implemented; the final shared
+native presentation, Store/package-channel integration, generic local-launch
+cutover and complete per-permission allow/ask/deny resource enforcement remain
+separate rollout work. Unsupported direct-resource controls must not be
+presented as working switches.
 
 ## 9. Environment variables
 

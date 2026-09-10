@@ -29,6 +29,9 @@ import daemon or core orchestration. Core depends on crate APIs; focused crates
 do not import core orchestration.
 Desktop broker consumers depend on `clawd-client`; the client contains no
 desktop UI or privileged broker implementation.
+System-review commands authenticate the connected Unix peer as root before
+sending a request. A socket override or an approved-looking JSON response from
+an ordinary user process cannot substitute for OS confirmation.
 Keep Obscura changes scoped and preserve upstream licensing/provenance. Add a
 new crate only for a coherent reusable responsibility.
 

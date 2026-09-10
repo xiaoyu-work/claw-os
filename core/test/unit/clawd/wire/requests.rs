@@ -2,6 +2,67 @@ use super::*;
 use serde_json::json;
 
 #[test]
+fn system_review_prepare_cannot_carry_approval_or_owner_authority() {
+    let request = json!({
+        "source": "/home/user/downloads/app",
+        "expected_package": {
+            "kind": "app", "id": "example", "content_digest": "sha256:example",
+            "tier": "user"
+        }
+    });
+    assert!(serde_json::from_value::<SystemReviewPrepare>(request.clone()).is_ok());
+    for (field, value) in [
+        ("owner_uid", json!(0)),
+        ("approved", json!(true)),
+        ("permissions", json!(["*"])),
+        ("session", json!("forged")),
+        ("contract_digest", json!("not-a-user-decision")),
+    ] {
+        let mut forged = request.clone();
+        forged[field] = value;
+        assert!(serde_json::from_value::<SystemReviewPrepare>(forged).is_err());
+    }
+    let mut oversized = request;
+    oversized["source"] = json!("x".repeat(PATH_BYTES + 1));
+    assert!(serde_json::from_value::<SystemReviewPrepare>(oversized).is_err());
+}
+
+#[test]
+fn system_review_decision_is_not_a_capability_grant() {
+    let request = json!({
+        "id": "rv-0123456789abcdef0123456789abcdef",
+        "owner_uid": 1000,
+        "decision": "approve",
+    });
+    assert!(serde_json::from_value::<SystemReviewDecide>(request.clone()).is_ok());
+    for (field, value) in [
+        ("duration", json!("forever")),
+        ("caps", json!(["*"])),
+        ("granted", json!(true)),
+        ("source", json!("/another/package")),
+    ] {
+        let mut forged = request.clone();
+        forged[field] = value;
+        assert!(serde_json::from_value::<SystemReviewDecide>(forged).is_err());
+    }
+}
+
+#[test]
+fn system_review_cancellation_cannot_be_changed_into_approval() {
+    let id = "rv-0123456789abcdef0123456789abcdef";
+    assert!(serde_json::from_value::<SystemReviewId>(json!({"id": id})).is_ok());
+    for (field, value) in [
+        ("decision", json!("approve")),
+        ("owner_uid", json!(0)),
+        ("approved", json!(true)),
+    ] {
+        let mut forged = json!({"id": id});
+        forged[field] = value;
+        assert!(serde_json::from_value::<SystemReviewId>(forged).is_err());
+    }
+}
+
+#[test]
 fn summary_ai_wire_is_bounded_and_cannot_carry_provider_or_owner_authority() {
     let base = json!({
         "session": "synthetic-session", "app_id": "summarize",

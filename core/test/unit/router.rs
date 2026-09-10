@@ -1,5 +1,6 @@
 use super::app_commands::{
-    consent_cmd, create_cmd, install_cmd, stage_app_install_with_rename,
+    consent_cmd, create_cmd, install_cmd_with_test_confirmation as install_cmd,
+    stage_app_install_with_rename,
     stage_app_install_with_review,
 };
 use super::*;
@@ -937,6 +938,29 @@ fn install_skips_desktop_entry_for_headless_app() {
 fn install_requires_source() {
     let err = install_cmd(&[]).unwrap_err();
     assert!(err.contains("usage:"), "got: {err}");
+}
+
+#[test]
+fn install_yes_cannot_replace_os_confirmation_when_the_broker_is_unavailable() {
+    let _lock = crate::test_env::lock_env();
+    let root = tempfile::tempdir().unwrap();
+    let source = root.path().join("source");
+    let destination = root.path().join("installed");
+    write_min_app(
+        &source,
+        "needs-os-review",
+        r#"{"id":"needs-os-review","version":"1.0.0","name":{"en":"Requires OS review"}}"#,
+    );
+    let _apps = crate::test_env::TestEnvVarGuard::set("COS_APPS_DIR", &destination);
+    let _socket = crate::test_env::TestEnvVarGuard::set("CLAWD_SOCKET", root.path().join("missing.sock"));
+    for flags in [
+        vec![source.display().to_string(), "--yes".to_string()],
+        vec![source.display().to_string(), "--yes".to_string(), "--no-consent".to_string()],
+    ] {
+        let error = super::app_commands::install_cmd(&flags).unwrap_err();
+        assert!(error.contains("system review service is unavailable"), "{error}");
+        assert!(!destination.join("needs-os-review").exists());
+    }
 }
 
 #[test]

@@ -27,6 +27,16 @@ pub enum Command {
     MemoryHistory,
     #[serde(rename = "permission.pending")]
     PermissionPending,
+    #[serde(rename = "system.review.prepare")]
+    SystemReviewPrepare,
+    #[serde(rename = "system.review.pending")]
+    SystemReviewPending,
+    #[serde(rename = "system.review.show")]
+    SystemReviewShow,
+    #[serde(rename = "system.review.consume")]
+    SystemReviewConsume,
+    #[serde(rename = "system.review.cancel")]
+    SystemReviewCancel,
     #[serde(rename = "notification.subscribe")]
     NotificationSubscribe,
     #[serde(rename = "notification.delivery.claim")]
@@ -40,13 +50,29 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Self; 11] = [
+    pub const fn requires_root_peer(self) -> bool {
+        matches!(
+            self,
+            Self::SystemReviewPrepare
+                | Self::SystemReviewPending
+                | Self::SystemReviewShow
+                | Self::SystemReviewConsume
+                | Self::SystemReviewCancel
+        )
+    }
+
+    pub const ALL: [Self; 16] = [
         Self::TaskSubmit,
         Self::TaskStream,
         Self::TaskCancel,
         Self::MemorySessions,
         Self::MemoryHistory,
         Self::PermissionPending,
+        Self::SystemReviewPrepare,
+        Self::SystemReviewPending,
+        Self::SystemReviewShow,
+        Self::SystemReviewConsume,
+        Self::SystemReviewCancel,
         Self::NotificationSubscribe,
         Self::NotificationDeliveryClaim,
         Self::NotificationDeliveryComplete,
@@ -62,6 +88,11 @@ impl Command {
             Self::MemorySessions => "memory.sessions",
             Self::MemoryHistory => "memory.history",
             Self::PermissionPending => "permission.pending",
+            Self::SystemReviewPrepare => "system.review.prepare",
+            Self::SystemReviewPending => "system.review.pending",
+            Self::SystemReviewShow => "system.review.show",
+            Self::SystemReviewConsume => "system.review.consume",
+            Self::SystemReviewCancel => "system.review.cancel",
             Self::NotificationSubscribe => "notification.subscribe",
             Self::NotificationDeliveryClaim => "notification.delivery.claim",
             Self::NotificationDeliveryComplete => "notification.delivery.complete",

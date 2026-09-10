@@ -1,4 +1,5 @@
 mod app_commands;
+mod system_review;
 
 use std::env;
 use std::io::Read;
@@ -595,6 +596,10 @@ fn dispatch_with_stdin_impl(
     }
 
     let name = &args[0];
+
+    if name == "review" {
+        return system_review::dispatch(&args[1..]);
+    }
 
     // Top-level help / version flags. Match what every Unix CLI does so
     // muscle memory works: bare `cos --help` / `cos help` is the same

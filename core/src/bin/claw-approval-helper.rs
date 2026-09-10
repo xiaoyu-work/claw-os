@@ -24,6 +24,7 @@ fn main() {
     let mut decision = None;
     let mut duration = None;
     let mut note = None;
+    let mut system_review = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -31,10 +32,11 @@ fn main() {
             "--decision" => decision = args.next(),
             "--duration" => duration = args.next(),
             "--note" => note = args.next(),
+            "--system-review" => system_review = true,
             "-h" | "--help" => {
                 println!(
                     "usage: claw-approval-helper --id ID --decision approve|deny \
-                     [--duration once|session|forever] [--note TEXT]"
+                     [--duration once|session|forever] [--note TEXT] [--system-review]"
                 );
                 return;
             }
@@ -46,6 +48,9 @@ fn main() {
     let decision = decision.unwrap_or_else(|| fail("--decision is required"));
     if !matches!(decision.as_str(), "approve" | "deny") {
         fail("--decision must be approve or deny");
+    }
+    if system_review && (duration.is_some() || note.is_some()) {
+        fail("system review confirmation does not accept capability grant duration or notes");
     }
 
     let mut params = json!({
@@ -60,7 +65,14 @@ fn main() {
         params["note"] = json!(note);
     }
 
-    let request = Request::build(Command::PermissionDecide, params);
+    let request = Request::build(
+        if system_review {
+            Command::SystemReviewDecide
+        } else {
+            Command::PermissionDecide
+        },
+        params,
+    );
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -75,7 +87,7 @@ fn main() {
             .unwrap_or_else(|| "clawd rejected the approval decision".to_string());
         fail(&message);
     }
-    println!("{}", response.result.unwrap_or_else(|| json!({"ok": true})));
+    println!("{}", response.result.unwrap_or_else(|| fail("clawd approval response has no result")));
 }
 
 fn fail(message: &str) -> ! {
