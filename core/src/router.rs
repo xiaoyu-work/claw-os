@@ -955,6 +955,7 @@ fn dispatch_with_stdin_impl(
     }
 
     if name == "__app-permissions" {
+        let args = &args[1..];
         if args.len() != 1 {
             return Err("internal App permission command requires one JSON request".into());
         }

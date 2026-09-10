@@ -7,6 +7,108 @@ use super::*;
 use crate::cli_help::{command_schemas, show_builtin_schema, show_command_schema};
 
 #[test]
+fn app_permissions_bridge_validates_json_after_its_command_name() {
+    for payload in [
+        r#"{"action":"list","session":"forged"}"#,
+        r#"{"session":null}"#,
+        "[]",
+        "null",
+    ] {
+        let error = dispatch(&["__app-permissions".into(), payload.into()]).unwrap_err();
+        assert!(error.contains("without caller-supplied session"), "{error}");
+    }
+    for payload in ["", "{"] {
+        let error = dispatch(&["__app-permissions".into(), payload.into()]).unwrap_err();
+        assert!(error.contains("invalid App permission request"), "{error}");
+    }
+    for args in [
+        vec!["__app-permissions".into()],
+        vec!["__app-permissions".into(), "{}".into(), "extra".into()],
+    ] {
+        let error = dispatch(&args).unwrap_err();
+        assert!(error.contains("requires one JSON request"), "{error}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn app_permissions_bridge_forwards_the_exact_request_and_session() {
+    use crate::clawd::{
+        protocol::{Request, Response},
+        routes::Command,
+        transport::frame,
+        wire,
+    };
+    use crate::test_env::TestEnvVarGuard;
+    use std::io::{Read, Write};
+    use std::os::unix::net::UnixListener;
+    use std::time::{Duration, Instant};
+
+    let _lock = crate::test_env::lock_env();
+    let root = tempfile::tempdir().unwrap();
+    let _runtime = TestEnvVarGuard::set("COS_RUNTIME_DIR", root.path());
+    let _private = TestEnvVarGuard::remove(crate::extension_host::protocol::BROKER_SOCKET_ENV);
+    let listener = UnixListener::bind(crate::paths::clawd_socket_path()).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    for session in [None, Some("app-permission-fixture")] {
+        let _session = match session {
+            Some(session) => TestEnvVarGuard::set("COS_SESSION", session),
+            None => TestEnvVarGuard::remove("COS_SESSION"),
+        };
+        let server = listener.try_clone().unwrap();
+        let receiver = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let mut stream = loop {
+                match server.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if Instant::now() >= deadline {
+                            return None;
+                        }
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("accept permission fixture: {error}"),
+                }
+            };
+            stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            let mut header = [0_u8; wire::HEADER_BYTES];
+            stream.read_exact(&mut header).unwrap();
+            let length =
+                frame::parse_header(&header, wire::KIND_REQUEST, wire::MAX_REQUEST_BYTES).unwrap();
+            let mut bytes = vec![0; length];
+            stream.read_exact(&mut bytes).unwrap();
+            let request: Request = serde_json::from_slice(&bytes).unwrap();
+            let response = Response::ok(request.id.clone(), json!({"apps": []}));
+            stream
+                .write_all(&frame::encode_frame(
+                    wire::KIND_RESPONSE,
+                    &serde_json::to_vec(&response).unwrap(),
+                ))
+                .unwrap();
+            Some(request)
+        });
+        let result = dispatch(&["__app-permissions".into(), r#"{"action":"list"}"#.into()]);
+        let request = receiver.join().unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&result.unwrap().unwrap()).unwrap(),
+            json!({"apps": []}),
+        );
+        let request = request.expect("valid permission JSON must reach the selected broker");
+        let expected_command = if session.is_some() {
+            Command::SystemAppPermissions
+        } else {
+            Command::PermissionApps
+        };
+        assert_eq!(request.command, expected_command);
+        let mut expected = json!({"action":"list"});
+        if let Some(session) = session {
+            expected["session"] = json!(session);
+        }
+        assert_eq!(request.params, expected);
+    }
+}
+
+#[test]
 fn capture_bridge_is_bounded_and_cannot_supply_session_authority() {
     let request = parse_internal_request_object(
         Some(br#"{"directory":"/work/shots","modal":true}"#), 8192, "capture",
