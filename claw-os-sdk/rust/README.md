@@ -148,6 +148,13 @@ caller identity, approval or extra capabilities.
 
 ## Wire protocol
 
+The [notification presentation companion](notification-presentation/README.md)
+is a separate lightweight crate inside the same development export. OS shell
+consumers and App presenters share its versioned records/private-connection
+client declarations without importing App configuration, image/markup code,
+or this crate's broader RPC/JSON feature set. It defines no authority or
+provider-selection privilege; durable notification state and DND remain OS-owned.
+
 This crate implements wire protocol v1. See
 [`../wire/v1/README.md`](../wire/v1/README.md) for the full spec.
 Regenerate typed structs with:

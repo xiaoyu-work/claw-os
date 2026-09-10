@@ -10,6 +10,7 @@ use std::sync::Arc;
 pub use named::{IconFallback, Named};
 
 mod handle;
+mod raster;
 pub use handle::{Data, Handle, from_path, from_raster_bytes, from_raster_pixels, from_svg_bytes};
 
 use crate::Element;
@@ -73,8 +74,8 @@ impl Icon {
 
     #[must_use]
     fn view<'a, Message: 'a>(self) -> Element<'a, Message> {
-        let from_image = |handle| {
-            Image::new(handle)
+        let from_image = |handle: crate::widget::image::Handle| {
+            let image = Image::new(handle.clone())
                 .width(
                     self.width
                         .unwrap_or_else(|| Length::Fixed(f32::from(self.size))),
@@ -84,8 +85,17 @@ impl Icon {
                         .unwrap_or_else(|| Length::Fixed(f32::from(self.size))),
                 )
                 .rotation(self.rotation.unwrap_or_default())
-                .content_fit(self.content_fit)
-                .into()
+                .content_fit(self.content_fit);
+            if self.handle.symbolic && matches!(handle, crate::widget::image::Handle::Rgba { .. }) {
+                Element::new(raster::Symbolic::new(
+                    image,
+                    handle,
+                    self.content_fit,
+                    self.rotation.unwrap_or_default(),
+                ))
+            } else {
+                image.into()
+            }
         };
 
         let from_svg = |handle| {

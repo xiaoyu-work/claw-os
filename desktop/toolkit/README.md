@@ -70,6 +70,14 @@ Available cargo features to choose from:
 - [COSMIC Text Editor](https://github.com/pop-os/cosmic-text-editor)
 - [COSMIC Settings](https://github.com/pop-os/cosmic-settings)
 
+## Decoded symbolic icons
+
+`widget::icon::from_raster_pixels(width, height, rgba).symbolic(true)` renders
+already-decoded RGBA with the inherited icon foreground, preserving alpha just
+like a symbolic SVG. The cached tint updates when either pixels or foreground
+change. This path performs no SVG/raster decoding or resource lookup. Existing
+encoded/path raster handles retain their previous rendering behavior.
+
 ## Licence
 
 Licensed under the [Mozilla Public License 2.0](https://choosealicense.com/licenses/mpl-2.0).

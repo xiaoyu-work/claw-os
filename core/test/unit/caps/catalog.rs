@@ -6,6 +6,25 @@ fn catalog_matches_verb_table() {
 }
 
 #[test]
+fn public_app_schema_tracks_the_capability_catalog_without_enabling_ai_bypass() {
+    let schema: serde_json::Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../claw-os-sdk/wire/v1/manifest.schema.json"
+    ))).unwrap();
+    let declared = schema["$defs"]["need"]["properties"]["verb"]["enum"]
+        .as_array().unwrap();
+    let exported: std::collections::BTreeSet<_> = declared.iter()
+        .map(|value| value.as_str().unwrap())
+        .collect();
+    let catalog: std::collections::BTreeSet<_> = ALL_VERBS.iter()
+        .map(|verb| verb.as_str())
+        .collect();
+    assert_eq!(declared.len(), exported.len(), "duplicate public capability");
+    assert_eq!(exported, catalog);
+    assert_eq!(schema["$defs"]["need"]["not"]["properties"]["verb"]["const"], "ai.bypass");
+}
+
+#[test]
 fn every_verb_has_metadata() {
     for v in ALL_VERBS {
         let m = lookup(*v).unwrap_or_else(|| panic!("missing meta for {}", v.as_str()));

@@ -179,13 +179,13 @@
       "properties": {
         "verb": {
           "type": "string",
-          "description": "Capability verb. Must be a verb the kernel recognises (core/src/caps/verb.rs).",
+          "description": "Capability verb from the Claw OS capability catalog.",
           "enum": [
             "fs.read", "fs.write", "fs.delete", "fs.exec", "fs.watch", "fs.meta",
             "net.dial", "net.listen", "net.raw", "net.resolve", "net.probe", "net.manage", "net.firewall",
             "proc.spawn", "proc.signal", "proc.observe",
             "sys.observe", "sys.crash", "sys.container", "sys.config", "sys.events", "sys.identity", "sys.security", "sys.storage",
-            "sys.service", "sys.package", "sys.mount", "sys.snapshot", "sys.time", "sys.power", "sys.kernel",
+            "sys.service", "sys.package", "sys.mount", "sys.snapshot", "sys.time", "sys.power", "sys.kernel", "sys.permissions",
             "secret.read", "secret.write", "secret.grant",
             "agent.spawn", "agent.invoke", "agent.observe", "agent.delegate",
             "data.kv.read", "data.kv.write", "data.kv.delete", "data.db.read", "data.db.write", "data.log.read", "data.log.write", "data.inbox.read", "data.inbox.write", "data.backup",
@@ -196,7 +196,7 @@
             "device.audio", "device.bluetooth", "device.media-route", "device.printer", "device.display", "device.camera", "device.microphone", "device.location", "device.sensor", "device.usb",
             "time.cron", "time.delay",
             "ai.chat", "ai.chat.untrusted", "ai.embed", "ai.image.generate", "ai.image.analyze", "ai.audio.tts", "ai.audio.stt", "ai.vision.analyze", "ai.video.generate", "ai.video.analyze", "ai.bypass",
-            "desktop.launch", "desktop.window",
+            "desktop.launch", "desktop.window", "desktop.capture", "desktop.media.observe", "desktop.media.control",
             "browser.tabs.read", "browser.nav", "browser.dom.read", "browser.dom.write", "browser.input.secret", "browser.eval"
           ]
         },

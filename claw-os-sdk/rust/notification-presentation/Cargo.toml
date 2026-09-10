@@ -1,0 +1,20 @@
+[package]
+name = "claw-notification-presentation"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Versioned, renderer-independent notification presentation contract for Claw OS Apps"
+repository = "https://github.com/xiaoyu-work/claw-os"
+readme = "README.md"
+
+[workspace]
+
+[features]
+default = []
+dbus = ["dep:zbus"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+zbus = { version = "5.14", default-features = false, features = ["tokio", "p2p"], optional = true }

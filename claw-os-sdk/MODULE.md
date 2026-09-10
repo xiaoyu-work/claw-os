@@ -33,6 +33,7 @@ Rust, Python, Node, and Go bindings.
 | `wire/v1/mcp_call_context.schema.json` | Gateway-authenticated caller identity, task/session correlation, and deadline |
 | `rust/` | Rust public SDK |
 | `rust/src/lib.rs` | Shared CLI wire/error decoder, including explicit executable selection and bounded stdin for controlled primitive business data |
+| `rust/notification-presentation/`, `wire/v1/notification-presentation.md` | OS-defined rendering/preferences companion contract; no App config/UI dependency, authority store or renderer feature coupling |
 | `python/` | Python public SDK |
 | `node/` | Node public SDK |
 | `go/` | Go public SDK |
@@ -40,7 +41,7 @@ Rust, Python, Node, and Go bindings.
 | `python/src/claw_os_sdk/mcp.py` | Manifest-bound MCP server, progress, and cooperative cancellation |
 | `python/src/claw_os_sdk/kernel.py` | Explicit installed-binary stdin transport, inherited broker session, strict shared wire errors, deadlines and cancellation/reaping |
 | `../.github/workflows/publish-sdk-release.yml` | GitHub-only multi-language SDK release |
-| `../docs/app-platform.md` | Versioned first-party development artifact containing SDK/runtime/native library exports, never App support or private OS providers |
+| `../docs/app-platform.md` | Versioned App development artifact containing SDK/runtime/native library exports, never App support or private OS providers |
 
 `cos-runtime/` is a separate internal package for bundled apps; public apps
 must not depend on its policy/runtime internals.
