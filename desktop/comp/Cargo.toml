@@ -8,6 +8,7 @@ rust-version = "1.90"
 
 [workspace]
 members = ["cosmic-comp-config"]
+exclude = ["vendor/smithay", "test/selection-read"]
 
 [dependencies]
 anyhow = { version = "1.0.102", features = ["backtrace"] }
@@ -143,4 +144,4 @@ cosmic-protocols = { git = "https://github.com/pop-os//cosmic-protocols", branch
 cosmic-client-toolkit = { git = "https://github.com/pop-os//cosmic-protocols", branch = "main" }
 
 [patch.crates-io]
-smithay = { git = "https://github.com/smithay/smithay.git", rev = "211c19d" }
+smithay = { path = "vendor/smithay" }

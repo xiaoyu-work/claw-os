@@ -67,6 +67,17 @@ upstream identifiers; rename them before any commercial release.
 | `workspaces/` | github.com/pop-os/cosmic-workspaces-epoch | `cd729d045bd2` | GPL-3.0 |
 | `xdg-desktop-portal/` | github.com/pop-os/xdg-desktop-portal-cosmic | `308da48a2790` | GPL-3.0 |
 
+### Compositor dependency fork
+
+[`comp/vendor/smithay`](comp/vendor/README.md) retains the complete MIT-licensed
+Smithay snapshot at `211c19d712dc5f1b78eb879f1c195715801e37ff`, the compositor's
+previous Git dependency. The local three-file patch adds pre-offer and fresh
+pre-transfer selection read hooks; all other upstream files and modes remain
+unchanged. The upstream workspace stays separate from the compositor and its
+private dispatch-test workspace. Default access is unchanged until the OS
+compositor wires authenticated authority into the hooks; this source fork is
+not itself clipboard permission enforcement.
+
 ### Nested vendor (`toolkit/`'s own submodules)
 
 `libcosmic` (now `toolkit/`) consumes two upstream sub-trees as path

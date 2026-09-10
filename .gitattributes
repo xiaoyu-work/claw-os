@@ -33,3 +33,9 @@
 
 # Vite bundles may contain intentional whitespace inside generated templates.
 core/src/agent/web/ui/dist/assets/*.js -whitespace
+
+# Preserve the pinned upstream snapshot's whitespace; check our logical patch normally.
+desktop/comp/vendor/smithay/** linguist-vendored whitespace=-blank-at-eol
+desktop/comp/vendor/smithay/src/wayland/selection/mod.rs whitespace=blank-at-eol,blank-at-eof,space-before-tab
+desktop/comp/vendor/smithay/src/wayland/selection/seat_data.rs whitespace=blank-at-eol,blank-at-eof,space-before-tab
+desktop/comp/vendor/smithay/src/wayland/selection/offer.rs whitespace=blank-at-eol,blank-at-eof,space-before-tab

@@ -1,0 +1,22 @@
+[package]
+name = "claw-smithay-selection-read-tests"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.90"
+license = "GPL-3.0-only"
+publish = false
+
+[workspace]
+
+[[test]]
+name = "selection_read"
+path = "tests/selection_read.rs"
+
+[dev-dependencies]
+smithay = { path = "../../vendor/smithay", default-features = false, features = ["wayland_frontend"] }
+wayland-server = "=0.31.13"
+wayland-backend = "=0.3.15"
+wayland-client = "=0.31.14"
+wayland-protocols = { version = "=0.32.12", features = ["client", "staging", "unstable"] }
+wayland-protocols-wlr = { version = "=0.3.12", features = ["client"] }
+rustix = { version = "=1.1.4", features = ["event", "fs", "pipe"] }
