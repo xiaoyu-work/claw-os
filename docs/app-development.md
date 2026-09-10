@@ -703,10 +703,12 @@ not supply launcher or manifest authority. Unsupported Ask policies and
 direct-resource controls have an explanation rather than a working-looking
 switch.
 
-Store/package-channel integration, generic local-launch cutover and complete
-per-permission allow/ask/deny resource enforcement remain separate rollout
-work. Native component builds do not establish interactive Wayland or complete
-installed-system acceptance.
+Older `permission.*` clients and the legacy capability-helper mode remain
+compatible; other Settings and Agent Web approval callers still need the same
+presentation cutover. Store/package-channel integration, generic local-launch
+cutover and complete per-permission allow/ask/deny resource enforcement also
+remain separate rollout work. Native component builds do not establish
+interactive Wayland or complete installed-system acceptance.
 
 ## 9. Environment variables
 

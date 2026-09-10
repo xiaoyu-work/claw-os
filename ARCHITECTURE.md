@@ -102,8 +102,8 @@ Brokered App registrations and prepared MCP calls require owner review, while
 unreviewed background services remain inactive. The OS terminal and native
 approval gate share the renderer-independent `clawd-client::system_review`
 contract, catalog labels and permission choices. Core projects both verified
-App requests and existing capability approvals; no App supplies its own
-permission dialog or gains approval because it has a GUI. Root-owned
+App requests and existing capability approvals. The target App's GUI metadata
+selects neither this presentation contract nor approval authority. Root-owned
 presentation revisions bind each action to the snapshot the user saw.
 The privileged helper accepts bounded typed decisions; owner cancellation
 needs no elevation. App confirmation cannot apply choices, and capability

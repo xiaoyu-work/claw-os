@@ -166,13 +166,18 @@ comes from polkit, never the frontend's JSON. The closed decision is bounded
 to 64 KiB, names the displayed revision, and has only an action plus explicit
 supported permission selections. The owner cancellation route accepts
 `{review: ReviewDecision}` with only `cancel` and no choices, without
-elevation. Legacy id/decision input remains limited to immutable, non-grant
-App confirmation/cancellation; it cannot select capability permissions.
+elevation. Within `system.review.*`, legacy id/decision input remains limited
+to immutable, non-grant App confirmation/cancellation; it cannot select
+capability permissions.
 The broker reconstructs the current projection and refuses stale revisions,
 unknown/duplicate choices, unsupported policies and mixed confirmation/grant
 actions before the underlying authority rechecks its own bounds.
 Protected revision files carry no authority and do not replace owner
 generation, package verification, atomic decision or consumption checks.
+
+The older `permission.*` routes and capability-helper mode remain compatible
+with existing clients. This typed terminal/native cutover does not establish
+that every Settings or Agent Web approval caller has migrated to it.
 
 App operation/GUI registration, native-host registration and prepared MCP
 calls require an owner review before capability settlement. Unreviewed
