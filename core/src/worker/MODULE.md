@@ -53,6 +53,7 @@ and a root-owned executed artifact.
 | --- | --- |
 | `policy.rs` | `LaunchPolicy`, tiers, mounts, limits, digest, audit facts |
 | `derive.rs` | Trusted derivation from manifest/caps/runtime |
+| `entry.rs` | Generic signed package-local stdio entry admission; no product, origin or native-table exemption |
 | `trusted_desktop.rs` | Fixed vendor table of native Desktop App ids/programs; no current row receives a session bus or other desktop transport |
 | `migrate.rs` | One-time move of legacy App state into its partition |
 | `provider.rs` | `WorkerSandbox` seam, availability, fail-closed `prepare` |
@@ -94,6 +95,35 @@ requires UID 0 and creates its own private `/run` mount namespace before using
 the canonical routed registry and temporary review/home state. It runs no App
 code and never uses real user state or the installed broker. Use a distinct
 `CARGO_TARGET_DIR` for each source snapshot.
+
+## Declared App stdio
+
+`cos app stdio <id> <operation> [args...]` uses `bridge::run_app_stdio`,
+not `run_native_app_host`. The existing Mail compatibility executable remains
+on its previous path until its paired App/package cutover. The held verified
+package's ordinary operation must declare `stdin: true`; its primary entry
+must be a declared signed regular file, package-relative and executable for a
+binary runtime. Only its own resolved operation needs enter the existing
+review, deny and grant chain. No native identifier or publisher category can
+admit an absolute entry through this path.
+
+The stdio Host uses the ordinary `AppOperation` sandbox and private broker.
+Its active-input lifetime is streamed, while input EOF starts the normal
+300-second operation deadline. The trusted runner reads exactly its private
+32-byte launch gate without buffering App bytes ahead of exec. Raw stdout,
+incremental stdin, package rechecks and cancellation remain process-owned;
+review text uses stderr and never consumes the App protocol.
+
+Ordinary launch registration retains its existing route. Stdio may wait
+read-only for the owner's Root-controlled activation and capability decisions,
+then retries the exact original request; it never sends a reviewed flag or
+copies a grant. A supervised Host retains its private broker's structured
+refusal rather than reaching around it. Capability status replies must match
+the complete requested ID set.
+
+The existing nine-row absolute-entry/native MCP planner, sandbox tiers and
+legacy native-host authority remain in this checkpoint for shipped App
+compatibility. Their later retirement is not stdio admission.
 
 ## Policy derivation
 

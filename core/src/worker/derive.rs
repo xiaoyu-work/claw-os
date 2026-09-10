@@ -291,6 +291,8 @@ pub fn app_operation(input: AppOperationInput<'_>) -> Result<LaunchPolicy, Strin
 
     let limits = if input.desktop {
         Limits::desktop()
+    } else if matches!(input.stdio, StdioPlan::Streamed) {
+        Limits::server()
     } else {
         Limits::operation()
     };

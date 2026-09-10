@@ -1,10 +1,26 @@
 use super::*;
 
 #[test]
+fn stdio_catalogue_is_explicitly_non_model_callable_and_opaque() {
+    let command = command_help("app", "stdio").unwrap();
+    assert_eq!(command["command"], "cos app stdio");
+    assert_eq!(command["model_callable"], false);
+    assert!(command["model_tool"].is_null());
+    assert_eq!(command["stdin"], true);
+    assert_eq!(command["output_format"], "opaque");
+    assert!(!namespace_names().contains(&"app"));
+    assert!(overview("test", 0)["description"]
+        .as_str()
+        .unwrap()
+        .contains("except"));
+}
+
+#[test]
 fn catalogue_contains_every_public_router_namespace() {
     assert_eq!(
         namespace_names(),
         vec![
+            "review",
             "sys",
             "service",
             "checkpoint",

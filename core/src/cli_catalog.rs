@@ -9,6 +9,9 @@ use serde_json::{json, Map, Value};
 pub type CommandEntry = (&'static str, &'static str);
 pub type NamespaceEntry = (&'static str, &'static str, Vec<CommandEntry>);
 
+pub const APP_STDIO_DESCRIPTION: &str =
+    "Human/host-only opaque stdio for one verified App's declared stdin operation";
+
 /// Public CLI namespaces and their canonical commands.
 ///
 /// Aliases are intentionally omitted. A caller discovers one stable spelling,
@@ -220,7 +223,7 @@ pub fn overview(version: &str, apps_available: usize) -> Value {
     json!({
         "name": "cos",
         "version": version,
-        "description": "Claw OS - agent-native operating system. All commands return structured JSON.",
+        "description": "Claw OS - agent-native operating system. Commands return structured JSON except explicitly selected opaque App stdio.",
         "primitives": primitives,
         "total_primitives": primitives.len(),
         "apps_available": apps_available,
@@ -256,6 +259,16 @@ pub fn namespace_help(name: &str) -> Option<Value> {
 }
 
 pub fn command_help(namespace: &str, command: &str) -> Option<Value> {
+    if namespace == "app" && command == "stdio" {
+        return Some(json!({
+            "command": "cos app stdio",
+            "description": APP_STDIO_DESCRIPTION,
+            "model_callable": false,
+            "model_tool": Value::Null,
+            "stdin": true,
+            "output_format": "opaque",
+        }));
+    }
     let (_, _, commands) = builtin_namespaces()
         .into_iter()
         .find(|(name, _, _)| *name == namespace)?;

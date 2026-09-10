@@ -1,6 +1,26 @@
 use super::*;
 
 #[test]
+fn stdio_keeps_transport_arguments_out_of_global_format_parsing() {
+    for suffix in [
+        vec!["fixture", "host", "--json", "--stdin"],
+        vec!["fixture", "host", "--pretty", "--compact"],
+        vec!["fixture", "host", "--", "--schema", "--plain"],
+    ] {
+        let original: Vec<String> = ["app", "stdio"]
+            .into_iter()
+            .chain(suffix)
+            .map(str::to_string)
+            .collect();
+        assert!(router::app_stdio_uses_process_streams(&original));
+        assert_eq!(extract_format(original.clone()).0, original);
+        let mut formatted = vec!["--compact".to_string()];
+        formatted.extend(original.clone());
+        assert_eq!(extract_format(formatted).0, original);
+    }
+}
+
+#[test]
 fn wire_version_must_be_an_explicit_leading_v1_flag() {
     let (args, enabled) =
         extract_wire_version(vec!["--wire=1".into(), "ai".into(), "tools".into()]).unwrap();

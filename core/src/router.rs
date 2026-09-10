@@ -119,8 +119,22 @@ fn apps_dir() -> PathBuf {
     PathBuf::from(env::var("COS_APPS_DIR").unwrap_or_else(|_| "/usr/lib/cos/apps".into()))
 }
 
+/// Whether this standalone CLI invocation owns opaque process stdin/stdout.
+pub fn app_stdio_uses_process_streams(args: &[String]) -> bool {
+    app_commands::stdio_uses_process_streams(args)
+}
+
+/// Process-owned transport frontend, deliberately separate from model/internal
+/// dispatch so an in-process caller cannot lend its own protocol streams.
+pub fn dispatch_app_stdio(args: &[String]) -> Result<(), String> {
+    if !app_stdio_uses_process_streams(args) {
+        return Err("expected cos app stdio <id> <operation> [args...]".to_string());
+    }
+    app_commands::run_stdio(&args[2..])
+}
+
 /// Return whether argv explicitly selects stdin for an installed operation or
-/// an MCP-only command's JSON arguments. Management, help, schema, and desktop
+/// an exact MCP command's JSON arguments. Management, help, schema, and desktop
 /// routes never read stdin eagerly.
 pub fn app_operation_accepts_stdin(args: &[String]) -> bool {
     app_operation_accepts_stdin_in(args, &apps_dir())
@@ -133,7 +147,7 @@ fn app_operation_accepts_stdin_in(args: &[String], root: &Path) -> bool {
     let app_id = &args[1];
     if matches!(
         app_id.as_str(),
-        "lint" | "tool" | "install" | "create" | "consent"
+        "lint" | "tool" | "install" | "create" | "consent" | "stdio"
     ) {
         return false;
     }
@@ -145,7 +159,7 @@ fn app_operation_accepts_stdin_in(args: &[String], root: &Path) -> bool {
     // gated by `require_runnable`.
     apps::find(root, app_id)
         .and_then(|app| {
-            if apps::is_mcp_only_cli(&app.manifest) {
+            if apps::command_uses_mcp_cli(&app.manifest, &args[2]) {
                 return Some(
                     args[3..] == ["--args-stdin"]
                         && apps::mcp_tool_for_command(&app.manifest, &args[2]).is_ok(),
@@ -1884,7 +1898,8 @@ fn run_app_command(
     }
 }
 
-/// Dispatch a human `cos app <id> <command>` for an MCP-only App.
+/// Dispatch a human `cos app <id> <command>` that names an MCP tool rather
+/// than an explicitly declared ordinary operation.
 ///
 /// The command names one MCP tool by the fixed `<app_id>.<command>`
 /// convention. The exact tool, the CLI-bound arguments and the caller's
@@ -1892,8 +1907,8 @@ fn run_app_command(
 /// `AppServiceManager` over the `Access::User` `app_service.cli_call`
 /// route — the App's declared MCP handler runs there, never `main.py`,
 /// never an unbrokered local child, and never as a Task Host. This is a
-/// migration gate, not a runtime fallback: an MCP-only App never falls
-/// back to operations/main.py on any error.
+/// declaration-based selection, not a runtime fallback: an MCP call never
+/// falls back to operations/main.py on any error.
 fn run_app_mcp_command(
     app_name: &str,
     command: &str,

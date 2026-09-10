@@ -56,14 +56,14 @@ decides it, and never bypasses the signed manifest or caller's ceiling.
 Dynamic/direct-resource permissions are explicitly unsupported by this first
 management surface; see [installed compatibility and limits](updating.md).
 
-A staged migration is moving Apps off `operations` + `main.py run(command,
-args)` and onto the single `mcp.tools` contract. Until an App migrates it keeps
-its `operations`. Once an App declares **no** `operations` but still exposes an
-`mcp` service, the human `cos app <id> <command>` surface is served from
-`mcp.tools`: each command maps to exactly one tool by the `<app-id>.<command>`
-convention, and the call is dispatched to the App's MCP handler through the
-daemon rather than by running `main.py`. To keep CLI syntax stable without
-`operations`, an MCP tool arg may carry the same optional one-shot CLI
+A staged migration is moving ordinary App calls onto `mcp.tools`, while
+explicit manifest operations remain available. The human
+`cos app <id> <command>` selects a declared ordinary operation first. Otherwise
+it resolves exactly one tool by the `<app-id>.<command>` convention and dispatches
+through the authenticated MCP gateway. Adding a distinct operation, including
+an opaque stdio host, does not hide the App's MCP commands. Execution errors
+never trigger a fallback between these paths. To keep CLI syntax stable, an
+MCP tool arg may carry the same optional one-shot CLI
 `binding` (`positional`/`flag`) as an operation arg. `binding` is CLI-only
 metadata: it never appears in the model-facing MCP `inputSchema`, and the
 default binding is unchanged (`bool` → flag, everything else → positional).
@@ -305,9 +305,27 @@ recognized only in an App operation's pre-`--` option region, so command-owned
 (configurable with `COS_APP_STDIN_MAX_BYTES`) and fails before launch on
 overflow. The bridge never inherits or probes process stdin. Agent, MCP
 service, and ordinary CLI calls therefore keep child stdin closed. Python list
-handlers use `apps/canonical_argv.py`;
+handlers use the common App support package's `canonical_argv` module;
 argparse and gateway parsers consume the same inline flags and `--` delimiter
 directly.
+
+An explicitly declared opaque host instead uses
+`cos app stdio <id> <operation> [args...]`. It requires that operation's
+`stdin: true` and a held, authenticated primary entry. This human/host-only,
+non-model-callable frontend forwards incremental bytes rather than collecting
+one-shot input; it does not parse or reformat stdout or append a newline.
+Diagnostics and OS review presentation use stderr. App arguments resembling
+format flags remain App arguments, and `--` ends metadata-option interpretation.
+Actual streaming execution refuses `--wire=1`; help/schema output remains
+ordinary CLI metadata. Cancellation and the existing operation deadline after
+input EOF retire the worker and session.
+
+The opaque host uses the existing authorization, owner review, App denial,
+package-binding and sandbox mechanisms. It cannot choose an arbitrary program
+or obtain another operation's capabilities. Ordinary captured Python operations
+still require `main.py`; the declared-stdio path and MCP may use their own
+verified entries. Do not add a captured-operation fallback for other primary
+Python filenames.
 
 ### Filesystem MCP contract
 

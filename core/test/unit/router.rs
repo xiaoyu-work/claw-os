@@ -2395,3 +2395,102 @@ fn mcp_only_app_uses_daemon_dispatch_and_never_falls_back_to_main_py() {
         assert!(!ran_marker.exists());
     });
 }
+
+#[test]
+fn stdio_frontend_separates_metadata_from_process_owned_streams() {
+    for tail in [
+        vec![],
+        vec!["--help"],
+        vec!["--schema"],
+        vec!["fixture", "host", "--schema"],
+    ] {
+        let args: Vec<String> = ["app", "stdio"]
+            .into_iter()
+            .chain(tail)
+            .map(str::to_string)
+            .collect();
+        assert!(!app_stdio_uses_process_streams(&args));
+        assert!(!app_operation_accepts_stdin(&args));
+    }
+    for tail in [
+        vec!["fixture"],
+        vec!["fixture", "host"],
+        vec!["fixture", "host", "--", "--schema"],
+        vec!["fixture", "host", "--json", "--stdin"],
+    ] {
+        let args: Vec<String> = ["app", "stdio"]
+            .into_iter()
+            .chain(tail)
+            .map(str::to_string)
+            .collect();
+        assert!(app_stdio_uses_process_streams(&args));
+        assert!(!app_operation_accepts_stdin(&args));
+        assert!(dispatch(&args).unwrap_err().contains("standalone"));
+    }
+    let schema: serde_json::Value = serde_json::from_str(
+        &dispatch(&["app".into(), "stdio".into(), "--schema".into()])
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(schema["model_callable"], false);
+    assert_eq!(schema["output_format"], "opaque");
+    assert_eq!(schema["stdin"], true);
+    assert_eq!(schema["parameters"][0]["name"], "id");
+    assert_eq!(schema["parameters"][1]["name"], "operation");
+    assert_eq!(schema["parameters"][2]["name"], "args");
+}
+
+#[cfg(unix)]
+#[test]
+fn mixed_stdio_app_preserves_exact_mcp_commands_without_execution_fallback() {
+    with_runtime_app_test_env(|apps, data, _| {
+        let id = "mixed-stdio";
+        let directory = write_mcp_only_app(apps, id);
+        let path = directory.join("app.json");
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        manifest["entry"] = json!("server.py");
+        manifest["operations"] = json!({
+            "host": {"label": {"en": "Opaque host"}, "stdin": true, "needs": []},
+        });
+        std::fs::write(&path, manifest.to_string()).unwrap();
+        reseal_app(&directory, id);
+        let call = |tail: &[&str]| {
+            dispatch(
+                &["app", id]
+                    .into_iter()
+                    .chain(tail.iter().copied())
+                    .map(str::to_string)
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let schema: serde_json::Value =
+            serde_json::from_str(&call(&["--schema"]).unwrap().unwrap()).unwrap();
+        assert_eq!(schema["commands"].as_array().unwrap().len(), 2);
+        let tool_schema: serde_json::Value =
+            serde_json::from_str(&call(&["get", "--schema"]).unwrap().unwrap()).unwrap();
+        assert_eq!(tool_schema["parameters"][0]["name"], "key");
+        let args = ["app", id, "get", "--args-stdin"].map(str::to_string);
+        assert!(app_operation_accepts_stdin_in(&args, apps));
+        assert!(call(&["get", "key"]).is_err());
+        assert!(!data
+            .join("apps")
+            .join(id)
+            .join(format!("{id}.ran"))
+            .exists());
+
+        manifest["operations"]["get"] = json!({
+            "label": {"en": "Explicit operation"}, "stdin": true,
+            "args": [{"name": "ordinary", "kind": "text", "binding": "positional"}],
+        });
+        std::fs::write(&path, manifest.to_string()).unwrap();
+        reseal_app(&directory, id);
+        let schema: serde_json::Value =
+            serde_json::from_str(&call(&["get", "--schema"]).unwrap().unwrap()).unwrap();
+        assert_eq!(schema["parameters"][0]["name"], "ordinary");
+        let all: serde_json::Value =
+            serde_json::from_str(&call(&["--schema"]).unwrap().unwrap()).unwrap();
+        assert_eq!(all["commands"].as_array().unwrap().len(), 2);
+    });
+}

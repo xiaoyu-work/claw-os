@@ -36,6 +36,7 @@ pub mod broker;
 #[cfg(target_os = "linux")]
 pub mod cgroup;
 pub mod derive;
+pub mod entry;
 pub mod exec;
 #[cfg(target_os = "linux")]
 pub mod linux;

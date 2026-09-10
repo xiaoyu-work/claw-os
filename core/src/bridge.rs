@@ -10,7 +10,24 @@ use crate::caps::{Cap, CapSet, Scope, Verb};
 use crate::clawd::routes::Command as ClawdCommand;
 use crate::proc::{deregister_session, register_session, SessionInfo};
 
+mod consent;
 mod local;
+
+#[cfg(unix)]
+mod stdio;
+#[cfg(unix)]
+pub use stdio::run_app_stdio;
+
+#[cfg(not(unix))]
+pub fn run_app_stdio(
+    _launch: &AppLaunch,
+    _operation: &str,
+    _args: &[String],
+    _data_dir: &str,
+    _apps_dir: &str,
+) -> Result<(), String> {
+    Err("App stdio hosting requires Unix worker isolation".to_string())
+}
 
 use local::use_clawd_backend as use_clawd_app_session_backend;
 
@@ -133,6 +150,25 @@ impl AppLaunch {
             let _ = required;
             Err("App execution requires a Unix host".to_string())
         }
+    }
+
+    /// Keep the execution binding across a human wait and refuse changed
+    /// package bytes, trust or inode identities before releasing the worker.
+    pub(crate) fn bind_for_session<T>(
+        &self,
+        entrypoints: &[String],
+        register: impl FnOnce() -> Result<T, String>,
+    ) -> Result<(T, LaunchBindingRef), String> {
+        let before = self.bind(entrypoints)?;
+        let session = register()?;
+        let after = self.bind(entrypoints)?;
+        if before.dir_identity() != after.dir_identity() || before.entries() != after.entries() {
+            return Err(format!(
+                "App `{}` changed while waiting for launch authorization",
+                self.app_id()
+            ));
+        }
+        Ok((session, after))
     }
 }
 
@@ -651,7 +687,7 @@ impl AppIdentitySession {
         app_id: &str,
         request: &LaunchRequest<'_>,
         parent_caps: CapSet,
-        granted_caps: CapSet,
+        _granted_caps: CapSet,
         ceiling: Option<&crate::provenance::Ceiling>,
         package: &crate::provenance::runtime::PackageRef,
     ) -> Result<Self, String> {
@@ -659,25 +695,7 @@ impl AppIdentitySession {
         // what the daemon already resolved. The launcher's identity —
         // including the session an approval grant binds to — is derived
         // by `clawd` from this connection, never reported here.
-        let mut params = serde_json::json!({
-            "app_id": app_id,
-            "kind": request.kind(),
-            "parent_caps": parent_caps,
-            "package": package,
-        });
-        match request {
-            LaunchRequest::Operation { operation, args } => {
-                params["operation"] = serde_json::Value::String((*operation).to_string());
-                params["args"] = serde_json::to_value(args)
-                    .map_err(|error| format!("failed to serialize App arguments: {error}"))?;
-            }
-            LaunchRequest::Gui { exec } => {
-                params["operation"] = serde_json::Value::String((*exec).to_string());
-            }
-            LaunchRequest::Mcp { tool } => {
-                params["tool"] = serde_json::Value::String((*tool).to_string());
-            }
-        }
+        let params = app_registration_params(app_id, request, Some(&parent_caps), package)?;
 
         // A launch that needs capability consent is answered with the ids of the
         // requests the daemon filed. This process stays alive and waits,
@@ -694,6 +712,16 @@ impl AppIdentitySession {
                 clawd_request(ClawdCommand::AppSessionRegister, params).map_err(String::from)?
             }
         };
+        Self::from_clawd_registration(app_id, result, Some(parent_caps), ceiling, package)
+    }
+
+    fn from_clawd_registration(
+        app_id: &str,
+        result: serde_json::Value,
+        parent_caps: Option<CapSet>,
+        ceiling: Option<&crate::provenance::Ceiling>,
+        package: &crate::provenance::runtime::PackageRef,
+    ) -> Result<Self, String> {
         let session_id = result
             .get("session_id")
             .and_then(serde_json::Value::as_str)
@@ -716,7 +744,6 @@ impl AppIdentitySession {
         // the approvals and applies the provenance ceiling itself.
         // Adopting its answer is what keeps the isolation shape and the
         // live grant describing the same world.
-        let _ = granted_caps;
         let granted_caps = result
             .get("caps")
             .ok_or_else(|| {
@@ -745,7 +772,7 @@ impl AppIdentitySession {
                 proc_data_dir,
                 handle,
             },
-            parent_caps: Some(parent_caps),
+            parent_caps,
             package: package.clone(),
             granted_caps,
             relay: crate::worker::relay_slot(),
@@ -1205,6 +1232,16 @@ struct ClawdCallError {
     data: Option<serde_json::Value>,
 }
 
+impl ClawdCallError {
+    fn with_context(&self, context: &str) -> Self {
+        Self {
+            code: self.code.clone(),
+            message: format!("{}: {context}", self.message),
+            data: self.data.clone(),
+        }
+    }
+}
+
 impl From<crate::clawd::protocol::BrokerError> for ClawdCallError {
     fn from(error: crate::clawd::protocol::BrokerError) -> Self {
         Self {
@@ -1258,6 +1295,37 @@ fn clawd_request(
     }
 }
 
+fn app_registration_params(
+    app_id: &str,
+    request: &LaunchRequest<'_>,
+    parent_caps: Option<&CapSet>,
+    package: &crate::provenance::runtime::PackageRef,
+) -> Result<serde_json::Value, String> {
+    let mut params = serde_json::json!({
+        "app_id": app_id,
+        "kind": request.kind(),
+        "package": package,
+    });
+    if let Some(parent_caps) = parent_caps {
+        params["parent_caps"] = serde_json::to_value(parent_caps)
+            .map_err(|error| format!("serialize parent capabilities: {error}"))?;
+    }
+    match request {
+        LaunchRequest::Operation { operation, args } => {
+            params["operation"] = serde_json::Value::String((*operation).to_string());
+            params["args"] = serde_json::to_value(args)
+                .map_err(|error| format!("failed to serialize App arguments: {error}"))?;
+        }
+        LaunchRequest::Gui { exec } => {
+            params["operation"] = serde_json::Value::String((*exec).to_string());
+        }
+        LaunchRequest::Mcp { tool } => {
+            params["tool"] = serde_json::Value::String((*tool).to_string());
+        }
+    }
+    Ok(params)
+}
+
 /// Longest a launcher will hold its place while the user decides.
 const APPROVAL_WAIT: Duration = Duration::from_secs(120);
 const APPROVAL_POLL: Duration = Duration::from_millis(500);
@@ -1289,11 +1357,14 @@ fn approval_requests(error: &ClawdCallError) -> Vec<String> {
         })
         .and_then(|data| data.get("approval_requests"))
         .and_then(serde_json::Value::as_array)
-        .map(|ids| {
+        .and_then(|ids| {
             ids.iter()
-                .filter_map(serde_json::Value::as_str)
-                .map(ToOwned::to_owned)
-                .collect()
+                .map(|id| {
+                    id.as_str()
+                        .filter(|id| id.starts_with("ap-") && id.len() > 3)
+                        .map(ToOwned::to_owned)
+                })
+                .collect::<Option<Vec<_>>>()
         })
         .unwrap_or_default()
 }
@@ -1306,52 +1377,73 @@ fn approval_requests(error: &ClawdCallError) -> Vec<String> {
 /// wait is bounded, ends immediately on a rejection, and reports a
 /// terminal error for anything that is not a clean approval.
 fn wait_for_approvals(ids: &[String]) -> Result<(), String> {
-    let deadline = Instant::now() + APPROVAL_WAIT;
+    wait_for_approvals_until(ids, Instant::now() + APPROVAL_WAIT)
+}
+
+fn wait_for_approvals_until(ids: &[String], deadline: Instant) -> Result<(), String> {
     loop {
-        if APPROVAL_WAIT_CANCELLED.swap(false, Ordering::SeqCst) {
-            return Err("waiting for App launch approval was cancelled".to_string());
-        }
+        check_approval_wait(deadline)?;
         let result = clawd_request(
             ClawdCommand::PermissionStatus,
             serde_json::json!({"ids": ids}),
         )
         .map_err(String::from)?;
-        let statuses = result
-            .get("statuses")
-            .and_then(serde_json::Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let mut pending = false;
-        for entry in &statuses {
-            let id = entry
-                .get("id")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("");
-            match entry.get("status").and_then(serde_json::Value::as_str) {
-                Some("approved") => {}
-                Some("pending" | "resolving") => pending = true,
-                Some("denied") => {
-                    return Err(format!("App launch approval {id} was denied"));
-                }
-                other => {
-                    return Err(format!(
-                        "App launch approval {id} is no longer available ({})",
-                        other.unwrap_or("unknown")
-                    ));
-                }
-            }
-        }
-        if !pending {
+        if approval_statuses_complete(ids, &result)? {
             return Ok(());
         }
-        if Instant::now() >= deadline {
-            return Err(format!(
-                "timed out after {}s waiting for App launch approval",
-                APPROVAL_WAIT.as_secs()
-            ));
-        }
-        std::thread::sleep(APPROVAL_POLL);
+        std::thread::sleep(APPROVAL_POLL.min(deadline.saturating_duration_since(Instant::now())));
     }
+}
+
+fn approval_statuses_complete(ids: &[String], result: &serde_json::Value) -> Result<bool, String> {
+    let statuses = result
+        .get("statuses")
+        .and_then(serde_json::Value::as_array)
+        .ok_or("App approval status response omitted its statuses")?;
+    let expected: BTreeSet<_> = ids.iter().map(String::as_str).collect();
+    if expected.is_empty() || expected.len() != ids.len() || statuses.len() != ids.len() {
+        return Err("App approval status response does not match the requested ids".into());
+    }
+    let mut seen = BTreeSet::new();
+    let mut pending = false;
+    for entry in statuses {
+        let id = entry
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("App approval status response omitted an id")?;
+        if !expected.contains(id) || !seen.insert(id) {
+            return Err("App approval status response contains an unexpected or duplicate id".into());
+        }
+        match entry.get("status").and_then(serde_json::Value::as_str) {
+            Some("approved") => {}
+            Some("pending" | "resolving") => pending = true,
+            Some("denied") => return Err(format!("App launch approval {id} was denied")),
+            other => {
+                return Err(format!(
+                    "App launch approval {id} is no longer available ({})",
+                    other.unwrap_or("unknown")
+                ));
+            }
+        }
+    }
+    Ok(!pending)
+}
+
+fn check_approval_wait(deadline: Instant) -> Result<(), String> {
+    #[cfg(unix)]
+    if stdio::cancelled() {
+        return Err("waiting for App launch approval was cancelled".to_string());
+    }
+    if APPROVAL_WAIT_CANCELLED.swap(false, Ordering::SeqCst) {
+        return Err("waiting for App launch approval was cancelled".to_string());
+    }
+    if Instant::now() >= deadline {
+        return Err(format!(
+            "timed out after {}s waiting for App launch authorization",
+            APPROVAL_WAIT.as_secs()
+        ));
+    }
+    Ok(())
 }
 
 fn load_manifest(app_dir: &Path) -> Result<Option<Manifest>, String> {

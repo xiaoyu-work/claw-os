@@ -207,6 +207,7 @@ fn discover_apps() -> Value {
         "path": ["app"],
         "kind": "namespace",
         "management": {
+            "stdio": crate::cli_catalog::APP_STDIO_DESCRIPTION,
             "lint": "Validate installed App manifests and source policy",
             "tool": "Inspect App session tools",
             "install": "Install an App from a source directory",
@@ -220,6 +221,9 @@ fn discover_apps() -> Value {
 }
 
 fn discover_app(app_id: &str) -> Value {
+    if app_id == "stdio" {
+        return discover_builtin_command("app", "stdio", &["app".to_string(), "stdio".to_string()]);
+    }
     if let Some((description, subcommands)) = app_management(app_id) {
         return json!({
             "found": true,
@@ -467,6 +471,7 @@ fn discover_nested_builtin(path: &[String]) -> Option<Value> {
 
 fn app_management(name: &str) -> Option<(&'static str, &'static [&'static str])> {
     match name {
+        "stdio" => Some((crate::cli_catalog::APP_STDIO_DESCRIPTION, &[])),
         "lint" => Some(("Validate installed App manifests and source policy", &[])),
         "install" => Some(("Install an App from a source directory", &[])),
         "create" => Some(("Scaffold a new App", &[])),

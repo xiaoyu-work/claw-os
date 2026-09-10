@@ -81,7 +81,7 @@ pub(crate) fn show_apps(
         "apps": app_list,
         "total": app_list.len(),
         "quarantined": quarantined,
-        "hint": "Run: cos app <name> for app details, cos app <name> <command> [args] to execute. Scaffold a new App with: cos app create <id> [--kind cli|desktop|both]. Review verified permission requests without installing: cos app install <source-dir> --review. Install with permission disclosure: cos app install <source-dir>. Installation does not grant the requested permissions.",
+        "hint": "Run: cos app <name> for app details, cos app <name> <command> [args] to execute. Human/host opaque transport: cos app stdio <name> <operation> [args...] (requires declared stdin; see cos app stdio --schema). Scaffold a new App with: cos app create <id> [--kind cli|desktop|both]. Review verified permission requests without installing: cos app install <source-dir> --review. Install with permission disclosure: cos app install <source-dir>. Installation does not grant the requested permissions.",
     });
     Ok(Some(output.to_string()))
 }
@@ -99,24 +99,22 @@ pub(crate) fn show_app_help(name: &str, app: &apps::App) -> Result<Option<String
 }
 
 /// The human `cos app <id> <command>` surface as a `command -> label`
-/// map. Legacy operation Apps report their operations; MCP-only Apps
-/// report the commands derived from their `<app_id>.<command>` tools.
+/// map. Explicit operations take precedence over exact MCP command names.
 fn app_command_labels(app: &apps::App) -> serde_json::Map<String, Value> {
-    if apps::is_mcp_only_cli(&app.manifest) {
-        mcp_cli_commands(&app.manifest)
-            .into_iter()
-            .map(|(command, tool)| (command, json!(tool.summary.current())))
-            .collect()
-    } else {
+    let mut labels: serde_json::Map<String, Value> = mcp_cli_commands(&app.manifest)
+        .into_iter()
+        .map(|(command, tool)| (command, json!(tool.summary.current())))
+        .collect();
+    labels.extend(
         app.manifest
             .operations
             .iter()
-            .map(|(k, op)| (k.clone(), json!(op.label.current())))
-            .collect()
-    }
+            .map(|(name, operation)| (name.clone(), json!(operation.label.current()))),
+    );
+    labels
 }
 
-/// Ordered `(command, tool)` pairs an MCP-only App exposes to the human
+/// Ordered `(command, tool)` pairs an App exposes to the human
 /// CLI. Only tools that follow the `<app_id>.<command>` convention map
 /// to a CLI command; anything else stays agent-only.
 fn mcp_cli_commands(
@@ -134,6 +132,7 @@ fn mcp_cli_commands(
                     tool.name
                         .strip_prefix(&prefix)
                         .filter(|command| !command.is_empty())
+                        .filter(|command| !manifest.operations.contains_key(*command))
                         .map(|command| (command.to_string(), tool))
                 })
                 .collect()
@@ -202,6 +201,20 @@ impl Param {
 
 pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandSchema>)> {
     vec![
+        (
+            "app",
+            "App management and declared host transports",
+            vec![CommandSchema {
+                command: "stdio",
+                description: cli_catalog::APP_STDIO_DESCRIPTION,
+                params: vec![
+                    Param::positional("id", "string", true, "Installed verified App identity, never a program path"),
+                    Param::positional("operation", "string", true, "Ordinary manifest operation declaring stdin: true"),
+                    Param::positional("args", "array", false, "Manifest-bound operation arguments; -- ends option/schema parsing"),
+                ],
+                example: "cos app stdio example host",
+            }],
+        ),
         (
             "review",
             "Owner-scoped OS App confirmations and separate permission decisions",
@@ -659,11 +672,8 @@ pub(crate) fn show_app_command_schema(
     command: &str,
     app: &apps::App,
 ) -> Result<Option<String>, String> {
-    // Staged migration gate: an App with no operations but an MCP service
-    // resolves its CLI schema from the manifest-declared tool named by the
-    // `<app_id>.<command>` convention. Schema introspection reads the
-    // manifest only and never runs App code.
-    let schema = if apps::is_mcp_only_cli(&app.manifest) {
+    // Selection is by declaration, never by retrying another execution path.
+    let schema = if apps::command_uses_mcp_cli(&app.manifest, command) {
         let tool = apps::mcp_tool_for_command(&app.manifest, command)?;
         apps::tool_schema(tool)
     } else {
@@ -687,28 +697,25 @@ pub(crate) fn show_app_command_schema(
 
 pub(crate) fn show_app_schema(app_name: &str, app: &apps::App) -> Result<Option<String>, String> {
     let mut commands = Vec::new();
-    if apps::is_mcp_only_cli(&app.manifest) {
-        for (command, tool) in mcp_cli_commands(&app.manifest) {
-            let schema = apps::tool_schema(tool);
-            commands.push(json!({
-                "command": command,
-                "label": tool.summary.current(),
-                "description": tool.summary.current(),
-                "parameters": schema["parameters"].clone(),
-                "stdin": schema["stdin"].clone(),
-            }));
-        }
-    } else {
-        for (cmd_name, op) in &app.manifest.operations {
-            let schema = apps::operation_schema(op);
-            commands.push(json!({
-                "command": cmd_name,
-                "label": op.label.current(),
-                "description": op.summary.current(),
-                "parameters": schema["parameters"].clone(),
-                "stdin": schema["stdin"].clone(),
-            }));
-        }
+    for (command, tool) in mcp_cli_commands(&app.manifest) {
+        let schema = apps::tool_schema(tool);
+        commands.push(json!({
+            "command": command,
+            "label": tool.summary.current(),
+            "description": tool.summary.current(),
+            "parameters": schema["parameters"].clone(),
+            "stdin": schema["stdin"].clone(),
+        }));
+    }
+    for (cmd_name, op) in &app.manifest.operations {
+        let schema = apps::operation_schema(op);
+        commands.push(json!({
+            "command": cmd_name,
+            "label": op.label.current(),
+            "description": op.summary.current(),
+            "parameters": schema["parameters"].clone(),
+            "stdin": schema["stdin"].clone(),
+        }));
     }
 
     let output = json!({

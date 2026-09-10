@@ -1315,22 +1315,19 @@ Manifest/schema discovery must remain side-effect free and must not execute the
 app entrypoint.
 
 App identity and capabilities are issued by the daemon authority, never
-asserted by the launcher, environment, or MCP business arguments. Human CLI
-operations remain one-shot commands. For an operation launch, `clawd` re-reads
+asserted by the launcher, environment, or MCP business arguments. Ordinary
+captured CLI operations remain one-shot commands. For an operation launch, `clawd` re-reads
 the installed manifest, derives capabilities from the operation and effective
 arguments, and binds a strictly narrower grant to the launched process tree.
 
-A staged migration moves each App from legacy `operations` + `main.py
-run(command, args)` to a single `mcp.tools` contract with direct
-`claw_os_sdk.mcp` handlers. During that transition the human `cos app <id>
-<command>` surface is gated per App: an App that still declares any `operations`
-keeps the operation launch above, while an **MCP-only** App (empty `operations`
-with an `mcp` service) dispatches the same human command through a dedicated
-authenticated-CLI broker route, `app_service.cli_call` (`Access::User`). This is
-a migration gate, not a runtime fallback: an MCP-only App never runs `main.py`,
-never launches an unbrokered local child, and never falls back to
-operations on error. The command maps to exactly one tool by the
-`<app-id>.<command>` convention; ambiguous or non-matching commands are refused.
+A staged migration moves ordinary App calls to the `mcp.tools` contract with
+direct `claw_os_sdk.mcp` handlers. Selection is per command: an explicitly
+declared `operations.<command>` wins; otherwise the human `cos app <id>
+<command>` resolves exactly one `<app-id>.<command>` MCP tool and uses the
+dedicated authenticated-CLI route, `app_service.cli_call` (`Access::User`).
+A distinct operation does not disable an App's MCP surface. Ambiguous or
+non-matching commands are refused, and execution errors never select another
+path or create an unbrokered child.
 The explicit, exclusive `--args-stdin` selector accepts a bounded JSON object
 of business arguments instead of argv. Both paths use the same manifest
 defaults/validation and broker authorization. Raw `--stdin` remains rejected;
@@ -1339,6 +1336,16 @@ JSON input is capped at 1008 KiB (or a lower `COS_APP_STDIN_MAX_BYTES`), leaving
 envelope headroom under the unchanged 1 MiB broker request cap. Only the CLI
 route's argument strings use this larger bounded allowance; general broker
 metadata retains its 64 KiB string cap and all structural limits still apply.
+
+`cos app stdio <id> <operation> [args...]` is a separate human/host transport
+for an ordinary manifest operation declaring `stdin: true`. It uses a held
+verified primary entry and the existing review/capability/sandbox path, but
+owns the process streams: input is incremental and stdout stays opaque.
+Review/errors go to stderr; cancellation and a bounded post-EOF deadline
+retire the worker and session. It is non-model-callable and does not pass
+through the captured Python `main.py` wrapper or JSON output formatting.
+This exception does not imply support for other primary Python filenames in
+ordinary captured operation/GUI execution.
 
 The MCP-only `fs` service accepts explicit text/base64 content for writes.
 Rust desktop filesystem writes always serialize `{path, content}` over this

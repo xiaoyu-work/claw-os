@@ -307,18 +307,22 @@ pub fn operation_schema(operation: &Operation) -> Value {
 }
 
 /// Whether an App is MCP-only for CLI dispatch purposes: it declares no
-/// legacy `operations` yet exposes an `mcp` service. This is the staged
-/// migration gate — an App with any operation keeps the legacy
-/// `run(command, args)` CLI dispatch unchanged.
+/// ordinary `operations` yet exposes an `mcp` service.
 pub fn is_mcp_only_cli(manifest: &Manifest) -> bool {
     manifest.operations.is_empty() && manifest.mcp.is_some()
+}
+
+/// An explicit operation takes precedence. Independent MCP commands remain
+/// available when an App also declares an ordinary host transport operation.
+pub fn command_uses_mcp_cli(manifest: &Manifest, command: &str) -> bool {
+    !manifest.operations.contains_key(command) && manifest.mcp.is_some()
 }
 
 /// Resolve a human `cos app <id> <command>` to the exact MCP tool it
 /// names, by the fixed `<app_id>.<command>` convention.
 ///
-/// Only exposed when the App is MCP-only (no operations). The mapping is
-/// exact: an ambiguous or non-matching command is rejected rather than
+/// The caller selects this only when no ordinary operation matches. The
+/// mapping is exact: an ambiguous or non-matching command is rejected rather than
 /// guessed, so CLI syntax stays stable and unforgeable.
 pub fn mcp_tool_for_command<'a>(
     manifest: &'a Manifest,

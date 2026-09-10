@@ -26,6 +26,9 @@ pub(super) fn dispatch_app(
     args: &[String],
     stdin_data: Option<Vec<u8>>,
 ) -> Result<Option<String>, String> {
+    if args.first().map(String::as_str) == Some("stdio") {
+        return stdio_schema(&args[1..]);
+    }
     let apps_dir = apps_dir();
     // Listing includes quarantined installs on purpose: an operator has
     // to be able to see that an App exists and why it will not run.
@@ -123,14 +126,9 @@ pub(super) fn dispatch_app(
         return show_app_command_schema(app_name, command, app);
     }
 
-    // Staged migration gate: an App with no legacy `operations` but an
-    // `mcp` service dispatches its human `cos app <id> <command>` through
-    // the daemon-owned AppServiceManager instead of running `main.py`. An
-    // App that still declares any operation keeps the legacy
-    // `run(command, args)` dispatch unchanged. This is a migration gate,
-    // not a runtime fallback: an MCP-only App never falls back to
-    // operations/main.py on any error.
-    if apps::is_mcp_only_cli(&app.manifest) {
+    // Select by declaration before execution. Ordinary operations retain
+    // precedence; an independent MCP command never falls back to main.py.
+    if apps::command_uses_mcp_cli(&app.manifest, command) {
         // Reject an ambiguous or non-matching command before launch.
         apps::mcp_tool_for_command(&app.manifest, command)?;
         require_runnable(app)?;
@@ -147,6 +145,78 @@ pub(super) fn dispatch_app(
 
     require_runnable(app)?;
     run_app_command(app_name, command, &cmd_args, app, stdin_data)
+}
+
+pub(super) fn stdio_uses_process_streams(args: &[String]) -> bool {
+    if args.first().map(String::as_str) != Some("app")
+        || args.get(1).map(String::as_str) != Some("stdio")
+    {
+        return false;
+    }
+    let tail = &args[2..];
+    !tail.is_empty()
+        && !(tail.len() == 1 && matches!(tail[0].as_str(), "--help" | "-h" | "help" | "--schema"))
+        && !(tail.len() >= 2 && schema_requested(&tail[2..]))
+}
+
+fn stdio_schema(args: &[String]) -> Result<Option<String>, String> {
+    if args.is_empty()
+        || (args.len() == 1 && matches!(args[0].as_str(), "--help" | "-h" | "help" | "--schema"))
+    {
+        return crate::cli_help::show_command_schema("app", "stdio");
+    }
+    if args.len() >= 2 && schema_requested(&args[2..]) {
+        let app = apps::find_verified_fresh(&apps_dir(), &args[0])?;
+        let operation = app
+            .manifest
+            .operations
+            .get(&args[1])
+            .ok_or_else(|| format!("App `{}` has no operation `{}`", args[0], args[1]))?;
+        if !operation.stdin {
+            return Err(format!(
+                "App operation `{}` does not declare stdin input",
+                args[1]
+            ));
+        }
+        let mut schema = apps::operation_schema(operation);
+        schema["command"] = json!(format!("cos app stdio {} {}", args[0], args[1]));
+        schema["model_callable"] = json!(false);
+        schema["output_format"] = json!("opaque");
+        schema["entry"] = json!(app
+            .manifest
+            .entry
+            .as_deref()
+            .unwrap_or_else(|| app.manifest.runtime.default_entry()));
+        return Ok(Some(schema.to_string()));
+    }
+    Err("opaque App stdio requires the standalone `cos app stdio` process frontend".into())
+}
+
+pub(super) fn run_stdio(args: &[String]) -> Result<(), String> {
+    let (Some(app_id), Some(operation)) = (args.first(), args.get(1)) else {
+        return Err("usage: cos app stdio <id> <operation> [args...]".into());
+    };
+    let app = apps::find_verified_fresh(&apps_dir(), app_id)?;
+    require_runnable(&app)?;
+    let launch = crate::bridge::AppLaunch::new(std::sync::Arc::clone(app.require_verified()?))?;
+    let started = std::time::Instant::now();
+    let result = crate::bridge::run_app_stdio(
+        &launch,
+        operation,
+        &args[2..],
+        &super::data_dir(),
+        &apps_dir().to_string_lossy(),
+    );
+    crate::audit::log_entry(
+        &super::audit_path(),
+        app_id,
+        operation,
+        &args[2..],
+        started,
+        if result.is_ok() { "ok" } else { "error" },
+        result.as_ref().err().map(String::as_str),
+    );
+    result
 }
 
 /// Refuse to run a quarantined App, and re-assert the verified snapshot

@@ -49,6 +49,11 @@ fn extract_format(argv: Vec<String>) -> (Vec<String>, OutputFormat) {
     let mut explicit: Option<OutputFormat> = None;
     let mut options = true;
     for a in argv {
+        if kept.first().map(String::as_str) == Some("app")
+            && kept.get(1).map(String::as_str) == Some("stdio")
+        {
+            options = false;
+        }
         if options && a == "--" {
             options = false;
             kept.push(a);
@@ -195,9 +200,23 @@ fn wire_failure(error: &str) -> serde_json::Value {
 
 fn main() {
     let raw_args: Vec<String> = env::args().skip(1).collect();
+    let without_wire = if raw_args
+        .first()
+        .is_some_and(|arg| arg.starts_with("--wire="))
+    {
+        &raw_args[1..]
+    } else {
+        &raw_args
+    };
+    let opaque_stdio =
+        router::app_stdio_uses_process_streams(&extract_format(without_wire.to_vec()).0);
     let (raw_args, wire_v1) = match extract_wire_version(raw_args) {
         Ok(parsed) => parsed,
         Err(error) => {
+            if opaque_stdio {
+                eprintln!("cos app stdio: {error}");
+                process::exit(1);
+            }
             println!(
                 "{}",
                 wire_failure(
@@ -219,7 +238,7 @@ fn main() {
     if let Err(refusal) =
         cos::update::runtime::enforce_startup(cos::update::runtime::Scope::CompiledEpoch)
     {
-        if wire_v1 {
+        if wire_v1 && !opaque_stdio {
             println!(
                 "{}",
                 wire_failure(
@@ -236,6 +255,19 @@ fn main() {
         process::exit(1);
     }
     let (raw_args, fmt) = extract_format(raw_args);
+    if opaque_stdio {
+        if wire_v1 {
+            eprintln!("cos app stdio is an opaque transport and does not support --wire=1");
+            process::exit(1);
+        }
+        // The broker authenticates this launcher. Do not manufacture a CLI
+        // parent or collect/format either side of the App-owned byte stream.
+        if let Err(error) = router::dispatch_app_stdio(&raw_args) {
+            eprintln!("{error}");
+            process::exit(1);
+        }
+        return;
+    }
     let fmt = if wire_v1 { OutputFormat::Compact } else { fmt };
     let operation_accepts_stdin = router::app_operation_accepts_stdin(&raw_args);
     let (args, stdin_requested) = extract_stdin_request(raw_args, operation_accepts_stdin);

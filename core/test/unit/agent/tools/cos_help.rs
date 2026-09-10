@@ -1,5 +1,22 @@
 use super::*;
 
+#[tokio::test]
+async fn stdio_discovery_explains_the_human_host_transport_without_exposing_a_tool() {
+    let schema = parse(CosHelp.exec(json!({"path": ["app", "stdio"]})).await);
+    assert_eq!(schema["command"], "cos app stdio");
+    assert_eq!(schema["model_callable"], false);
+    assert!(schema["model_tool"].is_null());
+    assert_eq!(schema["output_format"], "opaque");
+    assert_eq!(schema["stdin"], true);
+    assert_eq!(schema["parameters"][0]["name"], "id");
+    assert_eq!(schema["parameters"][1]["name"], "operation");
+    assert!(schema["parameters"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|parameter| parameter["name"] != "program"));
+}
+
 fn parse(result: ToolResult) -> Value {
     assert!(!result.is_error, "unexpected discovery error: {result:?}");
     serde_json::from_str(&result.content).expect("discovery result must be JSON")

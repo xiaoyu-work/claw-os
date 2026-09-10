@@ -43,6 +43,8 @@ persistence, and structured primitive dispatch.
 | `src/worker/` | Shared hostile-worker sandbox: launch policy, Linux provider, per-launch brokers |
 | `src/apps.rs` | `app.json` discovery and side-effect-free schema generation |
 | `src/bridge/local.rs` | Protected in-process Root App registration; held package review and owner/App deny checks before session creation |
+| `src/bridge/stdio.rs` | Generic declared-stdin operation hosting: held App binding, raw streams, cancellation and bounded EOF teardown |
+| `src/bridge/consent.rs` | Stdio launcher's read-only review/capability wait; retries unchanged registration without deciding or consuming consent |
 | `src/apps/permission_review.rs` | OS-catalog permission disclosure and comparison contract; not authorization |
 | `src/approvals/system_review.rs` | Private owner-bound review records, revocation generations and single-use confirmation; never capability grants |
 | `src/approvals/presentation.rs` | Protected monotonic display revisions and strict owner-scoped reads of existing capability requests; never authorization |
@@ -67,6 +69,22 @@ The core review controllers depend on the renderer-independent
 desktop component. A displayed revision is comparison state only. Root
 controllers validate every decision and then delegate to the existing App
 confirmation or capability authority; installation never implies Allow All.
+
+`cos app stdio <id> <operation> [args...]` is a human/host transport, not a
+model-callable command or executable selector. It runs a signed package-local
+primary entry for an ordinary `stdin: true` operation with only that operation's
+resolved needs. The process preserves opaque stdout and incremental stdin; it
+does not invoke the captured Python `main.py/run` wrapper or format a JSON result.
+Ordinary Python non-`main.py` operations outside this stdio contract remain
+unsupported. Explicit ordinary operations take precedence over same-name MCP
+commands; the other exact `<id>.<command>` tools still use the existing MCP
+service, never a fallback to Python dispatch.
+
+The new package-local stdio admission coexists with the existing absolute-entry
+native MCP planner and its nine fixed rows until App-owned native payloads are
+available. It never consults those rows or acquires a native exemption.
+The legacy native-host API, authority routes and Mail compatibility executable
+remain unchanged until their paired App/package cutover is consumable.
 
 Read [`src/agent/MODULE.md`](src/agent/MODULE.md) before changing agent code.
 Project-wide rules are in [`../ARCHITECTURE.md`](../ARCHITECTURE.md).

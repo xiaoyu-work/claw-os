@@ -45,7 +45,13 @@ fn main() {
     if let Some(expected) = launch_gate.as_deref() {
         disable_dumpability();
         let mut received = [0u8; 32];
-        if std::io::stdin().lock().read_exact(&mut received).is_err()
+        // Read only the gate; buffered stdin could consume App protocol bytes
+        // that must remain on the descriptor across exec.
+        let input = unsafe { std::os::fd::BorrowedFd::borrow_raw(libc::STDIN_FILENO) };
+        let input = input
+            .try_clone_to_owned()
+            .unwrap_or_else(|_| fail("App launch-gate input is unavailable"));
+        if std::fs::File::from(input).read_exact(&mut received).is_err()
             || received != expected.as_bytes()
         {
             fail("single-call App launch was not authorized");
