@@ -16,8 +16,7 @@ fn client(uid: u32) -> ClientIdentity {
 #[tokio::test]
 async fn verified_app_request_trusted_approval_and_revocation_share_owner_policy() {
     let _lock = crate::test_env::lock_env();
-    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../build");
-    let dir = tempfile::tempdir_in(&root).unwrap();
+    let dir = tempfile::tempdir().unwrap();
     let _data = TestEnvVarGuard::set("COS_DATA_DIR", dir.path().join("data"));
     let _caps = TestEnvVarGuard::set("COS_CAPS_DATA_DIR", dir.path().join("caps"));
     let _proc = TestEnvVarGuard::set("COS_PROC_DATA_DIR", dir.path().join("proc"));
@@ -51,8 +50,10 @@ async fn verified_app_request_trusted_approval_and_revocation_share_owner_policy
         domain: crate::provenance::state::TrustDomain::Owner(uid),
     }];
     crate::test_env::record_trust_state(&roots);
+    let trust_store = crate::provenance::TrustStore::load_roots(&roots);
+    assert!(!trust_store.is_empty(), "fixture publisher did not load: {:?}", trust_store.diagnostics());
     crate::provenance::set_trust_store_for_roots(
-        crate::provenance::TrustStore::load_roots(&roots),
+        trust_store,
         roots,
     );
     struct ResetTrust;
@@ -136,6 +137,40 @@ async fn verified_app_request_trusted_approval_and_revocation_share_owner_policy
         control(query.clone(), &owner, None).await.unwrap()["permissions"][0]["enabled"],
         false
     );
+    let restore = control(
+        json!({"action":"request","app_id":"permission-fixture","permission_id":permission,"reason":"restore through OS review"}),
+        &owner, None,
+    ).await.unwrap();
+    let displayed = super::super::system_review::show(
+        json!({"id":restore["id"]}), &owner,
+    ).await.unwrap();
+    let displayed: clawd_client::system_review::SystemReview =
+        serde_json::from_value(displayed).unwrap();
+    use clawd_client::system_review::{PermissionChoice, PermissionSelection, ReviewAction, ReviewDecision};
+    assert_eq!(displayed.subject.app_id.as_deref(), Some("permission-fixture"));
+    assert_eq!(displayed.permissions[0].uses[0].purpose, "Audio status");
+    assert_eq!(displayed.permissions[0].supported_choices,
+        vec![PermissionChoice::Deny, PermissionChoice::Restore]);
+    let typed = ReviewDecision {
+        id: displayed.id.clone(), revision: displayed.revision, action: ReviewAction::ApplyChoices,
+        choices: vec![PermissionSelection {
+            permission_id: displayed.permissions[0].id.clone(), choice: PermissionChoice::Restore,
+        }],
+    };
+    let restored = super::super::system_review::decide(
+        json!({"owner_uid":uid,"review":typed}), &client(0),
+    ).await.unwrap();
+    assert_eq!(restored["status"], "completed");
+    assert!(restored["permissions"][0]["current"].is_null());
+    let receipt = approvals::list_recent_for_owner(100, Some(uid)).into_iter()
+        .find(|resolved| resolved.request.id == displayed.id).unwrap();
+    assert!(receipt.decision.grant.is_none());
+    assert!(receipt.decision.restoration.is_some());
+    assert_eq!(
+        control(query.clone(), &owner, None).await.unwrap()["permissions"][0]["enabled"],
+        true
+    );
+    control(revoke.clone(), &owner, None).await.unwrap();
     let mut forged = query.clone();
     forged["action"] = json!("revoke");
     forged["permission_id"] = json!("undeclared-expansion");

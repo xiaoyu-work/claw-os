@@ -53,7 +53,8 @@ editing additional surfaces.
 | MCP client/server integration | `core/src/agent/tools/mcp/`, `core/src/config.rs` | tool registry and agent lifecycle attachment |
 | Extension package provenance (App/Skill/MCP signing, trust roots, revocation) | `core/src/provenance/`, `docs/extension-provenance.md` | `core/src/apps.rs`, `core/src/agent/skills/loader.rs`, `core/src/agent/tools/mcp/discover.rs`, `packaging/deb/build-debs.sh` |
 | App client/business/MCP operation | External `clawos-app` guide and owning `products/<group>/package.json` or `capabilities/<group>/package.json` | Declared App manifest, entrypoint and tests; versioned SDK/runtime; OS source-pin/package delivery |
-| App installation or requested-permission disclosure | `core/src/router/app_commands.rs`, `core/src/apps/permission_review.rs` | Verified package snapshots, capability catalog, CLI/Store presentation, separate runtime authorization and AI consent |
+| App installation or requested-permission disclosure | `core/src/router/app_commands.rs`, `core/src/apps/permission_review.rs` | Verified snapshots, OS catalog, protected review controller, separate runtime authorization and AI consent |
+| OS permission review UI or decision | `core/src/clawd/system_review.rs`, `crates/clawd-client/MODULE.md` | Shared App/capability DTO, protected display revisions, terminal and native renderers, bounded polkit helper, owner-only cancellation and existing approval authority |
 | Bundled App product boundary or source fork | `docs/app-product-redesign.md`, `apps/MODULE.md` | Product UI/backend, manifests, provenance/licenses, native launchers, account/state migration, packaging |
 | Adapter | `adapters/<id>/app.json`, `adapters/<id>/main.py` | adapter tests and external binary dependency |
 | App/SDK wire contract | `claw-os-sdk/wire/`, language SDK package | generated bindings, conformance tests, `publish-sdk-release.yml` |
@@ -204,6 +205,12 @@ installation review, including conditional needs, argument constraints, AI
 policy and background/external-Agent access. A review digest is comparison
 data, never an authorization token. Installing or selecting a default App must
 not implicitly grant its requested capabilities.
+
+OS review presentation changes must cover both terminal and native renderers,
+the root controller and the bounded helper. Decisions use the revision actually
+displayed. App confirmations never contain permission choices, and renderers
+advertise only choices enforced by the existing authority. Neither a new
+renderer nor a returned JSON object is a new source of consent.
 
 ### New or changed capability
 

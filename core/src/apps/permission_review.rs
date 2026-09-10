@@ -241,7 +241,7 @@ fn collect(
     Ok(())
 }
 
-fn scope_description(scope: &ScopeBinding) -> Result<String, String> {
+pub(crate) fn scope_description(scope: &ScopeBinding) -> Result<String, String> {
     let quote = |value: &str| {
         serde_json::to_string(value).map_err(|error| format!("format permission scope: {error}"))
     };

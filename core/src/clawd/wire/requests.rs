@@ -409,12 +409,53 @@ pub struct SystemReviewId {
     pub id: Token,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(transparent)]
+pub struct SystemReviewDecision(pub clawd_client::system_review::ReviewDecision);
+
+impl<'de> Deserialize<'de> for SystemReviewDecision {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = Structured::deserialize(deserializer)?;
+        let bytes = serde_json::to_vec(value.as_value()).map_err(serde::de::Error::custom)?;
+        clawd_client::system_review::ReviewDecision::decode(&bytes)
+            .map(Self)
+            .map_err(serde::de::Error::custom)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SystemReviewDecide {
+pub struct TypedSystemReviewDecide {
+    pub owner_uid: u32,
+    pub review: SystemReviewDecision,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LegacySystemReviewDecide {
     pub id: Token,
     pub owner_uid: u32,
     pub decision: Name,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SystemReviewDecide {
+    Typed(TypedSystemReviewDecide),
+    Legacy(LegacySystemReviewDecide),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TypedSystemReviewCancel {
+    pub review: SystemReviewDecision,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SystemReviewCancel {
+    Typed(TypedSystemReviewCancel),
+    Legacy(SystemReviewId),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

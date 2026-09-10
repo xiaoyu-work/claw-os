@@ -18,11 +18,11 @@ pub fn builtin_namespaces() -> Vec<NamespaceEntry> {
     vec![
         (
             "review",
-            "OS-owned App permission review; confirmation is not a capability grant",
+            "OS-owned App confirmations and explicit system permission choices",
             vec![
                 ("pending", "List the current user's pending system reviews"),
                 ("show", "Display one authenticated system review"),
-                ("approve", "Confirm a review through the interactive OS approval helper"),
+                ("approve", "Confirm an App review or choose permissions through the OS helper"),
                 ("deny", "Cancel one of the current user's pending system reviews"),
             ],
         ),

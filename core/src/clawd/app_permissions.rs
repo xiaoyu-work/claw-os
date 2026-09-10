@@ -144,6 +144,10 @@ fn fixed_cap(need: &Need) -> Option<Cap> {
 }
 
 pub(crate) fn validate_approval(request: &approvals::Request) -> Result<(), String> {
+    approval_app(request).map(|_| ())
+}
+
+pub(crate) fn approval_app(request: &approvals::Request) -> Result<crate::apps::App, String> {
     let (_, app_id) = app_policy::validate_request(request)?;
     let app = super::app_sessions::installed_app(&app_id)?;
     let cap = Cap::new(
@@ -175,7 +179,7 @@ pub(crate) fn validate_approval(request: &approvals::Request) -> Result<(), Stri
     {
         return Err("permission exceeds the current verified package ceiling".into());
     }
-    Ok(())
+    Ok(app)
 }
 
 fn permission_id(need: &Need) -> String {

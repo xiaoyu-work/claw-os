@@ -43,7 +43,9 @@ persistence, and structured primitive dispatch.
 | `src/apps.rs` | `app.json` discovery and side-effect-free schema generation |
 | `src/apps/permission_review.rs` | OS-catalog permission disclosure and comparison contract; not authorization |
 | `src/approvals/system_review.rs` | Private owner-bound review records, revocation generations and single-use confirmation; never capability grants |
+| `src/approvals/presentation.rs` | Protected monotonic display revisions and strict owner-scoped reads of existing capability requests; never authorization |
 | `src/clawd/system_review.rs` | Root-broker review preparation, pending/show, privileged decisions and confirmation consumption |
+| `src/clawd/system_review/presentation.rs` | Authenticated App/capability projection into the shared terminal and native desktop DTO |
 | `src/router/system_review.rs` | Terminal review presentation and trusted-helper decisions; no local approval state |
 | `src/router/app_commands.rs` | Authenticated install preview, pre-publication permission review and atomic App replacement |
 | `src/audit.rs` | Hash-chained audit persistence |
@@ -57,6 +59,12 @@ Providers implement those definitions; consumers must not import around them.
 `clawd` is the privileged boundary, and it does not run the model/tool loop:
 that executes in `claw-agentd` — see [`src/agentd/MODULE.md`](src/agentd/MODULE.md).
 App code and model output are untrusted inputs at this layer.
+
+The core review controllers depend on the renderer-independent
+[`clawd-client` review contract](../crates/clawd-client/MODULE.md), not the
+desktop component. A displayed revision is comparison state only. Root
+controllers validate every decision and then delegate to the existing App
+confirmation or capability authority; installation never implies Allow All.
 
 Read [`src/agent/MODULE.md`](src/agent/MODULE.md) before changing agent code.
 Project-wide rules are in [`../ARCHITECTURE.md`](../ARCHITECTURE.md).
@@ -94,6 +102,9 @@ These pinned integration inputs are not production core build dependencies.
 ```bash
 # Narrow test or module
 cargo test -p cos <test-filter> -- --test-threads=1
+
+# Shared App/capability review projection, controllers, terminal and bounded helper
+cargo test -p cos --lib --bin claw-approval-helper system_review -- --test-threads=1
 
 # Immutable product/capability fixture resolution.
 cargo test -p cos --test app_source_fixtures -- --test-threads=1

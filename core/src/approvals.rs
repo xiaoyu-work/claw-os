@@ -36,6 +36,7 @@ use crate::caps::{Cap, ConsentContext, Risk, Scope, ScopeKind, Verb};
 pub mod generations;
 pub mod app_policy;
 pub mod system_review;
+pub(crate) mod presentation;
 
 pub use generations::RevocationScope;
 
@@ -59,6 +60,14 @@ impl GrantDuration {
             "session" => Some(Self::Session),
             "forever" | "always" => Some(Self::Forever),
             _ => None,
+        }
+    }
+
+    pub(crate) fn limits(self) -> (u64, u32) {
+        match self {
+            Self::Once => (SESSION_GRANT_SECS, 1),
+            Self::Session => (SESSION_GRANT_SECS, REPEATABLE_GRANT_USES),
+            Self::Forever => (FOREVER_GRANT_SECS, REPEATABLE_GRANT_USES),
         }
     }
 }
@@ -535,11 +544,7 @@ impl GrantBinding {
         generation: u32,
         authorization: ApprovalAuthorization,
     ) -> Self {
-        let (lifetime, uses) = match duration {
-            GrantDuration::Once => (SESSION_GRANT_SECS, 1),
-            GrantDuration::Session => (SESSION_GRANT_SECS, REPEATABLE_GRANT_USES),
-            GrantDuration::Forever => (FOREVER_GRANT_SECS, REPEATABLE_GRANT_USES),
-        };
+        let (lifetime, uses) = duration.limits();
         Self {
             expires_at: now.saturating_add(lifetime),
             uses_remaining: uses,
@@ -1012,6 +1017,14 @@ fn validate_agent_duration(
         ),
         _ => Ok(()),
     }
+}
+
+pub(crate) fn supported_durations(request: &Request) -> Result<Vec<GrantDuration>, String> {
+    let authorization = authorization_for_request(request)?;
+    Ok([GrantDuration::Once, GrantDuration::Session, GrantDuration::Forever]
+        .into_iter()
+        .filter(|duration| validate_agent_duration(&authorization, *duration).is_ok())
+        .collect())
 }
 
 // ---------------------------------------------------------------------------

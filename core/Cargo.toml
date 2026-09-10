@@ -126,10 +126,10 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 # `cos agent serve` stays a single self-contained file with zero
 # external assets. The `ui/dist/` directory is committed to git.
 include_dir = "0.7"
+clawd-client = { version = "0.1.0", path = "../crates/clawd-client" }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [dev-dependencies]
-clawd-client = { path = "../crates/clawd-client" }
 zbus = { version = "=5.5.0", default-features = false, features = ["p2p"] }

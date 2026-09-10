@@ -350,6 +350,35 @@ fn a_peer_without_credentials_reaches_no_route_at_all() {
 }
 
 #[test]
+fn system_review_typed_wire_is_closed_bounded_and_separates_owner_cancellation() {
+    let decision = json!({
+        "id":"rv-0123456789abcdef0123456789abcdef", "revision":7,
+        "action":"confirm_install", "choices":[],
+    });
+    let decide = Command::SystemReviewDecide.route();
+    let cancel = Command::SystemReviewCancel.route();
+    let typed = json!({"owner_uid":1000,"review":decision});
+    assert_eq!((decide.decode)(typed.clone()).unwrap(), typed);
+    let cancellation = json!({"review":{
+        "id":"rv-0123456789abcdef0123456789abcdef", "revision":7,
+        "action":"cancel", "choices":[],
+    }});
+    assert_eq!((cancel.decode)(cancellation.clone()).unwrap(), cancellation);
+    assert!((cancel.decode)(json!({"owner_uid":1001,"review":decision})).is_err());
+    assert!((decide.decode)(json!({"owner_uid":1000,"id":"rv-fixture","decision":"approve","review":decision})).is_err());
+    for field in ["approved", "grant", "owner_uid", "permissions_granted", "trust"] {
+        let mut forged = typed.clone();
+        forged["review"][field] = json!(true);
+        assert!((decide.decode)(forged).is_err(), "{field}");
+    }
+    let mut oversized = typed;
+    oversized["review"]["id"] = json!("x".repeat(clawd_client::system_review::MAX_DECISION_BYTES));
+    assert!((decide.decode)(oversized).is_err());
+    let legacy = json!({"id":"rv-0123456789abcdef0123456789abcdef","owner_uid":1000,"decision":"approve"});
+    assert_eq!((decide.decode)(legacy.clone()).unwrap(), legacy);
+}
+
+#[test]
 fn every_route_has_a_finite_concurrency_budget() {
     for route in ROUTES {
         assert!(

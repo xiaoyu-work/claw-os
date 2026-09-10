@@ -884,7 +884,7 @@ routes! {
         budget: Budget::mutation(),
         authority: peer(Audience::Permission),
         body: body::SystemReviewDecide,
-        audit: &[("id", FieldRule::Token), ("owner_uid", FieldRule::Count), ("decision", FieldRule::Token)],
+        audit: &[("id", FieldRule::Token), ("owner_uid", FieldRule::Count), ("decision", FieldRule::Token), ("review", FieldRule::Size)],
         run: |c| super::system_review::decide(c.params, c.client).await,
     }
     SystemReviewConsume {
@@ -903,8 +903,8 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::mutation(),
         authority: peer(Audience::Permission),
-        body: body::SystemReviewId,
-        audit: &[("id", FieldRule::Token)],
+        body: body::SystemReviewCancel,
+        audit: &[("id", FieldRule::Token), ("review", FieldRule::Size)],
         run: |c| super::system_review::cancel(c.params, c.client).await,
     }
     PermissionPending {

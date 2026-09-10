@@ -1,20 +1,24 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-use crate::fl;
-use crate::queue::{self, GrantDuration, Request, Risk};
+use crate::{
+    fl,
+    localize::review_label,
+    queue,
+    review::ReviewModel,
+    review_card::{ReviewMessage, review_card},
+};
+use clawd_client::system_review::{PendingReviews, ReviewText, SystemReview, display_text};
 use cosmic::{
     Element, Task, app,
     applet::padded_control,
-    cosmic_theme::Spacing,
     iced::{
-        Length, Subscription,
+        Event, Length, Subscription, event, keyboard,
         platform_specific::shell::wayland::commands::popup::{destroy_popup, get_popup},
         time, window,
     },
     theme,
     widget::{
-        button, column, container, divider, row, space::horizontal as horizontal_space,
-        space::vertical as vertical_space, text,
+        button, column, divider, row, scrollable, space::horizontal as horizontal_space, text,
     },
 };
 use std::{
@@ -23,7 +27,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 pub fn run() -> cosmic::iced::Result {
@@ -34,8 +38,8 @@ pub fn run() -> cosmic::iced::Result {
 struct ApprovalGate {
     core: cosmic::app::Core,
     popup: Option<window::Id>,
-    pending: Vec<Request>,
-    last_error: Option<String>,
+    reviews: ReviewModel,
+    loaded: bool,
     refresh_state: RefreshState,
 }
 
@@ -43,12 +47,20 @@ struct ApprovalGate {
 enum Message {
     Tick,
     TogglePopup,
+    ClosePopup,
     CloseRequested(window::Id),
-    Refreshed(Vec<Request>),
-    LoadFailed(String),
-    Approve(String, GrantDuration),
-    Deny(String),
-    Resolved,
+    Focus(window::Id, bool),
+    Refreshed(Result<PendingReviews, String>),
+    Card(ReviewMessage),
+    DecisionReturned {
+        id: String,
+        revision: u64,
+        result: Result<SystemReview, String>,
+    },
+    Shown {
+        id: String,
+        result: Result<SystemReview, String>,
+    },
 }
 
 #[derive(Debug, Clone, Default)]
@@ -78,8 +90,19 @@ struct RefreshPermit {
 
 impl Drop for RefreshPermit {
     fn drop(&mut self) {
-        // The task owns this permit, so cancellation clears the flag too.
         self.in_flight.store(false, Ordering::Release);
+    }
+}
+
+impl ApprovalGate {
+    fn error(&mut self, error: String) {
+        tracing::warn!(%error, "OS review presentation error");
+        self.reviews.load_failed(error);
+    }
+
+    fn close(&mut self) -> app::Task<Message> {
+        self.reviews.closed();
+        self.popup.take().map_or_else(Task::none, destroy_popup)
     }
 }
 
@@ -109,145 +132,234 @@ impl cosmic::Application for ApprovalGate {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        // Poll the approval queue. inotify would be nicer, but clawd
-        // owns the authoritative store and the cost of a short RPC is
-        // negligible vs the simplicity win.
-        time::every(Duration::from_millis(1500)).map(|_| Message::Tick)
+        Subscription::batch([
+            time::every(Duration::from_millis(1500)).map(|_| Message::Tick),
+            event::listen_with(|event, status, id| {
+                if status != event::Status::Ignored {
+                    return None;
+                }
+                match event {
+                    Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) => {
+                        navigation_message(key, modifiers, id)
+                    }
+                    _ => None,
+                }
+            }),
+        ])
     }
 
     fn update(&mut self, message: Message) -> app::Task<Message> {
         match message {
             Message::Tick => refresh_task(&self.refresh_state),
-            Message::Refreshed(rows) => {
-                let count_changed = rows.len() != self.pending.len();
-                self.pending = rows;
-                self.last_error = None;
-                // If the popup is open and the queue empties out,
-                // close it — nothing more to act on.
-                if self.pending.is_empty()
-                    && count_changed
-                    && let Some(id) = self.popup.take()
-                {
-                    return destroy_popup(id);
+            Message::Refreshed(result) => {
+                let result = result.and_then(|rows| {
+                    self.reviews
+                        .receive_pending(rows)
+                        .map_err(|error| error.to_string())
+                });
+                match result {
+                    Ok(ids) => {
+                        self.loaded = true;
+                        if self.popup.is_none() {
+                            self.reviews.closed();
+                        }
+                        Task::batch(ids.into_iter().map(show_task))
+                    }
+                    Err(error) => {
+                        self.error(error);
+                        Task::none()
+                    }
                 }
-                Task::none()
-            }
-            Message::LoadFailed(msg) => {
-                self.last_error = Some(msg);
-                Task::none()
             }
             Message::TogglePopup => {
-                if let Some(id) = self.popup.take() {
-                    destroy_popup(id)
-                } else {
-                    let new_id = window::Id::unique();
-                    self.popup = Some(new_id);
-                    let popup_settings = self.core.applet.get_popup_settings(
-                        self.core.main_window_id().unwrap(),
-                        new_id,
-                        Some((520, 600)),
-                        None,
-                        None,
-                    );
-                    get_popup(popup_settings)
+                if self.popup.is_some() {
+                    return self.close();
                 }
+                let id = window::Id::unique();
+                self.popup = Some(id);
+                let settings = self.core.applet.get_popup_settings(
+                    self.core.main_window_id().unwrap(),
+                    id,
+                    Some((520, 600)),
+                    None,
+                    None,
+                );
+                get_popup(settings)
             }
+            Message::ClosePopup => self.close(),
             Message::CloseRequested(id) => {
                 if self.popup == Some(id) {
-                    self.popup = None;
+                    self.close()
+                } else {
+                    Task::none()
+                }
+            }
+            Message::Focus(id, backwards) => {
+                if self.popup != Some(id) {
+                    return Task::none();
+                }
+                if backwards {
+                    cosmic::iced::widget::operation::focus_previous()
+                } else {
+                    cosmic::iced::widget::operation::focus_next()
+                }
+            }
+            Message::Card(ReviewMessage::Select {
+                id,
+                revision,
+                permission,
+                choice,
+            }) => {
+                if let Err(error) = self.reviews.select(&id, revision, &permission, choice) {
+                    self.error(error.to_string());
                 }
                 Task::none()
             }
-            Message::Approve(id, dur) => {
-                let id = id.clone();
-                Task::perform(
-                    async move { queue::approve(&id, dur).await },
-                    |res| match res {
-                        Ok(_) => cosmic::Action::App(Message::Resolved),
-                        Err(e) => cosmic::Action::App(Message::LoadFailed(e.0)),
-                    },
-                )
+            Message::Card(ReviewMessage::Decide {
+                id,
+                revision,
+                action,
+            }) => match self.reviews.begin(&id, revision, action) {
+                Ok(decision) => {
+                    let review = self
+                        .reviews
+                        .cards
+                        .iter()
+                        .find(|card| card.review.id == id)
+                        .expect("begin validated the review id")
+                        .review
+                        .clone();
+                    let revision = decision.revision;
+                    Task::perform(
+                        async move {
+                            let result = queue::decide(&review, &decision)
+                                .await
+                                .map_err(|error| error.0);
+                            Message::DecisionReturned {
+                                id,
+                                revision,
+                                result,
+                            }
+                        },
+                        cosmic::Action::App,
+                    )
+                }
+                Err(error) => {
+                    self.error(error.to_string());
+                    Task::none()
+                }
+            },
+            Message::Card(ReviewMessage::Refresh(id)) => match self.reviews.request_refresh(&id) {
+                Ok(()) => show_task(id),
+                Err(error) => {
+                    self.error(error.to_string());
+                    Task::none()
+                }
+            },
+            Message::DecisionReturned {
+                id,
+                revision,
+                result,
+            } => match self.reviews.decision_returned(&id, revision, result) {
+                Ok(()) => show_task(id),
+                Err(error) => {
+                    self.error(error.to_string());
+                    Task::none()
+                }
+            },
+            Message::Shown { id, result } => {
+                let result = result.and_then(|review| {
+                    if review.id != id {
+                        return Err("OS show returned a different request".into());
+                    }
+                    self.reviews
+                        .receive_show(review)
+                        .map_err(|error| error.to_string())
+                });
+                if let Err(error) = result {
+                    tracing::warn!(%id, %error, "OS review refresh failed");
+                    if let Err(error) = self.reviews.show_failed(&id, error) {
+                        self.error(error.to_string());
+                    }
+                }
+                if self.popup.is_none() {
+                    self.reviews.closed();
+                }
+                Task::none()
             }
-            Message::Deny(id) => {
-                let id = id.clone();
-                Task::perform(async move { queue::deny(&id).await }, |res| match res {
-                    Ok(_) => cosmic::Action::App(Message::Resolved),
-                    Err(e) => cosmic::Action::App(Message::LoadFailed(e.0)),
-                })
-            }
-            Message::Resolved => refresh_task(&self.refresh_state),
         }
     }
 
     fn view(&self) -> Element<'_, Message> {
-        // The idle clipboard/check mark matches the task-oriented shell
-        // language and is less alarming than a permanent question mark.
-        // Pending requests still switch to a warning glyph and count.
-        let icon = if self.pending.is_empty() {
+        let count = self.reviews.pending_count();
+        let icon = if count == 0 && self.reviews.error.is_none() {
             "com.clawos.ApprovalGate-symbolic"
         } else {
             "dialog-warning-symbolic"
         };
-        let btn = self
+        let button = self
             .core
             .applet
             .icon_button(icon)
             .on_press(Message::TogglePopup);
-        if self.pending.is_empty() {
-            btn.into()
+        if count == 0 {
+            button.into()
         } else {
-            // Append a small numeric label next to the icon. Two-column
-            // mini-layout keeps the panel button compact.
-            row![btn, text(format!("{}", self.pending.len())).size(11)]
+            row![button, text(count.to_string()).size(11)]
                 .align_y(cosmic::iced::core::Alignment::Center)
                 .spacing(2)
                 .into()
         }
     }
 
-    fn view_window(&self, _id: window::Id) -> Element<'_, Message> {
-        let Spacing {
-            space_xxs,
-            space_xs,
-            space_s,
-            ..
-        } = theme::active().cosmic().spacing;
-
-        let header = padded_control(row![
-            text(fl!("title")).size(14),
-            horizontal_space(),
-            text(if self.pending.is_empty() {
-                fl!("no-pending")
-            } else {
-                fl!("title-pending", count = self.pending.len())
-            })
-            .size(11),
-        ]);
-
-        let body: Element<'_, Message> = if let Some(err) = &self.last_error {
-            padded_control(text(fl!("runtime-error", message = err.as_str())).size(12)).into()
-        } else if self.pending.is_empty() {
-            padded_control(
-                container(text(fl!("no-pending")).size(12))
-                    .center_x(Length::Fill)
-                    .padding(space_s),
-            )
-            .into()
-        } else {
-            let mut col = column::with_capacity(self.pending.len() * 2);
-            for (i, req) in self.pending.iter().enumerate() {
-                if i > 0 {
-                    col = col.push(padded_control(divider::horizontal::default()));
-                }
-                col = col.push(render_card(req, space_xxs, space_xs));
-            }
-            col.into()
-        };
-
+    fn view_window(&self, _: window::Id) -> Element<'_, Message> {
+        let spacing = theme::active().cosmic().spacing;
+        let header = padded_control(
+            column![
+                row![
+                    text::heading(review_label(ReviewText::Title)),
+                    horizontal_space(),
+                    text(fl!("title-pending", count = self.reviews.pending_count())).size(11),
+                ]
+                .align_y(cosmic::iced::core::Alignment::Center),
+                row![
+                    button::standard(review_label(ReviewText::Close)).on_press(Message::ClosePopup),
+                    button::standard(review_label(ReviewText::Refresh)).on_press(Message::Tick),
+                ]
+                .spacing(spacing.space_xs),
+            ]
+            .spacing(spacing.space_xs),
+        );
+        let mut body =
+            column::with_capacity(self.reviews.cards.len() * 2 + 2).spacing(spacing.space_s);
+        if let Some(error) = &self.reviews.error {
+            body = body.push(padded_control(column![
+                text::heading(review_label(ReviewText::Error)),
+                text::body(display_text(error)),
+            ]));
+        } else if !self.loaded {
+            body = body.push(padded_control(text::body(fl!("review-loading"))));
+        } else if self.reviews.cards.is_empty() {
+            body = body.push(padded_control(text::body(review_label(
+                ReviewText::NoPending,
+            ))));
+        }
+        for card in &self.reviews.cards {
+            body = body
+                .push(review_card(card).map(Message::Card))
+                .push(padded_control(divider::horizontal::default()));
+        }
         self.core
             .applet
             .popup_container(
-                column![header, divider::horizontal::default(), body].spacing(space_xxs),
+                column![
+                    header,
+                    divider::horizontal::default(),
+                    scrollable(body).height(Length::Fill)
+                ]
+                .spacing(spacing.space_xs)
+                .height(Length::Fixed(600.0))
+                .width(Length::Fixed(520.0)),
             )
             .into()
     }
@@ -257,117 +369,37 @@ impl cosmic::Application for ApprovalGate {
     }
 }
 
-fn render_card(req: &Request, space_xxs: u16, space_xs: u16) -> Element<'_, Message> {
-    let (risk, label_text, blurb_text) = match &req.meta {
-        Some(m) => (m.risk.clone(), m.label.clone(), m.blurb.clone()),
-        None => (Risk::Medium, req.verb.clone(), String::new()),
-    };
-    let risk_text = match risk {
-        Risk::Low => fl!("risk-low"),
-        Risk::Medium => fl!("risk-medium"),
-        Risk::High => fl!("risk-high"),
-        Risk::Critical => fl!("risk-critical"),
-    };
-
-    let head = row![
-        text(req.verb.clone()).size(13),
-        horizontal_space(),
-        text(format!("[{risk_text}]")).size(11),
-    ]
-    .spacing(space_xs);
-
-    let mut body = column::with_capacity(6).spacing(space_xxs);
-    if !label_text.is_empty() && label_text != req.verb {
-        body = body.push(text(label_text).size(12));
+fn navigation_message(
+    key: keyboard::Key,
+    modifiers: keyboard::Modifiers,
+    id: window::Id,
+) -> Option<Message> {
+    match key {
+        keyboard::Key::Named(keyboard::key::Named::Tab) => {
+            Some(Message::Focus(id, modifiers.shift()))
+        }
+        keyboard::Key::Named(keyboard::key::Named::Escape) => Some(Message::CloseRequested(id)),
+        _ => None,
     }
-    if !blurb_text.is_empty() {
-        body = body.push(text(blurb_text).size(11));
-    }
-    body = body.push(meta_row(fl!("scope-label"), req.scope.render()));
-    body = body.push(meta_row(fl!("reason-label"), req.reason.clone()));
-    body = body.push(meta_row(fl!("session-label"), req.session.clone()));
-    if let Some(requester) = &req.requester {
-        body = body.push(meta_row(fl!("requester-label"), requester.clone()));
-    }
-    body = body.push(meta_row(
-        fl!("requested-label"),
-        relative_time(req.requested_at),
-    ));
+}
 
-    let mut actions = row![]
-        .spacing(space_xs)
-        .align_y(cosmic::iced::core::Alignment::Center);
-    if matches!(risk, Risk::Critical) {
-        actions = actions.push(text(fl!("critical-warning")).size(10));
-    } else {
-        let id = req.id.clone();
-        let id_session = req.id.clone();
-        let id_forever = req.id.clone();
-        actions = actions
-            .push(
-                button::suggested(fl!("approve-once"))
-                    .on_press(Message::Approve(id, GrantDuration::Once)),
-            )
-            .push(
-                button::standard(fl!("approve-session"))
-                    .on_press(Message::Approve(id_session, GrantDuration::Session)),
-            )
-            .push(
-                button::standard(fl!("approve-forever"))
-                    .on_press(Message::Approve(id_forever, GrantDuration::Forever)),
-            );
-    }
-    actions = actions.push(horizontal_space());
-    let id_deny = req.id.clone();
-    actions = actions.push(button::destructive(fl!("deny")).on_press(Message::Deny(id_deny)));
-
-    padded_control(
-        column![
-            head,
-            body,
-            vertical_space().height(Length::Fixed(4.0)),
-            actions
-        ]
-        .spacing(space_xxs),
+fn show_task(id: String) -> app::Task<Message> {
+    Task::perform(
+        async move {
+            let result = queue::show(&id).await.map_err(|error| error.0);
+            Message::Shown { id, result }
+        },
+        cosmic::Action::App,
     )
-    .into()
 }
 
-fn meta_row(label: String, value: String) -> Element<'static, Message> {
-    row![
-        text(label).size(11).width(Length::Fixed(78.0)),
-        text(value).size(11),
-    ]
-    .spacing(8)
-    .into()
-}
-
-fn relative_time(then: u64) -> String {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let delta = now.saturating_sub(then);
-    match delta {
-        0..=4 => fl!("just-now"),
-        5..=59 => fl!("seconds-ago", n = (delta as u32)),
-        60..=3599 => fl!("minutes-ago", n = ((delta / 60) as u32)),
-        3600..=86399 => fl!("hours-ago", n = ((delta / 3600) as u32)),
-        _ => fl!("days-ago", n = ((delta / 86400) as u32)),
-    }
-}
-
-fn refresh_task(refresh_state: &RefreshState) -> app::Task<Message> {
-    let Some(permit) = refresh_state.try_start() else {
+fn refresh_task(state: &RefreshState) -> app::Task<Message> {
+    let Some(permit) = state.try_start() else {
         return Task::none();
     };
-    Task::perform(
-        run_refresh(permit, queue::load_pending()),
-        |res| match res {
-            Ok(rows) => cosmic::Action::App(Message::Refreshed(rows)),
-            Err(e) => cosmic::Action::App(Message::LoadFailed(e.0)),
-        },
-    )
+    Task::perform(run_refresh(permit, queue::load_pending()), |result| {
+        cosmic::Action::App(Message::Refreshed(result.map_err(|error| error.0)))
+    })
 }
 
 async fn run_refresh<T, F>(permit: RefreshPermit, future: F) -> T

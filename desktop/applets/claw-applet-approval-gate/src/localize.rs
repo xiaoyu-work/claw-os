@@ -36,6 +36,10 @@ pub fn localizer() -> Box<dyn Localizer> {
     Box::from(DefaultLocalizer::new(&*LANGUAGE_LOADER, &Localizations))
 }
 
+pub fn review_label(label: clawd_client::system_review::ReviewText) -> String {
+    LANGUAGE_LOADER.get(label.key())
+}
+
 pub fn localize() {
     let localizer = localizer();
     let requested_languages = i18n_embed::DesktopLanguageRequester::requested_languages();

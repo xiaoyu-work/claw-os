@@ -1,20 +1,27 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-//! Approval-gate applet — a tiny panel button that surfaces the live
-//! approval queue from clawd and lets the user approve or deny each
-//! request without leaving the desktop.
-//!
-//! Storage protocol is owned by `core/src/approvals.rs` (a Rust
-//! module in the `cos` kernel). The design ethos is dark-terminal +
-//! brand-blue accent (see `desktop/agent/docs/design-system.md`).
+//! OS review presentation for graphical and headless App subjects alike.
+//! The shared `clawd_client::system_review` DTO terminates broker models here.
+//! No capability, consent, approval store or privileged provider belongs to
+//! this GPL renderer; all decisions pass through the trusted OS helper.
 
 mod app;
 mod localize;
 mod queue;
+pub mod review;
+pub mod review_card;
 
 use crate::localize::localize;
 
 pub fn run() -> cosmic::iced::Result {
     localize();
     app::run()
+}
+
+#[cfg(test)]
+mod test_support {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/support/reviews.rs"
+    ));
 }

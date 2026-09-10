@@ -1,6 +1,30 @@
 use super::{RefreshState, run_refresh};
 
 #[test]
+fn keyboard_navigation_never_turns_enter_into_an_implicit_decision() {
+    use cosmic::iced::{
+        keyboard::{Key, Modifiers, key::Named},
+        window,
+    };
+    let id = window::Id::unique();
+    assert!(matches!(
+        super::navigation_message(Key::Named(Named::Tab), Modifiers::default(), id),
+        Some(super::Message::Focus(actual, false)) if actual == id
+    ));
+    assert!(matches!(
+        super::navigation_message(Key::Named(Named::Tab), Modifiers::SHIFT, id),
+        Some(super::Message::Focus(actual, true)) if actual == id
+    ));
+    assert!(matches!(
+        super::navigation_message(Key::Named(Named::Escape), Modifiers::default(), id),
+        Some(super::Message::CloseRequested(actual)) if actual == id
+    ));
+    for key in [Key::Named(Named::Enter), Key::Character(" ".into())] {
+        assert!(super::navigation_message(key, Modifiers::default(), id).is_none());
+    }
+}
+
+#[test]
 fn refresh_state_allows_only_one_in_flight_request() {
     let state = RefreshState::default();
     let first = state.try_start().expect("first refresh should start");

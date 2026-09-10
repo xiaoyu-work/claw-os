@@ -629,9 +629,9 @@ and ship an app
 | `cos app tool list [<id>]` | Show the manifest-declared MCP tools this App exposes through the private Gateway. |
 | `cos app install <dir> --review` | Verify the package and return its requested permissions, scopes, conditions, AI policy and execution surfaces as JSON, without installing or granting anything. |
 | `cos app install <dir> [--force] [--no-consent] [--yes] [--dev-trust]` | Authenticate and disclose the App's permission requests before publishing into `$COS_APPS_DIR/<id>/`. Ordinary installs require an OS review decision; `--yes` can use existing OS confirmation but cannot replace first review or grant capabilities/AI consent. `--no-consent` only defers AI consent. Copying is skipped only when source and destination are the same directory. `--dev-trust` retains its separate interactive, digest-bound development-trust workflow. |
-| `cos review pending` | List the current user's pending OS review requests. |
+| `cos review pending` | List and present the current user's App reviews and existing capability requests using the shared OS review contract. |
 | `cos review show <id>` | Display one owner-scoped review and its authenticated permission disclosure. |
-| `cos review approve <id>` | Present and confirm a review through the interactive OS privileged helper; not a capability grant. |
+| `cos review approve <id>` | Present an App confirmation or explicitly choose among a capability request's supported permissions through the interactive OS helper. App confirmation never grants permissions. |
 | `cos review deny <id>` | Cancel the current user's pending review through the owner-scoped OS route, without a privilege prompt or capability grant. |
 | `cos app consent list` | Which apps you have granted AI consent to. |
 | `cos app consent show <id>` | Display the manifest's AI block. |
@@ -658,8 +658,8 @@ change. The digest is a comparison key, **not an approval token or a grant**.
 
 Ordinary directory installation creates an owner-scoped OS request before
 publishing, including `--force`, `--yes`, `--no-consent` and in-place installs.
-A terminal presenter sends the user's decision through the installed
-`claw-approval-helper --system-review`, authenticated by polkit. Without an
+A terminal or native desktop presenter sends the displayed decision through
+`claw-approval-helper --system-review-json`, authenticated by polkit. Without an
 interactive terminal or a previous matching OS decision, installation returns
 an explicit pending-review error and does not replace the existing App.
 `--yes` never substitutes for first review. Automation may reuse a previously
@@ -676,18 +676,37 @@ and separate AI consent still govern App effects.
 
 The installer re-verifies the package after review and rejects a changed
 package before replacing the old installation. Cancelling review leaves the
-previous version untouched. The shared projection is in
-[`apps/permission_review.rs`](../core/src/apps/permission_review.rs).
+previous version untouched. Manifest disclosure is defined in
+[`apps/permission_review.rs`](../core/src/apps/permission_review.rs);
+the terminal and desktop share the typed
+[`SystemReview` contract](../crates/clawd-client/MODULE.md).
 Brokered operation/GUI/native registration and prepared MCP calls also require
 owner review before activation, including preinstalled Apps. Unreviewed
 background services are not warmed automatically. Existing App permission
 denials remain in effect after installation confirmation.
 
-The terminal controller and protected records are implemented; the final shared
-native presentation, Store/package-channel integration, generic local-launch
-cutover and complete per-permission allow/ask/deny resource enforcement remain
-separate rollout work. Unsupported direct-resource controls must not be
-presented as working switches.
+Both presenters use the same catalog labels, purposes, resource scopes,
+argument constraints, supported choices and state transitions. The broker
+assigns a protected monotonic revision to each displayed snapshot. Decisions
+carry that exact revision, not a subsequently fetched one; the controller
+rechecks it, the owner, the action and each selection before applying the
+existing authority. A stale view or a competing decision cannot grant access.
+Owner cancellation uses the same typed decision without a privilege prompt.
+The helper reads at most 64 KiB, accepts no caller-supplied owner or grant in
+the decision, and derives the authenticated user from polkit.
+
+App installation and activation confirmations cannot carry permission choices.
+Existing capability requests offer only durations their authority supports,
+with use/time limits disclosed. Fixed brokered App-policy restoration remains
+a separate, non-execution receipt: it removes an existing deny gate but does
+not supply launcher or manifest authority. Unsupported Ask policies and
+direct-resource controls have an explanation rather than a working-looking
+switch.
+
+Store/package-channel integration, generic local-launch cutover and complete
+per-permission allow/ask/deny resource enforcement remain separate rollout
+work. Native component builds do not establish interactive Wayland or complete
+installed-system acceptance.
 
 ## 9. Environment variables
 

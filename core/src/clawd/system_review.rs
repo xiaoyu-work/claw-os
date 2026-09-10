@@ -2,14 +2,18 @@
 
 use std::path::Path;
 
+use clawd_client::system_review::{PermissionChoice, ReviewAction, ReviewDecision, SystemReview};
 use serde_json::{json, Value};
 
 use crate::approvals::system_review::{self as store, ReviewKind, ReviewRecord};
+use crate::approvals::{self, GrantDuration};
 use crate::provenance::runtime::PackageRef;
 use crate::provenance::{PackageKind, TrustStore, VerifiedPackage, VerifyOptions};
 
 use super::client_identity::ClientIdentity;
 use super::protocol::BrokerError;
+
+mod presentation;
 
 fn invalid_input(message: impl Into<String>) -> BrokerError {
     BrokerError::execution(message).classified("invalid_system_review_request")
@@ -56,24 +60,8 @@ fn require_expected(package: &VerifiedPackage, expected: &PackageRef) -> Result<
 }
 
 fn view(record: &ReviewRecord) -> Result<Value, String> {
-    Ok(json!({
-        "id": record.id,
-        "kind": record.kind,
-        "state": record.effective_state()?,
-        "owner_uid": record.owner_uid,
-        "app_id": record.manifest.id,
-        "app_version": record.manifest.version,
-        "name": record.manifest.name,
-        "package": record.package,
-        "requester": record.requester,
-        "requested_at": record.requested_at,
-        "expires_at": record.expires_at,
-        "decided_at": record.decided_at,
-        "decided_by": record.decided_by,
-        "inherited_from": record.inherited_from,
-        "permission_review": record.permission_review()?,
-        "permissions_granted": false,
-    }))
+    serde_json::to_value(presentation::app(record)?)
+        .map_err(|error| format!("encode system review: {error}"))
 }
 
 pub(crate) fn require_app_review(
@@ -139,11 +127,8 @@ pub async fn pending(params: Value, client: &ClientIdentity) -> Result<Value, Br
         .map_err(BrokerError::authorization)?;
     let owner = client.require_uid().map_err(BrokerError::authorization)?;
     tokio::task::spawn_blocking(move || {
-        let reviews = store::pending(owner, limit as usize)?
-            .iter()
-            .map(view)
-            .collect::<Result<Vec<_>, String>>()?;
-        Ok::<_, String>(json!({"reviews": reviews}))
+        serde_json::to_value(presentation::pending(owner, limit as usize)?)
+            .map_err(|error| format!("encode pending system reviews: {error}"))
     })
     .await
     .map_err(|error| BrokerError::unavailable(format!("read pending system reviews: {error}")))?
@@ -156,10 +141,13 @@ pub async fn show(params: Value, client: &ClientIdentity) -> Result<Value, Broke
         .map_err(BrokerError::authorization)?;
     let owner = client.require_uid().map_err(BrokerError::authorization)?;
     let id = super::permissions::required_string(&params, "id").map_err(invalid_input)?;
-    tokio::task::spawn_blocking(move || view(&store::get(owner, &id)?))
-        .await
-        .map_err(|error| BrokerError::unavailable(format!("read system review: {error}")))?
-        .map_err(BrokerError::authorization)
+    tokio::task::spawn_blocking(move || {
+        serde_json::to_value(presentation::get(owner, &id)?)
+            .map_err(|error| format!("encode system review: {error}"))
+    })
+    .await
+    .map_err(|error| BrokerError::unavailable(format!("read system review: {error}")))?
+    .map_err(BrokerError::authorization)
 }
 
 pub async fn decide(params: Value, client: &ClientIdentity) -> Result<Value, BrokerError> {
@@ -168,48 +156,100 @@ pub async fn decide(params: Value, client: &ClientIdentity) -> Result<Value, Bro
             "system review decisions require the privileged OS approval helper",
         ));
     }
-    let owner = params
-        .get("owner_uid")
-        .and_then(Value::as_u64)
-        .and_then(|value| u32::try_from(value).ok())
-        .ok_or_else(|| invalid_input("owner_uid is required"))?;
-    let id = super::permissions::required_string(&params, "id").map_err(invalid_input)?;
-    let decision =
-        super::permissions::required_string(&params, "decision").map_err(invalid_input)?;
-    let approve = match decision.as_str() {
-        "approve" => true,
-        "deny" => false,
-        _ => {
-            return Err(invalid_input(
-                "system review decision must be approve or deny",
-            ))
-        }
-    };
+    let body: super::wire::requests::SystemReviewDecide = serde_json::from_value(params)
+        .map_err(|_| invalid_input("invalid typed system review decision"))?;
     tokio::task::spawn_blocking(move || {
-        let current = store::get(owner, &id)?;
-        let verified = if approve {
-            match verify_source(owner, &current.source_dir) {
-                Ok(package) => {
-                    if PackageRef::of(&package) != current.package {
-                        store::invalidate(owner, &id)?;
-                        return Err("App package changed; refresh the system review".into());
-                    }
-                    Some(package)
-                }
-                Err(error) => {
-                    store::invalidate(owner, &id)?;
-                    return Err(error);
-                }
+        use super::wire::requests::SystemReviewDecide;
+        let review = match body {
+            SystemReviewDecide::Typed(body) => apply_decision(body.owner_uid, &body.review.0)?,
+            SystemReviewDecide::Legacy(body) => {
+                let approve = match body.decision.as_str() {
+                    "approve" => true,
+                    "deny" => false,
+                    _ => return Err("system review decision must be approve or deny".into()),
+                };
+                decide_app(body.owner_uid, body.id.as_str(), approve)?
             }
-        } else {
-            None
         };
-        let record = store::decide(owner, &id, approve, verified.as_ref())?;
-        view(&record)
+        serde_json::to_value(review).map_err(|error| format!("encode system review: {error}"))
     })
     .await
     .map_err(|error| BrokerError::unavailable(format!("system review decision failed: {error}")))?
     .map_err(BrokerError::authorization)
+}
+
+fn decide_app(owner: u32, id: &str, approve: bool) -> Result<SystemReview, String> {
+    let current = store::get(owner, id)?;
+    let verified = if approve {
+        match verify_source(owner, &current.source_dir) {
+            Ok(package) => {
+                if PackageRef::of(&package) != current.package {
+                    store::invalidate(owner, id)?;
+                    return Err("App package changed; refresh the system review".into());
+                }
+                Some(package)
+            }
+            Err(error) => {
+                store::invalidate(owner, id)?;
+                return Err(error);
+            }
+        }
+    } else {
+        None
+    };
+    presentation::app(&store::decide(owner, id, approve, verified.as_ref())?)
+}
+
+fn apply_decision(owner: u32, decision: &ReviewDecision) -> Result<SystemReview, String> {
+    let current = presentation::get(owner, &decision.id)?;
+    decision
+        .validate_for(&current)
+        .map_err(|error| error.to_string())?;
+    if decision.id.starts_with("rv-") {
+        return decide_app(owner, &decision.id, decision.action != ReviewAction::Cancel);
+    }
+    let duration = match decision.action {
+        ReviewAction::Cancel => None,
+        ReviewAction::ApplyChoices => {
+            let [selection] = decision.choices.as_slice() else {
+                return Err(
+                    "a capability request requires exactly one permission selection".into(),
+                );
+            };
+            match selection.choice {
+                PermissionChoice::Deny => None,
+                PermissionChoice::AllowOnce => Some(GrantDuration::Once),
+                PermissionChoice::AllowSession => Some(GrantDuration::Session),
+                PermissionChoice::AllowForever => Some(GrantDuration::Forever),
+                PermissionChoice::Restore => {
+                    let approvals::presentation::LegacyReview::Pending(request) =
+                        approvals::presentation::legacy_get(owner, &decision.id)?
+                    else {
+                        return Err("App permission restoration is no longer pending".into());
+                    };
+                    super::app_permissions::validate_approval(&request)?;
+                    Some(GrantDuration::Forever)
+                }
+                PermissionChoice::Ask => {
+                    return Err("this request does not support ask policy".into())
+                }
+            }
+        }
+        _ => {
+            return Err("capability requests cannot confirm App installation or activation".into())
+        }
+    };
+    let by = Some(format!("uid:{owner}"));
+    let resolved = match duration {
+        Some(duration) => {
+            approvals::approve_for_owner(&decision.id, duration, by, None, Some(owner))?
+        }
+        None => approvals::deny_for_owner(&decision.id, by, None, Some(owner))?,
+    };
+    presentation::legacy(
+        owner,
+        approvals::presentation::LegacyReview::Resolved(Box::new(resolved)),
+    )
 }
 
 pub async fn consume(params: Value, client: &ClientIdentity) -> Result<Value, BrokerError> {
@@ -235,11 +275,27 @@ pub async fn cancel(params: Value, client: &ClientIdentity) -> Result<Value, Bro
         .await
         .map_err(BrokerError::authorization)?;
     let owner = client.require_uid().map_err(BrokerError::authorization)?;
-    let id = super::permissions::required_string(&params, "id").map_err(invalid_input)?;
-    tokio::task::spawn_blocking(move || view(&store::decide(owner, &id, false, None)?))
-        .await
-        .map_err(|error| BrokerError::unavailable(format!("cancel system review: {error}")))?
-        .map_err(BrokerError::authorization)
+    let body: super::wire::requests::SystemReviewCancel = serde_json::from_value(params)
+        .map_err(|_| invalid_input("invalid owner cancellation request"))?;
+    tokio::task::spawn_blocking(move || {
+        use super::wire::requests::SystemReviewCancel;
+        let review = match body {
+            SystemReviewCancel::Typed(body) => {
+                if body.review.0.action != ReviewAction::Cancel {
+                    return Err(
+                        "the owner cancellation route cannot grant permissions or confirm an App"
+                            .into(),
+                    );
+                }
+                apply_decision(owner, &body.review.0)?
+            }
+            SystemReviewCancel::Legacy(body) => decide_app(owner, body.id.as_str(), false)?,
+        };
+        serde_json::to_value(review).map_err(|error| format!("encode cancelled review: {error}"))
+    })
+    .await
+    .map_err(|error| BrokerError::unavailable(format!("cancel system review: {error}")))?
+    .map_err(BrokerError::authorization)
 }
 
 #[cfg(test)]

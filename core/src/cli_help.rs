@@ -204,7 +204,7 @@ pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandS
     vec![
         (
             "review",
-            "Owner-scoped OS review requests, not capability grants",
+            "Owner-scoped OS App confirmations and separate permission decisions",
             vec![
                 CommandSchema {
                     command: "pending",
@@ -214,13 +214,13 @@ pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandS
                 },
                 CommandSchema {
                     command: "show",
-                    description: "Display the authenticated App and its permission requests",
+                    description: "Display an authenticated App confirmation or capability request",
                     params: vec![Param::positional("id", "string", true, "System review ID")],
                     example: "cos review show rv-0123456789abcdef0123456789abcdef",
                 },
                 CommandSchema {
                     command: "approve",
-                    description: "Human-only confirmation through the privileged OS helper",
+                    description: "Human-only App confirmation or explicit permission choices through the OS helper",
                     params: vec![Param::positional("id", "string", true, "System review ID")],
                     example: "cos review approve rv-0123456789abcdef0123456789abcdef",
                 },

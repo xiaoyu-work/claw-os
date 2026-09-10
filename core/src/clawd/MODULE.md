@@ -42,7 +42,7 @@ and agent tasks.
 | `usage.rs` | Peer-UID-scoped Agent token usage queries |
 | `app_sessions.rs` | App/native/MCP session authority: derives identity and capabilities, plans approvals, issues launch grants, consumes service-bound call tickets |
 | `app_permissions.rs` | Shared Settings permission service: verified declarations, owner/App deny gates, pending durable restoration, fine-grained revocation; no approval authority |
-| `system_review.rs` | Owner-scoped App install/activation review requests, fresh package verification, root-only helper decisions and one-use confirmation |
+| `system_review.rs`, `system_review/presentation.rs` | Shared App/capability review projection, owner-scoped display revisions, root-only choices, fresh package verification and one-use App confirmation |
 | `app_services.rs` | Persistent owner/App service manager, lifecycle policy, permission-policy snapshot retirement, capacity/restart control, and single-use call authorization |
 | `../extension_host/broker.rs` | Purpose-bound private proxy: verifies SCM credentials, Host/child ancestry, route class, and nearest child session before normal dispatch |
 | `scheduler.rs` | Proactive-scheduler authority: validates `cos cron` / `cos triggers` requests and derives what a job may carry |
@@ -153,9 +153,26 @@ System review records live under the existing root-owned approvals root.
 filesystem identity and compiled trust roots; request JSON cannot choose an
 owner or assert approval. Only the privileged OS helper may call
 `system.review.decide`, and confirmation is consumed separately before App
-publication. Review requests and decisions carry no capability grants.
+publication. App confirmations carry no capability grants. Capability
+selections are separate actions delegated to the existing approval authority;
+App-policy restoration remains a non-execution receipt.
 The core and shared clients require a root Unix peer for this route family,
 so selecting a user-owned socket cannot forge an approved response.
+
+`system.review.pending` merges the owner's App reviews and existing capability
+requests. Every route returns the shared `clawd-client::system_review` DTO.
+The root helper submits `{owner_uid, review: ReviewDecision}`; `owner_uid`
+comes from polkit, never the frontend's JSON. The closed decision is bounded
+to 64 KiB, names the displayed revision, and has only an action plus explicit
+supported permission selections. The owner cancellation route accepts
+`{review: ReviewDecision}` with only `cancel` and no choices, without
+elevation. Legacy id/decision input remains limited to immutable, non-grant
+App confirmation/cancellation; it cannot select capability permissions.
+The broker reconstructs the current projection and refuses stale revisions,
+unknown/duplicate choices, unsupported policies and mixed confirmation/grant
+actions before the underlying authority rechecks its own bounds.
+Protected revision files carry no authority and do not replace owner
+generation, package verification, atomic decision or consumption checks.
 
 App operation/GUI registration, native-host registration and prepared MCP
 calls require an owner review before capability settlement. Unreviewed
