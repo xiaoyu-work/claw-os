@@ -2,6 +2,33 @@ use super::*;
 use crate::agent::llm::providers::mock::{MockProvider, MockResponse};
 use crate::config::AgentConfig;
 
+#[test]
+fn incomplete_or_refused_output_cannot_replace_conversation_history() {
+    let mut response = crate::agent::llm::ChatResponse {
+        model: "mock".into(),
+        content: vec![ContentBlock::Text {
+            text: "Goal: inspect only.".into(),
+        }],
+        tool_calls: Vec::new(),
+        finish_reason: FinishReason::Stop,
+        usage: crate::agent::llm::Usage::default(),
+    };
+    assert_eq!(
+        complete_summary(&response).as_deref(),
+        Some("Goal: inspect only.")
+    );
+    for reason in [
+        FinishReason::Length,
+        FinishReason::Refusal,
+        FinishReason::ContentFilter,
+        FinishReason::ToolUse,
+        FinishReason::Other,
+    ] {
+        response.finish_reason = reason;
+        assert!(complete_summary(&response).is_none());
+    }
+}
+
 fn parent_cfg() -> AgentConfig {
     AgentConfig {
         provider: "mock".into(),
@@ -12,6 +39,21 @@ fn parent_cfg() -> AgentConfig {
         system_prompt_path: None,
         ..Default::default()
     }
+}
+
+#[test]
+fn fenced_tool_results_do_not_displace_the_real_user_anchor() {
+    let result = crate::agent::trust::LabeledSegment::from_stored("[tool result]\nobserved")
+        .render_fenced(crate::agent::trust::envelope::process_seal());
+    let result = user_msg(&result);
+    assert!(!LlmCompressor::is_real_user_message(&result));
+    assert!(LlmCompressor::has_flattened_tool_result(&result));
+    let messages = vec![
+        user_msg("do not change anything"),
+        assistant_msg("[tool: observe]"),
+        result,
+    ];
+    assert_eq!(LlmCompressor::protect_user_anchor(&messages, 2), (0, 0));
 }
 
 fn user_msg(text: &str) -> Message {
@@ -287,8 +329,7 @@ fn summarising_untrusted_head_keeps_the_summary_untrusted() {
     match &m.content[0] {
         ContentBlock::Text { text } => {
             assert!(
-                text.contains("trust=legacy-unknown")
-                    || text.contains("trust=untrusted-external"),
+                text.contains("trust=legacy-unknown") || text.contains("trust=untrusted-external"),
                 "compression must not raise trust: {text}"
             );
             assert!(!text.contains("trust=system-policy"));
@@ -337,8 +378,7 @@ async fn compress_with_mock_provider_inserts_summary_before_tail() {
         summary_max_tokens: 256,
         ..Default::default()
     };
-    let provider_arc: Arc<MockProvider> =
-        Arc::new(MockProvider::new("mock-model", &parent_cfg()));
+    let provider_arc: Arc<MockProvider> = Arc::new(MockProvider::new("mock-model", &parent_cfg()));
     provider_arc.push_response(MockResponse::Text("compressed history goes here".into()));
     let provider: Arc<dyn Provider> = provider_arc.clone();
     let c = LlmCompressor::new(provider, "mock-model").with_config(cfg);
@@ -375,13 +415,13 @@ async fn compress_with_empty_provider_summary_preserves_history() {
         keep_tail_tokens: 12,
         ..Default::default()
     };
-    let provider_arc: Arc<MockProvider> =
-        Arc::new(MockProvider::new("mock-model", &parent_cfg()));
+    let provider_arc: Arc<MockProvider> = Arc::new(MockProvider::new("mock-model", &parent_cfg()));
     provider_arc.push_response(MockResponse::Text(String::new()));
     let provider: Arc<dyn Provider> = provider_arc.clone();
     let c = LlmCompressor::new(provider, "mock-model").with_config(cfg);
     let msgs: Vec<Message> = (0..8).map(|i| user_msg(&format!("msg-{i}"))).collect();
     let after = c.compress(None, msgs.clone()).await;
+    assert_eq!(after, msgs);
     assert_eq!(
         after.len(),
         msgs.len(),
@@ -432,8 +472,7 @@ async fn compress_preserves_tool_use_result_pair_in_tail() {
         summary_max_tokens: 256,
         ..Default::default()
     };
-    let provider_arc: Arc<MockProvider> =
-        Arc::new(MockProvider::new("mock-model", &parent_cfg()));
+    let provider_arc: Arc<MockProvider> = Arc::new(MockProvider::new("mock-model", &parent_cfg()));
     provider_arc.push_response(MockResponse::Text("summary".into()));
     let provider: Arc<dyn Provider> = provider_arc;
     let c = LlmCompressor::new(provider, "mock-model").with_config(cfg);

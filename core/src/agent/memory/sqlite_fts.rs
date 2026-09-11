@@ -75,7 +75,7 @@ impl MemoryError {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct MessageRow {
     pub id: i64,
     pub session_id: String,
@@ -127,6 +127,27 @@ impl MessageRow {
             .map(crate::agent::trust::SourceKind::from_tag)
             .collect()
     }
+
+    pub fn provenance(&self) -> crate::agent::trust::SegmentManifestEntry {
+        let source = self.trust_source();
+        let lineage = self.trust_lineage();
+        let class = lineage
+            .iter()
+            .fold(self.trust_class().least(source.class()), |class, kind| {
+                class.least(kind.class())
+            });
+        crate::agent::trust::SegmentManifestEntry {
+            source: crate::agent::trust::SourceRef::with_locator(
+                source,
+                &format!("{}:{}", self.session_id, self.id),
+            )
+            .label(),
+            class,
+            bytes: self.content.len(),
+            digest: crate::crypto::sha256_hex(self.content.as_bytes()),
+            lineage: lineage.iter().map(|kind| kind.tag().to_string()).collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -152,9 +173,15 @@ pub struct SessionSystemPrompt {
 #[derive(Debug, Clone)]
 pub struct SearchHit {
     pub row: MessageRow,
-    /// FTS5 bm25 rank — lower is better. Included so the model can decide
-    /// whether a match is strong enough to act on.
+    /// FTS5 bm25 rank — lower is more relevant, not more trustworthy.
     pub rank: f64,
+}
+
+#[derive(Clone, Copy)]
+enum SearchRows {
+    All,
+    History,
+    Apps,
 }
 
 /// Summary returned by [`MemoryDb::purge_older_than_ms`] /
@@ -522,12 +549,15 @@ impl MemoryDb {
         // Truncate at a character boundary so multi-byte UTF-8 is
         // preserved.
         const MAX_CONTENT_CHARS: usize = 64 * 1024;
-        let stored: std::borrow::Cow<'_, str> = if content.chars().count() > MAX_CONTENT_CHARS {
-            let truncated: String = content.chars().take(MAX_CONTENT_CHARS).collect();
-            std::borrow::Cow::Owned(truncated + "\n…[truncated]")
-        } else {
-            std::borrow::Cow::Borrowed(content)
-        };
+        // Injected context has its own composition budget and must remain
+        // reconstructable byte-for-byte, including its provenance envelope.
+        let stored: std::borrow::Cow<'_, str> =
+            if role != INJECTED_ROLE && content.chars().count() > MAX_CONTENT_CHARS {
+                let truncated: String = content.chars().take(MAX_CONTENT_CHARS).collect();
+                std::borrow::Cow::Owned(truncated + "\n…[truncated]")
+            } else {
+                std::borrow::Cow::Borrowed(content)
+            };
         let conn = self.lock_conn()?;
         conn.execute(
             "INSERT INTO messages
@@ -546,7 +576,7 @@ impl MemoryDb {
         Ok(conn.last_insert_rowid())
     }
 
-    /// Record an auto-injected system-prompt segment as its own row
+    /// Record an auto-injected request-context segment as its own row
     /// under `role = "injected"`. Enforces the "model-visible means
     /// logged" invariant (issue #2, point 1): every piece of variable
     /// content that reaches a model request — memory notes, due nudges,
@@ -863,28 +893,7 @@ impl MemoryDb {
     /// quoted phrase, then ANDed together — so users can pass arbitrary
     /// prose without worrying about FTS5 operator syntax.
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>, MemoryError> {
-        let escaped = fts5_escape(query);
-        if escaped.is_empty() {
-            return Ok(Vec::new());
-        }
-        let conn = self.lock_conn()?;
-        let mut stmt = conn.prepare(
-            "SELECT m.id, m.session_id, m.role, m.content, m.ts_ms, m.trust_class, m.trust_source, m.trust_lineage, bm25(messages_fts) AS rank
-             FROM messages_fts
-             JOIN messages m ON m.id = messages_fts.rowid
-             WHERE messages_fts MATCH ?
-             ORDER BY rank
-             LIMIT ?",
-        )?;
-        let hits = stmt
-            .query_map(params![escaped, limit as i64], |row| {
-                Ok(SearchHit {
-                    row: row_to_message(row)?,
-                    rank: row.get::<_, f64>(8)?,
-                })
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(hits)
+        self.search_filtered(query, None, SearchRows::All, limit)
     }
 
     /// FTS5 search constrained to a single session.
@@ -892,6 +901,36 @@ impl MemoryDb {
         &self,
         session_id: &str,
         query: &str,
+        limit: usize,
+    ) -> Result<Vec<SearchHit>, MemoryError> {
+        self.search_filtered(query, Some(session_id), SearchRows::All, limit)
+    }
+
+    /// The model/user conversation view excludes injection audit records
+    /// before applying the limit, matching `recent_replayable` and source reads.
+    pub fn search_history(
+        &self,
+        query: &str,
+        session_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<SearchHit>, MemoryError> {
+        self.search_filtered(query, session_id, SearchRows::History, limit)
+    }
+
+    pub fn search_apps(
+        &self,
+        query: &str,
+        session_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<SearchHit>, MemoryError> {
+        self.search_filtered(query, session_id, SearchRows::Apps, limit)
+    }
+
+    fn search_filtered(
+        &self,
+        query: &str,
+        session_id: Option<&str>,
+        rows: SearchRows,
         limit: usize,
     ) -> Result<Vec<SearchHit>, MemoryError> {
         let escaped = fts5_escape(query);
@@ -903,20 +942,44 @@ impl MemoryDb {
             "SELECT m.id, m.session_id, m.role, m.content, m.ts_ms, m.trust_class, m.trust_source, m.trust_lineage, bm25(messages_fts) AS rank
              FROM messages_fts
              JOIN messages m ON m.id = messages_fts.rowid
-             WHERE messages_fts MATCH ?
-               AND m.session_id = ?
-             ORDER BY rank
-             LIMIT ?",
+             WHERE messages_fts MATCH ?1
+               AND (?2 IS NULL OR m.session_id = ?2)
+               AND (NOT ?3 OR m.role <> ?4)
+               AND (NOT ?5 OR (m.role = 'app' AND m.session_id LIKE 'app:%'))
+             ORDER BY rank, m.id
+             LIMIT ?6",
         )?;
         let hits = stmt
-            .query_map(params![escaped, session_id, limit as i64], |row| {
-                Ok(SearchHit {
-                    row: row_to_message(row)?,
-                    rank: row.get::<_, f64>(8)?,
-                })
-            })?
+            .query_map(
+                params![
+                    escaped,
+                    session_id,
+                    !matches!(rows, SearchRows::All),
+                    INJECTED_ROLE,
+                    matches!(rows, SearchRows::Apps),
+                    limit as i64
+                ],
+                |row| {
+                    Ok(SearchHit {
+                        row: row_to_message(row)?,
+                        rank: row.get::<_, f64>(8)?,
+                    })
+                },
+            )?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(hits)
+    }
+
+    pub fn message(&self, id: i64) -> Result<Option<MessageRow>, MemoryError> {
+        let conn = self.lock_conn()?;
+        Ok(conn
+            .query_row(
+                "SELECT id, session_id, role, content, ts_ms, trust_class, trust_source, trust_lineage
+                 FROM messages WHERE id = ?",
+                params![id],
+                row_to_message,
+            )
+            .optional()?)
     }
 
     pub fn count_total(&self) -> Result<i64, MemoryError> {
@@ -1503,21 +1566,11 @@ fn default_path() -> PathBuf {
 pub(crate) fn fts5_escape(query: &str) -> String {
     let mut out = String::new();
     for word in query.split_whitespace() {
-        // Strip FTS5 punctuation/operators that have no useful meaning inside
-        // a phrase: parentheses, colons, asterisks, dashes (column filter,
-        // prefix, NEAR, NOT). We treat the input as plain prose.
-        let cleaned: String = word
-            .chars()
-            .filter(|c| !matches!(*c, '(' | ')' | ':' | '*' | '-' | '+' | '^'))
-            .collect();
-        if cleaned.is_empty() {
-            continue;
-        }
         if !out.is_empty() {
             out.push(' ');
         }
         out.push('"');
-        for ch in cleaned.chars() {
+        for ch in word.chars() {
             if ch == '"' {
                 out.push('"');
                 out.push('"');

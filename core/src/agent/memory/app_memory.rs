@@ -244,8 +244,13 @@ pub async fn remember(
     let content = entry.to_content();
     let stored_bytes = content.len();
 
+    let segment = crate::agent::trust::LabeledSegment::from_locator(
+        crate::agent::trust::SourceKind::AppMemory,
+        &session_id,
+        &content,
+    );
     let row_id = db
-        .record_message(&session_id, "app", &content)
+        .record_labeled_message(&session_id, "app", &segment, &content)
         .map_err(RememberError::Db)?;
 
     let mut indexed_semantic = false;
@@ -323,10 +328,12 @@ pub struct AppMemoryRow {
     /// FTS5 bm25 rank when this row was produced by a search; `None`
     /// otherwise (list / show).
     pub rank: Option<f64>,
+    pub provenance: crate::agent::trust::SegmentManifestEntry,
 }
 
 impl AppMemoryRow {
     fn from_row(row: MessageRow, rank: Option<f64>) -> Self {
+        let provenance = row.provenance();
         let parsed = parse_content(&row.content);
         let source = row
             .session_id
@@ -335,7 +342,7 @@ impl AppMemoryRow {
             .to_string();
         Self {
             id: row.id,
-            source: parsed.source.unwrap_or(source),
+            source,
             ts_ms: row.ts_ms,
             text: parsed.text,
             kind: parsed.kind,
@@ -343,6 +350,7 @@ impl AppMemoryRow {
             tags: parsed.tags,
             link: parsed.link,
             rank,
+            provenance,
         }
     }
 }
@@ -465,19 +473,24 @@ pub fn list(
     };
     let mut stmt = conn.prepare(sql)?;
     let mut out = Vec::new();
-    let rows_iter: Box<dyn Iterator<Item = Result<MessageRow, rusqlite::Error>>> = if let Some(s) =
-        sid.as_deref()
-    {
-        let rows = stmt
-            .query_map(rusqlite::params![s, limit as i64], super::sqlite_fts::row_to_message)?
-            .collect::<Vec<_>>();
-        Box::new(rows.into_iter())
-    } else {
-        let rows = stmt
-            .query_map(rusqlite::params![limit as i64], super::sqlite_fts::row_to_message)?
-            .collect::<Vec<_>>();
-        Box::new(rows.into_iter())
-    };
+    let rows_iter: Box<dyn Iterator<Item = Result<MessageRow, rusqlite::Error>>> =
+        if let Some(s) = sid.as_deref() {
+            let rows = stmt
+                .query_map(
+                    rusqlite::params![s, limit as i64],
+                    super::sqlite_fts::row_to_message,
+                )?
+                .collect::<Vec<_>>();
+            Box::new(rows.into_iter())
+        } else {
+            let rows = stmt
+                .query_map(
+                    rusqlite::params![limit as i64],
+                    super::sqlite_fts::row_to_message,
+                )?
+                .collect::<Vec<_>>();
+            Box::new(rows.into_iter())
+        };
     for r in rows_iter {
         let row = r?;
         out.push(AppMemoryRow::from_row(row, None));
@@ -509,18 +522,8 @@ pub fn search(
     source: Option<&str>,
     limit: usize,
 ) -> Result<Vec<AppMemoryRow>, MemoryError> {
-    let hits: Vec<SearchHit> = match source {
-        Some(s) => db.search_session(&session_id_for(s), query, limit)?,
-        None => {
-            // Search across everything, then filter to app-owned rows.
-            // Pull extra hits to compensate for the filter.
-            let raw = db.search(query, limit.saturating_mul(2).max(limit))?;
-            raw.into_iter()
-                .filter(|h| h.row.session_id.starts_with("app:") && h.row.role == "app")
-                .take(limit)
-                .collect()
-        }
-    };
+    let session_id = source.map(session_id_for);
+    let hits: Vec<SearchHit> = db.search_apps(query, session_id.as_deref(), limit)?;
     Ok(hits
         .into_iter()
         .map(|h| AppMemoryRow::from_row(h.row, Some(h.rank)))

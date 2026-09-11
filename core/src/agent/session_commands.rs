@@ -2,17 +2,34 @@ use super::memory;
 use serde_json::{json, Value};
 
 /// `cos agent recall <query> [limit]` — FTS5 search across all
-/// recorded conversation messages. Returns ranked hits (best first).
+/// recorded conversation messages. `--message <id>` expands one source.
 pub(super) fn recall_cmd(args: &[String]) -> Result<Value, String> {
+    if args.first().is_some_and(|argument| argument == "--message") {
+        let id = args
+            .get(1)
+            .filter(|_| args.len() == 2)
+            .and_then(|value| value.parse::<i64>().ok())
+            .filter(|id| *id > 0)
+            .ok_or_else(|| "usage: cos agent recall --message <positive-id>".to_string())?;
+        let db = memory::sqlite_fts::MemoryDb::open_default()
+            .map_err(|error| format!("memory db unavailable: {error}"))?;
+        let mut row = db
+            .message(id)
+            .map_err(|error| error.to_string())?
+            .filter(|row| row.role != memory::sqlite_fts::INJECTED_ROLE)
+            .ok_or_else(|| "source message not found".to_string())?;
+        row.content = memory::history::sanitize_stored_content(&row.role, &row.content);
+        return Ok(json!({ "message": row }));
+    }
     let query = args.first().cloned().unwrap_or_default();
     if query.is_empty() {
-        return Err("usage: cos agent recall \"<query>\" [limit]".into());
+        return Err("usage: cos agent recall \"<query>\" [limit] | --message <id>".into());
     }
     let limit: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(10);
     let db = memory::sqlite_fts::MemoryDb::open_default()
         .map_err(|e| format!("memory db unavailable: {e}"))?;
     let hits = db
-        .search(&query, limit)
+        .search_history(&query, None, limit)
         .map_err(|e| format!("search failed: {e}"))?;
     let rendered: Vec<Value> = hits
         .iter()

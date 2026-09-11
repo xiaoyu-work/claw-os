@@ -15,8 +15,47 @@
 
 use serde::Serialize;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 
 use super::sqlite_fts::{MemoryDb, MemoryError};
+
+pub const DEFAULT_READ_CHARS: usize = 4096;
+pub const MAX_READ_CHARS: usize = 16_384;
+
+#[derive(Debug, Serialize)]
+pub struct TextPage {
+    pub content: String,
+    pub revision: String,
+    pub offset: usize,
+    pub next_offset: Option<usize>,
+    pub total_chars: usize,
+    pub source_complete: bool,
+}
+
+pub fn text_revision(text: &str) -> String {
+    hex::encode(Sha256::digest(text.as_bytes()))
+}
+
+pub fn text_page(text: &str, offset: usize, max_chars: usize) -> Result<TextPage, String> {
+    if !(1..=MAX_READ_CHARS).contains(&max_chars) {
+        return Err(format!("max_chars must be within 1..={MAX_READ_CHARS}"));
+    }
+    let total_chars = text.chars().count();
+    if offset > total_chars {
+        return Err(format!(
+            "offset {offset} exceeds source length {total_chars}"
+        ));
+    }
+    let end = offset.saturating_add(max_chars).min(total_chars);
+    Ok(TextPage {
+        content: text.chars().skip(offset).take(end - offset).collect(),
+        revision: text_revision(text),
+        offset,
+        next_offset: (end < total_chars).then_some(end),
+        total_chars,
+        source_complete: offset == 0 && end == total_chars,
+    })
+}
 
 /// Parsed view of a single stored memory row.
 #[derive(Debug, Default, Serialize)]

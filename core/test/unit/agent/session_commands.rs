@@ -1,6 +1,18 @@
 use super::*;
 
 #[test]
+fn recall_message_validates_before_opening_storage() {
+    for args in [
+        vec!["--message".into()],
+        vec!["--message".into(), "not-an-id".into()],
+        vec!["--message".into(), "-1".into()],
+        vec!["--message".into(), "1".into(), "extra".into()],
+    ] {
+        assert!(recall_cmd(&args).unwrap_err().contains("positive-id"));
+    }
+}
+
+#[test]
 fn recall_empty_query_errors() {
     let err = recall_cmd(&[]).unwrap_err();
     assert!(err.to_lowercase().contains("usage"));

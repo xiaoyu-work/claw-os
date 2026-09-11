@@ -534,9 +534,11 @@ other content
             trust_lineage: None,
         }];
         let out = format_transcript(&rows, 100);
-        assert!(out.contains("[user message_id=1] "));
-        assert!(out.contains("…"));
-        assert!(out.len() < 200, "got len {}", out.len());
+        let parsed = crate::agent::trust::envelope::parse(&out).unwrap();
+        assert!(parsed.payload.contains("[user message_id=1] "));
+        assert!(parsed.payload.contains("…"));
+        assert!(parsed.payload.len() < 200, "got len {}", parsed.payload.len());
+        assert_eq!(parsed.class, crate::agent::trust::TrustClass::LegacyUnknown);
     }
 
     #[test]
@@ -552,7 +554,8 @@ other content
             trust_lineage: None,
         }];
         let out = format_transcript(&rows, 100);
-        assert!(out.contains("[assistant message_id=1] short"));
+        let parsed = crate::agent::trust::envelope::parse(&out).unwrap();
+        assert!(parsed.payload.contains("[assistant message_id=1] short"));
         assert!(!out.contains("…"));
     }
 
@@ -587,13 +590,17 @@ other content
 <fact category="environment" entity="operating_system" attribute="name" value="Windows 11" lifetime="observed" ttl_days="30" source_message_id="3" confidence="0.95">User runs Windows 11 with PowerShell</fact>"#
                 .to_string(),
         ));
-        let provider: Arc<dyn Provider> = Arc::new(provider);
+        let provider = Arc::new(provider);
+        let recorded_requests = Arc::clone(&provider);
+        let provider: Arc<dyn Provider> = provider;
         let aux = AuxiliaryClient::new(provider, AuxiliaryConfig::new("mock", "mock-aux"));
 
         let db = MemoryDb::open_in_memory().expect("memory db");
         db.record_message("sess-1", "user", "I love Rust!").unwrap();
         db.record_message("sess-1", "assistant", "Noted.").unwrap();
         db.record_message("sess-1", "user", "I'm on Windows 11.")
+            .unwrap();
+        db.record_injected("sess-1", "context_packet", "DO_NOT_LEARN_INJECTED_MEMORY")
             .unwrap();
 
         let dir = std::env::temp_dir().join(format!(
@@ -611,6 +618,12 @@ other content
         let curator = MemoryCurator::new(aux, notes.clone(), log_path.clone());
         let outcome = curator.curate_session(&db, "sess-1", false).await.unwrap();
 
+        assert_eq!(outcome.messages_examined, 3);
+        let request = recorded_requests.last_request().unwrap();
+        assert!(request.messages.iter().all(|message| {
+            !crate::agent::memory::sqlite_fts::render_message_content(message)
+                .contains("DO_NOT_LEARN_INJECTED_MEMORY")
+        }));
         assert_eq!(outcome.facts_proposed.len(), 2);
         assert_eq!(outcome.facts_added.len(), 2);
         assert!(!outcome.skipped_no_new_messages);
@@ -628,6 +641,16 @@ other content
         assert_eq!(loaded.last_id("sess-1"), outcome.last_message_id);
 
         // Re-running should skip (no new messages).
+        let summary = crate::agent::trust::LabeledSegment::of(
+            crate::agent::trust::SourceKind::ModelCompressionSummary,
+            "DO_NOT_REEXTRACT_COMPACTION",
+        );
+        db.record_labeled_message(
+            "sess-1",
+            crate::agent::memory::sqlite_fts::INJECTED_ROLE,
+            &summary,
+            summary.content(),
+        ).unwrap();
         let again = curator.curate_session(&db, "sess-1", false).await.unwrap();
         assert!(again.skipped_no_new_messages);
         assert!(again.facts_added.is_empty());

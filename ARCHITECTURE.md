@@ -778,6 +778,38 @@ summarised, stored, replayed or re-serialised, and cannot forge or escape the
 fence around themselves. The security boundary remains capabilities,
 guardrails, approvals and the sandbox — none of which read a trust label.
 
+### Model-directed memory context
+
+`context/packet.rs` supplies a bounded initial profile and source discovery
+through the existing `LabeledSegment` and `PromptProjection` contracts.
+`USER.md` and explicitly `[always]`-pinned entries remain owner-controlled data,
+never policy. Their admission uses the request's trusted tool exposure and
+`memory.read:self:agent` capability. The canonical prompt version is 6; older
+policy snapshots rebuild once to pick up the retrieval guidance.
+
+The main model chooses additional note, history, App and semantic reads through
+the normal guarded tools. No keyword router or compulsory extra planning call
+selects task-specific memories. An insufficient, stale, conflicting or partial
+result requires query refinement, reading the original source, or an authorized
+current observation; unchanged lookups that add no evidence are not progress.
+Execution limits and missing access remain explicit, not fabricated conclusions.
+
+Memory search returns bounded excerpts, source identity, coverage information
+and read handles. Character pages carry content revisions, and continuation
+pages reject changed sources rather than combine versions. Search relevance
+is not factual confidence; semantic timestamps describe indexing rather than
+event time. `cos_memory search` executes the model's literal note query, while
+`cos_recall show` and `cos_recall_semantic read` expand identified sources.
+The terminal exposes `cos agent notes search <query> [name] [limit]` and
+`cos agent recall --message <id>`.
+
+`context/budget.rs` counts policy, fenced prelude, original input and the exposed
+tool schemas against the configured input target and known model/fallback
+windows after response headroom. Unknown models retain the configured input
+target rather than an invented window. This does not replace durable compaction,
+origin tracking, memory repair or trust accounting; the protected original
+request and tool pairs still use those existing invariants.
+
 ### Persistence and observability
 
 Anything inserted into a model request must be reconstructable from session or
@@ -1014,10 +1046,11 @@ CLI / web UI / bridge
   -> restore the session's frozen content-addressed *policy* prompt, or
      build + freeze it once (compiled scaffold, plus a root-owned
      operator policy file when ownership verification passes)
-  -> rebuild the request prelude per turn: Skill catalogue, memory notes,
-     owner-writable prompt file, due reminders, transient App data —
+  -> rebuild the request prelude per turn: Skill catalogue, a bounded pinned profile,
+     owner-writable prompt file, due reminders, transient App data and source handles —
      each a separate fenced user data message before the owner's turn
   -> load persisted conversation and compress when the configured budget requires it
+  -> check the complete input budget, including projected tool definitions
   -> Provider::chat or Provider::chat_stream
   -> StreamEvent accumulation
   -> user-visible stream projection (tool identity only; evidence markers hidden)

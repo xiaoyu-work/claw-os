@@ -11,6 +11,8 @@ surfaces.
 - Configure providers and credentials without storing secret values in config.
 - Freeze versioned, content-addressed system prompts per session and trace
   request-local model context separately.
+- Supply a budgeted pinned profile through the typed data prelude; the main
+  model selects further memories and source reads through guarded tools.
 - Label every model-visible segment with immutable trust provenance from
   [`trust/`](trust/MODULE.md) at its ingestion adapter, and keep operator policy
   separate from owner-controlled, extension and third-party content.
@@ -61,6 +63,7 @@ surfaces.
 | `../../test/unit/agent/setup.rs` | Setup, status, apply, OAuth, and config regression tests |
 | `runtime/loop_.rs` | Multi-turn orchestration, prompt restore/freeze, compression, and persistence |
 | `runtime/deps.rs` | Explicit hooks, clock, semantic indexer, and runtime path context |
+| `context/packet.rs`, `runtime/context.rs` | Budgeted labelled request data and exposure-gated pinned memory |
 | `runtime/turn.rs` | One provider turn, hooks, tool ordering, results |
 | `service.rs`, `../../test/unit/agent/service.rs` | Task queue, approval-wait state, ownership/lease records, and `execute_job` — the runtime entry the `agentd` worker calls |
 | `llm/types.rs` | Provider-neutral request, response, content, and stream types |

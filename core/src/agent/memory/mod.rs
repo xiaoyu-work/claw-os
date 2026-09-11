@@ -1,7 +1,7 @@
 //! Memory subsystem.
 //!
 //! Phase 3 layers (decided in Q6):
-//!   - notes (MEMORY.md / USER.md)         — frozen snapshot
+//!   - notes (MEMORY.md / USER.md)         — pinned profile + model-selected reads
 //!   - sqlite_fts                          — built-in, FTS5 + trigram
 //!   - semantic                            — fastembed via crate::model::tasks::embed
 //!   - curator                             — async fact extractor

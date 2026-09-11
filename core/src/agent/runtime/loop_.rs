@@ -66,6 +66,9 @@ pub enum AgentError {
     #[error("LLM error: {0}")]
     Llm(#[from] llm::LlmError),
 
+    #[error("context: {0}")]
+    Context(#[from] crate::agent::context::budget::ContextError),
+
     #[error("max_turns ({0}) exceeded — possible tool loop")]
     MaxTurnsExceeded(u32),
 
@@ -636,13 +639,19 @@ fn rows_to_seed(rows: &[sqlite_fts::MessageRow]) -> ConversationSeed {
 }
 
 fn stored_replay_message(row: &sqlite_fts::MessageRow) -> Option<Message> {
-    replay_persisted_content(&row.role, &row.content, row.trust_source())
+    replay_persisted_content(
+        &row.role,
+        &row.content,
+        row.trust_source(),
+        row.trust_class(),
+    )
 }
 
 fn replay_persisted_content(
     stored_role: &str,
     content: &str,
     source: trust::SourceKind,
+    class: trust::TrustClass,
 ) -> Option<Message> {
     use crate::agent::llm::{ContentBlock, Role};
     if stored_role == sqlite_fts::INJECTED_ROLE {
@@ -651,9 +660,12 @@ fn replay_persisted_content(
     let seal = trust::envelope::process_seal();
     let role = match stored_role {
         "assistant" => Role::Assistant,
-        "system" => Role::System,
         _ => Role::User,
     };
+    let historical_external = !matches!(stored_role, "user" | "assistant")
+        || !crate::agent::memory::history::parse_stored_content(stored_role, content)
+            .tool_results
+            .is_empty();
     let text = super::evidence::strip_markers(&flatten_stored_content_for_replay(content));
     if text.trim().is_empty() {
         return None;
@@ -665,14 +677,24 @@ fn replay_persisted_content(
         Role::Assistant => trust::envelope::encode(&text),
         _ => {
             let in_band = trust::LabeledSegment::from_stored(&text);
-            if in_band.kind() != trust::SourceKind::LegacyStoredRow {
-                in_band.render_fenced(seal)
+            if in_band.kind() != trust::SourceKind::LegacyStoredRow || historical_external {
+                trust::envelope::render(
+                    seal,
+                    in_band.source(),
+                    class.least(in_band.class()),
+                    in_band.content(),
+                )
             } else {
                 match source {
                     trust::SourceKind::LegacyStoredRow | trust::SourceKind::UserMessage => {
                         trust::envelope::encode(&text)
                     }
-                    kind => trust::LabeledSegment::of(kind, text).render_fenced(seal),
+                    kind => trust::envelope::render(
+                        seal,
+                        &trust::SourceRef::new(kind),
+                        class.least(kind.class()),
+                        &text,
+                    ),
                 }
             }
         }
@@ -1092,7 +1114,7 @@ fn validate_active_projection(seed: &ConversationSeed) -> Result<(), String> {
 fn message_is_real_user(message: &Message) -> bool {
     message.role == llm::Role::User
         && message.content.iter().any(|block| match block {
-            llm::ContentBlock::Text { text } => text
+            llm::ContentBlock::Text { text } => compressor::replay_text(text)
                 .lines()
                 .map(str::trim)
                 .find(|line| !line.is_empty())
@@ -1282,7 +1304,11 @@ fn scrub_messages_with_origins(
     let mut scrubbed_messages = Vec::with_capacity(messages.len());
     let mut scrubbed_origins = Vec::with_capacity(origins.len());
     for (message, origin) in messages.into_iter().zip(origins) {
-        let mut scrubbed = scrubber.scrub_messages(vec![message]);
+        let mut scrubbed = if message.role == llm::Role::Assistant {
+            scrubber.scrub_messages(vec![message])
+        } else {
+            vec![message]
+        };
         if let Some(message) = scrubbed.pop() {
             scrubbed_messages.push(message);
             scrubbed_origins.push(origin);
@@ -1765,7 +1791,7 @@ fn resolve_projection(
     deps: &RuntimeDeps,
     cfg: &AgentConfig,
     user_prompt: &str,
-    transient_context: Option<&str>,
+    _transient_context: Option<&str>,
     recorder: Option<(&MemoryDb, &str)>,
 ) -> Result<trust::PromptProjection, AgentError> {
     let extra = cfg.system_prompt_path.as_deref().map(Path::new);
@@ -1789,7 +1815,6 @@ fn resolve_projection(
         }
     };
 
-    projection.extend_prelude(turn_context_segments(deps, transient_context));
     projection.push(trust::LabeledSegment::of(
         trust::SourceKind::UserMessage,
         user_prompt,
@@ -1802,31 +1827,6 @@ fn resolve_projection(
         "prompt projection mixed trust channels"
     );
     Ok(projection)
-}
-
-/// Request-local segments that are not part of prompt assembly.
-fn turn_context_segments(
-    deps: &RuntimeDeps,
-    transient_context: Option<&str>,
-) -> Vec<trust::LabeledSegment> {
-    let mut segments = match deps.paths() {
-        Some(paths) => prompt::build_turn_context_segments_with(
-            &crate::agent::nudge::NudgeStore::new(&paths.nudges_path),
-            deps.now_ms() / 1_000,
-        ),
-        None => prompt::build_turn_context_segments(),
-    }
-    .into_iter()
-    .map(|segment| trust::LabeledSegment::of(segment.kind, segment.raw))
-    .collect::<Vec<_>>();
-
-    if let Some(context) = transient_context.filter(|value| !value.trim().is_empty()) {
-        segments.push(trust::LabeledSegment::of(
-            trust::SourceKind::TransientAppContext,
-            context.trim(),
-        ));
-    }
-    segments
 }
 
 /// Freeze the policy channel so a session keeps a stable, cacheable
@@ -2011,7 +2011,9 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
         let segment = trust::LabeledSegment::of(trust::SourceKind::UserMessage, "");
         match db.record_labeled_message(sid, "user", &segment, &to_record) {
             Ok(msg_id) => {
-                if let Some(replay) = replay_persisted_content("user", &to_record, segment.kind()) {
+                if let Some(replay) =
+                    replay_persisted_content("user", &to_record, segment.kind(), segment.class())
+                {
                     user_origin = MessageOrigin::Raw { id: msg_id, replay };
                 }
                 if let Some(ix) = &semantic_indexer {
@@ -2022,27 +2024,10 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
         }
     }
 
-    let projection = resolve_projection(deps, cfg, user_prompt, transient_context, recorder)?;
+    let mut projection = resolve_projection(deps, cfg, user_prompt, transient_context, recorder)?;
     let system = projection.system_text();
 
-    let ConversationSeed {
-        mut messages,
-        mut origins,
-    } = initial_messages;
-    let request_messages = projection.request_messages(trust::envelope::process_seal());
-    let instruction_offset = projection
-        .instruction_segment()
-        .is_some()
-        .then(|| request_messages.len().saturating_sub(1));
-    let request_start = messages.len();
-    origins.resize(
-        request_start + request_messages.len(),
-        MessageOrigin::Ephemeral,
-    );
-    messages.extend(request_messages);
-    if let Some(offset) = instruction_offset {
-        origins[request_start + offset] = user_origin;
-    }
+    let budget = crate::agent::context::budget::ContextBudget::from_config(cfg)?;
     let llm_tools = if cfg.progressive_tools_enabled {
         tools.as_llm_tools_for(exposure)
     } else {
@@ -2061,6 +2046,46 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
     } else {
         interrupt::register(session_id.clone())
     };
+    if interrupt_handle.check() {
+        return Err(AgentError::Interrupted(
+            interrupt_handle.session_id().to_string(),
+        ));
+    }
+    let baseline_prelude = projection.prelude_messages(trust::envelope::process_seal());
+    let packet = super::context::prepare(
+        deps,
+        super::context::ContextRequest {
+            budget,
+            system: &system,
+            prelude: &baseline_prelude,
+            user_prompt,
+            transient_context,
+            tools,
+            exposure: Some(exposure),
+            llm_tools: if cfg.max_turns <= 1 { &[] } else { &llm_tools },
+            redactor: redactor.as_ref(),
+        },
+    )?;
+    super::context::record(&packet, recorder)?;
+    projection.extend_prelude(packet.segments());
+    let ConversationSeed {
+        mut messages,
+        mut origins,
+    } = initial_messages;
+    let request_messages = projection.request_messages(trust::envelope::process_seal());
+    let instruction_offset = projection
+        .instruction_segment()
+        .is_some()
+        .then(|| request_messages.len().saturating_sub(1));
+    let request_start = messages.len();
+    origins.resize(
+        request_start + request_messages.len(),
+        MessageOrigin::Ephemeral,
+    );
+    messages.extend(request_messages);
+    if let Some(offset) = instruction_offset {
+        origins[request_start + offset] = user_origin;
+    }
 
     // Process-wide hook registry (default empty → zero-cost when
     // no hooks registered). See `agent::runtime::hooks`. Auto-load
@@ -2157,11 +2182,17 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
                     messages_after = after,
                     est_tokens_before = est_before,
                     est_tokens_after = est_after,
-                    "context: compressed"
+                    "context: compression pass"
                 );
             }
         }
 
+        budget.check(
+            "model request after context selection/compression",
+            turn_system,
+            &messages,
+            if force_finalize { &[] } else { &llm_tools },
+        )?;
         let len_before = messages.len();
         let outcome_result = match (&output, force_finalize) {
             (LifecycleOutput::Buffered, true) => {
@@ -2357,9 +2388,14 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
                 let segment = message_provenance(new_msg);
                 match db.record_labeled_message(sid, role, &segment, &to_record) {
                     Ok(msg_id) => {
-                        let origin = replay_persisted_content(role, &to_record, segment.kind())
-                            .map(|replay| MessageOrigin::Raw { id: msg_id, replay })
-                            .unwrap_or(MessageOrigin::Ephemeral);
+                        let origin = replay_persisted_content(
+                            role,
+                            &to_record,
+                            segment.kind(),
+                            segment.class(),
+                        )
+                        .map(|replay| MessageOrigin::Raw { id: msg_id, replay })
+                        .unwrap_or(MessageOrigin::Ephemeral);
                         appended_origins.push(origin);
                         if let Some(ix) = &semantic_indexer {
                             ix.spawn_index(sid.to_string(), role, msg_id, to_record.clone());
@@ -2669,13 +2705,23 @@ fn compressor_from_cfg_with_exposure(
     }
     let fallback_exposure = ToolExposureContext::isolated(tools.guardrails().clone());
     let exposure = exposure.unwrap_or(&fallback_exposure);
-    let tool_tokens = compressor::estimate_tools_tokens(&tools.as_llm_tools_for(exposure));
-    let target_tokens = cfg
-        .compress_target_tokens
-        .saturating_sub(tool_tokens)
-        .max(1);
+    let budget = match crate::agent::context::budget::ContextBudget::from_config(cfg) {
+        Ok(budget) => budget,
+        Err(error) => {
+            tracing::warn!(%error, "context: cannot configure compression");
+            return None;
+        }
+    };
+    let visible_tools = if cfg.progressive_tools_enabled {
+        tools.as_llm_tools_for(exposure)
+    } else {
+        tools.direct_llm_tools_for(exposure)
+    };
+    let tool_tokens = compressor::estimate_tools_tokens(&visible_tools);
+    let target_tokens = budget.input_tokens.saturating_sub(tool_tokens).max(1);
     let trigger_tokens = cfg
         .compress_trigger_tokens
+        .min(budget.input_tokens)
         .saturating_sub(tool_tokens)
         .max(1);
     let compressor_cfg = CompressorConfig {

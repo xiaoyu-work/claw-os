@@ -154,6 +154,22 @@ impl NudgeStore {
             .collect()
     }
 
+    /// Context assembly must distinguish unavailable state from no reminders.
+    pub fn try_due(&self, now_epoch_s: u64) -> io::Result<Vec<Nudge>> {
+        let text = match fs::read_to_string(&self.path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(error),
+        };
+        let file: NudgeFile = serde_json::from_str(&text)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        Ok(file
+            .nudges
+            .into_values()
+            .filter(|nudge| nudge.due_at_epoch_s <= now_epoch_s)
+            .collect())
+    }
+
     /// Mark `id` as fired at `now_epoch_s`.
     ///
     /// * One-shot (no repeat) → deleted.

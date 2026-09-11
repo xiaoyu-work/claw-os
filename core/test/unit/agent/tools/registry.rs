@@ -443,6 +443,145 @@ fn builtin_only_registry_has_just_builtins() {
     assert!(r.get("cos_sandbox").is_none());
 }
 
+#[tokio::test]
+async fn injected_notes_root_is_shared_by_memory_profile_and_curator() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    let deps = RegistryDeps::without_optional_resources(
+        Arc::new(crate::config::CosConfig::default()),
+        RegistryPaths {
+            apps_dir: root.join("apps"),
+            todos_dir: root.join("todos"),
+            system_skills_dir: root.join("system-skills"),
+            user_skills_dir: root.join("user-skills"),
+            skills_usage_path: root.join("skills-usage.json"),
+            media_outputs_dir: root.join("media"),
+            memory_db_path: root.join("memory.db"),
+            semantic_db_path: root.join("semantic.db"),
+            notes_dir: root.join("injected-notes"),
+            hooks_config_path: root.join("hooks.json"),
+            audit_log_path: root.join("audit.jsonl"),
+            nudges_path: root.join("nudges.json"),
+            system_skills_origin: crate::agent::skills::loader::SkillOrigin::Local,
+            curation_log_path: root.join("curation.json"),
+        },
+    );
+    let registry = default_registry_with_deps(&deps);
+    let session = crate::proc::SessionInfo {
+        session_id: "notes-profile-session".to_string(),
+        pid: std::process::id(),
+        command: vec!["test".to_string()],
+        started_at: chrono::Utc::now().to_rfc3339(),
+        stdout_path: String::new(),
+        stderr_path: String::new(),
+        group: None,
+        parent: None,
+        workdir: None,
+        exit_code: None,
+        ended_at: None,
+        tier: None,
+        scope: None,
+        priority: None,
+        caps: Some(crate::caps::CapSet::from_caps(
+            [crate::caps::Verb::MEMORY_READ, crate::caps::Verb::MEMORY_WRITE]
+                .into_iter()
+                .map(|verb| crate::caps::Cap::new(
+                    verb,
+                    crate::caps::Scope::self_ref(crate::agent::tools::SYSTEM_AGENT_MEMORY_SCOPE),
+                )),
+        )),
+        transient_caps: None,
+        role: None,
+        app_id: None,
+        pending_bind: false,
+        start_time_ticks: None,
+        client: crate::session::SessionClient::default(),
+    };
+    let exposure = ToolExposureContext::from_trusted_session(
+        &session,
+        None,
+        None,
+        1000,
+        crate::agent::tools::exposure::ExecutionHost::Direct,
+        Guardrails::permissive(),
+    );
+    assert!(registry.get_for(&exposure, "cos_memory").is_some());
+    let result = crate::proc::with_trusted_session_override(
+        session,
+        registry.execute(&exposure, "cos_memory", serde_json::json!({
+            "command": "write",
+            "name": "USER.md",
+            "content": "INJECTED_NOTE_ROOT"
+        }), "test"),
+    )
+    .await;
+    assert!(!result.is_error, "memory write failed: {}", result.content);
+
+    let skills = crate::agent::skills::loader::LoadResult::default();
+    let (prompt, _) = crate::agent::prompt::build_system_prompt_traced_with(
+        None,
+        None,
+        &skills,
+        deps.runtime.notes(),
+    );
+    assert!(!prompt.contains("INJECTED_NOTE_ROOT"));
+    let budget =
+        crate::agent::context::budget::ContextBudget::from_config(&deps.config.agent).unwrap();
+    let mut builder =
+        crate::agent::context::packet::ContextBuilder::new(budget, budget.input_tokens);
+    crate::agent::runtime::context::add_notes(&mut builder, deps.runtime.notes(), None).unwrap();
+    let packet = builder.finish().unwrap();
+    let segments = packet.segments();
+    let profile = segments.iter()
+        .find(|segment| segment.content().contains("INJECTED_NOTE_ROOT"))
+        .expect("profile reads from the same injected notes root");
+    assert_eq!(profile.kind(), crate::agent::trust::SourceKind::UserProfileNotes);
+    assert_eq!(profile.class(), crate::agent::trust::TrustClass::UserControlledContext);
+    let fenced_profile =
+        profile.render_fenced(crate::agent::trust::envelope::process_seal());
+    assert!(packet.render().contains(&fenced_profile));
+    let parsed = crate::agent::trust::envelope::parse(&fenced_profile)
+        .expect("the profile is trust-fenced, not a concatenated raw user message");
+    assert!(parsed.payload.contains("INJECTED_NOTE_ROOT"));
+    let mut projection = crate::agent::trust::PromptProjection::new();
+    projection.extend_prelude(packet.segments());
+    assert!(projection.system_text().is_empty());
+    assert!(projection.instruction_segment().is_none());
+    assert!(projection.prelude_segments().iter().any(|segment| {
+        segment.kind() == crate::agent::trust::SourceKind::UserProfileNotes
+            && segment.content().contains("INJECTED_NOTE_ROOT")
+    }));
+
+    let mut config = (*deps.config).clone();
+    config.agent = crate::config::AgentConfig {
+        provider: "openai".into(),
+        model: "gpt-4o-mini".into(),
+        api_key_env: Some("OPENAI_API_KEY".into()),
+        ..Default::default()
+    };
+    let db = crate::agent::memory::sqlite_fts::MemoryDb::open_in_memory().unwrap();
+    crate::agent::runtime::context::record(&packet, Some((&db, "notes-profile-session"))).unwrap();
+    let recorded = db.recent("notes-profile-session", packet.segments().len() + 1).unwrap();
+    let recorded_profile = recorded.iter()
+        .find(|row| row.content.contains("INJECTED_NOTE_ROOT"))
+        .expect("the exact profile is retained as an injected audit row");
+    assert_eq!(recorded_profile.role, crate::agent::memory::sqlite_fts::INJECTED_ROLE);
+    assert_eq!(
+        recorded_profile.trust_source(),
+        crate::agent::trust::SourceKind::UserProfileNotes,
+    );
+    assert_eq!(recorded_profile.content, fenced_profile);
+    assert!(db.recent_replayable("notes-profile-session", 1).unwrap().is_empty());
+    let curator = crate::agent::runtime::auto_curator::AutoCurator::from_snapshot_with_runtime_paths(
+        Arc::new(config),
+        &db,
+        deps.runtime.notes().clone(),
+        crate::paths::RoutedPathContext::capture(),
+        deps.paths.curation_log_path.clone(),
+    )
+    .expect("curator");
+    assert_eq!(curator.notes_dir(), deps.runtime.notes().dir());
+}
 #[test]
 fn names_are_sorted() {
     let r = default_registry();

@@ -1,6 +1,90 @@
 use super::*;
 use crate::agent::memory::semantic::SemanticStore;
 
+fn semantic_json(result: &ToolResult) -> Value {
+    let parsed = crate::agent::trust::envelope::parse(&result.content)
+        .expect("semantic recall output has typed provenance");
+    assert_eq!(parsed.source.kind(), SourceKind::RecalledMemory);
+    assert!(!parsed.truncated, "a bounded semantic result must remain valid JSON");
+    serde_json::from_str(&parsed.payload).unwrap()
+}
+
+#[tokio::test]
+async fn semantic_search_exposes_bounded_versioned_reads_and_original_sources() {
+    let store =
+        Arc::new(SemanticStore::open_in_memory(Some(Arc::new(claw_embed::StubEmbedder))).unwrap());
+    let text = format!("{}TAIL_SENTINEL", "semantic source ".repeat(100));
+    store.index("session/one", "user-7", &text).await.unwrap();
+    let tool = CosRecallSemanticTool::new(store.clone());
+    let searched = exec(&tool, json!({
+            "command": "search", "query": text, "namespace": "session/one", "limit": 1,
+        }))
+        .await;
+    assert!(!searched.is_error, "{}", searched.content);
+    let value = semantic_json(&searched);
+    let hit = &value["hits"][0];
+    assert!(!hit["text"].as_str().unwrap().contains("TAIL_SENTINEL"));
+    assert_eq!(hit["next_offset"], 512);
+    assert_eq!(hit["source_complete"], false);
+    assert!(hit.get("indexed_at_ms").is_some());
+    assert_eq!(hit["original_source"]["message_id"], 7);
+    assert_eq!(value["score_kind"], "cosine_similarity_not_confidence");
+    assert_eq!(hit["provenance"]["class"], "legacy-unknown");
+    assert_eq!(
+        crate::agent::trust::envelope::parse(&searched.content).unwrap().class,
+        TrustClass::LegacyUnknown,
+    );
+    let mut read = hit["read"].clone();
+    read.as_object_mut().unwrap().remove("tool");
+    let read_result = exec(&tool, read.clone()).await;
+    assert!(!read_result.is_error, "{}", read_result.content);
+    assert!(read_result.content.contains("TAIL_SENTINEL"));
+    store
+        .index("session/one", "user-7", "changed source")
+        .await
+        .unwrap();
+    let stale = exec(&tool, read).await;
+    assert!(stale.is_error);
+    assert!(stale.content.contains("source changed"));
+}
+
+#[tokio::test]
+async fn namespace_filters_and_missing_sources_are_explicit() {
+    let store =
+        Arc::new(SemanticStore::open_in_memory(Some(Arc::new(claw_embed::StubEmbedder))).unwrap());
+    store
+        .index("app/calendar", "12", "calendar event")
+        .await
+        .unwrap();
+    store
+        .index("session/one", "user-7", "conversation event")
+        .await
+        .unwrap();
+    let tool = CosRecallSemanticTool::new(store);
+    let result = exec(&tool, json!({
+            "command": "search", "query": "event", "namespace": "app/calendar",
+        }))
+        .await;
+    let value = semantic_json(&result);
+    assert_eq!(value["hits"].as_array().unwrap().len(), 1);
+    assert_eq!(value["hits"][0]["original_source"]["source"], "calendar");
+    assert!(
+        exec(&tool, json!({"command":"count", "namespace":"x", "session_id":"y"}))
+            .await
+            .is_error
+    );
+    assert!(
+        exec(&tool, json!({"command":"count", "session_id":null}))
+            .await
+            .is_error
+    );
+    assert!(
+        exec(&tool, json!({"command":"read", "namespace":"app/calendar", "key":"missing"}))
+            .await
+            .is_error
+    );
+}
+
 fn tool_no_embedder() -> CosRecallSemanticTool {
     // Store without an embedder — search will return SemanticError::Disabled.
     let store = SemanticStore::open_in_memory(None).unwrap();
@@ -83,17 +167,12 @@ async fn count_on_empty_store_returns_zero() {
 #[test]
 fn normalise_namespace_prepends_when_missing() {
     assert_eq!(normalise_namespace("abc-123"), "session/abc-123");
-    assert_eq!(
-        normalise_namespace("session/abc-123"),
-        "session/abc-123"
-    );
+    assert_eq!(normalise_namespace("session/abc-123"), "session/abc-123");
 }
 
 #[tokio::test]
 async fn unknown_command_is_tool_error() {
-    let r = tool_no_embedder()
-        .exec(json!({ "command": "nope" }))
-        .await;
+    let r = tool_no_embedder().exec(json!({ "command": "nope" })).await;
     assert!(r.is_error);
     assert!(r.content.contains("unknown command"));
 }
@@ -120,7 +199,7 @@ async fn session_scoped_grant_cannot_count_another_or_all_namespaces() {
     assert!(registry
         .get_for(&context, "cos_recall_semantic")
         .is_some());
-    let (own, other, global) = crate::proc::with_trusted_session_override(session, async {
+    let (own, other, global, other_read, app_read) = crate::proc::with_trusted_session_override(session, async {
         let own = registry
             .execute(
                 &context,
@@ -145,10 +224,30 @@ async fn session_scoped_grant_cannot_count_another_or_all_namespaces() {
                 "test",
             )
             .await;
-        (own, other, global)
+        let other_read = registry
+            .execute(
+                &context,
+                "cos_recall_semantic",
+                json!({"command":"read", "namespace":"session/bravo", "key":"user-1"}),
+                "test",
+            )
+            .await;
+        let app_read = registry
+            .execute(
+                &context,
+                "cos_recall_semantic",
+                json!({"command":"read", "namespace":"app/calendar", "key":"1"}),
+                "test",
+            )
+            .await;
+        (own, other, global, other_read, app_read)
     })
     .await;
     assert!(!own.is_error, "{}", own.content);
     assert!(other.is_error);
     assert!(global.is_error);
+    assert!(other_read.is_error);
+    assert!(other_read.content.contains("memory.read"), "{}", other_read.content);
+    assert!(app_read.is_error);
+    assert!(app_read.content.contains("memory.read"), "{}", app_read.content);
 }

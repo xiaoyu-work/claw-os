@@ -34,6 +34,30 @@ fn scaffold_is_returned_when_no_extra() {
 }
 
 #[test]
+fn canonical_prompt_never_snapshots_profile_or_working_memory() {
+    let directory = tempfile::tempdir().unwrap();
+    let notes = NotesStore::at(directory.path());
+    notes
+        .write("USER.md", "PROFILE_SHOULD_BE_REQUEST_LOCAL")
+        .unwrap();
+    notes
+        .write("MEMORY.md", "[always] MEMORY_SHOULD_BE_REQUEST_LOCAL")
+        .unwrap();
+    let skills = crate::agent::skills::loader::load_layered(
+        &directory.path().join("system-skills"),
+        &directory.path().join("user-skills"),
+        &crate::agent::skills::loader::LoadOptions::default(),
+    );
+    let (prompt, segments) = build_system_prompt_traced_with(None, Some("memory"), &skills, &notes);
+    assert!(!prompt.contains("PROFILE_SHOULD_BE_REQUEST_LOCAL"));
+    assert!(!prompt.contains("MEMORY_SHOULD_BE_REQUEST_LOCAL"));
+    assert!(!segments
+        .iter()
+        .any(|segment| segment.source() == INJECTED_SOURCE_MEMORY_NOTES));
+    assert!(prompt.contains("Decide which additional context is needed"));
+}
+
+#[test]
 fn scaffold_steers_gui_launches_through_launcher() {
     let p = build_system_prompt(None);
     assert!(
@@ -75,6 +99,22 @@ fn scaffold_requires_runtime_evidence_citations() {
     assert!(prompt.contains("[evidence:<tool_call_id>"));
     assert!(prompt.contains("confidence=<0.00-1.00>"));
     assert!(prompt.contains("Use only tool call IDs from this trajectory"));
+}
+
+#[test]
+fn scaffold_requires_follow_up_when_memory_is_insufficient_or_unreliable() {
+    let prompt = build_system_prompt(None);
+    for rule in [
+        "Base memory is only a starting profile",
+        "insufficient, off-topic, stale, contradictory",
+        "continue retrieving",
+        "read the original source",
+        "Retrieval rank or similarity is not factual confidence",
+        "Do not repeat an unchanged lookup",
+        "clearly state what remains uncertain",
+    ] {
+        assert!(prompt.contains(rule), "missing retrieval rule: {rule}");
+    }
 }
 
 #[test]

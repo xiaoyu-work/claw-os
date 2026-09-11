@@ -10,6 +10,8 @@ through model turns, tools, hooks, progress, and final records.
 - Own one bounded multi-turn lifecycle for buffered and streaming asks.
 - Restore or freeze one versioned canonical system prompt per persisted session.
 - Keep due reminders and application context request-local.
+- Admit a bounded pinned profile through labelled prelude segments using the
+  trusted exposure context; additional memory reads are model-directed.
 - Load the latest verified durable compaction plus its uncompacted tail for
   every continuation surface.
 - Track raw row provenance through each turn so a prepared compaction can be
@@ -43,6 +45,7 @@ through model turns, tools, hooks, progress, and final records.
 | --- | --- |
 | `loop_.rs` | Shared request lifecycle, public ask adapters, and turn repetition |
 | `deps.rs` | Explicit runtime hooks, clock, semantic indexer, and path snapshot |
+| `context.rs` | Exposure-gated request packets and exact labelled recording |
 | `turn.rs` | Shared request/response/tool transitions, progressive resolution, and provider delivery adapters |
 | `hooks.rs` | Pre/post tool and turn hooks |
 | `progress.rs` | Tool progress and heartbeat contract |
@@ -81,6 +84,7 @@ Prepare
   -> register interrupt + hooks
 TurnReady
   -> cancellation check -> pre-turn hook -> scrub/compress
+  -> check policy + prelude + original input + exposed tool input budget
   -> turn::run_turn_inner
        -> build request -> Buffered(retry) | Streaming(sink)
        -> append assistant -> dispatch tools -> append tool results

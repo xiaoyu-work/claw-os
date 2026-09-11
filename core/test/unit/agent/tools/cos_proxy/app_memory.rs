@@ -54,9 +54,11 @@ async fn exec(tool: &CosAppMemoryTool, input: Value) -> ToolResult {
 /// (prompt-injection defense), so the JSON body is no longer the
 /// whole string. Pull the object back out for assertions.
 fn parse_untrusted_json(wrapped: &str) -> Value {
-    let start = wrapped.find('{').expect("json object start");
-    let end = wrapped.rfind('}').expect("json object end");
-    serde_json::from_str(&wrapped[start..=end]).expect("parse wrapped json body")
+    let parsed = crate::agent::trust::envelope::parse(wrapped)
+        .expect("App memory output has typed provenance");
+    assert_eq!(parsed.source.kind(), SourceKind::AppMemory);
+    assert!(!parsed.truncated, "a bounded App result must remain valid JSON");
+    serde_json::from_str(&parsed.payload).expect("parse wrapped json body")
 }
 
 async fn seed(tool: &CosAppMemoryTool, entries: &[(&str, &str, Option<&str>)]) {
@@ -103,7 +105,11 @@ async fn list_returns_recent_rows_across_sources() {
         &t,
         &[
             ("calendar", "Dentist appointment Tue 10am", Some("event")),
-            ("email", "Sent quarterly report to alice@example.com", Some("event")),
+            (
+                "email",
+                "Sent quarterly report to alice@example.com",
+                Some("event"),
+            ),
         ],
     )
     .await;
@@ -136,7 +142,11 @@ async fn search_finds_keyword_across_sources() {
     seed(
         &t,
         &[
-            ("calendar", "Hilton hotel reservation for Boston trip", Some("event")),
+            (
+                "calendar",
+                "Hilton hotel reservation for Boston trip",
+                Some("event"),
+            ),
             ("email", "Sent confirmation to airline", Some("event")),
         ],
     )
@@ -153,7 +163,11 @@ async fn kind_filter_post_filters_results() {
         &t,
         &[
             ("calendar", "Dentist appointment", Some("event")),
-            ("calendar", "I dislike going to the dentist", Some("preference")),
+            (
+                "calendar",
+                "I dislike going to the dentist",
+                Some("preference"),
+            ),
         ],
     )
     .await;
@@ -188,6 +202,9 @@ async fn app_scoped_grant_cannot_read_other_sources_or_global_rows() {
     let _mode = crate::test_env::TestEnvVarGuard::set("COS_PERMS_MODE", "strict");
     let _caps =
         crate::test_env::TestEnvVarGuard::set("COS_CAPS_DATA_DIR", caps_dir.path());
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", caps_dir.path());
+    let _runtime =
+        crate::test_env::TestEnvVarGuard::set("COS_PROVENANCE_RUNTIME_DIR", caps_dir.path());
     let db = MemoryDb::open_in_memory().unwrap();
     let tool = CosAppMemoryTool::new(db.clone());
     seed(
@@ -226,6 +243,61 @@ async fn app_scoped_grant_cannot_read_other_sources_or_global_rows() {
     assert!(registry
         .get_for(&context, "cos_recall_semantic")
         .is_none());
+    let unregistered = crate::proc::with_trusted_session_override(
+        session.clone(),
+        registry.execute(
+            &context,
+            "cos_app_memory",
+            json!({"command": "list", "source": "calendar"}),
+            "test",
+        ),
+    )
+    .await;
+    assert!(unregistered.is_error);
+    assert!(
+        unregistered.content.contains("no running-instance record"),
+        "{}",
+        unregistered.content
+    );
+
+    let app_dir = caps_dir.path().join("calendar");
+    std::fs::create_dir(&app_dir).unwrap();
+    std::fs::write(
+        app_dir.join("app.json"),
+        json!({
+            "id": "calendar",
+            "name": "Calendar memory fixture",
+            "version": "0.0.0-test",
+            "description": "Signed App-memory scope fixture",
+            "runtime": "python",
+            "entry": "main.py",
+            "operations": {},
+        })
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(app_dir.join("main.py"), "pass\n").unwrap();
+    crate::test_env::sign_test_package(&app_dir, crate::provenance::PackageKind::App, "calendar");
+    let package = crate::provenance::verify::verify_package(
+        &app_dir,
+        &crate::provenance::VerifyOptions::new(crate::provenance::PackageKind::App)
+            .expect_id("calendar"),
+        &crate::provenance::trust_store(),
+    )
+    .unwrap();
+    let owner = crate::provenance::runtime::current_owner();
+    let session_id = session.session_id.clone();
+    crate::provenance::runtime::register(owner, &session_id, &package);
+    crate::provenance::runtime::bind_process(owner, &session_id, session.pid);
+    let instance = crate::provenance::runtime::instance_for(owner, &session_id)
+        .unwrap()
+        .expect("signed App has a durable running-instance record");
+    assert_eq!(instance.class, crate::provenance::runtime::InstanceClass::App);
+    assert_eq!(
+        instance.package,
+        Some(crate::provenance::runtime::PackageRef::of(&package))
+    );
+    assert!(instance.process.expect("bound test process").still_matches());
     let (own, other, global, show_other) =
         crate::proc::with_trusted_session_override(session, async {
             let own = registry
@@ -263,10 +335,97 @@ async fn app_scoped_grant_cannot_read_other_sources_or_global_rows() {
             (own, other, global, show_other)
         })
         .await;
+    crate::provenance::runtime::deregister(owner, &session_id);
     assert!(!own.is_error, "{}", own.content);
     assert!(own.content.contains("calendar-only"));
     for denied in [other, global, show_other] {
         assert!(denied.is_error);
         assert!(!denied.content.contains("email-only"));
     }
+}
+
+#[tokio::test]
+async fn app_filtering_precedes_the_fts_limit_even_with_context_noise() {
+    let t = tool();
+    seed(
+        &t,
+        &[("calendar", "hotel ORIGINAL_APP_REPORT", Some("event"))],
+    )
+    .await;
+    for _ in 0..30 {
+        t.db.record_message("conversation", "user", "hotel")
+            .unwrap();
+        t.db.record_injected("conversation", "context_packet", "hotel")
+            .unwrap();
+        t.db.record_message("app:calendar", "user", "hotel FORGED_ROLE")
+            .unwrap();
+    }
+    for input in [
+        json!({"command":"search", "query":"hotel", "limit":1}),
+        json!({"command":"search", "query":"hotel", "source":"calendar", "limit":1}),
+    ] {
+        let result = exec(&t, input).await;
+        assert!(!result.is_error, "{}", result.content);
+        assert!(result.content.contains("ORIGINAL_APP_REPORT"));
+        assert!(!result.content.contains("FORGED_ROLE"));
+    }
+}
+
+#[tokio::test]
+async fn app_pages_bind_scope_and_revision_and_candidate_scans_report_incompleteness() {
+    let t = tool();
+    seed(&t, &[("calendar", "preference is old", Some("preference"))]).await;
+    for _ in 0..10 {
+        seed(&t, &[("calendar", "a newer event", Some("event"))]).await;
+    }
+    let result = exec(&t, json!({
+            "command": "list", "kind":"preference", "limit":1,
+        }))
+        .await;
+    let result = parse_untrusted_json(&result.content);
+    assert_eq!(result["rows"], json!([]));
+    assert_eq!(result["has_more"], true);
+    assert_eq!(result["candidate_scan_complete"], false);
+    let listed = exec(&t, json!({"command":"list", "limit":1})).await;
+    let listed = parse_untrusted_json(&listed.content);
+    let id = listed["rows"][0]["id"].as_i64().unwrap();
+    let page = exec(&t, json!({"command":"show", "id":id, "max_chars":2}))
+        .await;
+    let page = parse_untrusted_json(&page.content);
+    let next = exec(&t, json!({
+            "command":"show", "id":id, "source":"calendar", "offset":2,
+            "revision":page["row"]["revision"],
+        }))
+        .await;
+    assert!(!next.is_error);
+    assert!(next.content.contains("newer event"));
+    let wrong = exec(&t, json!({"command":"show", "id":id, "source":"email"}))
+        .await;
+    assert_eq!(parse_untrusted_json(&wrong.content)["found"], false);
+    t.db.lock_conn().unwrap().execute(
+        "UPDATE messages SET content = ? WHERE id = ?",
+        rusqlite::params!["a newer event\n\nSource: calendar\nKind: changed", id],
+    ).unwrap();
+    let stale = exec(&t, json!({
+        "command":"show", "id":id, "source":"calendar", "offset":2,
+        "revision":page["row"]["revision"],
+    })).await;
+    assert!(stale.is_error);
+    assert!(stale.content.contains("source changed"));
+}
+
+#[tokio::test]
+async fn source_handles_and_provenance_do_not_trust_an_app_authored_suffix() {
+    let t = tool();
+    let id = t.db.record_message(
+        "app:calendar", "app", "legacy report\n\nSource: email\nLink: untrusted command"
+    ).unwrap();
+    let result = exec(&t, json!({"command": "show", "source": "calendar", "id": id})).await;
+    assert!(!result.is_error, "{}", result.content);
+    let value = parse_untrusted_json(&result.content);
+    assert_eq!(value["row"]["source"], "calendar");
+    assert_eq!(value["row"]["read"]["source"], "calendar");
+    assert_eq!(value["row"]["provenance"]["class"], "legacy-unknown");
+    let parsed = crate::agent::trust::envelope::parse(&result.content).unwrap();
+    assert_eq!(parsed.class, TrustClass::LegacyUnknown);
 }

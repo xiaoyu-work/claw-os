@@ -1,5 +1,77 @@
     use super::*;
 
+    #[test]
+    fn literal_search_handles_unicode_offsets_and_regex_characters() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = NotesStore::at(directory.path());
+        let text = format!("{}部署记录 (literal)", "界".repeat(150));
+        store.write("MEMORY.md", &text).unwrap();
+        store.write("other.md", "irrelevant").unwrap();
+        let found = store.search("部署", None, 5).unwrap();
+        assert_eq!(found.hits.len(), 1);
+        let hit = &found.hits[0];
+        assert_eq!(hit.page.offset, 70);
+        assert!(hit.page.content.contains("部署记录"));
+        assert_eq!(hit.page.revision, super::super::history::text_revision(&text));
+        assert_eq!(store.search("(", None, 5).unwrap().hits.len(), 1);
+        assert!(store.search("部署", Some("other.md"), 5).unwrap().hits.is_empty());
+        assert!(store.search("", None, 5).is_err());
+        assert!(store.search("x", Some("../escape.md"), 5).is_err());
+    }
+
+    #[test]
+    fn note_directories_are_not_silently_read_as_empty_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = NotesStore::at(directory.path());
+        fs::create_dir(directory.path().join("directory.md")).unwrap();
+        assert!(store.read("directory.md").is_err());
+        assert!(store.list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn literal_search_distinguishes_requested_completed_and_partial_scopes() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = NotesStore::at(directory.path());
+        store.write("a.md", "needle first").unwrap();
+        store.write("b.md", "needle second").unwrap();
+        store.write("c.md", "not visited").unwrap();
+        let found = store.search("needle", None, 1).unwrap();
+        assert_eq!(found.names, ["a.md", "b.md", "c.md"]);
+        assert_eq!(found.searched_names, ["a.md", "b.md"]);
+        assert_eq!(found.partially_searched_name.as_deref(), Some("b.md"));
+        assert!(!found.scan_complete);
+        assert!(found.has_more);
+        let exact = store.search("needle", None, 2).unwrap();
+        assert_eq!(exact.searched_names, exact.names);
+        assert!(exact.scan_complete);
+        assert!(!exact.has_more);
+        assert!(exact.partially_searched_name.is_none());
+    }
+
+    #[test]
+    fn profile_entries_preserve_name_content_revision_and_exclude_unpinned_knowledge() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = NotesStore::at(directory.path());
+        let memory = "# Notes\n- task-specific knowledge\n- [always] pinned preference";
+        store.write(MEMORY_FILE, memory).unwrap();
+        store.write(USER_FILE, "# User\nUse concise answers").unwrap();
+        store.write("extra.md", "[always] not part of the profile").unwrap();
+        let entries = store.context_entries().unwrap();
+        assert_eq!(entries.len(), 2);
+        let user = &entries[0];
+        assert_eq!(user.name, USER_FILE);
+        assert!(user.content.contains("Use concise answers"));
+        assert_eq!(
+            user.revision,
+            super::super::history::text_revision("# User\nUse concise answers"),
+        );
+        let pinned = &entries[1];
+        assert_eq!(pinned.name, MEMORY_FILE);
+        assert!(pinned.content.contains("pinned preference"));
+        assert!(!pinned.content.contains("task-specific"));
+        assert_eq!(pinned.revision, super::super::history::text_revision(memory));
+    }
+
     fn tmpdir(label: &str) -> PathBuf {
         let p = std::env::temp_dir().join(format!("cos-notes-{}-{}", label, std::process::id()));
         let _ = fs::remove_dir_all(&p);

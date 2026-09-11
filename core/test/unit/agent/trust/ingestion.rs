@@ -58,7 +58,7 @@ fn from_prompt_assembly(observed: &mut std::collections::BTreeSet<SourceKind>) {
     let dir = tempfile::tempdir().expect("tmp");
     let notes = crate::agent::memory::notes::NotesStore::at(dir.path());
     std::fs::create_dir_all(dir.path()).ok();
-    std::fs::write(dir.path().join("MEMORY.md"), HOSTILE).expect("memory");
+    std::fs::write(dir.path().join("MEMORY.md"), format!("[always] {HOSTILE}")).expect("memory");
     std::fs::write(dir.path().join("USER.md"), "the owner prefers dark mode").expect("user");
 
     let system = tempfile::tempdir().expect("system skills");
@@ -83,8 +83,16 @@ fn from_prompt_assembly(observed: &mut std::collections::BTreeSet<SourceKind>) {
     let extra = dir.path().join("preface.md");
     std::fs::write(&extra, "owner preface").expect("extra");
 
-    let projection =
+    let mut projection =
         crate::agent::prompt::build_projection(Some(&extra), Some("query"), &skills, &notes);
+    let budget = crate::agent::context::budget::ContextBudget::from_config(
+        &crate::config::AgentConfig::default(),
+    )
+    .unwrap();
+    let mut builder =
+        crate::agent::context::packet::ContextBuilder::new(budget, budget.input_tokens);
+    crate::agent::runtime::context::add_notes(&mut builder, &notes, None).unwrap();
+    projection.extend_prelude(builder.finish().unwrap().segments());
     assert!(projection.channels_are_separated());
     // The compiled scaffold is the only thing in the policy channel.
     assert_eq!(projection.policy_segments().len(), 1);
@@ -205,10 +213,7 @@ fn from_tool_results(observed: &mut std::collections::BTreeSet<SourceKind>) {
     // real registered tool name.
     for (tool, expected) in [
         ("mcp_github_issue", SourceKind::McpToolResult),
-        (
-            "app_calendar__calendar_list",
-            SourceKind::AppToolResult,
-        ),
+        ("app_calendar__calendar_list", SourceKind::AppToolResult),
         ("cos_app_memory", SourceKind::AppMemory),
         ("cos_browser", SourceKind::WebPageContent),
         ("cos_stt", SourceKind::MediaTranscript),

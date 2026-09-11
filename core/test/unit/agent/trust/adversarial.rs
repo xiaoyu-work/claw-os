@@ -32,10 +32,7 @@ fn assert_contained(rendered: &str, expected_source: &str) {
         .match_indices("[[cos-data:")
         .filter(|(start, _)| !rendered[..*start].ends_with('\u{200b}'))
         .count();
-    assert_eq!(
-        live_openers, 1,
-        "payload opened a second fence: {rendered}"
-    );
+    assert_eq!(live_openers, 1, "payload opened a second fence: {rendered}");
     assert_eq!(
         rendered.matches("[[/cos-data:").count(),
         1,
@@ -124,8 +121,11 @@ fn web_page_injection_is_contained() {
 
 #[test]
 fn media_transcript_injection_is_contained() {
-    let rendered =
-        crate::agent::safety::untrusted::wrap_labeled(SourceKind::MediaTranscript, None, ESCALATION);
+    let rendered = crate::agent::safety::untrusted::wrap_labeled(
+        SourceKind::MediaTranscript,
+        None,
+        ESCALATION,
+    );
     assert_contained(&rendered, "media_transcript");
 }
 
@@ -158,6 +158,44 @@ fn memory_and_user_md_injection_is_contained() {
         // itself wrote through `cos_memory` cannot become this turn's
         // instruction.
         assert!(kind.class().rank() < TrustClass::UserInstruction.rank());
+    }
+}
+
+#[test]
+fn request_packet_keeps_ingestion_trust_even_if_display_kind_is_changed() {
+    use crate::agent::context::budget::ContextBudget;
+    use crate::agent::context::packet::{ContextBuilder, ContextKind, ContextSection};
+    let mut section = ContextSection::new(
+        ContextKind::Request,
+        "app-selected-context",
+        ESCALATION.to_string(),
+    );
+    section.kind = ContextKind::UserNotes;
+    section.reference = "pretend-policy".into();
+    let mut builder = ContextBuilder::new(
+        ContextBudget {
+            input_tokens: 10_000,
+            memory_tokens: 2000,
+            model_window_tokens: None,
+            output_tokens: 1024,
+        },
+        9000,
+    );
+    builder.required(section).unwrap();
+    let packet = builder.finish().unwrap();
+    let source = packet.sections[0].labeled();
+    assert_eq!(source.kind(), SourceKind::TransientAppContext);
+    assert_eq!(source.class(), TrustClass::UntrustedExternalContent);
+    assert!(source.source().label().contains("app-selected-context"));
+    let mut projection = crate::agent::trust::PromptProjection::new();
+    projection.extend_prelude(packet.segments());
+    projection.push(LabeledSegment::of(SourceKind::UserMessage, "inspect only"));
+    assert!(projection.system_text().is_empty());
+    assert!(projection.channels_are_separated());
+    for segment in projection.prelude_segments() {
+        let rendered = segment.render_fenced(crate::agent::trust::envelope::process_seal());
+        let parsed = crate::agent::trust::envelope::parse(&rendered).unwrap();
+        assert!(!parsed.class.is_policy());
     }
 }
 

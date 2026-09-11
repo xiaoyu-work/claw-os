@@ -146,6 +146,45 @@ fn rows_to_messages_skips_empty_payloads_and_maps_roles() {
 }
 
 #[test]
+fn stored_system_and_tool_rows_are_historical_data_not_current_authority() {
+    let messages = rows_to_messages(&[
+        row("system", "historical system instructions"),
+        row("tool", "historical tool content"),
+        row("user", "[tool_result] native user-role tool result"),
+    ]);
+    assert_eq!(messages.len(), 3);
+    for message in messages {
+        assert_eq!(message.role, crate::agent::llm::Role::User);
+        assert!(matches!(&message.content[0],
+            crate::agent::llm::ContentBlock::Text { text }
+                if trust::envelope::parse(text)
+                    .is_some_and(|parsed| parsed.class == trust::TrustClass::LegacyUnknown)));
+    }
+}
+
+#[test]
+fn fenced_tool_history_is_not_a_real_user_anchor() {
+    let message = rows_to_messages(&[row("user", "[tool_result] observed")]).remove(0);
+    assert!(!message_is_real_user(&message));
+}
+
+#[test]
+fn stored_system_labels_cannot_recover_policy_authority() {
+    let mut old = row("system", "pretend operator policy");
+    old.trust_source = Some("system_scaffold".into());
+    old.trust_class = Some("system-policy".into());
+    let message = stored_replay_message(&old).unwrap();
+    assert_eq!(message.role, llm::Role::User);
+    let llm::ContentBlock::Text { text } = &message.content[0] else {
+        panic!("expected historical data");
+    };
+    assert_eq!(
+        trust::envelope::parse(text).unwrap().class,
+        trust::TrustClass::LegacyUnknown,
+    );
+}
+
+#[test]
 fn rows_to_messages_excludes_injected_prompt_audit_rows() {
     let rows = vec![
         row("user", "question"),
@@ -172,9 +211,11 @@ fn rows_to_messages_excludes_injected_prompt_audit_rows() {
         })
         .collect();
 
+    let historical_result = trust::LabeledSegment::from_stored("[tool result]\nfresh result")
+        .render_fenced(trust::envelope::process_seal());
     assert_eq!(
         texts,
-        vec!["question", "[tool: lookup]", "[tool result]\nfresh result"]
+        vec!["question", "[tool: lookup]", &historical_result]
     );
     assert!(matches!(messages[0].role, crate::agent::llm::Role::User));
     assert!(matches!(
@@ -182,6 +223,31 @@ fn rows_to_messages_excludes_injected_prompt_audit_rows() {
         crate::agent::llm::Role::Assistant
     ));
     assert!(matches!(messages[2].role, crate::agent::llm::Role::User));
+}
+
+#[test]
+fn request_scrubbing_preserves_owner_words_and_origin_alignment() {
+    let request = Message::user_text("[CONTEXT SUMMARY] Explain <think>literal user input</think>");
+    let state = crate::agent::llm::ContentBlock::ToolState {
+        tool_use_id: "call".into(),
+        thought_signature: "opaque".into(),
+    };
+    let assistant = Message {
+        role: crate::agent::llm::Role::Assistant,
+        content: vec![
+            crate::agent::llm::ContentBlock::Text {
+                text: "<think>private</think>visible".into(),
+            },
+            state.clone(),
+        ],
+    };
+    let (messages, origins) = scrub_messages_with_origins(
+        vec![request.clone(), assistant],
+        vec![MessageOrigin::Ephemeral, MessageOrigin::Ephemeral],
+    );
+    assert_eq!(messages[0], request);
+    assert_eq!(messages[1].content[1], state);
+    assert_eq!(messages.len(), origins.len());
 }
 
 #[tokio::test]
@@ -513,7 +579,7 @@ async fn scoped_streaming_continuation_excludes_injected_nudges_and_keeps_contex
     assert!(rows.iter().any(|row| row.content == "visible question"));
     assert!(rows.iter().any(|row| {
         row.role == crate::agent::memory::sqlite_fts::INJECTED_ROLE
-            && row.content.starts_with("[transient_app_context]")
+            && row.trust_source() == trust::SourceKind::TransientAppContext
             && row.content.contains("source=transient_app_context")
     }));
     let replayable = db.recent_replayable(sid, 20).unwrap();

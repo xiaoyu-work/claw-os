@@ -238,8 +238,13 @@ impl SemanticStore {
             .into_iter()
             .next()
             .ok_or_else(|| SemanticError::Embed("provider returned 0 embeddings".into()))?;
+        if q.iter().any(|value| !value.is_finite()) {
+            return Err(SemanticError::Embed(
+                "query embedding contains non-finite values".into(),
+            ));
+        }
         normalise(&mut q);
-        self.search_with_vector(namespace, &q, limit)
+        self.search_vector(namespace, &q, limit, Some(&resp.model))
     }
 
     /// Rank rows against an already-computed (and ideally normalised)
@@ -251,6 +256,16 @@ impl SemanticStore {
         namespace: Option<&str>,
         query: &[f32],
         limit: usize,
+    ) -> Result<Vec<SemanticHit>, SemanticError> {
+        self.search_vector(namespace, query, limit, None)
+    }
+
+    fn search_vector(
+        &self,
+        namespace: Option<&str>,
+        query: &[f32],
+        limit: usize,
+        expected_model: Option<&str>,
     ) -> Result<Vec<SemanticHit>, SemanticError> {
         // We collect the candidate rows under the mutex into a small
         // intermediate buffer, then *drop the lock* before doing the
@@ -274,8 +289,23 @@ impl SemanticStore {
             };
             let mut buf: Vec<(SemanticHit, Vec<u8>, usize)> = Vec::new();
             while let Some(row) = rows.next()? {
+                let model: String = row.get(4)?;
+                if let Some(expected) = expected_model {
+                    if model != expected {
+                        return Err(SemanticError::ModelMismatch {
+                            existing: model,
+                            incoming: expected.to_string(),
+                        });
+                    }
+                }
                 let dim: i64 = row.get(5)?;
                 if (dim as usize) != query.len() {
+                    if expected_model.is_some() {
+                        return Err(SemanticError::DimMismatch {
+                            row: dim as usize,
+                            query: query.len(),
+                        });
+                    }
                     // Skip rows from a different model / dim — we may
                     // have a mixed corpus during a model upgrade.
                     continue;
@@ -286,7 +316,7 @@ impl SemanticStore {
                     namespace: row.get(1)?,
                     key: row.get(2)?,
                     text: row.get(3)?,
-                    model: row.get(4)?,
+                    model,
                     score: 0.0,
                     ts_ms: row.get(7)?,
                 };
@@ -299,7 +329,10 @@ impl SemanticStore {
         for (mut hit, blob, dim) in candidates {
             let v = match decode_vec(&blob, dim) {
                 Ok(v) => v,
-                Err(_) => {
+                Err(error) => {
+                    if expected_model.is_some() {
+                        return Err(error);
+                    }
                     // Corrupted row — skip rather than aborting the
                     // whole search. Surfacing the error in a hot path
                     // would degrade query stability on a single bad
@@ -308,6 +341,11 @@ impl SemanticStore {
                 }
             };
             hit.score = dot(&v, query)?;
+            if expected_model.is_some() && !hit.score.is_finite() {
+                return Err(SemanticError::Embed(
+                    "indexed embedding contains non-finite values".into(),
+                ));
+            }
             hits.push(hit);
         }
         hits.sort_by(|a, b| {
@@ -317,6 +355,45 @@ impl SemanticStore {
         });
         hits.truncate(limit);
         Ok(hits)
+    }
+
+    /// Read one stable namespace/key without invoking the embedder.
+    pub fn get(&self, namespace: &str, key: &str) -> Result<Option<SemanticRow>, SemanticError> {
+        let conn = self.lock_conn()?;
+        let row = conn
+            .query_row(
+                "SELECT id, namespace, key, text, model, dim, embedding, ts_ms
+             FROM semantic_docs WHERE namespace = ? AND key = ?",
+                params![namespace, key],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, Vec<u8>>(6)?,
+                        row.get::<_, i64>(7)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((id, namespace, key, text, model, dim, blob, ts_ms)) = row else {
+            return Ok(None);
+        };
+        let dim = usize::try_from(dim)
+            .map_err(|_| SemanticError::Embed("negative indexed dimension".into()))?;
+        Ok(Some(SemanticRow {
+            id,
+            namespace,
+            key,
+            text,
+            model,
+            dim,
+            embedding: decode_vec(&blob, dim)?,
+            ts_ms,
+        }))
     }
 
     /// Number of rows matching the optional `namespace` filter.
@@ -502,8 +579,5 @@ fn normalise(v: &mut [f32]) {
 
 #[cfg(test)]
 mod tests {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/test/unit/store.rs"
-    ));
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/store.rs"));
 }

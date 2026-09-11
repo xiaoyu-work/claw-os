@@ -15,8 +15,8 @@
 //!      provenance, then apply confidence + secret filtering.
 //!   5. Dedupe against the current non-expired projection and append
 //!      survivors to a `## Curated facts (auto)` section in
-//!      `MEMORY.md`. New sessions pick them up in their frozen prompt snapshot;
-//!      the current session retains the source conversation already in context.
+//!      `MEMORY.md`. The model reads additional notes when needed; explicitly
+//!      pinned entries enter subsequent request profiles, not frozen prompts.
 //!   6. Update a curation log so we don't re-extract from already-
 //!      seen messages on the next run.
 //!
@@ -552,19 +552,26 @@ pub fn default_system_prompt() -> &'static str {
 /// prompt within auxiliary's `max_tokens`.
 pub fn format_transcript(messages: &[MessageRow], per_msg_cap: usize) -> String {
     let mut buf = String::new();
-    for m in messages {
+    for m in messages
+        .iter()
+        .filter(|message| message.role != crate::agent::memory::sqlite_fts::INJECTED_ROLE)
+    {
         let body = if m.content.chars().count() > per_msg_cap {
             let truncated: String = m.content.chars().take(per_msg_cap).collect();
             format!("{truncated}…")
         } else {
             m.content.clone()
         };
-        buf.push('[');
-        buf.push_str(&m.role);
-        buf.push_str(" message_id=");
-        buf.push_str(&m.id.to_string());
-        buf.push_str("] ");
-        buf.push_str(&body);
+        let text = format!("[{} message_id={}] {body}", m.role, m.id);
+        buf.push_str(&crate::agent::trust::envelope::render(
+            crate::agent::trust::envelope::process_seal(),
+            &crate::agent::trust::SourceRef::with_locator(
+                m.trust_source(),
+                &format!("{}:{}", m.session_id, m.id),
+            ),
+            m.provenance().class,
+            &text,
+        ));
         buf.push_str("\n\n");
     }
     buf
@@ -1189,7 +1196,7 @@ impl MemoryCurator {
         dry_run: bool,
     ) -> Result<CurationOutcome, CurationError> {
         let messages = db
-            .recent(session_id, self.config.max_messages)
+            .recent_replayable(session_id, self.config.max_messages)
             .map_err(|e| CurationError::Memory(e.to_string()))?;
 
         let last_id = messages.last().map(|m| m.id);

@@ -39,6 +39,7 @@ editing additional surfaces.
 | `cos` CLI command or primitive | `core/src/main.rs`, `core/src/router.rs` | The primitive module, `core/src/clawd/`, inline Rust tests |
 | Model-visible content or prompt-injection containment | `core/src/agent/trust/` | `agent/prompt/`, `agent/safety/untrusted.rs`, the ingestion adapter, `test/unit/agent/trust/` |
 | Agent ask/chat loop | `core/src/agent/runtime/loop_.rs`, `core/src/agent/runtime/turn.rs` | `prompt/`, `tools/`, `memory/`, `llm/` |
+| Request context, memory selection, or context budget | `core/src/agent/context/`, `core/src/agent/runtime/context.rs` | `prompt/`, memory tools, continuation/compaction recording; the model chooses additional reads through guarded tools |
 | Agent worker process / broker isolation | `core/src/agentd/`, `core/src/bin/claw-agentd.rs` | `clawd/server.rs`, `agent/service.rs`, `clawd.service`, `packaging/deb/build-debs.sh` |
 | Dynamic App/MCP extension isolation | `core/src/extension_host/`, `core/src/bin/claw-extension-host.rs` | `agentd/`, `clawd/server.rs`, App/MCP tool integration, `clawd.service`, packaging |
 | Out-of-process Agent extension ABI | `core/src/agent_extensions/`, `core/src/extension_host/abi.rs` | `extension_host/agent_extension.rs`, agent runtime hooks/tools, provenance, audit, packaging |
@@ -165,6 +166,8 @@ Documentation-only changes do not require code tests.
 
 ## Conventions
 
+- Commit and push this repository's code directly to `main`; do not create or
+  push separate feature branches.
 - Preserve unrelated dirty-worktree changes. Stage explicit paths rather than
   using `git add -A`.
 - Keep public SDK code in `claw-os-sdk`; `cos-runtime` is for bundled apps and

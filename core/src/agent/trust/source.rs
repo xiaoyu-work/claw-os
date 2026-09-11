@@ -305,14 +305,14 @@ impl SourceKind {
             Self::UserProfileNotes => (
                 "user_profile_notes",
                 UserControlledContext,
-                FrozenPrompt,
+                InjectedAuditRow,
                 UserChannelEnvelope,
                 ContentRef,
             ),
             Self::MemoryNotes => (
                 "memory_notes",
                 UserControlledContext,
-                FrozenPrompt,
+                InjectedAuditRow,
                 UserChannelEnvelope,
                 ContentRef,
             ),

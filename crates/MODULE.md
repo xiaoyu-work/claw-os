@@ -27,6 +27,10 @@ CLI, semantic, and embedding surfaces.
 Core and `claw-semantic` depend on `claw-embed`; the primitives crate does not
 import daemon or core orchestration. Core depends on crate APIs; focused crates
 do not import core orchestration.
+`claw-embed::SemanticStore::get` reads a namespace/key without an embedding call.
+Its model-backed search checks model identity, dimensions and vector integrity
+before returning similarity-ranked candidates; raw precomputed-vector queries
+retain the caller-managed vector-space contract.
 Desktop broker consumers depend on `clawd-client`; the client contains no
 desktop UI or privileged broker implementation.
 System-review commands authenticate the connected Unix peer as root before

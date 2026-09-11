@@ -8,6 +8,33 @@ fn notes_list_returns_dir_and_names() {
     assert!(v.get("notes").and_then(|x| x.as_array()).is_some());
 }
 
+#[test]
+fn note_search_validates_missing_queries_and_extra_arguments() {
+    assert!(notes_cmd(&["search".into()]).unwrap_err().contains("usage"));
+    assert!(notes_cmd(&[
+        "search".into(), "query".into(), "MEMORY.md".into(), "1".into(), "extra".into(),
+    ]).unwrap_err().contains("usage"));
+}
+
+#[test]
+fn note_search_cli_reports_literal_scope_and_read_revision() {
+    let _lock = crate::test_env::lock_env();
+    let directory = tempfile::tempdir().unwrap();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", directory.path());
+    let store = memory::notes::NotesStore::system_default();
+    store.write("deploy.md", "us-west-2 first, us-west-2 second").unwrap();
+    store.write("other.md", "unrelated").unwrap();
+    let result = notes_cmd(&[
+        "search".into(), "us-west-2".into(), "deploy.md".into(), "1".into(),
+    ]).unwrap();
+    assert_eq!(result["names"], serde_json::json!(["deploy.md"]));
+    assert_eq!(result["searched_names"], serde_json::json!(["deploy.md"]));
+    assert_eq!(result["partially_searched_name"], "deploy.md");
+    assert_eq!(result["scan_complete"], false);
+    assert_eq!(result["hits"][0]["revision"].as_str().unwrap().len(), 64);
+    assert!(result["hits"][0]["content"].as_str().unwrap().contains("us-west-2"));
+}
+
 // ---- semantic_cmd: clear-all guards + status drift ----
 
 #[test]

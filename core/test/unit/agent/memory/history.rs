@@ -1,8 +1,36 @@
 use super::*;
 
 #[test]
+fn pages_expose_source_revision_and_distinguish_last_page_from_whole_source() {
+    let text = "你好 world";
+    let first = text_page(text, 0, 2).unwrap();
+    let last = text_page(text, 2, 100).unwrap();
+    assert_eq!(first.content, "你好");
+    assert_eq!(first.revision, last.revision);
+    assert!(!first.source_complete);
+    assert!(!last.source_complete);
+    assert_eq!(last.next_offset, None);
+    assert!(text_page(text, 0, 100).unwrap().source_complete);
+    assert_ne!(first.revision, text_revision("changed"));
+}
+
+#[test]
+fn invalid_page_windows_never_return_an_unbounded_or_misleading_source() {
+    assert!(text_page("source", 0, 0).is_err());
+    assert!(text_page("source", 0, MAX_READ_CHARS + 1).is_err());
+    assert!(text_page("source", 7, 1).is_err());
+    assert!(text_page("source", usize::MAX, 1).is_err());
+    let end = text_page("source", 6, 1).unwrap();
+    assert!(end.content.is_empty());
+    assert!(!end.source_complete);
+    assert!(end.next_offset.is_none());
+    assert!(text_page("", 0, 1).unwrap().source_complete);
+}
+
+#[test]
 fn assistant_row_splits_text_and_tool_use() {
-    let body = "Let me check.\n[tool_use:cos_sysinfo] {\"command\":\"largest_files\",\"args\":[\"/\"]}";
+    let body =
+        "Let me check.\n[tool_use:cos_sysinfo] {\"command\":\"largest_files\",\"args\":[\"/\"]}";
     let p = parse_stored_content("assistant", body);
     assert_eq!(p.text, "Let me check.");
     assert_eq!(p.tool_calls.len(), 1);
