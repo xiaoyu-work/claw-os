@@ -151,8 +151,8 @@ pub struct AgentConfig {
     /// Enable provider-backed conversation compression. When the
     /// estimated total token count of the system prompt, visible tool schemas,
     /// and running conversation exceeds `compress_trigger_tokens`, the head is
-    /// summarised by the same provider and replaced with a single
-    /// `[CONTEXT SUMMARY]` user message; the tail is kept verbatim.
+    /// summarised by the same provider into an agent-authored handoff;
+    /// the tail and the current original request are preserved.
     /// Defaults to `true` — long-running sessions on a system-level
     /// agent OS are the norm, not the exception, and a runaway context
     /// is the difference between "agent that quietly keeps working"
@@ -162,8 +162,10 @@ pub struct AgentConfig {
     #[serde(default = "default_compress_enabled")]
     pub compress_enabled: bool,
 
-    /// Target total context budget in tokens. Used as the upper bound
-    /// callers should size prompts to. Defaults to 80_000.
+    /// Estimated input-token ceiling for system, tools and messages, enforced
+    /// even when compression is disabled. Known model/fallback windows may
+    /// lower it after response headroom. Defaults to 80_000; unknown models
+    /// use this configured input target, not an assumed model window.
     #[serde(default = "default_compress_target")]
     pub compress_target_tokens: u32,
 

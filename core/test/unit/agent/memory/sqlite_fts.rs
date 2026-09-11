@@ -679,8 +679,8 @@ fn open_persists_and_reopens_cleanly() {
 fn fts5_escape_handles_quotes_and_operators() {
     // Bare alphanumeric words.
     assert_eq!(fts5_escape("foo bar"), r#""foo" "bar""#);
-    // Strip operators that would otherwise break MATCH.
-    assert_eq!(fts5_escape("foo* (bar)"), r#""foo" "bar""#);
+    // Quote operators rather than changing the literal words being searched.
+    assert_eq!(fts5_escape("foo* (bar)"), r#""foo*" "(bar)""#);
     // Embedded double quote is doubled.
     assert_eq!(fts5_escape(r#"a"b"#), r#""a""b""#);
     // All-whitespace returns empty.

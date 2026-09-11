@@ -11,6 +11,8 @@ surfaces.
 - Configure providers and credentials without storing secret values in config.
 - Freeze versioned, content-addressed system prompts per session and trace
   request-local model context separately.
+- Compose bounded initial context from explicit work data and a pinned profile;
+  the main model selects further context through the normal guarded tools.
 - Run model turns, dispatch authorized tools, and preserve provider state.
 - Maintain memory, sessions, checkpoints, audit views, and usage records.
 - Publish deterministic task and approval lifecycle notifications after durable
@@ -47,6 +49,7 @@ surfaces.
 | `../../test/unit/agent/setup.rs` | Setup, status, apply, OAuth, and config regression tests |
 | `runtime/loop_.rs` | Multi-turn orchestration, prompt restore/freeze, compression, and persistence |
 | `runtime/deps.rs` | Explicit hooks, clock, semantic indexer, and runtime path context |
+| `context/packet.rs`, `runtime/context.rs` | Typed request snapshots, source discovery, budgeted profile and exact recording |
 | `runtime/turn.rs` | One provider turn, hooks, tool ordering, results |
 | `service.rs`, `../../test/unit/agent/service.rs` | Task queue, approval-wait state, ownership/lease records, and `execute_job` — the runtime entry the `agentd` worker calls |
 | `llm/types.rs` | Provider-neutral request, response, content, and stream types |

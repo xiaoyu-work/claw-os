@@ -1,5 +1,101 @@
 use super::*;
 
+fn recall_json(result: &ToolResult) -> Value {
+    let start = result.content.find('{').unwrap();
+    let end = result.content.rfind('}').unwrap();
+    serde_json::from_str(&result.content[start..=end]).unwrap()
+}
+
+#[tokio::test]
+async fn show_pages_an_exact_source_and_rejects_other_scopes() {
+    let t = tool();
+    let id =
+        t.db.record_message("source-session", "assistant", "你好世界!")
+            .unwrap();
+    let first = t
+        .exec(json!({
+            "command": "show", "message_id": id, "offset": 0, "max_chars": 2,
+        }))
+        .await;
+    assert!(!first.is_error, "{}", first.content);
+    assert!(first.content.contains("\"content\":\"你好\""));
+    assert!(first.content.contains("\"next_offset\":2"));
+    let next = t
+        .exec(json!({
+            "command": "show", "message_id": id, "offset": 2, "max_chars": 3,
+            "revision": recall_json(&first)["message"]["revision"],
+        }))
+        .await;
+    assert!(!next.is_error);
+    assert!(next.content.contains("\"content\":\"世界!\""));
+    assert!(next.content.contains("\"next_offset\":null"));
+    let denied = t
+        .exec(json!({
+            "command": "show", "message_id": id, "session_id": "another-session",
+        }))
+        .await;
+    assert!(denied.is_error);
+    assert!(!denied.content.contains("你好"));
+}
+
+#[tokio::test]
+async fn show_never_promotes_injected_context_to_source_history() {
+    let t = tool();
+    let id =
+        t.db.record_injected("s", "context_packet", "old context")
+            .unwrap();
+    let result = t.exec(json!({ "command": "show", "message_id": id })).await;
+    assert!(result.is_error);
+    for input in [
+        json!({"command": "show", "message_id": 0}),
+        json!({"command": "show", "message_id": 1, "offset": -1}),
+        json!({"command": "show", "message_id": 1, "max_chars": 0}),
+    ] {
+        assert!(t.exec(input).await.is_error);
+    }
+}
+
+#[tokio::test]
+async fn recall_filters_injected_data_before_applying_search_and_recent_limits() {
+    let t = tool();
+    t.db.record_message("s", "user", "ORIGINAL_SENTINEL keyword")
+        .unwrap();
+    for _ in 0..10 {
+        t.db.record_injected("s", "context_packet", "keyword INJECTED_SENTINEL")
+            .unwrap();
+    }
+    for input in [
+        json!({"command": "search", "query": "keyword", "limit": 1}),
+        json!({"command": "recent", "session_id": "s", "limit": 1}),
+    ] {
+        let result = t.exec(input).await;
+        assert!(!result.is_error, "{}", result.content);
+        assert!(result.content.contains("ORIGINAL_SENTINEL"));
+        assert!(!result.content.contains("INJECTED_SENTINEL"));
+    }
+}
+
+#[tokio::test]
+async fn search_returns_an_excerpt_that_can_be_expanded() {
+    let t = tool();
+    let content = format!("needle {}TAIL_SENTINEL", "x".repeat(2000));
+    let id = t.db.record_message("s", "user", &content).unwrap();
+    let search = t
+        .exec(json!({"command": "search", "query": "needle"}))
+        .await;
+    assert!(!search.is_error);
+    assert!(!search.content.contains("TAIL_SENTINEL"));
+    assert!(search.content.contains("\"next_offset\":512"));
+    let expanded = t
+        .exec(json!({
+            "command": "show", "message_id": id, "offset": 512,
+            "revision": recall_json(&search)["hits"][0]["revision"],
+        }))
+        .await;
+    assert!(!expanded.is_error);
+    assert!(expanded.content.contains("TAIL_SENTINEL"));
+}
+
 fn tool() -> CosRecallTool {
     CosRecallTool::new(MemoryDb::open_in_memory().unwrap())
 }
@@ -139,11 +235,21 @@ async fn search_query_with_fts_meta_chars_is_safe() {
     }
 }
 
-#[test]
-fn escape_fts5_query_quotes_input() {
-    assert_eq!(escape_fts5_query("hello world"), "\"hello world\"");
-    // Double-up internal quotes.
-    assert_eq!(escape_fts5_query(r#"a"b"#), "\"a\"\"b\"");
-    // Column filter syntax must be inside the phrase, not at the top.
-    assert_eq!(escape_fts5_query("body:foo"), "\"body:foo\"");
+#[tokio::test]
+async fn search_preserves_punctuation_and_reports_candidate_limits() {
+    let t = tool();
+    for _ in 0..3 {
+        t.db.record_message("s", "user", "deployment in us-west-2 uses body:foo")
+            .unwrap();
+    }
+    for query in ["us-west-2", "body:foo"] {
+        let result = t
+            .exec(json!({"command": "search", "query": query, "limit": 1}))
+            .await;
+        assert!(!result.is_error, "{}", result.content);
+        let value = recall_json(&result);
+        assert_eq!(value["has_more"], true);
+        assert_eq!(value["hits"].as_array().unwrap().len(), 1);
+        assert_eq!(value["score_kind"], "bm25_not_confidence");
+    }
 }

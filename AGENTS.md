@@ -44,6 +44,7 @@ editing additional surfaces.
 | Staged file plan or guarded replacement | `apps/fs/MODULE.md`, `docs/file-change-plans.md`, `core/src/clawd/file_changes.rs` | Exact session capabilities, worker relay, indeterminate journal handling, App plan data and receipt projection; never widen target mounts for rename |
 | App execution from a leased Agent task | `core/src/agentd/app_host/`, `core/src/clawd/app_sessions/task_host.rs` | Original operation/session calls, per-call authority, broker admission, runtime provenance, shared sandbox, cancellation and receipts; no general broker access |
 | Agent ask/chat loop | `core/src/agent/runtime/loop_.rs`, `core/src/agent/runtime/turn.rs` | `prompt/`, `tools/`, `memory/`, `llm/` |
+| Request context, memory selection, or context budget | `core/src/agent/context/`, `core/src/agent/runtime/context.rs` | `prompt/`, memory tools, continuation/compaction recording; the model chooses additional reads through guarded tools |
 | Agent worker process / broker isolation | `core/src/agentd/`, `core/src/bin/claw-agentd.rs` | `clawd/server.rs`, `agent/service.rs`, `clawd.service`, `packaging/deb/build-debs.sh` |
 | LLM provider or model setup | `core/src/agent/llm/providers/`, `core/src/agent/llm/registry.rs`, `core/src/agent/setup.rs` | `types.rs`, `accumulate.rs`, streaming and non-streaming tests |
 | Tool, guardrail, or approval | `core/src/agent/tools/registry.rs`, `core/src/agent/runtime/turn.rs` | `guardrails.rs`, hooks, capability checks, audit |

@@ -8,6 +8,14 @@ fn notes_list_returns_dir_and_names() {
     assert!(v.get("notes").and_then(|x| x.as_array()).is_some());
 }
 
+#[test]
+fn note_search_validates_missing_queries_and_extra_arguments() {
+    assert!(notes_cmd(&["search".into()]).unwrap_err().contains("usage"));
+    assert!(notes_cmd(&[
+        "search".into(), "query".into(), "MEMORY.md".into(), "1".into(), "extra".into(),
+    ]).unwrap_err().contains("usage"));
+}
+
 // ---- semantic_cmd: clear-all guards + status drift ----
 
 #[test]

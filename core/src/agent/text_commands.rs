@@ -9,16 +9,14 @@ use serde_json::{json, Value};
 ///
 ///   1. Built-in scaffold (immutable in this binary).
 ///   2. Metadata-only installed Skill catalogue.
-///   3. `MEMORY.md` and `USER.md` from the system notes store
-///      (auto-loaded; capped per-file via
-///      [`crate::agent::memory::notes::MAX_NOTE_CHARS_FOR_PROMPT`]).
-///   4. Optional override file content from `--extra <path>`.
+///   3. Optional override file content from `--extra <path>`.
 ///
 /// Useful for: debugging "why did the model behave this way?",
-/// previewing a new MEMORY.md entry before committing, computing a
+/// previewing the pinned request profile separately, computing a
 /// rough token budget for a new session, or capturing the candidate
-/// to share in a bug report. Due nudges are reported separately because
-/// they are request-local context, not part of the frozen prompt.
+/// to share in a bug report. The ContextPacket preview contains the pinned
+/// profile and due reminders; runtime adds explicit App/Activity context and
+/// exposed source handles. Other knowledge is selected by model tool calls.
 ///
 /// `--raw` returns the prompt as a single JSON string in the
 /// `prompt` field (default). Without `--raw` the response also
@@ -56,11 +54,42 @@ pub(super) fn prompt_cmd(args: &[String]) -> Result<Value, String> {
     }
     let extra_ref = extra.as_deref();
     let prompt = crate::agent::prompt::build_system_prompt(extra_ref);
-    let turn_context = crate::agent::prompt::build_turn_context_segments();
-    let turn_context_chars: usize = turn_context
-        .iter()
-        .map(|segment| segment.content.chars().count())
-        .sum();
+    let config = crate::config::current_snapshot();
+    let budget = crate::agent::context::budget::ContextBudget::from_config(&config.agent)
+        .map_err(|error| error.to_string())?;
+    let mut builder = crate::agent::context::packet::ContextBuilder::new(
+        budget,
+        budget.input_tokens.saturating_sub(
+            crate::agent::context::compressor::estimate_text_tokens(&prompt).saturating_add(16),
+        ),
+    );
+    for segment in crate::agent::prompt::try_build_turn_context_segments_with(
+        &crate::agent::nudge::NudgeStore::new(crate::paths::agent_nudges_path()),
+        crate::agent::nudge::now_epoch_s(),
+    )? {
+        builder
+            .required(crate::agent::context::packet::ContextSection::new(
+                crate::agent::context::packet::ContextKind::Reminder,
+                segment.source,
+                segment.content,
+            ))
+            .map_err(|error| error.to_string())?;
+    }
+    if crate::agent::runtime::loop_::guardrails_from_cfg(&config.agent).permits("cos_memory") {
+        let redactor = config
+            .agent
+            .redact_memory_enabled
+            .then(crate::agent::safety::redact::Redactor::default_set);
+        crate::agent::runtime::context::add_notes(
+            &mut builder,
+            &crate::agent::memory::notes::NotesStore::system_default(),
+            redactor.as_ref(),
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    let packet = builder.finish().map_err(|error| error.to_string())?;
+    let turn_context = packet.injected_segments();
+    let turn_context_chars = packet.render().chars().count();
     let turn_context_sources: Vec<&str> =
         turn_context.iter().map(|segment| segment.source).collect();
     if raw {
@@ -69,6 +98,7 @@ pub(super) fn prompt_cmd(args: &[String]) -> Result<Value, String> {
             "chars": prompt.chars().count(),
             "prompt_version": crate::agent::prompt::CANONICAL_PROMPT_VERSION,
             "scope": "new-session-candidate",
+            "context_packet": packet,
             "turn_context": turn_context.iter().map(|segment| json!({
                 "source": segment.source,
                 "content": segment.content,
@@ -95,11 +125,12 @@ pub(super) fn prompt_cmd(args: &[String]) -> Result<Value, String> {
             "scaffold_chars": scaffold_chars,
             "extra_path": extra.as_ref().map(|p| p.display().to_string()),
             "extra_chars": extra_chars,
-            "approx_tokens": total_chars / 4,
+            "approx_tokens": crate::agent::context::compressor::estimate_text_tokens(&prompt),
             "prompt_version": crate::agent::prompt::CANONICAL_PROMPT_VERSION,
             "scope": "new-session-candidate",
             "turn_context_chars": turn_context_chars,
             "turn_context_sources": turn_context_sources,
+            "context_packet": packet,
         }))
     }
 }

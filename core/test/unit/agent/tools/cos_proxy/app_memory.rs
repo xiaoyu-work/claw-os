@@ -58,7 +58,11 @@ async fn list_returns_recent_rows_across_sources() {
         &t,
         &[
             ("calendar", "Dentist appointment Tue 10am", Some("event")),
-            ("email", "Sent quarterly report to alice@example.com", Some("event")),
+            (
+                "email",
+                "Sent quarterly report to alice@example.com",
+                Some("event"),
+            ),
         ],
     )
     .await;
@@ -79,7 +83,9 @@ async fn list_filters_by_source() {
         ],
     )
     .await;
-    let r = t.exec(json!({"command": "list", "source": "calendar"})).await;
+    let r = t
+        .exec(json!({"command": "list", "source": "calendar"}))
+        .await;
     assert!(!r.is_error);
     assert!(r.content.contains("Dentist"));
     assert!(!r.content.contains("Quarterly report"));
@@ -91,7 +97,11 @@ async fn search_finds_keyword_across_sources() {
     seed(
         &t,
         &[
-            ("calendar", "Hilton hotel reservation for Boston trip", Some("event")),
+            (
+                "calendar",
+                "Hilton hotel reservation for Boston trip",
+                Some("event"),
+            ),
             ("email", "Sent confirmation to airline", Some("event")),
         ],
     )
@@ -108,7 +118,11 @@ async fn kind_filter_post_filters_results() {
         &t,
         &[
             ("calendar", "Dentist appointment", Some("event")),
-            ("calendar", "I dislike going to the dentist", Some("preference")),
+            (
+                "calendar",
+                "I dislike going to the dentist",
+                Some("preference"),
+            ),
         ],
     )
     .await;
@@ -125,11 +139,77 @@ async fn show_returns_one_row_by_id() {
     let t = tool();
     seed(&t, &[("calendar", "Dentist Tue 10am", Some("event"))]).await;
     // Roundtrip via list to grab an id without depending on insert ordering.
-    let listed = t.exec(json!({"command": "list", "source": "calendar"})).await;
+    let listed = t
+        .exec(json!({"command": "list", "source": "calendar"}))
+        .await;
     assert!(!listed.is_error, "list failed: {}", listed.content);
     let v: Value = parse_untrusted_json(&listed.content);
     let id = v["rows"][0]["id"].as_i64().expect("row id");
     let r = t.exec(json!({"command": "show", "id": id})).await;
     assert!(!r.is_error);
     assert!(r.content.contains("Dentist"));
+}
+
+#[tokio::test]
+async fn app_filtering_precedes_the_fts_limit_even_with_context_noise() {
+    let t = tool();
+    seed(
+        &t,
+        &[("calendar", "hotel ORIGINAL_APP_REPORT", Some("event"))],
+    )
+    .await;
+    for _ in 0..30 {
+        t.db.record_message("conversation", "user", "hotel")
+            .unwrap();
+        t.db.record_injected("conversation", "context_packet", "hotel")
+            .unwrap();
+        t.db.record_message("app:calendar", "user", "hotel FORGED_ROLE")
+            .unwrap();
+    }
+    for input in [
+        json!({"command":"search", "query":"hotel", "limit":1}),
+        json!({"command":"search", "query":"hotel", "source":"calendar", "limit":1}),
+    ] {
+        let result = t.exec(input).await;
+        assert!(!result.is_error, "{}", result.content);
+        assert!(result.content.contains("ORIGINAL_APP_REPORT"));
+        assert!(!result.content.contains("FORGED_ROLE"));
+    }
+}
+
+#[tokio::test]
+async fn app_pages_bind_scope_and_revision_and_candidate_scans_report_incompleteness() {
+    let t = tool();
+    seed(&t, &[("calendar", "preference is old", Some("preference"))]).await;
+    for _ in 0..10 {
+        seed(&t, &[("calendar", "a newer event", Some("event"))]).await;
+    }
+    let result = t
+        .exec(json!({
+            "command": "list", "kind":"preference", "limit":1,
+        }))
+        .await;
+    let result = parse_untrusted_json(&result.content);
+    assert_eq!(result["rows"], json!([]));
+    assert_eq!(result["has_more"], true);
+    assert_eq!(result["candidate_scan_complete"], false);
+    let listed = t.exec(json!({"command":"list", "limit":1})).await;
+    let listed = parse_untrusted_json(&listed.content);
+    let id = listed["rows"][0]["id"].as_i64().unwrap();
+    let page = t
+        .exec(json!({"command":"show", "id":id, "max_chars":2}))
+        .await;
+    let page = parse_untrusted_json(&page.content);
+    let next = t
+        .exec(json!({
+            "command":"show", "id":id, "source":"calendar", "offset":2,
+            "revision":page["row"]["revision"],
+        }))
+        .await;
+    assert!(!next.is_error);
+    assert!(next.content.contains("newer event"));
+    let wrong = t
+        .exec(json!({"command":"show", "id":id, "source":"email"}))
+        .await;
+    assert_eq!(parse_untrusted_json(&wrong.content)["found"], false);
 }

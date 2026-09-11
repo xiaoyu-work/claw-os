@@ -662,12 +662,26 @@ fn memory_forget(args: &[String]) -> Result<Value, String> {
 }
 
 /// `cos agent notes [list|read <name>|write <name> <content>|append <name> <line>|delete <name>]`
-/// — manages markdown notes the agent can read into its system prompt
-/// (MEMORY.md / USER.md by convention) or any other ad-hoc note file.
+/// — manages base/profile notes and model-selected knowledge. `search <query>
+/// [name] [limit]` returns bounded literal matches without changing any note.
 pub(super) fn notes_cmd(args: &[String]) -> Result<Value, String> {
     let store = memory::notes::NotesStore::system_default();
     let sub = args.first().map(|s| s.as_str()).unwrap_or("list");
     match sub {
+        "search" => {
+            let query = args.get(1)
+                .ok_or_else(|| "usage: cos agent notes search <query> [name] [limit]".to_string())?;
+            if args.len() > 4 {
+                return Err("usage: cos agent notes search <query> [name] [limit]".into());
+            }
+            let limit = match args.get(3) {
+                None => 5,
+                Some(value) => value.parse::<usize>()
+                    .map_err(|_| "note search limit must be an integer".to_string())?,
+            };
+            let result = store.search(query, args.get(2).map(String::as_str), limit)?;
+            serde_json::to_value(result).map_err(|error| error.to_string())
+        }
         "list" | "" => {
             let names = store.list().map_err(|e| format!("list failed: {e}"))?;
             Ok(json!({
@@ -729,7 +743,7 @@ pub(super) fn notes_cmd(args: &[String]) -> Result<Value, String> {
             Ok(json!({ "name": name, "deleted": true }))
         }
         other => Err(format!(
-            "unknown notes subcommand: {other}. try: list | read <name> | write <name> <content> | append <name> <line> | delete <name>"
+            "unknown notes subcommand: {other}. try: list | search <query> [name] [limit] | read <name> | write <name> <content> | append <name> <line> | delete <name>"
         )),
     }
 }

@@ -36,7 +36,7 @@ pub enum MemoryError {
     Poisoned(String),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct MessageRow {
     pub id: i64,
     pub session_id: String,
@@ -71,6 +71,13 @@ pub struct SearchHit {
     /// FTS5 bm25 rank — lower is better. Included so the model can decide
     /// whether a match is strong enough to act on.
     pub rank: f64,
+}
+
+#[derive(Clone, Copy)]
+enum SearchRows {
+    All,
+    History,
+    Apps,
 }
 
 /// Summary returned by [`MemoryDb::purge_older_than_ms`] /
@@ -325,7 +332,14 @@ impl MemoryDb {
         content: &str,
     ) -> Result<i64, MemoryError> {
         let body = format!("[{source}]\n{content}");
-        self.record_message_at(session_id, INJECTED_ROLE, &body, current_ts_ms())
+        // Context is bounded by its composition budget. Unlike a searchable
+        // tool-output preview, its recorded copy must not be truncated.
+        let conn = self.lock_conn()?;
+        conn.execute(
+            "INSERT INTO messages (session_id, role, content, ts_ms) VALUES (?, ?, ?, ?)",
+            params![session_id, INJECTED_ROLE, body, current_ts_ms()],
+        )?;
+        Ok(conn.last_insert_rowid())
     }
 
     pub fn record_tool_start(
@@ -569,28 +583,7 @@ impl MemoryDb {
     /// quoted phrase, then ANDed together — so users can pass arbitrary
     /// prose without worrying about FTS5 operator syntax.
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>, MemoryError> {
-        let escaped = fts5_escape(query);
-        if escaped.is_empty() {
-            return Ok(Vec::new());
-        }
-        let conn = self.lock_conn()?;
-        let mut stmt = conn.prepare(
-            "SELECT m.id, m.session_id, m.role, m.content, m.ts_ms, bm25(messages_fts) AS rank
-             FROM messages_fts
-             JOIN messages m ON m.id = messages_fts.rowid
-             WHERE messages_fts MATCH ?
-             ORDER BY rank
-             LIMIT ?",
-        )?;
-        let hits = stmt
-            .query_map(params![escaped, limit as i64], |row| {
-                Ok(SearchHit {
-                    row: row_to_message(row)?,
-                    rank: row.get::<_, f64>(5)?,
-                })
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(hits)
+        self.search_filtered(query, None, SearchRows::All, limit)
     }
 
     /// FTS5 search constrained to a single session.
@@ -598,6 +591,36 @@ impl MemoryDb {
         &self,
         session_id: &str,
         query: &str,
+        limit: usize,
+    ) -> Result<Vec<SearchHit>, MemoryError> {
+        self.search_filtered(query, Some(session_id), SearchRows::All, limit)
+    }
+
+    /// The model/user conversation view excludes injection audit records
+    /// before applying the limit, matching `recent_replayable` and source reads.
+    pub fn search_history(
+        &self,
+        query: &str,
+        session_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<SearchHit>, MemoryError> {
+        self.search_filtered(query, session_id, SearchRows::History, limit)
+    }
+
+    pub fn search_apps(
+        &self,
+        query: &str,
+        session_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<SearchHit>, MemoryError> {
+        self.search_filtered(query, session_id, SearchRows::Apps, limit)
+    }
+
+    fn search_filtered(
+        &self,
+        query: &str,
+        session_id: Option<&str>,
+        rows: SearchRows,
         limit: usize,
     ) -> Result<Vec<SearchHit>, MemoryError> {
         let escaped = fts5_escape(query);
@@ -609,20 +632,43 @@ impl MemoryDb {
             "SELECT m.id, m.session_id, m.role, m.content, m.ts_ms, bm25(messages_fts) AS rank
              FROM messages_fts
              JOIN messages m ON m.id = messages_fts.rowid
-             WHERE messages_fts MATCH ?
-               AND m.session_id = ?
+             WHERE messages_fts MATCH ?1
+               AND (?2 IS NULL OR m.session_id = ?2)
+               AND (NOT ?3 OR m.role <> ?4)
+               AND (NOT ?5 OR (m.role = 'app' AND m.session_id LIKE 'app:%'))
              ORDER BY rank
-             LIMIT ?",
+             LIMIT ?6",
         )?;
         let hits = stmt
-            .query_map(params![escaped, session_id, limit as i64], |row| {
-                Ok(SearchHit {
-                    row: row_to_message(row)?,
-                    rank: row.get::<_, f64>(5)?,
-                })
-            })?
+            .query_map(
+                params![
+                    escaped,
+                    session_id,
+                    !matches!(rows, SearchRows::All),
+                    INJECTED_ROLE,
+                    matches!(rows, SearchRows::Apps),
+                    limit as i64
+                ],
+                |row| {
+                    Ok(SearchHit {
+                        row: row_to_message(row)?,
+                        rank: row.get::<_, f64>(5)?,
+                    })
+                },
+            )?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(hits)
+    }
+
+    pub fn message(&self, id: i64) -> Result<Option<MessageRow>, MemoryError> {
+        let conn = self.lock_conn()?;
+        Ok(conn
+            .query_row(
+                "SELECT id, session_id, role, content, ts_ms FROM messages WHERE id = ?",
+                params![id],
+                row_to_message,
+            )
+            .optional()?)
     }
 
     pub fn count_total(&self) -> Result<i64, MemoryError> {
@@ -839,13 +885,12 @@ impl MemoryDb {
         let (oldest_ts_ms, newest_ts_ms) = if total_messages == 0 {
             (None, None)
         } else {
-            conn
-                .query_row("SELECT MIN(ts_ms), MAX(ts_ms) FROM messages", [], |r| {
-                    let lo: Option<i64> = r.get(0)?;
-                    let hi: Option<i64> = r.get(1)?;
-                    Ok((lo, hi))
-                })
-                .unwrap_or((None, None))
+            conn.query_row("SELECT MIN(ts_ms), MAX(ts_ms) FROM messages", [], |r| {
+                let lo: Option<i64> = r.get(0)?;
+                let hi: Option<i64> = r.get(1)?;
+                Ok((lo, hi))
+            })
+            .unwrap_or((None, None))
         };
         Ok(MemoryStats {
             total_messages,
@@ -1089,21 +1134,11 @@ fn default_path() -> PathBuf {
 pub(crate) fn fts5_escape(query: &str) -> String {
     let mut out = String::new();
     for word in query.split_whitespace() {
-        // Strip FTS5 punctuation/operators that have no useful meaning inside
-        // a phrase: parentheses, colons, asterisks, dashes (column filter,
-        // prefix, NEAR, NOT). We treat the input as plain prose.
-        let cleaned: String = word
-            .chars()
-            .filter(|c| !matches!(*c, '(' | ')' | ':' | '*' | '-' | '+' | '^'))
-            .collect();
-        if cleaned.is_empty() {
-            continue;
-        }
         if !out.is_empty() {
             out.push(' ');
         }
         out.push('"');
-        for ch in cleaned.chars() {
+        for ch in word.chars() {
             if ch == '"' {
                 out.push('"');
                 out.push('"');

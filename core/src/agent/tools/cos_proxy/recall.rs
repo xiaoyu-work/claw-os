@@ -7,6 +7,7 @@
 //! Subcommands:
 //! - `search  {query, limit?, session_id?}`  → FTS5 search ranked by bm25
 //! - `recent  {session_id, limit?}`          → most-recent N messages of session
+//! - `show    {message_id, session_id?}`     → one complete source message
 //! - `sessions {limit?}`                     → list distinct sessions
 //! - `stats   {session_id?}`                 → row counts
 
@@ -43,7 +44,14 @@ impl Tool for CosRecallTool {
          (calendar events, sent emails, etc.) because they share the same \
          FTS index — for source-filtered queries over app facts specifically, \
          prefer `cos_app_memory`. Distinct from `cos_memory`, which is for \
-         durable Markdown notes you write deliberately."
+         durable Markdown notes you write deliberately. Use 'show' with a \
+         returned message_id to expand one source without replaying a whole session. \
+         Search/recent return bounded excerpts, not complete evidence. Follow \
+         next_offset with show offset/max_chars and the returned revision. \
+         If results are insufficient, off-topic, stale or conflicting, refine the \
+         query/scope, use semantic recall for paraphrases, or inspect original/current \
+         sources. No matches is only a result for this query/scope. BM25 rank measures \
+         retrieval relevance, not truth; historical success does not prove current state."
     }
 
     fn input_schema(&self) -> Value {
@@ -52,7 +60,7 @@ impl Tool for CosRecallTool {
             "properties": {
                 "command": {
                     "type": "string",
-                    "enum": ["search", "recent", "sessions", "stats"],
+                    "enum": ["search", "recent", "show", "sessions", "stats"],
                 },
                 "query": {
                     "type": "string",
@@ -61,6 +69,25 @@ impl Tool for CosRecallTool {
                 "session_id": {
                     "type": "string",
                     "description": "Constrain to a specific session id."
+                },
+                "message_id": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Source message id returned by recall. Required for 'show'."
+                },
+                "offset": {
+                    "type": "integer", "minimum": 0, "default": 0,
+                    "description": "For show: character offset in the disclosed source."
+                },
+                "max_chars": {
+                    "type": "integer", "minimum": 1,
+                    "maximum": crate::agent::memory::history::MAX_READ_CHARS,
+                    "default": crate::agent::memory::history::DEFAULT_READ_CHARS,
+                    "description": "For show: maximum characters returned."
+                },
+                "revision": {
+                    "type": "string",
+                    "description": "Source revision from search/show. Required for offset > 0; restart the read if it changed."
                 },
                 "limit": {
                     "type": "integer",
@@ -79,7 +106,7 @@ impl Tool for CosRecallTool {
             Some(s) if !s.is_empty() => s.to_string(),
             _ => {
                 return ToolResult::err(
-                    "missing 'command' (search|recent|sessions|stats)".to_string(),
+                    "missing 'command' (search|recent|show|sessions|stats)".to_string(),
                 );
             }
         };
@@ -88,55 +115,92 @@ impl Tool for CosRecallTool {
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
-        let session_id = input
-            .get("session_id")
-            .and_then(Value::as_str)
-            .map(str::to_string);
+        let session_id = match super::memory::optional_string(&input, "session_id") {
+            Ok(value) if value.is_none_or(|value| !value.trim().is_empty()) => {
+                value.map(str::to_string)
+            }
+            Ok(_) => return ToolResult::err("session_id must be non-empty when provided"),
+            Err(error) => return ToolResult::err(error),
+        };
         let limit = input
             .get("limit")
             .and_then(Value::as_u64)
             .map(|n| n as usize)
             .unwrap_or(DEFAULT_LIMIT)
             .clamp(1, MAX_LIMIT);
+        let message_id = input
+            .get("message_id")
+            .and_then(Value::as_i64)
+            .filter(|id| *id > 0);
+        let window = if command == "show" {
+            match super::memory::read_window(&input) {
+                Ok(window) => window,
+                Err(error) => return ToolResult::err(error),
+            }
+        } else {
+            super::memory::ReadWindow::default()
+        };
 
         let db = self.db.clone();
         let join = tokio::task::spawn_blocking(move || -> Result<Value, String> {
             match command.as_str() {
+                "show" => {
+                    let id = message_id
+                        .ok_or_else(|| "'show' requires a positive 'message_id'".to_string())?;
+                    let row = db
+                        .message(id)
+                        .map_err(|error| error.to_string())?
+                        .filter(|row| {
+                            row.role != crate::agent::memory::sqlite_fts::INJECTED_ROLE
+                                && session_id.as_ref().is_none_or(|sid| *sid == row.session_id)
+                        })
+                        .ok_or_else(|| {
+                            "source message not found in the requested scope".to_string()
+                        })?;
+                    let text = crate::agent::memory::history::sanitize_stored_content(
+                        &row.role,
+                        &row.content,
+                    );
+                    let page = window.page(&text)?;
+                    Ok(json!({ "message": row_page_to_json(&row, &page) }))
+                }
                 "search" => {
-                    if query.is_empty() {
+                    if query.trim().is_empty() {
                         return Err("'search' requires non-empty 'query'".to_string());
                     }
-                    // FTS5 query strings have their own grammar (`AND`,
-                    // `OR`, `NEAR`, column filters like `body:foo`). A
-                    // raw user query containing `:` or `"` can either
-                    // mis-parse (HTTP 500) or escape into a different
-                    // column. Wrap the whole user blob as a single
-                    // double-quoted phrase and double-escape interior
-                    // `"`s — FTS5 treats `""` as a literal `"` inside
-                    // a quoted phrase. This preserves "give me back what
-                    // I typed" semantics; advanced users wanting raw
-                    // operators can use the `cos_memory` direct path.
-                    let fts_query = escape_fts5_query(&query);
-                    let hits = match &session_id {
-                        Some(sid) => db
-                            .search_session(sid, &fts_query, limit)
-                            .map_err(|e| e.to_string())?,
-                        None => db.search(&fts_query, limit).map_err(|e| e.to_string())?,
-                    };
+                    let mut hits = db
+                        .search_history(&query, session_id.as_deref(), limit + 1)
+                        .map_err(|error| error.to_string())?;
+                    let has_more = hits.len() > limit;
+                    hits.truncate(limit);
+                    let preview_chars = preview_chars(hits.len());
                     Ok(json!({
                         "query": query,
                         "session_id": session_id,
-                        "hits": hits.iter().map(hit_to_json).collect::<Vec<_>>(),
+                        "limit": limit,
+                        "has_more": has_more,
+                        "match_kind": "fts5",
+                        "score_kind": "bm25_not_confidence",
+                        "hits": hits.iter().map(|hit| hit_to_json(hit, preview_chars)).collect::<Vec<_>>(),
                     }))
                 }
                 "recent" => {
                     let sid = session_id
                         .clone()
                         .ok_or_else(|| "'recent' requires 'session_id'".to_string())?;
-                    let rows = db.recent(&sid, limit).map_err(|e| e.to_string())?;
+                    let mut rows = db
+                        .recent_replayable(&sid, limit + 1)
+                        .map_err(|e| e.to_string())?;
+                    let has_more = rows.len() > limit;
+                    if has_more {
+                        rows.remove(0);
+                    }
+                    let preview_chars = preview_chars(rows.len());
                     Ok(json!({
                         "session_id": sid,
-                        "messages": rows.iter().map(row_to_json).collect::<Vec<_>>(),
+                        "limit": limit,
+                        "has_more": has_more,
+                        "messages": rows.iter().map(|row| row_to_json(row, preview_chars)).collect::<Vec<_>>(),
                     }))
                 }
                 "sessions" => {
@@ -165,7 +229,7 @@ impl Tool for CosRecallTool {
                     }))
                 }
                 other => Err(format!(
-                    "unknown command '{other}'. valid: search|recent|sessions|stats"
+                    "unknown command '{other}'. valid: search|recent|show|sessions|stats"
                 )),
             }
         })
@@ -189,60 +253,44 @@ impl Tool for CosRecallTool {
     }
 }
 
-fn row_to_json(row: &MessageRow) -> Value {
-    let content =
-        crate::agent::memory::history::sanitize_stored_content(&row.role, &row.content);
+fn preview_chars(count: usize) -> usize {
+    (crate::agent::memory::history::DEFAULT_READ_CHARS / count.max(1)).min(512)
+}
+
+fn row_to_json(row: &MessageRow, max_chars: usize) -> Value {
+    let content = crate::agent::memory::history::sanitize_stored_content(&row.role, &row.content);
+    let page = crate::agent::memory::history::text_page(&content, 0, max_chars)
+        .expect("a zero offset and fixed positive excerpt length are valid");
+    row_page_to_json(row, &page)
+}
+
+fn row_page_to_json(row: &MessageRow, page: &crate::agent::memory::history::TextPage) -> Value {
     json!({
         "id": row.id,
         "session_id": row.session_id,
         "role": row.role,
-        "content": content,
+        "content": page.content,
+        "revision": page.revision,
         "ts_ms": row.ts_ms,
+        "offset": page.offset,
+        "next_offset": page.next_offset,
+        "total_chars": page.total_chars,
+        "source_complete": page.source_complete,
+        "read": {
+            "tool": "cos_recall",
+            "command": "show",
+            "message_id": row.id,
+            "session_id": row.session_id,
+            "offset": page.next_offset.unwrap_or(0),
+            "revision": page.revision,
+        },
     })
 }
 
-fn hit_to_json(hit: &SearchHit) -> Value {
-    let content = crate::agent::memory::history::sanitize_stored_content(
-        &hit.row.role,
-        &hit.row.content,
-    );
-    json!({
-        "id": hit.row.id,
-        "session_id": hit.row.session_id,
-        "role": hit.row.role,
-        "content": content,
-        "ts_ms": hit.row.ts_ms,
-        "rank": hit.rank,
-    })
-}
-
-/// Escape a free-text user query for FTS5's MATCH grammar.
-///
-/// FTS5 reserves `:` for column filters (`body:foo`), `"` for phrase
-/// delimiters, `-` for negation, `*` for prefix, parens for grouping,
-/// and the bare keywords `AND` / `OR` / `NOT` / `NEAR`. The model is
-/// not in control of the raw FTS dialect — it asks for "search for X"
-/// and expects literal matching. Wrap the entire query as a single
-/// double-quoted phrase and double-escape interior `"` to a pair (the
-/// SQLite-documented escape rule for FTS5 quoted phrases). Whitespace
-/// inside the phrase is still tokenised by FTS5 as a multi-word
-/// phrase-with-stopwords-allowed search.
-///
-/// The empty string would build `""` which is a valid-but-empty FTS5
-/// match (returns no rows); the caller already rejects empty queries.
-fn escape_fts5_query(q: &str) -> String {
-    let mut out = String::with_capacity(q.len() + 2);
-    out.push('"');
-    for ch in q.chars() {
-        if ch == '"' {
-            out.push('"');
-            out.push('"');
-        } else {
-            out.push(ch);
-        }
-    }
-    out.push('"');
-    out
+fn hit_to_json(hit: &SearchHit, max_chars: usize) -> Value {
+    let mut value = row_to_json(&hit.row, max_chars);
+    value["rank"] = json!(hit.rank);
+    value
 }
 
 #[cfg(test)]

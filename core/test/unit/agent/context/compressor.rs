@@ -2,6 +2,33 @@ use super::*;
 use crate::agent::llm::providers::mock::{MockProvider, MockResponse};
 use crate::config::AgentConfig;
 
+#[test]
+fn incomplete_or_refused_output_cannot_replace_conversation_history() {
+    let mut response = crate::agent::llm::ChatResponse {
+        model: "mock".into(),
+        content: vec![ContentBlock::Text {
+            text: "Goal: inspect only.".into(),
+        }],
+        tool_calls: Vec::new(),
+        finish_reason: FinishReason::Stop,
+        usage: crate::agent::llm::Usage::default(),
+    };
+    assert_eq!(
+        complete_summary(&response).as_deref(),
+        Some("Goal: inspect only.")
+    );
+    for reason in [
+        FinishReason::Length,
+        FinishReason::Refusal,
+        FinishReason::ContentFilter,
+        FinishReason::ToolUse,
+        FinishReason::Other,
+    ] {
+        response.finish_reason = reason;
+        assert!(complete_summary(&response).is_none());
+    }
+}
+
 fn parent_cfg() -> AgentConfig {
     AgentConfig {
         provider: "mock".into(),
@@ -262,8 +289,7 @@ async fn compress_with_mock_provider_inserts_summary_before_tail() {
         summary_max_tokens: 256,
         ..Default::default()
     };
-    let provider_arc: Arc<MockProvider> =
-        Arc::new(MockProvider::new("mock-model", &parent_cfg()));
+    let provider_arc: Arc<MockProvider> = Arc::new(MockProvider::new("mock-model", &parent_cfg()));
     provider_arc.push_response(MockResponse::Text("compressed history goes here".into()));
     let provider: Arc<dyn Provider> = provider_arc.clone();
     let c = LlmCompressor::new(provider, "mock-model").with_config(cfg);
@@ -288,33 +314,19 @@ async fn compress_with_mock_provider_inserts_summary_before_tail() {
 }
 
 #[tokio::test]
-async fn compress_with_failing_provider_falls_back_to_truncate() {
-    // Mock provider has no responses queued; chat() returns a
-    // configurable empty error response — but our mock's default
-    // behaviour is to echo. We force a failure by pushing an
-    // error-shaped Text response that's blank (extract_text
-    // returns "") — which the compressor treats as "empty
-    // summary, fall back to truncate-only".
+async fn compress_with_empty_summary_preserves_original_history() {
     let cfg = CompressorConfig {
         trigger_tokens: 5,
         keep_tail_tokens: 12,
         ..Default::default()
     };
-    let provider_arc: Arc<MockProvider> =
-        Arc::new(MockProvider::new("mock-model", &parent_cfg()));
+    let provider_arc: Arc<MockProvider> = Arc::new(MockProvider::new("mock-model", &parent_cfg()));
     provider_arc.push_response(MockResponse::Text(String::new()));
     let provider: Arc<dyn Provider> = provider_arc.clone();
     let c = LlmCompressor::new(provider, "mock-model").with_config(cfg);
     let msgs: Vec<Message> = (0..8).map(|i| user_msg(&format!("msg-{i}"))).collect();
     let after = c.compress(None, msgs.clone()).await;
-    // No summary inserted; tail is the truncated suffix only.
-    for m in &after {
-        match &m.content[0] {
-            ContentBlock::Text { text } => assert!(!text.contains(SUMMARY_MARKER)),
-            _ => {}
-        }
-    }
-    assert!(after.len() < msgs.len());
+    assert_eq!(after, msgs);
 }
 
 #[tokio::test]
@@ -328,8 +340,7 @@ async fn compress_preserves_tool_use_result_pair_in_tail() {
         summary_max_tokens: 256,
         ..Default::default()
     };
-    let provider_arc: Arc<MockProvider> =
-        Arc::new(MockProvider::new("mock-model", &parent_cfg()));
+    let provider_arc: Arc<MockProvider> = Arc::new(MockProvider::new("mock-model", &parent_cfg()));
     provider_arc.push_response(MockResponse::Text("summary".into()));
     let provider: Arc<dyn Provider> = provider_arc;
     let c = LlmCompressor::new(provider, "mock-model").with_config(cfg);

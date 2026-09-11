@@ -465,19 +465,24 @@ pub fn list(
     };
     let mut stmt = conn.prepare(sql)?;
     let mut out = Vec::new();
-    let rows_iter: Box<dyn Iterator<Item = Result<MessageRow, rusqlite::Error>>> = if let Some(s) =
-        sid.as_deref()
-    {
-        let rows = stmt
-            .query_map(rusqlite::params![s, limit as i64], super::sqlite_fts::row_to_message)?
-            .collect::<Vec<_>>();
-        Box::new(rows.into_iter())
-    } else {
-        let rows = stmt
-            .query_map(rusqlite::params![limit as i64], super::sqlite_fts::row_to_message)?
-            .collect::<Vec<_>>();
-        Box::new(rows.into_iter())
-    };
+    let rows_iter: Box<dyn Iterator<Item = Result<MessageRow, rusqlite::Error>>> =
+        if let Some(s) = sid.as_deref() {
+            let rows = stmt
+                .query_map(
+                    rusqlite::params![s, limit as i64],
+                    super::sqlite_fts::row_to_message,
+                )?
+                .collect::<Vec<_>>();
+            Box::new(rows.into_iter())
+        } else {
+            let rows = stmt
+                .query_map(
+                    rusqlite::params![limit as i64],
+                    super::sqlite_fts::row_to_message,
+                )?
+                .collect::<Vec<_>>();
+            Box::new(rows.into_iter())
+        };
     for r in rows_iter {
         let row = r?;
         out.push(AppMemoryRow::from_row(row, None));
@@ -509,18 +514,8 @@ pub fn search(
     source: Option<&str>,
     limit: usize,
 ) -> Result<Vec<AppMemoryRow>, MemoryError> {
-    let hits: Vec<SearchHit> = match source {
-        Some(s) => db.search_session(&session_id_for(s), query, limit)?,
-        None => {
-            // Search across everything, then filter to app-owned rows.
-            // Pull extra hits to compensate for the filter.
-            let raw = db.search(query, limit.saturating_mul(2).max(limit))?;
-            raw.into_iter()
-                .filter(|h| h.row.session_id.starts_with("app:") && h.row.role == "app")
-                .take(limit)
-                .collect()
-        }
-    };
+    let session_id = source.map(session_id_for);
+    let hits: Vec<SearchHit> = db.search_apps(query, session_id.as_deref(), limit)?;
     Ok(hits
         .into_iter()
         .map(|h| AppMemoryRow::from_row(h.row, Some(h.rank)))

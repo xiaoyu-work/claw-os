@@ -161,7 +161,7 @@ fn registry_construction_does_not_open_optional_stores_or_create_paths() {
 }
 
 #[tokio::test]
-async fn injected_notes_root_is_shared_by_memory_prompt_and_curator() {
+async fn injected_notes_root_is_shared_by_memory_profile_and_curator() {
     let temp = tempfile::tempdir().unwrap();
     let mut paths = deps().paths;
     paths.notes_dir = temp.path().join("injected-notes");
@@ -176,7 +176,7 @@ async fn injected_notes_root_is_shared_by_memory_prompt_and_curator() {
     let result = memory
         .exec(serde_json::json!({
             "command": "write",
-            "name": "MEMORY.md",
+            "name": "USER.md",
             "content": "INJECTED_NOTE_ROOT"
         }))
         .await;
@@ -189,7 +189,17 @@ async fn injected_notes_root_is_shared_by_memory_prompt_and_curator() {
         &skills,
         deps.runtime.notes(),
     );
-    assert!(prompt.contains("INJECTED_NOTE_ROOT"));
+    assert!(!prompt.contains("INJECTED_NOTE_ROOT"));
+    let budget =
+        crate::agent::context::budget::ContextBudget::from_config(&deps.config.agent).unwrap();
+    let mut builder =
+        crate::agent::context::packet::ContextBuilder::new(budget, budget.input_tokens);
+    crate::agent::runtime::context::add_notes(&mut builder, deps.runtime.notes(), None).unwrap();
+    assert!(builder
+        .finish()
+        .unwrap()
+        .render()
+        .contains("INJECTED_NOTE_ROOT"));
 
     let config = crate::config::AgentConfig {
         provider: "openai".into(),

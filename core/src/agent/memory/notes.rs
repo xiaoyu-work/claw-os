@@ -5,10 +5,8 @@
 //! file-locked; writes are atomic (tmp + rename) via [`crate::filelock`].
 //!
 //! Two integration points:
-//! - The system prompt builder (`agent/prompt`) snapshots `MEMORY.md` and
-//!   `USER.md` when a persisted session freezes its canonical prompt. Writes
-//!   become automatic context in new sessions; the current session already
-//!   retains the conversation that produced them and can read them explicitly.
+//! - Request context selects current entries from `MEMORY.md` and `USER.md`.
+//!   Notes are data, never part of the session's frozen system instructions.
 //! - The `cos_memory` LLM tool exposes read / write / append / list so the
 //!   model itself can update its own memory after a task. (Auto-curator
 //!   in Phase 8 will do this for the model.)
@@ -26,18 +24,37 @@ pub const USER_FILE: &str = "USER.md";
 
 const ALL_KNOWN: &[&str] = &[MEMORY_FILE, USER_FILE];
 
-/// Per-file character budget when injecting notes into the system
-/// prompt. 32 KiB chars (≈ ~8K tokens for English) is generous for
-/// hand-written guidance but guards against a runaway paste blowing
-/// the context window. The cap applies *only* to prompt assembly —
-/// `NotesStore::read` always returns the full file, so
-/// `cos_memory read MEMORY.md` still gives the model the unedited
-/// contents on demand.
+/// Character cap for the legacy whole-note preview helpers. Runtime packets
+/// instead use token budgets and explicit profile entries. `NotesStore::read`
+/// returns the full file; model-facing reads expose bounded character pages.
 pub const MAX_NOTE_CHARS_FOR_PROMPT: usize = 32_768;
 
 #[derive(Debug, Clone)]
 pub struct NotesStore {
     dir: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct NoteEntry {
+    pub name: &'static str,
+    pub content: String,
+    pub revision: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct NoteHit {
+    pub name: String,
+    #[serde(flatten)]
+    pub page: super::history::TextPage,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct NoteSearch {
+    pub query: String,
+    pub names: Vec<String>,
+    pub searched_names: Vec<String>,
+    pub hits: Vec<NoteHit>,
+    pub has_more: bool,
 }
 
 impl NotesStore {
@@ -71,12 +88,12 @@ impl NotesStore {
     /// error — missing memory just means no memory yet).
     pub fn read(&self, name: &str) -> Result<Option<String>, String> {
         let p = self.path_of(name)?;
-        // `filelock::read_locked` already short-circuits to
-        // `Ok(None)` via `path.is_file()` when the path doesn't
-        // exist; we don't need a redundant string-match against the
-        // OS error message (which used to misclassify e.g. a
-        // permission-denied error as "not found" on locales where
-        // the message contains "no such file" in translation).
+        match fs::metadata(&p) {
+            Ok(metadata) if metadata.is_file() => {}
+            Ok(_) => return Err(format!("note {} is not a regular file", p.display())),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(format!("inspect note {}: {error}", p.display())),
+        }
         filelock::read_locked(&p)
     }
 
@@ -112,9 +129,18 @@ impl NotesStore {
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(out),
             Err(e) => return Err(format!("read_dir {}: {e}", self.dir.display())),
         };
-        for entry in read_dir.flatten() {
+        for entry in read_dir {
+            let entry =
+                entry.map_err(|error| format!("read_dir {}: {error}", self.dir.display()))?;
             if let Some(name) = entry.file_name().to_str() {
-                if name.ends_with(".md") {
+                if name.ends_with(".md")
+                    && !entry
+                        .file_type()
+                        .map_err(|error| {
+                            format!("inspect note {}: {error}", entry.path().display())
+                        })?
+                        .is_dir()
+                {
                     out.push(name.to_string());
                 }
             }
@@ -123,8 +149,91 @@ impl NotesStore {
         Ok(out)
     }
 
-    /// Return concatenated content of `MEMORY.md` and `USER.md` for the
-    /// system prompt. Either or both may be missing — `None` is returned if
+    /// Execute the model's literal query, not a classifier for the user's task.
+    /// Offsets refer to the original UTF-8 text, including for case-insensitive matches.
+    pub fn search(
+        &self,
+        query: &str,
+        name: Option<&str>,
+        limit: usize,
+    ) -> Result<NoteSearch, String> {
+        let query = query.trim();
+        if query.is_empty() || query.chars().count() > 256 {
+            return Err("note search query must contain 1..=256 characters".into());
+        }
+        if !(1..=20).contains(&limit) {
+            return Err("note search limit must be within 1..=20".into());
+        }
+        let names = if let Some(name) = name {
+            validate_name(name)?;
+            vec![name.to_string()]
+        } else {
+            self.list()?
+        };
+        let pattern = regex::RegexBuilder::new(&regex::escape(query))
+            .case_insensitive(true)
+            .build()
+            .map_err(|error| format!("compile note search: {error}"))?;
+        let mut result = NoteSearch {
+            query: query.to_string(),
+            names: names.clone(),
+            searched_names: Vec::new(),
+            hits: Vec::new(),
+            has_more: false,
+        };
+        for name in names {
+            let text = self
+                .read(&name)?
+                .ok_or_else(|| format!("note {name} disappeared; list/search again"))?;
+            result.searched_names.push(name.clone());
+            for matched in pattern.find_iter(&text) {
+                if result.hits.len() == limit {
+                    result.has_more = true;
+                    return Ok(result);
+                }
+                let offset = text[..matched.start()].chars().count().saturating_sub(80);
+                result.hits.push(NoteHit {
+                    name: name.clone(),
+                    page: super::history::text_page(&text, offset, 512)?,
+                });
+            }
+        }
+        Ok(result)
+    }
+
+    /// Only the always-on profile and explicitly pinned notes enter initial
+    /// context. The model selects other knowledge through memory tools.
+    pub fn context_entries(&self) -> Result<Vec<NoteEntry>, String> {
+        let mut entries = Vec::new();
+        for name in [USER_FILE, MEMORY_FILE] {
+            let Some(raw) = self.read(name)? else {
+                continue;
+            };
+            let revision = super::history::text_revision(&raw);
+            let current = if name == MEMORY_FILE {
+                project_chain_tails(&raw)
+            } else {
+                raw
+            };
+            entries.extend(
+                note_chunks(&current)
+                    .into_iter()
+                    .filter(|content| {
+                        name == USER_FILE || content.to_ascii_lowercase().contains(ALWAYS_TAG)
+                    })
+                    .map(|content| NoteEntry {
+                        name,
+                        content,
+                        revision: revision.clone(),
+                    }),
+            );
+        }
+        Ok(entries)
+    }
+
+    /// Legacy whole-note preview of `MEMORY.md` and `USER.md`.
+    /// Normal runtime context uses `context_entries` instead of this helper.
+    /// Either or both may be missing — `None` is returned if
     /// nothing useful exists. Each file is independently capped at
     /// [`MAX_NOTE_CHARS_FOR_PROMPT`] characters; oversized notes are
     /// truncated with a marker so the model is told what happened.
@@ -138,7 +247,7 @@ impl NotesStore {
         self.assemble_for_prompt_relevant(None, cap_chars)
     }
 
-    /// Assemble notes for the prompt, selecting MEMORY.md entries by
+    /// Assemble an explicit legacy notes preview, selecting MEMORY.md entries by
     /// relevance to `query` when the file exceeds `cap_chars`.
     ///
     /// ## Tiers
@@ -199,8 +308,8 @@ impl NotesStore {
     }
 }
 
-/// Marker that pins a `MEMORY.md` entry to the always-on tier whenever a
-/// session prompt snapshot is assembled. Case-insensitive.
+/// Marker that explicitly pins a `MEMORY.md` entry to the initial request
+/// profile. Case-insensitive.
 pub const ALWAYS_TAG: &str = "[always]";
 
 /// Drop curated entries that a later entry supersedes.
@@ -281,6 +390,48 @@ fn tokenize(text: &str) -> std::collections::HashSet<String> {
         .collect()
 }
 
+fn note_chunks(content: &str) -> Vec<String> {
+    fn flush(headings: &[(usize, String)], body: &mut String, out: &mut Vec<String>) {
+        if body.trim().is_empty() {
+            return;
+        }
+        let mut entry = headings
+            .iter()
+            .map(|(_, heading)| heading.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !entry.is_empty() {
+            entry.push('\n');
+        }
+        entry.push_str(body.trim());
+        out.push(entry);
+        body.clear();
+    }
+
+    let mut headings: Vec<(usize, String)> = Vec::new();
+    let mut body = String::new();
+    let mut out = Vec::new();
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        let depth = trimmed.chars().take_while(|ch| *ch == '#').count();
+        if (1..=6).contains(&depth) && trimmed.as_bytes().get(depth) == Some(&b' ') {
+            flush(&headings, &mut body, &mut out);
+            headings.retain(|(level, _)| *level < depth);
+            headings.push((depth, line.to_string()));
+        } else if trimmed.is_empty() {
+            flush(&headings, &mut body, &mut out);
+        } else {
+            if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
+                flush(&headings, &mut body, &mut out);
+            }
+            body.push_str(line);
+            body.push('\n');
+        }
+    }
+    flush(&headings, &mut body, &mut out);
+    out
+}
+
 /// Relevance of a memory `entry` to the current `query`: the number of
 /// distinct query tokens that also appear in the entry. Deterministic,
 /// synchronous, dependency-free — good enough to decide *which* facts to
@@ -291,7 +442,10 @@ fn lexical_relevance(query_tokens: &std::collections::HashSet<String>, entry: &s
         return 0;
     }
     let entry_tokens = tokenize(entry);
-    query_tokens.iter().filter(|t| entry_tokens.contains(*t)).count()
+    query_tokens
+        .iter()
+        .filter(|t| entry_tokens.contains(*t))
+        .count()
 }
 
 /// Select which of `memory.md`'s contextual entries to inject, keeping

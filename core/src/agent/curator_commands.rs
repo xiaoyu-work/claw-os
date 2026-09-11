@@ -80,7 +80,7 @@ pub(super) fn curator_cmd(args: &[String]) -> Result<Value, String> {
     let db = memory::sqlite_fts::MemoryDb::open_default()
         .map_err(|e| format!("memory db unavailable: {e}"))?;
     let rows = db
-        .recent(&sid, limit)
+        .recent_replayable(&sid, limit)
         .map_err(|e| format!("memory recent: {e}"))?;
     if rows.is_empty() {
         return Ok(json!({
@@ -479,7 +479,7 @@ fn curator_author_cmd(args: &[String]) -> Result<Value, String> {
     // (rare but possible if the user cleared memory between
     // propose and author) we still author from the draft alone.
     let turns: Vec<ConversationTurn> = match memory::sqlite_fts::MemoryDb::open_default() {
-        Ok(db) => match db.recent(&entry.session_id, limit) {
+        Ok(db) => match db.recent_replayable(&entry.session_id, limit) {
             Ok(rows) => rows
                 .iter()
                 .filter_map(|r| message_to_turn(&r.role, &r.content))
@@ -709,7 +709,7 @@ fn curator_scan_cmd(args: &[String]) -> Result<Value, String> {
             }));
             continue;
         }
-        let rows = match db.recent(&s.session_id, message_limit) {
+        let rows = match db.recent_replayable(&s.session_id, message_limit) {
             Ok(r) => r,
             Err(e) => {
                 results.push(json!({

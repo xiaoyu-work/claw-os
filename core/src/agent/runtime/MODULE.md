@@ -9,7 +9,8 @@ through model turns, tools, hooks, progress, and final records.
 
 - Own one bounded multi-turn lifecycle for buffered and streaming asks.
 - Restore or freeze one versioned canonical system prompt per persisted session.
-- Keep due reminders and application context request-local.
+- Build a source-labelled, budgeted ContextPacket per request without semantic
+  keyword routing; additional context reads are chosen by the main model.
 - Execute one provider/tool-result turn.
 - Dispatch parallel-safe and serial tools deterministically.
 - Resolve progressive tool envelopes before hooks, approval, progress, and
@@ -23,6 +24,7 @@ through model turns, tools, hooks, progress, and final records.
 | --- | --- |
 | `loop_.rs` | Shared request lifecycle, public ask adapters, and turn repetition |
 | `deps.rs` | Explicit runtime hooks, clock, semantic indexer, and path snapshot |
+| `context.rs` | Request packet composition/recording and original-input preservation |
 | `turn.rs` | Shared request/response/tool transitions, progressive resolution, and provider delivery adapters |
 | `hooks.rs` | Pre/post tool and turn hooks |
 | `progress.rs` | Tool progress and heartbeat contract |
@@ -54,11 +56,13 @@ curates memory, or chooses terminal states.
 
 ```text
 Prepare
-  -> record user + injected context
+  -> record original user input
   -> restore/freeze system prompt
   -> register interrupt + hooks
+  -> compose/record pinned profile, explicit context and source discovery
 TurnReady
-  -> cancellation check -> pre-turn hook -> scrub/compress
+  -> cancellation check -> pre-turn hook -> scrub assistant history / compress
+  -> preserve original request -> record handoff -> check complete input budget
   -> turn::run_turn_inner
        -> build request -> Buffered(retry) | Streaming(sink)
        -> append assistant -> dispatch tools -> append tool results
@@ -66,7 +70,7 @@ TurnReady
   -> observe evidence -> persist appended messages
   -> ContinueWithTools -------------------------------> TurnReady
   -> Final -> verify evidence -> title -> curate -> Success
-  -> provider/hook/progress error --------------------> Error
+  -> context/provider/hook/progress error ------------> Error
   -> cancellation at any cancellation-aware boundary -> Interrupted
   -> final-turn provider failure/empty answer -> persisted fallback -> Success
 ```

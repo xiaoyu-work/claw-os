@@ -61,6 +61,50 @@ fn store_with_hash(dim: usize) -> SemanticStore {
     SemanticStore::open_in_memory(Some(e)).unwrap()
 }
 
+#[tokio::test]
+async fn source_reads_do_not_embed_again_and_are_scoped_by_namespace_and_key() {
+    let embedder = Arc::new(HashEmbedder::new(8));
+    let store = SemanticStore::open_in_memory(Some(embedder.clone())).unwrap();
+    store.index("notes", "one", "source text").await.unwrap();
+    let row = store.get("notes", "one").unwrap().unwrap();
+    assert_eq!(row.text, "source text");
+    assert_eq!(row.model, "hash-test/v1");
+    assert_eq!(embedder.calls.load(Ordering::SeqCst), 1);
+    assert!(store.get("other", "one").unwrap().is_none());
+    assert!(store.get("notes", "missing").unwrap().is_none());
+}
+
+#[tokio::test]
+async fn search_refuses_same_dimension_vectors_from_a_different_model() {
+    let store = store_with_hash(8);
+    store.index("notes", "one", "source text").await.unwrap();
+    let store = store.with_embedder(Arc::new(TaggedHashEmbedder {
+        inner: HashEmbedder::new(8),
+        model: "different-model".into(),
+    }));
+    assert!(matches!(
+        store.search(Some("notes"), "source", 5).await,
+        Err(SemanticError::ModelMismatch { .. })
+    ));
+}
+
+#[tokio::test]
+async fn typed_search_reports_corrupt_vectors_instead_of_claiming_no_matches() {
+    let store = store_with_hash(8);
+    store.index("notes", "one", "source text").await.unwrap();
+    store
+        .conn
+        .lock()
+        .unwrap()
+        .execute("UPDATE semantic_docs SET embedding = ?", params![vec![0u8]])
+        .unwrap();
+    assert!(matches!(
+        store.search(Some("notes"), "source", 5).await,
+        Err(SemanticError::DimMismatch { .. })
+    ));
+    assert!(store.get("notes", "one").is_err());
+}
+
 /// Variant that lets each test pin a custom model identifier.
 struct TaggedHashEmbedder {
     inner: HashEmbedder,

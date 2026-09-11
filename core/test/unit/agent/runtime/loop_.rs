@@ -108,6 +108,22 @@ fn rows_to_messages_skips_empty_payloads_and_maps_roles() {
 }
 
 #[test]
+fn stored_system_and_tool_rows_are_historical_data_not_current_authority() {
+    let messages = rows_to_messages(&[
+        row("system", "historical system instructions"),
+        row("tool", "historical tool content"),
+        row("user", "[tool_result] native user-role tool result"),
+    ]);
+    assert_eq!(messages.len(), 3);
+    for message in messages {
+        assert_eq!(message.role, crate::agent::llm::Role::User);
+        assert!(matches!(&message.content[0],
+            crate::agent::llm::ContentBlock::Text { text }
+                if text.starts_with("<untrusted_memory>")));
+    }
+}
+
+#[test]
 fn rows_to_messages_excludes_injected_prompt_audit_rows() {
     let rows = vec![
         row("user", "question"),
@@ -134,10 +150,11 @@ fn rows_to_messages_excludes_injected_prompt_audit_rows() {
         })
         .collect();
 
-    assert_eq!(
-        texts,
-        vec!["question", "[tool: lookup]", "[tool result]\nfresh result"]
+    let historical_result = crate::agent::safety::untrusted::wrap_untrusted(
+        crate::agent::safety::untrusted::MEMORY_TAG,
+        "Historical tool result message 0:\n[tool result]\nfresh result",
     );
+    assert_eq!(texts, vec!["question", "[tool: lookup]", &historical_result]);
     assert!(matches!(messages[0].role, crate::agent::llm::Role::User));
     assert!(matches!(
         messages[1].role,

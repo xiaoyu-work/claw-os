@@ -1,5 +1,33 @@
     use super::*;
 
+    #[test]
+    fn literal_search_handles_unicode_offsets_and_regex_characters() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = NotesStore::at(directory.path());
+        let text = format!("{}部署记录 (literal)", "界".repeat(150));
+        store.write("MEMORY.md", &text).unwrap();
+        store.write("other.md", "irrelevant").unwrap();
+        let found = store.search("部署", None, 5).unwrap();
+        assert_eq!(found.hits.len(), 1);
+        let hit = &found.hits[0];
+        assert_eq!(hit.page.offset, 70);
+        assert!(hit.page.content.contains("部署记录"));
+        assert_eq!(hit.page.revision, super::super::history::text_revision(&text));
+        assert_eq!(store.search("(", None, 5).unwrap().hits.len(), 1);
+        assert!(store.search("部署", Some("other.md"), 5).unwrap().hits.is_empty());
+        assert!(store.search("", None, 5).is_err());
+        assert!(store.search("x", Some("../escape.md"), 5).is_err());
+    }
+
+    #[test]
+    fn note_directories_are_not_silently_read_as_empty_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = NotesStore::at(directory.path());
+        fs::create_dir(directory.path().join("directory.md")).unwrap();
+        assert!(store.read("directory.md").is_err());
+        assert!(store.list().unwrap().is_empty());
+    }
+
     fn tmpdir(label: &str) -> PathBuf {
         let p = std::env::temp_dir().join(format!("cos-notes-{}-{}", label, std::process::id()));
         let _ = fs::remove_dir_all(&p);

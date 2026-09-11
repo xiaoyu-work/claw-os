@@ -401,8 +401,10 @@ CLI / web UI / bridge
   -> runtime::loop_
   -> restore the session's versioned content-addressed system prompt,
      or build + freeze it once with the metadata-only Skill catalogue
-  -> append due reminders / transient App data to the current request only
-  -> load persisted conversation and compress when the configured budget requires it
+  -> build and record a bounded, source-labelled request ContextPacket
+     (explicit App/Activity context, due reminders, pinned profile, source handles)
+  -> load persisted conversation; preserve the current request during compaction
+  -> check the complete input budget, including the exposed tool definitions
   -> Provider::chat or Provider::chat_stream
   -> StreamEvent accumulation
   -> user-visible stream projection (tool identity only; evidence markers hidden)
@@ -472,8 +474,55 @@ The projection in `core/src/agent/runtime/presentation.rs` affects display
 events only; complete tool inputs/results remain in the runtime trajectory,
 session memory, audit records, and evidence verifier. Canonical prompt snapshots
 live in content-addressed memory tables and are restored byte-for-byte across
-continuations. Dynamic due/App context is logged separately as injected audit
-data and never becomes user-authored history.
+continuations. Canonical version 4 does not freeze memory notes into system
+instructions. `context/packet.rs` and `runtime/context.rs` compose each request
+from explicit App/Activity context, due reminders, bounded `USER.md` and
+`[always]`-pinned note entries, and exposed memory-tool handles. The main model
+chooses additional memory, App, Skill and system reads through the ordinary
+guarded tool loop; there is no keyword router or pre-request retrieval model.
+
+Packets carry source revisions and are recorded exactly as injected audit data,
+with selection/omission metadata kept separately. Neither packet records nor
+compaction records are replayed as user-authored history or fed back into
+memory/Skill curation. A new request refreshes its profile even in an existing
+session. Historical system/tool rows replay as untrusted data, never new system
+authority. These changes do not implement cross-store erasure or replace the
+existing broker's per-operation authorization.
+
+`context/budget.rs` bounds the complete request by the configured input target
+and any known model/fallback windows after response headroom. Unknown models
+retain the configured input target without an invented window size. Compression
+preserves the exact current input and tool pairs, records the generated handoff,
+and retains history on summarization failure; a remaining oversized request
+returns an explicit context error rather than dropping constraints silently.
+The multilingual estimator is conservative, not a provider tokenizer.
+
+Memory tools support progressive reads: notes and individual conversation
+messages, App reports and semantic snapshots return character-based pages.
+Search results include bounded excerpts, scope/coverage information and read
+handles. `revision` binds pages to one content snapshot; nonzero offsets require
+it, and a changed source rejects the read instead of mixing versions.
+`source_complete` means this response contains the whole source, not merely its
+last page. Similarity/BM25 scores express retrieval relevance, never factual
+confidence; semantic index timestamps are not original event times.
+
+The main model must continue retrieving when a result is insufficient,
+off-topic, stale, conflicting or partial: change the query/scope, read the
+original source and surrounding context, or use an authorized current App/OS
+observation. It must not repeat an unchanged lookup that adds no evidence.
+Existing turn/token/authorization limits still apply; unresolved gaps are
+reported explicitly rather than filled with invented memories.
+
+`cos_memory search` searches literal text within notes selected by the model;
+it is not a pre-request task classifier. The terminal equivalent is
+`cos agent notes search <query> [name] [limit]`. `cos_recall show` expands one
+recorded message (`cos agent recall --message <id>` in the terminal).
+`cos_recall_semantic read` expands a namespace/key and supplies an original
+conversation/App read handle where that identity is known. Model-backed
+semantic searches reject incompatible models/dimensions or damaged vectors.
+App filters apply before the FTS limit, and bounded kind-filter scans disclose
+their incomplete coverage. `cos agent dev prompt show` previews the stable
+prefix and pinned request profile separately.
 
 The embedded Agent Web app uses this same queue rather than running an
 in-process model loop. Chat submits and streams durable tasks, Tasks lists and

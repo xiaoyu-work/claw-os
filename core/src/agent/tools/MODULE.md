@@ -31,7 +31,8 @@ which tool calls are exposed and executed.
 | `cos_apps_session/` | Streamed App sandbox, serialized per-call authority, safe retirement and result capture |
 | `app_receipts.rs` | Common report delivery and recording-only retry diagnostics for both App entrypoints |
 | `mcp/` | MCP attachment and proxy tools |
-| `memory.rs`, `recall.rs` | Agent memory tools |
+| `cos_proxy/memory.rs`, `cos_proxy/recall.rs` | Model-selected note/history search and versioned source reads |
+| `cos_proxy/recall_semantic.rs`, `cos_proxy/app_memory.rs` | Semantic/App evidence, bounded coverage and original-source handles |
 
 ## Dependencies
 
@@ -47,6 +48,13 @@ consume stable service/capability definitions. Model output and external tool
 results are untrusted; authority comes only from session and capability
 context. A bridge call is resolved before hooks, approval, and parallel
 planning; synthetic bridge names are never registered as executable tools.
+
+Memory tools return source identity, revision, partial-page and candidate
+coverage information. Follow-up pages require the source revision. Instructions
+tell the main model to keep retrieving/refining when evidence is insufficient
+or unreliable, to verify current facts at their App/OS source, and to report
+remaining uncertainty if permissions or execution budgets prevent resolution.
+No pre-model keyword router or mandatory extra planning call selects memories.
 
 ## Activity receipts
 

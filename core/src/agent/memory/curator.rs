@@ -14,8 +14,8 @@
 //!   4. Filter by minimum confidence + dedupe against what's already
 //!      in `MEMORY.md`.
 //!   5. Append survivors to a `## Curated facts (auto)` section in
-//!      `MEMORY.md`. New sessions pick them up in their frozen prompt snapshot;
-//!      the current session retains the source conversation already in context.
+//!      `MEMORY.md`. The model reads additional notes when needed; explicitly
+//!      pinned entries enter subsequent request profiles, not frozen prompts.
 //!   6. Update a curation log so we don't re-extract from already-
 //!      seen messages on the next run.
 //!
@@ -943,7 +943,7 @@ impl MemoryCurator {
         dry_run: bool,
     ) -> Result<CurationOutcome, CurationError> {
         let messages = db
-            .recent(session_id, self.config.max_messages)
+            .recent_replayable(session_id, self.config.max_messages)
             .map_err(|e| CurationError::Memory(e.to_string()))?;
 
         let last_id = messages.last().map(|m| m.id);

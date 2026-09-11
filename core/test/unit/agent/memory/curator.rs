@@ -441,6 +441,8 @@ other content
         db.record_message("sess-1", "assistant", "Noted.").unwrap();
         db.record_message("sess-1", "user", "I'm on Windows 11.")
             .unwrap();
+        db.record_injected("sess-1", "context_packet", "DO_NOT_LEARN_INJECTED_MEMORY")
+            .unwrap();
 
         let dir = std::env::temp_dir().join(format!(
             "cos-curator-e2e-{}-{}",
@@ -457,6 +459,7 @@ other content
         let curator = MemoryCurator::new(aux, notes.clone(), log_path.clone());
         let outcome = curator.curate_session(&db, "sess-1", false).await.unwrap();
 
+        assert_eq!(outcome.messages_examined, 3);
         assert_eq!(outcome.facts_proposed.len(), 2);
         assert_eq!(outcome.facts_added.len(), 2);
         assert!(!outcome.skipped_no_new_messages);
