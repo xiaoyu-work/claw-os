@@ -67,6 +67,10 @@ a rootfs except for the separately staged desktop package. Rootfs features
 install the resulting packages. Package dependencies express runtime layering
 without forcing synchronized versions or publication schedules.
 
+Agent explicitly depends on `libc-bin` for its fixed `/usr/bin/getent` egress
+resolver. Lookup uses the installed NSS configuration in a bounded, owned child;
+package installation does not replace hosts, resolver configuration or DNS policy.
+
 Migrated products live in `xiaoyu-work/clawos-app`, not a second local App
 implementation. `apps.lock.json` pins their published commit. Product-owned
 staging builds the Mail XPI and Python payload; OS packaging retains the native

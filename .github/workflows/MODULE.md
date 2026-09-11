@@ -23,6 +23,9 @@ dispatched and reusable test/publication pipelines.
   Private namespace cases cover startup-failure exit and deferred retirement
   reclamation as well as normal lifecycle. Agent packaging builds the PAM
   library for GNU/glibc even when core uses musl.
+- Run egress retirement cases against private listener queues and stalled DNS,
+  with synthetic NSS configuration confined to a private mount/network namespace.
+  Real lookup children must be reaped before the retirement acknowledgement.
 - Build shared Docker/WSL images per architecture.
 - Build and sign independent multi-architecture APT packages/repository.
 - Build the React/Vite web desktop as an independent Pages input.

@@ -555,6 +555,22 @@ package/version/hold state before executing its inverse. Package effects remain
 system-wide; this change is not per-user package isolation, App installation
 review, or release authorization.
 
+## Brokered egress DNS lifetime
+
+Agent explicitly depends on `libc-bin` for `/usr/bin/getent`. Its CONNECT
+broker runs system NSS lookup in an owned process with a five-second query
+deadline, bounded output and at most 64 distinct TCP addresses. No new DNS
+server, App environment setting, SDK wire change or capability grant is needed.
+Installed hosts/NSS/resolver configuration is not rewritten.
+
+Endpoint retirement cancels and reaps a pending lookup rather than leaving an
+uncancellable resolver thread behind. Checked retirement still reports an
+error if its connections have not exited. Existing exact host/port matching,
+all-address public-IP validation, pinned TCP connection and TLS hostname
+verification remain unchanged. Lookup failure/overflow has no alternate
+resolver or partial-result fallback. This change applies to worker egress,
+not the separate network-diagnostics provider.
+
 ## Root-managed desktop session lifetime
 
 These requirements describe the unpublished Root-managed display implementation,

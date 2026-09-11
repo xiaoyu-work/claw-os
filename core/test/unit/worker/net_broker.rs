@@ -81,12 +81,16 @@ fn public_addresses_are_allowed() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn a_name_resolving_to_a_blocked_address_is_refused() {
     // `localhost` is the smallest reliable rebinding stand-in: it
     // resolves, and every answer is loopback.
-    let error = resolve_public(&Endpoint::new("localhost", 443));
-    assert!(error.is_err(), "loopback name must not resolve to a tunnel");
+    let (downstream, _app) = std::os::unix::net::UnixStream::pair().unwrap();
+    let lifetime = Arc::new(lifetime::Lifetime::default());
+    let tunnel = lifetime.track(&downstream).unwrap();
+    let error = resolve_public(&Endpoint::new("localhost", 443), &tunnel).unwrap_err();
+    assert!(error.contains("blocked address"), "{error}");
 }
 
 #[cfg(unix)]
@@ -310,4 +314,12 @@ fn retiring_endpoint_cancels_a_pending_tcp_connect() {
     assert_eq!(endpoint.stats.inflight.load(Ordering::Acquire), 0);
     assert_eq!(app.read(&mut [0_u8]).unwrap(), 0);
     endpoint.retire(std::time::Instant::now()).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+mod dns {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/worker/net_broker/dns.rs"
+    ));
 }

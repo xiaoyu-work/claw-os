@@ -1509,6 +1509,13 @@ then reads host interface and route state or performs bounded DNS resolution
 and DNS-pinned TCP probes. TCP and staged diagnosis require an explicit port;
 there is no worker-network or direct-socket fallback.
 
+The separate [worker egress broker](core/src/worker/MODULE.md#networking)
+resolves authorized CONNECT names through fixed system `getent`/NSS lookup
+children. It owns their output, deadline and cancellation/reaping before a
+tunnel can finish. All returned TCP addresses still pass the public-address
+gate before the first pinned address is connected; the helper grants no
+direct-worker network access and is not a second DNS server.
+
 Cross-App workflows belong to the built-in system Agent, never to Apps calling
 Apps. Apps may use gated AI, controlled system services, and shared libraries.
 App processes and App-owned agents cannot discover or invoke App services,

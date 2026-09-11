@@ -31,7 +31,7 @@
 //! socket to be created unless egress was brokered.
 
 use std::io::{Read, Write};
-use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
+use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -41,7 +41,10 @@ use super::policy::Endpoint;
 
 #[cfg(unix)]
 mod lifetime;
+#[cfg(unix)]
+mod resolver;
 
+const RESOLVE_DEADLINE: Duration = Duration::from_secs(5);
 const CONNECT_DEADLINE: Duration = Duration::from_secs(20);
 const RELAY_IDLE_DEADLINE: Duration = Duration::from_secs(120);
 /// Ceiling on one tunnel, in each direction.
@@ -283,10 +286,13 @@ fn serve(
         let _ = stream.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\n");
         return false;
     };
-    let address = match resolve_public(&endpoint) {
+    let address = match resolve_public(&endpoint, tunnel) {
         Ok(address) => address,
-        Err(_) => {
-            let _ = stream.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\n");
+        Err(error) => {
+            tracing::debug!(%error, "worker egress name resolution failed or retired");
+            if !tunnel.stopping() {
+                let _ = stream.write_all(b"HTTP/1.1 403 Forbidden\r\n\r\n");
+            }
             return false;
         }
     };
@@ -390,11 +396,10 @@ pub fn match_endpoint(target: &str, allowed: &[Endpoint]) -> Option<Endpoint> {
 }
 
 /// Resolve the endpoint and pin one globally routable address.
-fn resolve_public(endpoint: &Endpoint) -> Result<SocketAddr, String> {
-    let addresses: Vec<SocketAddr> = (endpoint.host.as_str(), endpoint.port)
-        .to_socket_addrs()
-        .map_err(|error| format!("resolve {}: {error}", endpoint.host))?
-        .collect();
+#[cfg(unix)]
+fn resolve_public(endpoint: &Endpoint, tunnel: &lifetime::Tunnel) -> Result<SocketAddr, String> {
+    let addresses = resolver::resolve(endpoint, RESOLVE_DEADLINE, || tunnel.stopping())
+        .map_err(|error| format!("resolve {}: {error}", endpoint.host))?;
     if addresses.is_empty() {
         return Err(format!("{} did not resolve", endpoint.host));
     }

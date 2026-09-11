@@ -247,6 +247,18 @@ jobs:
               exec "$1" --exact worker::net_broker::tests::retiring_endpoint_cancels_a_pending_tcp_connect \
                 --ignored --nocapture --test-threads=1
             ' private-egress "$test_binary"
+          for dns_case in \
+            retiring_endpoint_cancels_a_pending_dns_lookup \
+            resolver_preserves_complete_system_nss_answers_and_public_address_policy \
+            a_pending_dns_lookup_keeps_its_deadline_and_reaps_the_resolver; do
+            sudo timeout 15 unshare --mount --net --fork \
+             bash --noprofile --norc -c '
+               set -euo pipefail
+               mount --make-rprivate /
+               ip link set lo up
+               exec "$1" --exact "$2" --ignored --nocapture --test-threads=1
+             ' private-egress-dns "$test_binary" "worker::net_broker::tests::dns::$dns_case"
+          done
 
       # Downgrade protection is exercised against real .deb archives,
       # real maintainer scripts, real dpkg/apt transactions and real

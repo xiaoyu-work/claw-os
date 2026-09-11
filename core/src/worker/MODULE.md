@@ -63,6 +63,7 @@ and a root-owned executed artifact.
 | `gui_transport/` | Mandatory inherited GUI syscall mediation and trusted runner bootstrap |
 | `broker.rs` | Per-launch narrow broker endpoint |
 | `net_broker.rs` | Per-launch HTTP `CONNECT` egress broker |
+| `net_broker/resolver.rs` | Fixed system NSS lookup process, bounded output/deadline, endpoint cancellation and checked child reaping |
 | `exec.rs` | Bounded run, deadline, descendant cleanup |
 | `runtime.rs` | Private per-launch runtime directory |
 | `audit.rs` | Typed, path-free and secret-free launch records |
@@ -267,14 +268,34 @@ connection attempt. Retirement can therefore interrupt an in-progress connect,
 not only an established relay. The wait keeps the existing connection deadline
 and checks cancellation at most every 50 ms; timeout/error releases the pending
 socket without retrying another connection. Exact endpoint and public-address
-checks remain unchanged. DNS resolution is still synchronous and is a separate
-cancellation limitation, not covered by this TCP guarantee.
+checks remain unchanged.
+
+Name resolution runs in one owned `/usr/bin/getent` process using `ahosts`,
+`--no-addrconfig` and `--no-idn`, not an uncancellable in-process
+`getaddrinfo` thread.
+It uses the system NSS/hosts/DNS configuration and includes both address
+families; only TCP records enter the unchanged all-address public-IP check.
+Literal IPs need no subprocess. Lookup has a five-second deadline, 64-KiB
+stdout/4-KiB stderr ceilings and at most 64 distinct TCP addresses. Overflow,
+malformed output and lookup failure are errors, never partial results or a
+different resolver fallback. Cancellation is checked at most every 50 ms and
+kills/reaps the lookup before its tunnel finishes; a checked endpoint retirement
+still fails if its connections have not actually exited. The helper also dies
+with its creating parent thread on Linux. Agent declares the `libc-bin` runtime
+dependency; no DNS server, direct-worker socket or new scope is granted.
 
 The ignored `worker::net_broker::tests::retiring_endpoint_cancels_a_pending_tcp_connect`
 case requires Root in a private network namespace with `93.184.216.34/32`
 assigned to loopback. It fills a real listener queue, observes SYN-SENT and
 requires checked endpoint retirement within one second. Never run that setup
 against the real network; CI creates and discards its own namespace.
+
+The three ignored `worker::net_broker::tests::dns::*` cases also require Root
+with private mount/network namespaces and loopback up. They bind synthetic
+NSS/hosts/resolver files only inside those namespaces, compare real system
+lookup results, refuse mixed public/private answers, and stall a real local
+DNS exchange. Retirement must finish within one second with the resolver reaped;
+an independent shorter query deadline must also terminate its process.
 
 Bundled consumers use App-owned `shared/python/_shared/safe_http.py` and
 `shared/python/gateway/_shared/safe_egress.py`, the `calendar`, `search` and
