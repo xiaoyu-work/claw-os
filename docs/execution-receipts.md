@@ -5,7 +5,8 @@ result**. It is not an execution grant, an OS mutation attestation, or proof
 that an Activity goal was achieved.
 
 The broker sets the source to `caller_reported`, derives the owner from peer
-credentials, and timestamps receipt storage. Callers cannot select an owner,
+credentials or an authenticated worker lease, and timestamps receipt storage.
+Callers cannot select an owner,
 claim `os_confirmed` provenance, provide trusted effect declarations, or use a
 receipt to complete an Activity.
 
@@ -51,6 +52,41 @@ still names the original reported output, and the preview remains
 caller-reported and possibly redacted/truncated. Malformed typed plan replies
 are not treated as trusted proposals.
 
+## Agent operation reports
+
+Activity-associated tasks enable a task-scoped recorder for the ordinary
+one-shot `cos_app_run` and compatibility `cos_app_<id>` gateways. Both use the
+same manifest-selected App runtime and capture its return value once.
+Schema inspection and calls without an Activity recorder preserve their
+existing behavior and do not create automatic receipts.
+
+Reports travel over the worker's authenticated job channel, not through a new
+broker-socket permission. The broker verifies the signed reporting route and
+live lease, takes the owner and task from that lease, and resolves the Activity
+from its own stored Job. The report contains no owner, Activity, session,
+grant, or confirmed-effect selector. Each worker may submit at most 128
+reports, each bounded to 16 KiB; the existing per-Activity ledger limit still
+applies.
+
+The same receipt ledger serves terminal, Web and native desktop. A metadata-only
+`activity_receipt` entry in the task stream links the report to the task that
+submitted it. It records reporting provenance, not proof that the task
+performed the claimed operation. Repeated recording requests can produce
+repeated task links while the receipt remains one immutable record.
+
+Recording failures preserve the original tool result and append an explicit
+error with the bounded report for a recording-only retry. They never rerun an
+App to repair receipt storage. Reports may still arrive during cancellation
+and do not reopen or complete the Activity.
+
+This is a **reporting-only** channel. It does not restore the App/MCP launch
+path currently unavailable to isolated `agentd` workers; those ordinary launch
+refusals remain errors and can be reported as indeterminate. Successful
+Agent-to-App execution still requires the controlled App-host integration
+described in [the worker boundary](../core/src/agentd/MODULE.md).
+Stateful App-session/MCP calls retain their existing audit path; this initial
+capture surface covers one-shot App operations.
+
 ## Read the same receipts everywhere
 
 ```bash
@@ -88,11 +124,12 @@ report data for the same owner and Activity returns the original receipt.
 Reusing the ID with different report data or a different Activity is a
 conflict. Recording retries never replay App effects.
 
-Receipts are opt-in for this explicit execution path and for explicit report
-submission. A client crash before it records a result may leave no receipt;
+Receipts are opt-in for explicit execution/report submission and automatic for
+associated one-shot Agent operations when the recorder is enabled.
+A client crash before it records a result may leave no receipt;
 the existing session and mutation journals remain the evidence for privileged
-operations. Automatic Agent-tool capture and OS-confirmed file-change evidence
-are separate integrations, not implied guarantees of caller reports.
+operations. Existing task recovery semantics are unchanged; caller reports
+are not an exactly-once execution or OS-confirmed mutation guarantee.
 
 ## Storage and compatibility
 

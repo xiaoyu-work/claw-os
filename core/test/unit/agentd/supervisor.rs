@@ -11,6 +11,7 @@ fn new_lease() -> Lease {
         worker_pid: std::process::id(),
         worker_start_time_ticks: crate::proc::read_start_time_ticks_pub(std::process::id()),
         deadline: Instant::now() + Duration::from_secs(60),
+        receipts_authorized: false,
     }
 }
 
@@ -63,6 +64,47 @@ fn a_worker_cannot_report_on_another_owners_task() {
     let error = accept(&signer, broker_pid, &mut lease, &stolen, true)
         .expect_err("a frame for another task must be refused");
     assert!(error.contains("different task"), "{error}");
+}
+
+#[test]
+fn receipt_reporting_requires_its_signed_route_and_the_exact_live_task() {
+    let mut lease = new_lease();
+    let (signer, hello) = signer_and_hello(&lease);
+    let report = crate::operations::receipts::capture(
+        uuid::Uuid::new_v4().to_string(),
+        "demo".into(),
+        "read".into(),
+        format!("sha256:{}", "a".repeat(64)),
+        Ok(Some("result".into())),
+    );
+    let frame = WorkerFrame::Receipt(Box::new(protocol::ReceiptRequest {
+        task_id: lease.task_id.clone(),
+        correlation_id: 1,
+        report: Box::new(report),
+    }));
+    assert!(accept(&signer, std::process::id(), &mut lease, &frame, false).is_err());
+    assert!(accept(&signer, std::process::id(), &mut lease, &frame, true).is_err());
+    accept(&signer, std::process::id(), &mut lease, &hello, false).unwrap();
+    accept(&signer, std::process::id(), &mut lease, &frame, true).unwrap();
+    let mut foreign = frame.clone();
+    if let WorkerFrame::Receipt(request) = &mut foreign {
+        request.task_id = "another-task".into();
+    }
+    assert!(accept(&signer, std::process::id(), &mut lease, &foreign, true).is_err());
+    let mut restricted = hello.clone();
+    if let WorkerFrame::Hello(hello) = &mut restricted {
+        let mut claims = hello.grant.claims.clone();
+        claims
+            .routes
+            .retain(|route| route != protocol::ROUTE_RECEIPT);
+        hello.grant = signer.issue(claims);
+    }
+    accept(&signer, std::process::id(), &mut lease, &restricted, false).unwrap();
+    assert!(!lease.receipts_authorized);
+    assert!(accept(&signer, std::process::id(), &mut lease, &frame, true).is_err());
+    accept(&signer, std::process::id(), &mut lease, &hello, false).unwrap();
+    lease.deadline = Instant::now() - Duration::from_secs(1);
+    assert!(accept(&signer, std::process::id(), &mut lease, &frame, true).is_err());
 }
 
 #[test]

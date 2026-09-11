@@ -46,10 +46,11 @@ use crate::agent::service::{FinishOutcome, JobExecution};
 use crate::audit_policy;
 use crate::caps::approval_gateway::{ApprovalGateway, PendingApproval};
 use crate::caps::{Scope, Verb};
+use crate::operations::reporting::{self, ReceiptRecorder};
 
 use super::protocol::{
     self, ApprovalAsk, ApprovalReply, Assignment, BrokerFrame, FrameReader, ProgressRecord,
-    RuntimeAuditRecord, WorkerFrame, WorkerHello, WorkerOutcome,
+    ReceiptReply, ReceiptRequest, RuntimeAuditRecord, WorkerFrame, WorkerHello, WorkerOutcome,
 };
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
@@ -58,6 +59,7 @@ const INTERRUPT_RETRY: Duration = Duration::from_millis(100);
 /// cover scheduling jitter. It also bounds what a stalled or killed
 /// supervisor can cost a tool call.
 const APPROVAL_TIMEOUT: Duration = Duration::from_secs(15);
+const RECEIPT_TIMEOUT: Duration = Duration::from_secs(15);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(60);
 const IO_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -236,24 +238,45 @@ impl LocalIdentity {
 // Channel I/O
 // ---------------------------------------------------------------------------
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ChannelReply {
+    Approval(ApprovalReply),
+    Receipt(ReceiptReply),
+    Refused(String),
+}
+
+impl From<ApprovalReply> for ChannelReply {
+    fn from(reply: ApprovalReply) -> Self {
+        Self::Approval(reply)
+    }
+}
+
+impl From<ReceiptReply> for ChannelReply {
+    fn from(reply: ReceiptReply) -> Self {
+        Self::Receipt(reply)
+    }
+}
+
 /// Shared handles the agent runtime uses to reach the channel.
 #[derive(Debug)]
 struct ChannelState {
     tx: UnboundedSender<WorkerFrame>,
     cancelled: Arc<AtomicBool>,
-    waiters: Mutex<HashMap<u64, SyncSender<ApprovalReply>>>,
+    waiters: Mutex<HashMap<u64, SyncSender<ChannelReply>>>,
     pending_approvals: Mutex<Vec<String>>,
     next_correlation: AtomicU64,
     asks_used: AtomicU32,
+    receipts_used: AtomicU32,
 }
 
 impl ChannelState {
-    fn register(&self, correlation_id: u64) -> Receiver<ApprovalReply> {
+    fn register(&self, correlation_id: u64) -> Result<Receiver<ChannelReply>, String> {
         let (tx, rx) = sync_channel(1);
-        if let Ok(mut waiters) = self.waiters.lock() {
-            waiters.insert(correlation_id, tx);
-        }
-        rx
+        self.waiters
+            .lock()
+            .map_err(|_| "agent channel reply registry is poisoned".to_string())?
+            .insert(correlation_id, tx);
+        Ok(rx)
     }
 
     fn forget(&self, correlation_id: u64) {
@@ -262,29 +285,27 @@ impl ChannelState {
         }
     }
 
-    fn deliver(&self, correlation_id: u64, reply: ApprovalReply) {
+    fn deliver(&self, correlation_id: u64, reply: impl Into<ChannelReply>) {
         let waiter = self
             .waiters
             .lock()
             .ok()
             .and_then(|mut waiters| waiters.remove(&correlation_id));
         if let Some(waiter) = waiter {
-            let _ = waiter.try_send(reply);
+            let _ = waiter.try_send(reply.into());
         }
     }
 
     /// Wake every outstanding waiter so a cancelled or disconnected task
     /// cannot leave a tool call blocked until its timeout.
     fn refuse_all(&self, message: &str) {
-        let drained: Vec<SyncSender<ApprovalReply>> = self
+        let drained: Vec<SyncSender<ChannelReply>> = self
             .waiters
             .lock()
             .map(|mut waiters| waiters.drain().map(|(_, tx)| tx).collect())
             .unwrap_or_default();
         for waiter in drained {
-            let _ = waiter.try_send(ApprovalReply::Refused {
-                message: message.to_string(),
-            });
+            let _ = waiter.try_send(ChannelReply::Refused(message.to_string()));
         }
     }
 
@@ -323,6 +344,7 @@ impl ChannelIo {
             pending_approvals: Mutex::new(Vec::new()),
             next_correlation: AtomicU64::new(1),
             asks_used: AtomicU32::new(0),
+            receipts_used: AtomicU32::new(0),
         });
         let (handshake_tx, handshake_rx) = sync_channel(1);
         let io_state = state.clone();
@@ -504,6 +526,14 @@ where
         // here makes that a named startup error instead.
         return Err("agentd grant does not allow permission mediation".to_string());
     }
+    if assignment.job.record_activity_receipts
+        && !assignment
+            .grant
+            .claims
+            .allows_route(protocol::ROUTE_RECEIPT)
+    {
+        return Err("agentd grant does not allow Activity receipt reporting".to_string());
+    }
     if assignment.job.owner_uid != identity.uid {
         return Err(format!(
             "assignment names owner uid {} but this worker runs as {}",
@@ -525,6 +555,12 @@ where
     loop {
         match frames.next_frame::<BrokerFrame>().await {
             Ok(Some(BrokerFrame::ApprovalReply {
+                correlation_id,
+                reply,
+            })) => {
+                state.deliver(correlation_id, reply);
+            }
+            Ok(Some(BrokerFrame::ReceiptReply {
                 correlation_id,
                 reply,
             })) => {
@@ -575,7 +611,7 @@ impl ChannelApprovalGateway {
             ));
         }
         let correlation_id = self.state.next_correlation.fetch_add(1, Ordering::SeqCst);
-        let waiter = self.state.register(correlation_id);
+        let waiter = self.state.register(correlation_id)?;
         if self
             .state
             .tx
@@ -590,7 +626,11 @@ impl ChannelApprovalGateway {
             return Err("agent worker lost its supervisor channel".to_string());
         }
         match waiter.recv_timeout(APPROVAL_TIMEOUT) {
-            Ok(reply) => Ok(reply),
+            Ok(ChannelReply::Approval(reply)) => Ok(reply),
+            Ok(ChannelReply::Refused(message)) => Err(message),
+            Ok(ChannelReply::Receipt(_)) => {
+                Err("supervisor answered a permission request with a receipt reply".to_string())
+            }
             Err(_) => {
                 self.state.forget(correlation_id);
                 Err("timed out waiting for clawd to mediate the permission".to_string())
@@ -631,6 +671,60 @@ impl ApprovalGateway for ChannelApprovalGateway {
     }
 }
 
+#[derive(Debug)]
+struct ChannelReceiptRecorder {
+    task_id: String,
+    state: Arc<ChannelState>,
+}
+
+impl ReceiptRecorder for ChannelReceiptRecorder {
+    fn record(&self, report: crate::activities::ReceiptReport) -> Result<String, String> {
+        protocol::validate_receipt_report(&report)?;
+        let expected = uuid::Uuid::parse_str(&report.id)
+            .map_err(|error| error.to_string())?
+            .to_string();
+        let used = self.state.receipts_used.fetch_add(1, Ordering::SeqCst);
+        if used >= protocol::MAX_RECEIPT_REPORTS {
+            return Err("agent task exceeded its receipt-reporting budget".to_string());
+        }
+        // Late reports remain useful during cancellation; this grants no work.
+        let correlation_id = self.state.next_correlation.fetch_add(1, Ordering::SeqCst);
+        let waiter = self.state.register(correlation_id)?;
+        if self
+            .state
+            .tx
+            .send(WorkerFrame::Receipt(Box::new(ReceiptRequest {
+                task_id: self.task_id.clone(),
+                correlation_id,
+                report: Box::new(report),
+            })))
+            .is_err()
+        {
+            self.state.forget(correlation_id);
+            return Err("agent worker lost its receipt-reporting channel".to_string());
+        }
+        match waiter.recv_timeout(RECEIPT_TIMEOUT) {
+            Ok(ChannelReply::Receipt(ReceiptReply::Recorded { receipt_id }))
+                if receipt_id == expected =>
+            {
+                Ok(receipt_id)
+            }
+            Ok(ChannelReply::Receipt(ReceiptReply::Recorded { .. })) => {
+                Err("supervisor acknowledged a different receipt report".to_string())
+            }
+            Ok(ChannelReply::Receipt(ReceiptReply::Refused { message }))
+            | Ok(ChannelReply::Refused(message)) => Err(message),
+            Ok(ChannelReply::Approval(_)) => {
+                Err("supervisor answered a receipt report with a permission reply".to_string())
+            }
+            Err(error) => {
+                self.state.forget(correlation_id);
+                Err(format!("receipt acknowledgement was unavailable: {error}"))
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Execution
 // ---------------------------------------------------------------------------
@@ -654,6 +748,14 @@ async fn execute(assignment: Assignment, state: Arc<ChannelState>) -> WorkerOutc
         task_id: task_id.clone(),
         tx: tx.clone(),
     });
+    let recorder: Option<Arc<dyn ReceiptRecorder>> = if job.record_activity_receipts {
+        Some(Arc::new(ChannelReceiptRecorder {
+            task_id: task_id.clone(),
+            state: state.clone(),
+        }))
+    } else {
+        None
+    };
 
     let home = std::path::PathBuf::from(&job.owner_home);
     let request = JobExecution {
@@ -667,8 +769,14 @@ async fn execute(assignment: Assignment, state: Arc<ChannelState>) -> WorkerOutc
     };
 
     let config = crate::config::load_for_home(&home);
-    let scoped =
-        crate::agent::service::execute_job_with_hooks(request, stream_sink, progress_sink, hooks);
+    // Keep the large runtime future out of each task-local wrapper's stack frame.
+    let scoped = Box::pin(crate::agent::service::execute_job_with_hooks(
+        request,
+        stream_sink,
+        progress_sink,
+        hooks,
+    ));
+    let scoped = reporting::with_recorder(recorder, scoped);
     let scoped = with_session(assignment.session, scoped);
     let scoped = crate::config::with_snapshot(config, scoped);
     // The same per-owner scoping the in-process worker installed, so

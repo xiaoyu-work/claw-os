@@ -27,6 +27,7 @@ which tool calls are exposed and executed.
 | `cos_proxy/` | Structured `cos` primitive tools |
 | `cos_proxy/oauth_login.rs` | Agent-initiated trusted OAuth browser flow |
 | `cos_apps.rs`, `cos_apps_session.rs` | Compact app catalog/run gateways and active session calls |
+| `cos_apps/invocation.rs` | Shared one-shot App execution, unchanged tool results, and optional task-scoped receipt capture |
 | `mcp/` | MCP attachment and proxy tools |
 | `memory.rs`, `recall.rs` | Agent memory tools |
 
@@ -44,6 +45,15 @@ consume stable service/capability definitions. Model output and external tool
 results are untrusted; authority comes only from session and capability
 context. A bridge call is resolved before hooks, approval, and parallel
 planning; synthetic bridge names are never registered as executable tools.
+
+## Activity receipts
+
+One-shot App gateways share the ordinary manifest-selected runtime and report
+results through `operations::reporting` when the worker installs an
+Activity-scoped recorder. Schema inspection creates no receipt. Recording
+failures keep the original result, explicitly report the failure and provide
+only a recording retry; they never repeat App execution or acquire authority.
+Stateful App-session/MCP calls retain their existing audit path.
 
 ## Tests
 

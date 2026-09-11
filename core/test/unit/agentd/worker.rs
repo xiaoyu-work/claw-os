@@ -68,9 +68,7 @@ async fn routed_curator_context_survives_detached_spawn() {
         .join("agent")
         .join("memory")
         .join("curation_log.json");
-    let notes = crate::agent::memory::notes::NotesStore::at(
-        owner_root.join("agent").join("notes"),
-    );
+    let notes = crate::agent::memory::notes::NotesStore::at(owner_root.join("agent").join("notes"));
     let mut config = crate::config::CosConfig::default();
     config.agent.provider = "openai".into();
     config.agent.model = "gpt-4o-mini".into();
@@ -111,7 +109,10 @@ async fn routed_curator_context_survives_detached_spawn() {
     assert_eq!(observed.0, owner_root.join("ai_budget.db"));
     assert_eq!(observed.1, owner_root.join("logs").join("ai.jsonl"));
     assert_eq!(observed.2, owner_root.join("agent").join("notes"));
-    assert_eq!(observed.3, home.join(".config").join("cos").join("config.json"));
+    assert_eq!(
+        observed.3,
+        home.join(".config").join("cos").join("config.json")
+    );
     assert_eq!(observed.4, Some(owner_uid));
     assert!(observed.5);
     assert_eq!(observed.6, curation_log);
@@ -133,6 +134,7 @@ fn gateway() -> (ChannelApprovalGateway, mpsc::UnboundedReceiver<WorkerFrame>) {
         pending_approvals: Mutex::new(Vec::new()),
         next_correlation: AtomicU64::new(1),
         asks_used: AtomicU32::new(0),
+        receipts_used: AtomicU32::new(0),
     });
     (
         ChannelApprovalGateway {
@@ -292,7 +294,7 @@ fn losing_the_channel_refuses_every_waiter() {
 fn a_reply_is_delivered_only_to_its_own_waiter() {
     let (gateway, _rx) = gateway();
     let state = gateway.state.clone();
-    let waiter = state.register(7);
+    let waiter = state.register(7).unwrap();
     // A reply correlated to a different ask must not satisfy this one,
     // so a replayed or mismatched frame cannot open an unrelated gate.
     state.deliver(8, ApprovalReply::Granted);
@@ -300,11 +302,161 @@ fn a_reply_is_delivered_only_to_its_own_waiter() {
     state.deliver(7, ApprovalReply::Granted);
     assert_eq!(
         waiter.recv_timeout(Duration::from_millis(50)),
-        Ok(ApprovalReply::Granted)
+        Ok(ChannelReply::Approval(ApprovalReply::Granted))
     );
     // Replaying the same correlation id finds no waiter at all.
     state.deliver(7, ApprovalReply::Granted);
     assert!(waiter.recv_timeout(Duration::from_millis(50)).is_err());
+}
+
+fn receipt() -> crate::activities::ReceiptReport {
+    crate::operations::receipts::capture(
+        uuid::Uuid::new_v4().to_string(),
+        "demo".into(),
+        "read".into(),
+        format!("sha256:{}", "a".repeat(64)),
+        Ok(Some("reported result".into())),
+    )
+}
+
+fn receipt_recorder() -> (ChannelReceiptRecorder, mpsc::UnboundedReceiver<WorkerFrame>) {
+    let (gateway, rx) = gateway();
+    (
+        ChannelReceiptRecorder {
+            task_id: gateway.task_id,
+            state: gateway.state,
+        },
+        rx,
+    )
+}
+
+fn next_receipt(rx: &mut mpsc::UnboundedReceiver<WorkerFrame>) -> ReceiptRequest {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let frame = runtime.block_on(async {
+        tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .unwrap()
+            .unwrap()
+    });
+    let WorkerFrame::Receipt(request) = frame else {
+        panic!("expected a receipt report")
+    };
+    *request
+}
+
+#[test]
+fn a_receipt_crosses_the_control_socket_and_matches_only_its_own_acknowledgement() {
+    use std::io::Write;
+
+    let (recorder, mut rx) = receipt_recorder();
+    let state = recorder.state.clone();
+    let report = receipt();
+    let expected_id = report.id.clone();
+    let waiter = std::thread::spawn(move || recorder.record(report));
+    let request = next_receipt(&mut rx);
+    assert_eq!(request.task_id, "task-a");
+    assert_eq!(request.report.id, expected_id);
+    state.deliver(
+        request.correlation_id + 1,
+        ReceiptReply::Recorded {
+            receipt_id: expected_id.clone(),
+        },
+    );
+    assert!(state
+        .waiters
+        .lock()
+        .unwrap()
+        .contains_key(&request.correlation_id));
+    let reply = protocol::encode(&BrokerFrame::ReceiptReply {
+        correlation_id: request.correlation_id,
+        reply: ReceiptReply::Recorded {
+            receipt_id: expected_id.clone(),
+        },
+    })
+    .unwrap();
+    let (mut sender, receiver) = std::os::unix::net::UnixStream::pair().unwrap();
+    receiver.set_nonblocking(true).unwrap();
+    sender.write_all(reply.as_bytes()).unwrap();
+    drop(sender);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let socket = tokio::net::UnixStream::from_std(receiver).unwrap();
+        watch_control(
+            FrameReader::new(BufReader::new(socket)),
+            "task-a".into(),
+            state.clone(),
+        )
+        .await;
+    });
+    assert_eq!(waiter.join().unwrap(), Ok(expected_id));
+    assert!(state.waiters.lock().unwrap().is_empty());
+}
+
+#[test]
+fn receipt_refusals_wrong_ids_and_permission_replies_never_acknowledge_storage() {
+    for reply in [
+        ChannelReply::Receipt(ReceiptReply::Recorded {
+            receipt_id: uuid::Uuid::new_v4().to_string(),
+        }),
+        ChannelReply::Receipt(ReceiptReply::Refused {
+            message: "store unavailable".into(),
+        }),
+        ChannelReply::Approval(ApprovalReply::Granted),
+    ] {
+        let (recorder, mut rx) = receipt_recorder();
+        let state = recorder.state.clone();
+        let waiter = std::thread::spawn(move || recorder.record(receipt()));
+        let request = next_receipt(&mut rx);
+        state.deliver(request.correlation_id, reply);
+        assert!(waiter.join().unwrap().is_err());
+        assert!(state.waiters.lock().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn receipt_reporting_is_bounded_and_disconnects_release_waiters() {
+    let (recorder, mut rx) = receipt_recorder();
+    recorder
+        .state
+        .receipts_used
+        .store(protocol::MAX_RECEIPT_REPORTS, Ordering::SeqCst);
+    assert!(recorder.record(receipt()).unwrap_err().contains("budget"));
+    assert!(rx.try_recv().is_err());
+    let (recorder, mut rx) = receipt_recorder();
+    let state = recorder.state.clone();
+    let waiter = std::thread::spawn(move || recorder.record(receipt()));
+    let _request = next_receipt(&mut rx);
+    state.refuse_all("channel closed after the invocation");
+    assert!(waiter
+        .join()
+        .unwrap()
+        .unwrap_err()
+        .contains("channel closed"));
+    assert!(state.waiters.lock().unwrap().is_empty());
+}
+
+#[test]
+fn cancellation_does_not_discard_a_late_report_or_create_an_approval() {
+    let (recorder, mut rx) = receipt_recorder();
+    let state = recorder.state.clone();
+    state.cancelled.store(true, Ordering::SeqCst);
+    let waiter = std::thread::spawn(move || recorder.record(receipt()));
+    let request = next_receipt(&mut rx);
+    state.deliver(
+        request.correlation_id,
+        ReceiptReply::Recorded {
+            receipt_id: request.report.id.clone(),
+        },
+    );
+    assert_eq!(waiter.join().unwrap(), Ok(request.report.id));
+    assert!(state.pending_approvals().is_empty());
+    assert_eq!(state.asks_used.load(Ordering::SeqCst), 0);
 }
 
 #[test]

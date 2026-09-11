@@ -13,6 +13,7 @@ grant, a filesystem diff, or proof that an effect will occur.
 | `mod.rs` | Verified manifest preview, bounded input binding, and requested target projection |
 | `cli.rs` | Thin terminal client of the shared broker |
 | `receipts.rs` | Bounded, redacted capture of App return values as reports, not verified effects |
+| `reporting.rs` | Task-scoped recorder definition; delivery is supplied by the worker, never a second store or execution path |
 | `../router/operation_commands.rs` | Explicit normal App execution and receipt-recording orchestration |
 | `../caps/manifest/effects.rs` | Optional effect declaration vocabulary and validation |
 | `../clawd/operation_previews.rs` | Authenticated general and owner-scoped Activity adapters |

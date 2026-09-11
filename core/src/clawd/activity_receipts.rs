@@ -2,7 +2,9 @@
 
 use serde_json::{json, Value};
 
-use crate::activities::{self, ActivityService, ReceiptDeclaration, ReceiptEffect, ReceiptReport};
+use crate::activities::{
+    self, ActivityReceipt, ActivityService, ReceiptDeclaration, ReceiptEffect, ReceiptReport,
+};
 use crate::operations::receipts::{diagnostic, sanitize};
 
 use super::activities::{decode, encode, owner, service_error};
@@ -36,21 +38,30 @@ pub fn list(params: Value, client: &ClientIdentity) -> Result<Value, BrokerError
 pub fn record(params: Value, client: &ClientIdentity) -> Result<Value, BrokerError> {
     let owner = owner(client)?;
     let request: body::ActivityReceiptRecord = decode(params)?;
-    activities::validate_id(request.id.as_str()).map_err(service_error)?;
+    encode(record_for_owner(owner, request.id.as_str(), request.report.0)?)
+}
+
+/// The caller supplies an authenticated owner and an already-owned association,
+/// never an identity copied from a model-authored report.
+pub(crate) fn record_for_owner(
+    owner: u32,
+    activity_id: &str,
+    mut report: ReceiptReport,
+) -> Result<ActivityReceipt, BrokerError> {
+    activities::validate_id(activity_id).map_err(service_error)?;
+    report.validate().map_err(service_error)?;
     let service = activities::open_default().map_err(service_error)?;
     let activity = service
-        .get(owner, request.id.as_str())
+        .get(owner, activity_id)
         .map_err(service_error)?;
-    let mut report = request.report.0;
     sanitize(&mut report);
     let (declaration, declaration_error) = match declaration(&report) {
         Ok(declaration) => (Some(declaration), None),
         Err(error) => (None, Some(diagnostic(&error))),
     };
-    let receipt = service
+    service
         .record_receipt(owner, &activity.id, report, declaration, declaration_error)
-        .map_err(service_error)?;
-    encode(receipt)
+        .map_err(service_error)
 }
 
 fn declaration(report: &ReceiptReport) -> Result<ReceiptDeclaration, String> {

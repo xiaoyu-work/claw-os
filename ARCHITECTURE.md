@@ -344,6 +344,27 @@ Session/mutation journals remain the source for OS-observed privileged changes;
 caller reports are not promoted into that evidence. See
 [`docs/execution-receipts.md`](docs/execution-receipts.md).
 
+### Agent operation reporting
+
+Ordinary one-shot App gateways share `cos_apps/invocation.rs`, which invokes
+the manifest-selected runtime once and captures its result. For an
+Activity-associated task, `operations::reporting` supplies a task-local
+recorder backed by the authenticated worker channel.
+
+Worker protocol v5 carries a bounded report and a correlated acknowledgement.
+The supervisor checks the signed reporting route and live task lease, derives
+the owner and Activity from the lease and its own Job, then calls the same
+receipt service used by direct clients. A metadata-only task-stream link
+records which task submitted the report. Receipt source remains
+`caller_reported`; neither this link nor authenticated declaration metadata
+attests to execution.
+
+This path owns no new store, App launcher, permission or UI-specific lifecycle.
+Recording errors preserve the original tool result and expose a report-only
+retry, never repeat the operation. Unassociated tasks and schema inspection
+do not enable automatic capture. The existing isolated-worker App/MCP launch
+limitation remains; reporting does not bypass it.
+
 ### Staged file changes
 
 The Files App prepares bounded UTF-8 proposals in its own private data

@@ -63,7 +63,11 @@ fn the_model_and_tool_runtime_is_refused_inside_the_broker() {
         r#"{"id":"guarded","version":"1","name":"Guarded","operations":{}}"#,
     )
     .unwrap();
-    std::fs::write(dir.join("main.py"), "def run(command, args):\n    return {}\n").unwrap();
+    std::fs::write(
+        dir.join("main.py"),
+        "def run(command, args):\n    return {}\n",
+    )
+    .unwrap();
     let launch = crate::test_env::app_launch(&dir, "guarded");
 
     let app = crate::bridge::run_python_app(
@@ -83,4 +87,38 @@ fn the_model_and_tool_runtime_is_refused_inside_the_broker() {
         "the refusal should name the worker: {message}"
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn every_manifest_selected_app_runtime_is_refused_inside_the_broker() {
+    let _guard = BrokerFlagGuard::engaged();
+    for (runtime, entry) in [
+        ("python", "main.py"),
+        ("node", "main.js"),
+        ("shell", "main.sh"),
+        ("binary", "main"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("app.json"),
+            serde_json::json!({
+                "id":"guarded","version":"1","name":"Guarded","runtime":runtime,
+                "entry":entry,"operations":{"run":{"label":"Run"}}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        std::fs::write(dir.path().join(entry), "must never execute\n").unwrap();
+        let launch = crate::test_env::app_launch(dir.path(), "guarded");
+        let error = crate::bridge::run_app(
+            &launch,
+            "run",
+            &[],
+            "/nonexistent-data",
+            "/nonexistent-apps",
+        )
+        .unwrap_err();
+        assert!(error.contains("clawd broker"), "{runtime}: {error}");
+        assert!(error.contains("claw-agentd"), "{runtime}: {error}");
+    }
 }

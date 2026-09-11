@@ -110,6 +110,12 @@ compatible Agent package, or restore a consistent pre-upgrade backup through
 the operator's recovery process. Receipt records remain caller-reported data,
 never restored authorization.
 
+Automatic one-shot Agent receipt reporting uses worker protocol v5.
+`clawd` and `claw-agentd` must be upgraded together; a mixed pair fails closed
+at assignment rather than dropping reports or inventing compatibility.
+Activity wire schema 1 and database schema 2 remain unchanged by this reporting
+channel. It does not grant isolated workers a new App/MCP launch path.
+
 ### App data moves into per-App directories
 
 From the release that isolates App workers, an App no longer receives the

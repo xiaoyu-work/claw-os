@@ -39,7 +39,8 @@ fn the_worker_channel_exposes_only_job_lifecycle_routes() {
             ROUTE_AUDIT,
             ROUTE_HEARTBEAT,
             ROUTE_RESULT,
-            ROUTE_APPROVAL
+            ROUTE_APPROVAL,
+            ROUTE_RECEIPT
         ]
     );
 }
@@ -66,6 +67,48 @@ fn permission_mediation_is_the_only_consent_surface_and_carries_no_identity() {
         );
     }
     assert_eq!(ask.verb(), "fs.read");
+}
+
+#[test]
+fn receipt_requests_are_closed_reports_not_identity_or_authority_requests() {
+    let report = crate::operations::receipts::capture(
+        uuid::Uuid::new_v4().to_string(),
+        "demo".into(),
+        "read".into(),
+        format!("sha256:{}", "a".repeat(64)),
+        Ok(Some("reported result".into())),
+    );
+    let frame = WorkerFrame::Receipt(Box::new(ReceiptRequest {
+        task_id: "task-a".into(),
+        correlation_id: 7,
+        report: Box::new(report),
+    }));
+    assert_eq!(frame.route(), ROUTE_RECEIPT);
+    assert_eq!(frame.task_id(), Some("task-a"));
+    let value = serde_json::to_value(&frame).unwrap();
+    for field in [
+        "owner_uid",
+        "activity_id",
+        "session_id",
+        "caps",
+        "source",
+        "effects_confirmed",
+    ] {
+        assert!(value["report"].get(field).is_none());
+        let mut forged = value.clone();
+        forged["report"][field] = serde_json::json!("forged");
+        assert!(serde_json::from_value::<WorkerFrame>(forged).is_err());
+        let mut forged = value.clone();
+        forged[field] = serde_json::json!("forged");
+        assert!(serde_json::from_value::<WorkerFrame>(forged).is_err());
+    }
+    let mut oversized = value;
+    oversized["report"]["result"]["preview"] = serde_json::json!("x".repeat(2049));
+    assert!(serde_json::from_value::<WorkerFrame>(oversized).is_err());
+    assert!(serde_json::from_value::<ReceiptReply>(serde_json::json!({
+        "status":"recorded","receipt_id":"id","caps":[]
+    }))
+    .is_err());
 }
 
 #[test]

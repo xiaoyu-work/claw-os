@@ -2105,6 +2105,7 @@ pub fn run_app_with_stdin(
     apps_dir: &str,
     stdin_data: Option<Vec<u8>>,
 ) -> Result<Option<String>, String> {
+    crate::agentd::guard::ensure_agent_runtime_allowed("App execution")?;
     // Runtime and entry come from the verified snapshot's manifest,
     // parsed once. There is no path re-read here and no unsigned
     // fallback: a package that did not verify never reaches this

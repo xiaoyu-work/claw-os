@@ -31,8 +31,8 @@
 //!
 //! The channel itself is a private `socketpair(2)` created before the
 //! fork and handed to the child as fd 3. It carries the job lifecycle
-//! routes in [`protocol::WORKER_ROUTES`] plus one narrow permission
-//! mediation route — there is no admin, App-session, scheduler or
+//! routes in [`protocol::WORKER_ROUTES`], bounded Activity reporting and
+//! narrow permission mediation — there is no admin, App-session, scheduler or
 //! permission-decision route on it, and `/run/cos/clawd.sock` stays
 //! `0660 root:sudo` with the worker's supplementary groups cleared, so
 //! the worker cannot reach the broker socket at all. Even a leaked fd
@@ -79,6 +79,8 @@
 pub mod grant;
 pub mod guard;
 pub mod protocol;
+#[cfg(unix)]
+mod receipts;
 #[cfg(unix)]
 pub mod spawn;
 #[cfg(unix)]

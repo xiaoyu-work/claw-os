@@ -323,6 +323,7 @@ struct Lease {
     worker_pid: u32,
     worker_start_time_ticks: Option<u64>,
     deadline: Instant,
+    receipts_authorized: bool,
 }
 
 async fn supervise(
@@ -422,6 +423,7 @@ async fn supervise(
         worker_pid: pid,
         worker_start_time_ticks: start_time_ticks,
         deadline: Instant::now() + config.lease,
+        receipts_authorized: false,
     };
 
     let outcome = pump(
@@ -514,6 +516,7 @@ async fn pump(
             use_memory: job.use_memory,
             owner_uid: lease.owner_uid,
             owner_home: job.owner_home.clone().unwrap_or_default(),
+            record_activity_receipts: job.activity_id.is_some(),
         },
         session,
     };
@@ -526,6 +529,7 @@ async fn pump(
     let mut cancel_sent = false;
     let mut cancelled_at: Option<Instant> = None;
     let mut approvals_used: u32 = 0;
+    let mut receipts_used: u32 = 0;
     let mut last_progress = Instant::now();
     let mut ticker = tokio::time::interval(PUMP_TICK);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -605,6 +609,27 @@ async fn pump(
                         }
                         WorkerFrame::Heartbeat { .. } => {
                             lease.deadline = Instant::now() + config.lease;
+                        }
+                        WorkerFrame::Receipt(request) => {
+                            let reply = super::receipts::record(
+                                &mut receipts_used,
+                                store,
+                                lease.owner_uid,
+                                &lease.task_id,
+                                job,
+                                *request.report,
+                            );
+                            if let Err(error) = send(
+                                &mut writer,
+                                &BrokerFrame::ReceiptReply {
+                                    correlation_id: request.correlation_id,
+                                    reply,
+                                },
+                            ).await {
+                                return TaskOutcome::Failed(format!(
+                                    "could not acknowledge the Activity receipt; do not repeat the App operation: {error}"
+                                ));
+                            }
                         }
                         WorkerFrame::Result { outcome, .. } => {
                             return TaskOutcome::Reported(outcome);
@@ -736,11 +761,17 @@ fn accept(
     if frame.task_id() != Some(lease.task_id.as_str()) {
         return Err("frame is addressed to a different task".to_string());
     }
+    if matches!(frame, WorkerFrame::Receipt(_)) && !lease.receipts_authorized {
+        return Err("worker grant does not allow receipt reporting".to_string());
+    }
     if Instant::now() > lease.deadline {
         return Err("worker lease has expired".to_string());
     }
     if !crate::proc::is_pid_alive(lease.worker_pid) {
         return Err("worker process is gone".to_string());
+    }
+    if let WorkerFrame::Hello(hello) = frame {
+        lease.receipts_authorized = hello.grant.claims.allows_route(protocol::ROUTE_RECEIPT);
     }
     Ok(())
 }

@@ -26,6 +26,7 @@ supervises, but does not execute it.
 | `spawn.rs` | `socketpair` + `pre_exec` privilege drop, fd/env isolation, session/process-group isolation, worker image checks |
 | `grant.rs` | HMAC-signed job grant, its bindings, and both verification directions |
 | `protocol.rs` | Frames, route allowlist, protocol version, bounded framing, permission-mediation types |
+| `receipts.rs` | Reporting-only Activity receipt association from the authenticated lease and broker-owned Job |
 | `supervisor.rs` | Broker-side claim → spawn → lease → pump → finish, permission mediation, reconciliation |
 | `worker.rs` | Worker-side handshake, dedicated channel thread, sinks, audit forwarding, approval gateway, cancellation |
 
@@ -96,6 +97,26 @@ immediate filing response; keeping the reader off the agent runtime's threads
 is what stops that from deadlocking against streaming or tool execution. Human
 wait time does not hold a worker: the queue persists the task under `waiting/`,
 and the supervisor requeues it after approval.
+
+## Activity receipt reporting
+
+Worker protocol v5 adds a reporting-only request/reply. The broker marks
+Activity-associated assignments for capture; an enabled assignment requires
+the signed `receipt` route. The supervisor retains that handshake decision
+and checks the route, task and live lease before recording.
+
+The worker sends only a closed, bounded `ReceiptReport` and correlation ID
+under its existing task identity. The broker selects owner/Activity from its
+lease and Job, uses the shared Activity receipt service, and records a
+metadata-only task-stream link. Source remains `caller_reported`, never an
+OS mutation attestation. There are at most 128 reports per worker and 16 KiB
+per report; acknowledgements are correlated and cannot satisfy permission
+waiters. Channel loss releases waiting calls explicitly.
+
+Reporting failures never retry an App invocation. Late reports may arrive
+during cancellation, and receipt persistence does not change Activity state.
+This route provides no App launch, broker proxy, capability, or approval
+decision. The App/MCP launch limitation below is unchanged.
 
 ## Residual Same-UID Boundary
 
