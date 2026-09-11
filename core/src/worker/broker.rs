@@ -279,9 +279,16 @@ fn serve(
     }
 
     if name == POLICY_CHECK_COMMAND {
-        let result = policy_check(authority, envelope.get("params").unwrap_or(&Value::Null));
-        respond_ok(&mut stream, &id, result);
-        return Outcome::Served;
+        return match policy_check(authority, envelope.get("params").unwrap_or(&Value::Null)) {
+            Ok(result) => {
+                respond_ok(&mut stream, &id, result);
+                Outcome::Served
+            }
+            Err(error) => {
+                respond_denied(&mut stream, &id, &error);
+                Outcome::Denied
+            }
+        };
     }
 
     if name == MEMORY_CALL_COMMAND {
@@ -452,7 +459,7 @@ fn admit(command: Command, authority: &BrokerAuthority) -> Result<(), String> {
             command.as_str()
         ));
     }
-    let caps = authority.live_caps();
+    let caps = authority.live_caps()?;
     let justified = verbs.iter().any(|verb| {
         caps.iter()
             .any(|cap| cap.verb == *verb || cap.covers(&Cap::new(*verb, Scope::Wild)))
@@ -472,28 +479,28 @@ fn admit(command: Command, authority: &BrokerAuthority) -> Result<(), String> {
 /// say, read from the same routed registry row `clawd` and
 /// `caps::require` read, so a transient capability appears and
 /// disappears with the call it was granted for.
-fn policy_check(authority: &BrokerAuthority, params: &Value) -> Value {
+fn policy_check(authority: &BrokerAuthority, params: &Value) -> Result<Value, String> {
     let verb = params.get("verb").and_then(Value::as_str).unwrap_or("");
     let Some(verb) = Verb::parse(verb) else {
-        return serde_json::json!({
+        return Ok(serde_json::json!({
             "decision": "deny",
             "reason": "unknown-verb",
-        });
+        }));
     };
     let scope: Scope = params
         .get("scope")
         .and_then(|value| serde_json::from_value(value.clone()).ok())
         .unwrap_or(Scope::Wild);
     let cap = Cap::new(verb, scope.clone());
-    let allowed = authority.live_caps().covers(&cap);
-    serde_json::json!({
+    let allowed = authority.live_caps()?.covers(&cap);
+    Ok(serde_json::json!({
         "decision": if allowed { "allow" } else { "deny" },
         "verb": verb.as_str(),
         "scope": scope,
         "session": authority.session_id,
         "app": authority.app_id,
         "reason": if allowed { Value::Null } else { Value::String("not-granted".into()) },
-    })
+    }))
 }
 
 /// Run one App→agent-memory call on the worker's behalf.
@@ -535,7 +542,7 @@ fn memory_call(authority: &BrokerAuthority, params: &Value) -> Result<Value, Str
         args.push(text.to_string());
     }
     crate::mem_bridge::run_with(
-        &crate::mem_bridge::LaunchAuthority::new(authority.live_caps()),
+        &crate::mem_bridge::LaunchAuthority::new(authority.live_caps()?),
         command,
         &args,
     )
@@ -755,10 +762,14 @@ fn sandbox_exchange(command: &str, params: Value) -> Result<Value, String> {
 #[cfg(unix)]
 fn check_sandbox_response(request: &Value, response: &Value) -> Result<(), String> {
     if response.get("v").and_then(Value::as_u64) != Some(u64::from(PROTOCOL_VERSION)) {
-        return Err("worker sandbox authority answered with a different protocol version".to_string());
+        return Err(
+            "worker sandbox authority answered with a different protocol version".to_string(),
+        );
     }
     if response.get("id") != request.get("id") {
-        return Err("worker sandbox authority response did not correlate with the request".to_string());
+        return Err(
+            "worker sandbox authority response did not correlate with the request".to_string(),
+        );
     }
     Ok(())
 }

@@ -106,6 +106,14 @@ where the protected runtime record is owned, instead of giving the launcher
 write access to that record or its lock. The ordinary socket-backed launcher
 path remains unchanged outside this gateway.
 
+For App-owned persistent sessions, the same provider uses streamed stdio and
+server limits. Only package/runtime/private App data are mounted for the
+session lifetime; per-call capabilities do not create standing host-file or
+network access. The task host freshly authorizes mediated calls and rotates
+their grants. Its endpoint threads obtain current capabilities from root,
+including grant expiry and process binding, without depending on task-local
+owner paths that a newly spawned thread does not inherit.
+
 Granted paths are mounted at the *same absolute path* they have on the
 host, so the argument the App receives, the scope the authority granted,
 and the path inside the sandbox are one string.
@@ -208,7 +216,8 @@ per-launch broker endpoint bind-mounted at that path, which:
 
 - accepts only connections whose `SO_PEERCRED` uid is the worker's;
 - answers `worker.policy.check` itself from the launch's **live**
-  capability set — read from the routed registry row at call time, so a
+  capability set — a controlled task host queries the root grant; ordinary
+  launchers read their routed registry row. Thus a
   transient capability set for one MCP tool call appears and disappears
   with that call — which is what `cos __policy check`, and therefore
   `cos_runtime.policy`, needs inside the sandbox;

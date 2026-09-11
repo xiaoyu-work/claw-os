@@ -126,8 +126,54 @@ fn original_invocations_are_bounded_data_without_authority_selectors() {
         forged["params"][field] = json!(0);
         assert!(serde_json::from_value::<AppHostCall>(forged).is_err());
     }
+
     let mut oversized = value;
     oversized["params"]["args"] = json!(["x".repeat(4097)]);
     let call: AppHostCall = serde_json::from_value(oversized).unwrap();
     assert!(call.validate().is_err());
+}
+
+#[test]
+fn stateful_sessions_require_their_own_retained_context_and_explicit_call_controls() {
+    let request = Request::build(
+        Command::AppSessionRegister,
+        json!({"app_id":"demo","kind":"mcp"}),
+    );
+    assert!(AppHostCall::from_request(&request, None).is_err());
+    let call = AppHostCall::from_request(&request, Some(invocation_id())).unwrap();
+    call.validate().unwrap();
+    assert_eq!(call.params().unwrap(), request.params);
+    let begin = AppHostCall::BeginSession(crate::operations::invocation::AppSessionInvocation {
+        app_id: "demo".into(),
+        package_digest: digest(),
+    });
+    begin.validate().unwrap();
+    let mut forged = serde_json::to_value(begin).unwrap();
+    forged["params"]["caps"] = json!([]);
+    assert!(serde_json::from_value::<AppHostCall>(forged).is_err());
+    let params = json!({
+        "session_id":"app-demo","handle":"task-local-alias",
+        "call":{"tool":"demo.read","args":{"path":"relative.txt"}},
+    });
+    let request = Request::build(Command::AppSessionSetTransient, params.clone());
+    assert!(AppHostCall::from_request(&request, None).is_err());
+    let start = AppHostCall::StartCall(serde_json::from_value(params.clone()).unwrap());
+    start.validate().unwrap();
+    assert_eq!(start.session_id(), Some("app-demo"));
+    assert_eq!(start.command(), Some(Command::AppSessionSetTransient));
+    let end = |params| {
+        AppHostCall::EndCall(SessionCallEnd {
+            request: serde_json::from_value(params).unwrap(),
+            call_id: crate::clawd::wire::bounded::Token::parse(&invocation_id()).unwrap(),
+        })
+    };
+    assert!(end(params.clone()).validate().is_err());
+    let mut clear = params;
+    clear["call"] = Value::Null;
+    end(clear.clone()).validate().unwrap();
+    assert!(
+        AppHostCall::StartCall(serde_json::from_value(clear).unwrap())
+            .validate()
+            .is_err()
+    );
 }

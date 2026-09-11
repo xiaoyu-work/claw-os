@@ -12,7 +12,7 @@ use crate::clawd::client_identity::ClientIdentity;
 use crate::clawd::protocol::{BrokerError, BrokerErrorKind, Request, Response};
 use crate::clawd::state::DaemonState;
 use crate::clawd::transport::limits::Admission;
-use crate::operations::invocation::{AppInvocation, PreparedInvocation};
+use crate::operations::invocation::{AppInvocation, AppSessionInvocation, PreparedInvocation};
 use crate::proc::SessionInfo;
 use crate::provenance::runtime::{InstanceClass, PackageRef, ProcessIdentity};
 use crate::provenance::VerifiedPackage;
@@ -21,14 +21,24 @@ use super::protocol::{
     AppHostCall, AppHostRequest, MAX_ACTIVE_CALLS, MAX_ACTIVE_SESSIONS, MAX_CONTROL_CALLS,
 };
 
+mod stateful;
+use stateful::StatefulSession;
+
 struct HostedSession {
     package: Arc<VerifiedPackage>,
     invocation_id: String,
     process: Option<ProcessIdentity>,
+    launch_grant: crate::clawd::authority::GrantId,
+    stateful: Option<StatefulSession>,
+}
+
+enum OriginalInvocation {
+    Operation(AppInvocation),
+    Session(AppSessionInvocation),
 }
 
 struct Invocation {
-    original: AppInvocation,
+    original: OriginalInvocation,
     package: Arc<VerifiedPackage>,
 }
 
@@ -83,6 +93,7 @@ fn verify_instance(uid: u32, id: &str, hosted: &HostedSession) -> Result<(), Str
 }
 
 fn retire_session(uid: u32, id: &str, hosted: &HostedSession) -> Result<(), String> {
+    crate::clawd::authority::authority().revoke(hosted.launch_grant);
     crate::clawd::authority::revoke_session_for_owner(id, uid);
     if let Some(process) = &hosted.process {
         crate::provenance::runtime::terminate_process_identity(
@@ -230,6 +241,14 @@ impl AppHost {
                             .map_err(|error| BrokerError::execution(error.to_string()))?,
                     ));
                 }
+                AppHostCall::BeginSession(invocation) => {
+                    let prepared = self.prepare_session(invocation.clone(), &mut sessions)?;
+                    return Ok(Response::ok(
+                        request.request_id,
+                        serde_json::to_value(prepared)
+                            .map_err(|error| BrokerError::execution(error.to_string()))?,
+                    ));
+                }
                 AppHostCall::End(end) => {
                     let invocation_id = end.invocation_id.as_str();
                     if !sessions.invocations.contains_key(invocation_id) {
@@ -275,7 +294,23 @@ impl AppHost {
                 .map_err(BrokerError::authorization)?;
             verify_instance(uid, check.session_id.as_str(), hosted)
                 .map_err(BrokerError::authorization)?;
-            return Ok(Response::ok(request.request_id, json!({"live":true})));
+            let process = hosted.process.as_ref().expect("bound App process");
+            let grant = crate::clawd::authority::authority()
+                .resolve_session(
+                    check.session_id.as_str(),
+                    &crate::clawd::authority::Presentation::new(
+                        uid,
+                        process.pid,
+                        process.start_time_ticks,
+                        crate::clawd::authority::Audience::SystemService,
+                        "app_host.check",
+                    ),
+                )
+                .map_err(|error| BrokerError::authorization(error.to_string()))?;
+            return Ok(Response::ok(
+                request.request_id,
+                json!({"live":true,"caps":grant.caps}),
+            ));
         }
         let binding = if let AppHostCall::Bind(bind) = &request.call {
             let hosted = &sessions.active[bind.session_id.as_str()];
@@ -318,7 +353,8 @@ impl AppHost {
             .call
             .command()
             .ok_or_else(|| BrokerError::execution("unknown App-host method"))?;
-        let params = request.call.params().map_err(BrokerError::execution)?;
+        let mut params = request.call.params().map_err(BrokerError::execution)?;
+        self.translate_session_handle(&request.call, &mut params, &sessions)?;
         let wire = Request {
             v: crate::clawd::wire::PROTOCOL_VERSION,
             id: request.request_id.clone(),
@@ -355,6 +391,15 @@ impl AppHost {
                     Err(error) => Response::handler_error(admitted.id.clone(), error),
                 }
             }
+            AppHostCall::StartCall(_) | AppHostCall::EndCall(_) => {
+                match self
+                    .session_call(&request.call, admitted.params.clone(), &mut sessions)
+                    .await
+                {
+                    Ok(value) => Response::ok(admitted.id.clone(), value),
+                    Err(error) => Response::handler_error(admitted.id.clone(), error),
+                }
+            }
             _ => {
                 crate::clawd::server::dispatch(
                     admitted.route,
@@ -368,7 +413,9 @@ impl AppHost {
             }
         };
         if response.ok {
-            if let Err(error) = self.after_dispatch(&request.call, uid, binding, &mut sessions) {
+            if let Err(error) =
+                self.after_dispatch(&request.call, uid, binding, &mut sessions, &mut response)
+            {
                 if let Some(id) = request.call.session_id() {
                     if let Some(session) = sessions.active.remove(id) {
                         if let Err(cleanup) = retire_session(uid, id, &session) {
@@ -387,6 +434,25 @@ impl AppHost {
                 );
             }
         } else if let Some(error) = &response.error {
+            let approval_required = error
+                .data
+                .as_ref()
+                .and_then(|data| data.get("status"))
+                .and_then(Value::as_str)
+                == Some("approval_required");
+            if matches!(
+                request.call,
+                AppHostCall::StartCall(_) | AppHostCall::EndCall(_)
+            ) && !approval_required
+            {
+                if let Some(id) = request.call.session_id() {
+                    if let Some(session) = sessions.active.remove(id) {
+                        if let Err(cleanup) = retire_session(uid, id, &session) {
+                            tracing::error!(error = %cleanup, "failed to retire a failed stateful App call");
+                        }
+                    }
+                }
+            }
             if let Some(ids) = error
                 .data
                 .as_ref()
@@ -443,41 +509,71 @@ impl AppHost {
             .ok_or_else(|| {
                 BrokerError::authorization("App registration has no retained invocation")
             })?;
-        let original = &retained.original;
         let package = retained.package.clone();
-        let invocation = crate::clawd::app_sessions::TaskHostInvocation {
-            app_id: &original.app_id,
-            operation: &original.operation,
-            args: &original.args,
-            package_digest: &original.package_digest,
+        let mut value = match &retained.original {
+            OriginalInvocation::Operation(original) => {
+                let invocation = crate::clawd::app_sessions::TaskHostInvocation {
+                    app_id: &original.app_id,
+                    operation: &original.operation,
+                    args: &original.args,
+                    package_digest: &original.package_digest,
+                };
+                crate::clawd::app_sessions::register_for_task_host(
+                    params,
+                    &self.client,
+                    parent,
+                    &invocation,
+                )
+                .await?
+            }
+            OriginalInvocation::Session(original) => {
+                let session = crate::clawd::app_sessions::TaskHostSession {
+                    app_id: &original.app_id,
+                    package_digest: &original.package_digest,
+                };
+                crate::clawd::app_sessions::register_session_for_task_host(
+                    params,
+                    &self.client,
+                    parent,
+                    &session,
+                )
+                .await?
+            }
         };
-        let value = crate::clawd::app_sessions::register_for_task_host(
-            params,
-            &self.client,
-            parent,
-            &invocation,
-        )
-        .await?;
         let id = value
             .get("session_id")
             .and_then(Value::as_str)
-            .ok_or_else(|| BrokerError::unavailable("App registration omitted its session"))?;
+            .ok_or_else(|| BrokerError::unavailable("App registration omitted its session"))?
+            .to_string();
+        let handle = value.get("handle").and_then(Value::as_str).ok_or_else(|| {
+            BrokerError::unavailable("App registration omitted its launch handle")
+        })?;
+        let launch_grant = self.resolve_launch_grant(&id, package.id(), handle)?;
+        let stateful = if matches!(retained.original, OriginalInvocation::Session(_)) {
+            let state = StatefulSession::new(handle.to_string());
+            value["handle"] = json!(state.launch_alias);
+            Some(state)
+        } else {
+            None
+        };
         sessions.active.insert(
-            id.to_string(),
+            id.clone(),
             HostedSession {
                 package: package.clone(),
                 invocation_id: registration.invocation_id.as_str().to_string(),
                 process: None,
+                launch_grant,
+                stateful,
             },
         );
         let uid = self
             .client
             .require_uid()
             .map_err(BrokerError::authorization)?;
-        crate::provenance::runtime::register(uid, id, &package);
-        if let Err(error) = verify_instance(uid, id, &sessions.active[id]) {
-            let session = sessions.active.remove(id).expect("registered App session");
-            if let Err(cleanup) = retire_session(uid, id, &session) {
+        crate::provenance::runtime::register(uid, &id, &package);
+        if let Err(error) = verify_instance(uid, &id, &sessions.active[&id]) {
+            let session = sessions.active.remove(&id).expect("registered App session");
+            if let Err(cleanup) = retire_session(uid, &id, &session) {
                 tracing::error!(error = %cleanup, "failed to retire App registration after bookkeeping failure");
             }
             return Err(BrokerError::unavailable(error));
@@ -522,9 +618,13 @@ impl AppHost {
             ));
         }
         let id = uuid::Uuid::new_v4().to_string();
-        sessions
-            .invocations
-            .insert(id.clone(), Invocation { original, package });
+        sessions.invocations.insert(
+            id.clone(),
+            Invocation {
+                original: OriginalInvocation::Operation(original),
+                package,
+            },
+        );
         Ok(PreparedInvocation { id, args })
     }
 
@@ -534,6 +634,7 @@ impl AppHost {
         uid: u32,
         binding: Option<ProcessIdentity>,
         sessions: &mut Sessions,
+        response: &mut Response,
     ) -> Result<(), String> {
         match call {
             AppHostCall::Bind(bind) => {
@@ -547,6 +648,18 @@ impl AppHost {
                 );
                 crate::provenance::runtime::bind_process(uid, bind.session_id.as_str(), bind.pid);
                 verify_instance(uid, bind.session_id.as_str(), hosted)?;
+                if let Some(state) = &mut hosted.stateful {
+                    let result = response
+                        .result
+                        .as_mut()
+                        .ok_or_else(|| "App bind returned no result".to_string())?;
+                    let handle = result
+                        .get("relay_handle")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| "stateful App bind returned no relay handle".to_string())?;
+                    state.install_initial_relay(handle.to_string());
+                    result["relay_handle"] = json!(state.relay_alias);
+                }
             }
             AppHostCall::Deregister(release) => {
                 let session = sessions

@@ -351,7 +351,7 @@ the manifest-selected runtime once and captures its result. For an
 Activity-associated task, `operations::reporting` supplies a task-local
 recorder backed by the authenticated worker channel.
 
-Worker protocol v6 carries a bounded report and a correlated acknowledgement.
+Worker protocol v7 carries a bounded report and a correlated acknowledgement.
 The supervisor checks the signed reporting route and live task lease, derives
 the owner and Activity from the lease and its own Job, then calls the same
 receipt service used by direct clients. A metadata-only task-stream link
@@ -363,7 +363,10 @@ This path owns no new store, App launcher, permission or UI-specific lifecycle.
 Recording errors preserve the original tool result and expose a report-only
 retry, never repeat the operation. Unassociated tasks and schema inspection
 do not enable automatic capture. One-shot execution uses the separate
-controlled App host; reporting does not bypass its authority checks.
+controlled App host; reporting does not bypass its authority checks. App-owned
+session calls use the same recorder and shared delivery helper, retaining
+rendered MCP results, error flags and transport uncertainty. Their
+`session:<tool>` receipt names cannot select one-shot operation declarations.
 
 ### Staged file changes
 
@@ -727,7 +730,8 @@ Deregistration revokes the launch grant, and the session grant with it.
 
 ### Controlled task App hosting
 
-The existing non-root `claw-agentd` process hosts one-shot Apps through a
+The existing non-root `claw-agentd` process hosts App operations and stateful
+App-owned sessions through a
 process-local gateway and the signed `app_host` job-channel route. It receives
 neither the general broker socket nor write access to the routed capability
 registry. The broker retains the original App/operation/args/package digest,
@@ -746,7 +750,19 @@ Liveness queries stay at root. Cancellation stops new control calls without
 dropping an admitted privileged mutation; teardown then revokes owned grants,
 identity-checks and stops the child, and removes matching records. App
 execution itself still uses the shared sandbox, never the broker runtime.
-Stateful App/MCP and GUI hosting are not included in this initial surface.
+Stateful calls retain the original tool and arguments at root and receive
+canonical arguments plus a call ID. Freshly authorized launch/App/relay grant
+rotation preserves generic monotonic attenuation; task-local aliases never
+become reusable broker handles. Calls serialize grant, RPC and clearing, hold
+only base invoke authority at rest, and cannot extend the original session
+lifetime. A stale call-end ID cannot clear a later call.
+
+Persistent App servers use streamed WorkerSandbox launches with package,
+runtime and App-owned data only, not lifetime host-file or network mounts.
+Mediated providers see the live call grant. Endpoint threads query the root
+grant rather than relying on inherited task-local paths or stale capability
+metadata. General external MCP and GUI hosting remain outside this private
+task-control surface; this does not introduce a separate App category.
 
 ### Proactive scheduling
 

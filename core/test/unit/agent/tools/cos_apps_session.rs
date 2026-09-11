@@ -1,5 +1,12 @@
 use super::*;
 
+mod failures {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/agent/tools/cos_apps_session/failures.rs"
+    ));
+}
+
 fn env_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     LOCK.lock().unwrap_or_else(|p| p.into_inner())
@@ -133,6 +140,14 @@ fn registry_name_replaces_dots_with_underscores() {
 }
 
 #[test]
+fn session_call_arguments_must_be_an_object() {
+    for input in [Value::Null, json!([]), json!("text"), json!(1), json!(true)] {
+        assert!(json_to_arg_map(&input).unwrap_err().contains("JSON object"));
+    }
+    assert!(json_to_arg_map(&json!({})).unwrap().is_empty());
+}
+
+#[test]
 fn build_schema_marks_required_args() {
     use crate::caps::manifest::{Arg, ArgBinding, ArgKind};
     use crate::i18n::LocalizedText;
@@ -202,15 +217,14 @@ fn build_schema_marks_required_args() {
 
 #[test]
 fn build_schema_exposes_conditional_requiredness() {
-    let args: Vec<crate::caps::manifest::Arg> =
-        serde_json::from_value(serde_json::json!([
+    let args: Vec<crate::caps::manifest::Arg> = serde_json::from_value(serde_json::json!([
         {"name":"state","kind":"name","required":true},
         {
             "name":"confirm","kind":"bool","choices":[true],
             "required_when":{"kind":"arg-equals","arg":"state","value":"off"}
         }
     ]))
-        .unwrap();
+    .unwrap();
     let schema = build_schema(&args);
     assert_eq!(
         schema["allOf"][0],
@@ -256,8 +270,7 @@ async fn pilot_kv_e2e_call_chain() {
     std::env::set_var("COS_DATA_DIR", data.path());
     std::env::set_var("COS_CAPS_MODE", "permissive");
     let _session = crate::test_env::TestSessionGuard::admin(data.path());
-    let _local_sessions =
-        crate::test_env::TestEnvVarGuard::set("COS_TEST_LOCAL_APP_SESSIONS", "1");
+    let _local_sessions = crate::test_env::TestEnvVarGuard::set("COS_TEST_LOCAL_APP_SESSIONS", "1");
     let _runner = install_test_app_runner(data.path());
 
     // Make sure no stale entry from a previous test run survives.
@@ -269,36 +282,37 @@ async fn pilot_kv_e2e_call_chain() {
         "kv should advertise ≥5 tools, got {}",
         opened.1
     );
-
-    // 1) set, get — verify in-memory state survives.
-    let r = opened
-        .0
-        .call_tool("kv.set", Some(serde_json::json!({"key":"x","value":"42"})))
-        .await
-        .expect("set");
-    assert!(!r.is_error.unwrap_or(false));
-
-    let r = opened
-        .0
-        .call_tool("kv.get", Some(serde_json::json!({"key":"x"})))
-        .await
-        .expect("get");
-    let text = first_text(&r);
+    let mut registry = ToolRegistry::new();
+    register_all(&mut registry);
+    let set = registry.get_unfiltered("app_kv__kv_set").unwrap();
+    let get = registry.get_unfiltered("app_kv__kv_get").unwrap();
+    let list = registry.get_unfiltered("app_kv__kv_list").unwrap();
+    let key = session_key("kv", &apps_dir).unwrap();
+    let identity = manager().lock().await[&key].identity.id().to_string();
+    let r = set.exec(json!({"key":"x","value":"42"})).await;
+    assert!(!r.is_error, "{}", r.content);
+    let r = get.exec(json!({"key":"x"})).await;
+    assert!(!r.is_error, "{}", r.content);
+    let text = r.content;
     assert!(text.contains("42"), "kv.get returned: {text}");
 
-    let r = opened.0.call_tool("kv.list", None).await.expect("list");
-    let text = first_text(&r);
+    let r = list.exec(json!({})).await;
+    assert!(!r.is_error, "{}", r.content);
+    let text = r.content;
     assert!(text.contains("\"x\""), "kv.list returned: {text}");
+    assert_eq!(manager().lock().await[&key].identity.id(), identity);
+    assert!(crate::proc::session_info_by_id(&identity)
+        .unwrap()
+        .transient_caps
+        .is_none());
+    assert!(data.path().join("apps/kv/kv.json").is_file());
 
     let closed = close_session("kv").await;
     assert!(closed);
-    let opened2 = open_session("kv").await.expect("re-open kv");
-    let r = opened2
-        .0
-        .call_tool("kv.get", Some(serde_json::json!({"key":"x"})))
-        .await
-        .expect("get after restart");
-    let text = first_text(&r);
+    open_session("kv").await.expect("re-open kv");
+    let r = get.exec(json!({"key":"x"})).await;
+    assert!(!r.is_error, "{}", r.content);
+    let text = r.content;
     assert!(
         text.contains("42"),
         "post-restart get should re-load value: {text}"
@@ -360,8 +374,7 @@ async fn open_race_single_child() {
     std::env::set_var("COS_DATA_DIR", data.path());
     std::env::set_var("COS_CAPS_MODE", "permissive");
     let _session = crate::test_env::TestSessionGuard::admin(data.path());
-    let _local_sessions =
-        crate::test_env::TestEnvVarGuard::set("COS_TEST_LOCAL_APP_SESSIONS", "1");
+    let _local_sessions = crate::test_env::TestEnvVarGuard::set("COS_TEST_LOCAL_APP_SESSIONS", "1");
     let _runner = install_test_app_runner(data.path());
 
     let _ = close_session("kv").await;
@@ -422,8 +435,7 @@ async fn injected_app_root_is_used_for_discovery_and_execution() {
     let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", temp.path());
     let _caps = crate::test_env::TestEnvVarGuard::set("COS_CAPS_MODE", "permissive");
     let _session = crate::test_env::TestSessionGuard::admin(temp.path());
-    let _local_sessions =
-        crate::test_env::TestEnvVarGuard::set("COS_TEST_LOCAL_APP_SESSIONS", "1");
+    let _local_sessions = crate::test_env::TestEnvVarGuard::set("COS_TEST_LOCAL_APP_SESSIONS", "1");
     let _runner = install_test_app_runner(temp.path());
     let app = crate::apps::find_verified(&injected_root, "kv").expect("injected kv app");
 
@@ -436,17 +448,6 @@ async fn injected_app_root_is_used_for_discovery_and_execution() {
     assert!(crate::apps::find(&ambient_root, "kv").is_none());
     assert!(close_session_at("kv", &injected_root).await);
 }
-
-fn first_text(res: &crate::agent::tools::mcp::protocol::CallToolResult) -> String {
-    use crate::agent::tools::mcp::protocol::ContentItem;
-    for item in &res.content {
-        if let ContentItem::Text { text } = item {
-            return text.clone();
-        }
-    }
-    String::new()
-}
-
 
 // ---------------------------------------------------------------------------
 // The session server runs the signed snapshot, or it does not run
@@ -534,7 +535,7 @@ fn replacing_the_session_script_after_binding_is_detected() {
 
     let entry = declared_session_entry(&launch).expect("entry");
     let binding = launch.bind(&[entry.clone()]).expect("bind");
-    let bound = SessionBinding::new(binding, entry, dir.join("server.py"));
+    let bound = SessionBinding::new(binding, entry, dir.join("server.py")).unwrap();
     bound.assert_pinned().expect("nothing has moved yet");
 
     // Replace the script the way an attacker would: a fresh file at the
@@ -545,7 +546,10 @@ fn replacing_the_session_script_after_binding_is_detected() {
     let error = bound
         .assert_pinned()
         .expect_err("a replaced session script must fail the launch");
-    assert!(error.contains("replaced after verification"), "unexpected: {error}");
+    assert!(
+        error.contains("replaced after verification"),
+        "unexpected: {error}"
+    );
 
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -561,7 +565,7 @@ fn replacing_the_package_directory_after_binding_is_detected() {
     let launch = launch_for(&dir, "dirswap").expect("verified");
     let entry = declared_session_entry(&launch).expect("entry");
     let binding = launch.bind(&[entry.clone()]).expect("bind");
-    let bound = SessionBinding::new(binding, entry, dir.join("server.py"));
+    let bound = SessionBinding::new(binding, entry, dir.join("server.py")).unwrap();
     bound.assert_pinned().expect("clean");
 
     // Swap the whole directory for another one — the classic

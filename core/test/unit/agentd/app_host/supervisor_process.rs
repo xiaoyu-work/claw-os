@@ -25,6 +25,13 @@ mod support {
 
 use support::{ProcessContext, APP_ID, BODY, CHILD_TEST, CONTEXT_ENV, OPERATION};
 
+mod stateful {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/agentd/app_host/supervisor_stateful.rs"
+    ));
+}
+
 const APP_SOURCE: &str = r#"
 import hashlib
 import json
@@ -105,6 +112,8 @@ impl ProcessFixture {
                 .to_str()
                 .unwrap()
                 .to_string(),
+            stateful: false,
+            expected: Vec::new(),
         };
         let mut fixture = Self {
             context,
@@ -164,21 +173,40 @@ impl ProcessFixture {
         mode(&app, 0o755);
         write_public(&self.context.input(), BODY.as_bytes());
         write_public(&root.join("not-granted.txt"), b"must not be mounted");
-        write_public(&app.join("main.py"), APP_SOURCE.as_bytes());
-        let manifest = json!({
-            "id": APP_ID, "version": "0.1.0", "name": "Controlled host process",
-            "operations": {
-                "read": {
-                    "label": "Read exactly once",
-                    "args": [{"name": "path", "kind": "path", "required": true}],
-                    "needs": [
-                        {"verb": "fs.read", "scope": {"kind": "from-arg", "arg": "path"}, "why": "read"},
-                        {"verb": "fs.write", "scope": {"kind": "from-arg", "arg": "path"}, "why": "replace"},
-                        {"verb": "data.kv.write", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": APP_ID}}, "why": "count"},
-                    ],
+        let entry = if self.context.stateful {
+            "server.py"
+        } else {
+            "main.py"
+        };
+        let source = if self.context.stateful {
+            stateful::APP_SOURCE
+        } else {
+            APP_SOURCE
+        };
+        write_public(&app.join(entry), source.as_bytes());
+        let manifest = if self.context.stateful {
+            write_public(&self.context.second_input(), BODY.as_bytes());
+            self.context.expected = vec![
+                stateful::file_state(&self.context.input()),
+                stateful::file_state(&self.context.second_input()),
+            ];
+            stateful::manifest()
+        } else {
+            json!({
+                "id": APP_ID, "version": "0.1.0", "name": "Controlled host process",
+                "operations": {
+                    "read": {
+                        "label": "Read exactly once",
+                        "args": [{"name": "path", "kind": "path", "required": true}],
+                        "needs": [
+                            {"verb": "fs.read", "scope": {"kind": "from-arg", "arg": "path"}, "why": "read"},
+                            {"verb": "fs.write", "scope": {"kind": "from-arg", "arg": "path"}, "why": "replace"},
+                            {"verb": "data.kv.write", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": APP_ID}}, "why": "count"},
+                        ],
+                    },
                 },
-            },
-        });
+            })
+        };
         write_public(
             &app.join("app.json"),
             &serde_json::to_vec(&manifest).unwrap(),
@@ -205,7 +233,7 @@ impl ProcessFixture {
                 version: "0.1.0".into(),
                 manifest_schema: "test".into(),
                 manifest_path: "app.json".into(),
-                entrypoints: vec!["main.py".into()],
+                entrypoints: vec![entry.into()],
                 resources: vec![],
             },
             &key,
@@ -469,6 +497,16 @@ async fn inspect_live_app(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires root/private /run, COS_APP_HOST_COS_BIN, an owner UID, and working bubblewrap"]
 async fn controlled_host_runs_one_real_app_and_records_one_receipt() {
+    exercise_controlled_host(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires root/private /run, COS_APP_HOST_COS_BIN, an owner UID, and working bubblewrap"]
+async fn controlled_host_keeps_one_stateful_app_with_per_call_authority_and_receipts() {
+    exercise_controlled_host(true).await;
+}
+
+async fn exercise_controlled_host(stateful: bool) {
     let _env = crate::test_env::lock_env();
     assert_private_run();
     let binary = PathBuf::from(std::env::var_os("COS_APP_HOST_COS_BIN").expect("fresh cos binary"))
@@ -481,6 +519,7 @@ async fn controlled_host_runs_one_real_app_and_records_one_receipt() {
         .unwrap();
     let mut identity = spawn::resolve_identity(uid).unwrap();
     let mut fixture = ProcessFixture::new(uid, identity.gid);
+    fixture.context.stateful = stateful;
     fixture.install(&binary);
     let context = fixture.context.clone();
     // Isolate HOME without changing the real passwd-derived uid/gid.
@@ -490,7 +529,7 @@ async fn controlled_host_runs_one_real_app_and_records_one_receipt() {
     assert!(availability.is_available(), "{availability:?}");
     let app = crate::apps::find_verified(&context.apps(), APP_ID).unwrap();
     let package = PackageRef::of(app.require_verified().unwrap());
-    let caps = CapSet::from_caps([
+    let mut caps = CapSet::from_caps([
         Cap::new(Verb::AGENT_INVOKE, Scope::name(APP_ID)),
         Cap::new(
             Verb::FS_READ,
@@ -500,8 +539,19 @@ async fn controlled_host_runs_one_real_app_and_records_one_receipt() {
             Verb::FS_WRITE,
             Scope::path(context.input().to_string_lossy()),
         ),
-        Cap::new(Verb::DATA_KV_WRITE, Scope::name(APP_ID)),
     ]);
+    if stateful {
+        caps.insert(Cap::new(
+            Verb::FS_READ,
+            Scope::path(context.second_input().to_string_lossy()),
+        ));
+        caps.insert(Cap::new(
+            Verb::FS_WRITE,
+            Scope::path(context.second_input().to_string_lossy()),
+        ));
+    } else {
+        caps.insert(Cap::new(Verb::DATA_KV_WRITE, Scope::name(APP_ID)));
+    }
     let session = crate::paths::with_user_override(uid, context.home(), async {
         crate::session::create("controlled App process regression").unwrap()
     })
@@ -611,12 +661,21 @@ async fn controlled_host_runs_one_real_app_and_records_one_receipt() {
             services,
         );
         tokio::pin!(run);
+        let observe = async {
+            if stateful {
+                stateful::inspect(&context, session.as_str(), &package, pid).await
+            } else {
+                inspect_live_app(&context, session.as_str(), &package, pid).await
+            }
+        };
         let (app_session, app_identity, app_facts) = tokio::select! {
-            observed = inspect_live_app(&context, session.as_str(), &package, pid) => observed,
+            observed = observe => observed,
             outcome = &mut run => panic!("worker ended before live App inspection: {}", describe_outcome(&outcome)),
         };
         cleanup.app = Some(app_identity.clone());
-        write_public(&context.app_data().join("release"), b"continue");
+        if !stateful {
+            write_public(&context.app_data().join("release"), b"continue");
+        }
         let outcome = tokio::time::timeout(Duration::from_secs(60), &mut run)
             .await
             .expect("controlled host did not return a result");
@@ -642,13 +701,19 @@ async fn controlled_host_runs_one_real_app_and_records_one_receipt() {
         outcome => panic!("App execution failed: {outcome:?}"),
     };
     let result: Value = serde_json::from_str(&run.response).unwrap();
-    assert_eq!(result["output"], app_facts);
+    if stateful {
+        assert_eq!(result["output"]["calls"], app_facts["calls"]);
+        assert_eq!(result["output"]["at_rest"], app_facts["at_rest"]);
+    } else {
+        assert_eq!(result["output"], app_facts);
+    }
     assert_eq!(result["worker_pid"], pid);
     assert_eq!(result["worker_start_time_ticks"], start_time_ticks.unwrap());
     assert_eq!(result["worker_uid"], uid);
     assert_eq!(result["worker_gid"], identity.gid);
     assert_eq!(result["worker_nnp"], true);
-    assert_eq!(result["receipt_calls"], 2);
+    let expected_calls = if stateful { 2 } else { 1 };
+    assert_eq!(result["receipt_calls"], expected_calls + 1);
     assert!(result["app_controls"].as_u64().unwrap() >= 6);
     let finished = store.finish(job, (*outcome).into()).unwrap();
     assert_eq!(finished.owner_uid, Some(uid));
@@ -659,29 +724,41 @@ async fn controlled_host_runs_one_real_app_and_records_one_receipt() {
     let receipts = service.receipts(uid, &activity.id, 100).unwrap();
     assert_eq!(
         receipts.len(),
-        1,
+        expected_calls as usize,
         "record-only retry must not duplicate storage"
     );
-    let receipt = &receipts[0];
+    let receipt = receipts
+        .iter()
+        .find(|receipt| result["receipt_id"].as_str() == Some(receipt.id.as_str()))
+        .unwrap();
     assert_eq!(receipt.id, result["receipt_id"].as_str().unwrap());
     assert_eq!(receipt.owner_uid, uid);
     assert_eq!(receipt.activity_id, activity.id);
     assert_eq!(receipt.source, ReceiptSource::CallerReported);
     assert_eq!(receipt.report.app_id, APP_ID);
-    assert_eq!(receipt.report.operation, OPERATION);
+    assert_eq!(
+        receipt.report.operation,
+        if stateful {
+            crate::activities::ReceiptReport::session_operation(support::SESSION_TOOL)
+        } else {
+            OPERATION.to_string()
+        },
+    );
     assert_eq!(receipt.report.package_digest, package.content_digest);
     assert_eq!(receipt.report.outcome, ReceiptOutcome::Returned);
     assert_eq!(
         receipt.report.result.as_ref().unwrap().kind,
         ResultKind::Json
     );
-    assert!(receipt
-        .report
-        .result
-        .as_ref()
-        .unwrap()
-        .preview
-        .contains("controlled App process body"));
+    if !stateful {
+        assert!(receipt
+            .report
+            .result
+            .as_ref()
+            .unwrap()
+            .preview
+            .contains("controlled App process body"));
+    }
     assert!(receipt.declaration.is_some());
     assert!(receipt.declaration_error.is_none());
     assert!(service.receipts(0, &activity.id, 100).is_err());
@@ -700,25 +777,31 @@ async fn controlled_host_runs_one_real_app_and_records_one_receipt() {
         .iter()
         .filter(|event| event["progress"]["kind"] == "activity_receipt")
         .collect();
-    assert_eq!(links.len(), 2);
+    assert_eq!(links.len(), expected_calls as usize + 1);
     for link in links {
         assert_eq!(link["progress"]["activity_id"], activity.id);
-        assert_eq!(link["progress"]["receipt_id"], receipt.id);
+        assert!(receipts
+            .iter()
+            .any(|receipt| link["progress"]["receipt_id"] == receipt.id));
         assert_eq!(link["progress"]["source"], "caller_reported");
     }
     assert_eq!(
         std::fs::read_to_string(context.app_data().join("counter")).unwrap(),
-        "1"
+        expected_calls.to_string()
     );
-    let replaced = format!("{BODY}updated by controlled broker\n");
-    assert_eq!(std::fs::read_to_string(context.input()).unwrap(), replaced);
-    assert_eq!(std::fs::metadata(context.input()).unwrap().uid(), 0);
-    assert_eq!(result["output"]["replacement"]["changed"], true);
-    assert_eq!(result["output"]["replacement"]["bytes"], replaced.len());
-    assert_eq!(
-        result["output"]["replacement"]["sha256"],
-        format!("sha256:{}", crate::crypto::sha256_hex(replaced.as_bytes()))
-    );
+    if stateful {
+        stateful::assert_finished(&context, &result, &receipts);
+    } else {
+        let replaced = format!("{BODY}updated by controlled broker\n");
+        assert_eq!(std::fs::read_to_string(context.input()).unwrap(), replaced);
+        assert_eq!(std::fs::metadata(context.input()).unwrap().uid(), 0);
+        assert_eq!(result["output"]["replacement"]["changed"], true);
+        assert_eq!(result["output"]["replacement"]["bytes"], replaced.len());
+        assert_eq!(
+            result["output"]["replacement"]["sha256"],
+            format!("sha256:{}", crate::crypto::sha256_hex(replaced.as_bytes()))
+        );
+    }
     assert!(crate::provenance::runtime::instance_for(uid, &app_session)
         .unwrap()
         .is_none());

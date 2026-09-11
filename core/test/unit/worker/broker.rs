@@ -91,9 +91,21 @@ fn a_launch_holding_the_family_verb_is_admitted() {
 fn file_replace_admission_only_prechecks_the_write_family() {
     let command = Command::SystemFileReplace;
     assert_eq!(required_verbs(command), &[Verb::FS_WRITE]);
-    assert!(admit(command, &relaying_authority(vec![Cap::new(Verb::FS_READ, Scope::path("/srv/document"))])).is_err());
-    assert!(admit(command, &authority(vec![Cap::new(Verb::FS_WRITE, Scope::path("/srv/document"))])).is_err());
-    admit(command, &relaying_authority(vec![Cap::new(Verb::FS_WRITE, Scope::path("/srv/document"))])).unwrap();
+    assert!(admit(
+        command,
+        &relaying_authority(vec![Cap::new(Verb::FS_READ, Scope::path("/srv/document"))])
+    )
+    .is_err());
+    assert!(admit(
+        command,
+        &authority(vec![Cap::new(Verb::FS_WRITE, Scope::path("/srv/document"))])
+    )
+    .is_err());
+    admit(
+        command,
+        &relaying_authority(vec![Cap::new(Verb::FS_WRITE, Scope::path("/srv/document"))]),
+    )
+    .unwrap();
     // Admission has not authorized any particular path or supplied fs.read.
     // Those checks are mandatory in the provider's single Decision.
     assert!(required_verbs(Command::PermissionRequest).is_empty());
@@ -105,10 +117,11 @@ fn admission_and_policy_read_the_capability_set_live() {
     // what is seen. The assertion is that `live_caps()` — a read, not a
     // frozen field — is what both paths consult.
     let empty = relaying_authority(Vec::new());
-    assert!(empty.live_caps().is_empty());
+    assert!(empty.live_caps().unwrap().is_empty());
     let granted = relaying_authority(vec![Cap::new(Verb::SYS_PACKAGE, Scope::Wild)]);
     assert!(granted
         .live_caps()
+        .unwrap()
         .covers(&Cap::new(Verb::SYS_PACKAGE, Scope::Wild)));
 }
 
@@ -122,7 +135,8 @@ fn policy_check_answers_from_the_launch_capability_set() {
             "verb": "fs.read",
             "scope": { "kind": "path", "value": "/srv/data/report.csv" },
         }),
-    );
+    )
+    .unwrap();
     assert_eq!(allowed["decision"], "allow");
     assert_eq!(allowed["session"], "app-test");
 
@@ -132,7 +146,8 @@ fn policy_check_answers_from_the_launch_capability_set() {
             "verb": "fs.read",
             "scope": { "kind": "path", "value": "/etc/shadow" },
         }),
-    );
+    )
+    .unwrap();
     assert_eq!(denied["decision"], "deny");
 
     let wrong_verb = policy_check(
@@ -141,14 +156,15 @@ fn policy_check_answers_from_the_launch_capability_set() {
             "verb": "fs.write",
             "scope": { "kind": "path", "value": "/srv/data/report.csv" },
         }),
-    );
+    )
+    .unwrap();
     assert_eq!(wrong_verb["decision"], "deny");
 }
 
 #[test]
 fn an_unknown_verb_is_denied_rather_than_ignored() {
     let authority = relaying_authority(vec![Cap::new(Verb::FS_READ, Scope::Wild)]);
-    let answer = policy_check(&authority, &serde_json::json!({ "verb": "fs.teleport" }));
+    let answer = policy_check(&authority, &serde_json::json!({ "verb": "fs.teleport" })).unwrap();
     assert_eq!(answer["decision"], "deny");
     assert_eq!(answer["reason"], "unknown-verb");
 }
@@ -156,11 +172,11 @@ fn an_unknown_verb_is_denied_rather_than_ignored() {
 #[test]
 fn a_missing_scope_is_treated_as_the_widest_request() {
     let narrow = relaying_authority(vec![Cap::new(Verb::FS_READ, Scope::path("/srv/**"))]);
-    let answer = policy_check(&narrow, &serde_json::json!({ "verb": "fs.read" }));
+    let answer = policy_check(&narrow, &serde_json::json!({ "verb": "fs.read" })).unwrap();
     assert_eq!(answer["decision"], "deny");
 
     let wide = relaying_authority(vec![Cap::new(Verb::FS_READ, Scope::Wild)]);
-    let answer = policy_check(&wide, &serde_json::json!({ "verb": "fs.read" }));
+    let answer = policy_check(&wide, &serde_json::json!({ "verb": "fs.read" })).unwrap();
     assert_eq!(answer["decision"], "allow");
 }
 
@@ -221,7 +237,11 @@ fn the_endpoint_answers_a_policy_check_and_refuses_identity_control() {
     assert_eq!(allowed["ok"], true);
     assert_eq!(allowed["result"]["decision"], "allow");
 
-    let refused = ask(PROTOCOL_VERSION, "app_session.register", serde_json::json!({}));
+    let refused = ask(
+        PROTOCOL_VERSION,
+        "app_session.register",
+        serde_json::json!({}),
+    );
     assert_eq!(refused["ok"], false);
     assert!(
         refused["error"]["message"]

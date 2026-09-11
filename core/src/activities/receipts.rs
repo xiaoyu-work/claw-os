@@ -12,6 +12,7 @@ const MAX_REPORT_TEXT_BYTES: usize = 2048;
 const MAX_LABEL_BYTES: usize = 512;
 const MAX_NAME_BYTES: usize = 128;
 const MAX_EFFECTS: usize = 16;
+const SESSION_TOOL_PREFIX: &str = "session:";
 const EMPTY_SHA256: &str =
     "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
@@ -85,6 +86,14 @@ pub struct ReceiptReport {
 }
 
 impl ReceiptReport {
+    pub fn session_operation(tool: &str) -> String {
+        format!("{SESSION_TOOL_PREFIX}{tool}")
+    }
+
+    pub fn session_tool_name(&self) -> Option<&str> {
+        self.operation.strip_prefix(SESSION_TOOL_PREFIX)
+    }
+
     pub fn validate(&self) -> Result<(), ActivityError> {
         parse_id(&self.id)?;
         if !name(&self.app_id, false) {
@@ -92,8 +101,14 @@ impl ReceiptReport {
                 "receipt app_id must be a lowercase App identifier of at most 128 bytes",
             );
         }
-        if !name(&self.operation, true) {
-            return invalid("receipt operation must be a lowercase operation name of at most 128 bytes without '..'");
+        if let Some(tool) = self.session_tool_name() {
+            if !session_tool_name(tool) {
+                return invalid(
+                    "receipt session tool must match [a-z][a-z0-9._-]* and fit 128 bytes",
+                );
+            }
+        } else if !name(&self.operation, true) {
+            return invalid("receipt operation must be a lowercase operation name of at most 128 bytes without '..', or session:<tool>");
         }
         validate_digest("receipt package_digest", &self.package_digest)?;
         if let Some(result) = &self.result {
@@ -215,6 +230,15 @@ fn name(value: &str, operation: bool) -> bool {
                 || byte.is_ascii_digit()
                 || byte == b'_'
                 || byte == if operation { b'.' } else { b'-' }
+        })
+}
+
+fn session_tool_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_NAME_BYTES
+        && value.as_bytes()[0].is_ascii_lowercase()
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-' | b'.')
         })
 }
 

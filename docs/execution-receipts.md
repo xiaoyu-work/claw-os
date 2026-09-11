@@ -32,7 +32,7 @@ The returned receipt distinguishes:
 | Outcome | Meaning |
 | --- | --- |
 | `returned` | The normal App invocation returned output, or intentionally returned no output |
-| `reported_error` | The returned JSON contained an App error |
+| `reported_error` | Returned JSON contained an App error, or a session call returned an MCP error |
 | `indeterminate` | The invocation result was unavailable or could not be captured within the bounds |
 
 An error does not prove that no side effect occurred. An indeterminate result
@@ -55,8 +55,8 @@ are not treated as trusted proposals.
 ## Agent operation reports
 
 Activity-associated tasks enable a task-scoped recorder for the ordinary
-one-shot `cos_app_run` and compatibility `cos_app_<id>` gateways. Both use the
-same manifest-selected App runtime and capture its return value once.
+one-shot `cos_app_run`, compatibility `cos_app_<id>`, and App-owned session-tool
+gateways. They use the shared App boundary and capture each returned result once.
 Schema inspection and calls without an Activity recorder preserve their
 existing behavior and do not create automatic receipts.
 
@@ -79,12 +79,25 @@ error with the bounded report for a recording-only retry. They never rerun an
 App to repair receipt storage. Reports may still arrive during cancellation
 and do not reopen or complete the Activity.
 
-The receipt route is **reporting-only**. One-shot App execution uses the
+The receipt route is **reporting-only**. App execution uses the
 separate [controlled App host](../core/src/agentd/app_host/MODULE.md), which
 retains original invocations at the broker and applies ordinary App
 permissions and sandboxing. A receipt never grants that execution authority.
-Stateful App-session/MCP hosting and automatic capture are not part of this
-initial one-shot surface.
+
+An App-owned session's receipt operation is `session:<declared-tool-name>`,
+for example `session:kv.get`. The namespace prevents a session tool from
+borrowing metadata or effect declarations from a same-named one-shot
+operation. Its authenticated summary becomes the declaration label; the
+session manifest currently declares no effects, which means unknown effects,
+not purity.
+
+For session calls, the result hash and byte count name the rendered tool
+output seen by the agent, not the raw MCP envelope or omitted image bytes.
+MCP `isError` and explicit RPC error replies produce `reported_error`;
+timeouts and lost/invalid responses produce `indeterminate`. Failed authority
+clearing closes the session and is surfaced alongside the original result,
+not substituted for it. Opening/closing a session and calls denied before
+dispatch do not create execution receipts.
 
 ## Read the same receipts everywhere
 
@@ -124,7 +137,7 @@ Reusing the ID with different report data or a different Activity is a
 conflict. Recording retries never replay App effects.
 
 Receipts are opt-in for explicit execution/report submission and automatic for
-associated one-shot Agent operations when the recorder is enabled.
+associated Agent App operations and session calls when the recorder is enabled.
 A client crash before it records a result may leave no receipt;
 the existing session and mutation journals remain the evidence for privileged
 operations. Existing task recovery semantics are unchanged; caller reports
@@ -142,3 +155,8 @@ bounded records, immutable retry semantics, and per-Activity limits.
 Old binaries that only understand database schema 1 must not open a migrated
 database; see [updating](updating.md). Restoring metadata does not restore any
 authority or grant.
+
+The `session:<tool>` vocabulary requires the session-receipt-capable core.
+Wire schema 1 and SQLite schema 2 do not change; older core versions may reject
+these new identifiers when validating stored receipts. Upgrade the paired
+Agent binaries together, and retain a consistent backup for a version rollback.

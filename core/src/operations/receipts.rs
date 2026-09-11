@@ -84,6 +84,35 @@ pub fn capture(
     report
 }
 
+pub(crate) fn capture_session(
+    app_id: &str,
+    tool: &str,
+    package_digest: &str,
+    result: Result<(String, bool), String>,
+) -> ReceiptReport {
+    let (result, reported_error) = match result {
+        Ok((output, is_error)) => {
+            let error = is_error.then(|| nonempty_error(&output));
+            (Ok(Some(output)), error)
+        }
+        Err(error) => (Err(error), None),
+    };
+    let mut report = capture(
+        uuid::Uuid::new_v4().to_string(),
+        app_id.to_string(),
+        ReceiptReport::session_operation(tool),
+        package_digest.to_string(),
+        result,
+    );
+    if report.result.is_some() {
+        if let Some(error) = reported_error {
+            report.outcome = ReceiptOutcome::ReportedError;
+            report.error = Some(error);
+        }
+    }
+    report
+}
+
 fn file_plan_preview(value: &serde_json::Value, app_id: &str) -> Result<(String, bool), String> {
     claw_os_sdk::generated::validate_file_change_plan(value).map_err(|_| {
         "App returned an invalid file-change-plan report; no plan was trusted".to_string()

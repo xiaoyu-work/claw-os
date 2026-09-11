@@ -58,7 +58,11 @@ impl AppLaunch {
                 package.id()
             ));
         }
-        Ok(Self { package, manifest, hosted_invocation: None })
+        Ok(Self {
+            package,
+            manifest,
+            hosted_invocation: None,
+        })
     }
 
     pub fn package(&self) -> &std::sync::Arc<crate::provenance::VerifiedPackage> {
@@ -226,6 +230,7 @@ pub(crate) struct AppIdentitySession {
     /// egress and its broker authority from, so the isolation shape and
     /// the capability grant cannot describe different worlds.
     granted_caps: CapSet,
+    _hosted_scope: Option<crate::clawd::client::HostedInvocation>,
 }
 
 #[derive(Clone)]
@@ -254,7 +259,9 @@ enum LaunchRequest<'a> {
     Gui {
         exec: &'a str,
     },
-    Mcp,
+    Mcp {
+        hosted_invocation: Option<&'a str>,
+    },
 }
 
 impl LaunchRequest<'_> {
@@ -262,7 +269,7 @@ impl LaunchRequest<'_> {
         match self {
             LaunchRequest::Operation { .. } => "operation",
             LaunchRequest::Gui { .. } => "gui",
-            LaunchRequest::Mcp => "mcp",
+            LaunchRequest::Mcp { .. } => "mcp",
         }
     }
 
@@ -270,7 +277,7 @@ impl LaunchRequest<'_> {
         match self {
             LaunchRequest::Operation { operation, .. } => format!("cos app {app_id} {operation}"),
             LaunchRequest::Gui { exec } => format!("cos app {app_id} {exec}"),
-            LaunchRequest::Mcp => format!("cos app {app_id} session"),
+            LaunchRequest::Mcp { .. } => format!("cos app {app_id} session"),
         }
     }
 }
@@ -304,7 +311,8 @@ pub(crate) struct McpProcSession {
     relay: crate::worker::RelayHandle,
 }
 
-impl McpProcSession {    pub fn for_current_parent(command: &str) -> Result<Option<Self>, String> {
+impl McpProcSession {
+    pub fn for_current_parent(command: &str) -> Result<Option<Self>, String> {
         #[cfg(unix)]
         if crate::paths::current_owner_uid_override().is_none() && unsafe { libc::geteuid() } != 0 {
             let parent = crate::proc::current_session_info_for_caps()
@@ -415,6 +423,104 @@ impl AppSessionControl {
             call,
         )
     }
+
+    pub(crate) fn begin_hosted_call(
+        &self,
+        tool: &str,
+        args: &BTreeMap<String, serde_json::Value>,
+    ) -> Result<HostedSessionCall, String> {
+        let AppSessionBackend::Clawd { handle, .. } = &self.backend else {
+            return Err("hosted session call requires broker-owned identity".to_string());
+        };
+        let params = serde_json::json!({
+            "session_id":self.session_id, "handle":handle,
+            "call":{"tool":tool,"args":args},
+        });
+        let start = || {
+            clawd_response(
+                ClawdCommand::AppSessionSetTransient,
+                crate::clawd::client::request_session_call(
+                    crate::clawd::protocol::Request::build(
+                        ClawdCommand::AppSessionSetTransient,
+                        params.clone(),
+                    ),
+                    None,
+                ),
+            )
+        };
+        let value = match start() {
+            Ok(value) => value,
+            Err(error) => {
+                let ids = approval_requests(&error);
+                if ids.is_empty() {
+                    return Err(error.message);
+                }
+                wait_for_approvals(&ids)?;
+                start().map_err(String::from)?
+            }
+        };
+        let prepared: crate::operations::invocation::PreparedSessionCall =
+            serde_json::from_value(value)
+                .map_err(|error| format!("invalid hosted call preparation: {error}"))?;
+        if uuid::Uuid::parse_str(&prepared.id)
+            .map_err(|error| error.to_string())?
+            .to_string()
+            != prepared.id
+        {
+            return Err("hosted call identifier is not canonical".to_string());
+        }
+        Ok(HostedSessionCall {
+            control: self.clone(),
+            prepared,
+            finished: false,
+        })
+    }
+}
+
+pub(crate) struct HostedSessionCall {
+    control: AppSessionControl,
+    pub(crate) prepared: crate::operations::invocation::PreparedSessionCall,
+    finished: bool,
+}
+
+impl HostedSessionCall {
+    pub(crate) fn finish(mut self) -> Result<(), String> {
+        self.finished = true;
+        self.clear()
+    }
+
+    fn clear(&self) -> Result<(), String> {
+        let AppSessionBackend::Clawd { handle, .. } = &self.control.backend else {
+            return Err("hosted session call lost its broker identity".to_string());
+        };
+        let result = clawd_response(
+            ClawdCommand::AppSessionSetTransient,
+            crate::clawd::client::request_session_call(
+                crate::clawd::protocol::Request::build(
+                    ClawdCommand::AppSessionSetTransient,
+                    serde_json::json!({
+                        "session_id":self.control.session_id,"handle":handle,"call":null,
+                    }),
+                ),
+                Some(self.prepared.id.clone()),
+            ),
+        )
+        .map_err(String::from)?;
+        if result.get("cleared").and_then(serde_json::Value::as_bool) != Some(true) {
+            return Err("hosted call clearing was not acknowledged".to_string());
+        }
+        Ok(())
+    }
+}
+
+impl Drop for HostedSessionCall {
+    fn drop(&mut self) {
+        if !self.finished {
+            if let Err(error) = self.clear() {
+                tracing::error!(error = %error, "hosted App call could not clear transient authority");
+            }
+        }
+    }
 }
 
 impl AppIdentitySession {
@@ -447,6 +553,7 @@ impl AppIdentitySession {
             parent_caps: None,
             granted_caps: CapSet::new(),
             relay: crate::worker::relay_slot(),
+            _hosted_scope: None,
         })
     }
 
@@ -542,9 +649,23 @@ impl AppIdentitySession {
 
     /// Register an MCP identity. Session tools receive their authority
     /// per call through [`AppSessionControl::set_transient_call`].
-    pub fn for_mcp(app_id: &str, manifest: &Manifest) -> Result<Self, String> {
-        let _ = manifest;
-        Self::start(app_id, LaunchRequest::Mcp, None, |_| Ok(CapSet::new()))
+    pub fn for_mcp(launch: &AppLaunch) -> Result<Self, String> {
+        let hosted = crate::clawd::client::prepare_session(
+            crate::operations::invocation::AppSessionInvocation {
+                app_id: launch.app_id().to_string(),
+                package_digest: launch.package().content_digest().to_string(),
+            },
+        )?;
+        let mut session = Self::start(
+            launch.app_id(),
+            LaunchRequest::Mcp {
+                hosted_invocation: hosted.as_ref().map(|scope| scope.prepared.id.as_str()),
+            },
+            Some(launch.ceiling()),
+            |_| Ok(CapSet::new()),
+        )?;
+        session._hosted_scope = hosted;
+        Ok(session)
     }
 
     /// Shared launch path.
@@ -612,7 +733,9 @@ impl AppIdentitySession {
             "parent_caps": parent_caps,
         });
         match request {
-            LaunchRequest::Operation { operation, args, .. } => {
+            LaunchRequest::Operation {
+                operation, args, ..
+            } => {
                 params["operation"] = serde_json::Value::String((*operation).to_string());
                 params["args"] = serde_json::to_value(args)
                     .map_err(|error| format!("failed to serialize App arguments: {error}"))?;
@@ -620,7 +743,7 @@ impl AppIdentitySession {
             LaunchRequest::Gui { exec } => {
                 params["operation"] = serde_json::Value::String((*exec).to_string());
             }
-            LaunchRequest::Mcp => {}
+            LaunchRequest::Mcp { .. } => {}
         }
 
         // A launch that needs consent is answered with the ids of the
@@ -628,7 +751,10 @@ impl AppIdentitySession {
         // then retries over the same connection identity, so the user
         // never has to rerun anything and no secret has to travel.
         let register = |params| match request {
-            LaunchRequest::Operation { hosted_invocation, .. }
+            LaunchRequest::Operation {
+                hosted_invocation, ..
+            }
+            | LaunchRequest::Mcp { hosted_invocation }
                 if crate::clawd::client::has_gateway() =>
             {
                 let invocation = hosted_invocation.ok_or_else(|| ClawdCallError {
@@ -711,6 +837,7 @@ impl AppIdentitySession {
             parent_caps: Some(parent_caps),
             granted_caps,
             relay: crate::worker::relay_slot(),
+            _hosted_scope: None,
         })
     }
 
@@ -759,6 +886,7 @@ impl AppIdentitySession {
             parent_caps: Some(parent_caps),
             granted_caps: caps,
             relay: crate::worker::relay_slot(),
+            _hosted_scope: None,
         })
     }
 
@@ -1097,10 +1225,13 @@ fn clawd_request(
     command: ClawdCommand,
     params: serde_json::Value,
 ) -> Result<serde_json::Value, ClawdCallError> {
-    clawd_response(command, crate::clawd::client::request_blocking(
-        crate::paths::clawd_socket_path(),
-        crate::clawd::protocol::Request::build(command, params),
-    ))
+    clawd_response(
+        command,
+        crate::clawd::client::request_blocking(
+            crate::paths::clawd_socket_path(),
+            crate::clawd::protocol::Request::build(command, params),
+        ),
+    )
 }
 
 fn clawd_response(
@@ -1281,35 +1412,35 @@ fn constrained_operation_caps(
             continue;
         }
         if matches!(need.scope, ScopeBinding::Wild) {
-                let inherited = parent
-                    .iter()
-                    .filter(|cap| cap.verb == need.verb)
-                    .cloned()
-                    .collect::<Vec<_>>();
-                if inherited.iter().any(|cap| cap.scope.is_wildcard())
-                    && matches!(
-                        crate::caps::lookup_meta(need.verb).map(|meta| meta.scope_kind),
-                        Some(
-                            crate::caps::ScopeKind::Path
-                                | crate::caps::ScopeKind::Host
-                                | crate::caps::ScopeKind::Name
-                        ) | None
-                    )
-                {
-                    return Err(format!(
-                        "wildcard `{}` need cannot inherit unbounded authority",
-                        need.verb.as_str()
-                    ));
-                }
-                if inherited.is_empty() && !parent_is_app {
-                    let requested = Cap::new(need.verb, Scope::Wild);
-                    crate::caps::require(requested.verb, requested.scope.clone())
-                        .map_err(|denial| denial.to_string())?;
-                    caps.insert(requested);
-                } else {
-                    caps.extend(inherited);
-                }
-                continue;
+            let inherited = parent
+                .iter()
+                .filter(|cap| cap.verb == need.verb)
+                .cloned()
+                .collect::<Vec<_>>();
+            if inherited.iter().any(|cap| cap.scope.is_wildcard())
+                && matches!(
+                    crate::caps::lookup_meta(need.verb).map(|meta| meta.scope_kind),
+                    Some(
+                        crate::caps::ScopeKind::Path
+                            | crate::caps::ScopeKind::Host
+                            | crate::caps::ScopeKind::Name
+                    ) | None
+                )
+            {
+                return Err(format!(
+                    "wildcard `{}` need cannot inherit unbounded authority",
+                    need.verb.as_str()
+                ));
+            }
+            if inherited.is_empty() && !parent_is_app {
+                let requested = Cap::new(need.verb, Scope::Wild);
+                crate::caps::require(requested.verb, requested.scope.clone())
+                    .map_err(|denial| denial.to_string())?;
+                caps.insert(requested);
+            } else {
+                caps.extend(inherited);
+            }
+            continue;
         }
         for requested in requested_caps {
             if parent.covers(requested) {
@@ -1371,9 +1502,7 @@ fn trusted_pre_dispatch_args(
             .iter()
             .take_while(|arg| arg.as_str() != "--")
             .any(|arg| arg == &format!("--{flag}") || arg.starts_with(&format!("--{flag}=")));
-        if supplied
-            && resolver == crate::caps::manifest::TrustedArgResolver::EmailHost
-        {
+        if supplied && resolver == crate::caps::manifest::TrustedArgResolver::EmailHost {
             return Err("`--host` is reserved for trusted email resolution".to_string());
         }
         if supplied {
@@ -1384,12 +1513,13 @@ fn trusted_pre_dispatch_args(
                 resolve_email_provider(operation, selector)?.to_string()
             }
             crate::caps::manifest::TrustedArgResolver::EmailHost => {
-                let bound =
-                    crate::caps::args::bind_supplied_cli_args(&operation.args, &resolved)?;
+                let bound = crate::caps::args::bind_supplied_cli_args(&operation.args, &resolved)?;
                 let provider = bound
                     .get("provider")
                     .and_then(serde_json::Value::as_str)
-                    .ok_or_else(|| "email host resolver requires provider resolution".to_string())?;
+                    .ok_or_else(|| {
+                        "email host resolver requires provider resolution".to_string()
+                    })?;
                 resolve_email_host(provider)?
             }
             crate::caps::manifest::TrustedArgResolver::CalendarProvider => {
@@ -1599,10 +1729,11 @@ fn raw_operation_positionals(operation: &Operation, raw: &[String]) -> Vec<Strin
         if options && token == "--" {
             options = false;
         } else if options && token.starts_with('-') {
-            let option = token.split_once('=').map_or(token.as_str(), |(name, _)| name);
+            let option = token
+                .split_once('=')
+                .map_or(token.as_str(), |(name, _)| name);
             if let Some(declaration) = operation.args.iter().find(|declaration| {
-                (declaration.effective_binding()
-                    == crate::caps::manifest::ArgBinding::Flag
+                (declaration.effective_binding() == crate::caps::manifest::ArgBinding::Flag
                     && option == format!("--{}", crate::caps::args::flag_name(declaration)))
                     || declaration.aliases.iter().any(|alias| alias == option)
             }) {
@@ -1985,7 +2116,10 @@ pub fn run_python_app_with_stdin(
         launch
     });
     let launch = hosted_launch.as_ref().unwrap_or(launch);
-    let args = hosted.as_ref().map(|hosted| hosted.prepared.args.as_slice()).unwrap_or(args);
+    let args = hosted
+        .as_ref()
+        .map(|hosted| hosted.prepared.args.as_slice())
+        .unwrap_or(args);
 
     let app_dir = launch.dir();
     let main_py = app_dir.join("main.py");
@@ -2158,7 +2292,10 @@ pub fn run_app_with_stdin(
         launch
     });
     let launch = hosted_launch.as_ref().unwrap_or(launch);
-    let args = hosted.as_ref().map(|hosted| hosted.prepared.args.as_slice()).unwrap_or(args);
+    let args = hosted
+        .as_ref()
+        .map(|hosted| hosted.prepared.args.as_slice())
+        .unwrap_or(args);
     // Runtime and entry come from the verified snapshot's manifest,
     // parsed once. There is no path re-read here and no unsigned
     // fallback: a package that did not verify never reaches this
@@ -2366,10 +2503,7 @@ pub fn launch_gui(
         }
         let wrapper = python_wrapper(&main_py, exec, files, data_dir, apps_dir)?;
         let python = if cfg!(windows) { "python" } else { "python3" };
-        (
-            interpreter_path(python)?,
-            vec!["-c".to_string(), wrapper],
-        )
+        (interpreter_path(python)?, vec!["-c".to_string(), wrapper])
     } else {
         let entry_path = app_dir.join(&entry);
         if !entry_path.is_file() {
@@ -2445,7 +2579,7 @@ pub fn launch_gui(
         .spawn()
         .map_err(|e| format!("failed to launch {runtime:?} GUI: {e}"))?;
     let owner = crate::provenance::runtime::current_owner();
-        crate::provenance::runtime::register(owner, app_session.id(), launch.package());
+    crate::provenance::runtime::register(owner, app_session.id(), launch.package());
     crate::provenance::runtime::bind_process(
         crate::provenance::runtime::current_owner(),
         app_session.id(),
@@ -2479,7 +2613,7 @@ pub fn launch_gui(
 /// Resolve an interpreter to the canonical absolute path the sandbox
 /// will execute. Resolution happens in the launcher, on the host's
 /// `PATH`, so the worker cannot influence which binary runs.
-fn interpreter_path(program: &str) -> Result<std::path::PathBuf, String> {
+pub(crate) fn interpreter_path(program: &str) -> Result<std::path::PathBuf, String> {
     if let Some(paths) = std::env::var_os("PATH") {
         for dir in std::env::split_paths(&paths) {
             let candidate = dir.join(program);

@@ -43,13 +43,13 @@ const MANIFEST: &str = r#"{
   }
 }"#;
 
-struct HostProcess {
+pub(super) struct HostProcess {
     child: Child,
-    client: ClientIdentity,
+    pub(super) client: ClientIdentity,
 }
 
 impl HostProcess {
-    fn spawn(no_new_privs: bool) -> Self {
+    pub(super) fn spawn(no_new_privs: bool) -> Self {
         let root = unsafe { libc::geteuid() } == 0;
         let uid = if root {
             65534
@@ -100,17 +100,32 @@ impl Drop for HostProcess {
     }
 }
 
-struct Fixture {
+pub(super) struct Fixture {
     _lock: std::sync::MutexGuard<'static, ()>,
-    root: PathBuf,
+    pub(super) root: PathBuf,
     previous: Vec<(&'static str, Option<OsString>)>,
     replaced_trust: bool,
 }
 
 impl Fixture {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let lock = crate::test_env::lock_env();
         let root = crate::test_env::secure_scratch_dir("task-host-authority");
+        Self::with_directory(lock, root)
+    }
+
+    pub(super) fn private_root() -> Self {
+        let lock = crate::test_env::lock_env();
+        let root = PathBuf::from("/run").join(format!(
+            "cos-task-session-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        Self::with_directory(lock, root)
+    }
+
+    fn with_directory(lock: std::sync::MutexGuard<'static, ()>, root: PathBuf) -> Self {
         let mut fixture = Self {
             _lock: lock,
             root,
@@ -134,7 +149,11 @@ impl Fixture {
         self.signed_app_with_manifest(MANIFEST)
     }
 
-    fn signed_app_with_manifest(&mut self, manifest: &str) -> App {
+    pub(super) fn signed_app_with_manifest(&mut self, manifest: &str) -> App {
+        self.signed_app_with_entries(manifest, &["main.py"])
+    }
+
+    pub(super) fn signed_app_with_entries(&mut self, manifest: &str, entries: &[&str]) -> App {
         use crate::provenance::{sign, trust::TrustRootSpec, TrustStore};
 
         let declaration = Manifest::from_json(manifest).unwrap();
@@ -154,6 +173,11 @@ impl Fixture {
         ] {
             let path = app_dir.join(name);
             std::fs::write(&path, contents).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        if declaration.session.is_some() {
+            let path = app_dir.join("server.py");
+            std::fs::write(&path, "# verified stdio session fixture\n").unwrap();
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
         }
         let key = sign::SigningKeyFile::generate(Some("task-host fixture".to_string())).unwrap();
@@ -183,7 +207,7 @@ impl Fixture {
                 version: declaration.version,
                 manifest_schema: "test".to_string(),
                 manifest_path: "app.json".to_string(),
-                entrypoints: vec!["main.py".to_string()],
+                entrypoints: entries.iter().map(|entry| (*entry).to_string()).collect(),
                 resources: vec![],
             },
             &key,
@@ -213,7 +237,7 @@ fn argv(tokens: &[&str]) -> Vec<String> {
     tokens.iter().map(|token| (*token).to_string()).collect()
 }
 
-fn parent(caps: CapSet) -> SessionInfo {
+pub(super) fn parent(caps: CapSet) -> SessionInfo {
     SessionInfo {
         session_id: "task-parent".to_string(),
         pid: std::process::id(),
@@ -275,7 +299,7 @@ fn assigned_invocation<'a>(
     }
 }
 
-fn runtime() -> tokio::runtime::Runtime {
+pub(super) fn runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

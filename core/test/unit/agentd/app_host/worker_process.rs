@@ -13,9 +13,16 @@ mod support {
 
 use support::{ProcessContext, APP_ID, BODY, CHILD_TEST, CONTEXT_ENV, OPERATION};
 
+mod stateful {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/agentd/app_host/worker_stateful.rs"
+    ));
+}
+
 struct CapturedReceipt {
     channel: Arc<ChannelReceiptRecorder>,
-    report: Arc<Mutex<Option<crate::activities::ReceiptReport>>>,
+    report: Arc<Mutex<Vec<crate::activities::ReceiptReport>>>,
 }
 
 impl ReceiptRecorder for CapturedReceipt {
@@ -26,10 +33,10 @@ impl ReceiptRecorder for CapturedReceipt {
             .lock()
             .map_err(|_| "test receipt lock poisoned")?;
         assert!(
-            captured.is_none(),
+            captured.iter().all(|saved| saved.id != report.id),
             "the App invocation was reported more than once"
         );
-        *captured = Some(report);
+        captured.push(report);
         Ok(id)
     }
 }
@@ -84,7 +91,7 @@ fn controlled_host_child() {
         task_id: task_id.clone(),
         state: io.state.clone(),
     });
-    let captured = Arc::new(Mutex::new(None));
+    let captured = Arc::new(Mutex::new(Vec::new()));
     let recorder: Arc<dyn ReceiptRecorder> = Arc::new(CapturedReceipt {
         channel: channel.clone(),
         report: captured.clone(),
@@ -103,13 +110,17 @@ fn controlled_host_child() {
                 reporting::with_recorder(Some(recorder), async {
                     let session = crate::proc::current_session_info_for_caps().unwrap();
                     assert_eq!(session.pid, std::process::id());
-                    CosAppRun
-                        .exec(json!({
-                            "app": APP_ID,
-                            "command": OPERATION,
-                            "args": [context.input()],
-                        }))
-                        .await
+                    if context.stateful {
+                        stateful::execute(&context).await
+                    } else {
+                        CosAppRun
+                            .exec(json!({
+                                "app": APP_ID,
+                                "command": OPERATION,
+                                "args": [context.input()],
+                            }))
+                            .await
+                    }
                 }),
             ),
         ),
@@ -120,27 +131,33 @@ fn controlled_host_child() {
         }
     } else {
         let output: Value = serde_json::from_str(&result.content).expect("real App JSON output");
-        assert_eq!(output["body"], BODY);
-        assert_eq!(output["invocations"], 1);
+        let expected_calls = if context.stateful { 2 } else { 1 };
+        if !context.stateful {
+            assert_eq!(output["body"], BODY);
+            assert_eq!(output["invocations"], 1);
+        }
         assert_eq!(
             std::fs::read_to_string(context.app_data().join("counter")).unwrap(),
-            "1",
+            expected_calls.to_string(),
         );
-        let report = captured
-            .lock()
-            .unwrap()
-            .clone()
-            .expect("ordinary receipt capture");
+        let reports = captured.lock().unwrap().clone();
+        assert_eq!(reports.len(), expected_calls);
+        let report = reports[0].clone();
+        let receipt_ids: Vec<_> = reports.iter().map(|report| report.id.clone()).collect();
         let first_id = report.id.clone();
         // Retry only the original report over the real channel, not CosAppRun.
         let retried_id = channel.record(report).expect("record-only retry");
         assert_eq!(first_id, retried_id);
-        assert_eq!(io.state.receipts_used.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            io.state.receipts_used.load(Ordering::SeqCst),
+            expected_calls as u32 + 1
+        );
         assert!(io.state.pending_approvals().is_empty());
         WorkerOutcome::Ok(Box::new(protocol::CompletedRun {
             response: json!({
                 "output": output,
                 "receipt_id": retried_id,
+                "receipt_ids": receipt_ids,
                 "receipt_calls": io.state.receipts_used.load(Ordering::SeqCst),
                 "app_controls": io.state.app_calls_used.load(Ordering::SeqCst),
                 "worker_pid": identity.pid,

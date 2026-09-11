@@ -17,11 +17,17 @@ fn app(root: &std::path::Path) -> crate::apps::App {
     std::fs::write(dir.join("app.json"), json!({
         "id":"demo","version":"1","name":{"en":"Demo"},
         "operations":{"get":{"label":{"en":"Get"},"args":[{"name":"key","kind":"name","required":true}],
-        "effects":[{"kind":"read","label":{"en":"Read key"},"target_arg":"key","recovery":"not_applicable"}]}}
+        "effects":[{"kind":"read","label":{"en":"Read key"},"target_arg":"key","recovery":"not_applicable"}]}},
+        "session":{"entry":"server.py","tools":[{"name":"get","summary":"Read through the session"}]}
     }).to_string()).unwrap();
     std::fs::write(
         dir.join("main.py"),
         "raise AssertionError('recording never executes')\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("server.py"),
+        "raise AssertionError('recording never starts a session')\n",
     )
     .unwrap();
     crate::test_env::sign_test_package(&dir, crate::provenance::PackageKind::App, "demo");
@@ -96,4 +102,30 @@ fn receipt_keeps_unmatched_reports_and_redacts_text_without_authenticating_them(
         saved["source"],
         serde_json::to_value(ReceiptSource::CallerReported).unwrap()
     );
+}
+
+#[test]
+fn session_declarations_never_borrow_effects_from_a_same_named_operation() {
+    let _lock = crate::test_env::lock_env();
+    let apps = tempfile::tempdir().unwrap();
+    let _apps = TestEnvVarGuard::set("COS_APPS_DIR", apps.path());
+    let app = app(apps.path());
+    let mut report = crate::operations::receipts::capture_session(
+        "demo",
+        "get",
+        app.require_verified().unwrap().content_digest(),
+        Ok(("value".into(), false)),
+    );
+    let metadata = declaration(&report).unwrap();
+    assert_eq!(metadata.operation_label, "Read through the session");
+    assert!(metadata.effects.is_empty());
+    report.operation = "get".into();
+    let metadata = declaration(&report).unwrap();
+    assert_eq!(metadata.operation_label, "Get");
+    assert_eq!(metadata.effects.len(), 1);
+    report.operation = ReceiptReport::session_operation("missing");
+    assert!(declaration(&report).unwrap_err().contains("session tool"));
+    report.operation = ReceiptReport::session_operation("get");
+    report.package_digest = format!("sha256:{}", "b".repeat(64));
+    assert!(declaration(&report).unwrap_err().contains("differs"));
 }

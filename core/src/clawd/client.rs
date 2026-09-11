@@ -26,8 +26,17 @@ pub(crate) trait BrokerGateway: Send + Sync {
         &self,
         invocation: crate::operations::invocation::AppInvocation,
     ) -> Result<crate::operations::invocation::PreparedInvocation, String>;
+    fn prepare_session(
+        &self,
+        invocation: crate::operations::invocation::AppSessionInvocation,
+    ) -> Result<crate::operations::invocation::PreparedInvocation, String>;
+    fn session_call(&self, request: Request, call_id: Option<String>) -> Result<Response, String>;
     fn finish_app(&self, invocation_id: &str) -> Result<(), String>;
-    fn check_app(&self, session_id: &str, package_digest: &str) -> Result<(), String>;
+    fn check_app(
+        &self,
+        session_id: &str,
+        package_digest: &str,
+    ) -> Result<crate::caps::CapSet, String>;
 }
 
 static GATEWAY: OnceLock<Arc<dyn BrokerGateway>> = OnceLock::new();
@@ -55,6 +64,27 @@ pub(crate) fn prepare_app(
     Ok(Some(HostedInvocation { gateway, prepared }))
 }
 
+pub(crate) fn prepare_session(
+    invocation: crate::operations::invocation::AppSessionInvocation,
+) -> Result<Option<HostedInvocation>, String> {
+    let Some(gateway) = GATEWAY.get().cloned() else {
+        return Ok(None);
+    };
+    let prepared = gateway.prepare_session(invocation)?;
+    Ok(Some(HostedInvocation { gateway, prepared }))
+}
+
+pub(crate) fn request_session_call(
+    request: Request,
+    call_id: Option<String>,
+) -> Result<Response, String> {
+    let gateway = GATEWAY
+        .get()
+        .ok_or_else(|| "stateful call has no task gateway".to_string())?;
+    let response = gateway.session_call(request.clone(), call_id)?;
+    check(&request, response)
+}
+
 pub(crate) fn install_gateway(gateway: Arc<dyn BrokerGateway>) -> Result<(), String> {
     GATEWAY
         .set(gateway)
@@ -69,6 +99,13 @@ pub(crate) fn check_hosted_app(
     session_id: &str,
     package_digest: &str,
 ) -> Option<Result<(), String>> {
+    hosted_app_caps(session_id, package_digest).map(|result| result.map(|_| ()))
+}
+
+pub(crate) fn hosted_app_caps(
+    session_id: &str,
+    package_digest: &str,
+) -> Option<Result<crate::caps::CapSet, String>> {
     GATEWAY
         .get()
         .map(|gateway| gateway.check_app(session_id, package_digest))

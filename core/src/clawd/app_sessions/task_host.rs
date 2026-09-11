@@ -1,4 +1,4 @@
-//! Private exception for a root-supervised, one-shot App host.
+//! Private authority for a root-supervised App host.
 //!
 //! No route points here. The controller authenticates the task's signed
 //! grant and live lease, selects its owner and parent session from root
@@ -8,6 +8,13 @@
 use super::{
     operation_call, register_with_launcher, required_string, App, BrokerError, ClientIdentity,
     Delegation, LaunchKind, LauncherAuthority, SessionInfo, Value,
+};
+
+mod stateful;
+pub(crate) use stateful::{
+    prepare_session_call_for_task_host, prepare_session_for_task_host,
+    register_session_for_task_host, set_session_call_for_task_host, TaskHostSession,
+    TaskHostSessionCall,
 };
 
 /// The original invocation admitted by the root task controller.
@@ -98,10 +105,11 @@ pub(crate) async fn register_for_task_host(
         .require_home_dir()
         .map_err(BrokerError::authorization)?;
     let delegation = task_host_delegation(&launcher, uid, &home, parent, &params)?;
+    let app = super::installed_app(invocation.app_id)?;
     register_with_launcher(
         params,
         home,
-        invocation.app_id,
+        app,
         LaunchKind::Operation,
         launcher,
         delegation,

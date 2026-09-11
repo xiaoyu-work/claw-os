@@ -27,7 +27,7 @@ supervises, but does not execute it.
 | `grant.rs` | HMAC-signed job grant, its bindings, and both verification directions |
 | `protocol.rs` | Frames, route allowlist, protocol version, bounded framing, permission-mediation types |
 | `receipts.rs` | Reporting-only Activity receipt association from the authenticated lease and broker-owned Job |
-| `app_host/` | Controlled one-shot App hosting, retained original invocations and root-owned session lifecycle |
+| `app_host/` | Controlled App operations and stateful sessions, original invocations, per-call authority and root-owned lifecycle |
 | `supervisor.rs` | Broker-side claim → spawn → lease → pump → finish, permission mediation, reconciliation |
 | `worker.rs` | Worker-side handshake, dedicated channel thread, sinks, audit forwarding, approval gateway, cancellation |
 
@@ -101,7 +101,7 @@ and the supervisor requeues it after approval.
 
 ## Activity receipt reporting
 
-The reporting request/reply remains reporting-only in worker protocol v6. The broker marks
+The reporting request/reply remains reporting-only in worker protocol v7. The broker marks
 Activity-associated assignments for capture; an enabled assignment requires
 the signed `receipt` route. The supervisor retains that handshake decision
 and checks the route, task and live lease before recording.
@@ -117,9 +117,9 @@ waiters. Channel loss releases waiting calls explicitly.
 Reporting failures never retry an App invocation. Late reports may arrive
 during cancellation, and receipt persistence does not change Activity state.
 This route provides no App launch, broker proxy, capability, or approval
-decision. One-shot App execution uses the separate controlled host below.
+decision. App execution uses the separate controlled host below.
 
-## Controlled one-shot App host
+## Controlled App host
 
 The existing unprivileged worker acts as the App host; it does not become
 root or receive the general broker socket. A process-local gateway uses the
@@ -147,6 +147,15 @@ semantics. The dedicated channel thread keeps heartbeats live while a
 synchronous App or approval request waits. Runtime-selected arguments absent
 from the original invocation fail closed rather than introducing new targets.
 See [the App host module](app_host/MODULE.md) for bounds and privileged tests.
+
+App-owned stateful sessions use streamed WorkerSandbox launches with private
+App state and no standing host-file or network mounts. Every call is freshly
+authorized at root and serialized with its RPC and grant clearing. Private
+grant rotation preserves generic monotonic attenuation; stable control aliases
+remain task-local, and stale call-end IDs cannot clear later calls. Endpoint
+threads query the live root grant rather than relying on task-local registry
+paths or cached capabilities. Both one-shot and session results feed the same
+Activity receipt ledger.
 
 ## Residual Same-UID Boundary
 

@@ -30,8 +30,9 @@
 //!    materializes every declared default.
 //! 2. [`Manifest::resolve_session_tool_needs`] turns the manifest's
 //!    `needs[]` plus those effective arguments into concrete [`Cap`]s.
-//! 3. [`crate::caps::require`] checks each. A denial short-circuits
-//!    before the app server sees the call.
+//! 3. The broker freshly authorizes each hosted call; ordinary launchers
+//!    retain their local capability gate. A denial precedes `tools/call`.
+//!    Grant, RPC and revocation share one per-session lock.
 //! 4. On both allow and deny the kernel emits one
 //!    [`LlmRunRecord`] to `ai.jsonl` with `provider="app:<id>"` and
 //!    `model="tool:<tool_name>"`, matching the `cos ai tool` audit
@@ -39,21 +40,20 @@
 //!    server shells `cos ai chat`) carry the app's `COS_APP_ID` and
 //!    are audited under that identity too.
 //!
-//! The app's MCP server therefore never sees a call its manifest
-//! didn't authorise. App authors can still defensively re-check inside
-//! handlers, but they don't have to.
+//! The App runs in the shared sandbox with private App state, not standing
+//! host-file or network grants. Mediated effects use only the current call's
+//! live authority. Activity-associated results use the shared receipt ledger.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use tokio::process::{Child, Command};
-use tokio::sync::{Mutex, OwnedMutexGuard};
+use tokio::process::Child;
+use tokio::sync::Mutex;
 use tokio::time::timeout;
 
 use crate::agent::llm::run_log::{record as record_run, LlmRunRecord};
@@ -65,6 +65,10 @@ use crate::caps::manifest::{Manifest, Runtime, SessionTransport};
 use super::registry::ToolRegistry;
 use super::{Tool, ToolResult};
 
+mod call;
+mod sandbox;
+use sandbox::SessionProcess;
+
 // ---------------------------------------------------------------------------
 // Process-wide session manager
 // ---------------------------------------------------------------------------
@@ -73,9 +77,8 @@ use super::{Tool, ToolResult};
 /// dropping the whole entry kills it.
 struct ActiveSession {
     client: Arc<McpClient>,
-    /// We keep `Child` around so [`ActiveSession::Drop`] can
-    /// `start_kill` the server when the agent closes the session.
-    child: Option<Child>,
+    /// Owns the child, broker endpoints and sandbox teardown together.
+    _process: SessionProcess,
     /// For diagnostics + tool count surfaced through `open`.
     tool_count: usize,
     /// Keeps the kernel-attested App session registered for the lifetime of
@@ -84,7 +87,7 @@ struct ActiveSession {
     /// Serializes grant + RPC + revoke so concurrent tool calls cannot
     /// exercise each other's transient capabilities.
     call_lock: Arc<Mutex<()>>,
-    child_pid: u32,
+    process_identity: crate::provenance::runtime::ProcessIdentity,
     poisoned: Arc<AtomicBool>,
     /// The verified snapshot this server is running, with descriptors
     /// on the manifest and the session entry still open.
@@ -98,17 +101,10 @@ struct ActiveSession {
 
 impl Drop for ActiveSession {
     fn drop(&mut self) {
-        if let Some(mut child) = self.child.take() {
-            let _ = child.start_kill();
-            // Reap in a detached tokio task so we don't leak a
-            // zombie. Falls back to relying on parent-exit reap if
-            // no tokio runtime is available (which shouldn't happen
-            // — every caller of `close_session` is async).
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                handle.spawn(async move {
-                    let _ = child.wait().await;
-                });
-            }
+        self.poisoned.store(true, Ordering::SeqCst);
+        self._process.terminate();
+        if !crate::clawd::client::has_gateway() {
+            crate::provenance::runtime::deregister(self.process_identity.uid, self.identity.id());
         }
     }
 }
@@ -205,9 +201,7 @@ fn session_key(app_id: &str, apps_root: &Path) -> Result<SessionKey, String> {
 /// something the publisher said may be executed, and running it would
 /// let a signed package become an arbitrary-code launcher for anything
 /// shipped alongside it.
-fn declared_session_entry(
-    launch: &crate::bridge::AppLaunch,
-) -> Result<String, String> {
+fn declared_session_entry(launch: &crate::bridge::AppLaunch) -> Result<String, String> {
     let app_id = launch.app_id();
     let manifest = launch.manifest();
     let session = manifest
@@ -256,14 +250,11 @@ fn declared_session_entry(
 ///
 /// # Scope
 ///
-/// Provenance only. This answers *which bytes run*; it does not
-/// isolate them. The App-session stdio child on this path is spawned
-/// directly, outside the worker sandbox — no mount namespace, no
-/// egress policy, no seccomp filter — and that predates this binding.
-/// Adding the binding does not make the path sandboxed and must not be
-/// read as saying it is.
+/// This binding authenticates the bytes. The separate SessionProcess owns
+/// the shared worker sandbox and its lifetime; neither replaces the other.
 pub(crate) struct SessionBinding {
     binding: crate::bridge::LaunchBindingRef,
+    package: crate::provenance::runtime::PackageRef,
     entry_rel: String,
     entry_path: PathBuf,
     package_identity: Option<(u64, u64)>,
@@ -275,16 +266,20 @@ impl SessionBinding {
         binding: crate::bridge::LaunchBindingRef,
         entry_rel: String,
         entry_path: PathBuf,
-    ) -> Self {
+    ) -> Result<Self, String> {
         let package_identity = binding.dir_identity();
         let pinned_entries = binding.entries();
-        Self {
+        let package = binding
+            .package_ref()
+            .ok_or_else(|| "App session has no verified package binding".to_string())?;
+        Ok(Self {
             binding,
+            package,
             entry_rel,
             entry_path,
             package_identity,
             pinned_entries,
-        }
+        })
     }
 
     /// The absolute path of the pinned session entry.
@@ -294,24 +289,8 @@ impl SessionBinding {
 
     /// Audit-safe projection of what this launch is pinned to.
     ///
-    /// These are the same `(dev, ino)` identities a sandbox policy
-    /// binds through `AppOperationInput::package_identity` and
-    /// `pinned_entries`. This path does not build such a policy: the
-    /// App-session stdio child is spawned directly rather than through
-    /// `worker::prepare`. That is a pre-existing property of this code
-    /// path, not a consequence of anything here, and it is not a
-    /// design justification — `worker::derive` already supports
-    /// `StdioPlan::Streamed`, which is what the MCP/adapter attach path
-    /// uses for exactly this shape of child. Moving this launch onto it
-    /// is tracked separately.
-    ///
-    /// Until then the identities are enforced by this binding alone:
-    /// the descriptors stay open, and every spawn, cache reuse and tool
-    /// call re-asserts them. That is a provenance guarantee — the bytes
-    /// executing are the bytes that were signed — and nothing more. It
-    /// is not isolation, and it does not substitute for the sandbox
-    /// this path is missing. Recording the identities makes the pinned
-    /// set reconstructable from the audit log either way.
+    /// The streamed worker policy pins these same directory and entrypoint
+    /// identities. Cache reuse and tool calls still recheck the binding.
     fn audit_facts(&self) -> serde_json::Value {
         json!({
             "entry": self.entry_rel,
@@ -364,6 +343,20 @@ impl SessionBinding {
         }
         Ok(())
     }
+
+    fn assert_live(&self, session_id: &str) -> Result<(), String> {
+        self.assert_pinned()?;
+        if let Some(result) =
+            crate::clawd::client::check_hosted_app(session_id, &self.package.content_digest)
+        {
+            return result;
+        }
+        self.package.is_live(&crate::provenance::trust_store())?;
+        crate::provenance::runtime::assert_live_instance_now(
+            crate::provenance::runtime::current_owner(),
+            session_id,
+        )
+    }
 }
 
 #[cfg(unix)]
@@ -384,7 +377,7 @@ async fn bring_up_app(
 ) -> Result<
     (
         Arc<McpClient>,
-        Child,
+        SessionProcess,
         usize,
         crate::bridge::AppIdentitySession,
         SessionBinding,
@@ -393,7 +386,6 @@ async fn bring_up_app(
 > {
     let app_id = launch.app_id().to_string();
     let app_id = app_id.as_str();
-    let manifest = launch.manifest();
     let entry_rel = declared_session_entry(launch)?;
 
     // Re-assert the snapshot against the current trust store and open
@@ -403,9 +395,8 @@ async fn bring_up_app(
     // no `app_dir.join(entry)` re-resolution anywhere below.
     let binding = launch.bind(std::slice::from_ref(&entry_rel))?;
     let entry_path = launch.dir().join(&entry_rel);
-    let bound = SessionBinding::new(binding, entry_rel.clone(), entry_path);
+    let bound = SessionBinding::new(binding, entry_rel.clone(), entry_path)?;
 
-    let apps_dir_str = apps_dir.to_string_lossy().to_string();
     let data_dir = data_dir_string();
 
     // Resolve the directories holding `claw_os_sdk` and `cos_runtime`
@@ -416,107 +407,48 @@ async fn bring_up_app(
     // (`<repo>/claw-os-sdk/python/src` and
     // `<repo>/cos-runtime/python/src`).
     let py_dirs = resolve_python_pkg_dirs(apps_dir);
-    let mut path_parts: Vec<String> = py_dirs
-        .iter()
-        .map(|p| p.to_string_lossy().to_string())
-        .collect();
-    path_parts.push(apps_dir_str.clone());
-    let pythonpath = path_parts.join(pathsep());
-
-    // The interpreter selection comes from the same verified manifest
-    // as the entry, so the runtime that executes the signed bytes and
-    // the bytes themselves cannot be decided by two different reads.
-    let mut command = build_command(manifest.runtime, bound.entry_path());
-    let mut app_session = crate::bridge::AppIdentitySession::for_mcp(app_id, manifest)?;
-    // Wipe inherited env then reinstate the bare minimum + the
-    // `COS_*` configuration variables. App-internal env from
-    // `crate::config::as_env_vars()` is the curated subset the
-    // kernel decides to share with apps.
-    command.env_clear();
-    for (k, v) in safe_session_env_allowlist() {
-        command.env(k, v);
+    let mut app_session = crate::bridge::AppIdentitySession::for_mcp(launch)?;
+    let owner = crate::provenance::runtime::current_owner();
+    if !crate::clawd::client::has_gateway() {
+        crate::provenance::runtime::register(owner, app_session.id(), launch.package());
     }
-    command
-        .env("COS_APP_ID", app_id)
-        .env("COS_SESSION", app_session.id())
-        .env("COS_DATA_DIR", &data_dir)
-        .env("COS_PROC_DATA_DIR", app_session.proc_data_dir())
-        .env("COS_APPS_DIR", &apps_dir_str)
-        .env("PYTHONPATH", &pythonpath)
-        .env("PYTHONDONTWRITEBYTECODE", "1")
-        .env("DEBIAN_FRONTEND", "noninteractive")
-        .env("PAGER", "cat")
-        // Trigger the MCP-server mode of `runtime: binary` apps. The
-        // Rust SDK at `crates/cos-mcp-serve` keys off this variable
-        // (and only this variable) so the same desktop GUI binary can
-        // serve both its normal `main()` flow and the agent's tool
-        // surface. Python/Node/Shell apps ignore the var.
-        .env("COS_MCP_SERVER", "1")
-        .envs(crate::config::as_env_vars())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    if let Some(home) = crate::paths::current_home_override() {
-        command.env("HOME", &home).env("COS_HOME", home);
-    }
-    if app_id == "cosmic-notifications" {
-        for key in [
-            "DISPLAY",
-            "WAYLAND_DISPLAY",
-            "XDG_RUNTIME_DIR",
-            "DBUS_SESSION_BUS_ADDRESS",
-        ] {
-            if let Ok(value) = std::env::var(key) {
-                command.env(key, value);
-            }
-        }
-    }
-    crate::bridge::apply_routed_identity(command.as_std_mut())?;
 
     // The last thing before `spawn`, with the descriptors still open:
     // is every pinned file still the inode that was verified? A tree
     // swapped between `bind` and here fails the launch instead of
     // running whatever now sits at the path.
     bound.assert_pinned()?;
-    crate::provenance::audit(
-        "provenance.app_session_bound",
-        {
-            let mut facts = bound.audit_facts();
-            if let Some(object) = facts.as_object_mut() {
-                object.insert("package_id".to_string(), json!(app_id));
-                object.insert("session".to_string(), json!(app_session.id()));
-            }
-            facts
-        },
-    );
-    let mut child = command
-        .spawn()
-        .map_err(|e| format!("spawn `{app_id}` session: {e}"))?;
-    let Some(child_pid) = child.id() else {
-        kill_and_reap_child(child);
-        return Err(format!("spawned `{app_id}` session has no pid"));
-    };
-    if let Err(error) = app_session.bind_process(child_pid) {
-        kill_and_reap_child(child);
-        return Err(error);
+    crate::provenance::audit("provenance.app_session_bound", {
+        let mut facts = bound.audit_facts();
+        if let Some(object) = facts.as_object_mut() {
+            object.insert("package_id".to_string(), json!(app_id));
+            object.insert("session".to_string(), json!(app_session.id()));
+        }
+        facts
+    });
+    let mut process = sandbox::spawn(launch, &bound, &app_session, apps_dir, &data_dir, &py_dirs)?;
+    let child_pid = process
+        .id()
+        .ok_or_else(|| format!("spawned `{app_id}` session has no pid"))?;
+    if !crate::clawd::client::has_gateway() {
+        crate::provenance::runtime::bind_process(owner, app_session.id(), child_pid);
     }
-    let stdin = match child.stdin.take() {
+    app_session.bind_process(child_pid)?;
+    let stdin = match process.child().stdin.take() {
         Some(stdin) => stdin,
         None => {
-            kill_and_reap_child(child);
             return Err("child stdin unavailable".to_string());
         }
     };
-    let stdout = match child.stdout.take() {
+    let stdout = match process.child().stdout.take() {
         Some(stdout) => stdout,
         None => {
-            kill_and_reap_child(child);
             return Err("child stdout unavailable".to_string());
         }
     };
     // Pipe + prefix child stderr so per-app log lines are
     // attributable and don't corrupt the parent's TUI/log stream.
-    if let Some(stderr) = child.stderr.take() {
+    if let Some(stderr) = process.child().stderr.take() {
         let prefix = app_id.to_string();
         tokio::spawn(async move {
             use tokio::io::{AsyncBufReadExt, BufReader};
@@ -547,11 +479,9 @@ async fn bring_up_app(
     let init = match timeout(timeout_dur, init_fut).await {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => {
-            kill_and_reap_child(child);
             return Err(format!("initialize: {e}"));
         }
         Err(_) => {
-            kill_and_reap_child(child);
             return Err(format!(
                 "initialize timed out after {}s",
                 timeout_dur.as_secs()
@@ -574,11 +504,9 @@ async fn bring_up_app(
     let listed_count = match timeout(timeout_dur, list_fut).await {
         Ok(Ok(v)) => v.tools.len(),
         Ok(Err(e)) => {
-            kill_and_reap_child(child);
             return Err(format!("tools/list: {e}"));
         }
         Err(_) => {
-            kill_and_reap_child(child);
             return Err(format!(
                 "tools/list timed out after {}s",
                 timeout_dur.as_secs()
@@ -586,7 +514,7 @@ async fn bring_up_app(
         }
     };
 
-    Ok((client, child, listed_count, app_session, bound))
+    Ok((client, process, listed_count, app_session, bound))
 }
 
 /// Best-effort kill + detached reap of a child process. Used on
@@ -599,39 +527,6 @@ fn kill_and_reap_child(mut child: Child) {
         handle.spawn(async move {
             let _ = child.wait().await;
         });
-    }
-}
-
-fn build_command(runtime: Runtime, entry: &Path) -> Command {
-    let runner = crate::bridge::app_runner_path();
-    match runtime {
-        Runtime::Python => {
-            let bin = if cfg!(windows) { "python" } else { "python3" };
-            let mut c = Command::new(&runner);
-            c.arg("--").arg(bin).arg(entry);
-            c
-        }
-        Runtime::Node => {
-            let mut c = Command::new(&runner);
-            c.arg("--").arg("node").arg(entry);
-            c
-        }
-        Runtime::Shell => {
-            if cfg!(windows) {
-                let mut c = Command::new(&runner);
-                c.arg("--").arg("cmd").arg("/c").arg(entry);
-                c
-            } else {
-                let mut c = Command::new(&runner);
-                c.arg("--").arg("bash").arg(entry);
-                c
-            }
-        }
-        Runtime::Binary => {
-            let mut c = Command::new(&runner);
-            c.arg("--").arg(entry);
-            c
-        }
     }
 }
 
@@ -679,7 +574,7 @@ async fn get_or_open(
 /// re-checked against the current trust store; either failing drops the
 /// entry and forces a fresh, fully verified bring-up.
 fn reusable(session: &ActiveSession) -> bool {
-    if let Err(error) = session.bound.assert_pinned() {
+    if let Err(error) = session.bound.assert_live(session.identity.id()) {
         tracing::warn!(
             target: "provenance",
             %error,
@@ -687,133 +582,7 @@ fn reusable(session: &ActiveSession) -> bool {
         );
         return false;
     }
-    if let Err(error) = crate::provenance::runtime::assert_live_instance_now(
-        crate::provenance::runtime::current_owner(),
-        session.identity.id(),
-    ) {
-        tracing::warn!(
-            target: "provenance",
-            %error,
-            "dropping a cached App session whose package is no longer trusted"
-        );
-        return false;
-    }
     true
-}
-
-struct ActiveCallGuard {
-    control: crate::bridge::AppSessionControl,
-    child_pid: u32,
-    completed: bool,
-    poisoned: Arc<AtomicBool>,
-    _lock: OwnedMutexGuard<()>,
-}
-
-impl ActiveCallGuard {
-    fn mark_completed(&mut self) {
-        self.completed = true;
-    }
-}
-
-impl Drop for ActiveCallGuard {
-    fn drop(&mut self) {
-        let clear = self.control.set_transient_call(None);
-        if let Err(error) = &clear {
-            tracing::warn!(
-                child_pid = self.child_pid,
-                error = %error,
-                "failed to clear App MCP transient capabilities; killing session"
-            );
-        }
-        if !self.completed || clear.is_err() {
-            self.poisoned.store(true, Ordering::SeqCst);
-            #[cfg(unix)]
-            unsafe {
-                libc::kill(self.child_pid as i32, libc::SIGKILL);
-            }
-        }
-    }
-}
-
-async fn begin_active_session_call(
-    app_id: &str,
-    apps_root: &Path,
-    tool: &str,
-    args: &BTreeMap<String, Value>,
-    caps: &[crate::caps::Cap],
-) -> Result<ActiveCallGuard, String> {
-    let key = session_key(app_id, apps_root)?;
-    let (control, child_pid, call_lock, poisoned, session_id, bound) = {
-        let table = manager().lock().await;
-        let session = table
-            .get(&key)
-            .ok_or_else(|| format!("App session `{app_id}` is not open"))?;
-        (
-            session.identity.control(),
-            session.child_pid,
-            session.call_lock.clone(),
-            session.poisoned.clone(),
-            session.identity.id().to_string(),
-            Arc::clone(&session.bound),
-        )
-    };
-    // Per call, against the pinned snapshot. A session that has been
-    // open for hours is exactly the case where the tree may have moved
-    // underneath it.
-    if let Err(error) = bound.assert_pinned() {
-        poisoned.store(true, Ordering::SeqCst);
-        close_session_at(app_id, apps_root).await;
-        return Err(format!(
-            "App session `{app_id}` no longer runs the verified package: {error}"
-        ));
-    }
-    // Per call, against a freshly resolved trust store. A revocation
-    // that landed since the session opened ends the session here — the
-    // child's process group is signalled and the entry dropped — rather
-    // than merely declining this one call and leaving revoked code
-    // holding an open channel to the agent.
-    let owner = crate::provenance::runtime::current_owner();
-    if let Err(reason) = crate::provenance::runtime::assert_live_instance_now(owner, &session_id) {
-        poisoned.store(true, Ordering::SeqCst);
-        close_session_at(app_id, apps_root).await;
-        let doomed = session_id.clone();
-        let _ = tokio::task::spawn_blocking(move || {
-            crate::provenance::runtime::terminate(
-                owner,
-                &doomed,
-                crate::provenance::runtime::SHUTDOWN_GRACE,
-            )
-        })
-        .await;
-        return Err(format!(
-            "App session `{app_id}` is no longer trusted and was shut down: {reason}"
-        ));
-    }
-    let lock = call_lock.lock_owned().await;
-    if let Err(error) = control.set_transient_call(Some(crate::bridge::TransientCall {
-        tool,
-        args,
-        caps: crate::caps::CapSet::from_caps(caps.iter().cloned()),
-    })) {
-        let clear_error = control.set_transient_call(None).err();
-        #[cfg(unix)]
-        unsafe {
-            libc::kill(child_pid as i32, libc::SIGKILL);
-        }
-        return Err(match clear_error {
-            Some(clear) => {
-                format!("{error}; transient state was uncertain and cleanup failed: {clear}")
-            }
-            None => error,
-        });
-    }
-    Ok(ActiveCallGuard {
-        control,
-        child_pid,
-        completed: false,
-        poisoned,
-        _lock: lock,
-    })
 }
 
 /// Explicitly bring up `app_id`. Returns `(client, tool_count)`.
@@ -875,28 +644,31 @@ async fn open_session_at(
     }
     let launch = crate::bridge::AppLaunch::new(std::sync::Arc::clone(verified))?;
     let _ = manifest;
-    let (client, child, listed, identity, bound) =
+    let (client, process, listed, identity, bound) =
         bring_up_app(&launch, apps_root, DEFAULT_TIMEOUT).await?;
-    let child_pid = child
+    let child_pid = process
         .id()
         .ok_or_else(|| format!("App session `{app_id}` lost its pid"))?;
+    let process_identity = crate::provenance::runtime::ProcessIdentity::of_process(
+        crate::provenance::runtime::current_owner(),
+        child_pid,
+    )
+    .filter(crate::provenance::runtime::ProcessIdentity::still_matches)
+    .ok_or_else(|| format!("App session `{app_id}` lost its process identity"))?;
     // The App-session MCP child is a verified package holding a live
     // stdio channel to the agent. Record which artifact it came from
     // and which exact process it is, so a later revocation can both
     // deny it and stop it.
-    let owner = crate::provenance::runtime::current_owner();
-    crate::provenance::runtime::register_mcp_package(owner, identity.id(), verified);
-    crate::provenance::runtime::bind_process(owner, identity.id(), child_pid);
     let mut table = manager().lock().await;
     table.insert(
         key,
         ActiveSession {
             client: client.clone(),
-            child: Some(child),
+            _process: process,
             tool_count: listed,
             identity,
             call_lock: Arc::new(Mutex::new(())),
-            child_pid,
+            process_identity,
             poisoned: Arc::new(AtomicBool::new(false)),
             bound: Arc::new(bound),
         },
@@ -914,20 +686,21 @@ async fn open_session_at(
 /// session will return `ConnectionClosed` once the child's stdio is
 /// torn down.
 async fn close_session_at(app_id: &str, apps_root: &Path) -> bool {
+    close_matching_session_at(app_id, apps_root, None).await
+}
+
+async fn close_matching_session_at(app_id: &str, apps_root: &Path, expected: Option<&str>) -> bool {
     let Ok(key) = session_key(app_id, apps_root) else {
         return false;
     };
     let removed = {
         let mut table = manager().lock().await;
+        if expected.is_some_and(|id| table.get(&key).is_none_or(|s| s.identity.id() != id)) {
+            return false;
+        }
         table.remove(&key)
     };
     let was_present = removed.is_some();
-    if let Some(session) = removed.as_ref() {
-        crate::provenance::runtime::deregister(
-            crate::provenance::runtime::current_owner(),
-            session.identity.id(),
-        );
-    }
     // Explicit drop here to make the lifetime obvious — the Drop
     // impl does the async reap.
     drop(removed);
@@ -946,28 +719,9 @@ fn data_dir_string() -> String {
     }
 }
 
-/// Environment variables an app-session child needs at a minimum:
-/// PATH (for locating interpreters), HOME (cache dirs), locale/TZ
-/// (for correct output), terminal hints. Everything else — and in
-/// particular every `*_TOKEN`, `*_API_KEY`, `*_SECRET` — is dropped
-/// by [`bring_up_app`]'s `env_clear`.
+/// Locale and terminal hints only; the sandbox owns PATH, HOME and scratch.
 fn safe_session_env_allowlist() -> Vec<(String, String)> {
-    const ALWAYS: &[&str] = &[
-        "PATH",
-        "HOME",
-        "USER",
-        "LOGNAME",
-        "SHELL",
-        "LANG",
-        "LC_ALL",
-        "LC_CTYPE",
-        "LC_MESSAGES",
-        "TZ",
-        "TERM",
-        "TMPDIR",
-        "TEMP",
-        "TMP",
-    ];
+    const ALWAYS: &[&str] = &["LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES", "TZ", "TERM"];
     let mut out = Vec::with_capacity(ALWAYS.len());
     for k in ALWAYS {
         if let Ok(v) = std::env::var(k) {
@@ -1183,7 +937,21 @@ impl Tool for AppSessionTool {
 
     async fn exec(&self, input: Value) -> ToolResult {
         let started = Instant::now();
-        let supplied_args = json_to_arg_map(&input);
+        let supplied_args = match json_to_arg_map(&input) {
+            Ok(args) => args,
+            Err(error) => {
+                emit_audit(
+                    &self.app_id,
+                    &self.manifest_tool_name,
+                    "",
+                    "denied",
+                    Some(&error),
+                    Some(&error),
+                    started.elapsed(),
+                );
+                return ToolResult::err(error);
+            }
+        };
         let paths = match crate::bridge::launcher_path_context() {
             Ok(paths) => paths,
             Err(error) => return ToolResult::err(format!("resolve App paths: {error}")),
@@ -1212,57 +980,59 @@ impl Tool for AppSessionTool {
         let args_map = effective.values;
         let caps = effective.needs.into_iter().flatten().collect::<Vec<_>>();
 
-        for cap in &caps {
-            if let Err(denial) = crate::caps::require(cap.verb, cap.scope.clone()) {
-                let msg = denial.to_string();
-                emit_audit(
-                    &self.app_id,
-                    &self.manifest_tool_name,
-                    cap.verb.as_str(),
-                    "denied",
-                    Some(&msg),
-                    Some(&msg),
-                    started.elapsed(),
-                );
-                return ToolResult::err(msg);
+        let hosted = crate::clawd::client::has_gateway();
+        if !hosted {
+            for cap in &caps {
+                if let Err(denial) = crate::caps::require(cap.verb, cap.scope.clone()) {
+                    let msg = denial.to_string();
+                    emit_audit(
+                        &self.app_id,
+                        &self.manifest_tool_name,
+                        cap.verb.as_str(),
+                        "denied",
+                        Some(&msg),
+                        Some(&msg),
+                        started.elapsed(),
+                    );
+                    return ToolResult::err(msg);
+                }
             }
         }
 
-        // 2) Open / reuse session.
-        let client = match get_or_open(
-            &self.app_id,
-            &self.app_dir,
-            &self.apps_root,
-            &self.manifest,
-        )
-        .await
+        if let Err(error) =
+            get_or_open(&self.app_id, &self.app_dir, &self.apps_root, &self.manifest).await
         {
-            Ok(c) => c,
-            Err(e) => {
-                emit_audit(
-                    &self.app_id,
-                    &self.manifest_tool_name,
-                    verb_csv(&caps).as_str(),
-                    "allowed",
-                    None,
-                    Some(&e),
-                    started.elapsed(),
-                );
-                return ToolResult::err(format!("could not bring up app `{}`: {e}", self.app_id));
-            }
-        };
-        let mut active_call = match begin_active_session_call(
+            emit_audit(
+                &self.app_id,
+                &self.manifest_tool_name,
+                verb_csv(&caps).as_str(),
+                "allowed",
+                None,
+                Some(&error),
+                started.elapsed(),
+            );
+            return ToolResult::err(format!("could not bring up app `{}`: {error}", self.app_id));
+        }
+        let active_call = match call::begin(
             &self.app_id,
             &self.apps_root,
             &self.manifest_tool_name,
-            &args_map,
+            if hosted { &supplied_args } else { &args_map },
             &caps,
         )
         .await
         {
             Ok(guard) => guard,
             Err(error) => {
-                close_session_at(&self.app_id, &self.apps_root).await;
+                emit_audit(
+                    &self.app_id,
+                    &self.manifest_tool_name,
+                    verb_csv(&caps).as_str(),
+                    "denied",
+                    Some(&error),
+                    Some(&error),
+                    started.elapsed(),
+                );
                 return ToolResult::err(format!(
                     "could not grant App `{}` call capabilities: {error}",
                     self.app_id
@@ -1270,91 +1040,80 @@ impl Tool for AppSessionTool {
             }
         };
 
-        // 3) Forward tools/call.
-        let arguments = if args_map.is_empty() {
+        let session_id = active_call.session_id.clone();
+        let package_digest = active_call.package_digest.clone();
+        let arguments = if active_call.args.is_empty() {
             None
         } else {
-            Some(Value::Object(args_map.clone().into_iter().collect()))
+            Some(Value::Object(
+                active_call.args.clone().into_iter().collect(),
+            ))
         };
-        let call = client.call_tool(self.manifest_tool_name.clone(), arguments);
-        let res = match timeout(self.timeout, call).await {
-            Ok(r) => r,
-            Err(_) => {
-                let msg = format!(
-                    "app `{}` tool `{}` timed out after {}s",
-                    self.app_id,
-                    self.manifest_tool_name,
-                    self.timeout.as_secs()
-                );
-                emit_audit(
-                    &self.app_id,
-                    &self.manifest_tool_name,
-                    verb_csv(&caps).as_str(),
-                    "allowed",
-                    None,
-                    Some(&msg),
-                    started.elapsed(),
-                );
-                drop(active_call);
-                close_session_at(&self.app_id, &self.apps_root).await;
-                return ToolResult::err(msg);
-            }
-        };
-        match res {
-            Ok(call_result) => {
-                active_call.mark_completed();
-                let (content, is_error) = render_call_result(call_result);
-                emit_audit(
-                    &self.app_id,
-                    &self.manifest_tool_name,
-                    verb_csv(&caps).as_str(),
-                    "allowed",
-                    None,
-                    if is_error {
-                        Some(content.as_str())
-                    } else {
-                        None
-                    },
-                    started.elapsed(),
-                );
-                if is_error {
-                    ToolResult::err(content)
-                } else {
-                    ToolResult::ok(content)
-                }
-            }
-            Err(e) => {
-                if matches!(e, ClientError::Server { .. }) {
-                    active_call.mark_completed();
-                } else {
-                    drop(active_call);
-                    close_session_at(&self.app_id, &self.apps_root).await;
-                }
-                let msg = format!(
-                    "app `{}` tool `{}` failed: {e}",
+        let call = active_call
+            .client
+            .call_tool(self.manifest_tool_name.clone(), arguments);
+        let (result, response_received) = match timeout(self.timeout, call).await {
+            Ok(Ok(result)) => (Ok(render_call_result(result)), true),
+            Ok(Err(error)) => {
+                let received = matches!(error, ClientError::Server { .. });
+                let message = format!(
+                    "app `{}` tool `{}` failed: {error}",
                     self.app_id, self.manifest_tool_name
                 );
-                emit_audit(
-                    &self.app_id,
-                    &self.manifest_tool_name,
-                    verb_csv(&caps).as_str(),
-                    "allowed",
-                    None,
-                    Some(&msg),
-                    started.elapsed(),
-                );
-                ToolResult::err(msg)
+                if received {
+                    (Ok((message, true)), true)
+                } else {
+                    (
+                        Err(format!(
+                            "{message}; effects are indeterminate, do not repeat automatically"
+                        )),
+                        false,
+                    )
+                }
             }
+            Err(_) => (
+                Err(format!(
+                    "app `{}` tool `{}` timed out after {}s; effects are indeterminate, do not repeat automatically",
+                    self.app_id, self.manifest_tool_name, self.timeout.as_secs()
+                )),
+                false,
+            ),
+        };
+        let cleanup_error = active_call.finish(response_received).err();
+        if !response_received || cleanup_error.is_some() {
+            close_matching_session_at(&self.app_id, &self.apps_root, Some(&session_id)).await;
         }
+        let error = match &result {
+            Ok((content, true)) => Some(content.as_str()),
+            Err(error) => Some(error.as_str()),
+            _ => None,
+        };
+        emit_audit(
+            &self.app_id,
+            &self.manifest_tool_name,
+            verb_csv(&caps).as_str(),
+            "allowed",
+            None,
+            error.or(cleanup_error.as_deref()),
+            started.elapsed(),
+        );
+        call::report(
+            &self.app_id,
+            &self.manifest_tool_name,
+            &package_digest,
+            result,
+            cleanup_error,
+        )
+        .await
     }
 }
 
-fn json_to_arg_map(input: &Value) -> BTreeMap<String, Value> {
+fn json_to_arg_map(input: &Value) -> Result<BTreeMap<String, Value>, String> {
     // MCP protocol metadata lives in the tools/call envelope. The arguments
     // object contains only manifest-declared values and is validated strictly.
     match input {
-        Value::Object(m) => m.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
-        _ => BTreeMap::new(),
+        Value::Object(m) => Ok(m.iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
+        _ => Err("App session tool arguments must be a JSON object".to_string()),
     }
 }
 

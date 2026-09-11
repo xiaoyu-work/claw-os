@@ -3,7 +3,7 @@
 //! The channel is a private `socketpair(2)` handed to the child as fd
 //! 3 and carries newline-delimited JSON. It exposes nothing but the
 //! lifecycle of the single task the worker was spawned for, including a
-//! closed one-shot App-host control surface. There is no general broker
+//! closed App operation/session control surface. There is no general broker
 //! proxy, admin, scheduler or permission-decision route here, and
 //! every payload is a typed, already policy-projected structure rather
 //! than free-form JSON, so a compromised worker cannot widen what it
@@ -30,7 +30,7 @@ use super::grant::SignedGrant;
 /// Bumped whenever a frame changes shape. `clawd` refuses a worker that
 /// reports a different version, and the worker refuses an assignment
 /// that carries one.
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 7;
 
 /// Descriptor the broker dups the worker end of the channel onto.
 pub const CHANNEL_FD: i32 = 3;

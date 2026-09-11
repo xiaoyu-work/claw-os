@@ -45,7 +45,7 @@ async fn finish(
             );
             (recorder, report)
         });
-    let mut output = match result {
+    let output = match result {
         Ok(Some(text)) => ToolResult::ok(text),
         Ok(None) => ToolResult::ok(String::new()),
         Err(message) => ToolResult::err(message),
@@ -53,28 +53,7 @@ async fn finish(
     let Some((recorder, report)) = report else {
         return output;
     };
-    let submitted = report.clone();
-    let recorded = match tokio::task::spawn_blocking(move || recorder.record(submitted)).await {
-        Ok(Ok(id)) if id == report.id => return output,
-        Ok(Ok(_)) => "receipt recorder acknowledged a different report".to_string(),
-        Ok(Err(error)) => receipts::diagnostic(&error),
-        Err(error) => receipts::diagnostic(&format!("receipt recorder failed: {error}")),
-    };
-    let retry = match serde_json::to_string(&report) {
-        Ok(retry) => retry,
-        Err(error) => {
-            output.content.push_str(&format!(
-                "\n\nActivity receipt recording failed: {recorded}. The report could not be encoded: {error}. Do not repeat the App operation."
-            ));
-            output.is_error = true;
-            return output;
-        }
-    };
-    output.content.push_str(&format!(
-        "\n\nActivity receipt recording failed: {recorded}.\nDo not repeat the App operation to repair recording. Retry only this report through `cos activity record-receipt <activity-id> --stdin`:\n{retry}"
-    ));
-    output.is_error = true;
-    output
+    super::super::app_receipts::deliver(output, recorder, report).await
 }
 
 #[cfg(test)]

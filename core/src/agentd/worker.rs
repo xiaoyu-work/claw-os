@@ -782,7 +782,10 @@ impl ChannelAppGateway {
 
         call.validate()?;
         if self.state.cancelled.load(Ordering::SeqCst)
-            && !matches!(call, AppHostCall::Deregister(_) | AppHostCall::End(_))
+            && !matches!(
+                call,
+                AppHostCall::Deregister(_) | AppHostCall::End(_) | AppHostCall::EndCall(_)
+            )
         {
             return Err("the task App host was cancelled".to_string());
         }
@@ -843,36 +846,104 @@ impl crate::clawd::client::BrokerGateway for ChannelAppGateway {
             super::app_host::protocol::AppHostCall::Begin(invocation),
         )?;
         if !response.ok {
-            return Err(response.error.map(|error| error.message)
+            return Err(response
+                .error
+                .map(|error| error.message)
                 .unwrap_or_else(|| "App invocation preparation failed".to_string()));
         }
-        let prepared: crate::operations::invocation::PreparedInvocation =
-            serde_json::from_value(response.result.ok_or_else(|| "App preparation returned no result".to_string())?)
-                .map_err(|error| format!("invalid App preparation result: {error}"))?;
-        if uuid::Uuid::parse_str(&prepared.id).map_err(|error| error.to_string())?.to_string() != prepared.id {
+        let prepared: crate::operations::invocation::PreparedInvocation = serde_json::from_value(
+            response
+                .result
+                .ok_or_else(|| "App preparation returned no result".to_string())?,
+        )
+        .map_err(|error| format!("invalid App preparation result: {error}"))?;
+        if uuid::Uuid::parse_str(&prepared.id)
+            .map_err(|error| error.to_string())?
+            .to_string()
+            != prepared.id
+        {
             return Err("App preparation returned a noncanonical identifier".to_string());
         }
         Ok(prepared)
     }
 
+    fn prepare_session(
+        &self,
+        invocation: crate::operations::invocation::AppSessionInvocation,
+    ) -> Result<crate::operations::invocation::PreparedInvocation, String> {
+        let response = self.exchange(
+            crate::clawd::protocol::RequestId::generate(),
+            super::app_host::protocol::AppHostCall::BeginSession(invocation),
+        )?;
+        if !response.ok {
+            return Err(response
+                .error
+                .map(|error| error.message)
+                .unwrap_or_else(|| "App session preparation failed".to_string()));
+        }
+        let prepared: crate::operations::invocation::PreparedInvocation = serde_json::from_value(
+            response
+                .result
+                .ok_or_else(|| "App session preparation returned no result".to_string())?,
+        )
+        .map_err(|error| format!("invalid App session preparation: {error}"))?;
+        if !prepared.args.is_empty()
+            || uuid::Uuid::parse_str(&prepared.id)
+                .map_err(|error| error.to_string())?
+                .to_string()
+                != prepared.id
+        {
+            return Err("invalid prepared App session identity".to_string());
+        }
+        Ok(prepared)
+    }
+
+    fn session_call(
+        &self,
+        request: crate::clawd::protocol::Request,
+        call_id: Option<String>,
+    ) -> Result<crate::clawd::protocol::Response, String> {
+        use super::app_host::protocol::{AppHostCall, SessionCallEnd};
+        if request.command != crate::clawd::routes::Command::AppSessionSetTransient {
+            return Err("hosted session calls require the transient-call contract".to_string());
+        }
+        let params = (request.command.route().decode)(request.params)
+            .map_err(|_| "invalid hosted session call parameters".to_string())?;
+        let call: crate::clawd::wire::requests::AppSessionSetTransient =
+            serde_json::from_value(params).map_err(|error| error.to_string())?;
+        let call = match call_id {
+            Some(id) => AppHostCall::EndCall(SessionCallEnd {
+                request: call,
+                call_id: crate::clawd::wire::bounded::Token::parse(&id).map_err(str::to_string)?,
+            }),
+            None => AppHostCall::StartCall(call),
+        };
+        self.exchange(request.id, call)
+    }
+
     fn finish_app(&self, invocation_id: &str) -> Result<(), String> {
         let response = self.exchange(
             crate::clawd::protocol::RequestId::generate(),
-            super::app_host::protocol::AppHostCall::End(
-                super::app_host::protocol::InvocationEnd {
-                    invocation_id: crate::clawd::wire::bounded::Token::parse(invocation_id).map_err(str::to_string)?,
-                },
-            ),
+            super::app_host::protocol::AppHostCall::End(super::app_host::protocol::InvocationEnd {
+                invocation_id: crate::clawd::wire::bounded::Token::parse(invocation_id)
+                    .map_err(str::to_string)?,
+            }),
         )?;
         if response.ok {
             Ok(())
         } else {
-            Err(response.error.map(|error| error.message)
+            Err(response
+                .error
+                .map(|error| error.message)
                 .unwrap_or_else(|| "App invocation retirement failed".to_string()))
         }
     }
 
-    fn check_app(&self, session_id: &str, package_digest: &str) -> Result<(), String> {
+    fn check_app(
+        &self,
+        session_id: &str,
+        package_digest: &str,
+    ) -> Result<crate::caps::CapSet, String> {
         use super::app_host::protocol::{AppCheck, AppHostCall};
         let check = AppCheck {
             session_id: crate::clawd::wire::bounded::Token::parse(session_id)
@@ -887,7 +958,15 @@ impl crate::clawd::client::BrokerGateway for ChannelAppGateway {
             && response.result.as_ref().and_then(|value| value.get("live"))
                 == Some(&Value::Bool(true))
         {
-            return Ok(());
+            let caps = response
+                .result
+                .as_ref()
+                .and_then(|value| value.get("caps"))
+                .ok_or_else(|| {
+                    "App-host liveness response omitted its live capabilities".to_string()
+                })?;
+            return serde_json::from_value(caps.clone())
+                .map_err(|error| format!("invalid App-host live capabilities: {error}"));
         }
         Err(response
             .error

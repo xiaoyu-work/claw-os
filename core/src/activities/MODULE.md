@@ -137,6 +137,13 @@ The digest and byte count are caller reports about the original output, not
 proof of execution. A redacted or truncated preview need not be valid JSON,
 match the digest, or have the same length as the original output.
 
+One-shot operation names retain their existing grammar. App-owned session
+receipts use `session:<tool>`, where the tool is at most 128 ASCII bytes and
+matches the manifest's `[a-z][a-z0-9._-]*` grammar. This is a qualified identifier
+in the existing string field, not an execution route or another App category.
+Session results summarize the rendered MCP output, including its explicit
+error flag, rather than the raw protocol envelope.
+
 The broker redacts previews/errors before storage and supplies exactly one
 verified declaration snapshot or a bounded declaration error. A declaration
 is only current signed-manifest metadata matched to the reported package

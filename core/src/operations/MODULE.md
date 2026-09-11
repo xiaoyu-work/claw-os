@@ -11,7 +11,7 @@ grant, a filesystem diff, or proof that an effect will occur.
 | Path | Role |
 | --- | --- |
 | `mod.rs` | Verified manifest preview, bounded input binding, and requested target projection |
-| `invocation.rs` | Requested App operation and canonical preparation data; neither is execution authority |
+| `invocation.rs` | Requested App operations/sessions and canonical invocation/call preparation; none is execution authority |
 | `cli.rs` | Thin terminal client of the shared broker |
 | `receipts.rs` | Bounded, redacted capture of App return values as reports, not verified effects |
 | `reporting.rs` | Task-scoped recorder definition; delivery is supplied by the worker, never a second store or execution path |
@@ -40,6 +40,10 @@ The router's explicit execution path captures results through `receipts.rs`
 and records them in the shared Activity service. It preserves App errors and
 indeterminate outcomes and never retries an operation to repair receipt
 storage. See [execution receipts](../../../docs/execution-receipts.md).
+App-owned session calls use the same capture and delivery contract, with
+`session:<tool>` receipt names and explicit MCP error/uncertainty semantics.
+Session summaries are authenticated independently of ordinary operation
+effects; a same-named operation cannot supply a session tool's declaration.
 Public file-change-plan replies are validated before projecting their real
 unified diffs into the same receipt view. The original output digest is
 retained, truncation is explicit, and App-reported plans are never promoted

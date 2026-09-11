@@ -58,7 +58,9 @@ use super::state::DaemonState;
 
 mod task_host;
 pub(crate) use task_host::{
-    prepare_for_task_host, register_for_task_host, TaskHostInvocation,
+    prepare_for_task_host, prepare_session_call_for_task_host, prepare_session_for_task_host,
+    register_for_task_host, register_session_for_task_host, set_session_call_for_task_host,
+    TaskHostInvocation, TaskHostSession, TaskHostSessionCall,
 };
 
 /// How long an issued handle may be used to bind a child process.
@@ -252,19 +254,20 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
     let kind = launch_kind(&params)?;
     let launcher = authenticate_launcher(client, uid, home.clone()).await?;
     let delegation = Delegation::new(&launcher, uid, &home, &params)?;
-    register_with_launcher(params, home, &app_id, kind, launcher, delegation, None).await
+    let app = installed_app(&app_id)?;
+    register_with_launcher(params, home, app, kind, launcher, delegation, None).await
 }
 
 async fn register_with_launcher(
     params: Value,
     home: std::path::PathBuf,
-    app_id: &str,
+    app: App,
     kind: LaunchKind,
     launcher: LauncherAuthority,
     delegation: Delegation,
     invocation: Option<&TaskHostInvocation<'_>>,
 ) -> Result<Value, BrokerError> {
-    let app = installed_app(app_id)?;
+    let app_id = app.manifest.id.as_str();
     if let Some(invocation) = invocation {
         invocation.validate_package(&app)?;
     }
@@ -630,6 +633,7 @@ pub async fn set_transient(params: Value, client: &ClientIdentity) -> Result<Val
     // concurrent re-scope, clear or teardown cannot land between them.
     let serializer = session_lock(&session_id);
     let _transition = serializer.lock().await;
+    require_launch_grant(client, &handle, &session_id, uid)?;
 
     // Everything the new grant needs is read under the owner's own path
     // view — the routed registry is partitioned per uid, and reading
@@ -722,27 +726,66 @@ pub async fn set_transient(params: Value, client: &ClientIdentity) -> Result<Val
     // ceiling — the previous transient set is restored before the error
     // is returned, so a failed call never leaves widened authority
     // behind for `caps::require` or a later peer-session grant to find.
-    let write_id = session_id.clone();
-    let write_caps = caps.clone();
-    let write_home = home.clone();
-    let previous = crate::paths::with_user_override(uid, write_home, async move {
-        crate::proc::swap_app_session_transient_caps(&write_id, write_caps)
-    })
-    .await?;
-
-    if let Err(error) = reissue_session_grant(
-        &handle,
-        &session_id,
-        Some(&app_id),
+    transient_transaction(
         uid,
-        child_pid,
-        &effective,
-        ceiling,
-    ) {
-        rollback_transient_caps(uid, home, &session_id, previous).await;
-        return Err(error);
-    }
+        home,
+        &session_id,
+        caps,
+        TransientRollback::RestorePrevious,
+        || {
+            reissue_session_grant(
+                &handle, &session_id, Some(&app_id), uid, child_pid, &effective, ceiling,
+            )
+            .map_err(BrokerError::from)
+        },
+        || {},
+    )
+    .await
+    .map_err(|error| error.message)?;
     Ok(json!({"updated": true}))
+}
+
+#[derive(Clone, Copy)]
+enum TransientRollback {
+    RestorePrevious,
+    Clear,
+}
+
+/// Both public re-scope and private rotation commit through this transaction.
+/// The private path clears on failure instead of restoring prior call rights.
+async fn transient_transaction<T>(
+    uid: u32,
+    home: std::path::PathBuf,
+    session_id: &str,
+    caps: Option<CapSet>,
+    rollback: TransientRollback,
+    apply: impl FnOnce() -> Result<T, BrokerError>,
+    revoke_failed: impl FnOnce(),
+) -> Result<T, BrokerError> {
+    let previous = crate::paths::with_user_override(uid, home.clone(), async {
+        crate::proc::swap_app_session_transient_caps(session_id, caps)
+    })
+    .await;
+    let previous = match previous {
+        Ok(previous) => previous,
+        Err(error) => {
+            if matches!(rollback, TransientRollback::Clear) {
+                revoke_failed();
+                rollback_transient_caps(uid, home, session_id, None).await;
+            }
+            return Err(error.into());
+        }
+    };
+    let result = apply();
+    if result.is_err() {
+        revoke_failed();
+        let restored = match rollback {
+            TransientRollback::RestorePrevious => previous,
+            TransientRollback::Clear => None,
+        };
+        rollback_transient_caps(uid, home, session_id, restored).await;
+    }
+    result
 }
 
 /// Put an App session's transient capabilities back the way they were.
@@ -781,13 +824,14 @@ pub async fn deregister(params: Value, client: &ClientIdentity) -> Result<Value,
     let home = client.require_home_dir()?;
     let session_id = required_string(&params, "session_id")?;
     let handle = required_string(&params, "handle")?;
-    let launch = require_launch_grant(client, &handle, &session_id, uid)?;
+    require_launch_grant(client, &handle, &session_id, uid)?;
     // Teardown is a capability transition like any other: taking the
     // same serializer is what stops a deregistration from racing an
     // in-flight re-scope and leaving a grant behind for a row that is
     // already gone.
     let serializer = session_lock(&session_id);
     let transition = serializer.lock().await;
+    let launch = require_launch_grant(client, &handle, &session_id, uid)?;
     let remove_id = session_id.clone();
     crate::paths::with_user_override(uid, home, async move {
         crate::proc::deregister_session(&remove_id);
@@ -1155,6 +1199,20 @@ fn session_tool_plan(
     delegation: &Delegation,
     ceiling: &Ceiling,
 ) -> Result<LaunchPlan, BrokerError> {
+    let (tool, effective) = session_tool_call(app, call, delegation)?;
+    derive_plan(
+        &tool.needs, &effective.needs, delegation, ceiling, &app.manifest.id,
+    )
+}
+
+fn session_tool_call<'a>(
+    app: &'a App,
+    call: &Value,
+    delegation: &Delegation,
+) -> Result<
+    (&'a crate::caps::manifest::SessionTool, crate::caps::manifest::EffectiveCall),
+    BrokerError,
+> {
     let app_id = app.manifest.id.as_str();
     let tool_name = required_string(call, "tool")?;
     let args: BTreeMap<String, Value> = match call.get("args") {
@@ -1172,7 +1230,7 @@ fn session_tool_plan(
         .manifest
         .resolve_session_tool_call(&tool_name, &args, &delegation.paths)
         .map_err(|error| format!("resolve `{tool_name}` capabilities: {error}"))?;
-    derive_plan(&tool.needs, &effective.needs, delegation, ceiling, app_id)
+    Ok((tool, effective))
 }
 
 /// Turn manifest needs into a complete capability plan.
@@ -1491,46 +1549,61 @@ fn issue_launch_grant(
     caps: &CapSet,
     ceiling: Option<&Ceiling>,
 ) -> Result<String, String> {
+    let issuance = launch_issuance(
+        session_id, app_id, uid, launcher, caps, ceiling, LAUNCH_GRANT_TTL,
+    )?;
+    let (handle, view) = authority::authority()
+        .issue(issuance)
+        .map_err(|error| error.to_string())?;
+    authority::audit::record_issued(&view, None);
+    Ok(handle.into_wire())
+}
+
+fn launch_issuance(
+    session_id: &str,
+    app_id: Option<&str>,
+    uid: u32,
+    launcher: &LauncherAuthority,
+    caps: &CapSet,
+    ceiling: Option<&Ceiling>,
+    lifetime: Duration,
+) -> Result<authority::Issuance, String> {
     let principal = authority::Principal::of_process(uid, launcher.pid)
         .ok_or_else(|| "cannot bind an App launch to an unverifiable process".to_string())?;
     if principal.start_time_ticks != launcher.start_time_ticks {
         return Err("App launcher process identity changed during registration".to_string());
     }
-    let (handle, view) = authority::authority()
-        .issue(authority::Issuance {
-            issuer: authority::Issuer::AppSessionAuthority,
-            principal,
-            binding: authority::Binding::Process,
-            subject: authority::Subject::session(session_id)
-                .with_app(app_id.map(ToOwned::to_owned)),
-            // The launch grant is the parent of the session grant and
-            // of the launcher's relay grant, so it has to carry every
-            // audience either will need; `bind` narrows the session
-            // grant to the provider audiences, the relay grant to
-            // relay authority alone, and both drop launch authority.
-            //
-            // Filtered through the package's ceiling, so a
-            // developer-trusted App's launch grant carries `AppLaunch`
-            // alone and no attenuation of it can produce a relay,
-            // system-service or credential grant — attenuation may only
-            // narrow.
-            audience: permitted_audiences(
-                ceiling,
-                &[
-                    authority::Audience::AppLaunch,
-                    authority::Audience::SystemService,
-                    authority::Audience::Credential,
-                    authority::Audience::AppRelay,
-                ],
-            ),
-            caps: caps.clone(),
-            lifetime: LAUNCH_GRANT_TTL,
-            uses: authority::Uses::Unbounded,
-            index_session: false,
-        })
-        .map_err(|error| error.to_string())?;
-    authority::audit::record_issued(&view, None);
-    Ok(handle.into_wire())
+    Ok(authority::Issuance {
+        issuer: authority::Issuer::AppSessionAuthority,
+        principal,
+        binding: authority::Binding::Process,
+        subject: authority::Subject::session(session_id)
+            .with_app(app_id.map(ToOwned::to_owned)),
+        // The launch grant is the parent of the session grant and
+        // of the launcher's relay grant, so it has to carry every
+        // audience either will need; `bind` narrows the session
+        // grant to the provider audiences, the relay grant to
+        // relay authority alone, and both drop launch authority.
+        //
+        // Filtered through the package's ceiling, so a
+        // developer-trusted App's launch grant carries `AppLaunch`
+        // alone and no attenuation of it can produce a relay,
+        // system-service or credential grant — attenuation may only
+        // narrow.
+        audience: permitted_audiences(
+            ceiling,
+            &[
+                authority::Audience::AppLaunch,
+                authority::Audience::SystemService,
+                authority::Audience::Credential,
+                authority::Audience::AppRelay,
+            ],
+        ),
+        caps: caps.clone(),
+        lifetime,
+        uses: authority::Uses::Unbounded,
+        index_session: false,
+    })
 }
 
 /// Derive the session grant a bound App runs under.
@@ -1549,33 +1622,45 @@ fn issue_session_grant(
     caps: &CapSet,
     ceiling: Option<&Ceiling>,
 ) -> Result<(), String> {
-    let principal = authority::Principal::of_process(uid, child_pid)
-        .ok_or_else(|| format!("App process {child_pid} could not be identified"))?;
+    let request = session_attenuation(
+        session_id, app_id, uid, child_pid, caps, ceiling, SESSION_GRANT_TTL,
+    )?;
     let (_handle, view) = authority::authority()
-        .attenuate(
-            launch_handle,
-            authority::Attenuation {
-                issuer: authority::Issuer::AppSessionAuthority,
-                principal,
-                binding: authority::Binding::ProcessTree,
-                subject: authority::Subject::session(session_id)
-                    .with_app(app_id.map(ToOwned::to_owned)),
-                audience: permitted_audiences(
-                    ceiling,
-                    &[
-                        authority::Audience::SystemService,
-                        authority::Audience::Credential,
-                    ],
-                ),
-                caps: caps.clone(),
-                lifetime: SESSION_GRANT_TTL,
-                uses: authority::Uses::Unbounded,
-                index_session: true,
-            },
-        )
+        .attenuate(launch_handle, request)
         .map_err(|error| error.to_string())?;
     authority::audit::record_issued(&view, None);
     Ok(())
+}
+
+fn session_attenuation(
+    session_id: &str,
+    app_id: Option<&str>,
+    uid: u32,
+    child_pid: u32,
+    caps: &CapSet,
+    ceiling: Option<&Ceiling>,
+    lifetime: Duration,
+) -> Result<authority::Attenuation, String> {
+    let principal = authority::Principal::of_process(uid, child_pid)
+        .ok_or_else(|| format!("App process {child_pid} could not be identified"))?;
+    Ok(authority::Attenuation {
+        issuer: authority::Issuer::AppSessionAuthority,
+        principal,
+        binding: authority::Binding::ProcessTree,
+        subject: authority::Subject::session(session_id)
+            .with_app(app_id.map(ToOwned::to_owned)),
+        audience: permitted_audiences(
+            ceiling,
+            &[
+                authority::Audience::SystemService,
+                authority::Audience::Credential,
+            ],
+        ),
+        caps: caps.clone(),
+        lifetime,
+        uses: authority::Uses::Unbounded,
+        index_session: true,
+    })
 }
 
 /// Mint the launcher's right to relay for one App session.
@@ -1765,27 +1850,35 @@ fn issue_relay_grant(
     uid: u32,
     launcher_pid: u32,
 ) -> Result<String, String> {
-    let principal = authority::Principal::of_process(uid, launcher_pid)
-        .ok_or_else(|| format!("App launcher {launcher_pid} could not be identified"))?;
+    let request = relay_attenuation(session_id, app_id, uid, launcher_pid, SESSION_GRANT_TTL)?;
     let (handle, view) = authority::authority()
-        .attenuate(
-            launch_handle,
-            authority::Attenuation {
-                issuer: authority::Issuer::AppSessionAuthority,
-                principal,
-                binding: authority::Binding::Process,
-                subject: authority::Subject::session(session_id)
-                    .with_app(app_id.map(ToOwned::to_owned)),
-                audience: authority::AudienceSet::of(&[authority::Audience::AppRelay]),
-                caps: CapSet::new(),
-                lifetime: SESSION_GRANT_TTL,
-                uses: authority::Uses::Unbounded,
-                index_session: false,
-            },
-        )
+        .attenuate(launch_handle, request)
         .map_err(|error| error.to_string())?;
     authority::audit::record_issued(&view, None);
     Ok(handle.into_wire())
+}
+
+fn relay_attenuation(
+    session_id: &str,
+    app_id: Option<&str>,
+    uid: u32,
+    launcher_pid: u32,
+    lifetime: Duration,
+) -> Result<authority::Attenuation, String> {
+    let principal = authority::Principal::of_process(uid, launcher_pid)
+        .ok_or_else(|| format!("App launcher {launcher_pid} could not be identified"))?;
+    Ok(authority::Attenuation {
+        issuer: authority::Issuer::AppSessionAuthority,
+        principal,
+        binding: authority::Binding::Process,
+        subject: authority::Subject::session(session_id)
+            .with_app(app_id.map(ToOwned::to_owned)),
+        audience: authority::AudienceSet::of(&[authority::Audience::AppRelay]),
+        caps: CapSet::new(),
+        lifetime,
+        uses: authority::Uses::Unbounded,
+        index_session: false,
+    })
 }
 
 /// Re-derive the session grant after a transient capability change.

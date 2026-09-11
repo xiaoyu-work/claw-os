@@ -49,18 +49,30 @@ impl Fixture {
         let work = root.join("workspace");
         std::fs::create_dir(&work).unwrap();
         let path = work.join("input.txt");
+        let second = work.join("second.txt");
         std::fs::write(&path, "input").unwrap();
+        std::fs::write(&second, "second").unwrap();
         std::fs::write(app.join("app.json"), json!({
             "id":"demo","version":"1","name":"Demo",
             "operations":{"read":{
                 "label":"Read",
                 "args":[{"name":"path","kind":"path","required":true}],
                 "needs":[{"verb":"fs.read","scope":{"kind":"from-arg","arg":"path"},"why":"Read"}]
-            }}
+            }},
+            "session":{"entry":"server.py","tools":[{
+                "name":"demo.read","summary":"Read in a session",
+                "args":[{"name":"path","kind":"path","required":true}],
+                "needs":[{"verb":"fs.read","scope":{"kind":"from-arg","arg":"path"},"why":"Read"}]
+            }]}
         }).to_string()).unwrap();
         std::fs::write(
             app.join("main.py"),
             "raise AssertionError('broker does not execute Apps')\n",
+        )
+        .unwrap();
+        std::fs::write(
+            app.join("server.py"),
+            "raise AssertionError('root does not run sessions')\n",
         )
         .unwrap();
         let launch = crate::test_env::app_launch(&app, "demo");
@@ -117,6 +129,7 @@ impl Fixture {
         let caps = CapSet::from_caps([
             Cap::new(Verb::AGENT_INVOKE, Scope::name("demo")),
             Cap::new(Verb::FS_READ, Scope::path(path.to_string_lossy())),
+            Cap::new(Verb::FS_READ, Scope::path(second.to_string_lossy())),
         ]);
         let parent: SessionInfo = serde_json::from_value(json!({
             "session_id":"host-parent","pid":std::process::id(),"command":["task"],
@@ -210,6 +223,13 @@ fn require_private_root() {
         std::path::Path::new("/run/.cos-app-host-test").is_file(),
         "mount an isolated tmpfs on /run and create its test marker first"
     );
+}
+
+mod stateful {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/agentd/app_host/broker_stateful.rs"
+    ));
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -110,14 +110,27 @@ compatible Agent package, or restore a consistent pre-upgrade backup through
 the operator's recovery process. Receipt records remain caller-reported data,
 never restored authorization.
 
-Controlled one-shot App hosting and Agent receipt reporting use worker protocol v6.
+Controlled App operation/session hosting and receipt reporting use worker protocol v7.
 `clawd` and `claw-agentd` must be upgraded together; a mixed pair fails closed
 at assignment rather than dropping reports or inventing compatibility.
 Activity wire schema 1 and database schema 2 remain unchanged. The App-host
 gateway exists only inside the authenticated worker process and uses the
 root-owned routed capability registry; it does not grant direct broker-socket
-access or make registry files writable to workers. Stateful App/MCP and GUI
-hosting remain outside this initial control surface.
+access or make registry files writable to workers. App-owned sessions now run
+through the shared streamed sandbox with per-call grant rotation; general
+external MCP and GUI hosting remain outside this private control surface.
+
+Session servers receive their private App partition, not standing host-file
+or network access. Apps that relied on the former direct spawn must use
+mediated providers for transient effects or ordinary one-shot operations for
+launch-specific resources. No upgrade fallback launches a session outside the
+sandbox.
+
+Session receipts use the new `session:<tool>` identifier vocabulary in the
+existing receipt string field. Older cores may reject these identifiers while
+validating stored schema-2 receipts. Keep `cos`, `clawd` and `claw-agentd`
+paired, preserve receipt data, and use a consistent pre-upgrade backup if
+rolling back to a core that predates session receipts.
 
 ### App data moves into per-App directories
 

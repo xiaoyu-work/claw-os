@@ -147,6 +147,7 @@ fn receipt_identifiers_and_digests_are_strict_and_bounded() {
         value.app_id = app;
         assert!(value.validate().is_err());
     }
+
     for operation in [
         "a".repeat(129),
         "Read".into(),
@@ -173,6 +174,25 @@ fn receipt_identifiers_and_digests_are_strict_and_bounded() {
         summary.sha256 = digest;
         assert!(summary.validate().is_err());
     }
+}
+
+#[test]
+fn session_receipts_use_an_unambiguous_bounded_operation_namespace() {
+    let mut value = report();
+    for tool in ["kv.get", "app.read-file", "a..b", &"a".repeat(128)] {
+        value.operation = ReceiptReport::session_operation(tool);
+        value.validate().unwrap();
+        assert_eq!(value.session_tool_name(), Some(tool));
+    }
+    for tool in ["", "Read", "../read", "a/b", "a:read", &"a".repeat(129)] {
+        value.operation = ReceiptReport::session_operation(tool);
+        assert!(value.validate().is_err(), "{tool}");
+    }
+    value.operation = "kv.get".into();
+    value.validate().unwrap();
+    assert!(value.session_tool_name().is_none());
+    value.operation = "session:session:kv.get".into();
+    assert!(value.validate().is_err());
 }
 
 #[test]

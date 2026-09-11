@@ -2,8 +2,8 @@
 
 ## Purpose
 
-Let the existing unprivileged, leased Agent worker host ordinary one-shot App
-operations through a closed control channel. App code still runs in the
+Let the existing unprivileged, leased Agent worker host ordinary App operations
+and App-owned stateful sessions through a closed control channel. App code runs in the
 shared hostile-worker sandbox. This is not a separate App product category,
 an unsandboxed launcher, or access to the general broker socket.
 
@@ -11,12 +11,14 @@ an unsandboxed launcher, or access to the general broker socket.
 
 | Path | Role |
 | --- | --- |
-| `protocol.rs` | Closed Begin/End, registration, bind, relay, release, approval-status and liveness messages |
+| `protocol.rs` | Closed operation/session preparation, call start/end, registration, bind, relay, release, approval-status and live-capability messages |
 | `broker.rs` | Root-owned original invocations, session/package/process tracking, standard admission and deferred cleanup |
+| `broker/stateful.rs` | Retained session calls, call IDs and task-local aliases for freshly authorized grant rotations |
 | `../worker.rs` | Process-local gateway, correlated replies and independent channel heartbeats |
 | `../../operations/invocation.rs` | Original invocation and canonical preparation value definitions |
 | `../../clawd/app_sessions/task_host.rs` | Private task-host registration using ordinary App authority and permission policy |
 | `../../bridge.rs` | Manifest-selected App execution with a retained invocation scope |
+| `../../agent/tools/cos_apps_session/` | Streamed shared sandbox, serialized call/clear lifecycle and receipt capture |
 | `../../../test/unit/agentd/app_host/` | Protocol, authority integration and process-lifecycle regressions |
 
 ## Boundaries
@@ -48,9 +50,31 @@ an unsandboxed launcher, or access to the general broker socket.
   sixteen active invocations/sessions per task. The control budget is 4096
   requests per worker.
 
-This initial surface supports one-shot operations. GUI, native-host
-exemptions, arbitrary broker calls and stateful MCP session controls are not
-accepted.
+Stateful sessions bind the signed `session.entry` and run in the same
+WorkerSandbox as ordinary operations, with streamed stdio and server limits.
+They keep only their package, runtime and private App data mounted. A tool's
+`needs` do not become lifetime host-file mounts or network access; mediated
+providers use the current call's capabilities.
+
+Each call retains its original tool/arguments at root, receives canonical
+arguments and a root-generated call ID, and freshly authorizes its exact
+requirements. The private task-host path rotates launch/App/relay grants,
+rather than widening a child through generic attenuation. Actual handles stay
+at root; stable aliases are valid only inside their owning task and session.
+The App is at base invoke authority between calls. Active-call grants have a
+short deadline and cannot extend the original session lifetime.
+
+Grant, RPC and clear share a per-session lock. An overlapping start or a
+delayed end for an older call is refused without clearing a newer call.
+Timeout, transport uncertainty or failed clearing retires the session, never
+replays the operation. Root live-capability queries also check the actual
+grant, so broker endpoint threads do not depend on inherited task-local paths
+or trust stale serialized capabilities.
+
+Worker protocol v7 adds these private controls. General external MCP servers,
+GUI launches, native-host exemptions and arbitrary broker calls are not
+accepted through this surface. App-owned sessions remain ordinary Apps, not a
+new product category.
 
 ## Validation
 
@@ -99,3 +123,9 @@ Only the orchestration driver is a test fixture: the worker privilege drop,
 App sandbox, policy checks, root-owned file replacement, receipt persistence
 and recording-only retry execute through the real implementation. Test trust
 roots live inside the private namespace; no live user trust store is changed.
+
+Run the same process command with
+`agentd::supervisor::tests::app_host_process::controlled_host_keeps_one_stateful_app_with_per_call_authority_and_receipts`
+to cover two real file replacements in one persistent App, changing exact
+call scopes, idle denial, isolated filesystem/network, shared receipts and
+recording-only retry.

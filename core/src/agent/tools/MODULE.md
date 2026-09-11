@@ -28,6 +28,8 @@ which tool calls are exposed and executed.
 | `cos_proxy/oauth_login.rs` | Agent-initiated trusted OAuth browser flow |
 | `cos_apps.rs`, `cos_apps_session.rs` | Compact app catalog/run gateways and active session calls |
 | `cos_apps/invocation.rs` | Shared one-shot App execution, unchanged tool results, and optional task-scoped receipt capture |
+| `cos_apps_session/` | Streamed App sandbox, serialized per-call authority, safe retirement and result capture |
+| `app_receipts.rs` | Common report delivery and recording-only retry diagnostics for both App entrypoints |
 | `mcp/` | MCP attachment and proxy tools |
 | `memory.rs`, `recall.rs` | Agent memory tools |
 
@@ -53,7 +55,11 @@ results through `operations::reporting` when the worker installs an
 Activity-scoped recorder. Schema inspection creates no receipt. Recording
 failures keep the original result, explicitly report the failure and provide
 only a recording retry; they never repeat App execution or acquire authority.
-Stateful App-session/MCP calls retain their existing audit path.
+App-owned session calls preserve their audit path and also report rendered MCP
+results through the same recorder. `session:<tool>` names cannot collide with
+one-shot operation declarations. MCP error flags remain reported errors, and
+timeouts/transport failures remain indeterminate. Explicit session open/close,
+argument validation and denied calls do not create execution receipts.
 
 ## Tests
 

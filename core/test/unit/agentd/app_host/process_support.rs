@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 pub(super) const APP_ID: &str = "host-process";
 pub(super) const OPERATION: &str = "read";
+pub(super) const SESSION_TOOL: &str = "host.replace";
 pub(super) const BODY: &str = "controlled App process body\n";
 pub(super) const CONTEXT_ENV: &str = "COS_APP_HOST_PROCESS_CONTEXT";
 pub(super) const CHILD_TEST: &str =
@@ -16,11 +17,17 @@ pub(super) struct ProcessContext {
     pub uid: u32,
     pub gid: u32,
     pub mount_namespace: String,
+    pub stateful: bool,
+    pub expected: Vec<serde_json::Value>,
 }
 
 impl ProcessContext {
     pub fn input(&self) -> PathBuf {
         self.root.join("input.txt")
+    }
+
+    pub fn second_input(&self) -> PathBuf {
+        self.root.join("second.txt")
     }
 
     pub fn apps(&self) -> PathBuf {

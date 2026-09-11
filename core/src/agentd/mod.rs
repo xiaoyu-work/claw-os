@@ -32,7 +32,7 @@
 //! The channel itself is a private `socketpair(2)` created before the
 //! fork and handed to the child as fd 3. It carries the job lifecycle
 //! routes in [`protocol::WORKER_ROUTES`], bounded Activity reporting,
-//! controlled one-shot App hosting and narrow permission mediation. There
+//! controlled App operation/session hosting and narrow permission mediation. There
 //! is no general broker proxy, admin, scheduler or permission-decision route,
 //! and `/run/cos/clawd.sock` stays
 //! `0660 root:sudo` with the worker's supplementary groups cleared, so

@@ -5,6 +5,7 @@
 //! exercised without committing to a sandbox/credential integration. Phase 2
 //! adds the cos-primitive proxies (fs/exec/proc/net/web/etc.).
 
+mod app_receipts;
 pub mod builtin;
 pub mod clarify;
 pub mod cos_apps;

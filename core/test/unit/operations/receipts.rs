@@ -45,6 +45,57 @@ fn receipt_distinguishes_app_error_empty_output_and_unavailable_result() {
 }
 
 #[test]
+fn session_capture_preserves_mcp_error_flags_and_transport_uncertainty() {
+    for (result, outcome, error) in [
+        (
+            Ok(("exact\noutput".to_string(), false)),
+            ReceiptOutcome::Returned,
+            None,
+        ),
+        (
+            Ok(("handler refused".into(), true)),
+            ReceiptOutcome::ReportedError,
+            Some("handler refused"),
+        ),
+        (
+            Err("connection lost after dispatch".to_string()),
+            ReceiptOutcome::Indeterminate,
+            Some("connection lost after dispatch"),
+        ),
+    ] {
+        let returned = result.as_ref().ok().map(|(text, _)| text.clone());
+        let captured = capture_session(
+            "demo",
+            "demo.read-file",
+            &format!("sha256:{}", "a".repeat(64)),
+            result,
+        );
+        captured.validate().unwrap();
+        assert_eq!(captured.operation, "session:demo.read-file");
+        assert_eq!(captured.outcome, outcome);
+        assert_eq!(captured.error.as_deref(), error);
+        if let Some(text) = returned {
+            let summary = captured.result.unwrap();
+            assert_eq!(summary.bytes, text.len() as u64);
+            assert_eq!(
+                summary.sha256,
+                format!("sha256:{}", crate::crypto::sha256_hex(text.as_bytes())),
+            );
+        } else {
+            assert!(captured.result.is_none());
+        }
+    }
+    let oversized = capture_session(
+        "demo",
+        "demo.read",
+        &format!("sha256:{}", "a".repeat(64)),
+        Ok(("x".repeat(MAX_RESULT_BYTES + 1), true)),
+    );
+    oversized.validate().unwrap();
+    assert_eq!(oversized.outcome, ReceiptOutcome::Indeterminate);
+}
+
+#[test]
 fn receipt_previews_are_bounded_redacted_and_control_safe() {
     let token = format!("ghp_{}", "a".repeat(36));
     let raw = format!("token {token}\u{1b}[31m {}", "界".repeat(1000));

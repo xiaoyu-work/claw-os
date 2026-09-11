@@ -561,10 +561,10 @@ fn package_checks_use_the_host_channel_without_a_writable_runtime_store() {
         request.correlation_id,
         ChannelReply::AppHost(Box::new(crate::clawd::protocol::Response::ok(
             request.request_id,
-            serde_json::json!({"live":true}),
+            serde_json::json!({"live":true,"caps":[]}),
         ))),
     );
-    assert_eq!(waiter.join().unwrap(), Ok(()));
+    assert_eq!(waiter.join().unwrap(), Ok(crate::caps::CapSet::new()));
 }
 
 #[test]

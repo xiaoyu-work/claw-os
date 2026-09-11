@@ -576,6 +576,31 @@ this while writing the manifest:
 * **GUI.** Display and GPU transports are granted only to a
   `desktop.exec` launch, never to a headless operation.
 
+### Stateful App sessions
+
+An App's signed `session.entry` runs lazily in the same WorkerSandbox, with
+streamed MCP stdio, server resource limits and its private App data partition.
+The process and its in-memory state survive successive tool calls; explicit
+session close, cancellation or an uncertain call tears it down.
+
+Unlike a one-shot operation, a persistent session does **not** mount the union
+of its tools' host paths or receive lifetime network access. Each `tools/call`
+is checked against `session.tools[].args` and `needs`, receives canonical
+arguments, and carries exact transient authority only while that call runs.
+Grant, RPC and clearing are serialized. Mediated operations such as
+`cos_runtime.file_changes.replace_file` use the current grant; ordinary
+`open()` and direct network sockets do not gain access from a transient
+declaration. Keep cross-call state in `COS_DATA_DIR`. Use an ordinary one-shot
+operation when a resource needs a launch-specific mount or egress endpoint;
+there is no unsandboxed fallback.
+
+The controlled Agent host authorizes each call at root, consumes any exact
+one-call approvals once, and retains only base invoke authority between
+calls. A timeout or clearing failure retires the session without repeating
+the App call. Activity-associated calls append
+[caller-reported receipts](execution-receipts.md) to the same backend used by
+terminal, Web and native desktop.
+
 ## 11. Ship it
 
 Once the app does what you want:

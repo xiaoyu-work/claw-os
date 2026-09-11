@@ -103,10 +103,9 @@ impl BrokerAuthority {
     /// revocation.
     pub fn assert_live(&self) -> Result<(), String> {
         if let Some(package) = &self.package {
-            if let Some(result) = crate::clawd::client::check_hosted_app(
-                &self.session_id,
-                &package.content_digest,
-            ) {
+            if let Some(result) =
+                crate::clawd::client::check_hosted_app(&self.session_id, &package.content_digest)
+            {
                 return result;
             }
         }
@@ -150,8 +149,18 @@ impl BrokerAuthority {
     }
 
     /// The session's capabilities right now, base plus transient.
-    pub fn live_caps(&self) -> CapSet {
-        super::broker::live_session_caps(&self.session_id, &self.base_caps)
+    pub fn live_caps(&self) -> Result<CapSet, String> {
+        if let Some(package) = &self.package {
+            if let Some(result) =
+                crate::clawd::client::hosted_app_caps(&self.session_id, &package.content_digest)
+            {
+                return result;
+            }
+        }
+        Ok(super::broker::live_session_caps(
+            &self.session_id,
+            &self.base_caps,
+        ))
     }
 }
 
