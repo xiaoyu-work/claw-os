@@ -141,6 +141,7 @@ async fn activity_http_routes_require_authentication() {
         ("GET", "/api/activities/activity-1/objects"),
         ("POST", "/api/activities/activity-1/objects"),
         ("POST", "/api/activities/activity-1/operation-preview"),
+        ("GET", "/api/activities/activity-1/receipts"),
     ] {
         let response = crate::agent::web::server::build_app(state.clone())
             .oneshot(
@@ -158,6 +159,52 @@ async fn activity_http_routes_require_authentication() {
             StatusCode::UNAUTHORIZED,
             "{method} {path}"
         );
+    }
+}
+
+#[test]
+fn activity_receipt_queries_preserve_limits_and_reject_owner_or_source_overrides() {
+    let request = with_id::<ActivityReceipts>("activity-1".into(), json!({ "limit": 50 })).unwrap();
+    assert_eq!(
+        serde_json::to_value(request).unwrap(),
+        json!({ "id": "activity-1", "limit": 50 })
+    );
+    for body in [
+        json!({ "id": "another" }),
+        json!({ "owner_uid": 0 }),
+        json!({ "source": "os_confirmed" }),
+        json!({ "report": {} }),
+        json!({ "limit": -1 }),
+        json!({ "limit": "all" }),
+    ] {
+        assert!(with_id::<ActivityReceipts>("activity-1".into(), body).is_err());
+    }
+    assert!(with_id::<ActivityReceipts>("../another".into(), json!({})).is_err());
+}
+
+#[tokio::test]
+async fn activity_receipts_http_surface_has_no_authoring_methods() {
+    use axum::body::Body;
+    use axum::http::Request;
+    use axum::routing::get as http_get;
+    use axum::Router;
+    use tower::ServiceExt;
+
+    let router = Router::new().route("/activities/{id}/receipts", http_get(receipts));
+    for method in ["POST", "PUT", "PATCH", "DELETE"] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri("/activities/activity-1/receipts")
+                    .header("content-type", "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
     }
 }
 
@@ -233,8 +280,23 @@ async fn activity_run_and_read_errors_use_the_shared_broker_without_fallback() {
         "notes": ["Effects are unknown, not implicitly read-only."],
     });
     let preview_result = preview.clone();
+    let receipt_view = json!({
+        "schema": 1, "activity_id": "activity-1",
+        "receipts": [{
+            "id": "receipt-1", "activity_id": "activity-1", "owner_uid": 1000,
+            "received_at": "2026-09-10T12:00:00Z", "source": "caller_reported",
+            "report": {
+                "id": "report-1", "app_id": "archive", "operation": "write",
+                "package_digest": "a".repeat(64), "outcome": "indeterminate",
+                "result": null, "error": "Result could not be captured",
+            },
+            "declaration": null, "declaration_error": "Matching App package unavailable",
+        }],
+    });
+    let receipt_result = receipt_view.clone();
     let broker = tokio::spawn(async move {
         let mut preview_count = 0;
+        let mut receipt_count = 0;
         for command in [
             Command::ActivityRun,
             Command::ActivityGet,
@@ -242,6 +304,8 @@ async fn activity_run_and_read_errors_use_the_shared_broker_without_fallback() {
             Command::ActivityObjectAttach,
             Command::ActivityOperationPreview,
             Command::ActivityOperationPreview,
+            Command::ActivityReceipts,
+            Command::ActivityReceipts,
         ] {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut header = [0; HEADER_BYTES];
@@ -290,6 +354,15 @@ async fn activity_run_and_read_errors_use_the_shared_broker_without_fallback() {
                         Response::ok(request.id, preview_result.clone())
                     } else {
                         Response::error(request.id, "unavailable", "App signature unavailable")
+                    }
+                }
+                Command::ActivityReceipts => {
+                    assert_eq!(request.params, json!({ "id": "activity-1", "limit": 50 }));
+                    receipt_count += 1;
+                    if receipt_count == 1 {
+                        Response::ok(request.id, receipt_result.clone())
+                    } else {
+                        Response::error(request.id, "unavailable", "Receipt ledger unavailable")
                     }
                 }
                 _ => unreachable!(),
@@ -372,6 +445,24 @@ async fn activity_run_and_read_errors_use_the_shared_broker_without_fallback() {
             assert_eq!(body["error"], "App signature unavailable");
         }
     }
+    for attempt in 0..2 {
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            receipts(
+                Path("activity-1".into()),
+                Ok(Query(DetailQuery { limit: Some(50) })),
+            ),
+        )
+        .await
+        .unwrap();
+        if attempt == 0 {
+            assert_eq!(result.unwrap().0, receipt_view);
+        } else {
+            let (status, Json(body)) = result.unwrap_err();
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert_eq!(body["error"], "Receipt ledger unavailable");
+        }
+    }
     broker.await.unwrap();
     let unavailable = list(Ok(Query(ActivityList {
         state: None,
@@ -400,6 +491,7 @@ async fn activity_decode_failures_are_readable_json_errors_before_broker_access(
             "/activities/{id}/operation-preview",
             post(operation_preview),
         )
+        .route("/activities/{id}/receipts", http_get(receipts))
         .route("/activities/{id}/update", post(update));
     for (method, path, body) in [
         (
@@ -410,6 +502,14 @@ async fn activity_decode_failures_are_readable_json_errors_before_broker_access(
         ("GET", "/activities?owner_uid=0", ""),
         ("GET", "/activities?state=running", ""),
         ("GET", "/activities/activity-1/objects?owner_uid=0", ""),
+        ("GET", "/activities/activity-1/receipts?owner_uid=0", ""),
+        ("GET", "/activities/activity-1/receipts?id=another", ""),
+        (
+            "GET",
+            "/activities/activity-1/receipts?source=os_confirmed",
+            "",
+        ),
+        ("GET", "/activities/activity-1/receipts?limit=-1", ""),
         (
             "POST",
             "/activities/activity-1/operation-preview",

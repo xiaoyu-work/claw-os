@@ -4,7 +4,8 @@
 use cos_agent_protocol::{
     ActivityApprovalView, ActivityDetailResponse, ActivityJobView, ActivityListResponse,
     ActivityObjectResourceView, ActivityObjectStatus, ActivityObjectsResponse,
-    ActivityOperationPreview, ActivityResource, ActivityState, ActivityView, ActivityWorkResponse,
+    ActivityOperationPreview, ActivityReceiptsResponse, ActivityResource, ActivityState,
+    ActivityView, ActivityWorkResponse,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -125,6 +126,15 @@ pub fn operation_preview(value: Value) -> Result<ActivityOperationPreview, Strin
         return Err("activity.operation.preview did not return schema-1 metadata-only data".into());
     }
     Ok(preview)
+}
+
+pub fn receipts(value: Value) -> Result<ActivityReceiptsResponse, String> {
+    let response: ActivityReceiptsResponse = serde_json::from_value(value)
+        .map_err(|error| format!("invalid activity.receipts result: {error}"))?;
+    if !response.matches_activity(&response.activity_id) {
+        return Err("activity.receipts returned an invalid schema or Activity identity".into());
+    }
+    Ok(response)
 }
 
 pub fn list(value: Value) -> Result<ActivityListResponse, String> {

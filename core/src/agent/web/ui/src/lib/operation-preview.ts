@@ -1,4 +1,4 @@
-import { nullableString, record, strings } from "@/lib/api-shapes";
+import { nullableString, oneOf, record, strings } from "@/lib/api-shapes";
 
 export type OperationInvocation = { app_id: string; operation: string; args: string[] };
 
@@ -33,9 +33,13 @@ export type OperationPreview = {
   notes: string[];
 };
 
-function oneOf<T extends readonly string[]>(choices: T, value: unknown): value is T[number] {
-  return choices.some((choice) => choice === value);
-}
+export const effectRecoveryLabels: Record<PlannedEffect["recovery"], string> = {
+  not_applicable: "Not applicable (App-declared)",
+  reversible: "Reversible (App-declared)",
+  compensatable: "Compensatable (App-declared)",
+  irreversible: "Irreversible (App-declared)",
+  unknown: "Unknown",
+};
 
 function isPlannedEffect(value: unknown): value is PlannedEffect {
   return record(value)

@@ -9,9 +9,12 @@ use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBeha
 
 use super::{
     normalize_completion_note, normalize_resource, parse_id, validate_planning, validate_resources,
-    Activity, ActivityDraft, ActivityError, ActivityPatch, ActivityResource, ActivityService,
-    ActivityState, DEFAULT_LIST_LIMIT, MAX_ACTIVITIES_PER_OWNER, MAX_LIST_LIMIT, SCHEMA_VERSION,
+    Activity, ActivityDraft, ActivityError, ActivityPatch, ActivityReceipt, ActivityResource,
+    ActivityService, ActivityState, ReceiptDeclaration, ReceiptReport, ReceiptSource,
+    DATABASE_SCHEMA_VERSION, DEFAULT_LIST_LIMIT, MAX_ACTIVITIES_PER_OWNER, MAX_LIST_LIMIT,
 };
+
+const MAX_RECEIPTS_PER_ACTIVITY: i64 = 1000;
 
 const SCHEMA: &str = r#"
 CREATE TABLE activities (
@@ -36,6 +39,34 @@ CREATE INDEX activities_owner_updated ON activities(owner_uid, updated_at DESC, 
 CREATE INDEX activities_owner_state_updated
     ON activities(owner_uid, state, updated_at DESC, id DESC);
 "#;
+
+const MIGRATE_TO_V2: &str = r#"
+CREATE UNIQUE INDEX activities_owner_id ON activities(owner_uid, id);
+
+CREATE TABLE activity_receipts (
+    sequence          INTEGER PRIMARY KEY AUTOINCREMENT,
+    id                TEXT NOT NULL,
+    activity_id       TEXT NOT NULL,
+    owner_uid         INTEGER NOT NULL CHECK(owner_uid BETWEEN 0 AND 4294967295),
+    received_at       TEXT NOT NULL,
+    source            TEXT NOT NULL CHECK(source = 'caller_reported'),
+    report_json       TEXT NOT NULL,
+    declaration_json  TEXT,
+    declaration_error TEXT,
+    UNIQUE(owner_uid, id),
+    FOREIGN KEY(owner_uid, activity_id) REFERENCES activities(owner_uid, id),
+    CHECK (
+        (declaration_json IS NOT NULL AND declaration_error IS NULL)
+        OR (declaration_json IS NULL AND declaration_error IS NOT NULL)
+    )
+);
+
+CREATE INDEX activity_receipts_owner_activity
+    ON activity_receipts(owner_uid, activity_id, sequence DESC);
+"#;
+
+const SELECT_RECEIPT: &str = "SELECT id, activity_id, owner_uid, received_at, source, report_json,
+            declaration_json, declaration_error FROM activity_receipts";
 
 const SELECT_ACTIVITY: &str = "SELECT id, owner_uid, title, goal, completion_criteria, boundaries,
             resources_json, state, completion_note, created_at, updated_at
@@ -78,6 +109,7 @@ impl SqliteActivityService {
         conn.pragma_update(None, "temp_store", "MEMORY")?;
         conn.pragma_update(None, "trusted_schema", false)?;
         conn.pragma_update(None, "synchronous", "FULL")?;
+        conn.pragma_update(None, "foreign_keys", true)?;
         if durable {
             let mode: String = conn.query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))?;
             if mode != "wal" {
@@ -90,16 +122,33 @@ impl SqliteActivityService {
         }
 
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if check_version(&tx)? == 0 {
+        let version = check_version(&tx)?;
+        if version == 0 {
             tx.execute_batch(SCHEMA)?;
-            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         }
         tx.prepare(&format!("{SELECT_ACTIVITY} LIMIT 0"))?;
+        if version < i64::from(DATABASE_SCHEMA_VERSION) {
+            tx.execute_batch(MIGRATE_TO_V2)?;
+        }
+        tx.prepare(&format!("{SELECT_RECEIPT} LIMIT 0"))?;
         let integrity: String = tx.query_row("PRAGMA quick_check(1)", [], |row| row.get(0))?;
         if integrity != "ok" {
             return Err(ActivityError::Corrupt(format!(
                 "SQLite integrity check failed: {integrity}"
             )));
+        }
+        let invalid_foreign_key: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_foreign_key_check)",
+            [],
+            |row| row.get(0),
+        )?;
+        if invalid_foreign_key {
+            return Err(ActivityError::Corrupt(
+                "receipt ownership or Activity reference is invalid".to_string(),
+            ));
+        }
+        if version < i64::from(DATABASE_SCHEMA_VERSION) {
+            tx.pragma_update(None, "user_version", DATABASE_SCHEMA_VERSION)?;
         }
         tx.commit()?;
         Ok(Self {
@@ -172,13 +221,7 @@ impl ActivityService for SqliteActivityService {
         state: Option<ActivityState>,
         limit: usize,
     ) -> Result<Vec<Activity>, ActivityError> {
-        let limit = if limit == 0 {
-            DEFAULT_LIST_LIMIT
-        } else {
-            limit.min(MAX_LIST_LIMIT)
-        };
-        let limit = i64::try_from(limit)
-            .map_err(|_| ActivityError::Invalid("list limit is not representable".to_string()))?;
+        let limit = list_limit(limit)?;
         let conn = self.lock()?;
         let mut statement = conn.prepare(&format!(
             "{SELECT_ACTIVITY}
@@ -314,6 +357,111 @@ impl ActivityService for SqliteActivityService {
         tx.commit()?;
         Ok(activity)
     }
+
+    fn record_receipt(
+        &self,
+        owner_uid: u32,
+        activity_id: &str,
+        report: ReceiptReport,
+        declaration: Option<ReceiptDeclaration>,
+        declaration_error: Option<String>,
+    ) -> Result<ActivityReceipt, ActivityError> {
+        let activity_id = parse_id(activity_id)?;
+        let report = report.canonicalized()?;
+        super::receipts::validate_declaration(declaration.as_ref(), declaration_error.as_deref())?;
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        load_activity(&tx, owner_uid, &activity_id)?;
+        if let Some(existing) = load_receipt(&tx, owner_uid, &report.id)? {
+            if existing.activity_id != activity_id || existing.report != report {
+                return Err(ActivityError::Conflict(
+                    "receipt id is already bound to a different Activity or report".to_string(),
+                ));
+            }
+            tx.commit()?;
+            return Ok(existing);
+        }
+        let count: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM activity_receipts WHERE owner_uid = ?1 AND activity_id = ?2",
+            params![owner_uid, activity_id],
+            |row| row.get(0),
+        )?;
+        if count >= MAX_RECEIPTS_PER_ACTIVITY {
+            return Err(ActivityError::LimitReached);
+        }
+        let receipt = ActivityReceipt {
+            id: report.id.clone(),
+            activity_id,
+            owner_uid,
+            received_at: timestamp(),
+            source: ReceiptSource::CallerReported,
+            report,
+            declaration,
+            declaration_error,
+        };
+        let declaration_json = receipt
+            .declaration
+            .as_ref()
+            .map(serde_json::to_string)
+            .transpose()?;
+        let inserted = tx.execute(
+            "INSERT INTO activity_receipts (
+                id, activity_id, owner_uid, received_at, source,
+                report_json, declaration_json, declaration_error
+             ) VALUES (?1, ?2, ?3, ?4, 'caller_reported', ?5, ?6, ?7)",
+            params![
+                receipt.id,
+                receipt.activity_id,
+                owner_uid,
+                receipt.received_at,
+                serde_json::to_string(&receipt.report)?,
+                declaration_json,
+                receipt.declaration_error,
+            ],
+        )?;
+        if inserted != 1 || load_receipt(&tx, owner_uid, &receipt.id)?.as_ref() != Some(&receipt) {
+            return Err(ActivityError::Corrupt(
+                "receipt append did not persist the original immutable record".to_string(),
+            ));
+        }
+        tx.commit()?;
+        Ok(receipt)
+    }
+
+    fn receipts(
+        &self,
+        owner_uid: u32,
+        activity_id: &str,
+        limit: usize,
+    ) -> Result<Vec<ActivityReceipt>, ActivityError> {
+        let activity_id = parse_id(activity_id)?;
+        let limit = list_limit(limit)?;
+        let mut conn = self.lock()?;
+        let tx = conn.transaction()?;
+        load_activity(&tx, owner_uid, &activity_id)?;
+        let receipts = {
+            let mut statement = tx.prepare(&format!(
+                "{SELECT_RECEIPT} WHERE owner_uid = ?1 AND activity_id = ?2
+                 ORDER BY sequence DESC LIMIT ?3"
+            ))?;
+            let rows = statement
+                .query_map(params![owner_uid, activity_id, limit], ReceiptRow::from_row)?;
+            rows.map(|row| row?.into_receipt())
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        tx.commit()?;
+        Ok(receipts)
+    }
+}
+
+fn list_limit(limit: usize) -> Result<i64, ActivityError> {
+    let limit = if limit == 0 {
+        DEFAULT_LIST_LIMIT
+    } else {
+        limit.min(MAX_LIST_LIMIT)
+    };
+    i64::try_from(limit)
+        .map_err(|_| ActivityError::Invalid("list limit is not representable".to_string()))
 }
 
 fn check_version(conn: &Connection) -> Result<i64, ActivityError> {
@@ -332,11 +480,12 @@ fn check_version(conn: &Connection) -> Result<i64, ActivityError> {
                 ));
             }
         }
-        version if version == i64::from(SCHEMA_VERSION) => {}
+        1 => {}
+        version if version == i64::from(DATABASE_SCHEMA_VERSION) => {}
         found => {
             return Err(ActivityError::SchemaVersion {
                 found,
-                supported: SCHEMA_VERSION,
+                supported: DATABASE_SCHEMA_VERSION,
             });
         }
     }
@@ -567,10 +716,113 @@ fn parse_timestamp(value: &str) -> Result<DateTime<Utc>, ActivityError> {
     Ok(timestamp)
 }
 
+fn load_receipt(
+    conn: &Connection,
+    owner_uid: u32,
+    id: &str,
+) -> Result<Option<ActivityReceipt>, ActivityError> {
+    let receipt = conn
+        .query_row(
+            &format!("{SELECT_RECEIPT} WHERE owner_uid = ?1 AND id = ?2"),
+            params![owner_uid, id],
+            ReceiptRow::from_row,
+        )
+        .optional()?
+        .map(ReceiptRow::into_receipt)
+        .transpose()?;
+    if let Some(receipt) = &receipt {
+        match load_activity(conn, owner_uid, &receipt.activity_id) {
+            Ok(_) => {}
+            Err(ActivityError::NotFound) => {
+                return Err(ActivityError::Corrupt(
+                    "receipt references a missing or foreign Activity".to_string(),
+                ));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(receipt)
+}
+
+struct ReceiptRow {
+    id: String,
+    activity_id: String,
+    owner_uid: u32,
+    received_at: String,
+    source: String,
+    report_json: String,
+    declaration_json: Option<String>,
+    declaration_error: Option<String>,
+}
+
+impl ReceiptRow {
+    fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
+        Ok(Self {
+            id: row.get(0)?,
+            activity_id: row.get(1)?,
+            owner_uid: row.get(2)?,
+            received_at: row.get(3)?,
+            source: row.get(4)?,
+            report_json: row.get(5)?,
+            declaration_json: row.get(6)?,
+            declaration_error: row.get(7)?,
+        })
+    }
+
+    fn into_receipt(self) -> Result<ActivityReceipt, ActivityError> {
+        let report: ReceiptReport = serde_json::from_str(&self.report_json)?;
+        report
+            .validate()
+            .map_err(|error| ActivityError::Corrupt(error.to_string()))?;
+        for id in [&self.id, &self.activity_id] {
+            if parse_id(id).map_err(|error| ActivityError::Corrupt(error.to_string()))? != *id {
+                return Err(ActivityError::Corrupt(
+                    "receipt UUID is not canonical".to_string(),
+                ));
+            }
+        }
+        if report.id != self.id {
+            return Err(ActivityError::Corrupt(
+                "receipt key does not match the canonical report id".to_string(),
+            ));
+        }
+        if self.source != "caller_reported" {
+            return Err(ActivityError::Corrupt(
+                "receipt source is not caller_reported".to_string(),
+            ));
+        }
+        parse_timestamp(&self.received_at)?;
+        let declaration: Option<ReceiptDeclaration> = self
+            .declaration_json
+            .as_deref()
+            .map(serde_json::from_str)
+            .transpose()?;
+        super::receipts::validate_declaration(
+            declaration.as_ref(),
+            self.declaration_error.as_deref(),
+        )
+        .map_err(|error| ActivityError::Corrupt(error.to_string()))?;
+        Ok(ActivityReceipt {
+            id: self.id,
+            activity_id: self.activity_id,
+            owner_uid: self.owner_uid,
+            received_at: self.received_at,
+            source: ReceiptSource::CallerReported,
+            report,
+            declaration,
+            declaration_error: self.declaration_error,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/test/unit/activities/sqlite.rs"
+    ));
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/activities/sqlite_receipts.rs"
     ));
 }

@@ -1,4 +1,5 @@
 import { api } from "@/lib/api";
+import { readActivityReceipts } from "@/lib/activity-receipts";
 import { nullableString, record, strings } from "@/lib/api-shapes";
 import { readOperationPreview, type OperationInvocation } from "@/lib/operation-preview";
 
@@ -248,4 +249,7 @@ export const activityApi = {
       operation: invocation.operation,
       args: invocation.args,
     }, { signal }), invocation),
+  receipts: async (id: string, signal?: AbortSignal) => readActivityReceipts(
+    await api.get<unknown>(`${activityPath(id)}/receipts?limit=100`, { signal }), id,
+  ),
 };

@@ -15,6 +15,9 @@ use super::client_identity::ClientIdentity;
 use super::protocol::BrokerError;
 use super::wire::requests as body;
 
+// Activity presentation versions do not follow SQLite migration versions.
+pub const WIRE_SCHEMA_VERSION: u32 = 1;
+
 pub fn create(params: Value, client: &ClientIdentity) -> Result<Value, BrokerError> {
     let owner = owner(client)?;
     let draft: ActivityDraft = decode(params)?;
@@ -35,7 +38,7 @@ pub fn list(params: Value, client: &ClientIdentity) -> Result<Value, BrokerError
         .list(owner, request.state, limit)
         .map_err(service_error)?;
     Ok(json!({
-        "schema": activities::SCHEMA_VERSION,
+        "schema": WIRE_SCHEMA_VERSION,
         "activities": records,
     }))
 }
@@ -59,7 +62,7 @@ pub fn get(params: Value, client: &ClientIdentity) -> Result<Value, BrokerError>
         .collect();
     let views: Vec<_> = jobs.iter().map(job_view).collect();
     Ok(json!({
-        "schema": activities::SCHEMA_VERSION,
+        "schema": WIRE_SCHEMA_VERSION,
         "activity": activity,
         "jobs": views,
         "sessions": sessions,

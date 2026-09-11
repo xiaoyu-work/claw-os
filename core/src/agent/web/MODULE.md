@@ -16,6 +16,8 @@ web UI.
 - Preview App-declared effects on explicit request, keeping requested targets,
   recovery guidance, unresolved arguments, and authorization caveats distinct
   from execution results.
+- Read immutable caller-reported receipts, keeping report outcomes and result
+  summaries separate from matched App declarations and OS-confirmed evidence.
 - Stream text, tools, reasoning presentation, usage, and terminal state.
 - Subscribe to owner-scoped notifications and expose live unread,
   acknowledgement, dismissal, and delivery-preference UI.
@@ -35,6 +37,7 @@ web UI.
 | `ui/src/lib/activities.ts`, `ui/src/hooks/use-activities.ts` | Validated fetched views and abortable, selection-safe refreshes |
 | `ui/src/components/activity-objects.tsx` | Typed object attachment, declaration-only status, inert references, and structured invocation metadata |
 | `ui/src/components/operation-effects.tsx`, `ui/src/lib/operation-preview.ts` | Per-object metadata-only effect previews and strict response validation |
+| `ui/src/components/activity-receipts.tsx`, `ui/src/lib/activity-receipts.ts` | Read-only caller-reported receipts, source/identity checks, inert summaries, and declaration diagnostics |
 | `ui/src/lib/api-shapes.ts` | Shared response-shape guards used by Activity and preview adapters |
 | `mod.rs`, `server.rs` | Serve command and authenticated router assembly |
 
@@ -61,6 +64,15 @@ Neither effect kinds nor targets are inferred locally. Responses claiming
 execution, checked authorization, or confirmed effects are rejected. The
 meaning of declarations and recovery labels is defined in
 [`docs/operation-previews.md`](../../../../docs/operation-previews.md).
+`activity.receipts` is a read-only owner-scoped projection of the shared ledger.
+The Web receipt surface cannot author, edit, replay, or delete receipts. It accepts only
+`caller_reported` provenance, checks Activity/owner identity, and never uses a
+report outcome to complete a goal or grant authority. Stored declaration
+snapshots authenticate matching App metadata at recording time, not current App
+validity after changes/revocation or the reported execution. Recording time and
+reported original-output digests are explicitly distinguished from execution
+time and OS evidence; result previews and errors stay inert text. See
+[`docs/execution-receipts.md`](../../../../docs/execution-receipts.md).
 
 ## Tests
 
@@ -78,4 +90,5 @@ and visible failures.
 [`ui/README.md`](ui/README.md) documents focused UI tests and a real Chromium
 workflow over a mocked authenticated API, including stale selection responses,
 canonical object attachments, declaration failures, non-execution, unknown
-effects, requested-only targets, and isolated late previews.
+effects, requested-only targets, isolated late previews, receipt provenance,
+uncertain/error reports, declaration failures, and terminal-state receipt reads.

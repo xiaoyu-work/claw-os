@@ -6,16 +6,20 @@ use crate::clawd::{client, config, protocol::Request, routes::Command};
 
 pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
     let (route, params) = parse(command, args)?;
+    request(route, params)
+}
+
+pub(crate) fn request(route: Command, params: Value) -> Result<Value, String> {
     let response = client::request_blocking(config::socket_path(), Request::build(route, params))?;
     if !response.ok {
         return Err(response
             .error
             .map(|error| format!("{}: {}", error.code, error.message))
-            .unwrap_or_else(|| "operation preview was refused without an error".into()));
+            .unwrap_or_else(|| "operation request was refused without an error".into()));
     }
     response
         .result
-        .ok_or_else(|| "operation preview returned no result".into())
+        .ok_or_else(|| "operation request returned no result".into())
 }
 
 fn parse(command: &str, args: &[String]) -> Result<(Command, Value), String> {

@@ -143,6 +143,106 @@ impl ActivityOperationPreview {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActivityReceiptSource {
+    CallerReported,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActivityReceiptOutcome {
+    Returned,
+    ReportedError,
+    Indeterminate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReceiptResultKind {
+    Json,
+    Text,
+    Empty,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReceiptResultSummary {
+    pub kind: ReceiptResultKind,
+    pub sha256: String,
+    pub bytes: u64,
+    pub preview: String,
+    pub preview_truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActivityReceiptReport {
+    pub id: String,
+    pub app_id: String,
+    pub operation: String,
+    pub package_digest: String,
+    pub outcome: ActivityReceiptOutcome,
+    #[serde(default)]
+    pub result: Option<ReceiptResultSummary>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReceiptDeclaredEffect {
+    pub kind: AppEffectKind,
+    pub label: String,
+    pub recovery: AppEffectRecovery,
+    #[serde(default)]
+    pub target_arg: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActivityReceiptDeclaration {
+    pub app_version: String,
+    pub operation_label: String,
+    pub effects: Vec<ReceiptDeclaredEffect>,
+}
+
+/// An immutable caller report, not an OS execution or mutation attestation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActivityReceiptView {
+    pub id: String,
+    pub activity_id: String,
+    pub received_at: String,
+    pub source: ActivityReceiptSource,
+    pub report: ActivityReceiptReport,
+    #[serde(default)]
+    pub declaration: Option<ActivityReceiptDeclaration>,
+    #[serde(default)]
+    pub declaration_error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActivityReceiptsResponse {
+    pub schema: u32,
+    pub activity_id: String,
+    pub receipts: Vec<ActivityReceiptView>,
+}
+
+impl ActivityReceiptsResponse {
+    pub fn matches_activity(&self, id: &str) -> bool {
+        self.schema == 1
+            && !id.trim().is_empty()
+            && self.activity_id == id
+            && self
+                .receipts
+                .iter()
+                .all(|receipt| !receipt.id.trim().is_empty() && receipt.activity_id == id)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityReceiptsQuery {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppObjectDescription {
     pub object: AppObjectReference,

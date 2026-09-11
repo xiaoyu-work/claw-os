@@ -13,6 +13,7 @@ pub use cos_agent_protocol::{
     ActivityCreateRequest, ActivityDetailResponse, ActivityListQuery, ActivityListResponse,
     ActivityObjectAttachRequest, ActivityObjectsResponse,
     ActivityOperationPreview, ActivityOperationPreviewRequest,
+    ActivityReceiptsQuery, ActivityReceiptsResponse,
     ActivityRunRequest, ActivityState, ActivityTransitionRequest, ActivityUpdateRequest,
     ActivityView, ActivityWorkResponse, BridgeEndpoint, CancelResponse, ChatRequest, ErrorEnvelope,
     HistoryMessage, ModelsResponse, SessionSummary, StreamEvent, ToolCallView, ToolResultView,
@@ -458,6 +459,21 @@ pub async fn preview_activity_operation(
         &["activities", id, "operation-preview"],
     )?;
     activity_response(request.json(&body), selected).await
+}
+
+pub async fn fetch_activity_receipts(
+    endpoint: BridgeEndpoint,
+    id: &str,
+) -> Result<ActivityReceiptsResponse> {
+    let (request, selected) = activity_request(
+        &endpoint,
+        reqwest::Method::GET,
+        &["activities", id, "receipts"],
+    )?;
+    activity_response(
+        request.query(&ActivityReceiptsQuery { limit: Some(100) }),
+        selected,
+    ).await
 }
 
 pub async fn create_activity(

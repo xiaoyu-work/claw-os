@@ -37,6 +37,7 @@ and agent tasks.
 | `activities.rs` | Shared Activity CRUD/lifecycle, related-job views, and submission through the existing task path |
 | `activity_objects.rs` | Owner-scoped reference attachment and authenticated object descriptions; never fetches App data |
 | `operation_previews.rs` | Shared App effect previews and owner-scoped Activity adaptation; never executes Apps |
+| `activity_receipts.rs` | Owner-scoped immutable caller reports and separately authenticated declaration snapshots |
 | `usage.rs` | Peer-UID-scoped Agent token usage queries |
 | `app_sessions.rs` | App/native/MCP session authority: derives identity and capabilities, plans approvals, issues launch grants |
 | `scheduler.rs` | Proactive-scheduler authority: validates `cos cron` / `cos triggers` requests and derives what a job may carry |

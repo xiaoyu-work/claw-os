@@ -4,13 +4,21 @@
 //! [`ActivityService`]. Activities grant no authority and never infer goal
 //! completion from an execution result.
 
+mod receipts;
 mod sqlite;
 
 use serde::{Deserialize, Serialize};
 
+pub use receipts::{
+    ActivityReceipt, ReceiptDeclaration, ReceiptEffect, ReceiptOutcome, ReceiptReport,
+    ReceiptSource, ResultKind, ResultSummary,
+};
 pub use sqlite::SqliteActivityService;
 
+/// Public Activity wire-compatibility version; the broker versions responses independently.
 pub const SCHEMA_VERSION: u32 = 1;
+/// SQLite user_version; never emitted as an Activity response schema.
+pub const DATABASE_SCHEMA_VERSION: u32 = 2;
 pub const DEFAULT_LIST_LIMIT: usize = 50;
 pub const MAX_LIST_LIMIT: usize = 100;
 
@@ -31,7 +39,7 @@ pub enum ActivityError {
     NotFound,
     #[error("activity conflict: {0}")]
     Conflict(String),
-    #[error("activity limit reached for this owner")]
+    #[error("activity or receipt limit reached")]
     LimitReached,
     #[error("activity database is unavailable: {0}")]
     Database(#[from] rusqlite::Error),
@@ -259,6 +267,25 @@ pub trait ActivityService: Send + Sync {
         state: ActivityState,
         completion_note: Option<String>,
     ) -> Result<Activity, ActivityError>;
+
+    /// Append a caller report without executing work or changing Activity state.
+    /// An exact report retry returns the original declaration and received time.
+    fn record_receipt(
+        &self,
+        owner_uid: u32,
+        activity_id: &str,
+        report: ReceiptReport,
+        declaration: Option<ReceiptDeclaration>,
+        declaration_error: Option<String>,
+    ) -> Result<ActivityReceipt, ActivityError>;
+
+    /// Read immutable caller reports, including for paused or terminal Activities.
+    fn receipts(
+        &self,
+        owner_uid: u32,
+        activity_id: &str,
+        limit: usize,
+    ) -> Result<Vec<ActivityReceipt>, ActivityError>;
 }
 
 /// Daemon composition only. Direct clients use owner-scoped broker routes.

@@ -6,6 +6,18 @@ use crate::activities::{ActivityDraft, ActivityPatch};
 use crate::clawd::{client, config, protocol::Request, routes::Command};
 
 pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
+    if command == "record-receipt" {
+        use std::io::IsTerminal;
+        if args.len() != 2 || args[1] != "--stdin" || std::io::stdin().is_terminal() {
+            return Err("usage: pipe report JSON to cos activity record-receipt ID --stdin".into());
+        }
+        crate::activities::validate_id(&args[0]).map_err(|error| error.to_string())?;
+        let report = read_receipt(std::io::stdin().lock())?;
+        return crate::operations::cli::request(
+            Command::ActivityReceiptRecord,
+            json!({"id":args[0],"report":report}),
+        );
+    }
     let (route, params) = parse(command, args)?;
     let response = client::request_blocking(config::socket_path(), Request::build(route, params))?;
     if !response.ok {
@@ -31,6 +43,7 @@ fn parse(command: &str, args: &[String]) -> Result<(Command, Value), String> {
         "update" => Command::ActivityUpdate,
         "run" => Command::ActivityRun,
         "objects" => Command::ActivityObjects,
+        "receipts" => Command::ActivityReceipts,
         "pause" | "resume" | "complete" | "cancel" => Command::ActivityTransition,
         other => {
             return Err(format!(
@@ -95,7 +108,7 @@ fn parse(command: &str, args: &[String]) -> Result<(Command, Value), String> {
             ("create" | "update", "--resource") => "resource",
             ("update", "--title") => "title",
             ("list", "--state") => "state",
-            ("list" | "show", "--limit") => "limit",
+            ("list" | "show" | "receipts", "--limit") => "limit",
             ("run", "--session") => "session_id",
             ("run", "--max-turns") => "max_turns",
             ("complete", "--note") => "completion_note",
@@ -180,6 +193,21 @@ fn set(params: &mut Value, key: &str, value: Value) -> Result<(), String> {
     }
     params[key] = value;
     Ok(())
+}
+
+fn read_receipt(reader: impl std::io::Read) -> Result<crate::activities::ReceiptReport, String> {
+    use std::io::Read;
+    const MAX_REPORT_BYTES: u64 = 16 * 1024;
+    let mut data = Vec::new();
+    reader.take(MAX_REPORT_BYTES + 1).read_to_end(&mut data)
+        .map_err(|error| format!("read receipt report: {error}"))?;
+    if data.len() as u64 > MAX_REPORT_BYTES {
+        return Err("receipt report input exceeds 16 KiB".into());
+    }
+    let report: crate::activities::ReceiptReport = serde_json::from_slice(&data)
+        .map_err(|error| format!("invalid receipt report JSON: {error}"))?;
+    report.validate().map_err(|error| error.to_string())?;
+    Ok(report)
 }
 
 fn parse_object_attachment(args: &[String]) -> Result<(Command, Value), String> {

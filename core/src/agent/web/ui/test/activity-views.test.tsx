@@ -4,9 +4,12 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 import { OperationEffects } from "../src/components/operation-effects";
-import { useActivity, useActivities, useActivityObjects } from "../src/hooks/use-activities";
+import { ActivityReceiptsPanel } from "../src/components/activity-receipts";
+import { useActivity, useActivities, useActivityObjects, useActivityReceipts } from "../src/hooks/use-activities";
 import { activityApi, type ActivityDetail, type ActivityObjects, type ActivityState } from "../src/lib/activities";
+import type { ActivityReceipts } from "../src/lib/activity-receipts";
 import type { OperationPreview } from "../src/lib/operation-preview";
+import { receiptFixture } from "./receipt-fixtures";
 
 function detail(id: string): ActivityDetail {
   return {
@@ -68,6 +71,81 @@ function ObjectsView({ id }: { id: string }) {
   const view = useActivityObjects(id);
   return <div>{view.data?.activity_id ?? "Loading"}{view.error}</div>;
 }
+
+function ReceiptsView({ id }: { id: string }) {
+  return <ActivityReceiptsPanel view={useActivityReceipts(id)} ownerUid={1000} />;
+}
+
+test("receipts display inert caller reports and recording metadata without authoring or authority", async () => {
+  const receipt = receiptFixture();
+  spyOn(activityApi, "receipts").mockResolvedValue({ schema: 1, activity_id: "activity-1", receipts: [receipt] });
+  const transition = spyOn(activityApi, "transition");
+  const run = spyOn(activityApi, "run");
+  await act(async () => root.render(<ReceiptsView id="activity-1" />));
+  expect(container.textContent).toContain("Returned (caller report)");
+  expect(container.textContent).toContain("Caller-reported (not an execution attestation)");
+  expect(container.textContent).toContain("Preview truncated");
+  expect(container.textContent).toContain("not OS execution proof");
+  expect(container.textContent).toContain("App-declared update");
+  expect(container.textContent).toContain("Authenticated at recording time only");
+  expect(container.textContent).toContain("does not establish current App validity");
+  expect(container.querySelector("time")?.getAttribute("datetime")).toBe(receipt.received_at);
+  expect(container.querySelector("pre")?.textContent).toBe(receipt.report.result?.preview);
+  expect(container.querySelectorAll("img,script,a,input,textarea")).toHaveLength(0);
+  expect(container.querySelectorAll("button")).toHaveLength(1);
+  expect(transition).not.toHaveBeenCalled();
+  expect(run).not.toHaveBeenCalled();
+});
+
+test("receipt errors and indeterminate outcomes remain visible without implying no side effects", async () => {
+  const receipt = receiptFixture();
+  spyOn(activityApi, "receipts").mockResolvedValue({
+    schema: 1, activity_id: "activity-1",
+    receipts: [{
+      ...receipt, report: { ...receipt.report, outcome: "reported_error", result: null, error: "Reported failure" },
+      declaration: null, declaration_error: "Matching App package unavailable",
+    }, {
+      ...receiptFixture("uncertain"), report: { ...receipt.report, outcome: "indeterminate", error: "Capture uncertain" },
+    }],
+  });
+  await act(async () => root.render(<ReceiptsView id="activity-1" />));
+  expect(container.textContent).toContain("Reported error (caller report)");
+  expect(container.textContent).toContain("Indeterminate (caller report)");
+  expect(container.textContent).toContain("Matching App package unavailable");
+  expect(container.textContent).toContain("does not prove that no side effect occurred");
+});
+
+test("receipt owner mismatches and read failures hide prior reports", async () => {
+  const receipt = receiptFixture();
+  const read = spyOn(activityApi, "receipts").mockResolvedValue({
+    schema: 1, activity_id: "activity-1", receipts: [{ ...receipt, owner_uid: 1001 }],
+  });
+  await act(async () => root.render(<ReceiptsView id="activity-1" />));
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("Receipt owner does not match");
+  expect(container.querySelectorAll("article")).toHaveLength(0);
+  read.mockResolvedValue({ schema: 1, activity_id: "activity-1", receipts: [receipt] });
+  await act(async () => container.querySelector("button")!.click());
+  expect(container.querySelectorAll("article")).toHaveLength(1);
+  read.mockRejectedValue(new Error("Receipt ledger unavailable"));
+  await act(async () => container.querySelector("button")!.click());
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("Receipt ledger unavailable");
+  expect(container.querySelectorAll("article")).toHaveLength(0);
+});
+
+test("an older receipt response cannot replace a newly selected Activity's reports", async () => {
+  const first = deferred<ActivityReceipts>();
+  let oldSignal: AbortSignal | undefined;
+  spyOn(activityApi, "receipts").mockImplementation((id, signal) => {
+    if (id === "first") { oldSignal = signal; return first.promise; }
+    return Promise.resolve({ schema: 1, activity_id: id, receipts: [receiptFixture("second-receipt", id)] });
+  });
+  await act(async () => root.render(<ReceiptsView id="first" />));
+  await act(async () => root.render(<ReceiptsView id="second" />));
+  expect(oldSignal?.aborted).toBe(true);
+  await act(async () => first.resolve({ schema: 1, activity_id: "first", receipts: [receiptFixture("first-receipt", "first")] }));
+  expect(container.textContent).toContain("second-receipt");
+  expect(container.textContent).not.toContain("first-receipt");
+});
 
 test("an old object description response cannot replace the selected Activity's metadata", async () => {
   const first = deferred<ActivityObjects>();

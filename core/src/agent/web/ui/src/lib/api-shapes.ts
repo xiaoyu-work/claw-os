@@ -9,3 +9,7 @@ export function nullableString(value: unknown): value is string | null {
 export function strings(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
+
+export function oneOf<T extends readonly string[]>(choices: T, value: unknown): value is T[number] {
+  return choices.some((choice) => choice === value);
+}

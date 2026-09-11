@@ -31,6 +31,8 @@ pub fn builtin_namespaces() -> Vec<NamespaceEntry> {
                 ("cancel", "End an Activity without claiming its goal was achieved"),
                 ("objects", "Inspect authenticated App object declarations for attached references"),
                 ("attach-object", "Attach a declared App object without reading its data"),
+                ("receipts", "Read immutable caller-reported operation results"),
+                ("record-receipt", "Record a bounded report from stdin without re-executing an App"),
             ],
         ),
         (
@@ -46,7 +48,10 @@ pub fn builtin_namespaces() -> Vec<NamespaceEntry> {
         (
             "operation",
             "App-declared effect previews, without execution or authority",
-            vec![("preview", "Preview declared effects and requested targets; actual effects remain unconfirmed")],
+            vec![
+                ("preview", "Preview declared effects and requested targets; actual effects remain unconfirmed"),
+                ("execute", "Run an ordinary App operation and record a caller-reported Activity receipt"),
+            ],
         ),
         (
             "sys",

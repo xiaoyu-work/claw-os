@@ -163,3 +163,19 @@ fn activity_operation_preview_transport_is_authenticated_versioned_and_typed() {
         body,
     );
 }
+
+#[test]
+fn activity_receipts_transport_is_authenticated_versioned_read_only_and_bounded() {
+    let endpoint = endpoint(1, 1);
+    let (request, selected) = activity_request(
+        &endpoint, reqwest::Method::GET, &["activities", "activity-1", "receipts"],
+    ).unwrap();
+    let request = request.query(&ActivityReceiptsQuery { limit: Some(100) }).build().unwrap();
+    assert_eq!(selected, ProtocolVersion(1));
+    assert_eq!(request.headers()[PROTOCOL_VERSION_HEADER], "1");
+    assert!(request.headers().contains_key(reqwest::header::AUTHORIZATION));
+    assert_eq!(request.method(), reqwest::Method::GET);
+    assert_eq!(request.url().path(), "/api/activities/activity-1/receipts");
+    assert_eq!(request.url().query(), Some("limit=100"));
+    assert!(request.body().is_none());
+}

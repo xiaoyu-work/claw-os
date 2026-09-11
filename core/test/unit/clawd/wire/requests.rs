@@ -2,6 +2,26 @@ use super::*;
 use serde_json::json;
 
 #[test]
+fn receipt_reports_are_bounded_data_and_cannot_claim_authority_or_os_verification() {
+    let report = json!({
+        "id":"00000000-0000-4000-8000-000000000002",
+        "app_id":"demo","operation":"get","package_digest":format!("sha256:{}", "a".repeat(64)),
+        "outcome":"indeterminate","result":null,"error":"No result was available"
+    });
+    let valid = json!({"id":"00000000-0000-4000-8000-000000000001","report":report});
+    assert!(serde_json::from_value::<ActivityReceiptRecord>(valid.clone()).is_ok());
+    for field in ["source","owner_uid","effects_confirmed","grant","declaration"] {
+        let mut forged = valid.clone();
+        forged["report"][field] = json!("caller chooses");
+        assert!(serde_json::from_value::<ActivityReceiptRecord>(forged).is_err(), "{field}");
+    }
+    let mut oversized = valid;
+    oversized["report"]["error"] = json!("x".repeat(2049));
+    assert!(serde_json::from_value::<ActivityReceiptRecord>(oversized).is_err());
+    assert!(serde_json::from_value::<ActivityReceipts>(json!({"id":"id","owner_uid":0})).is_err());
+}
+
+#[test]
 fn operation_preview_requests_are_bounded_and_cannot_supply_authority() {
     let good = json!({"app_id":"fs","operation":"write","args":["/home/user/file","--content","draft"]});
     assert!(serde_json::from_value::<OperationPreview>(good.clone()).is_ok());

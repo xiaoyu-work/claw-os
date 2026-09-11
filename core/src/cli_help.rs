@@ -195,6 +195,16 @@ pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandS
                     Param::positional("args", "array<string>", false, "App arguments after --; not executed"),
                 ],
                 example: "cos operation preview fs write -- /home/user/draft.md --content Draft",
+            }, CommandSchema {
+                command: "execute",
+                description: "Execute through the normal App gate and record an unverified outcome report",
+                params: vec![
+                    Param::positional("app", "string", true, "Installed App ID"),
+                    Param::positional("operation", "string", true, "Declared operation"),
+                    Param::flag("--activity", "uuid", true, "Active owner-scoped Activity"),
+                    Param::positional("args", "array<string>", false, "App arguments after --; stdin is not forwarded"),
+                ],
+                example: "cos operation execute kv get --activity 00000000-0000-4000-8000-000000000001 -- release.status",
             }],
         ),
         (
@@ -594,6 +604,24 @@ fn activity_schemas() -> Vec<CommandSchema> {
         "Remove references without deleting the referenced data",
     ));
     let mut schemas = vec![
+        CommandSchema {
+            command: "receipts",
+            description: "Read caller-reported results without inferring goal completion or verified effects",
+            params: vec![
+                id(),
+                Param::flag("--limit", "integer", false, "Maximum receipts, 1-100 (default 50)"),
+            ],
+            example: "cos activity receipts 00000000-0000-4000-8000-000000000001",
+        },
+        CommandSchema {
+            command: "record-receipt",
+            description: "Retry recording a bounded report from stdin without re-executing the operation",
+            params: vec![
+                id(),
+                Param::flag("--stdin", "bool", true, "Read at most 16 KiB of report JSON from piped stdin"),
+            ],
+            example: "cos activity record-receipt 00000000-0000-4000-8000-000000000001 --stdin < report.json",
+        },
         CommandSchema {
             command: "objects",
             description: "Describe attached App references without reading their data",

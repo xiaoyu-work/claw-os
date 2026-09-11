@@ -283,3 +283,95 @@ fn operation_preview_missing_effects_remain_unknown_without_read_only_inference(
     assert_eq!(preview.operation, "delete");
     assert!(preview.is_metadata_only());
 }
+
+fn receipt_envelope() -> Value {
+    json!({
+        "schema": 1, "activity_id": "activity-1",
+        "receipts": [{
+            "id": "receipt-1", "activity_id": "activity-1", "owner_uid": 1000,
+            "received_at": "2026-09-10T21:00:00Z", "source": "caller_reported",
+            "report": {
+                "id": "report-1", "app_id": "kv", "operation": "get",
+                "package_digest": "reported-package", "outcome": "returned",
+                "result": {
+                    "kind": "text", "sha256": "reported-output", "bytes": 4096,
+                    "preview": "**applied** [open](https://invalid.example) <script>data</script>",
+                    "preview_truncated": true
+                },
+                "error": "[REDACTED] caller error"
+            },
+            "declaration": null,
+            "declaration_error": "package changed or revoked"
+        }]
+    })
+}
+
+#[test]
+fn receipt_translation_preserves_recording_time_redacted_content_and_declaration_diagnostics() {
+    let response = receipts(receipt_envelope()).unwrap();
+    let receipt = &response.receipts[0];
+    assert_eq!(receipt.received_at, "2026-09-10T21:00:00Z");
+    assert_eq!(
+        receipt.declaration_error.as_deref(),
+        Some("package changed or revoked")
+    );
+    assert!(receipt.declaration.is_none());
+    assert_eq!(
+        receipt.report.error.as_deref(),
+        Some("[REDACTED] caller error")
+    );
+    let result = receipt.report.result.as_ref().unwrap();
+    assert_eq!(result.bytes, 4096);
+    assert_eq!(result.sha256, "reported-output");
+    assert_eq!(
+        result.preview,
+        "**applied** [open](https://invalid.example) <script>data</script>"
+    );
+    assert!(result.preview_truncated);
+    assert!(
+        serde_json::to_value(receipt)
+            .unwrap()
+            .get("owner_uid")
+            .is_none()
+    );
+}
+
+#[test]
+fn receipt_translation_rejects_stronger_sources_outcomes_and_mixed_activity_records() {
+    for source in ["os_confirmed", "verified"] {
+        let mut value = receipt_envelope();
+        value["receipts"][0]["source"] = json!(source);
+        assert!(receipts(value).is_err());
+    }
+    let mut value = receipt_envelope();
+    value["receipts"][0]["report"]["outcome"] = json!("applied");
+    assert!(receipts(value).is_err());
+    let mut value = receipt_envelope();
+    value["receipts"][0]["activity_id"] = json!("other-activity");
+    assert!(receipts(value).is_err());
+    let mut value = receipt_envelope();
+    value["receipts"][0]["id"] = json!("");
+    assert!(receipts(value).is_err());
+    let mut value = receipt_envelope();
+    value["schema"] = json!(2);
+    assert!(receipts(value).is_err());
+}
+
+#[test]
+fn receipt_translation_keeps_matched_declarations_separate_from_execution_claims() {
+    let mut value = receipt_envelope();
+    value["receipts"][0]["declaration_error"] = Value::Null;
+    value["receipts"][0]["declaration"] = json!({
+        "app_version": "1", "operation_label": "Get entry",
+        "effects": [{"kind": "read", "label": "App-declared read", "recovery": "unknown", "target_arg": "key"}],
+        "execution_verified": true
+    });
+    value["receipts"][0]["effects_confirmed"] = json!(true);
+    let response = receipts(value).unwrap();
+    let encoded = serde_json::to_value(&response.receipts[0]).unwrap();
+    assert_eq!(encoded["source"], "caller_reported");
+    assert_eq!(encoded["report"]["outcome"], "returned");
+    assert_eq!(encoded["declaration"]["effects"][0]["target_arg"], "key");
+    assert!(encoded.get("effects_confirmed").is_none());
+    assert!(encoded["declaration"].get("execution_verified").is_none());
+}

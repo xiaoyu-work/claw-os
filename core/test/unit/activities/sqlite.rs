@@ -61,7 +61,7 @@ fn object_reference_attachment_is_atomic_idempotent_and_does_not_change_goal_sta
     service.transition(1000, &activity.id, ActivityState::Completed, Some("Confirmed".into())).unwrap();
     assert!(service.add_resource(1000, &activity.id, resource).is_err());
     let version: u32 = service.lock().unwrap().pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
-    assert_eq!(version, 1);
+    assert_eq!(version, DATABASE_SCHEMA_VERSION);
 }
 
 #[test]
@@ -630,7 +630,7 @@ fn future_schema_is_rejected_without_changing_version_or_existing_data() {
     {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
-            "PRAGMA user_version = 2;
+            "PRAGMA user_version = 3;
              CREATE TABLE future_data (value TEXT NOT NULL);
              INSERT INTO future_data VALUES ('preserve this');",
         )
@@ -639,15 +639,15 @@ fn future_schema_is_rejected_without_changing_version_or_existing_data() {
     assert!(matches!(
         SqliteActivityService::open(&path),
         Err(ActivityError::SchemaVersion {
-            found: 2,
-            supported: 1
+            found: 3,
+            supported: 2
         })
     ));
     let conn = Connection::open(&path).unwrap();
     assert_eq!(
         conn.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        2
+        3
     );
     assert_eq!(
         conn.query_row("SELECT value FROM future_data", [], |row| row
@@ -802,7 +802,7 @@ fn unavailable_parent_is_an_explicit_io_error() {
 }
 
 #[test]
-fn disk_provider_uses_full_sync_wal_busy_timeout_and_version_one() {
+fn disk_provider_uses_full_sync_wal_busy_timeout_and_current_schema() {
     let directory = TestDirectory::new();
     let service = SqliteActivityService::open(directory.database()).unwrap();
     let conn = service.lock().unwrap();
@@ -814,7 +814,8 @@ fn disk_provider_uses_full_sync_wal_busy_timeout_and_version_one() {
     for (pragma, expected) in [
         ("synchronous", 2),
         ("busy_timeout", 5000),
-        ("user_version", i64::from(SCHEMA_VERSION)),
+        ("user_version", i64::from(DATABASE_SCHEMA_VERSION)),
+        ("foreign_keys", 1),
         ("temp_store", 2),
     ] {
         assert_eq!(

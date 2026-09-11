@@ -30,6 +30,7 @@ async fn every_activity_surface_requires_authentication_and_version() {
         (Method::GET, "/activities"),
         (Method::POST, "/activities"),
         (Method::GET, "/activities/a"),
+        (Method::GET, "/activities/a/receipts"),
         (Method::GET, "/activities/a/objects"),
         (Method::POST, "/activities/a/objects"),
         (Method::POST, "/activities/a/operation-preview"),
@@ -113,6 +114,9 @@ async fn owner_injection_and_malformed_requests_return_typed_errors() {
         ),
         (Method::GET, "/activities?owner_uid=0", ""),
         (Method::GET, "/activities?limit=101", ""),
+        (Method::GET, "/activities/a/receipts?owner_uid=0", ""),
+        (Method::GET, "/activities/a/receipts?limit=0", ""),
+        (Method::GET, "/activities/a/receipts?limit=101", ""),
     ] {
         let response = router()
             .oneshot(
@@ -185,6 +189,39 @@ fn operation_preview_params_are_owner_free_and_preserve_opaque_argv() {
             "args": ["entry with ; $() metacharacters"]
         })
     );
+}
+
+#[test]
+fn receipt_query_forwards_only_activity_identity_and_limit() {
+    assert_eq!(
+        with_id("activity", ActivityReceiptsQuery { limit: Some(100) })
+            .ok()
+            .unwrap(),
+        json!({"id": "activity", "limit": 100})
+    );
+}
+
+#[tokio::test]
+async fn receipt_surface_does_not_expose_authoring_mutation_or_execution() {
+    for method in [Method::POST, Method::PUT, Method::PATCH, Method::DELETE] {
+        let response = router()
+            .oneshot(
+                Request::builder()
+                    .method(method.clone())
+                    .uri("/activities/a/receipts")
+                    .header(PROTOCOL_VERSION_HEADER, "1")
+                    .header("authorization", format!("Bearer {}", "activity-test-token"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            StatusCode::METHOD_NOT_ALLOWED,
+            "{method}"
+        );
+    }
 }
 
 #[tokio::test]

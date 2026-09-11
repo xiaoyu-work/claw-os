@@ -14,6 +14,7 @@ fn activity_commands_have_stable_names_and_round_trip() {
         (Command::ActivityObjects, "activity.objects"),
         (Command::ActivityObjectAttach, "activity.object.attach"),
         (Command::ActivityOperationPreview, "activity.operation.preview"),
+        (Command::ActivityReceipts, "activity.receipts"),
         (Command::TaskGet, "task.get"),
         (Command::TaskRetry, "task.retry"),
     ] {

@@ -208,6 +208,33 @@ Selection generations and an invocation snapshot reject stale replies;
 navigation, object refresh and metadata/object editing discard displayed
 previews. No preview enters the separate work-submission or approval path.
 
+### Caller-reported execution receipts
+
+The Activity detail's **Refresh receipts** button reads up to 100 immutable
+reports from the same owner-scoped `activity.receipts` service as the terminal.
+This is a GET-only presentation: it cannot author a receipt or execute an App.
+Reports remain readable on paused, completed and cancelled Activities.
+
+Every record is labeled **CALLER-REPORTED**. Outcomes are only **Returned**,
+**Reported error** or **Indeterminate**; none means applied/verified effects
+or a completed goal. Recording time is when the broker received the report,
+not an execution timestamp. Reported format, original byte count and SHA-256
+are displayed with bounded/redacted previews and truncation indicators.
+The digest is not a cryptographic OS execution attestation. Result previews
+and errors are inert plain text, including JSON, markup and command-like text.
+
+An optional declaration is a historical snapshot authenticated **at recording
+time**, never proof of current App validity, reported execution or outcome.
+Later package changes or revocation do not turn an old snapshot into current
+validation. The report remains **CALLER-REPORTED**; effect/recovery guidance is
+historical, App-declared and non-guaranteed. If no declaration could be matched
+when recording, the stored report and declaration diagnostic remain visible.
+OS-confirmed mutation evidence belongs to the separate journal, not these
+reports. Receipt refresh is explicit; stale selections and failed requests
+cannot synthesize reports or change jobs, permissions, previews or goal state.
+The core owns the schema-2 database migration; Activity and receipt wire
+schemas remain 1, and the desktop never opens or migrates that database.
+
 ## Endpoint discovery
 
 The bridge binds an ephemeral port when `COS_AGENT_BRIDGE_PORT` is
@@ -256,6 +283,7 @@ the prior non-disruptive `start` behavior.
 | `GET /api/activities?state=…&limit=…` | `ActivityListQuery` → `ActivityListResponse`; `activity.list` |
 | `POST /api/activities` | `ActivityCreateRequest` → `ActivityView`; `activity.create` |
 | `GET /api/activities/:id` | `ActivityDetailResponse`; `activity.get` plus associated `permission.pending` projections |
+| `GET /api/activities/:id/receipts?limit=…` | `ActivityReceiptsQuery` → schema-1 `ActivityReceiptsResponse`; read-only `activity.receipts` |
 | `GET /api/activities/:id/objects` | `ActivityObjectsResponse`; declaration-only `activity.objects` |
 | `POST /api/activities/:id/objects` | `ActivityObjectAttachRequest` → unchanged `ActivityView`; `activity.object.attach` |
 | `POST /api/activities/:id/operation-preview` | `ActivityOperationPreviewRequest` → schema-1 metadata-only `ActivityOperationPreview`; `activity.operation.preview` |

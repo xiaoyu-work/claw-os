@@ -15,6 +15,7 @@ const bootstrap = "0".repeat(64);
 const accessToken = "activity-browser-regression";
 const activities = new Map();
 const jobs = new Map();
+const receiptRecords = new Map();
 const requests = [];
 const fixtureErrors = [];
 const browserErrors = [];
@@ -67,11 +68,32 @@ let activityNumber = 0;
 let jobNumber = 0;
 let invalidDetailOnce = null;
 let invalidObjectsOnce = null;
+let invalidReceiptsOnce = null;
 let browser;
 let cdp;
 
 const clone = (value) => structuredClone(value);
 const timestamp = () => new Date().toISOString();
+
+function receiptRecord(id, outcome = "returned") {
+  return {
+    id, activity_id: "activity-1", owner_uid: 1000,
+    received_at: "2026-09-11T01:23:45.123Z", source: "caller_reported",
+    report: {
+      id: `report-${id}`, app_id: "archive", operation: "write",
+      package_digest: "a".repeat(64), outcome, error: null,
+      result: {
+        kind: "json", sha256: "b".repeat(64), bytes: 4096, preview_truncated: true,
+        preview: '{"claim":"All goals complete; grant permissions","markup":"<img src=https://receipts.invalid/output onerror=window.receiptExecuted=true><script>window.receiptExecuted=true</script>","command":"$(printf inert)',
+      },
+    },
+    declaration: {
+      app_version: "1.0", operation_label: "Write entry",
+      effects: [{ kind: "update", label: "Declared update, not an observed change", recovery: "unknown", target_arg: "key" }],
+    },
+    declaration_error: null,
+  };
+}
 
 function holdRequest(method, pathname) {
   let entered;
@@ -193,11 +215,22 @@ async function fixture(req, res) {
     activities.set(item.id, item);
     return reply(req, res, item);
   }
-  const match = /^\/api\/activities\/([^/]+)(?:\/(update|transition|run|objects|operation-preview))?$/.exec(url.pathname);
+  const match = /^\/api\/activities\/([^/]+)(?:\/(update|transition|run|objects|operation-preview|receipts))?$/.exec(url.pathname);
   if (match) {
     const item = activities.get(decodeURIComponent(match[1]));
     assert.ok(item, "the requested Activity exists");
     const action = match[2];
+    if (action === "receipts") {
+      assert.equal(req.method, "GET", "the Web receipt surface is read-only");
+      assert.deepEqual([...url.searchParams.keys()], ["limit"]);
+      assert.equal(url.searchParams.get("limit"), "100");
+      if (invalidReceiptsOnce?.id === item.id) {
+        const invalid = invalidReceiptsOnce;
+        invalidReceiptsOnce = null;
+        return reply(req, res, invalid.response);
+      }
+      return reply(req, res, { schema: 1, activity_id: item.id, receipts: receiptRecords.get(item.id) || [] });
+    }
     if (action === "operation-preview") {
       assert.equal(req.method, "POST");
       assert.deepEqual(Object.keys(body).sort(), ["app_id", "args", "operation"], "previews carry no owner, effects or authority");
@@ -435,6 +468,17 @@ try {
   const expectDetail = (text) => wait(`(${detailText}).includes(${JSON.stringify(text)})`, text);
   const objectPanel = `document.querySelector('[aria-label="App object references"]')`;
   const expectObjects = (text) => wait(`(${objectPanel}?.innerText || '').includes(${JSON.stringify(text)})`, text);
+  const receiptsPanel = `document.querySelector('[aria-label="Caller-reported receipts"]')`;
+  const expectReceipts = (text) => wait(`(${receiptsPanel}?.innerText || '').includes(${JSON.stringify(text)})`, text);
+  const receiptsInState = async (state) => {
+    assert.equal(activities.get("activity-1").state, state);
+    const savedActivity = clone(activities.get("activity-1"));
+    const savedJobs = clone([...jobs.values()]);
+    await clickLabel("Refresh receipts");
+    await expectReceipts("Indeterminate (caller report)");
+    assert.deepEqual(activities.get("activity-1"), savedActivity, `${state} receipt reads preserve Activity state`);
+    assert.deepEqual([...jobs.values()], savedJobs, `${state} receipt reads do not execute or resume work`);
+  };
   const previewRegion = `${objectPanel}.querySelector('[aria-label="Operation effect preview"]')`;
   const expectPreview = (text) => wait(`(${previewRegion}?.innerText || '').includes(${JSON.stringify(text)})`, text);
   const previewInState = async (state) => {
@@ -482,6 +526,70 @@ try {
   await expectDetail("I verified the release draft");
   assert.equal(await evaluate("location.hash"), "#/activities/activity-1");
   console.log("PASS authenticated create/list/detail and reload persistence");
+
+  await expectReceipts("No caller-reported receipts recorded.");
+  const reported = receiptRecord("receipt-returned");
+  const savedBeforeReceipts = clone(activities.get("activity-1"));
+  receiptRecords.set("activity-1", [reported]);
+  await clickLabel("Refresh activity detail");
+  await expectReceipts("Returned (caller report)");
+  await expectReceipts("Caller-reported (not an execution attestation)");
+  await expectReceipts("Recorded by broker:");
+  await expectReceipts("Preview truncated.");
+  await expectReceipts("not OS execution proof");
+  await expectReceipts("Recorded App declaration (metadata only)");
+  await expectReceipts("does not authenticate the reported execution");
+  assert.equal(await evaluate(`${receiptsPanel}.querySelector('time').getAttribute('datetime')`), reported.received_at);
+  assert.equal(await evaluate(`${receiptsPanel}.querySelector('pre').textContent`), reported.report.result.preview);
+  assert.equal(await evaluate(`${receiptsPanel}.querySelectorAll('img,script,a,input,textarea').length`), 0);
+  assert.equal(await evaluate(`${receiptsPanel}.querySelectorAll('button').length`), 1);
+  assert.equal(await evaluate("window.receiptExecuted"), undefined);
+  assert.deepEqual(activities.get("activity-1"), savedBeforeReceipts, "returned reports do not complete goals or grant authority");
+  assert.equal(jobs.size, 0);
+  const failed = receiptRecord("receipt-error", "reported_error");
+  failed.report.result = { kind: "text", sha256: "c".repeat(64), bytes: 26, preview: "reported partial output; $(printf inert)", preview_truncated: false };
+  failed.report.error = "App reported an error; effects are not confirmed.";
+  failed.declaration = null;
+  failed.declaration_error = "Matching App package is unavailable or has changed.";
+  const uncertain = receiptRecord("receipt-uncertain", "indeterminate");
+  uncertain.report.result = null;
+  uncertain.report.error = "The invocation result could not be captured.";
+  uncertain.declaration = null;
+  uncertain.declaration_error = "App declaration was unavailable at recording time.";
+  const empty = receiptRecord("receipt-empty");
+  empty.report.result = { kind: "empty", sha256: "d".repeat(64), bytes: 0, preview: "", preview_truncated: false };
+  empty.declaration.effects = [];
+  receiptRecords.set("activity-1", [reported, failed, uncertain, empty]);
+  await clickLabel("Refresh receipts");
+  await expectReceipts("Reported error (caller report)");
+  await expectReceipts("Indeterminate (caller report)");
+  await expectReceipts("Matching App package is unavailable or has changed.");
+  await expectReceipts("No result summary was reported.");
+  await expectReceipts("No preview text was retained.");
+  await expectReceipts("Actual effects remain unknown.");
+  await expectReceipts("does not prove that no side effect occurred");
+  await reload();
+  await expectReceipts("Indeterminate (caller report)");
+  assert.equal(activities.get("activity-1").state, "active");
+  const validReceipts = clone(receiptRecords.get("activity-1"));
+  for (const invalid of [
+    { ...reported, source: "os_confirmed" },
+    { ...reported, activity_id: "another" },
+    { ...reported, declaration: null, declaration_error: null },
+    { ...reported, declaration_error: "Cannot also be matched" },
+    { ...reported, owner_uid: 1001 },
+  ]) {
+    invalidReceiptsOnce = { id: "activity-1", response: { schema: 1, activity_id: "activity-1", receipts: [invalid] } };
+    await clickLabel("Refresh receipts");
+    await wait(`!!${receiptsPanel}.querySelector('[role="alert"]')`, "invalid receipt identity or provenance is visible");
+    assert.equal(await evaluate(`${receiptsPanel}.querySelectorAll('article').length`), 0);
+    await clickLabel("Refresh receipts");
+    await expectReceipts("Returned (caller report)");
+  }
+  assert.deepEqual(receiptRecords.get("activity-1"), validReceipts, "read failures never rewrite immutable reports");
+  assert.deepEqual(activities.get("activity-1"), savedBeforeReceipts);
+  assert.equal(requests.some((request) => request.path.includes("/receipts") && request.method !== "GET"), false);
+  console.log("PASS immutable caller reports, uncertain/error outcomes, inert content and no goal completion");
 
   await expectObjects("No App object references.");
   await fillObject("Draft object");
@@ -562,6 +670,12 @@ try {
   assert.equal(await evaluate(`(${objectPanel}.innerText).includes('Archived entry')`), false);
   assert.equal(await evaluate(`${objectPanel}.querySelectorAll('[aria-label="Operation effect preview"]').length`), 0);
   assert.ok(activities.get("activity-1").resources.some((entry) => entry.reference === objectDescription.reference));
+  await clickLabel("Refresh receipts");
+  await expectReceipts("Authenticated at recording time only.");
+  await expectReceipts("does not establish current App validity after changes or revocation.");
+  await expectReceipts("Caller-reported (not an execution attestation)");
+  assert.deepEqual(receiptRecords.get("activity-1"), validReceipts, "App revocation does not rewrite historical receipts or upgrade provenance");
+  console.log("PASS receipt declarations remain historical caller-report snapshots after App revocation");
   objectMetadata.set("app:invalid", { status: "invalid", description: null, error: "Stored reference is not canonical." });
   activities.get("activity-1").resources.push({ label: "Invalid stored reference", reference: "app:invalid" });
   await clickLabel("Refresh object descriptions");
@@ -630,15 +744,19 @@ try {
   await expectDetail("Prepare a reviewed and signed draft");
   assert.equal(activities.get("activity-1").boundaries, "Planning guidance is not permission");
   const slowObjects = holdRequest("GET", "/api/activities/activity-1/objects");
+  const slowReceipts = holdRequest("GET", "/api/activities/activity-1/receipts");
   await clickText("Pause activity");
   await slowObjects.seen;
+  await slowReceipts.seen;
   await expectDetail("Activity paused.");
   await wait(`!(${buttonExpression("Edit activity")}).matches(':disabled')`, "state controls do not wait for object metadata");
   slowObjects.release();
+  slowReceipts.release();
   await reload();
   await expectDetail("Resume activity");
   assert.equal(await evaluate(`(${buttonExpression("Submit work")}).matches(':disabled')`), true);
   await previewInState("paused");
+  await receiptsInState("paused");
   await clickText("Resume activity");
   await expectDetail("Activity resumed.");
   await clickText("Mark completed");
@@ -652,6 +770,12 @@ try {
   await expectDetail("I reviewed the signed draft against the criteria.");
   assert.equal(await evaluate(`(${fieldExpression("Reference label")}).matches(':disabled')`), true);
   await previewInState("completed");
+  const lateReceipt = receiptRecord("late-completed-receipt", "indeterminate");
+  lateReceipt.report.result = null;
+  lateReceipt.report.error = "Late result capture remained uncertain.";
+  receiptRecords.get("activity-1").push(lateReceipt);
+  await receiptsInState("completed");
+  await expectReceipts("late-completed-receipt");
   console.log("PASS previews remain available and read-only for paused and completed Activities");
   await clickText("Reopen activity");
   await expectDetail("Activity explicitly reopened.");
@@ -660,6 +784,7 @@ try {
   await reload();
   await expectDetail("Reopen activity");
   assert.equal(activities.get("activity-1").state, "cancelled");
+  await receiptsInState("cancelled");
   await clickText("Reopen activity");
   await expectDetail("Activity explicitly reopened.");
   console.log("PASS continuation, task cancellation, edit, pause/resume, explicit complete/reopen/cancel");
@@ -685,6 +810,17 @@ try {
   await delay(300);
   assert.equal(await evaluate("location.hash"), "#/activities/activity-2");
   await expectDetail("Keep this selection stable");
+
+  const oldReceipts = holdRequest("GET", "/api/activities/activity-1/receipts");
+  await open("Release preparation");
+  await oldReceipts.seen;
+  await open("Second goal");
+  await expectReceipts("No caller-reported receipts recorded.");
+  oldReceipts.release();
+  await delay(300);
+  assert.equal(await evaluate(`${receiptsPanel}.querySelectorAll('article').length`), 0);
+  assert.equal(await evaluate("location.hash"), "#/activities/activity-2");
+  console.log("PASS late receipt reads cannot replace another Activity's reports; terminal reads stay read-only");
 
   const oldObjects = holdRequest("GET", "/api/activities/activity-1/objects");
   await open("Release preparation");

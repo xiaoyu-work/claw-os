@@ -40,6 +40,7 @@ editing additional surfaces.
 | Activity goal/lifecycle or presentation | `core/src/activities/`, `core/src/clawd/activities.rs`, `docs/activities.md` | `core/src/activity.rs`, task/session associations, Agent Web, `desktop/agent/`; one shared backend for headless and desktop |
 | App object contract or Activity object reference | `core/src/objects/`, `core/src/caps/manifest/objects.rs`, `docs/app-objects.md` | SDK wire/types/helpers, `clawd/activity_objects.rs`, ordinary App dispatch, Web/native presentations |
 | App effect declaration or operation preview | `core/src/operations/`, `core/src/caps/manifest/effects.rs`, `docs/operation-previews.md` | Shared broker preview routes, SDK manifest schema, Activity Web/native views; no execution or authority |
+| Activity execution receipt | `core/src/activities/receipts.rs`, `core/src/clawd/activity_receipts.rs`, `docs/execution-receipts.md` | Normal App execution, immutable owner-scoped reports, redaction, database migration, terminal/Web/native views |
 | Agent ask/chat loop | `core/src/agent/runtime/loop_.rs`, `core/src/agent/runtime/turn.rs` | `prompt/`, `tools/`, `memory/`, `llm/` |
 | Agent worker process / broker isolation | `core/src/agentd/`, `core/src/bin/claw-agentd.rs` | `clawd/server.rs`, `agent/service.rs`, `clawd.service`, `packaging/deb/build-debs.sh` |
 | LLM provider or model setup | `core/src/agent/llm/providers/`, `core/src/agent/llm/registry.rs`, `core/src/agent/setup.rs` | `types.rs`, `accumulate.rs`, streaming and non-streaming tests |

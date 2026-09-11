@@ -10,8 +10,9 @@ use clawd_client::{Command, Error as BrokerError, ErrorCode as BrokerErrorCode};
 use cos_agent_protocol::{
     ActivityCreateRequest, ActivityDetailResponse, ActivityListQuery, ActivityListResponse,
     ActivityObjectAttachRequest, ActivityObjectsResponse, ActivityOperationPreview,
-    ActivityOperationPreviewRequest, ActivityRunRequest, ActivityTransitionRequest,
-    ActivityUpdateRequest, ActivityView, ActivityWorkResponse, ErrorCode,
+    ActivityOperationPreviewRequest, ActivityReceiptsQuery, ActivityReceiptsResponse,
+    ActivityRunRequest, ActivityTransitionRequest, ActivityUpdateRequest, ActivityView,
+    ActivityWorkResponse, ErrorCode,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -125,6 +126,29 @@ pub async fn operation_preview(
         ));
     }
     Ok(Json(preview))
+}
+
+pub async fn receipts(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    query: Result<Query<ActivityReceiptsQuery>, QueryRejection>,
+) -> Result<Json<ActivityReceiptsResponse>, ApiError> {
+    let Query(query) = query.map_err(|_| invalid("invalid Activity receipt query"))?;
+    if query.limit.is_some_and(|limit| !(1..=100).contains(&limit)) {
+        return Err(invalid("Receipt limit must be between 1 and 100"));
+    }
+    let value = state
+        .clawd
+        .call(Command::ActivityReceipts, with_id(&id, query)?)
+        .await
+        .map_err(upstream_error)?;
+    let response = translation::receipts(value).map_err(ApiError::bad_gateway)?;
+    if !response.matches_activity(&id) {
+        return Err(ApiError::bad_gateway(
+            "Activity receipt response id did not match the request",
+        ));
+    }
+    Ok(Json(response))
 }
 
 pub async fn update(

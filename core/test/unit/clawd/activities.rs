@@ -31,6 +31,7 @@ fn activity_broker_uses_one_persistent_owner_scoped_backend() {
     assert_eq!(created["state"], "active");
 
     let shown = get(json!({"id": id}), &peer(1000)).unwrap();
+    assert_eq!(shown["schema"], 1, "database migrations must not change the Activity wire contract");
     assert_eq!(shown["activity"], created);
     assert_eq!(shown["jobs"], json!([]));
     assert_eq!(shown["sessions"], json!([]));
@@ -39,6 +40,7 @@ fn activity_broker_uses_one_persistent_owner_scoped_backend() {
     assert_eq!(edited["goal"], created["goal"]);
     assert_eq!(edited["resources"], created["resources"]);
     let listed = list(json!({"state": "active"}), &peer(1000)).unwrap();
+    assert_eq!(listed["schema"], 1);
     assert_eq!(listed["activities"], json!([edited]));
     assert_eq!(
         list(json!({}), &peer(2000)).unwrap()["activities"],

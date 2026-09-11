@@ -3,6 +3,21 @@ use super::*;
 const ID: &str = "00000000-0000-4000-8000-000000000001";
 
 #[test]
+fn receipt_recording_is_explicit_bounded_stdin_and_never_an_execution_command() {
+    let report = crate::operations::receipts::capture(
+        uuid::Uuid::new_v4().to_string(),"demo".into(),"get".into(),
+        format!("sha256:{}", "a".repeat(64)), Ok(Some("result".into())),
+    );
+    let decoded = read_receipt(serde_json::to_vec(&report).unwrap().as_slice()).unwrap();
+    assert_eq!(decoded.id, report.id);
+    assert!(read_receipt("x".repeat(16 * 1024 + 1).as_bytes()).is_err());
+    assert!(read_receipt(br#"{"source":"os_confirmed"}"#.as_slice()).is_err());
+    let (command, params) = parse("receipts", &args(&[ID,"--limit","2"])).unwrap();
+    assert_eq!(command, Command::ActivityReceipts);
+    assert_eq!(params["limit"], 2);
+}
+
+#[test]
 fn object_attachment_uses_the_shared_typed_broker_without_local_uri_logic() {
     let (command, params) = parse(
         "attach-object",

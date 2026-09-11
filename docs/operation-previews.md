@@ -93,3 +93,8 @@ public SDK language bindings.
 Execution receipts, OS-confirmed mutations, and genuine staged file-change
 previews are separate contracts built on the existing journal and snapshot
 boundaries; this metadata preview does not claim to implement them.
+
+The explicit [execution receipt path](execution-receipts.md) now captures App
+return values as caller-reported evidence while preserving the normal App
+permission boundary. It does not promote preview declarations or reports into
+OS-confirmed changes.

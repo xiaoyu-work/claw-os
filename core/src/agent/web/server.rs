@@ -48,6 +48,7 @@ pub fn build_app(state: AppState) -> Router {
             "/api/activities/{id}/operation-preview",
             post(routes::activities::operation_preview),
         )
+        .route("/api/activities/{id}/receipts", get(routes::activities::receipts))
         .route("/api/sessions", get(routes::sessions::list))
         .route("/api/sessions/{id}", get(routes::sessions::detail))
         .route("/api/sessions/{id}/history", get(routes::sessions::history))

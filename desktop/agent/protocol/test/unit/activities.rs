@@ -274,3 +274,92 @@ fn operation_preview_enums_accept_only_declared_contract_values() {
     assert!(serde_json::from_value::<AppEffectRecovery>(json!("guaranteed")).is_err());
     assert!(serde_json::from_value::<AppEffectTargetState>(json!("canonical")).is_err());
 }
+
+fn receipt_value() -> serde_json::Value {
+    json!({
+        "id": "receipt-1", "activity_id": "activity-1",
+        "received_at": "2026-09-10T21:00:00Z", "source": "caller_reported",
+        "report": {
+            "id": "report-1", "app_id": "kv", "operation": "get",
+            "package_digest": "reported-package-digest", "outcome": "returned",
+            "result": {
+                "kind": "json", "sha256": "reported-output-digest", "bytes": 900,
+                "preview": "{\"outcome\":\"applied\",\"os_confirmed\":true}",
+                "preview_truncated": true
+            },
+            "error": null
+        }
+    })
+}
+
+#[test]
+fn receipt_protocol_preserves_caller_reports_and_defaults_unavailable_declarations() {
+    let receipt: ActivityReceiptView = serde_json::from_value(receipt_value()).unwrap();
+    assert_eq!(receipt.source, ActivityReceiptSource::CallerReported);
+    assert_eq!(receipt.report.outcome, ActivityReceiptOutcome::Returned);
+    assert!(receipt.declaration.is_none());
+    assert!(receipt.declaration_error.is_none());
+    assert!(receipt.report.result.as_ref().unwrap().preview_truncated);
+    let encoded = serde_json::to_value(&receipt).unwrap();
+    assert_eq!(
+        serde_json::from_value::<ActivityReceiptView>(encoded).unwrap(),
+        receipt
+    );
+}
+
+#[test]
+fn receipt_protocol_rejects_unknown_source_outcome_and_result_claims() {
+    for source in ["os_confirmed", "verified", "broker_attested"] {
+        let mut value = receipt_value();
+        value["source"] = json!(source);
+        assert!(serde_json::from_value::<ActivityReceiptView>(value).is_err());
+    }
+    for outcome in ["applied", "verified", "goal_completed", "ok"] {
+        let mut value = receipt_value();
+        value["report"]["outcome"] = json!(outcome);
+        assert!(serde_json::from_value::<ActivityReceiptView>(value).is_err());
+    }
+    let mut value = receipt_value();
+    value["report"]["result"]["kind"] = json!("trusted_html");
+    assert!(serde_json::from_value::<ActivityReceiptView>(value).is_err());
+    let mut value = receipt_value();
+    value.as_object_mut().unwrap().remove("source");
+    assert!(serde_json::from_value::<ActivityReceiptView>(value).is_err());
+    let mut value = receipt_value();
+    value["report"]["result"]
+        .as_object_mut()
+        .unwrap()
+        .remove("preview_truncated");
+    assert!(serde_json::from_value::<ActivityReceiptView>(value).is_err());
+}
+
+#[test]
+fn receipt_protocol_drops_owner_and_additive_attestation_claims() {
+    let mut value = receipt_value();
+    value["owner_uid"] = json!(0);
+    value["os_confirmed"] = json!(true);
+    value["report"]["verified"] = json!(true);
+    value["report"]["result"]["attestation"] = json!("not part of this contract");
+    let receipt: ActivityReceiptView = serde_json::from_value(value).unwrap();
+    let encoded = serde_json::to_value(receipt).unwrap();
+    assert!(encoded.get("owner_uid").is_none());
+    assert!(encoded.get("os_confirmed").is_none());
+    assert!(encoded["report"].get("verified").is_none());
+    assert!(encoded["report"]["result"].get("attestation").is_none());
+    assert_eq!(encoded["source"], "caller_reported");
+}
+
+#[test]
+fn receipt_query_is_owner_free_and_collection_scope_is_explicit() {
+    assert!(serde_json::from_value::<ActivityReceiptsQuery>(json!({"owner_uid": 0})).is_err());
+    let receipt: ActivityReceiptView = serde_json::from_value(receipt_value()).unwrap();
+    let mut response = ActivityReceiptsResponse {
+        schema: 1,
+        activity_id: "activity-1".into(),
+        receipts: vec![receipt],
+    };
+    assert!(response.matches_activity("activity-1"));
+    assert!(!response.matches_activity("other"));
+    response.receipts[0].activity_id = "other".into();
+    assert!(!response.matches_activity("activity-1"));
+}

@@ -37,7 +37,7 @@ use super::wire::bounded::MAX_WAIT_MS;
 use super::wire::requests as body;
 use super::wire::{Fault, RequestId};
 use super::{
-    accessibility, activities, activity_objects, app_sessions, audio, backup, bluetooth, camera, clipboard, config_editor,
+    accessibility, activities, activity_objects, activity_receipts, app_sessions, audio, backup, bluetooth, camera, clipboard, config_editor,
     containers, context, context_events, crash, credentials, desktop, display, event_center,
     firewall, hardware, journal as journal_ops, location, memory, network, notifications, packages,
     operation_previews, permissions, power, printer, scheduler, security, snapshots, storage, system_journal, systemd,
@@ -578,6 +578,26 @@ routes! {
         body: body::ActivityOperationPreview,
         audit: &[("id", FieldRule::Token), ("app_id", FieldRule::Token), ("operation", FieldRule::Token), ("args", FieldRule::Size)],
         run: |c| operation_previews::for_activity(c.params, c.client),
+    }
+    ActivityReceipts {
+        name: "activity.receipts",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Task),
+        body: body::ActivityReceipts,
+        audit: &[("id", FieldRule::Token), ("limit", FieldRule::Count)],
+        run: |c| activity_receipts::list(c.params, c.client),
+    }
+    ActivityReceiptRecord {
+        name: "activity.receipt.record",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Task),
+        body: body::ActivityReceiptRecord,
+        audit: &[("id", FieldRule::Token), ("report", FieldRule::Size)],
+        run: |c| activity_receipts::record(c.params, c.client),
     }
     // -----------------------------------------------------------------
     // Agent tasks

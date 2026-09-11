@@ -1175,6 +1175,306 @@ fn operation_preview_draft_changes_invalidate_pending_and_displayed_results() {
     assert_eq!(state.completion_note, "New confirmation draft");
 }
 
+fn receipt_response(id: &str, outcome: ActivityReceiptOutcome) -> ActivityReceiptsResponse {
+    use cos_agent_protocol::{ActivityReceiptReport, ReceiptResultSummary};
+    ActivityReceiptsResponse {
+        schema: 1,
+        activity_id: id.into(),
+        receipts: vec![ActivityReceiptView {
+            id: "receipt-1".into(),
+            activity_id: id.into(),
+            received_at: "2026-09-10T21:00:00Z".into(),
+            source: ActivityReceiptSource::CallerReported,
+            report: ActivityReceiptReport {
+                id: "caller-report-1".into(),
+                app_id: "kv".into(),
+                operation: "get".into(),
+                package_digest: "reported-package".into(),
+                outcome,
+                result: Some(ReceiptResultSummary {
+                    kind: ReceiptResultKind::Json,
+                    sha256: "reported-output".into(),
+                    bytes: 4096,
+                    preview: r#"{"goal_completed":true,"outcome":"applied","os_confirmed":true}"#
+                        .into(),
+                    preview_truncated: true,
+                }),
+                error: Some("[REDACTED] caller error".into()),
+            },
+            declaration: None,
+            declaration_error: Some("package changed or revoked".into()),
+        }],
+    }
+}
+
+#[test]
+fn receipts_are_readable_in_all_states_without_job_or_goal_completion_inference() {
+    for activity_state in [
+        ActivityState::Active,
+        ActivityState::Paused,
+        ActivityState::Completed,
+        ActivityState::Cancelled,
+    ] {
+        for outcome in [
+            ActivityReceiptOutcome::Returned,
+            ActivityReceiptOutcome::ReportedError,
+            ActivityReceiptOutcome::Indeterminate,
+        ] {
+            let mut state = ready(activity_state);
+            let before = state.detail.clone().unwrap();
+            let request = state.update(Message::RefreshReceipts, true).unwrap();
+            assert!(matches!(&request.action, Action::Receipts(id) if id == "activity-1"));
+            assert!(
+                finish(
+                    &mut state,
+                    request,
+                    Ok(Response::Receipts(receipt_response("activity-1", outcome)))
+                )
+                .is_none()
+            );
+            assert_eq!(state.detail.as_ref().unwrap(), &before);
+            assert_eq!(
+                state.receipts.as_ref().unwrap().receipts[0].report.outcome,
+                outcome
+            );
+            assert!(state.pending.is_none());
+            assert!(state.notice.is_none());
+            let _ = state.view(true);
+        }
+    }
+}
+
+#[test]
+fn receipt_selection_changes_reject_old_results_and_errors() {
+    let mut state = ready(ActivityState::Active);
+    let old = state.update(Message::RefreshReceipts, true).unwrap();
+    let current = state
+        .update(Message::Open("activity-2".into()), true)
+        .unwrap();
+    finish(&mut state, old.clone(), Err("stale receipt error".into()));
+    assert!(state.error.is_none());
+    assert!(state.pending.is_some());
+    finish(
+        &mut state,
+        current,
+        Ok(Response::Detail(Box::new(detail(
+            "activity-2",
+            ActivityState::Paused,
+        )))),
+    );
+    finish(
+        &mut state,
+        old,
+        Ok(Response::Receipts(receipt_response(
+            "activity-1",
+            ActivityReceiptOutcome::Returned,
+        ))),
+    );
+    assert!(state.receipts.is_none());
+    assert_eq!(state.detail.as_ref().unwrap().activity.id, "activity-2");
+}
+
+#[test]
+fn receipt_refresh_is_explicit_and_failures_do_not_become_empty_success() {
+    let mut state = ready(ActivityState::Active);
+    let poll = state.update(Message::Tick, true).unwrap();
+    assert!(matches!(poll.action, Action::Get(_)));
+    finish(
+        &mut state,
+        poll,
+        Ok(Response::Detail(Box::new(detail(
+            "activity-1",
+            ActivityState::Active,
+        )))),
+    );
+    assert!(state.receipts.is_none());
+    state.receipts = Some(receipt_response(
+        "activity-1",
+        ActivityReceiptOutcome::Returned,
+    ));
+    let request = state.update(Message::RefreshReceipts, true).unwrap();
+    assert!(state.receipts.is_none());
+    assert!(state.update(Message::RefreshReceipts, true).is_none());
+    finish(
+        &mut state,
+        request,
+        Err("receipt service unavailable".into()),
+    );
+    assert_eq!(state.error.as_deref(), Some("receipt service unavailable"));
+    assert!(state.receipts.is_none());
+    assert!(!state.should_poll());
+}
+
+#[test]
+fn receipt_scope_mismatches_and_unknown_schemas_are_visible_errors() {
+    for mismatch in 0..3 {
+        let mut state = ready(ActivityState::Active);
+        let request = state.update(Message::RefreshReceipts, true).unwrap();
+        let mut response = receipt_response("activity-1", ActivityReceiptOutcome::Returned);
+        match mismatch {
+            0 => response.schema = 2,
+            1 => response.activity_id = "other".into(),
+            _ => response.receipts[0].activity_id = "other".into(),
+        }
+        finish(&mut state, request, Ok(Response::Receipts(response)));
+        assert!(state.error.is_some());
+        assert!(state.receipts.is_none());
+        assert_eq!(
+            state.detail.as_ref().unwrap().activity.state,
+            ActivityState::Active
+        );
+    }
+}
+
+#[test]
+fn receipt_reads_preserve_drafts_and_existing_object_previews() {
+    let mut state = ready_preview(ActivityState::Active);
+    let preview = request_preview(&mut state);
+    finish(
+        &mut state,
+        preview,
+        Ok(Response::OperationPreview(Box::new(
+            operation_preview_result(),
+        ))),
+    );
+    let before = state.operation_preview.as_ref().unwrap().preview.clone();
+    let request = state.update(Message::RefreshReceipts, true).unwrap();
+    finish(
+        &mut state,
+        request,
+        Ok(Response::Receipts(receipt_response(
+            "activity-1",
+            ActivityReceiptOutcome::Returned,
+        ))),
+    );
+    assert_eq!(state.operation_preview.as_ref().unwrap().preview, before);
+    state.update(Message::Edit, true);
+    state.update(Message::Field(Field::Goal, "Unsent edit".into()), true);
+    assert!(state.update(Message::RefreshReceipts, true).is_none());
+    assert_eq!(state.form.as_ref().unwrap().goal, "Unsent edit");
+    state.form = None;
+    fill_object_form(&mut state);
+    assert!(state.update(Message::RefreshReceipts, true).is_none());
+    assert_eq!(
+        state.object_form.as_ref().unwrap().object.object_id,
+        "release.status"
+    );
+}
+
+#[test]
+fn receipt_reports_and_declarations_render_as_inert_separate_data() {
+    use cos_agent_protocol::ActivityReceiptDeclaration;
+    crate::localize::localize();
+    let mut response = receipt_response("activity-1", ActivityReceiptOutcome::Returned);
+    let receipt = &mut response.receipts[0];
+    let raw = "**applied** [Approve](https://invalid.example) <script>not executed</script>";
+    for kind in [
+        ReceiptResultKind::Json,
+        ReceiptResultKind::Text,
+        ReceiptResultKind::Empty,
+    ] {
+        let result = receipt.report.result.as_mut().unwrap();
+        result.kind = kind;
+        result.preview = raw.into();
+        result.bytes = u64::MAX;
+        let _ = receipt_view(receipt);
+        assert_eq!(receipt.report.result.as_ref().unwrap().preview, raw);
+        assert_eq!(receipt.report.result.as_ref().unwrap().bytes, u64::MAX);
+        assert_eq!(receipt.source, ActivityReceiptSource::CallerReported);
+    }
+    receipt.report.result = None;
+    receipt.report.error = Some(raw.into());
+    receipt.declaration = Some(ActivityReceiptDeclaration {
+        app_version: "1".into(),
+        operation_label: "App-declared operation".into(),
+        effects: vec![ReceiptDeclaredEffect {
+            kind: AppEffectKind::Delete,
+            label: "App-declared deletion".into(),
+            recovery: AppEffectRecovery::Reversible,
+            target_arg: Some("path".into()),
+        }],
+    });
+    receipt.declaration_error = None;
+    let _ = receipt_view(receipt);
+    assert_eq!(receipt.report.outcome, ActivityReceiptOutcome::Returned);
+    receipt.declaration.as_mut().unwrap().effects.clear();
+    let _ = receipt_view(receipt);
+    receipt.declaration = None;
+    let _ = receipt_view(receipt);
+    assert_eq!(
+        receipt_outcome_label(ActivityReceiptOutcome::Returned),
+        fl!("activity-receipt-returned")
+    );
+    assert_eq!(
+        receipt_outcome_label(ActivityReceiptOutcome::ReportedError),
+        fl!("activity-receipt-reported-error")
+    );
+    assert_eq!(
+        receipt_outcome_label(ActivityReceiptOutcome::Indeterminate),
+        fl!("activity-receipt-indeterminate")
+    );
+}
+
+#[test]
+fn leaving_the_activity_discards_receipt_responses_without_authoring_anything() {
+    let mut state = ready(ActivityState::Active);
+    let request = state.update(Message::RefreshReceipts, true).unwrap();
+    state.hide();
+    finish(
+        &mut state,
+        request,
+        Ok(Response::Receipts(receipt_response(
+            "activity-1",
+            ActivityReceiptOutcome::Returned,
+        ))),
+    );
+    assert!(state.receipts.is_none());
+    assert!(state.pending.is_none());
+    assert!(state.update(Message::RefreshReceipts, true).is_none());
+    let request = state.update(Message::Show, true).unwrap();
+    assert!(matches!(request.action, Action::Get(_)));
+}
+
+#[test]
+fn receipt_snapshot_stays_historical_and_caller_reported_when_app_metadata_changes() {
+    use cos_agent_protocol::ActivityReceiptDeclaration;
+    let mut state = ready_preview(ActivityState::Active);
+    state.objects.as_mut().unwrap().objects[0]
+        .description
+        .as_mut()
+        .unwrap()
+        .app_version = "new-package-version".into();
+    let mut response = receipt_response("activity-1", ActivityReceiptOutcome::Returned);
+    response.receipts[0].declaration_error = None;
+    response.receipts[0].declaration = Some(ActivityReceiptDeclaration {
+        app_version: "version-at-recording".into(),
+        operation_label: "Historical operation".into(),
+        effects: vec![],
+    });
+    let request = state.update(Message::RefreshReceipts, true).unwrap();
+    finish(&mut state, request, Ok(Response::Receipts(response)));
+    let receipt = &state.receipts.as_ref().unwrap().receipts[0];
+    assert_eq!(receipt.source, ActivityReceiptSource::CallerReported);
+    assert_eq!(receipt.report.outcome, ActivityReceiptOutcome::Returned);
+    assert_eq!(
+        receipt.declaration.as_ref().unwrap().app_version,
+        "version-at-recording"
+    );
+    assert_eq!(
+        state.objects.as_ref().unwrap().objects[0]
+            .description
+            .as_ref()
+            .unwrap()
+            .app_version,
+        "new-package-version",
+    );
+    assert_eq!(
+        state.detail.as_ref().unwrap().activity.state,
+        ActivityState::Active
+    );
+    let _ = state.view(true);
+}
+
 #[test]
 fn native_views_build_for_list_forms_and_all_backend_states() {
     for activity_state in [

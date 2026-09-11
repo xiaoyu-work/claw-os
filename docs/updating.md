@@ -95,6 +95,21 @@ rerunning the setup wizard:
 cos agent setup text --verify-only
 ```
 
+### Activity receipt storage
+
+The receipt-capable Activity service transactionally migrates `activities.db`
+from database schema 1 to schema 2. Existing goals, states, resource references,
+and completion notes are preserved; the migration adds an owner-scoped receipt
+ledger. This database version is separate from Activity wire schema 1, which
+does not change.
+
+An older binary that only supports database schema 1 refuses a migrated
+database rather than silently dropping receipt data. Do not downgrade only
+`cos`/`clawd` against schema-2 state. Preserve the database and restore a
+compatible Agent package, or restore a consistent pre-upgrade backup through
+the operator's recovery process. Receipt records remain caller-reported data,
+never restored authorization.
+
 ### App data moves into per-App directories
 
 From the release that isolates App workers, an App no longer receives the

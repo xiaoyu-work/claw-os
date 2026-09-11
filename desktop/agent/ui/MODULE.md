@@ -61,6 +61,18 @@ invocation snapshot and generation must still match when the reply arrives.
 Metadata/object drafts and navigation invalidate it; no result starts a job
 or becomes an approval. Preview response DTOs contain no raw non-resource argv.
 
+Activity receipts have an explicit read-only refresh and use the same shared
+broker ledger as headless clients. Closed source/outcome/result enums prevent
+caller reports from being relabeled as OS-confirmed or applied effects. The UI
+shows recording time, reported bytes/digests, bounded result/error text,
+truncation and optional matched declarations without parsing result markup.
+Declaration snapshots were authenticated at recording time, not against
+current App validity. Even with a snapshot, execution remains caller-reported;
+historical metadata and recovery hints are not evidence or guarantees.
+Reading receipts remains available for terminal Activities and
+never changes jobs, goal state, object previews or permissions. There is no
+receipt authoring/execution endpoint or local persistence.
+
 ## Dependencies
 
 The UI consumes DTOs from `../protocol/` through `src/bridge.rs`. Views may
@@ -101,3 +113,5 @@ completion inference, stale lookup/attachment responses, terminal restrictions,
 and inert operation details. Preview coverage includes metadata-only flags,
 requested-target preservation, non-resource argument redaction, missing effect
 declarations, selection/draft guards and unchanged Activity/job state.
+Receipt coverage adds strict source/claim decoding, declaration absence and
+diagnostics, inert output, stale selection, terminal reads and GET-only routing.

@@ -6,6 +6,7 @@ use crate::apps::App;
 use crate::caps::manifest::{ArgKind, EffectKind, EffectRecovery, Manifest};
 
 pub mod cli;
+pub mod receipts;
 
 pub const MAX_ARGUMENTS: usize = 64;
 pub const MAX_ARGUMENT_BYTES: usize = 8192;

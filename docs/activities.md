@@ -115,6 +115,8 @@ progression, effect previews, and cross-device continuation remain later steps.
 | `activity.objects` | Authenticated declaration metadata or explicit diagnostics for App references |
 | `activity.object.attach` | Atomically attached reference; no App execution or new authority |
 | `activity.operation.preview` | App-declared expected effects; no execution, authorization, or confirmed changes |
+| `activity.receipts` | Immutable caller-reported results for the authenticated owner's Activity |
+| `activity.receipt.record` | Append or idempotently retry a report; never execute or create authority |
 
 No request accepts an owner UID, capability set, or grant. Root does not receive
 an implicit cross-owner Activity view. Mutation routes use the existing
@@ -130,3 +132,7 @@ package upgrades.
 Activity object views can inspect [operation previews](operation-previews.md)
 through that same backend. These previews are metadata, not execution receipts
 or actual before/after file diffs.
+
+[Execution receipts](execution-receipts.md) retain reported outcomes through
+the same backend. Recording does not change Activity state, and a receipt is
+not evidence that an App's declared effects or the user's goal were achieved.

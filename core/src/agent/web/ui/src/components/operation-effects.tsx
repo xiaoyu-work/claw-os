@@ -4,7 +4,7 @@ import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useActivityView } from "@/hooks/use-activities";
 import { activityApi } from "@/lib/activities";
-import type { OperationInvocation, OperationPreview, PlannedEffect } from "@/lib/operation-preview";
+import { effectRecoveryLabels, type OperationInvocation, type OperationPreview, type PlannedEffect } from "@/lib/operation-preview";
 
 type Props = {
   activityId: string;
@@ -98,13 +98,6 @@ function PreviewResult({ preview }: { preview: OperationPreview }) {
   );
 }
 
-const recoveryLabels: Record<PlannedEffect["recovery"], string> = {
-  not_applicable: "Not applicable (App-declared)",
-  reversible: "Reversible (App-declared)",
-  compensatable: "Compensatable (App-declared)",
-  irreversible: "Irreversible (App-declared)",
-  unknown: "Unknown",
-};
 const targetLabels: Record<PlannedEffect["target_state"], string> = {
   requested: "Requested targets",
   unresolved: "Target unresolved",
@@ -118,7 +111,7 @@ function Effect({ effect }: { effect: PlannedEffect }) {
         <p className="break-words font-medium">{effect.label}</p>
         <span className="rounded-full border px-2 py-0.5">App-declared {effect.kind}</span>
       </div>
-      <p>Recovery: {recoveryLabels[effect.recovery]}</p>
+      <p>Recovery: {effectRecoveryLabels[effect.recovery]}</p>
       {effect.target_arg !== null && (
         <p className="break-all">Target argument: <code>{effect.target_arg}</code></p>
       )}

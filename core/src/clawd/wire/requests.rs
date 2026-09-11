@@ -180,6 +180,33 @@ pub struct ActivityOperationPreview {
     pub args: Option<TextList<64, 8192>>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(transparent)]
+pub struct BoundedReceiptReport(pub crate::activities::ReceiptReport);
+
+impl<'de> Deserialize<'de> for BoundedReceiptReport {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let report = crate::activities::ReceiptReport::deserialize(deserializer)?;
+        report.validate().map_err(|_| serde::de::Error::custom("invalid or oversized receipt report"))?;
+        Ok(Self(report))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityReceipts {
+    pub id: Token,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityReceiptRecord {
+    pub id: Token,
+    pub report: BoundedReceiptReport,
+}
+
 // ---------------------------------------------------------------------------
 // Agent tasks
 // ---------------------------------------------------------------------------

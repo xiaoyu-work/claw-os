@@ -65,6 +65,7 @@ ownership, and work submission. The authenticated adapters are:
 | `GET /api/activities/{id}/objects` | `activity.objects` |
 | `POST /api/activities/{id}/objects` | `activity.object.attach` |
 | `POST /api/activities/{id}/operation-preview` | `activity.operation.preview` |
+| `GET /api/activities/{id}/receipts?limit=100` | `activity.receipts` |
 
 Creation saves a goal without starting work. The detail view shows goal,
 completion criteria, planning boundaries, inert resource references, job
@@ -148,13 +149,53 @@ Changing that scope aborts old reads; simultaneous object previews stay
 independent. Previews do not modify Activity resources or task state. See the
 [shared preview contract](../../../../../docs/operation-previews.md).
 
+### Caller-reported receipts
+
+Activity detail displays the shared ledger through a GET-only receipt adapter.
+There is no Web receipt authoring, execution, retry-recording, update, or deletion
+action. Receipts load with the initial detail view, participate in its existing
+refresh action, and also have a dedicated **Refresh receipts** button. They
+remain readable while an Activity is paused, completed, or cancelled.
+
+The source is always **caller-reported**, not OS-confirmed execution or mutation
+evidence. Outcomes are displayed as `returned`, `reported_error`, or
+`indeterminate`, never as proof that changes were applied. An error does not
+establish that no side effect occurred, and an indeterminate result does not
+establish whether an App process started. Neither report content nor a returned
+outcome completes the Activity or grants permissions.
+
+The received time is the broker's recording time, not execution time. Result
+kind, reported original byte count and SHA-256, bounded preview, truncation, and
+reported errors are displayed as data. The hash is not an execution attestation
+or a hash of the redacted preview. JSON/text previews are never parsed as HTML,
+interpreted as instructions, or used to infer observed effects.
+
+Each receipt has either a historical App declaration snapshot authenticated
+at recording time or an explicit declaration error from that time. A snapshot
+does not establish current App validity after package changes or revocation,
+and never upgrades the execution report beyond `caller_reported`. Matching a
+signed manifest authenticates that metadata only, not the execution, output,
+effects, or goal achievement. Missing
+declarations retain their diagnostic rather than hiding the report. Empty
+effect metadata remains unknown, not an implicit read-only claim.
+Database migrations remain core-owned; Activity and receipt presentation
+schemas remain version 1.
+
+Malformed provenance, mismatched Activity/owner identity, duplicate receipt
+identifiers, or read failures hide the receipt list with a visible diagnostic.
+The existing abortable read guards keep late responses from replacing another
+Activity's reports. Receipt refreshes do not delay unrelated Activity actions.
+See the [shared receipt contract](../../../../../docs/execution-receipts.md).
+
 ### Refresh behavior
 
-Views refetch after mutations, on focus/notification changes, every three
-seconds while associated jobs are queued/running/waiting for approval, and
-every ten seconds otherwise (including object declarations). Stale reads are aborted and cannot replace a newer
-selection. Read errors remain visible; there is no local fallback. Lists and
-job projections show at most 100 records.
+Views refetch after mutations and on focus/notification changes. Activity
+detail polls every three seconds while associated jobs are queued, running, or
+waiting for approval, and every ten seconds otherwise. Lists, object declarations,
+and receipts poll every ten seconds; effect previews remain explicitly requested.
+Stale reads are aborted and cannot replace a newer selection. Read errors remain
+visible; there is no local fallback. Lists, job projections, and receipts show
+at most 100 records.
 
 ### Activity validation
 
@@ -163,7 +204,7 @@ Chromium-based browser:
 
 ```bash
 bun run typecheck
-bun test test/activities.test.ts test/activity-views.test.tsx test/operation-preview.test.ts
+bun test test/activities.test.ts test/activity-views.test.tsx test/operation-preview.test.ts test/activity-receipts.test.ts
 bun run build --outDir .activity-validation/dist
 bun run test:browser
 ```
@@ -183,6 +224,10 @@ Effect-preview coverage verifies explicit requests, opaque argv, every effect
 kind and recovery category, requested-only targets, unresolved/unknown states,
 rejected execution/authorization claims, inert output, and late previews
 across objects and Activities.
+Receipt cases cover source/identity validation, recording time, bounded inert
+JSON/text/empty results, errors and uncertain outcomes, declaration failures,
+existing/dedicated refresh, late reads, no goal completion, and read-only access
+on paused and terminal Activities.
 Console errors and unexpected outbound
 requests fail the test. It neither contacts a model nor uses real credentials.
 Browser profiles stay under `.activity-validation/` and are removed after the

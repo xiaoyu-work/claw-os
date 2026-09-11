@@ -50,6 +50,7 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | Activities | Desktop-independent persistent user goals, explicit completion, planning metadata, and owner-scoped task/session projections | `core/src/activities/`, `core/src/clawd/activities.rs`, `core/src/activity.rs` |
 | App object catalogue | Authenticated App-owned object declarations, portable SDK references, and explicit resolution through ordinary App operations | `core/src/objects/`, `core/src/caps/manifest/objects.rs`, `core/src/clawd/activity_objects.rs` |
 | Operation previews | Non-executing, authenticated App effect declarations and requested target projections; never execution permission or confirmed effects | `core/src/operations/`, `core/src/clawd/operation_previews.rs` |
+| Activity execution receipts | Immutable owner-scoped caller reports, separate authenticated declaration snapshots, and normal App execution capture | `core/src/activities/receipts.rs`, `core/src/clawd/activity_receipts.rs`, `core/src/router/operation_commands.rs` |
 | Session event journal | Root-owned, MAC-chained record of session lifecycle and privileged mutation brackets; the ordering and recovery authority the other session/audit views project from | `core/src/session/journal/`, `core/src/clawd/journal.rs` |
 | Audit | Hash-chained JSONL events and agent audit/query commands | `core/src/audit.rs`, `core/src/agent/audit_cli.rs` |
 | Notification service | Durable owner-scoped user-attention records, delivery policy, DND, deduplication, retries, and channel leases | `core/src/notifications/`, `core/src/clawd/notifications.rs` |
@@ -320,6 +321,27 @@ mean unknown, never implicitly read-only. Every preview says that authorization,
 execution and effect confirmation have not occurred. Normal App execution and
 its existing audit/journal boundaries remain separate. See
 [`docs/operation-previews.md`](docs/operation-previews.md).
+
+### Execution receipts
+
+`cos operation execute` checks the owner's active Activity and then reuses the
+ordinary App invocation, permission, provenance, sandbox and audit path. It
+captures returned JSON, text, empty output, reported errors or unavailable
+results without asserting that effects occurred. The broker records only
+bounded, redacted reports under the authenticated owner, fixes their source to
+`caller_reported`, and timestamps storage.
+
+App declaration metadata is included separately only when current verified
+package bytes match the reported package digest; otherwise the report retains
+an explicit declaration error. A match authenticates metadata, not execution.
+Recording is immutable and idempotent per owner/report ID and never changes
+Activity state, grants authority, or replays an operation.
+
+The receipt ledger migrates Activity database schema 1 to 2 without changing
+Activity wire schema 1. Terminal, Web and native desktop read the same records.
+Session/mutation journals remain the source for OS-observed privileged changes;
+caller reports are not promoted into that evidence. See
+[`docs/execution-receipts.md`](docs/execution-receipts.md).
 
 ### Agent ask/chat turn
 

@@ -57,6 +57,9 @@ pub(crate) fn activity_task(endpoint: BridgeEndpoint, request: ActivityRequest) 
                 ActivityAction::Get(id) => bridge::fetch_activity(endpoint, &id)
                     .await
                     .map(|detail| ActivityResponse::Detail(Box::new(detail))),
+                ActivityAction::Receipts(id) => bridge::fetch_activity_receipts(endpoint, &id)
+                    .await
+                    .map(ActivityResponse::Receipts),
                 ActivityAction::Objects(id) => bridge::fetch_activity_objects(endpoint, &id)
                     .await
                     .map(ActivityResponse::Objects),

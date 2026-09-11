@@ -12,6 +12,8 @@ grant, a filesystem diff, or proof that an effect will occur.
 | --- | --- |
 | `mod.rs` | Verified manifest preview, bounded input binding, and requested target projection |
 | `cli.rs` | Thin terminal client of the shared broker |
+| `receipts.rs` | Bounded, redacted capture of App return values as reports, not verified effects |
+| `../router/operation_commands.rs` | Explicit normal App execution and receipt-recording orchestration |
 | `../caps/manifest/effects.rs` | Optional effect declaration vocabulary and validation |
 | `../clawd/operation_previews.rs` | Authenticated general and owner-scoped Activity adapters |
 | `../../test/unit/operations/` | Purity, binding, unknown-effect, and target-resolution coverage |
@@ -31,6 +33,11 @@ grant, a filesystem diff, or proof that an effect will occur.
 - Raw non-resource argument content is not included in the returned preview.
 - The module starts no App, model, task, or approval and owns no second store.
   Normal execution still performs every existing check.
+
+The router's explicit execution path captures results through `receipts.rs`
+and records them in the shared Activity service. It preserves App errors and
+indeterminate outcomes and never retries an operation to repair receipt
+storage. See [execution receipts](../../../docs/execution-receipts.md).
 
 ## Tests
 

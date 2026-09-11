@@ -10,7 +10,8 @@ use serde_json::{json, Value};
 use crate::clawd::routes::Command;
 use crate::clawd::wire::requests::{
     ActivityCreate, ActivityGet, ActivityList, ActivityObjectAttach, ActivityObjects,
-    ActivityOperationPreview, ActivityRun, ActivityTransition, ActivityUpdate, NoBody,
+    ActivityOperationPreview, ActivityReceipts, ActivityRun, ActivityTransition, ActivityUpdate,
+    NoBody,
 };
 
 use super::clawd::ApiError;
@@ -109,6 +110,18 @@ pub async fn operation_preview(
     request(
         Command::ActivityOperationPreview,
         with_id::<ActivityOperationPreview>(id, json_body(body)?)?,
+    )
+    .await
+}
+
+pub async fn receipts(
+    Path(id): Path<String>,
+    query: Result<Query<DetailQuery>, QueryRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Query(query) = query.map_err(|error| bad_request(error.body_text()))?;
+    request(
+        Command::ActivityReceipts,
+        with_id::<ActivityReceipts>(id, json!({ "limit": query.limit }))?,
     )
     .await
 }
