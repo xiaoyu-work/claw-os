@@ -20,6 +20,8 @@ session optional        pam_keyinit.so force revoke
 session required        pam_limits.so
 session required        pam_env.so readenv=1
 session required        pam_env.so readenv=1 user_readenv=1 envfile=/etc/default/locale
+session required        pam_claw_display.so close-before
 @include common-session
+session required        pam_claw_display.so open-after
 session optional        pam_gnome_keyring.so auto_start
 @include common-password

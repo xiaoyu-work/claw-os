@@ -592,14 +592,15 @@ impl Authority {
         inner.revoke_lineage(id)
     }
 
-    /// Revoke only approval-derived grants for one session.
-    pub fn revoke_approvals_for_session(&self, session_id: &str) -> usize {
+    /// Revoke only approval-derived grants for one owner's session.
+    pub fn revoke_approvals_for_session(&self, owner_uid: u32, session_id: &str) -> usize {
         let mut inner = self.lock();
         let grants: Vec<GrantId> = inner
             .grants
             .values()
             .filter(|grant| {
                 grant.issuer == Issuer::Approval
+                    && grant.principal.uid == owner_uid
                     && grant.subject.session_id.as_deref() == Some(session_id)
             })
             .map(|grant| grant.id)

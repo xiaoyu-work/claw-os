@@ -208,4 +208,22 @@ fn wire_rejects_owner_and_confirmation_forgery() {
             assert!((route.route().decode)(params).is_err(), "{field}");
         }
     }
+
+}
+
+#[test]
+fn revocation_reports_both_audit_and_incomplete_retirement() {
+    assert!(finish_revocation(Ok(()), Ok(())).is_ok());
+    assert_eq!(
+        finish_revocation(Err("audit failed".into()), Ok(())).unwrap_err(),
+        "audit failed",
+    );
+    assert_eq!(
+        finish_revocation(Ok(()), Err("teardown pending".into())).unwrap_err(),
+        "teardown pending",
+    );
+    assert_eq!(
+        finish_revocation(Err("audit failed".into()), Err("teardown pending".into())).unwrap_err(),
+        "audit failed; teardown pending",
+    );
 }

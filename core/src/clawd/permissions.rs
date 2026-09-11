@@ -163,7 +163,7 @@ fn owner_filter(client: &ClientIdentity) -> Result<Option<u32>, String> {
 /// flag on a record: every approval minted under an older generation
 /// stops being authority immediately, and restoring one of those files
 /// from a backup does not bring it back.
-pub fn revoke(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+pub async fn revoke(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     if client.require_uid()? != 0 {
         return Err("permission revocation requires the privileged approval helper".to_string());
     }
@@ -187,14 +187,17 @@ pub fn revoke(params: Value, client: &ClientIdentity) -> Result<Value, String> {
         None => approvals::RevocationScope::Owner { uid: owner_uid },
     };
     let generation = approvals::generations::revoke(&scope)?;
+    #[cfg(target_os = "linux")]
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     let retired = match &scope {
-        approvals::RevocationScope::Session { session, .. } => {
-            super::authority::authority().revoke_approvals_for_session(session)
+        approvals::RevocationScope::Session { uid: Some(uid), session } => {
+            super::authority::authority().revoke_approvals_for_session(*uid, session)
         }
         approvals::RevocationScope::Owner { uid: Some(uid) } => {
             super::authority::authority().revoke_approvals_for_owner(*uid)
         }
-        approvals::RevocationScope::Owner { uid: None } => 0,
+        approvals::RevocationScope::Owner { uid: None }
+        | approvals::RevocationScope::Session { uid: None, .. } => 0,
     };
     super::authority::audit::record_revoked(scope.kind(), session.as_deref(), retired);
     crate::clawd::audit::record_approval_revocation(
@@ -202,6 +205,15 @@ pub fn revoke(params: Value, client: &ClientIdentity) -> Result<Value, String> {
         session.as_deref().unwrap_or("*"),
         generation,
     );
+    #[cfg(target_os = "linux")]
+    {
+        let scope = scope.clone();
+        super::gui::retirement::wait(deadline, move |deadline| {
+            super::gui::retire_approval_scope(&scope, deadline)
+        })
+        .await
+        .map_err(|error| format!("Approval generation retired but GUI retirement did not complete: {error}"))?;
+    }
     Ok(json!({
         "revoked": true,
         "scope": scope.kind(),

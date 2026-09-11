@@ -437,11 +437,11 @@ install -Dm0644 "$DESKTOP_SRC/greeter/cosmic-greeter.toml" \
 #      the cosmic-greeter user list by UserFilter).
 #   2. Append [initial_session] to /etc/greetd/cosmic-greeter.toml
 #      pointing at /usr/lib/cos/firstboot-session — a wrapper that either
-#      execs cosmic-session (no human user yet) or exits 0 so greetd
+#      subscribes to the Root display (no human user yet) or exits 0 so greetd
 #      falls through to [default_session] (wizard already ran).
 #
-# The firstboot-session wrapper kiosk-launches the wizard directly
-# (`cosmic-comp cosmic-initial-setup`). When the wizard's Finish handler runs
+# PAM activates the Root-owned compositor and fixed first-boot kiosk command.
+# The wrapper only waits for that authenticated display. When Finish runs
 # `loginctl terminate-user cosmic-initial-setup`, the session dies and greetd
 # advances to cosmic-greeter for normal login as the user the wizard created.
 # ---------------------------------------------------------------------------

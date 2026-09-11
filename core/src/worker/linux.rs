@@ -60,6 +60,10 @@ pub struct PinnedSources {
 
 impl PinnedSources {
     fn open(mounts: &[super::policy::Mount]) -> Result<Self, String> {
+        Self::open_with_numbers(mounts, false)
+    }
+
+    fn open_with_numbers(mounts: &[super::policy::Mount], actual_numbers: bool) -> Result<Self, String> {
         use std::os::unix::fs::MetadataExt;
         use std::os::unix::io::AsRawFd;
 
@@ -101,7 +105,14 @@ impl PinnedSources {
                 }
             }
             let index = files.len();
-            let target_fd = PINNED_FD_BASE + index as libc::c_int;
+            let target_fd = if actual_numbers {
+                if file.as_raw_fd() < 3 {
+                    return Err("GUI mount pin overlaps a standard stream".to_string());
+                }
+                file.as_raw_fd()
+            } else {
+                PINNED_FD_BASE + index as libc::c_int
+            };
             pinned.push(super::policy::Mount {
                 source: PathBuf::from(format!("/proc/self/fd/{target_fd}")),
                 target: mount.target.clone(),
@@ -185,6 +196,14 @@ const SYSTEM_PATHS: &[&str] = &[
 
 pub struct LinuxSandbox;
 
+pub(crate) const GUI_WAYLAND_SOCKET: &str = "/run/cos/app-wayland.sock";
+
+pub(crate) struct GuiPreparation<'a> {
+    pub workload: &'a claw_display_control::workload::Workload,
+    pub instance: claw_display_control::InstanceId,
+    pub runtime: &'a mut crate::display_session::runtime::Runtime,
+}
+
 impl WorkerSandbox for LinuxSandbox {
     fn name(&self) -> &'static str {
         "linux-bwrap"
@@ -222,7 +241,63 @@ impl WorkerSandbox for LinuxSandbox {
     }
 
     fn prepare(&self, launch: &WorkerLaunch) -> Result<PreparedLaunch, String> {
+        self.prepare_internal(launch, None)
+    }
+}
+
+impl LinuxSandbox {
+    pub(crate) fn prepare_gui(
+        &self,
+        launch: &WorkerLaunch,
+        gui: GuiPreparation<'_>,
+    ) -> Result<PreparedLaunch, String> {
+        launch.policy.validate()?;
+        if unsafe { libc::geteuid() } != 0
+            || crate::paths::current_owner_uid_override().is_none()
+            || launch.policy.tier != super::policy::TrustTier::DesktopSurface
+        {
+            return Err("GUI preparation requires Root-owned desktop launch custody".to_string());
+        }
+        if [
+            "DISPLAY",
+            "XAUTHORITY",
+            "WAYLAND_SOCKET",
+            "X_PRIVILEGED_WAYLAND_SOCKET",
+            "DBUS_SESSION_BUS_ADDRESS",
+            "COSMIC_SESSION_SOCK",
+            "CLAW_DISPLAY_CONTROL_FD",
+        ]
+        .iter()
+        .any(|name| launch.policy.env.contains_key(*name))
+            || launch.policy.env.get("WAYLAND_DISPLAY").map(String::as_str)
+                != Some(GUI_WAYLAND_SOCKET)
+        {
+            return Err("GUI workers require only their instance-bound Wayland transport; X11 is unsupported".to_string());
+        }
+        for field in ["loginuid", "sessionid"] {
+            let identity =
+                claw_display_control::identity::read_bounded(&format!("/proc/self/{field}"), 32)
+                    .map_err(|error| error.to_string())?;
+            if identity.trim() != "4294967295" {
+                return Err("GUI supervisor must not inherit ambient login authority".to_string());
+            }
+        }
+        let availability = self.availability();
+        if !availability.is_available() {
+            return Err(availability.refusal());
+        }
+        self.prepare_internal(launch, Some(gui))
+    }
+
+    fn prepare_internal(
+        &self,
+        launch: &WorkerLaunch,
+        mut gui: Option<GuiPreparation<'_>>,
+    ) -> Result<PreparedLaunch, String> {
         let policy = &launch.policy;
+        if policy.tier == super::policy::TrustTier::DesktopSurface && gui.is_none() {
+            return Err("desktop surfaces require checked Root GUI custody".to_string());
+        }
         let bwrap = which("bwrap")
             .ok_or_else(|| "worker isolation unavailable: `bwrap` is missing".to_string())?;
         let (uid, gid) = worker_identity()?;
@@ -232,64 +307,119 @@ impl WorkerSandbox for LinuxSandbox {
         let mut mounts = policy.mounts.clone();
 
         if policy.broker || matches!(policy.network, NetworkPolicy::Brokered { .. }) {
-            let dir = super::runtime::LaunchDir::create(&id, Some((uid, gid)))?;
+            let legacy_dir = if gui.is_none() {
+                Some(super::runtime::LaunchDir::create(&id, Some((uid, gid)))?)
+            } else {
+                None
+            };
             if policy.broker {
-                let authority = launch.authority.as_ref().ok_or_else(|| {
-                    "worker launch requests a broker endpoint without an authority".to_string()
-                })?;
-                let endpoint = super::broker::BrokerEndpoint::start(
-                    dir.child("broker.sock"),
-                    authority.clone(),
-                    uid,
-                )?;
-                mounts.push(super::policy::Mount::read_write(
-                    endpoint.socket_path().to_path_buf(),
-                    PathBuf::from(SANDBOX_BROKER_SOCKET),
-                    MountClass::BrokerIpc,
-                ));
-                resources.broker = Some(endpoint);
+                if let Some(gui) = &gui {
+                    mounts.push(super::policy::Mount::read_write(
+                        gui.runtime
+                            .socket(crate::display_session::runtime::Socket::Broker),
+                        PathBuf::from(SANDBOX_BROKER_SOCKET),
+                        MountClass::BrokerIpc,
+                    ));
+                } else {
+                    let authority = launch.authority.as_ref().ok_or_else(|| {
+                        "worker launch requests a broker endpoint without an authority".to_string()
+                    })?;
+                    let dir = legacy_dir
+                        .as_ref()
+                        .ok_or("worker runtime directory is unavailable")?;
+                    let endpoint = super::broker::BrokerEndpoint::start(
+                        dir.child("broker.sock"),
+                        authority.clone(),
+                        uid,
+                    )?;
+                    mounts.push(super::policy::Mount::read_write(
+                        endpoint.socket_path().to_path_buf(),
+                        PathBuf::from(SANDBOX_BROKER_SOCKET),
+                        MountClass::BrokerIpc,
+                    ));
+                    resources.broker = Some(endpoint);
+                }
             }
             if let NetworkPolicy::Brokered { endpoints } = &policy.network {
-                let egress = super::net_broker::EgressEndpoint::start(
-                    dir.child("egress.sock"),
-                    endpoints.clone(),
-                    uid,
-                )?;
+                let socket = if let Some(gui) = &gui {
+                    gui.runtime
+                        .socket(crate::display_session::runtime::Socket::Egress)
+                } else {
+                    legacy_dir
+                        .as_ref()
+                        .ok_or("worker runtime directory is unavailable")?
+                        .child("egress.sock")
+                };
+                let egress = if gui.is_some() {
+                    super::net_broker::EgressEndpoint::start_gui(socket, endpoints.clone())?
+                } else {
+                    super::net_broker::EgressEndpoint::start(socket, endpoints.clone(), uid)?
+                };
+                if let Some(gui) = &mut gui {
+                    gui.runtime
+                        .adopt(crate::display_session::runtime::Socket::Egress, uid)
+                        .map_err(|error| error.to_string())?;
+                }
                 mounts.push(super::policy::Mount::read_write(
-                    egress.socket_path().to_path_buf(),
+                    if let Some(gui) = &gui {
+                        gui.runtime.socket(crate::display_session::runtime::Socket::EgressTransport)
+                    } else {
+                        egress.socket_path().to_path_buf()
+                    },
                     PathBuf::from(SANDBOX_EGRESS_SOCKET),
                     MountClass::BrokerIpc,
                 ));
                 resources.egress = Some(egress);
             }
-            resources.runtime_dir = Some(dir);
+            resources.runtime_dir = legacy_dir;
         }
 
-        let pinned = PinnedSources::open(&mounts)?;
-        let args = build_bwrap_args(policy, &pinned.mounts, uid, gid, &host_layout());
+        let actual_numbers = gui.is_some();
+        let pinned = if actual_numbers {
+            PinnedSources::open_with_numbers(&mounts, true)?
+        } else {
+            PinnedSources::open(&mounts)?
+        };
         let seccomp = seccomp_descriptor(policy.seccomp)?;
         let seccomp_raw = {
             use std::os::unix::io::AsRawFd;
             seccomp.as_raw_fd()
         };
+        if actual_numbers && seccomp_raw < 3 {
+            return Err("GUI seccomp pin overlaps a standard stream".to_string());
+        }
+        let args = build_bwrap_args_with_seccomp(
+            policy, &pinned.mounts, uid, gid, &host_layout(),
+            if actual_numbers { seccomp_raw } else { SECCOMP_FD },
+        );
         // A task extension host already lives in its own bounded cgroup. Its
         // reserved uid cannot create a nested cgroup, and every App child
         // inherits the host limit, so trying to re-join here fails in pre-exec.
-        let cgroup = match super::cgroup::is_available() && !inside_extension_host() {
-            true => Some(super::cgroup::create(
-                &format!("cos-worker-{id}"),
+        let cgroup = if let Some(gui) = gui {
+            Some(super::cgroup::create_gui(
+                gui.workload,
+                gui.instance,
                 &policy.limits,
-            )?),
-            false => None,
+            )?)
+        } else {
+            match super::cgroup::is_available() && !inside_extension_host() {
+                true => Some(super::cgroup::create(
+                    &format!("cos-worker-{id}"),
+                    &policy.limits,
+                )?),
+                false => None,
+            }
         };
         let governor = if cgroup.is_some() {
             Governor::Cgroup
         } else {
             Governor::Rlimit
         };
-        let cgroup_procs = cgroup
-            .as_ref()
-            .map(|scope| scope.path().join("cgroup.procs"));
+        let membership = cgroup.as_ref().map(|scope| {
+            std::fs::OpenOptions::new().write(true).open(scope.path().join("cgroup.procs"))
+                .map_err(|error| format!("pin worker cgroup membership: {error}"))
+        }).transpose()?;
+        let cgroup_procs = membership.as_ref().map(std::os::fd::AsRawFd::as_raw_fd);
 
         let mut command = Command::new(bwrap);
         command.args(&args);
@@ -307,6 +437,7 @@ impl WorkerSandbox for LinuxSandbox {
                 limits: policy.limits,
                 nproc_ceiling: current_task_count().saturating_add(policy.limits.pids_max as u64),
                 identity: (uid, gid),
+                actual_numbers,
             },
         );
 
@@ -319,6 +450,7 @@ impl WorkerSandbox for LinuxSandbox {
         resources.seccomp = Some(seccomp);
         resources.pinned = Some(pinned);
         resources.cgroup = cgroup;
+        resources.cgroup_membership = membership;
         Ok(PreparedLaunch {
             command,
             facts,
@@ -376,6 +508,17 @@ pub fn build_bwrap_args(
     uid: u32,
     gid: u32,
     layout: &HostLayout,
+) -> Vec<String> {
+    build_bwrap_args_with_seccomp(policy, mounts, uid, gid, layout, SECCOMP_FD)
+}
+
+fn build_bwrap_args_with_seccomp(
+    policy: &LaunchPolicy,
+    mounts: &[super::policy::Mount],
+    uid: u32,
+    gid: u32,
+    layout: &HostLayout,
+    seccomp_fd: libc::c_int,
 ) -> Vec<String> {
     let mut args: Vec<String> = Vec::new();
     macro_rules! push {
@@ -470,7 +613,7 @@ pub fn build_bwrap_args(
     push!("--remount-ro", "/");
 
     push!("--chdir", policy.workdir.display());
-    push!("--seccomp", SECCOMP_FD);
+    push!("--seccomp", seccomp_fd);
     push!("--", policy.program.display());
     args.extend(policy.argv.iter().cloned());
     args
@@ -482,12 +625,13 @@ struct PreExecPlan {
     /// `FD_CLOEXEC` cleared so bubblewrap can resolve
     /// `/proc/self/fd/<n>` after `execve`.
     pinned_fds: Vec<libc::c_int>,
-    cgroup_procs: Option<PathBuf>,
+    cgroup_procs: Option<libc::c_int>,
     umask: u32,
     limits: super::policy::Limits,
     /// `RLIMIT_NPROC` ceiling, precomputed in the parent.
     nproc_ceiling: u64,
     identity: (u32, u32),
+    actual_numbers: bool,
 }
 
 /// Everything that must happen in the forked child before `bwrap`
@@ -511,6 +655,7 @@ fn install_pre_exec(command: &mut Command, plan: PreExecPlan) {
         limits,
         nproc_ceiling,
         identity: (uid, gid),
+        actual_numbers,
     } = plan;
     let parent = unsafe { libc::getpid() };
     unsafe {
@@ -527,12 +672,10 @@ fn install_pre_exec(command: &mut Command, plan: PreExecPlan) {
                     "worker launcher exited before sandbox setup completed",
                 ));
             }
-            if let Some(path) = &cgroup_procs {
-                let pid = libc::getpid().to_string();
-                std::fs::OpenOptions::new()
-                    .write(true)
-                    .open(path)
-                    .and_then(|mut file| file.write_all(pid.as_bytes()))?;
+            if let Some(descriptor) = cgroup_procs {
+                if libc::write(descriptor, b"0".as_ptr().cast(), 1) != 1 {
+                    return Err(std::io::Error::last_os_error());
+                }
             }
             if libc::geteuid() == 0 {
                 if libc::setgroups(0, std::ptr::null()) != 0 {
@@ -551,17 +694,31 @@ fn install_pre_exec(command: &mut Command, plan: PreExecPlan) {
                     ));
                 }
             }
-            libc::umask(umask as libc::mode_t);
-            apply_rlimits(&limits, nproc_ceiling)?;
-            if libc::dup2(seccomp_fd, SECCOMP_FD) == -1 {
+            // Dropping uid clears PDEATHSIG, including for a Root-supervised GUI.
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) != 0 {
                 return Err(std::io::Error::last_os_error());
             }
-            // `dup2` clears `FD_CLOEXEC` on the new descriptor, which is
-            // exactly what makes these survive into bubblewrap.
-            for (index, source) in pinned_fds.iter().enumerate() {
-                let target = PINNED_FD_BASE + index as libc::c_int;
-                if libc::dup2(*source, target) == -1 {
+            if libc::getppid() != parent {
+                return Err(std::io::Error::from_raw_os_error(libc::EPIPE));
+            }
+            libc::umask(umask as libc::mode_t);
+            apply_rlimits(&limits, nproc_ceiling)?;
+            if actual_numbers {
+                for descriptor in std::iter::once(&seccomp_fd).chain(&pinned_fds) {
+                    let flags = libc::fcntl(*descriptor, libc::F_GETFD);
+                    if flags < 0 || libc::fcntl(*descriptor, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                }
+            } else {
+                if libc::dup2(seccomp_fd, SECCOMP_FD) == -1 {
                     return Err(std::io::Error::last_os_error());
+                }
+                for (index, source) in pinned_fds.iter().enumerate() {
+                    let target = PINNED_FD_BASE + index as libc::c_int;
+                    if libc::dup2(*source, target) == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
                 }
             }
             Ok(())

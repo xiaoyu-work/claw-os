@@ -72,7 +72,7 @@ pub const MEMORY_CALL_COMMAND: &str = "worker.memory.call";
 
 /// Memory subcommands a worker may ask the launcher to run. Anything
 /// else is refused before a single argument is parsed.
-const MEMORY_SUBCOMMANDS: &[&str] = &["remember", "list", "show", "search", "forget"];
+pub(crate) const MEMORY_SUBCOMMANDS: &[&str] = &["remember", "list", "show", "search", "forget"];
 
 /// Bounds on a forwarded memory call, so a hostile worker cannot turn
 /// the launcher into its own argument parser.
@@ -489,6 +489,20 @@ fn admit(command: Command, authority: &BrokerAuthority) -> Result<(), String> {
 /// `caps::require` read, so a transient capability appears and
 /// disappears with the call it was granted for.
 fn policy_check(authority: &BrokerAuthority, params: &Value) -> Value {
+    policy_response(
+        &authority.session_id,
+        authority.app_id.as_deref(),
+        &authority.live_caps(),
+        params,
+    )
+}
+
+pub(crate) fn policy_response(
+    session: &str,
+    app: Option<&str>,
+    caps: &CapSet,
+    params: &Value,
+) -> Value {
     let verb = params.get("verb").and_then(Value::as_str).unwrap_or("");
     let Some(verb) = Verb::parse(verb) else {
         return serde_json::json!({
@@ -501,13 +515,13 @@ fn policy_check(authority: &BrokerAuthority, params: &Value) -> Value {
         .and_then(|value| serde_json::from_value(value.clone()).ok())
         .unwrap_or(Scope::Wild);
     let cap = Cap::new(verb, scope.clone());
-    let allowed = authority.live_caps().covers(&cap);
+    let allowed = caps.covers(&cap);
     serde_json::json!({
         "decision": if allowed { "allow" } else { "deny" },
         "verb": verb.as_str(),
         "scope": scope,
-        "session": authority.session_id,
-        "app": authority.app_id,
+        "session": session,
+        "app": app,
         "reason": if allowed { Value::Null } else { Value::String("not-granted".into()) },
     })
 }
@@ -525,6 +539,11 @@ fn policy_check(authority: &BrokerAuthority, params: &Value) -> Value {
 /// exact source being written.
 #[cfg(unix)]
 fn memory_call(authority: &BrokerAuthority, params: &Value) -> Result<Value, String> {
+    memory_call_with_caps(authority.live_caps(), params)
+}
+
+#[cfg(unix)]
+pub(crate) fn memory_call_with_caps(caps: CapSet, params: &Value) -> Result<Value, String> {
     let command = params
         .get("command")
         .and_then(Value::as_str)
@@ -551,7 +570,7 @@ fn memory_call(authority: &BrokerAuthority, params: &Value) -> Result<Value, Str
         args.push(text.to_string());
     }
     crate::mem_bridge::run_with(
-        &crate::mem_bridge::LaunchAuthority::new(authority.live_caps()),
+        &crate::mem_bridge::LaunchAuthority::new(caps),
         command,
         &args,
     )

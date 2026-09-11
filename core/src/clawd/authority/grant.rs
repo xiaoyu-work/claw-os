@@ -76,6 +76,8 @@ pub enum Audience {
     /// that legitimately speaks for that session. Every effect is still
     /// authorized against the session grant on the inner route.
     AppRelay,
+    /// Root-supervised GUI instance lifetime and resource projection; no public route.
+    GuiResource,
 }
 
 impl Audience {
@@ -93,6 +95,7 @@ impl Audience {
             Audience::Credential => "credential",
             Audience::SystemService => "system-service",
             Audience::AppRelay => "app-relay",
+            Audience::GuiResource => "gui-resource",
         }
     }
 
@@ -153,6 +156,7 @@ impl AudienceSet {
             Audience::Scheduler,
             Audience::Credential,
             Audience::SystemService,
+            Audience::GuiResource,
         ]
         .into_iter()
         .filter(|audience| self.contains(*audience))

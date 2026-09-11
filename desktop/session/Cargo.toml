@@ -9,6 +9,7 @@ authors = ["Lucy <lucy@system76.com>"]
 publish = false
 
 [dependencies]
+claw-display-control = { path = "../../crates/claw-display-control" }
 color-eyre = "0.6"
 futures-util = "0.3"
 cosmic-dbus-a11y = { git = "https://github.com/pop-os/dbus-settings-bindings" }

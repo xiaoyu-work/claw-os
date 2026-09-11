@@ -71,12 +71,14 @@ upstream identifiers; rename them before any commercial release.
 
 [`comp/vendor/smithay`](comp/vendor/README.md) retains the complete MIT-licensed
 Smithay snapshot at `211c19d712dc5f1b78eb879f1c195715801e37ff`, the compositor's
-previous Git dependency. The local three-file patch adds pre-offer and fresh
-pre-transfer selection read hooks; all other upstream files and modes remain
-unchanged. The upstream workspace stays separate from the compositor and its
-private dispatch-test workspace. Default access is unchanged until the OS
-compositor wires authenticated authority into the hooks; this source fork is
-not itself clipboard permission enforcement.
+previous Git dependency. The original three-file read-hook foundation is
+retained; independent pre-effect write vetoes add four protocol-device files,
+for seven locally modified upstream files. All other upstream files and modes
+remain unchanged. The upstream workspace stays separate from the compositor
+and its private dispatch-test workspace. Both hook defaults preserve other
+consumers. The OS [compositor](comp/MODULE.md) now applies Root instance
+authority, with checked process/transport retirement in the OS Host; the
+dependency fork alone is not a permission grant or CopyQ-history enforcement.
 
 ### Nested vendor (`toolkit/`'s own submodules)
 

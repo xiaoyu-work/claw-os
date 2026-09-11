@@ -155,19 +155,16 @@ pub struct ClientState {
     pub evlh: LoopHandle<'static, State>,
     pub evls: LoopSignal,
     pub security_context: Option<SecurityContext>,
+    pub display_origin: Option<crate::display_authority::ClientOrigin>,
 }
 unsafe impl Send for ClientState {}
 unsafe impl Sync for ClientState {}
 
 impl ClientState {
-    /// We treat a client as "sandboxed" if it has a security context for any sandbox engine
-    /// other than `com.clawos.Panel`
     pub fn not_sandboxed(&self) -> bool {
-        self.security_context
+        self.display_origin
             .as_ref()
-            .is_none_or(|security_context| {
-                security_context.sandbox_engine.as_deref() == Some("com.clawos.Panel")
-            })
+            .is_some_and(|origin| origin.os_session())
     }
 }
 
@@ -229,6 +226,7 @@ pub struct State {
 #[derive(Debug)]
 pub struct Common {
     pub config: Config,
+    pub display_authority: Option<crate::display_authority::DisplayAuthority>,
 
     pub socket: OsString,
     pub display_handle: DisplayHandle,
@@ -629,6 +627,27 @@ fn client_not_sandboxed(client: &Client) -> bool {
         .is_some_and(|client_state| client_state.not_sandboxed())
 }
 
+fn client_can_create_context(client: &Client) -> bool {
+    client
+        .get_data::<ClientState>()
+        .and_then(|data| data.display_origin.as_ref())
+        .is_some_and(|origin| origin.can_create_context())
+}
+
+fn client_can_data_control(client: &Client) -> bool {
+    client
+        .get_data::<ClientState>()
+        .and_then(|data| data.display_origin.as_ref())
+        .is_some_and(|origin| origin.selection_read() || origin.selection_write())
+}
+
+fn client_can_layer(client: &Client) -> bool {
+    client
+        .get_data::<ClientState>()
+        .and_then(|data| data.display_origin.as_ref())
+        .is_some_and(|origin| origin.layer_shell())
+}
+
 impl State {
     pub fn new(
         dh: &DisplayHandle,
@@ -682,7 +701,7 @@ impl State {
         PointerConstraintsState::new::<Self>(dh);
         PointerGesturesState::new::<Self>(dh);
         TabletManagerState::new::<Self>(dh);
-        SecurityContextState::new::<Self, _>(dh, client_has_no_security_context);
+        SecurityContextState::new::<Self, _>(dh, client_can_create_context);
         InputMethodManagerState::new::<Self, _>(dh, client_not_sandboxed);
         TextInputManagerState::new::<Self>(dh);
         VirtualKeyboardManagerState::new::<State, _>(dh, client_not_sandboxed);
@@ -697,18 +716,18 @@ impl State {
         let ext_data_control_state = ExtDataControlState::new::<Self, _>(
             dh,
             Some(&primary_selection_state),
-            client_not_sandboxed,
+            client_can_data_control,
         );
         let wlr_data_control_state = WlrDataControlState::new::<Self, _>(
             dh,
             Some(&primary_selection_state),
-            client_not_sandboxed,
+            client_can_data_control,
         );
 
         let shell = Arc::new(parking_lot::RwLock::new(Shell::new(&config)));
 
         let layer_shell_state =
-            WlrLayerShellState::new_with_filter::<State, _>(dh, client_not_sandboxed);
+            WlrLayerShellState::new_with_filter::<State, _>(dh, client_can_layer);
         let xdg_shell_state = XdgShellState::new_with_capabilities::<State>(
             dh,
             [
@@ -747,6 +766,7 @@ impl State {
         State {
             common: Common {
                 config,
+                display_authority: None,
                 socket,
                 display_handle: dh.clone(),
                 event_loop_handle: handle,
@@ -831,6 +851,7 @@ impl State {
             evlh: self.common.event_loop_handle.clone(),
             evls: self.common.event_loop_signal.clone(),
             security_context: None,
+            display_origin: None,
         }
     }
 

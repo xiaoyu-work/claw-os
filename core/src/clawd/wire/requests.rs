@@ -541,6 +541,10 @@ pub struct AppSessionBind {
     pub pid: u32,
 }
 
+pub type AppGuiLaunch = crate::clawd::gui::inputs::LaunchRequest;
+pub type AppGuiWait = crate::clawd::gui::inputs::InstanceRequest;
+pub type AppGuiStop = crate::clawd::gui::inputs::InstanceRequest;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AppSessionSetTransient {

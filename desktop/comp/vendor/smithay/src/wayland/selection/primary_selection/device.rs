@@ -66,6 +66,11 @@ where
                     }
                 };
 
+                if !D::allow_selection_write(client, &seat, SelectionTarget::Primary) {
+                    debug!(client = ?client, "denying primary selection write");
+                    return;
+                }
+
                 // NOTE: While protocol states that selection shouldn't be used more than once,
                 // no-one enforces it, thus we have clients around that do so and crashing them
                 // doesn't worth it at this point.

@@ -51,6 +51,9 @@ use super::client_identity::ClientIdentity;
 use super::routes::{Access, Command, Route, RouteCall};
 use super::state::DaemonState;
 
+#[cfg(target_os = "linux")]
+pub(crate) mod gui;
+
 /// How long an issued handle may be used to bind a child process.
 /// Long enough for a slow interpreter start, short enough that a
 /// forgotten handle is not standing authority.
@@ -298,6 +301,21 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
         )
         .into());
     }
+    #[cfg(target_os = "linux")]
+    let gui_draft = if kind == LaunchKind::Gui {
+        super::gui::Manager::get().map_err(BrokerError::unavailable)?;
+        if !string_array(&params, "args")?.is_empty() {
+            return Err(BrokerError::execution("GUI user arguments belong in app.gui.launch"));
+        }
+        Some(gui::Draft::new(
+            package.clone(), &required_string(&params, "operation")?, client, &launcher, &delegation,
+        )
+            .map_err(BrokerError::unavailable)?)
+    } else { None };
+    #[cfg(not(target_os = "linux"))]
+    if kind == LaunchKind::Gui {
+        return Err(BrokerError::unavailable("authenticated GUI launch requires Linux"));
+    }
 
     let (command, mut plan, caller_invoke) = match kind {
         LaunchKind::Operation => {
@@ -375,13 +393,14 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
     };
 
     let proc_dir = install_session(uid, home.clone(), info).await?;
-    let handle = match issue_launch_grant(
+    let handle = match issue_launch_grant_with_gui(
         &session_id,
         Some(&app_id),
         uid,
         &launcher,
         &grant_caps,
         Some(&ceiling),
+        kind == LaunchKind::Gui,
     ) {
         Ok(handle) => handle,
         Err(error) => {
@@ -390,7 +409,18 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
         }
     };
     crate::provenance::runtime::register(uid, &session_id, &package);
-    Ok(json!({
+    #[cfg(target_os = "linux")]
+    if let Some(draft) = gui_draft {
+        let reserved = draft.finish(session_id.clone(), caps.clone())
+            .and_then(|registration| super::gui::Manager::get()?.reserve(registration));
+        if let Err(error) = reserved {
+            authority::authority().revoke_session(&session_id);
+            remove_session_row(uid, home.clone(), &session_id).await;
+            crate::provenance::runtime::deregister(uid, &session_id);
+            return Err(BrokerError::unavailable(error));
+        }
+    }
+    let mut response = json!({
         "session_id": session_id,
         "proc_data_dir": proc_dir,
         "app_id": app_id,
@@ -402,7 +432,14 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
         "caps": caps,
         "package": package_ref,
         "trust_tier": ceiling.label(),
-    }))
+    });
+    if kind == LaunchKind::Gui {
+        let data_dir = crate::paths::RoutedPathContext::for_owner(uid, home)
+            .scope_sync(crate::paths::user_data_dir);
+        response["gui_data_dir"] = serde_json::to_value(data_dir)
+            .map_err(|error| BrokerError::execution(format!("encode GUI data location: {error}")))?;
+    }
+    Ok(response)
 }
 
 pub async fn register_native(params: Value, client: &ClientIdentity) -> Result<Value, BrokerError> {
@@ -529,6 +566,9 @@ pub async fn bind(params: Value, client: &ClientIdentity) -> Result<Value, Strin
     let uid = client.require_uid()?;
     let home = client.require_home_dir()?;
     let session_id = required_string(&params, "session_id")?;
+    if is_gui_session(&session_id)? {
+        return Err("GUI processes are created and bound only by Root GUI custody".to_string());
+    }
     let handle = required_string(&params, "handle")?;
     let launcher_pid = client
         .pid
@@ -951,6 +991,9 @@ pub async fn set_transient(
     let uid = client.require_uid()?;
     let home = client.require_home_dir()?;
     let session_id = required_string(&params, "session_id")?;
+    if is_gui_session(&session_id)? {
+        return Err("GUI operation authority cannot be replaced by MCP tool grants".to_string());
+    }
     let handle = required_string(&params, "handle")?;
     require_launch_grant(client, &handle, &session_id, uid)?;
 
@@ -1167,6 +1210,14 @@ pub async fn deregister(params: Value, client: &ClientIdentity) -> Result<Value,
     let session_id = required_string(&params, "session_id")?;
     let handle = required_string(&params, "handle")?;
     let launch = require_launch_grant(client, &handle, &session_id, uid)?;
+    #[cfg(target_os = "linux")]
+    if is_gui_session(&session_id)? {
+        let retire_id = session_id.clone();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        super::gui::retirement::wait(deadline, move |deadline| {
+            super::gui::retire_session(uid, &retire_id, deadline)
+        }).await?;
+    }
     // Teardown is a capability transition like any other: taking the
     // same serializer is what stops a deregistration from racing an
     // in-flight re-scope and leaving a grant behind for a row that is
@@ -1191,6 +1242,13 @@ pub async fn deregister(params: Value, client: &ClientIdentity) -> Result<Value,
     drop(transition);
     release_session_lock(&session_id);
     Ok(json!({"removed": true}))
+}
+
+fn is_gui_session(session: &str) -> Result<bool, String> {
+    #[cfg(target_os = "linux")]
+    { super::gui::Manager::contains(session) }
+    #[cfg(not(target_os = "linux"))]
+    { let _ = session; Ok(false) }
 }
 
 /// Re-resolve the launch grant this route was admitted under.
@@ -1642,6 +1700,7 @@ fn audience_facet(audience: authority::Audience) -> crate::provenance::ceiling::
         authority::Audience::AgentWorker => Facet::AgentWorker,
         authority::Audience::AppLaunch => Facet::AppLaunch,
         authority::Audience::AppRelay => Facet::AppRelay,
+        authority::Audience::GuiResource => Facet::GuiResource,
         authority::Audience::SystemService => Facet::SystemService,
         authority::Audience::Credential => Facet::Credential,
         authority::Audience::Scheduler => Facet::Scheduler,
@@ -2061,10 +2120,31 @@ fn issue_launch_grant(
     caps: &CapSet,
     ceiling: Option<&Ceiling>,
 ) -> Result<String, String> {
+    issue_launch_grant_with_gui(session_id, app_id, uid, launcher, caps, ceiling, false)
+}
+
+fn issue_launch_grant_with_gui(
+    session_id: &str,
+    app_id: Option<&str>,
+    uid: u32,
+    launcher: &LauncherAuthority,
+    caps: &CapSet,
+    ceiling: Option<&Ceiling>,
+    gui: bool,
+) -> Result<String, String> {
     let principal = authority::Principal::of_process(uid, launcher.pid)
         .ok_or_else(|| "cannot bind an App launch to an unverifiable process".to_string())?;
     if principal.start_time_ticks != launcher.start_time_ticks {
         return Err("App launcher process identity changed during registration".to_string());
+    }
+    let mut audiences = vec![
+        authority::Audience::AppLaunch,
+        authority::Audience::SystemService,
+        authority::Audience::Credential,
+        authority::Audience::AppRelay,
+    ];
+    if gui {
+        audiences.push(authority::Audience::GuiResource);
     }
     let (handle, view) = authority::authority()
         .issue(authority::Issuance {
@@ -2084,15 +2164,7 @@ fn issue_launch_grant(
             // alone and no attenuation of it can produce a relay,
             // system-service or credential grant — attenuation may only
             // narrow.
-            audience: permitted_audiences(
-                ceiling,
-                &[
-                    authority::Audience::AppLaunch,
-                    authority::Audience::SystemService,
-                    authority::Audience::Credential,
-                    authority::Audience::AppRelay,
-                ],
-            ),
+            audience: permitted_audiences(ceiling, &audiences),
             caps: caps.clone(),
             lifetime: LAUNCH_GRANT_TTL,
             uses: authority::Uses::Unbounded,
@@ -2119,8 +2191,29 @@ fn issue_session_grant(
     caps: &CapSet,
     ceiling: Option<&Ceiling>,
 ) -> Result<(), String> {
+    issue_session_grant_with_gui(launch_handle, session_id, app_id, uid, child_pid, caps, ceiling, false)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn issue_session_grant_with_gui(
+    launch_handle: &str,
+    session_id: &str,
+    app_id: Option<&str>,
+    uid: u32,
+    child_pid: u32,
+    caps: &CapSet,
+    ceiling: Option<&Ceiling>,
+    gui: bool,
+) -> Result<(), String> {
     let principal = authority::Principal::of_process(uid, child_pid)
         .ok_or_else(|| format!("App process {child_pid} could not be identified"))?;
+    let mut audiences = vec![
+        authority::Audience::SystemService,
+        authority::Audience::Credential,
+    ];
+    if gui {
+        audiences.push(authority::Audience::GuiResource);
+    }
     let (_handle, view) = authority::authority()
         .attenuate(
             launch_handle,
@@ -2130,13 +2223,7 @@ fn issue_session_grant(
                 binding: authority::Binding::ProcessTree,
                 subject: authority::Subject::session(session_id)
                     .with_app(app_id.map(ToOwned::to_owned)),
-                audience: permitted_audiences(
-                    ceiling,
-                    &[
-                        authority::Audience::SystemService,
-                        authority::Audience::Credential,
-                    ],
-                ),
+                audience: permitted_audiences(ceiling, &audiences),
                 caps: caps.clone(),
                 lifetime: SESSION_GRANT_TTL,
                 uses: authority::Uses::Unbounded,

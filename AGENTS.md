@@ -55,6 +55,7 @@ editing additional surfaces.
 | App client/business/MCP operation | External `clawos-app` guide and owning `products/<group>/package.json` or `capabilities/<group>/package.json` | Declared App manifest, entrypoint and tests; versioned SDK/runtime; OS source-pin/package delivery |
 | App installation or requested-permission disclosure | `core/src/router/app_commands.rs`, `core/src/apps/permission_review.rs` | Verified snapshots, OS catalog, protected review controller, separate runtime authorization and AI consent |
 | OS permission review UI or decision | `core/src/clawd/system_review.rs`, `crates/clawd-client/MODULE.md` | Shared App/capability DTO, protected display revisions, terminal and native renderers, bounded polkit helper, owner-only cancellation and existing approval authority |
+| Authenticated display login or GUI App lifetime | `core/src/display_session/MODULE.md`, `core/src/clawd/gui/MODULE.md` | `crates/claw-display-{control,login}/`, `core/src/worker/gui_transport/`, compositor/session/PAM startup, checked permission retirement and `docs/updating.md` |
 | Bundled App product boundary or source fork | `docs/app-product-redesign.md`, external `clawos-app` guides, `packaging/MODULE.md` | Product UI/backend, App-owned common support, manifests, provenance/licenses, native launchers, account/state migration, compatibility packaging |
 | Adapter | `adapters/<id>/app.json`, `adapters/<id>/main.py` | adapter tests and external binary dependency |
 | App/SDK wire contract | `claw-os-sdk/wire/`, language SDK package | generated bindings, conformance tests, `publish-sdk-release.yml` |
@@ -269,6 +270,15 @@ on an LLM choosing to invoke a notification tool.
 Cover configuration/setup, credential resolution, non-streaming probes,
 streaming events, text/tool/reasoning round-trips, usage/error classification,
 and provider-chain/pool behavior. A successful text-only request is not enough.
+
+### GUI App or display lifetime change
+
+GUI lifetime changes must preserve the Root PAM/kernel-login binding, private
+display epoch and instance-scoped transport. Permission revocation must await
+checked resource retirement without undoing durable denial on failure. A
+process-local `gui::retire_app` call from standalone `cos` is not a broker
+retirement acknowledgement; App install/update/rollback coordination remains a
+separate Root-owned contract. Headless operation must not require a display.
 
 ### Rootfs or package change
 

@@ -281,7 +281,8 @@ On a running systemd target, `claw-os-agent` reloads systemd and runs
 upgrade. Newly launched `cos` commands use the replaced binary immediately;
 the running daemon is restarted automatically. `claw-os-base` separately
 restarts the managed-home service on Claw OS systems. Rebooting or replacing
-the system is not normally needed.
+the system is not normally needed. A Root-managed graphical session is an
+interruption boundary: see [display lifetime](#root-managed-desktop-session-lifetime).
 
 `clawd`, `claw-agentd`, and `claw-extension-host` ship in the same package and
 are replaced together. Package configuration creates the dedicated
@@ -529,6 +530,39 @@ directory; the per-App directory is what finally separates the two, and the
 App's own process registry starts empty there. Apps still write to the shared
 agent memory through `cos_runtime.memory`, which the launcher carries out on
 their behalf.
+
+## Root-managed desktop session lifetime
+
+These requirements describe the unpublished Root-managed display implementation,
+not approval to deploy it or a completed installed-system acceptance result.
+Agent supplies the internal `claw-os-display-session-v1` interface and native
+PAM/display helpers; Desktop supplies its matching compositor, session manager
+and greetd/PAM startup configuration.
+
+Replacing or restarting `clawd`, the Root display supervisor or the compositor
+retires the affected display epoch and its GUI instances. Save unsaved work and
+log out before that coordinated package transition, then log in through the
+new PAM/display path. In-process state is not preserved; this does not migrate
+or delete App files, configuration, credentials or user data.
+
+An update controller must disclose this interruption before starting the
+transaction. It must not promise a background hot-swap, reconnect an old
+compositor through an owner-provided socket, or treat an interrupted session
+command as success. Full Agent/Desktop transactions and real
+greetd/logind/KMS/LSM acceptance remain rollout requirements.
+
+Independent App replacement needs an authenticated Root, owner/App-scoped
+retirement barrier and admission fencing, not a display-wide restart. Current
+standalone `cos app install` and provenance rollback/trust mutation do not yet
+provide that acknowledgement. Calling the broker's process-local GUI manager
+from another process would not retire its instances. This remains separate
+from the checked permission/session revocation paths already implemented.
+
+Terminal-only installations retain their existing worker restart behavior and
+do not require a display. Missing GUI kernel facilities are explicit GUI
+errors, not permission to use an unconfined fallback. See the
+[display lifecycle](../core/src/display_session/MODULE.md) and
+[transport requirements](../core/src/worker/gui_transport/MODULE.md).
 
 ## Extension packages across an update
 

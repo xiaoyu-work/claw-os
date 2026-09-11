@@ -18,12 +18,15 @@ use std::path::{Path, PathBuf};
 
 use super::policy::Limits;
 
+mod checked;
+
 const MOUNT_POINT: &str = "/sys/fs/cgroup";
 
 /// A per-launch cgroup, removed on drop.
 #[derive(Debug)]
 pub struct Scope {
     path: PathBuf,
+    checked: Option<checked::CheckedScope>,
 }
 
 impl Scope {
@@ -44,10 +47,34 @@ impl Scope {
     pub fn kill(&self) {
         let _ = std::fs::write(self.path.join("cgroup.kill"), "1");
     }
+
+    pub fn retire_checked(&self, deadline: std::time::Instant) -> Result<(), String> {
+        self.checked
+            .as_ref()
+            .ok_or_else(|| "GUI retirement requires a checked cgroup-v2 governor".to_string())?
+            .retire(deadline)
+    }
+
+    pub fn duplicate_checked(&self) -> Result<std::os::fd::OwnedFd, String> {
+        self.checked
+            .as_ref()
+            .ok_or_else(|| "GUI identity requires a checked cgroup-v2 governor".to_string())?
+            .duplicate()
+    }
+
+    pub fn remove_checked(&mut self) -> Result<(), String> {
+        self.checked
+            .as_mut()
+            .ok_or_else(|| "GUI cleanup requires a checked cgroup-v2 governor".to_string())?
+            .remove()
+    }
 }
 
 impl Drop for Scope {
     fn drop(&mut self) {
+        if self.checked.is_some() {
+            return;
+        }
         self.kill();
         // The kernel refuses rmdir until the cgroup is empty; a couple
         // of retries covers the gap between SIGKILL and reaping.
@@ -109,7 +136,10 @@ pub fn create(name: &str, limits: &Limits) -> Result<Scope, String> {
     let _ = std::fs::write(parent.join("cgroup.subtree_control"), "+memory +pids +cpu");
     let path = parent.join(name);
     std::fs::create_dir(&path).map_err(|error| format!("create worker cgroup: {error}"))?;
-    let scope = Scope { path };
+    let scope = Scope {
+        path,
+        checked: None,
+    };
 
     write_limit(&scope, "memory.max", &limits.memory_bytes.to_string())?;
     write_limit(&scope, "memory.swap.max", "0")?;
@@ -122,6 +152,18 @@ pub fn create(name: &str, limits: &Limits) -> Result<Scope, String> {
         &format!("{} 100000", (limits.cpu_percent as u64) * 1000),
     )?;
     Ok(scope)
+}
+
+pub(crate) fn create_gui(
+    parent: &claw_display_control::workload::Workload,
+    instance: claw_display_control::InstanceId,
+    limits: &Limits,
+) -> Result<Scope, String> {
+    let checked = checked::CheckedScope::create(parent, instance, limits)?;
+    Ok(Scope {
+        path: checked.path().to_path_buf(),
+        checked: Some(checked),
+    })
 }
 
 /// Controller files are best-effort: a kernel without `memory.swap.max`

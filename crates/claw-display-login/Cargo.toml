@@ -1,0 +1,15 @@
+[package]
+name = "claw-display-login"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.90"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+name = "pam_claw_display"
+crate-type = ["cdylib"]
+
+[dependencies]
+claw-display-control = { path = "../claw-display-control" }
+libc = "0.2"

@@ -433,6 +433,14 @@ APPROVAL_HELPER_BIN="$(ensure_bin claw-approval-helper cos)" || {
     echo "error: claw-approval-helper binary not built" >&2; exit 1; }
 APP_RUNNER_BIN="$(ensure_bin claw-app-runner cos)" || {
     echo "error: claw-app-runner binary not built" >&2; exit 1; }
+GUI_RUNNER_BIN="$(ensure_bin claw-gui-runner cos)" || {
+    echo "error: claw-gui-runner binary not built" >&2; exit 1; }
+DISPLAY_HOST_BIN="$(ensure_bin claw-display-host cos)" || {
+    echo "error: claw-display-host binary not built" >&2; exit 1; }
+DISPLAY_SESSION_BIN="$(ensure_bin claw-display-session cos)" || {
+    echo "error: claw-display-session binary not built" >&2; exit 1; }
+PAM_DISPLAY_MODULE="$(ensure_bin libpam_claw_display.so claw-display-login "${RUST_TARGET/-musl/-gnu}")" || {
+    echo "error: native GNU PAM display module not built (libpam0g-dev is required)" >&2; exit 1; }
 MAIL_AI_HOST_BIN="$(ensure_bin claw-mail-ai-host cos)" || {
     echo "error: claw-mail-ai-host binary not built" >&2; exit 1; }
 # The update downgrade-protection verifier. Maintainer scripts, the APT
@@ -447,6 +455,10 @@ echo "  :: claw-agentd            <- $AGENTD_BIN"
 echo "  :: claw-extension-host    <- $EXTENSION_HOST_BIN"
 echo "  :: claw-approval-helper   <- $APPROVAL_HELPER_BIN"
 echo "  :: claw-app-runner        <- $APP_RUNNER_BIN"
+echo "  :: claw-gui-runner        <- $GUI_RUNNER_BIN"
+echo "  :: claw-display-host      <- $DISPLAY_HOST_BIN"
+echo "  :: claw-display-session   <- $DISPLAY_SESSION_BIN"
+echo "  :: pam_claw_display.so    <- $PAM_DISPLAY_MODULE"
 echo "  :: claw-mail-ai-host      <- $MAIL_AI_HOST_BIN"
 echo "  :: claw-security-floor    <- $SECURITY_FLOOR_BIN"
 install -m 755 "$COS_BIN" "$AGENT_STAGE/usr/local/bin/cos"
@@ -455,6 +467,16 @@ install -m 755 "$AGENTD_BIN" "$AGENT_STAGE/usr/local/bin/claw-agentd"
 install -m 755 "$EXTENSION_HOST_BIN" "$AGENT_STAGE/usr/local/bin/claw-extension-host"
 install -m 755 "$APPROVAL_HELPER_BIN" "$AGENT_STAGE/usr/local/bin/claw-approval-helper"
 install -m 755 "$APP_RUNNER_BIN" "$AGENT_STAGE/usr/local/bin/claw-app-runner"
+install -m 755 "$GUI_RUNNER_BIN" "$AGENT_STAGE/usr/local/bin/claw-gui-runner"
+install -m 755 "$DISPLAY_SESSION_BIN" "$AGENT_STAGE/usr/local/bin/claw-display-session"
+install -m 755 "$DISPLAY_HOST_BIN" "$AGENT_STAGE/usr/lib/cos/bin/claw-display-host"
+case "$DEB_ARCH" in
+    amd64) PAM_MULTIARCH=x86_64-linux-gnu ;;
+    arm64) PAM_MULTIARCH=aarch64-linux-gnu ;;
+    *) echo "error: unsupported PAM display architecture: $DEB_ARCH" >&2; exit 1 ;;
+esac
+install -Dm0644 "$PAM_DISPLAY_MODULE" \
+    "$AGENT_STAGE/usr/lib/$PAM_MULTIARCH/security/pam_claw_display.so"
 install -m 755 "$MAIL_AI_HOST_BIN" "$AGENT_STAGE/usr/lib/cos/claw-mail-ai-host"
 install -m 755 "$SECURITY_FLOOR_BIN" "$AGENT_STAGE/usr/lib/cos/bin/claw-security-floor"
 install -m 755 "$SCRIPT_DIR/common/security-floor-hook" \

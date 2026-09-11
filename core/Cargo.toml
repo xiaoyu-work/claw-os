@@ -33,12 +33,24 @@ name = "claw-app-runner"
 path = "src/bin/claw-app-runner.rs"
 
 [[bin]]
+name = "claw-gui-runner"
+path = "src/bin/claw-gui-runner.rs"
+
+[[bin]]
 name = "claw-mail-ai-host"
 path = "src/bin/claw-mail-ai-host.rs"
 
 [[bin]]
 name = "claw-security-floor"
 path = "src/bin/claw-security-floor.rs"
+
+[[bin]]
+name = "claw-display-host"
+path = "src/bin/claw-display-host.rs"
+
+[[bin]]
+name = "claw-display-session"
+path = "src/bin/claw-display-session.rs"
 
 [features]
 default = []
@@ -127,9 +139,14 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 # external assets. The `ui/dist/` directory is committed to git.
 include_dir = "0.7"
 clawd-client = { version = "0.1.0", path = "../crates/clawd-client" }
+claw-display-control = { path = "../crates/claw-display-control" }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+wayland-client = "0.31.11"
+wayland-protocols = { version = "0.32.9", features = ["client", "staging"] }
 
 [dev-dependencies]
 zbus = { version = "=5.5.0", default-features = false, features = ["p2p"] }

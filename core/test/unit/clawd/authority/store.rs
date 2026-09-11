@@ -763,7 +763,7 @@ fn approval_revocation_does_not_retire_the_sessions_base_grant() {
     let (_approval_handle, approval_view) =
         store.issue_with_generation(approval, 3).unwrap();
 
-    assert_eq!(store.revoke_approvals_for_session("agent-session"), 1);
+    assert_eq!(store.revoke_approvals_for_session(current_uid(), "agent-session"), 1);
     store
         .resolve_session(
             "agent-session",
@@ -786,6 +786,22 @@ fn approval_revocation_does_not_retire_the_sessions_base_grant() {
             .unwrap_err(),
         AuthorityError::UnknownGrant
     );
+}
+
+#[test]
+fn approval_session_revocation_requires_the_exact_owner() {
+    let store = store();
+    let mut approval = issuance("shared-session-name", &[Audience::AgentWorker]);
+    approval.issuer = Issuer::Approval;
+    approval.index_session = false;
+    store.issue_with_generation(approval, 3).unwrap();
+
+    let foreign = current_uid().checked_add(1).unwrap();
+    assert_eq!(store.revoke_approvals_for_session(foreign, "shared-session-name"), 0);
+    assert_eq!(store.revoke_approvals_for_session(current_uid(), "other-session"), 0);
+    assert_eq!(store.len(), 1);
+    assert_eq!(store.revoke_approvals_for_session(current_uid(), "shared-session-name"), 1);
+    assert_eq!(store.len(), 0);
 }
 
 #[test]

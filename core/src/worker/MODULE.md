@@ -60,6 +60,7 @@ and a root-owned executed artifact.
 | `linux.rs` | bubblewrap argv, `pre_exec`, rlimits, identity |
 | `seccomp.rs` | Hand-built classic-BPF syscall filter |
 | `cgroup.rs` | cgroup v2 governor and `cgroup.kill` teardown |
+| `gui_transport/` | Mandatory inherited GUI syscall mediation and trusted runner bootstrap |
 | `broker.rs` | Per-launch narrow broker endpoint |
 | `net_broker.rs` | Per-launch HTTP `CONNECT` egress broker |
 | `exec.rs` | Bounded run, deadline, descendant cleanup |
@@ -126,6 +127,14 @@ legacy native-host authority remain in this checkpoint for shipped App
 compatibility. Their later retirement is not stdio admission.
 
 ## Policy derivation
+
+GUI policies require the Root-owned [GUI Host](../clawd/gui/MODULE.md) and its
+explicit instance transport. `app_operation(desktop=true)` is refused before
+creating App state; inherited display, X11, Panel and session-bus environment
+cannot select this authority. `gui_operation` projects only the private Wayland
+endpoint. The Linux provider adds mandatory checked cgroup custody and
+connect mediation; neither the existing stdio/native compatibility paths nor
+their documented tiers gain an exemption into this GUI instance.
 
 Notifications is a normal hostile MCP worker. Its original `ui.notify`
 capability admits bounded native post/close or `notify` send intent; the

@@ -2,7 +2,7 @@
 
 mod client;
 
-pub use client::{Peer, Protocol, read_pipe};
+pub use client::{Protocol, read_pipe};
 
 use std::{
     fs::File,
@@ -55,6 +55,43 @@ pub const CASES: &[(Protocol, SelectionTarget)] = &[
     (Protocol::Ext, SelectionTarget::Clipboard),
     (Protocol::Ext, SelectionTarget::Primary),
 ];
+
+pub struct Peer {
+    inner: client::Peer,
+    server_client: Client,
+}
+
+impl std::ops::Deref for Peer {
+    type Target = client::Peer;
+    fn deref(&self) -> &Self::Target { &self.inner }
+}
+
+impl std::ops::DerefMut for Peer {
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.inner }
+}
+
+impl Peer {
+    pub fn new(server: &Server, protocol: Protocol, access: Arc<Access>) -> Self {
+        let (stream, server_client) = server.connect(access);
+        Self { inner: client::Peer::from_stream(stream, protocol), server_client }
+    }
+
+    pub fn publish(&mut self, server: &Server, target: SelectionTarget, payload: &[u8]) {
+        if self.requires_focus() { server.focus(self); }
+        self.inner.publish_selection(target, payload);
+    }
+
+    pub fn clear_selection(&mut self, server: &Server, target: SelectionTarget) {
+        if self.requires_focus() { server.focus(self); }
+        self.inner.clear_selection(target);
+    }
+
+    pub fn start_drag(&mut self, server: &Server, payload: &[u8]) {
+        let serial = server.press_pointer(self);
+        self.roundtrip();
+        self.inner.start_drag_serial(serial, payload);
+    }
+}
 
 pub struct Access {
     clipboard: AtomicBool,

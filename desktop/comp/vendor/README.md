@@ -9,26 +9,37 @@ other projects vendored here. The upstream workspace manifest is unchanged
 and excluded from the compositor workspace.
 
 Upstream trailing whitespace is preserved for byte-identical provenance.
-Repository whitespace checks remain enabled for the three locally modified
+Repository whitespace checks remain enabled for the seven locally modified
 files; only trailing-space checks on the imported snapshot are exempted.
 
 The local production patch changes only these upstream files:
 
 - `src/wayland/selection/mod.rs`: compatibility-default
-  `SelectionHandler::allow_selection_read(client, seat, target)`.
+  `SelectionHandler::allow_selection_read(client, seat, target)` and the
+  independent `allow_selection_write` hook.
 - `src/wayland/selection/seat_data.rs`: check the recipient before inspecting
   selection state, constructing an offer or disclosing MIME types. Denial
   preserves public initial/focus unavailability, not private change signals.
 - `src/wayland/selection/offer.rs`: retain the server-selected target and
   recheck the requester before either client- or compositor-provided payload
   transfer, including an already-created offer.
+- `src/wayland/selection/data_device/device.rs`,
+  `primary_selection/device.rs`, `wlr_data_control/device.rs` and
+  `ext_data_control/device.rs`: veto writes before selection/source mutation
+  or callbacks. Core `StartDrag` is not a selection write.
 
-The default returns `true`. **This foundation does not enable OS clipboard
-permission enforcement.** The compositor does not override it yet. It grants
-no authority, changes no writes or DnD behavior, and cannot revoke transfer FDs
-already delivered to another process. Root/Host instance binding, effective
-permission checks, separate layer-shell admission and revocation remain a
-subsequent coordinated unit.
+Both defaults return `true`, preserving other Smithay consumers. The dependency
+hooks do not grant authority or enforce an OS policy by themselves. This
+repository's [compositor](../MODULE.md) now overrides both from authenticated
+Root instance leases; the [Host](../../../core/src/clawd/gui/MODULE.md) owns
+capability projection and checked process retirement. Engine/App/instance
+strings and Panel labels do not authorize selection access. Read and write
+remain independent, and DnD is unchanged.
+
+Revoking already-delivered transfer FDs requires the actual instance/descendant
+retirement barrier. Disclosed bytes cannot be recalled. This boundary does not
+provide CopyQ-history authority, unmediated X11 or a producer's missing grant
+acquisition path.
 
 The [private dispatch fixture](../test/selection-read/Cargo.toml) is a separate
 test-only workspace. It consumes this same source with only the Wayland
@@ -71,5 +82,5 @@ libraries, including `libpixman-1-dev`; those dependencies are not vendored.
 
 Keep dependency updates explicit: replace this snapshot only with a verified
 real upstream revision, preserve its workspace/license, reapply and review the
-three-file patch, update the compositor lock, and repeat both commands.
+seven-file logical patch, update the compositor lock, and repeat both commands.
 Never edit Cargo's shared Git cache or substitute a fabricated revision.

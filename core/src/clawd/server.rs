@@ -148,6 +148,15 @@ pub async fn run(options: ServerOptions) -> Result<(), DaemonError> {
     })?;
     spawn_authority_sweep();
     let admission = Admission::new(Limits::default());
+    #[cfg(target_os = "linux")]
+    if unsafe { libc::geteuid() } == 0 {
+        super::gui::Manager::start(state.clone(), admission.clone()).map_err(|message| DaemonError::Startup {
+            operation: "gui.initialize", message, source: None,
+        })?;
+        if let Err(error) = crate::display_session::registry::Registry::start() {
+            tracing::error!(%error, "Root display activation unavailable; GUI requests are refused");
+        }
+    }
     let agentd_broker = crate::agentd::supervisor::BrokerContext::new(
         state.clone(),
         admission.clone(),
@@ -961,6 +970,14 @@ fn resolve_group_gid(name: &str) -> Result<u32, String> {
         return Err("broker socket group does not exist".to_string());
     }
     Ok(group.gr_gid)
+}
+
+#[cfg(test)]
+mod gui_fixture {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/clawd/server/gui_fixture.rs"
+    ));
 }
 
 #[cfg(test)]

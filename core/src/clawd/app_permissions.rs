@@ -110,9 +110,22 @@ pub async fn control(
         }
         if action == "revoke" {
             let block = app_policy::revoke(uid, &app_id, cap)?;
+            #[cfg(target_os = "linux")]
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
             let retired = super::authority::authority().revoke_app(uid, &app_id);
-            super::authority::audit::record_app_permission_revoked(uid, &app_id, &block.cap, block.generation, retired)
-                .map_err(|error| format!("App permission was disabled but revocation audit failed: {error}; refresh status"))?;
+            let audit = super::authority::audit::record_app_permission_revoked(uid, &app_id, &block.cap, block.generation, retired)
+                .map_err(|error| format!("App permission was disabled but revocation audit failed: {error}; refresh status"));
+            #[cfg(target_os = "linux")]
+            let retirement = {
+                let app = app_id.clone();
+                super::gui::retirement::wait(deadline, move |deadline| super::gui::retire_app(
+                    uid, &app, deadline,
+                )).await
+                    .map_err(|error| format!("App permission is disabled but GUI retirement did not complete: {error}"))
+            };
+            #[cfg(not(target_os = "linux"))]
+            let retirement = Ok(());
+            finish_revocation(audit, retirement)?;
             return Ok(json!({"app_id":app_id, "permission_id":key, "enabled":false,
                 "revoked":true, "generation":block.generation, "retired_grants":retired,
                 "restart_required":true}));
@@ -132,6 +145,14 @@ pub async fn control(
         Ok(json!({"id":id, "status":"pending", "enabled":false, "app_id":app_id,
             "required_duration":"forever", "approval":"trusted human helper; never an MCP tool"}))
     }).await
+}
+
+fn finish_revocation(audit: Result<(), String>, retirement: Result<(), String>) -> Result<(), String> {
+    match (audit, retirement) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(audit), Err(retirement)) => Err(format!("{audit}; {retirement}")),
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+    }
 }
 
 fn fixed_cap(need: &Need) -> Option<Cap> {

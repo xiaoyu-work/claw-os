@@ -39,6 +39,7 @@ pub mod config;
 pub mod dbus;
 #[cfg(feature = "debug")]
 pub mod debug;
+pub mod display_authority;
 pub mod hooks;
 pub mod input;
 mod logger;
@@ -73,12 +74,27 @@ impl State {
             }
 
             // potentially tell the session we are setup now
-            if let Err(err) =
-                session::run_socket(self.common.event_loop_handle.clone(), &self.common)
-            {
-                warn!(?err, "Failed to setup cosmic-session communication");
+            let activation = self
+                .common
+                .display_authority
+                .as_ref()
+                .ok_or(claw_display_control::Error::Identity)
+                .and_then(|authority| {
+                    authority.ready(
+                        self.common
+                            .socket
+                            .to_str()
+                            .ok_or(claw_display_control::Error::Protocol(
+                                "invalid display socket name",
+                            ))?
+                            .to_string(),
+                    )
+                });
+            if let Err(error) = activation {
+                error!(%error, "Root compositor activation failed");
+                self.common.should_stop = true;
+                return;
             }
-
             let mut args = env::args().skip(1);
             self.common.kiosk_child = if let Some(exec) = args.next() {
                 // Run command in kiosk mode
@@ -139,6 +155,8 @@ pub fn run(hooks: crate::hooks::Hooks) -> Result<(), Box<dyn Error>> {
         }
     }
 
+    let display_authority = display_authority::DisplayAuthority::receive()?;
+
     // setup logger
     logger::init_logger()?;
     info!("Cosmic starting up!");
@@ -148,12 +166,6 @@ pub fn run(hooks: crate::hooks::Hooks) -> Result<(), Box<dyn Error>> {
     tracy_client::Client::start();
 
     utils::rlimit::increase_nofile_limit();
-    // This needs to be done before any potential program launches
-    // (e.g. Xwayland) as it handles passed file descriptors.
-    if let Err(err) = session::setup_socket() {
-        warn!("Session error: {:?}", err);
-    };
-
     // init hook globals
     hooks::HOOKS.set(hooks)
         .expect("Hooks global has already been initialized. Running multiple instances of COSMIC in one process is not supported.");
@@ -170,6 +182,17 @@ pub fn run(hooks: crate::hooks::Hooks) -> Result<(), Box<dyn Error>> {
         event_loop.get_signal(),
         with_xwayland,
     );
+    state.common.display_authority = Some(display_authority);
+    event_loop.handle().insert_source(
+        Timer::from_duration(Duration::from_millis(50)),
+        |_, _, state| {
+            if let Err(error) = display_authority::dispatch(state) {
+                error!(%error, "Root display control failed");
+                state.common.should_stop = true;
+            }
+            TimeoutAction::ToDuration(Duration::from_millis(50))
+        },
+    )?;
     // init backend
     backend::init_backend_auto(&display, &mut event_loop, &mut state)?;
 
@@ -275,7 +298,26 @@ fn init_wayland_display(
     event_loop
         .handle()
         .insert_source(source, |client_stream, _, state| {
-            let client_state = state.new_client_state();
+            let Some(authority) = state.common.display_authority.as_ref() else {
+                warn!("Wayland connection has no Root display binding");
+                return;
+            };
+            let origin = authority.login_origin();
+            match origin.accepts(&client_stream) {
+                Ok(true) => {}
+                Ok(false) => {
+                    warn!(
+                        "Ordinary Wayland endpoint refused a client outside the authenticated login"
+                    );
+                    return;
+                }
+                Err(error) => {
+                    warn!(%error, "Wayland login identity failed");
+                    return;
+                }
+            }
+            let mut client_state = state.new_client_state();
+            client_state.display_origin = Some(origin);
             if let Err(err) = state
                 .common
                 .display_handle

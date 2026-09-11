@@ -273,6 +273,24 @@ the underlying home. A migration or unmount failure blocks package removal and
 retains the overlay/recovery data; see
 [`docs/updating.md`](../docs/updating.md#removing-the-claw-os-integration-package).
 
+## Authenticated desktop runtime
+
+The unpublished authenticated desktop runtime adds the OS-only
+`claw-os-display-session-v1` interface: Agent provides it and Desktop requires
+it. Agent owns `/usr/lib/cos/bin/claw-display-host`,
+`/usr/local/bin/claw-display-session`, `/usr/local/bin/claw-gui-runner` and
+`/usr/lib/<GNU-multiarch>/security/pam_claw_display.so`. The executables install
+as `0755`, PAM as `0644`, with Root ownership and protected ancestors. Desktop
+owns the compositor/session and the greetd/PAM activation policy.
+
+Build the PAM crate for GNU/glibc with `libpam0g-dev`; runtime requires
+`libpam0g`. The Agent workflow builds that native library explicitly, separately
+from musl core binaries. Neither the interface nor package installation grants
+an App GUI resources. Coordinate the package set and
+[logout/re-login](../docs/updating.md#root-managed-desktop-session-lifetime);
+the private fixture does not establish a full Debian transaction or image
+acceptance. No release or version change is implied by this source wiring.
+
 ## Extension trust roots
 
 `claw-os-agent` creates two root-owned publisher trust roots:

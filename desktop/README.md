@@ -54,6 +54,21 @@ desktop/
 
 ## Building
 
+Authenticated display startup is owned by the
+[OS PAM/display runtime](../core/src/display_session/MODULE.md), before user
+startup profiles. The [session manager](session/MODULE.md) starts downstream
+components and subscribes to that Root-owned display; it does not launch a
+replacement compositor or private fallback bus. The compositor consumes
+instance authority from the [GUI Host](../core/src/clawd/gui/MODULE.md), not
+App IDs, native origin or Panel labels. Independent clipboard read/write and
+checked resource retirement do not enable CopyQ history or grant layer-shell.
+
+The unpublished source requires the matching Agent display/PAM helpers and
+Desktop startup wiring. Authority/compositor replacement interrupts the display;
+see [logout and update requirements](../docs/updating.md#root-managed-desktop-session-lifetime).
+Private headless coverage is not a real greetd/logind/KMS/LSM or installed-image
+acceptance result.
+
 The complete [Notifications product](https://github.com/xiaoyu-work/clawos-app/tree/main/products/notifications)
 is built with `just notifications-build` from the immutable App pin at
 `build/native-apps/cosmic-notifications`. All 40 original native files, both

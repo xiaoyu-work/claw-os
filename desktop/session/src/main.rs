@@ -5,7 +5,6 @@ extern crate tracing;
 mod a11y;
 mod comp;
 mod notifications;
-mod process;
 mod service;
 mod systemd;
 
@@ -27,7 +26,7 @@ use std::sync::Arc;
 #[cfg(feature = "systemd")]
 use systemd::{get_systemd_env, is_systemd_used, spawn_scope};
 use tokio::signal::unix::{SignalKind, signal};
-use tokio::sync::mpsc::{Receiver, Sender};
+use tokio::sync::mpsc::Receiver;
 use tokio::sync::{Mutex, oneshot};
 use tokio::time::Duration;
 use tokio_util::sync::CancellationToken;
@@ -77,9 +76,13 @@ async fn main() -> Result<()> {
 		.wrap_err("failed to initialize logger")?;
 
 	log_panics::init();
+	if env::args_os().nth(1).is_some() {
+		color_eyre::eyre::bail!(
+			"the compositor is launched by the Root login service; cosmic-session takes no compositor command"
+		);
+	}
 
 	let (session_tx, mut session_rx) = tokio::sync::mpsc::channel(10);
-	let session_tx_clone = session_tx.clone();
 	let _conn = zbus::connection::Builder::session()?
 		.name("com.clawos.Session")?
 		.serve_at(
@@ -90,7 +93,7 @@ async fn main() -> Result<()> {
 		.await?;
 
 	loop {
-		match start(session_tx_clone.clone(), &mut session_rx).await {
+		match start(&mut session_rx).await {
 			Ok(Status::Exited) => {
 				info!("Exited cleanly");
 				break;
@@ -98,9 +101,7 @@ async fn main() -> Result<()> {
 			Ok(Status::Restarted) => {
 				info!("Restarting");
 			}
-			Err(error) => {
-				error!("Restarting after error: {:?}", error);
-			}
+			Err(error) => return Err(error).wrap_err("authenticated desktop session failed"),
 		};
 		// Drain the session channel.
 		while session_rx.try_recv().is_ok() {}
@@ -114,17 +115,8 @@ pub enum Status {
 	Exited,
 }
 
-async fn start(
-	session_tx: Sender<SessionRequest>,
-	session_rx: &mut Receiver<SessionRequest>,
-) -> Result<Status> {
+async fn start(session_rx: &mut Receiver<SessionRequest>) -> Result<Status> {
 	info!("Starting cosmic-session");
-
-	let mut args = env::args().skip(1);
-	let (executable, args) = (
-		args.next().unwrap_or_else(|| String::from("cosmic-comp")),
-		args.collect::<Vec<_>>(),
-	);
 
 	let process_manager = ProcessManager::new().await;
 	_ = process_manager.set_max_restarts(usize::MAX).await;
@@ -134,20 +126,12 @@ async fn start(
 		))
 		.await;
 	let token = CancellationToken::new();
-	let (env_tx, env_rx) = oneshot::channel();
-	let compositor_handle = comp::run_compositor(
-		&process_manager,
-		executable.clone(),
-		args,
-		token.child_token(),
-		env_tx,
-		session_tx,
-	)
-	.wrap_err("failed to start compositor")?;
-
-	let mut env_vars = env_rx
+	// Component startup can unwind before the normal cancellation and checked join.
+	let _cancel_display_on_drop = token.clone().drop_guard();
+	let (environment, mut compositor_handle) = comp::attach_display(token.child_token())
 		.await
-		.expect("failed to receive environmental variables")
+		.wrap_err("failed to attach the Root-owned compositor")?;
+	let mut env_vars = environment
 		.into_iter()
 		.collect::<Vec<_>>();
 	info!(
@@ -174,6 +158,7 @@ async fn start(
 							&& systemd_env.key != "XAUTHORITY"
 							&& systemd_env.key != "WAYLAND_DISPLAY"
 							&& systemd_env.key != "WAYLAND_SOCKET"
+							&& systemd_env.key != "DBUS_SESSION_BUS_ADDRESS"
 							&& systemd_env.key != "_"
 							&& systemd_env.key != "SHELL"
 							&& systemd_env.key != "SHLVL"
@@ -461,7 +446,11 @@ async fn start(
 	let mut sigint = signal(SignalKind::interrupt()).expect("Failed to bind SIGINT handler");
 	let mut status = Status::Exited;
 	let session_dbus_rx_next = session_rx.recv();
-	tokio::select! {
+	let display_result = tokio::select! {
+		result = &mut compositor_handle => {
+			info!("EXITING: Root display session ended");
+			Some(result)
+		},
 		res = session_dbus_rx_next => {
 			match res {
 				Some(service::SessionRequest::Exit) => {
@@ -475,16 +464,18 @@ async fn start(
 					warn!("exit channel dropped session");
 				}
 			}
+			None
 		},
 		_ = sigterm.recv() => {
 			info!("EXITING: received SIGTERM request to terminate");
+			None
 		},
 		_ = sigint.recv() => {
 			info!("EXITING: received SIGINT request to terminate");
+			None
 		}
-	}
+	};
 
-	compositor_handle.abort();
 	token.cancel();
 	if let Err(err) = process_manager.stop_process(settings_daemon).await {
 		tracing::error!(?err, "Failed to gracefully stop settings daemon.");
@@ -497,7 +488,13 @@ async fn start(
 		};
 	};
 
+	process_manager.stop();
+	let display_result = match display_result {
+		Some(result) => result,
+		None => compositor_handle.await,
+	};
 	tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+	display_result.wrap_err("display lifetime watcher failed")??;
 	Ok(status)
 }
 

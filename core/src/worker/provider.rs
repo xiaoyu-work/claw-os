@@ -232,6 +232,8 @@ pub struct LaunchResources {
     #[allow(dead_code)]
     pub(crate) pinned: Option<super::linux::PinnedSources>,
     pub(crate) cgroup: Option<super::cgroup::Scope>,
+    #[cfg(target_os = "linux")]
+    pub(crate) cgroup_membership: Option<std::fs::File>,
 }
 
 impl LaunchResources {
@@ -244,6 +246,8 @@ impl LaunchResources {
             #[cfg(target_os = "linux")]
             pinned: None,
             cgroup: None,
+            #[cfg(target_os = "linux")]
+            cgroup_membership: None,
         }
     }
 
@@ -264,6 +268,46 @@ impl LaunchResources {
         }
         #[cfg(not(unix))]
         let _ = child_pid;
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn retire_gui(&self, deadline: std::time::Instant) -> Result<(), String> {
+        self.cgroup
+            .as_ref()
+            .ok_or_else(|| "GUI retirement has no checked cgroup governor".to_string())?
+            .retire_checked(deadline)
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn stop_gui_services(&self) -> Result<(), String> {
+        if let Some(egress) = &self.egress {
+            egress.stop()?;
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn retire_gui_services(&mut self, deadline: std::time::Instant) -> Result<(), String> {
+        if let Some(egress) = &mut self.egress {
+            egress.retire(deadline)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn gui_cgroup(&self) -> Result<std::os::fd::OwnedFd, String> {
+        self.cgroup
+            .as_ref()
+            .ok_or_else(|| "GUI launch has no checked cgroup governor".to_string())?
+            .duplicate_checked()
+    }
+
+    #[cfg(target_os = "linux")]
+    pub fn remove_gui_cgroup(&mut self) -> Result<(), String> {
+        self.cgroup
+            .as_mut()
+            .ok_or_else(|| "GUI cleanup has no checked cgroup governor".to_string())?
+            .remove_checked()
     }
 }
 

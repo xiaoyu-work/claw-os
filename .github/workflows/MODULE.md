@@ -18,6 +18,11 @@ dispatched and reusable test/publication pipelines.
 - Exercise the public App data codec/client, independent OS provider library and
   executable, exact export/ELF guards, and private real-kernel fixtures whose
   clients remain non-Root. No GUI/Clipboard admission or release gate is relaxed.
+- Build the internal display control/PAM crates with `libpam0g-dev`, and run
+  the actual Root-authenticated GUI/session fixture with a private `dbus-daemon`.
+  Private namespace cases cover startup-failure exit and deferred retirement
+  reclamation as well as normal lifecycle. Agent packaging builds the PAM
+  library for GNU/glibc even when core uses musl.
 - Build shared Docker/WSL images per architecture.
 - Build and sign independent multi-architecture APT packages/repository.
 - Build the React/Vite web desktop as an independent Pages input.

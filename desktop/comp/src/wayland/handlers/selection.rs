@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-use crate::state::State;
+use crate::state::{ClientState, State};
 use smithay::{
     input::Seat,
+    reexports::wayland_server::Client,
     wayland::selection::{SelectionHandler, SelectionSource, SelectionTarget},
     xwayland::xwm::XwmId,
 };
@@ -11,6 +12,24 @@ use tracing::warn;
 
 impl SelectionHandler for State {
     type SelectionUserData = XwmId;
+
+    fn allow_selection_read(client: &Client, _seat: &Seat<Self>, _target: SelectionTarget) -> bool {
+        client
+            .get_data::<ClientState>()
+            .and_then(|data| data.display_origin.as_ref())
+            .is_some_and(|origin| origin.selection_read())
+    }
+
+    fn allow_selection_write(
+        client: &Client,
+        _seat: &Seat<Self>,
+        _target: SelectionTarget,
+    ) -> bool {
+        client
+            .get_data::<ClientState>()
+            .and_then(|data| data.display_origin.as_ref())
+            .is_some_and(|origin| origin.selection_write())
+    }
 
     fn new_selection(
         &mut self,

@@ -563,6 +563,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
+name = "claw-display-control"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "claw-display-login"
+version = "0.1.0"
+dependencies = [
+ "claw-display-control",
+ "libc",
+]
+
+[[package]]
 name = "claw-embed"
 version = "0.1.0"
 dependencies = [
@@ -723,6 +741,7 @@ dependencies = [
  "base64",
  "bytes",
  "chrono",
+ "claw-display-control",
  "claw-embed",
  "clawd-client",
  "cosmic-client-toolkit",
@@ -756,6 +775,8 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "wayland-client",
+ "wayland-protocols",
  "zbus",
  "zip",
 ]

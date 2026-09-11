@@ -44,6 +44,15 @@ pub trait SelectionHandler: Sized + SeatHandler {
         true
     }
 
+    /// Whether a client may replace or clear this seat's selection.
+    ///
+    /// Checked after protocol validation but before source-use bookkeeping, provider
+    /// notifications or selection state changes. Drag-and-drop is independent.
+    /// The default preserves existing access.
+    fn allow_selection_write(_client: &Client, _seat: &Seat<Self>, _target: SelectionTarget) -> bool {
+        true
+    }
+
     /// A client has set the selection
     #[allow(unused_variables)]
     fn new_selection(&mut self, ty: SelectionTarget, source: Option<SelectionSource>, seat: Seat<Self>) {}

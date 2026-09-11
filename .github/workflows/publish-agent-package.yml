@@ -50,7 +50,7 @@ jobs:
       - name: Install host build tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y musl-tools dpkg-dev fakeroot
+          sudo apt-get install -y musl-tools dpkg-dev fakeroot libpam0g-dev
 
       # Release-security metadata is signed by the same publisher
       # identity that signs the repository. It has to be signed here,
@@ -99,6 +99,7 @@ jobs:
       - name: Build Agent binaries
         run: |
           cargo build --release -p cos --target ${{ matrix.musl_target }}
+          cargo build --release -p claw-display-login --target ${{ matrix.gnu_target }}
           cargo build --release -p cos-browser --target ${{ matrix.gnu_target }}
           cargo build --release -p claw-semantic --target ${{ matrix.gnu_target }}
 
@@ -117,6 +118,12 @@ jobs:
           grep -q './usr/local/bin/clawd$' "$RUNNER_TEMP/claw-os-agent.files"
           grep -q './usr/local/bin/claw-agentd$' "$RUNNER_TEMP/claw-os-agent.files"
           grep -q './usr/local/bin/claw-extension-host$' "$RUNNER_TEMP/claw-os-agent.files"
+          grep -q './usr/local/bin/claw-gui-runner$' "$RUNNER_TEMP/claw-os-agent.files"
+          grep -q './usr/local/bin/claw-display-session$' "$RUNNER_TEMP/claw-os-agent.files"
+          grep -q './usr/lib/cos/bin/claw-display-host$' "$RUNNER_TEMP/claw-os-agent.files"
+          pam_multiarch="$(dpkg-architecture -a"$ARCH" -qDEB_HOST_MULTIARCH)"
+          grep -q "./usr/lib/$pam_multiarch/security/pam_claw_display.so$" "$RUNNER_TEMP/claw-os-agent.files"
+          dpkg-deb -f "$agent_deb" Provides | grep -qw claw-os-display-session-v1
           grep -q './usr/lib/sysusers.d/claw-os-agent.conf$' "$RUNNER_TEMP/claw-os-agent.files"
           grep -q './usr/local/bin/cos-browser$' "$RUNNER_TEMP/claw-os-agent.files"
           grep -q './usr/local/bin/claw-semantic$' "$RUNNER_TEMP/claw-os-agent.files"

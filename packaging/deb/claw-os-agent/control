@@ -5,12 +5,12 @@ Priority: optional
 Architecture: __ARCH__
 Maintainer: Claw OS <noreply@github.com>
 Homepage: https://github.com/xiaoyu-work/claw-os
-Provides: claw-os-abi-__ABI__, claw-os-app-permissions-v1, claw-os-capture-v1, claw-os-media-player-v1, claw-os-notifications-v1
+Provides: claw-os-abi-__ABI__, claw-os-display-session-v1, claw-os-app-permissions-v1, claw-os-capture-v1, claw-os-media-player-v1, claw-os-notifications-v1
 Breaks: claw-os-base (<< __MIN_BASE__), claw-os-desktop (<< __MIN_DESKTOP__)
 XB-Claw-Os-Security-Epoch: __SECURITY_EPOCH__
 XB-Claw-Os-Abi: __ABI__
 Depends: acl, bash, coreutils, ca-certificates, bubblewrap (>= 0.8.0), curl, findutils, python3,
- python3-idna (>= 3.3), python3-idna (<< 4), sudo, systemd,
+ python3-idna (>= 3.3), python3-idna (<< 4), sudo, systemd, libpam0g,
  init-system-helpers (>= 1.52),
  libnss3, libxss1, libasound2, libatk1.0-0, libatk-bridge2.0-0,
  libcups2, libdrm2, libdbus-1-3, libxcomposite1, libxdamage1,
@@ -30,5 +30,7 @@ Description: reusable Claw OS system agent for Debian and Ubuntu
  `claw-agentd` and task-owned `claw-extension-host` processes that `clawd`
  supervises. Browser and user indexing services are installed but remain
  opt-in or condition-gated.
+ OS desktop packages use its Root PAM display activation and supervised GUI
+ transport helpers; their presence does not grant any App a GUI resource.
  It does not alter the host's home layout, boot identity, desktop
  environment, PAM policy, or firmware policy.

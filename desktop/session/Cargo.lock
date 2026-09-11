@@ -255,6 +255,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
+name = "claw-display-control"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "color-eyre"
 version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -302,6 +311,7 @@ dependencies = [
 name = "cosmic-session"
 version = "1.0.0"
 dependencies = [
+ "claw-display-control",
  "color-eyre",
  "cosmic-dbus-a11y",
  "dirs",

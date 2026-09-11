@@ -30,6 +30,7 @@ pub mod event_center;
 pub mod filesystem;
 pub mod firewall;
 pub mod hardware;
+pub mod gui;
 pub mod heartbeat;
 pub mod journal;
 pub mod location;

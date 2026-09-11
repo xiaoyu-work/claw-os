@@ -2,6 +2,8 @@
 Description=ClawOS Greeter
 After=systemd-user-sessions.service plymouth-quit-wait.service cosmic-greeter-daemon.service
 After=getty@tty1.service
+After=clawd.service
+Requires=clawd.service
 Conflicts=getty@tty1.service
 Wants=cosmic-greeter-daemon.service
 StartLimitIntervalSec=30

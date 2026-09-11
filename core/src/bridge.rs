@@ -1,5 +1,5 @@
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -11,6 +11,9 @@ use crate::clawd::routes::Command as ClawdCommand;
 use crate::proc::{deregister_session, register_session, SessionInfo};
 
 mod consent;
+pub(crate) mod gui_args;
+#[cfg(target_os = "linux")]
+pub(crate) mod gui;
 mod local;
 
 #[cfg(unix)]
@@ -278,6 +281,8 @@ pub(crate) struct AppIdentitySession {
     /// egress and its broker authority from, so the isolation shape and
     /// the capability grant cannot describe different worlds.
     granted_caps: CapSet,
+    gui_data_dir: Option<std::path::PathBuf>,
+    gui_retired: bool,
 }
 
 #[derive(Clone)]
@@ -521,6 +526,8 @@ impl AppIdentitySession {
             parent_caps: None,
             package,
             granted_caps: CapSet::new(),
+            gui_data_dir: None,
+            gui_retired: false,
             relay: crate::worker::relay_slot(),
         })
     }
@@ -593,6 +600,14 @@ impl AppIdentitySession {
 
     /// Register a GUI identity with the constrained union of all operation needs.
     pub fn for_gui(launch: &AppLaunch, app_id: &str, exec: &str) -> Result<Self, String> {
+        let desktop = launch
+            .manifest()
+            .desktop
+            .as_ref()
+            .ok_or_else(|| "App does not declare a desktop surface".to_string())?;
+        if desktop.exec != exec {
+            return Err("GUI selector differs from the verified desktop declaration".to_string());
+        }
         let ceiling = launch.ceiling();
         let local_ceiling = ceiling.clone();
         let manifest = launch.manifest().clone();
@@ -766,6 +781,11 @@ impl AppIdentitySession {
                 ));
             }
         }
+        let gui_data_dir = match result.get("gui_data_dir") {
+            Some(value) => serde_json::from_value::<Option<std::path::PathBuf>>(value.clone())
+                .map_err(|error| format!("invalid Root GUI data-directory binding: {error}"))?,
+            None => None,
+        };
         Ok(Self {
             session_id,
             backend: AppSessionBackend::Clawd {
@@ -775,6 +795,8 @@ impl AppIdentitySession {
             parent_caps,
             package: package.clone(),
             granted_caps,
+            gui_data_dir,
+            gui_retired: false,
             relay: crate::worker::relay_slot(),
         })
     }
@@ -834,6 +856,8 @@ impl AppIdentitySession {
             parent_caps: Some(parent_caps),
             package: launch.package_ref(),
             granted_caps: caps,
+            gui_data_dir: None,
+            gui_retired: false,
             relay: crate::worker::relay_slot(),
         })
     }
@@ -1754,6 +1778,17 @@ fn bind_child_session(
 
 impl Drop for AppIdentitySession {
     fn drop(&mut self) {
+        if self.gui_data_dir.is_some() {
+            if !self.gui_retired {
+                if let Err(error) = clawd_request(
+                    ClawdCommand::AppGuiStop,
+                    serde_json::json!({ "session_id": self.session_id }),
+                ) {
+                    tracing::warn!(%error, "GUI retirement was not confirmed");
+                }
+            }
+            return;
+        }
         match &self.backend {
             AppSessionBackend::Local { .. } => deregister_session(&self.session_id),
             AppSessionBackend::Clawd { handle, .. } => {
@@ -2349,15 +2384,15 @@ pub fn run_app_with_stdin(
 /// Launch an app's **desktop GUI surface**.
 ///
 /// Unlike [`run_app`] (one-shot, stdout captured as a JSON envelope),
-/// this is a long-lived foreground launch: the app entry is spawned
-/// with `COS_APP_GUI=1`, given the manifest's `desktop.exec` value
-/// (default `--gui`) as its `COS_COMMAND`, inherits the parent's stdio,
-/// and runs its own event loop until the window closes.
+/// this waits for the Root-owned GUI instance and its checked retirement.
+/// The entry receives `COS_APP_GUI=1` and the verified `desktop.exec` as
+/// `COS_COMMAND`; non-Python runtimes also receive that literal selector
+/// followed by the unchanged user arguments. The App runs its own event
+/// loop; bounded stdout and stderr diagnostics are returned on completion.
 ///
-/// Identity (`COS_APP_ID`) is set exactly as for the headless path, so
-/// audit / consent / policy enforcement apply unchanged. This is the
-/// reason the generated `.desktop` routes through `cos app <id> --gui`
-/// instead of exec-ing the app binary directly.
+/// Root binds the kernel identity independently of the presentation
+/// environment. The generated `.desktop` routes through `cos app <id> --gui`
+/// instead of executing an App binary outside this custody.
 ///
 /// `exec` is the command the entry receives (the manifest's
 /// `desktop.exec`); `files` are the file paths passed by the launcher
@@ -2369,133 +2404,15 @@ pub fn launch_gui(
     data_dir: &str,
     apps_dir: &str,
 ) -> Result<(), String> {
-    let app_dir = launch.dir();
-    let manifest = launch.manifest();
-    let runtime = manifest.runtime;
-    let panel_applet = manifest
-        .desktop
-        .as_ref()
-        .is_some_and(|desktop| desktop.panel_applet);
-    let entry = manifest
-        .entry
-        .clone()
-        .unwrap_or_else(|| runtime.default_entry().to_string());
-
-    let app_id = launch.app_id().to_string();
-    let binding = launch.bind(std::slice::from_ref(&entry))?;
-    let mut app_session = AppIdentitySession::for_gui(launch, &app_id, exec)?;
-
-    let (program, mut launch_argv) = if matches!(runtime, Runtime::Python) {
-        let main_py = app_dir.join("main.py");
-        if !main_py.is_file() {
-            return Err(format!("app has no main.py at {}", main_py.display()));
-        }
-        let wrapper = python_wrapper(&main_py, exec, files, data_dir, apps_dir)?;
-        let python = if cfg!(windows) { "python" } else { "python3" };
-        (interpreter_path(python)?, vec!["-c".to_string(), wrapper])
-    } else {
-        let entry_path = app_dir.join(&entry);
-        if !entry_path.is_file() {
-            return Err(format!("app entry not found: {}", entry_path.display()));
-        }
-        match runtime {
-            Runtime::Node => (
-                interpreter_path("node")?,
-                vec![entry_path.to_string_lossy().into_owned()],
-            ),
-            Runtime::Shell => (
-                interpreter_path("bash")?,
-                vec![entry_path.to_string_lossy().into_owned()],
-            ),
-            Runtime::Binary => (
-                entry_path
-                    .canonicalize()
-                    .map_err(|error| format!("resolve app entry: {error}"))?,
-                Vec::new(),
-            ),
-            Runtime::Python => unreachable!("python handled above"),
-        }
-    };
-    launch_argv.shrink_to_fit();
-
-    let args_json =
-        serde_json::to_string(files).map_err(|e| format!("failed to serialize files: {e}"))?;
-    let mut extra_env = BTreeMap::from([
-        ("COS_APP_GUI".to_string(), "1".to_string()),
-        ("COS_COMMAND".to_string(), exec.to_string()),
-        ("COS_ARGS_JSON".to_string(), args_json),
-    ]);
-    if panel_applet {
-        // Panel applets are handed a pre-opened compositor socket by the
-        // panel itself. It is still a display transport, so it stays
-        // inside the desktop tier and never reaches an operation worker.
-        for key in PANEL_APPLET_ENV_KEYS {
-            if let Ok(value) = std::env::var(key) {
-                extra_env.insert((*key).to_string(), value);
-            }
-        }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = apps_dir;
+        gui::launch(launch, exec, files, data_dir)
     }
-
-    // A GUI draws on Wayland/X, not stdout, and lives until its window
-    // closes: it inherits the launcher's stdio and has no wall-clock
-    // deadline, but it is still a third-party worker inside the
-    // sandbox.
-    let prepared = prepare_app_worker(
-        &app_session,
-        &app_id,
-        app_dir,
-        exec,
-        program,
-        launch_argv,
-        data_dir,
-        apps_dir,
-        extra_env,
-        crate::worker::StdioPlan::Inherited,
-        true,
-        &binding,
-    )?;
-    let policy_digest = prepared.facts["policy"]
-        .as_str()
-        .unwrap_or_default()
-        .to_string();
-    let crate::worker::PreparedLaunch {
-        mut command,
-        resources,
-        ..
-    } = prepared;
-    command.stdin(Stdio::null());
-    let mut child = command
-        .spawn()
-        .map_err(|e| format!("failed to launch {runtime:?} GUI: {e}"))?;
-    let owner = crate::provenance::runtime::current_owner();
-    crate::provenance::runtime::register(owner, app_session.id(), launch.package());
-    crate::provenance::runtime::bind_process(
-        crate::provenance::runtime::current_owner(),
-        app_session.id(),
-        child.id(),
-    );
-    bind_child_session(&mut app_session, &mut child)?;
-    let status = child
-        .wait()
-        .map_err(|e| format!("failed to wait for {runtime:?} GUI: {e}"))?;
-    resources.kill_all(Some(child.id()));
-    crate::provenance::runtime::deregister(
-        crate::provenance::runtime::current_owner(),
-        app_session.id(),
-    );
-    crate::worker::audit::outcome(
-        &policy_digest,
-        &format!("app:{app_id}/{exec}"),
-        serde_json::json!({ "exit_code": status.code(), "timed_out": false }),
-    );
-
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "GUI `{app_id}` exited with code {}",
-            status.code().unwrap_or(-1)
-        ))
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (launch, exec, files, data_dir, apps_dir);
+        Err("GUI launch requires Linux Root display custody".to_string())
     }
 }
 

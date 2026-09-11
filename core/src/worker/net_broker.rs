@@ -39,6 +39,9 @@ use std::time::Duration;
 
 use super::policy::Endpoint;
 
+#[cfg(unix)]
+mod lifetime;
+
 const CONNECT_DEADLINE: Duration = Duration::from_secs(20);
 const RELAY_IDLE_DEADLINE: Duration = Duration::from_secs(120);
 /// Ceiling on one tunnel, in each direction.
@@ -53,6 +56,32 @@ pub struct EgressEndpoint {
     socket: PathBuf,
     stop: Arc<AtomicBool>,
     stats: Arc<Stats>,
+    #[cfg(unix)]
+    lifetime: Arc<lifetime::Lifetime>,
+    #[cfg(unix)]
+    listener: Option<std::thread::JoinHandle<()>>,
+}
+
+#[derive(Clone)]
+enum Peer {
+    Owner(u32),
+    #[cfg(target_os = "linux")]
+    RootRelay(claw_display_control::ProcessIdentity),
+}
+
+impl Peer {
+    #[cfg(unix)]
+    fn accepts(&self, stream: &std::os::unix::net::UnixStream) -> bool {
+        match self {
+            Self::Owner(uid) => super::peer_uid_of(stream) == Some(*uid),
+            #[cfg(target_os = "linux")]
+            Self::RootRelay(expected) => {
+                use std::os::fd::AsFd;
+                claw_display_control::ProcessIdentity::unix_peer(stream.as_fd())
+                    .is_ok_and(|actual| actual == *expected)
+            }
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -68,6 +97,19 @@ impl EgressEndpoint {
         endpoints: Vec<Endpoint>,
         owner_uid: u32,
     ) -> Result<Self, String> {
+        Self::start_for(socket, endpoints, Peer::Owner(owner_uid))
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn start_gui(socket: PathBuf, endpoints: Vec<Endpoint>) -> Result<Self, String> {
+        let relay = claw_display_control::ProcessIdentity::current().map_err(|error| error.to_string())?;
+        if relay.uid() != 0 {
+            return Err("GUI egress requires its Root transport relay".to_string());
+        }
+        Self::start_for(socket, endpoints, Peer::RootRelay(relay))
+    }
+
+    fn start_for(socket: PathBuf, endpoints: Vec<Endpoint>, peer: Peer) -> Result<Self, String> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -76,7 +118,6 @@ impl EgressEndpoint {
             for endpoint in &endpoints {
                 super::policy::validate_endpoint(endpoint)?;
             }
-            let _ = std::fs::remove_file(&socket);
             let listener = UnixListener::bind(&socket)
                 .map_err(|error| format!("bind worker egress socket: {error}"))?;
             std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))
@@ -84,18 +125,32 @@ impl EgressEndpoint {
 
             let stop = Arc::new(AtomicBool::new(false));
             let stats = Arc::new(Stats::default());
+            let lifetime = Arc::new(lifetime::Lifetime::default());
             let allowed = Arc::new(endpoints);
-            {
+            listener.set_nonblocking(true).map_err(|error| format!("configure worker egress listener: {error}"))?;
+            let thread = {
                 let stop = Arc::clone(&stop);
                 let stats = Arc::clone(&stats);
+                let lifetime = Arc::clone(&lifetime);
                 std::thread::Builder::new()
                     .name("cos-worker-egress".to_string())
                     .spawn(move || {
-                        for stream in listener.incoming() {
+                        loop {
                             if stop.load(Ordering::Relaxed) {
                                 return;
                             }
-                            let Ok(stream) = stream else { continue };
+                            let stream = match listener.accept() {
+                                Ok((stream, _)) => stream,
+                                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                                    std::thread::sleep(Duration::from_millis(5));
+                                    continue;
+                                }
+                                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                                Err(error) => {
+                                    tracing::error!(%error, "worker egress listener failed");
+                                    return;
+                                }
+                            };
                             if stats.inflight.load(Ordering::Relaxed) >= MAX_TUNNELS {
                                 stats.refused.fetch_add(1, Ordering::Relaxed);
                                 continue;
@@ -103,10 +158,19 @@ impl EgressEndpoint {
                             stats.inflight.fetch_add(1, Ordering::Relaxed);
                             let allowed = Arc::clone(&allowed);
                             let stats_for_thread = Arc::clone(&stats);
+                            let peer = peer.clone();
+                            let tunnel = match lifetime.track(&stream) {
+                                Ok(tunnel) => tunnel,
+                                Err(error) => {
+                                    stats.inflight.fetch_sub(1, Ordering::Relaxed);
+                                    tracing::error!(%error, "worker egress lifecycle tracking failed");
+                                    return;
+                                }
+                            };
                             let spawned = std::thread::Builder::new()
                                 .name("cos-worker-egress-conn".to_string())
                                 .spawn(move || {
-                                    match serve(stream, &allowed, owner_uid) {
+                                    match serve(stream, &allowed, &peer, &tunnel) {
                                         true => stats_for_thread
                                             .admitted
                                             .fetch_add(1, Ordering::Relaxed),
@@ -114,30 +178,60 @@ impl EgressEndpoint {
                                             stats_for_thread.refused.fetch_add(1, Ordering::Relaxed)
                                         }
                                     };
+                                    drop(tunnel);
                                     stats_for_thread.inflight.fetch_sub(1, Ordering::Relaxed);
                                 });
-                            if spawned.is_err() {
+                            if let Err(error) = spawned {
                                 stats.inflight.fetch_sub(1, Ordering::Relaxed);
+                                tracing::error!(%error, "worker egress connection thread failed");
                             }
                         }
                     })
-                    .map_err(|error| format!("start worker egress broker: {error}"))?;
-            }
+                    .map_err(|error| format!("start worker egress broker: {error}"))?
+            };
             Ok(Self {
                 socket,
                 stop,
                 stats,
+                lifetime,
+                listener: Some(thread),
             })
         }
         #[cfg(not(unix))]
         {
-            let _ = (socket, endpoints, owner_uid);
+            let _ = (socket, endpoints, peer);
             Err("worker egress brokers require Unix".to_string())
         }
     }
 
     pub fn socket_path(&self) -> &Path {
         &self.socket
+    }
+
+    pub(crate) fn stop(&self) -> Result<(), String> {
+        self.stop.store(true, Ordering::Release);
+        #[cfg(unix)]
+        self.lifetime.stop()?;
+        Ok(())
+    }
+
+    pub(crate) fn retire(&mut self, deadline: std::time::Instant) -> Result<(), String> {
+        self.stop()?;
+        #[cfg(unix)]
+        {
+            while self.stats.inflight.load(Ordering::Acquire) != 0
+                || self.listener.as_ref().is_some_and(|thread| !thread.is_finished())
+            {
+                if std::time::Instant::now() >= deadline {
+                    return Err("worker egress connections have not retired".to_string());
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            if let Some(thread) = self.listener.take() {
+                thread.join().map_err(|_| "worker egress listener panicked")?;
+            }
+        }
+        Ok(())
     }
 
     pub fn facts(&self) -> serde_json::Value {
@@ -150,19 +244,25 @@ impl EgressEndpoint {
 
 impl Drop for EgressEndpoint {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        #[cfg(unix)]
-        {
-            use std::os::unix::net::UnixStream;
-            let _ = UnixStream::connect(&self.socket);
+        if let Err(error) = self.stop() {
+            tracing::error!(%error, "worker egress cleanup failed");
         }
-        let _ = std::fs::remove_file(&self.socket);
+        if let Err(error) = std::fs::remove_file(&self.socket) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                tracing::error!(%error, "worker egress socket cleanup failed");
+            }
+        }
     }
 }
 
 #[cfg(unix)]
-fn serve(mut stream: std::os::unix::net::UnixStream, allowed: &[Endpoint], owner_uid: u32) -> bool {
-    if super::peer_uid_of(&stream) != Some(owner_uid) {
+fn serve(
+    mut stream: std::os::unix::net::UnixStream,
+    allowed: &[Endpoint],
+    peer: &Peer,
+    tunnel: &lifetime::Tunnel,
+) -> bool {
+    if !peer.accepts(&stream) || tunnel.stopping() {
         return false;
     }
     let _ = stream.set_read_timeout(Some(CONNECT_DEADLINE));
@@ -190,10 +290,17 @@ fn serve(mut stream: std::os::unix::net::UnixStream, allowed: &[Endpoint], owner
             return false;
         }
     };
+    if tunnel.stopping() {
+        return false;
+    }
     let Ok(upstream) = TcpStream::connect_timeout(&address, CONNECT_DEADLINE) else {
         let _ = stream.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
         return false;
     };
+    if let Err(error) = tunnel.upstream(&upstream) {
+        tracing::warn!(%error, "worker egress was retired before upstream activation");
+        return false;
+    }
     if stream
         .write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
         .is_err()

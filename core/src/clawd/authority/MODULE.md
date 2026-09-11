@@ -56,6 +56,12 @@ expiry, one use, the approval's revocation generation, and any validated
 operation digest. The broker exercises that grant before telling the worker its
 final `caps::require` check succeeded.
 
+Approval-session revocation matches both the authenticated owner and session.
+Unattributed system approvals are a separate bucket from `Some(0)` and do not
+match owner-bound execution grants or GUI instances. A removed-grant count is
+not resource-retirement completion; the GUI controller separately awaits its
+checked process and transport barrier.
+
 Each `PeerSession` route also declares whether an App session's one-call
 transient capabilities count for it. `credential.oauth-refresh` excludes them,
 preserving what the credential broker checked before this module existed; the

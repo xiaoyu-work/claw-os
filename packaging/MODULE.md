@@ -50,6 +50,7 @@ Debian packages and a signed multi-architecture APT repository.
 | `deb/tests/test-security-floor-install.sh` | Real `dpkg` multi-package and `apt-get` hook transactions |
 | `apt-repo/verify-release-security.sh` | Refuse a publication that regresses, is incoherent, or has no authenticated baseline |
 | `deb/tests/test-agentd-packaging.sh` | Worker/extension-host binary, identity, service, and isolation contract |
+| `../crates/claw-display-login/MODULE.md`, `../core/src/display_session/MODULE.md` | Native GNU PAM/display helpers, OS-only Agent-to-Desktop interface, private installation fixture and logout boundary |
 | `../rootfs/overlay/usr/lib/cos/init/remove-home-overlay.sh` | Safe managed-home flattening before Base removal |
 | `deb/tests/test-remove-home-overlay.sh` | Merged-tree, metadata, whiteout, and opaque-directory removal regression tests |
 | `apt-repo/build-repo.sh` | Multi-arch index, Release, `Valid-Until`, by-hash, and GPG signatures |

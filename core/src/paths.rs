@@ -72,11 +72,33 @@ pub struct RoutedPathContext {
 }
 
 impl RoutedPathContext {
+    pub(crate) fn for_owner(owner_uid: u32, home: PathBuf) -> Self {
+        Self { home: Some(home), owner_uid: Some(owner_uid), routed_job: false }
+    }
+
     pub fn capture() -> Self {
         Self {
             home: current_home_override(),
             owner_uid: current_owner_uid_override(),
             routed_job: is_routed_job(),
+        }
+    }
+
+    pub(crate) fn scope_sync<R>(self, run: impl FnOnce() -> R) -> R {
+        let with_job = || {
+            if self.routed_job {
+                ROUTED_JOB_OVERRIDE.sync_scope(true, run)
+            } else {
+                run()
+            }
+        };
+        let with_home = || match self.home {
+            Some(home) => HOME_OVERRIDE.sync_scope(home, with_job),
+            None => with_job(),
+        };
+        match self.owner_uid {
+            Some(uid) => OWNER_UID_OVERRIDE.sync_scope(uid, with_home),
+            None => with_home(),
         }
     }
 

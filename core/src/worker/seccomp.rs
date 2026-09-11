@@ -35,6 +35,8 @@
 
 use super::policy::SeccompProfile;
 
+pub(crate) mod gui;
+
 const BPF_LD: u16 = 0x00;
 const BPF_W: u16 = 0x00;
 const BPF_ABS: u16 = 0x20;

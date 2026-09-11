@@ -62,6 +62,35 @@ assert_contains "$CARGO_TOML" 'path = "src/bin/claw-extension-host.rs"' \
     "the extension host binary must have an entry point"
 [ -f "$PROJECT_DIR/core/src/bin/claw-extension-host.rs" ] ||
     fail "core/src/bin/claw-extension-host.rs is missing"
+for helper in claw-gui-runner claw-display-host claw-display-session; do
+    assert_contains "$CARGO_TOML" "name = \"$helper\"" \
+        "the GUI helper must be a first-class cargo binary"
+    assert_contains "$BUILD_DEBS" "ensure_bin $helper cos" \
+        "Agent packaging must build every required GUI helper"
+done
+assert_contains "$BUILD_DEBS" 'ensure_bin libpam_claw_display.so claw-display-login "${RUST_TARGET/-musl/-gnu}"' \
+    "the PAM module must be built for GNU rather than musl"
+assert_contains "$BUILD_DEBS" 'install -Dm0644 "$PAM_DISPLAY_MODULE"' \
+    "the PAM module must retain its non-executable installation mode"
+assert_contains "$BUILD_DEBS" '/usr/lib/$PAM_MULTIARCH/security/pam_claw_display.so' \
+    "the PAM module must use the target multiarch installation directory"
+assert_contains "$PROJECT_DIR/packaging/deb/claw-os-agent/control" 'claw-os-display-session-v1' \
+    "Agent must provide the internal display runtime interface"
+assert_contains "$PROJECT_DIR/packaging/deb/claw-os-agent/control" 'libpam0g' \
+    "Agent must declare its PAM runtime dependency"
+assert_contains "$PROJECT_DIR/packaging/deb/claw-os-desktop/control" 'claw-os-display-session-v1' \
+    "Desktop must require the Agent display runtime"
+assert_contains "$PROJECT_DIR/.github/workflows/publish-agent-package.yml" 'libpam0g-dev' \
+    "the native package build must install PAM development inputs"
+assert_contains "$PROJECT_DIR/.github/workflows/publish-agent-package.yml" \
+    'cargo build --release -p claw-display-login --target ${{ matrix.gnu_target }}' \
+    "the Agent build must produce the native GNU PAM library"
+assert_contains "$TEST_WORKFLOW" 'crates/claw-display-login/test/fixtures/bootstrap.sh' \
+    "CI must retain the private authenticated display fixture"
+assert_contains "$TEST_WORKFLOW" '"$CARGO_TARGET_DIR/debug/claw-display-session" "$CARGO_TARGET_DIR/debug/cosmic-session"' \
+    "the private fixture must receive the actual session binary as input twelve"
+assert_contains "$TEST_WORKFLOW" 'private_deferred_retirement_reclaims_the_exact_slot_and_workload' \
+    "CI must exercise deferred display retirement and slot reclamation"
 assert_contains "$PROJECT_DIR/packaging/deb/claw-os-agent/control" 'Depends: acl,' \
     "the package must install getfacl for execution-gid collision scans"
 assert_contains "$PROJECT_DIR/packaging/deb/claw-os-agent/control" 'findutils' \

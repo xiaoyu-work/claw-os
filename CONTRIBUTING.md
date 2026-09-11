@@ -13,6 +13,7 @@ routing and authoritative validation commands, then
 - Python 3
 - Docker (for building the image)
 - Root access (for rootfs bootstrap)
+- `libpam0g-dev` on Debian/Ubuntu when building the OS display PAM module
 
 ### Build the Rust Core
 
@@ -20,6 +21,22 @@ routing and authoritative validation commands, then
 cd core
 cargo build --release
 ```
+
+### Build the OS display runtime
+
+The unpublished OS display runtime has separate native build inputs. From the
+repository root, with the PAM development library installed:
+
+```bash
+cargo build -p cos --bin claw-display-host --bin claw-display-session --bin claw-gui-runner --locked
+cargo build -p claw-display-login --locked
+cargo test -p claw-display-control -p claw-display-login --locked -- --test-threads=1
+```
+
+The PAM module must target GNU/glibc, including when the core package uses musl.
+These commands do not install or restart a desktop. The
+[private authenticated fixture](crates/claw-display-login/MODULE.md) uses
+isolated mounts and disposable login state; do not substitute a live login.
 
 ### Build the Rootfs + Docker Image
 

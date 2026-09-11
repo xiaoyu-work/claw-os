@@ -1,0 +1,29 @@
+[package]
+name = "claw-display-headless-fixture"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.90"
+license = "GPL-3.0-only"
+publish = false
+
+default-run = "claw-display-headless-fixture"
+
+[[bin]]
+name = "claw-gui-probe"
+path = "src/probe.rs"
+
+[workspace]
+
+[dependencies]
+claw-display-control = { path = "../../../../crates/claw-display-control" }
+smithay = { path = "../../vendor/smithay", default-features = false, features = ["wayland_frontend"] }
+wayland-server = "=0.31.13"
+calloop = "=0.14.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
+wayland-client = "=0.31.14"
+wayland-protocols = { version = "=0.32.12", features = ["client", "staging", "unstable"] }
+wayland-protocols-wlr = { version = "=0.3.12", features = ["client"] }
+rustix = { version = "=1.1.4", features = ["event", "fs", "pipe"] }
+libc = "0.2"
+serde_json = "1"

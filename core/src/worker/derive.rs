@@ -103,8 +103,8 @@ pub struct AppOperationInput<'a> {
     /// `COS_ARGS_JSON`, …). Names are validated by the policy.
     pub extra_env: BTreeMap<String, String>,
     pub stdio: StdioPlan,
-    /// GUI surfaces run in the desktop tier and receive a display
-    /// transport; headless operations never do.
+    /// Ambient desktop requests are refused. Only `gui_operation` can
+    /// derive a GUI policy from an explicit Root instance transport.
     pub desktop: bool,
     /// `(st_dev, st_ino)` of the verified package directory.
     ///
@@ -224,13 +224,11 @@ pub struct AgentExecInput {
     pub limits: Limits,
 }
 
-/// Derive the policy for one App operation (or GUI surface).
+/// Derive the policy for one headless App operation.
 pub fn app_operation(input: AppOperationInput<'_>) -> Result<LaunchPolicy, String> {
-    let tier = if input.desktop {
-        TrustTier::DesktopSurface
-    } else {
-        TrustTier::AppOperation
-    };
+    if input.desktop {
+        return Err("GUI policies require a Root-owned instance display binding".to_string());
+    }
     let app_dir = canonical_dir(input.app_dir, "App package")?;
     // The launcher hands over the *owner's* data root, which holds the
     // credential store, the session registry and the journal. A worker
@@ -268,11 +266,6 @@ pub fn app_operation(input: AppOperationInput<'_>) -> Result<LaunchPolicy, Strin
         mounts.extend(granted_path_mounts(input.caps)?);
     }
     let mut env = base_env(&data_dir);
-    if input.desktop {
-        let (display_mounts, display_env) = desktop_transports();
-        mounts.extend(display_mounts);
-        env.extend(display_env);
-    }
     dedupe_mounts(&mut mounts);
 
     let network = egress_from_caps(input.caps);
@@ -289,15 +282,13 @@ pub fn app_operation(input: AppOperationInput<'_>) -> Result<LaunchPolicy, Strin
     }
     apply_egress_env(&mut env, &network);
 
-    let limits = if input.desktop {
-        Limits::desktop()
-    } else if matches!(input.stdio, StdioPlan::Streamed) {
+    let limits = if matches!(input.stdio, StdioPlan::Streamed) {
         Limits::server()
     } else {
         Limits::operation()
     };
     Ok(LaunchPolicy {
-        tier,
+        tier: TrustTier::AppOperation,
         label: format!("app:{}/{}", input.app_id, input.operation),
         program: input.program,
         argv: input.argv,
@@ -311,6 +302,52 @@ pub fn app_operation(input: AppOperationInput<'_>) -> Result<LaunchPolicy, Strin
         broker: true,
         umask: 0o077,
     })
+}
+
+/// Extend the common App policy with one Root-created Wayland transport.
+#[cfg(target_os = "linux")]
+pub(crate) fn gui_operation(
+    mut input: AppOperationInput<'_>,
+    display: &Path,
+    inner_program: &Path,
+) -> Result<LaunchPolicy, String> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+
+    input.desktop = false;
+    let mut policy = app_operation(input)?;
+    policy.tier = TrustTier::DesktopSurface;
+    policy.limits = Limits::desktop();
+    policy.mounts.extend(program_mount(inner_program));
+    policy.mounts.push(Mount::read_write(
+        display.to_path_buf(), PathBuf::from(super::linux::GUI_WAYLAND_SOCKET), MountClass::Display,
+    ));
+    policy.env.insert("WAYLAND_DISPLAY".to_string(), super::linux::GUI_WAYLAND_SOCKET.to_string());
+    policy.env.insert("XDG_RUNTIME_DIR".to_string(), "/run/cos".to_string());
+    policy.env.insert("XDG_SESSION_TYPE".to_string(), "wayland".to_string());
+    policy.env.insert("XDG_CURRENT_DESKTOP".to_string(), "COSMIC".to_string());
+    match std::fs::read_dir("/dev/dri") {
+        Ok(entries) => {
+            for (index, entry) in entries.enumerate() {
+                if index >= 64 {
+                    return Err("GUI render-node enumeration exceeded its bound".to_string());
+                }
+                let entry = entry.map_err(|error| format!("inspect GUI render nodes: {error}"))?;
+                let path = entry.path();
+                let metadata = std::fs::symlink_metadata(&path)
+                    .map_err(|error| format!("inspect GUI render node: {error}"))?;
+                if entry.file_name().to_str().is_some_and(|name| name.starts_with("renderD"))
+                    && metadata.file_type().is_char_device() && libc::major(metadata.rdev()) == 226
+                    && libc::minor(metadata.rdev()) >= 128
+                {
+                    policy.mounts.push(Mount::read_write(path.clone(), path, MountClass::Device));
+                }
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("enumerate GUI render nodes: {error}")),
+    }
+    dedupe_mounts(&mut policy.mounts);
+    Ok(policy)
 }
 
 /// Derive the policy for one MCP server or adapter.
@@ -574,59 +611,6 @@ pub fn agent_exec(input: AgentExecInput) -> Result<LaunchPolicy, String> {
     })
 }
 
-/// Display and session transports for the desktop tier.
-///
-/// This is the one place a worker can be handed a compositor socket, a
-/// session bus or a GPU node, and it is reachable only from
-/// [`TrustTier::DesktopSurface`] — a headless operation worker cannot
-/// opt into it from a manifest. Each transport is bound individually:
-/// the runtime directory that contains them is never exposed, so an
-/// App sees its own compositor socket and not its neighbours' sockets,
-/// keyrings or agent endpoints.
-fn desktop_transports() -> (Vec<Mount>, BTreeMap<String, String>) {
-    let mut mounts = Vec::new();
-    let mut env = BTreeMap::new();
-    let runtime_dir = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from);
-
-    if let (Some(runtime_dir), Ok(display)) = (&runtime_dir, std::env::var("WAYLAND_DISPLAY")) {
-        // A display name with a separator would name a socket outside
-        // the runtime directory.
-        if !display.is_empty() && !display.contains('/') && !display.contains("..") {
-            let socket = runtime_dir.join(&display);
-            if socket.exists() {
-                mounts.push(Mount::read_write(
-                    socket.clone(),
-                    socket,
-                    MountClass::Display,
-                ));
-                env.insert("WAYLAND_DISPLAY".to_string(), display);
-                env.insert(
-                    "XDG_RUNTIME_DIR".to_string(),
-                    runtime_dir.to_string_lossy().into_owned(),
-                );
-            }
-        }
-    }
-    if let Ok(xauthority) = std::env::var("XAUTHORITY") {
-        let path = PathBuf::from(&xauthority);
-        if path.is_file() {
-            mounts.push(Mount::read_only(path.clone(), path, MountClass::Display));
-            env.insert("XAUTHORITY".to_string(), xauthority);
-            if let Ok(display) = std::env::var("DISPLAY") {
-                env.insert("DISPLAY".to_string(), display);
-            }
-        }
-    }
-    // GPU nodes: a window that cannot reach a renderer is not a window.
-    // `--dev-bind` is the only mount in the whole policy that enables
-    // device access, and only for this tier.
-    let dri = PathBuf::from("/dev/dri");
-    if dri.is_dir() {
-        mounts.push(Mount::read_write(dri.clone(), dri, MountClass::Device));
-    }
-    (mounts, env)
-}
-
 /// The `_shared` helper trees a bundled App imports.
 ///
 /// Bundled Apps put their package's parent on `sys.path` and import
@@ -668,7 +652,7 @@ fn shared_library_mounts(app_dir: &Path, apps_root: &Path) -> Vec<Mount> {
 /// only covers `/usr`. The binary is bound read-only and on its own:
 /// its directory is not exposed, so a sibling script in the same
 /// `bin/` stays invisible.
-fn program_mount(program: &Path) -> Option<Mount> {
+pub(crate) fn program_mount(program: &Path) -> Option<Mount> {
     const SYSTEM_ROOTS: &[&str] = &["/usr/", "/bin/", "/sbin/", "/lib/", "/lib64/"];
     let text = program.to_string_lossy();
     if SYSTEM_ROOTS.iter().any(|root| text.starts_with(root)) {
@@ -1269,6 +1253,12 @@ fn app_partition(data_root: &Path, app_id: &str) -> Result<PathBuf, String> {
     {
         return Err(format!("App id `{app_id}` is not a safe path component"));
     }
+    #[cfg(target_os = "linux")]
+    let routed_owner = crate::paths::current_owner_uid_override()
+        .filter(|_| unsafe { libc::geteuid() } == 0);
+    #[cfg(target_os = "linux")]
+    let _owner_fs = routed_owner.map(crate::clawd::client_identity::FsIdentityGuard::enter)
+        .transpose()?;
     let partition = data_root.join("apps").join(app_id);
     let created = ensure_dir(&partition, "App data partition")?;
     #[cfg(unix)]
@@ -1296,6 +1286,8 @@ fn app_partition(data_root: &Path, app_id: &str) -> Result<PathBuf, String> {
             ));
         }
         let effective = unsafe { libc::geteuid() };
+        #[cfg(target_os = "linux")]
+        let effective = routed_owner.unwrap_or(effective);
         if meta.uid() != effective {
             return Err(format!(
                 "App data partition `{}` belongs to uid {} rather than {effective}",

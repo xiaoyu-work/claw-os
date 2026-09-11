@@ -1002,7 +1002,7 @@ routes! {
             ("owner_uid", FieldRule::Count),
             ("session", FieldRule::Token),
         ],
-        run: |c| permissions::revoke(c.params, c.client).map_err(BrokerError::from),
+        run: |c| permissions::revoke(c.params, c.client).await.map_err(BrokerError::from),
     }
 
     // -----------------------------------------------------------------
@@ -1156,6 +1156,36 @@ routes! {
                 .await
                 .map_err(BrokerError::from)
         },
+    }
+    AppGuiLaunch {
+        name: "app.gui.launch",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::launch(),
+        authority: handle(Audience::AppLaunch),
+        body: body::AppGuiLaunch,
+        audit: &[("session_id", FieldRule::Token), ("args", FieldRule::Size)],
+        run: |c| super::gui::launch(c.params, c.client).await,
+    }
+    AppGuiWait {
+        name: "app.gui.wait",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::poll(),
+        authority: peer(Audience::AppLaunch),
+        body: body::AppGuiWait,
+        audit: &[("session_id", FieldRule::Token)],
+        run: |c| super::gui::wait(c.params, c.client).await,
+    }
+    AppGuiStop {
+        name: "app.gui.stop",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::launch(),
+        authority: peer(Audience::AppLaunch),
+        body: body::AppGuiStop,
+        audit: &[("session_id", FieldRule::Token)],
+        run: |c| super::gui::stop(c.params, c.client).await,
     }
     AppSessionDeregister {
         name: "app_session.deregister",

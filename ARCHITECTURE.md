@@ -46,6 +46,8 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | --- | --- | --- |
 | `cos` CLI and router | Parse output format, dispatch primitives, apps, hidden bridges, and `cos agent` subcommands | `core/src/main.rs`, `core/src/router.rs` |
 | `clawd` broker | Versioned framed Unix-socket RPC, per-message peer identity, declarative route registry, mandatory capability-authority middleware, privileged dispatch, task ownership/lease, worker/extension supervision, and audit hook | `core/src/bin/clawd.rs`, `core/src/clawd/server.rs`, `core/src/clawd/transport/`, `core/src/clawd/routes.rs`, `core/src/clawd/authority/` |
+| Authenticated display lifetime | Root PAM/kernel-login binding, protected compositor startup, display epochs and downstream session subscriptions | `core/src/display_session/`, `crates/claw-display-control/`, `crates/claw-display-login/` |
+| GUI App custody | Verified launch, existing grant/parent authority, independent selection rights, instance-confined transport and checked teardown | `core/src/clawd/gui/`, `core/src/worker/gui_transport/`, `desktop/comp/` |
 | `claw-agentd` worker | Unprivileged per-task process that runs the model/tool loop after privilege drop; grant-authenticated private job channel | `core/src/bin/claw-agentd.rs`, `core/src/agentd/` |
 | `claw-extension-host` | Purpose-bound isolated-UID process: a task Host runs dynamic App/MCP code and signed Agent extension observers behind independently bounded canonical, event, and priority control lanes and relays authenticated App calls, while an owner/App service Host runs persistent App MCP code behind broker-owned private sockets; only App/MCP children receive the route-filtered broker proxy | `core/src/bin/claw-extension-host.rs`, `core/src/extension_host/`, `core/src/clawd/app_services.rs` |
 | Agent extension ABI | Explicit authenticated-package registry, provider-attempt/tool observation FIFO, absolute event deadlines, independently acknowledged detach with supervisor containment escalation, per-extension capability references, and default-deny exact-action mediation | `core/src/agent_extensions/`, `core/src/provenance/`, `core/src/extension_host/abi.rs` |
@@ -117,6 +119,30 @@ peer on the actual connection and preserves structured review refusals.
 Store/package-channel delivery, generic local-launch cutover and complete
 per-resource allow/ask/deny enforcement still need integration. Unsupported
 resource controls are disclosed, not simulated with unenforced switches.
+
+The [Root display runtime](core/src/display_session/MODULE.md) binds the
+PAM-authenticated account to the kernel login identity before user startup
+customization. The broker assigns the display epoch; a protected supervisor
+starts the compositor. `cosmic-session` starts downstream components and
+subscribes to that display rather than creating an owner-authored replacement.
+The closed control/PAM crates are internal OS interfaces, not public SDK exports.
+
+The [GUI Host](core/src/clawd/gui/MODULE.md) binds signed App execution to the
+existing session grant, parent delegation and revocation generation. Its
+constrained operation needs do not inherit MCP permissions; selection read and
+write remain independent, and Panel metadata grants nothing. Mandatory
+instance cgroups, inherited syscall mediation and credential-checked relays
+confine the transport. Checked permission/session retirement includes retained
+descriptors and descendants before success; denial remains durable on failure.
+Standalone App installation, replacement, rollback and provenance mutations
+still need authenticated Root coordination and admission fencing.
+
+Replacing the authority or compositor ends its display epoch and requires
+coordinated logout/re-login, not a hot owner-socket handoff. See
+[installed update requirements](docs/updating.md#root-managed-desktop-session-lifetime).
+These are unpublished source contracts with private process coverage, not
+real-login/image or all-App resource acceptance. Terminal-only operation does
+not acquire a display dependency.
 
 The complete native Notifications fork, both shared presentation crates,
 descriptor, license and original build now live in

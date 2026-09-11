@@ -8,12 +8,13 @@ rust-version = "1.90"
 
 [workspace]
 members = ["cosmic-comp-config"]
-exclude = ["vendor/smithay", "test/selection-read"]
+exclude = ["vendor/smithay", "test/selection-read", "test/display-control"]
 
 [dependencies]
 anyhow = { version = "1.0.102", features = ["backtrace"] }
 bitflags = "2.11.0"
 calloop = { version = "0.14.4", features = ["executor"] }
+claw-display-control = { path = "../../crates/claw-display-control" }
 cosmic-comp-config = { path = "cosmic-comp-config", features = [
     "libdisplay-info",
     "output",

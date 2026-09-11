@@ -39,6 +39,8 @@ pub mod derive;
 pub mod entry;
 pub mod exec;
 #[cfg(target_os = "linux")]
+pub mod gui_transport;
+#[cfg(target_os = "linux")]
 pub mod linux;
 pub(crate) mod migrate;
 pub mod net_broker;

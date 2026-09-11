@@ -7,6 +7,78 @@ fn caps(items: Vec<Cap>) -> CapSet {
     CapSet::from_caps(items)
 }
 
+fn app_input<'a>(
+    app_dir: &'a Path,
+    data_dir: &'a str,
+    granted: &'a CapSet,
+) -> AppOperationInput<'a> {
+    AppOperationInput {
+        app_id: "gui-policy-fixture",
+        app_dir,
+        operation: "--gui",
+        program: PathBuf::from("/usr/bin/true"),
+        argv: Vec::new(),
+        caps: granted,
+        session_id: "gui-policy-fixture-session",
+        data_dir,
+        apps_dir: "/nonexistent-gui-fixture-apps",
+        extra_env: BTreeMap::new(),
+        stdio: StdioPlan::Captured,
+        desktop: false,
+        package_identity: None,
+        pinned_entries: Vec::new(),
+        developer: false,
+    }
+}
+
+#[test]
+fn ambient_gui_policy_is_refused_before_creating_app_state() {
+    let root = tempfile::tempdir().unwrap();
+    let data = root.path().join("uncreated-data");
+    let granted = CapSet::new();
+    let mut input = app_input(root.path(), data.to_str().unwrap(), &granted);
+    input.desktop = true;
+    let error = app_operation(input).unwrap_err();
+    assert!(error.contains("Root-owned instance display binding"), "{error}");
+    assert!(!data.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn gui_policy_projects_only_its_explicit_instance_transport() {
+    let _lock = crate::test_env::lock_env();
+    let root = tempfile::tempdir().unwrap();
+    let data = root.path().join("private-data");
+    let socket = root.path().join("instance.sock");
+    let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+    let _display = crate::test_env::TestEnvVarGuard::set("WAYLAND_DISPLAY", "ambient-display");
+    let _runtime = crate::test_env::TestEnvVarGuard::set("XDG_RUNTIME_DIR", root.path());
+    let _bus = crate::test_env::TestEnvVarGuard::set(
+        "DBUS_SESSION_BUS_ADDRESS",
+        "unix:path=/nonexistent-gui-fixture-bus",
+    );
+    let _x11 = crate::test_env::TestEnvVarGuard::set("DISPLAY", ":12345");
+    let _xauth = crate::test_env::TestEnvVarGuard::set("XAUTHORITY", root.path().join("xauth"));
+    let granted = CapSet::new();
+    let input = app_input(root.path(), data.to_str().unwrap(), &granted);
+    let policy = gui_operation(input, &socket, Path::new("/usr/bin/true")).unwrap();
+    assert_eq!(policy.tier, TrustTier::DesktopSurface);
+    assert_eq!(policy.env["WAYLAND_DISPLAY"], super::super::linux::GUI_WAYLAND_SOCKET);
+    assert_eq!(policy.env["XDG_RUNTIME_DIR"], "/run/cos");
+    for key in ["DBUS_SESSION_BUS_ADDRESS", "DISPLAY", "XAUTHORITY", "WAYLAND_SOCKET"] {
+        assert!(!policy.env.contains_key(key), "inherited {key}");
+    }
+    let displays = policy.mounts.iter()
+        .filter(|mount| mount.class == MountClass::Display)
+        .collect::<Vec<_>>();
+    assert_eq!(displays.len(), 1);
+    assert_eq!(displays[0].source, socket);
+    assert_eq!(displays[0].target, Path::new(super::super::linux::GUI_WAYLAND_SOCKET));
+    assert!(!policy.mounts.iter().any(|mount| {
+        mount.class == MountClass::Display && mount.source == root.path()
+    }));
+}
+
 #[test]
 fn a_segment_glob_binds_each_match_and_not_their_children() {
     let dir = tempfile::tempdir().expect("tempdir");

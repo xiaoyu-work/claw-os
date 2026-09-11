@@ -83,6 +83,7 @@ pub const DEVELOPER_ALLOWED: &[Verb] = &[
 pub enum Audience {
     AgentWorker,
     AppLaunch,
+    GuiResource,
     AppRelay,
     SystemService,
     Credential,
@@ -100,6 +101,7 @@ impl Audience {
         match self {
             Self::AgentWorker => "agent-worker",
             Self::AppLaunch => "app-launch",
+            Self::GuiResource => "gui-resource",
             Self::AppRelay => "app-relay",
             Self::SystemService => "system-service",
             Self::Credential => "credential",
@@ -213,7 +215,7 @@ impl Ceiling {
         if !self.is_developer() {
             return true;
         }
-        matches!(audience, Audience::AppLaunch)
+        matches!(audience, Audience::AppLaunch | Audience::GuiResource)
     }
 
     /// The audiences a grant for this package may carry, filtered from

@@ -31,6 +31,8 @@ persistence, and structured primitive dispatch.
 | `src/bin/claw-agentd.rs` | Unprivileged agent worker entry |
 | `src/bin/claw-mail-ai-host.rs` | Trusted Thunderbird launcher for the canonical `/usr/lib/cos/apps/mail-ai` implementation |
 | `src/bin/claw-security-floor.rs` | Update downgrade-protection verifier used by maintainer scripts |
+| `src/display_session/` | Root PAM/display activation, private compositor control, kernel login identity and checked display teardown |
+| `src/clawd/gui/` | Verified native GUI argv, instance-bound transport/authority and checked resource/process retirement |
 | `src/update/` | Signed release manifest, monotonic security floor, recovery authorizations, runtime gates |
 | `src/clawd/server.rs` | IPC broker, identity checks, RPC dispatch, audit hook |
 | `src/agentd/` | Broker/runtime process split: privilege drop, job grants, worker supervision, consent mediation |

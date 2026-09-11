@@ -4,8 +4,10 @@ use std::{
     collections::HashMap,
     fs::File,
     io::{Read, Write},
-    os::fd::{AsFd, OwnedFd},
-    sync::Arc,
+    os::{
+        fd::{AsFd, BorrowedFd, OwnedFd},
+        unix::net::UnixStream,
+    },
     time::Instant,
 };
 
@@ -13,9 +15,7 @@ use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
     pipe::{PipeFlags, pipe_with},
 };
-use smithay::{
-    reexports::wayland_server::Client as ServerClient, wayland::selection::SelectionTarget,
-};
+use smithay::wayland::selection::SelectionTarget;
 use wayland_client::{
     Connection, Dispatch, EventQueue, Proxy, QueueHandle,
     backend::ObjectId,
@@ -42,7 +42,7 @@ use wayland_protocols_wlr::data_control::v1::client::{
     zwlr_data_control_offer_v1 as wlr_offer, zwlr_data_control_source_v1 as wlr_source,
 };
 
-use super::{Access, DEADLINE, MIME, Server};
+use super::{DEADLINE, MIME};
 
 #[derive(Clone, Copy, Debug)]
 pub enum Protocol {
@@ -129,6 +129,8 @@ struct Events {
     selection_events: Vec<(SelectionTarget, bool)>,
     source_sends: usize,
     dnd: Option<(wl_data_offer::WlDataOffer, u32)>,
+    keyboard_serial: Option<u32>,
+    pointer_serial: Option<u32>,
 }
 
 impl Events {
@@ -159,12 +161,10 @@ pub struct Peer {
     device: Device,
     surface: wl_surface::WlSurface,
     sources: Vec<Source>,
-    pub(super) server_client: ServerClient,
 }
 
 impl Peer {
-    pub fn new(server: &Server, protocol: Protocol, access: Arc<Access>) -> Self {
-        let (stream, server_client) = server.connect(access);
+    pub fn from_stream(stream: UnixStream, protocol: Protocol) -> Self {
         let connection = Connection::from_socket(stream).unwrap();
         let mut queue = connection.new_event_queue();
         let qh = queue.handle();
@@ -236,7 +236,6 @@ impl Peer {
             device,
             surface,
             sources: Vec::new(),
-            server_client,
         };
         peer.roundtrip();
         peer
@@ -246,34 +245,67 @@ impl Peer {
         roundtrip(&self.connection, &mut self.queue, &mut self.events);
     }
 
+    pub fn requires_focus(&self) -> bool {
+        matches!(self.device, Device::Core(..) | Device::Primary(..))
+    }
+
+    #[allow(dead_code)] // Also used by the authenticated process fixture.
+    pub fn commit(&mut self) {
+        self.surface.commit();
+        self.roundtrip();
+    }
+
+    #[allow(dead_code)]
+    pub fn has_global(&self, name: &str) -> bool {
+        self.events.globals.contains_key(name)
+    }
+
+    #[allow(dead_code)]
+    pub fn connection_fd(&self) -> BorrowedFd<'_> {
+        self.connection.as_fd()
+    }
+
     pub(super) fn surface_id(&self) -> u32 {
         self.surface.id().protocol_id()
     }
 
-    pub fn publish(&mut self, server: &Server, target: SelectionTarget, payload: &[u8]) {
-        if matches!(self.device, Device::Core(..) | Device::Primary(..)) {
-            server.focus(self);
-        }
+    pub fn publish_selection(&mut self, target: SelectionTarget, payload: &[u8]) {
+        self.publish_selection_with_mimes(target, payload, &[MIME]);
+    }
+
+    pub fn publish_selection_with_mimes(
+        &mut self,
+        target: SelectionTarget,
+        payload: &[u8],
+        mime_types: &[&str],
+    ) {
         let qh = self.queue.handle();
+        let serial = self.events.keyboard_serial.unwrap_or(1);
         let data = SourcePayload(payload.to_vec());
         let source = match &self.device {
             Device::Core(manager, device) => {
                 assert_eq!(target, SelectionTarget::Clipboard);
                 let source = manager.create_data_source(&qh, data);
-                source.offer(MIME.to_string());
-                device.set_selection(Some(&source), 1);
+                for mime in mime_types {
+                    source.offer((*mime).to_string());
+                }
+                device.set_selection(Some(&source), serial);
                 Source::Core(source)
             }
             Device::Primary(manager, device) => {
                 assert_eq!(target, SelectionTarget::Primary);
                 let source = manager.create_source(&qh, data);
-                source.offer(MIME.to_string());
-                device.set_selection(Some(&source), 1);
+                for mime in mime_types {
+                    source.offer((*mime).to_string());
+                }
+                device.set_selection(Some(&source), serial);
                 Source::Primary(source)
             }
             Device::Wlr(manager, device) => {
                 let source = manager.create_data_source(&qh, data);
-                source.offer(MIME.to_string());
+                for mime in mime_types {
+                    source.offer((*mime).to_string());
+                }
                 match target {
                     SelectionTarget::Clipboard => device.set_selection(Some(&source)),
                     SelectionTarget::Primary => device.set_primary_selection(Some(&source)),
@@ -282,7 +314,9 @@ impl Peer {
             }
             Device::Ext(manager, device) => {
                 let source = manager.create_data_source(&qh, data);
-                source.offer(MIME.to_string());
+                for mime in mime_types {
+                    source.offer((*mime).to_string());
+                }
                 match target {
                     SelectionTarget::Clipboard => device.set_selection(Some(&source)),
                     SelectionTarget::Primary => device.set_primary_selection(Some(&source)),
@@ -295,18 +329,16 @@ impl Peer {
         self.roundtrip();
     }
 
-    pub fn clear_selection(&mut self, server: &Server, target: SelectionTarget) {
-        if matches!(self.device, Device::Core(..) | Device::Primary(..)) {
-            server.focus(self);
-        }
+    pub fn clear_selection(&mut self, target: SelectionTarget) {
+        let serial = self.events.keyboard_serial.unwrap_or(1);
         match &self.device {
             Device::Core(_, device) => {
                 assert_eq!(target, SelectionTarget::Clipboard);
-                device.set_selection(None, 1);
+                device.set_selection(None, serial);
             }
             Device::Primary(_, device) => {
                 assert_eq!(target, SelectionTarget::Primary);
-                device.set_selection(None, 1);
+                device.set_selection(None, serial);
             }
             Device::Wlr(_, device) => match target {
                 SelectionTarget::Clipboard => device.set_selection(None),
@@ -360,9 +392,7 @@ impl Peer {
         reader
     }
 
-    pub fn start_drag(&mut self, server: &Server, payload: &[u8]) {
-        let serial = server.press_pointer(self);
-        self.roundtrip();
+    pub fn start_drag_serial(&mut self, serial: u32, payload: &[u8]) {
         let Device::Core(manager, device) = &self.device else {
             panic!("DnD uses the core data device");
         };
@@ -373,6 +403,11 @@ impl Peer {
         device.start_drag(Some(&source), &self.surface, None, serial);
         self.sources.push(Source::Core(source));
         self.roundtrip();
+    }
+
+    #[allow(dead_code)]
+    pub fn pointer_serial(&self) -> u32 {
+        self.events.pointer_serial.expect("private pointer gesture")
     }
 
     pub fn dnd_offer(&mut self) -> Offer {
@@ -595,8 +630,35 @@ source_events!(ext_source, ExtDataControlSourceV1);
 delegate_noop!(Events: ignore wl_compositor::WlCompositor);
 delegate_noop!(Events: ignore wl_surface::WlSurface);
 delegate_noop!(Events: ignore wl_seat::WlSeat);
-delegate_noop!(Events: ignore wl_keyboard::WlKeyboard);
-delegate_noop!(Events: ignore wl_pointer::WlPointer);
+impl Dispatch<wl_keyboard::WlKeyboard, ()> for Events {
+    fn event(
+        state: &mut Self,
+        _: &wl_keyboard::WlKeyboard,
+        event: wl_keyboard::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wl_keyboard::Event::Enter { serial, .. } = event {
+            state.keyboard_serial = Some(serial);
+        }
+    }
+}
+
+impl Dispatch<wl_pointer::WlPointer, ()> for Events {
+    fn event(
+        state: &mut Self,
+        _: &wl_pointer::WlPointer,
+        event: wl_pointer::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wl_pointer::Event::Button { serial, .. } = event {
+            state.pointer_serial = Some(serial);
+        }
+    }
+}
 delegate_noop!(Events: ignore wl_data_device_manager::WlDataDeviceManager);
 delegate_noop!(Events: ignore primary_manager::ZwpPrimarySelectionDeviceManagerV1);
 delegate_noop!(Events: ignore wlr_manager::ZwlrDataControlManagerV1);

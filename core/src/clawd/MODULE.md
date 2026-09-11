@@ -42,6 +42,8 @@ and agent tasks.
 | `usage.rs` | Peer-UID-scoped Agent token usage queries |
 | `app_sessions.rs` | App/native/MCP session authority: derives identity and capabilities, plans approvals, issues launch grants, consumes service-bound call tickets |
 | `app_permissions.rs` | Shared Settings permission service: verified declarations, owner/App deny gates, pending durable restoration, fine-grained revocation; no approval authority |
+| `gui/`, `app_sessions/gui.rs` | Root-supervised GUI instances; operation-only needs, live parent/grant/policy checks, independent selection rights and checked retirement |
+| `../display_session/` | Root PAM/login activation and compositor control; owner sockets or Wayland labels cannot register authority |
 | `system_review.rs`, `system_review/presentation.rs` | Shared App/capability review projection, owner-scoped display revisions, root-only choices, fresh package verification and one-use App confirmation |
 | `app_services.rs` | Persistent owner/App service manager, lifecycle policy, permission-policy snapshot retirement, capacity/restart control, and single-use call authorization |
 | `../extension_host/broker.rs` | Purpose-bound private proxy: verifies SCM credentials, Host/child ancestry, route class, and nearest child session before normal dispatch |

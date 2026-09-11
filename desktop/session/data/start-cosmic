@@ -106,9 +106,5 @@ if command -v systemctl >/dev/null; then
     done
 fi
 
-# Run cosmic-session
-if [[ -z "${DBUS_SESSION_BUS_ADDRESS}" ]]; then
-    exec /usr/bin/dbus-run-session -- /usr/bin/cosmic-session
-else
-    exec /usr/bin/cosmic-session
-fi
+# Attach to the Root-started display and its canonical logind user bus.
+exec /usr/local/bin/claw-display-session --exec /usr/bin/cosmic-session

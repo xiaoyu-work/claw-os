@@ -45,6 +45,19 @@ where
 
         match request {
             zwlr_data_control_device_v1::Request::SetSelection { source, .. } => {
+                if source.as_ref().is_some_and(|source| {
+                    handler.data_control_state().used_sources.contains_key(source)
+                }) {
+                    resource.post_error(
+                        zwlr_data_control_device_v1::Error::UsedSource,
+                        "selection source can be used only once.",
+                    );
+                    return;
+                }
+                if !D::allow_selection_write(client, &seat, SelectionTarget::Clipboard) {
+                    tracing::debug!(client = ?client, "denying clipboard selection write");
+                    return;
+                }
                 // Each source can only be used once.
                 if let Some(source) = source.as_ref() {
                     if handler
@@ -81,6 +94,20 @@ where
             zwlr_data_control_device_v1::Request::SetPrimarySelection { source, .. } => {
                 // When the primary selection is disabled, we should simply ignore the requests.
                 if !(*data.primary_selection_filter)(client) {
+                    return;
+                }
+
+                if source.as_ref().is_some_and(|source| {
+                    handler.data_control_state().used_sources.contains_key(source)
+                }) {
+                    resource.post_error(
+                        zwlr_data_control_device_v1::Error::UsedSource,
+                        "selection source can be used only once.",
+                    );
+                    return;
+                }
+                if !D::allow_selection_write(client, &seat, SelectionTarget::Primary) {
+                    tracing::debug!(client = ?client, "denying primary selection write");
                     return;
                 }
 

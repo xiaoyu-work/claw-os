@@ -28,6 +28,8 @@ pub mod config;
 pub mod credential;
 pub mod cron;
 pub mod crypto;
+#[cfg(target_os = "linux")]
+pub mod display_session;
 pub mod engine_pkg;
 pub mod errors;
 pub mod extension_host;

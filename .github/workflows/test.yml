@@ -26,6 +26,11 @@ jobs:
             tools/install-mail-ai.sh
             packaging/deb/build-debs.sh
             packaging/deb/build-desktop-deb.sh
+            desktop/greeter/cosmic-greeter-start.sh
+            desktop/session/data/start-cosmic
+            rootfs/features/desktop/overlay/usr/lib/cos/firstboot-session
+            crates/claw-display-login/test/fixtures/bootstrap.sh
+            crates/claw-display-login/test/fixtures/authenticate.sh
             targets/docker/build.sh
             targets/docker/container-entrypoint.sh
             targets/wsl/build.sh
@@ -64,7 +69,7 @@ jobs:
       # rather than skip if it is somehow still unavailable, so a
       # missing dependency cannot turn those tests into a no-op.
       - name: Install worker sandbox dependencies
-        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends bubblewrap python3-idna openssl
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends bubblewrap python3-idna openssl libpam0g-dev dbus-daemon
 
       - name: Cache cargo registry & target
         uses: actions/cache@v4
@@ -193,6 +198,46 @@ jobs:
             HOME=/root \
             COS_GID_SCAN_HELPER_SOURCE="$root/extension-gid-scan.py" \
             /usr/bin/python3 "$root/test-extension-gid-scan.py"
+
+      - name: Test authenticated OS display and GUI lifetime
+        shell: bash
+        run: |
+          set -euo pipefail
+          export CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target"
+          cargo test -p claw-display-control -p claw-display-login --locked -- --test-threads=1
+          cargo clippy -p claw-display-control -p claw-display-login --all-targets --locked -- -D warnings
+          cargo build -p cos --locked --bin cos --bin claw-display-host \
+            --bin claw-display-session --bin claw-gui-runner --bin claw-app-runner
+          cargo build -p claw-display-login --locked
+          cargo test -p cos --lib --locked --no-run --message-format=json \
+            > "$CARGO_TARGET_DIR/gui-tests.jsonl"
+          test_binary="$(python3 -c 'import json,sys; print(next(x["executable"] for x in map(json.loads,sys.stdin) if x.get("executable") and x.get("profile",{}).get("test") and x.get("target",{}).get("name") == "cos"))' < "$CARGO_TARGET_DIR/gui-tests.jsonl")"
+          cargo clippy --manifest-path desktop/comp/test/display-control/Cargo.toml \
+            --locked --all-targets -- -D warnings
+          cargo build --manifest-path desktop/comp/test/display-control/Cargo.toml --locked
+          cargo clippy --manifest-path desktop/session/Cargo.toml --locked -- -D warnings
+          cargo build --manifest-path desktop/session/Cargo.toml --locked
+          cc -std=c11 -Wall -Wextra -Werror \
+            crates/claw-display-login/test/fixtures/pam_login.c \
+            -lpam -ldl -o "$CARGO_TARGET_DIR/pam-login-fixture"
+          private="$(mktemp -d "$RUNNER_TEMP/cos-gui.XXXXXX")"
+          sudo timeout 180 unshare --mount --net --ipc --uts --fork \
+            bash --noprofile --norc crates/claw-display-login/test/fixtures/bootstrap.sh \
+            "$test_binary" "$CARGO_TARGET_DIR/debug/claw-display-host" \
+            "$CARGO_TARGET_DIR/debug/claw-display-headless-fixture" \
+            "$CARGO_TARGET_DIR/debug/libpam_claw_display.so" \
+            "$CARGO_TARGET_DIR/pam-login-fixture" "$private" \
+            "$CARGO_TARGET_DIR/debug/cos" "$CARGO_TARGET_DIR/debug/claw-gui-runner" \
+            "$CARGO_TARGET_DIR/debug/claw-app-runner" "$CARGO_TARGET_DIR/debug/claw-gui-probe" \
+            "$CARGO_TARGET_DIR/debug/claw-display-session" "$CARGO_TARGET_DIR/debug/cosmic-session"
+          sudo timeout 30 unshare --mount --net --ipc --uts --fork \
+            "$test_binary" \
+            --exact display_session::registry::tests::private_deferred_retirement_reclaims_the_exact_slot_and_workload \
+            --ignored --nocapture --test-threads=1 \
+            | tee "$RUNNER_TEMP/gui-retirement.log"
+          retired_group="$(sed -n 's/.*private retirement cgroup: //p' "$RUNNER_TEMP/gui-retirement.log")"
+          [[ "$retired_group" =~ ^/sys/fs/cgroup/claw-display-retirement-[0-9]+-[0-9a-f]+$ ]]
+          sudo test ! -e "$retired_group"
 
       # Downgrade protection is exercised against real .deb archives,
       # real maintainer scripts, real dpkg/apt transactions and real
