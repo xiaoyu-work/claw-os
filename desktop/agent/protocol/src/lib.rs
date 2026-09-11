@@ -6,10 +6,12 @@
 
 mod activities;
 mod http;
+mod object_state;
 mod stream;
 mod version;
 
 pub use activities::*;
 pub use http::*;
+pub use object_state::*;
 pub use stream::*;
 pub use version::*;

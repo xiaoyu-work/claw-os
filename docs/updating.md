@@ -113,7 +113,7 @@ never restored authorization.
 Controlled App operation/session hosting and receipt reporting use worker protocol v7.
 `clawd` and `claw-agentd` must be upgraded together; a mixed pair fails closed
 at assignment rather than dropping reports or inventing compatibility.
-Activity wire schema 1 and database schema 2 remain unchanged. The App-host
+Activity wire schema 1 is unchanged. The App-host
 gateway exists only inside the authenticated worker process and uses the
 root-owned routed capability registry; it does not grant direct broker-socket
 access or make registry files writable to workers. App-owned sessions now run
@@ -125,6 +125,15 @@ or network access. Apps that relied on the former direct spawn must use
 mediated providers for transient effects or ordinary one-shot operations for
 launch-specific resources. No upgrade fallback launches a session outside the
 sandbox.
+
+Object-state history adds database schema 3 through a transactional migration
+from schemas 1 and 2. Activity planning/lifecycle data and immutable receipt
+rows are preserved; observations, planning relations and corrections use new
+tables in the same `activities.db`, not an App-data copy. Invalid state or a
+failed migration is an error rather than permission to reset the database.
+Older schema-2 cores refuse schema-3 state. Restore a compatible package or a
+consistent pre-upgrade backup; do not delete the ledger to force a downgrade.
+See [object state](object-state.md) for its source and validity semantics.
 
 Session receipts use the new `session:<tool>` identifier vocabulary in the
 existing receipt string field. Older cores may reject these identifiers while

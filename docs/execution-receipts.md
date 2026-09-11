@@ -147,8 +147,9 @@ are not an exactly-once execution or OS-confirmed mutation guarantee.
 
 Receipts use the same desktop-independent Activity service and private
 `activities.db`. Database schema 2 adds the receipt ledger through a
-transactional migration that preserves schema-1 Activity records. The Activity
-and receipt wire representations remain version 1.
+transactional migration that preserves schema-1 Activity records. Schema 3
+preserves that ledger while adding [object-state history](object-state.md).
+The Activity and receipt wire representations remain version 1.
 
 No receipt update or deletion API is exposed. Storage enforces owner isolation,
 bounded records, immutable retry semantics, and per-Activity limits.
@@ -157,6 +158,6 @@ database; see [updating](updating.md). Restoring metadata does not restore any
 authority or grant.
 
 The `session:<tool>` vocabulary requires the session-receipt-capable core.
-Wire schema 1 and SQLite schema 2 do not change; older core versions may reject
+Wire schema 1 is unchanged; older core versions may reject
 these new identifiers when validating stored receipts. Upgrade the paired
 Agent binaries together, and retain a consistent backup for a version rollback.

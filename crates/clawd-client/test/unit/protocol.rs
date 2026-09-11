@@ -13,6 +13,8 @@ fn activity_commands_have_stable_names_and_round_trip() {
         (Command::ActivityRun, "activity.run"),
         (Command::ActivityObjects, "activity.objects"),
         (Command::ActivityObjectAttach, "activity.object.attach"),
+        (Command::ActivityObjectStateList, "activity.object_state.list"),
+        (Command::ActivityObjectStateRecord, "activity.object_state.record"),
         (Command::ActivityOperationPreview, "activity.operation.preview"),
         (Command::ActivityReceipts, "activity.receipts"),
         (Command::TaskGet, "task.get"),

@@ -49,6 +49,7 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | Memory and sessions | SQLite/FTS memory, semantic recall, session/message persistence, curation, and checkpoints | `core/src/agent/memory/`, `core/src/session/`, `core/src/checkpoint.rs` |
 | Activities | Desktop-independent persistent user goals, explicit completion, planning metadata, and owner-scoped task/session projections | `core/src/activities/`, `core/src/clawd/activities.rs`, `core/src/activity.rs` |
 | App object catalogue | Authenticated App-owned object declarations, portable SDK references, and explicit resolution through ordinary App operations | `core/src/objects/`, `core/src/caps/manifest/objects.rs`, `core/src/clawd/activity_objects.rs` |
+| Activity object state | Bounded caller-reported observations, receipt links, planning relations and immutable correction/retraction history | `core/src/activities/object_state.rs`, `core/src/clawd/activity_object_state.rs` |
 | Operation previews | Non-executing, authenticated App effect declarations and requested target projections; never execution permission or confirmed effects | `core/src/operations/`, `core/src/clawd/operation_previews.rs` |
 | Activity execution receipts | Immutable owner-scoped caller reports, separate authenticated declaration snapshots, and normal App execution capture | `core/src/activities/receipts.rs`, `core/src/clawd/activity_receipts.rs`, `core/src/router/operation_commands.rs` |
 | Staged file changes | App-owned bounded proposals and review fingerprints, applied through exact-capability broker replacement without expanding target mounts for rename | `apps/fs/file_plans.py`, `core/src/clawd/file_changes.rs` |
@@ -305,6 +306,29 @@ resource list, preserving schema version 1 and ordinary resource compatibility.
 Missing or revoked declarations remain visible as diagnostics; `declared`
 proves authenticated metadata, not existence, freshness or successful access.
 See [`docs/app-objects.md`](docs/app-objects.md).
+
+### Object-state annotations
+
+The Activity service stores bounded annotations in the same owner-scoped
+database, keyed by canonical App references already attached to the Activity.
+Statements, inferences, linked App receipt reports and planning relationships
+remain data, not authority, verified facts or execution dependencies. App
+reports link existing immutable owner/Activity/App-matching receipts rather
+than accepting replacement App output. That linkage is still caller-reported,
+not proof of semantic object binding or execution.
+
+Corrections and retractions append new entries and preserve history. Unique
+supersession prevents a delayed correction from overwriting a newer one.
+Reported time windows are projected independently of server recording time;
+within-window data is not declared fresh or true. Removing a resource or ending
+an Activity does not erase its history or reopen its lifecycle.
+
+Terminal, Web and native clients use `activity.object_state.list/record`.
+At task claim, bounded unsuperseded excerpts enter the existing untrusted
+Activity context and exact task-stream record; retries refresh that snapshot.
+The backend never fetches App data or starts an LLM for metadata. Database
+schema 3 preserves Activity and receipt rows while adding this history; wire
+schemas remain 1. See [`docs/object-state.md`](docs/object-state.md).
 
 ### Operation effect previews
 

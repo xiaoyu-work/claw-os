@@ -368,17 +368,19 @@ fn activity_submission_persists_initial_job_and_session_association() {
         )
         .unwrap();
 
-    let durable: Job = serde_json::from_slice(
-        &fs::read(store.path_for(JobStatus::Pending, &job.id)).unwrap(),
-    )
-    .unwrap();
+    let durable: Job =
+        serde_json::from_slice(&fs::read(store.path_for(JobStatus::Pending, &job.id)).unwrap())
+            .unwrap();
     assert_eq!(durable.activity_id.as_deref(), Some(activity.id.as_str()));
     assert_eq!(job.activity_id, durable.activity_id);
     assert_eq!(
         crate::session::get_meta(&sid).unwrap().activity_id,
         durable.activity_id
     );
-    for alias in [activity.id.replace('-', ""), format!("urn:uuid:{}", activity.id)] {
+    for alias in [
+        activity.id.replace('-', ""),
+        format!("urn:uuid:{}", activity.id),
+    ] {
         assert_eq!(
             resolve_activity_id(1001, Some(&activity.id), Some(&alias)).unwrap(),
             Some(activity.id.clone())
@@ -393,10 +395,19 @@ fn activity_submission_persists_initial_job_and_session_association() {
     .unwrap();
     assert!(store.claim_one().is_err());
     crate::session::update_meta(&sid, |meta| meta.activity_id = Some(activity.id.clone())).unwrap();
-    assert_eq!(store.locate(&job.id).unwrap().unwrap().1.status, JobStatus::Pending);
+    assert_eq!(
+        store.locate(&job.id).unwrap().unwrap().1.status,
+        JobStatus::Pending
+    );
     store.cancel_pending(&job.id).unwrap().unwrap();
     let continued = store
-        .submit("continue".to_string(), Some(sid.to_string()), None, Some(1001), None)
+        .submit(
+            "continue".to_string(),
+            Some(sid.to_string()),
+            None,
+            Some(1001),
+            None,
+        )
         .unwrap();
     assert_eq!(continued.activity_id.as_deref(), Some(activity.id.as_str()));
 }
@@ -447,7 +458,11 @@ fn activity_admission_rejects_inactive_foreign_and_missing_before_publication() 
         assert!(error.to_string().contains(state.as_str()), "{error}");
     }
     let foreign = activity_fixture(1002);
-    for id in [foreign.id, uuid::Uuid::new_v4().to_string(), "../invalid".to_string()] {
+    for id in [
+        foreign.id,
+        uuid::Uuid::new_v4().to_string(),
+        "../invalid".to_string(),
+    ] {
         assert!(store
             .submit_with_activity(
                 "refused".to_string(),
@@ -489,7 +504,9 @@ fn activity_claim_skips_paused_and_durably_cancels_terminal_jobs() {
             )
             .unwrap();
     }
-    let legacy = store.submit("legacy".to_string(), None, None, None, None).unwrap();
+    let legacy = store
+        .submit("legacy".to_string(), None, None, None, None)
+        .unwrap();
     assert_eq!(store.claim_one().unwrap().unwrap().id, legacy.id);
     assert!(store.claim_one().unwrap().is_none());
     assert_eq!(
@@ -520,7 +537,9 @@ fn activity_claim_fails_closed_for_missing_foreign_and_ownerless_associations() 
         (None, activity.id),
         (Some(1001), "../invalid".to_string()),
     ] {
-        let mut job = store.submit("test".to_string(), None, None, owner, None).unwrap();
+        let mut job = store
+            .submit("test".to_string(), None, None, owner, None)
+            .unwrap();
         job.activity_id = Some(association);
         write_json_atomic(&store.path_for(JobStatus::Pending, &job.id), &job).unwrap();
         assert!(store.claim_one().is_err());
@@ -544,9 +563,14 @@ fn activity_database_failure_keeps_associated_work_pending_but_legacy_work_usabl
 
     let error = store.claim_one().unwrap_err();
     assert!(error.to_string().contains("load Activity"), "{error}");
-    assert_eq!(store.locate(&job.id).unwrap().unwrap().1.status, JobStatus::Pending);
+    assert_eq!(
+        store.locate(&job.id).unwrap().unwrap().1.status,
+        JobStatus::Pending
+    );
     store.cancel_pending(&job.id).unwrap().unwrap();
-    let legacy = store.submit("legacy".to_string(), None, None, None, None).unwrap();
+    let legacy = store
+        .submit("legacy".to_string(), None, None, None, None)
+        .unwrap();
     assert_eq!(store.claim_one().unwrap().unwrap().id, legacy.id);
 }
 
@@ -566,15 +590,36 @@ fn activity_projection_filters_owner_and_association_before_limit_across_buckets
     ];
     let mut wanted = Vec::new();
     for (index, status) in statuses.into_iter().enumerate() {
-        let mut job = Job::new_pending("wanted".into(), None, None, None, None, true, Some(1001), None);
+        let mut job = Job::new_pending(
+            "wanted".into(),
+            None,
+            None,
+            None,
+            None,
+            true,
+            Some(1001),
+            None,
+        );
         job.activity_id = Some(activity_id.clone());
         job.status = status;
         job.created_at = format!("2026-01-01T00:0{index}:00Z");
-        fs::write(store.path_for(status, &job.id), serde_json::to_vec(&job).unwrap()).unwrap();
+        fs::write(
+            store.path_for(status, &job.id),
+            serde_json::to_vec(&job).unwrap(),
+        )
+        .unwrap();
         wanted.push(job.id);
         for index in 0..24 {
-            let mut other =
-                Job::new_pending("other".into(), None, None, None, None, true, Some(1001), None);
+            let mut other = Job::new_pending(
+                "other".into(),
+                None,
+                None,
+                None,
+                None,
+                true,
+                Some(1001),
+                None,
+            );
             other.status = status;
             other.created_at = "2026-12-01T00:00:00Z".to_string();
             if index % 2 == 0 {
@@ -583,7 +628,11 @@ fn activity_projection_filters_owner_and_association_before_limit_across_buckets
             } else {
                 other.activity_id = Some(uuid::Uuid::new_v4().to_string());
             }
-            fs::write(store.path_for(status, &other.id), serde_json::to_vec(&other).unwrap()).unwrap();
+            fs::write(
+                store.path_for(status, &other.id),
+                serde_json::to_vec(&other).unwrap(),
+            )
+            .unwrap();
         }
     }
     let jobs = store.list_for_activity(1001, &activity_id, 3).unwrap();
@@ -591,9 +640,21 @@ fn activity_projection_filters_owner_and_association_before_limit_across_buckets
         jobs.iter().map(|job| &job.id).collect::<Vec<_>>(),
         wanted.iter().rev().take(3).collect::<Vec<_>>()
     );
-    assert_eq!(store.list_for_activity(1001, &activity_id, usize::MAX).unwrap().len(), 6);
-    assert!(store.list_for_activity(1001, &activity_id, 0).unwrap().is_empty());
-    assert!(store.list_for_activity(0, &activity_id, 10).unwrap().is_empty());
+    assert_eq!(
+        store
+            .list_for_activity(1001, &activity_id, usize::MAX)
+            .unwrap()
+            .len(),
+        6
+    );
+    assert!(store
+        .list_for_activity(1001, &activity_id, 0)
+        .unwrap()
+        .is_empty());
+    assert!(store
+        .list_for_activity(0, &activity_id, 10)
+        .unwrap()
+        .is_empty());
 }
 
 #[test]
@@ -615,16 +676,28 @@ fn activity_recovery_refreshes_transient_context_and_success_never_completes_goa
         )
         .unwrap();
     let claimed = store.claim_one().unwrap().unwrap();
-    assert!(claimed.context.as_deref().unwrap().contains("Current first goal"));
-    assert_eq!(store.locate(&job.id).unwrap().unwrap().1.context, job.context);
+    assert!(claimed
+        .context
+        .as_deref()
+        .unwrap()
+        .contains("Current first goal"));
+    assert_eq!(
+        store.locate(&job.id).unwrap().unwrap().1.context,
+        job.context
+    );
     let (_, events) = store.read_stream_events(&job.id, 0).unwrap();
     assert_eq!(events[0]["progress"]["kind"], "activity_context");
     assert!(events[0]["progress"]["context"]
         .as_str()
         .unwrap()
         .contains("<untrusted_app_context>"));
-    store.release_for_retry(&job.id, "worker interrupted").unwrap().unwrap();
-    service.transition(1001, &activity.id, ActivityState::Paused, None).unwrap();
+    store
+        .release_for_retry(&job.id, "worker interrupted")
+        .unwrap()
+        .unwrap();
+    service
+        .transition(1001, &activity.id, ActivityState::Paused, None)
+        .unwrap();
     assert!(store.claim_one().unwrap().is_none());
     service
         .update(
@@ -636,7 +709,9 @@ fn activity_recovery_refreshes_transient_context_and_success_never_completes_goa
             },
         )
         .unwrap();
-    service.transition(1001, &activity.id, ActivityState::Active, None).unwrap();
+    service
+        .transition(1001, &activity.id, ActivityState::Active, None)
+        .unwrap();
     let retried = store.claim_one().unwrap().unwrap();
     let context = retried.context.as_deref().unwrap();
     assert!(context.contains("Current retry goal"));
@@ -668,6 +743,80 @@ fn activity_recovery_refreshes_transient_context_and_success_never_completes_goa
     assert!(current.completion_note.is_none());
 }
 
+#[test]
+fn object_state_corrections_refresh_the_recorded_context_without_becoming_facts() {
+    let dir = fresh_activity_root();
+    let _guard = EnvGuard::set(&dir.path().canonicalize().unwrap());
+    let store = Store::with_root(dir.path().join("jobs")).unwrap();
+    let service = crate::activities::open_default().unwrap();
+    let activity = activity_fixture(1001);
+    let reference = "app://kv/entry?id=release";
+    service
+        .add_resource(
+            1001,
+            &activity.id,
+            crate::activities::ActivityResource {
+                label: "Release state".into(),
+                reference: reference.into(),
+            },
+        )
+        .unwrap();
+    let old_id = uuid::Uuid::new_v4().to_string();
+    service
+        .record_object_state(
+            1001,
+            &activity.id,
+            serde_json::from_value(json!({
+                "id":old_id,"reference":reference,
+                "content":{"kind":"user_statement","text":"Old reported object state"},
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    let before = service.get(1001, &activity.id).unwrap();
+    let job = submit_activity_fixture(&store, &activity);
+    let claimed = store.claim_one().unwrap().unwrap();
+    assert!(claimed
+        .context
+        .as_deref()
+        .unwrap()
+        .contains("Old reported object state"));
+    store
+        .release_for_retry(&job.id, "refresh object state")
+        .unwrap()
+        .unwrap();
+    let new_id = uuid::Uuid::new_v4().to_string();
+    service
+        .record_object_state(
+            1001,
+            &activity.id,
+            serde_json::from_value(json!({
+                "id":new_id,"reference":reference,"supersedes":old_id,
+                "content":{"kind":"agent_inference","text":"Corrected inference, still unverified"},
+                "observed_at":"2000-01-01T00:00:00Z","valid_until":"2000-01-02T00:00:00Z",
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    let claimed = store.claim_one().unwrap().unwrap();
+    let context = claimed.context.as_deref().unwrap();
+    assert!(context.contains("Corrected inference, still unverified"));
+    assert!(context.contains("Agent inference (not a fact)"));
+    assert!(context.contains("reported window expired"));
+    assert!(!context.contains("Old reported object state"));
+    assert!(context.contains("desktop selection"));
+    let (_, events) = store.read_stream_events(&job.id, 0).unwrap();
+    let recorded = events
+        .iter()
+        .rev()
+        .find(|event| event["progress"]["kind"] == "activity_context")
+        .unwrap();
+    let recorded = recorded["progress"]["context"].as_str().unwrap();
+    assert!(recorded.contains(&new_id));
+    assert!(recorded.contains("<untrusted_app_context>"));
+    assert_eq!(service.get(1001, &activity.id).unwrap(), before);
+}
+
 #[tokio::test]
 async fn activity_context_is_recorded_as_untrusted_transient_not_prompt_or_user_history() {
     let dir = fresh_activity_root();
@@ -681,8 +830,13 @@ async fn activity_context_is_recorded_as_untrusted_transient_not_prompt_or_user_
         model: "mock-model".to_string(),
         ..Default::default()
     };
-    let mock = Arc::new(crate::agent::llm::providers::mock::MockProvider::new(&config.model, &config));
-    mock.push_response(crate::agent::llm::providers::mock::MockResponse::Text("done".to_string()));
+    let mock = Arc::new(crate::agent::llm::providers::mock::MockProvider::new(
+        &config.model,
+        &config,
+    ));
+    mock.push_response(crate::agent::llm::providers::mock::MockResponse::Text(
+        "done".to_string(),
+    ));
     let db = crate::agent::memory::sqlite_fts::MemoryDb::open_in_memory().unwrap();
     let deps = crate::agent::runtime::deps::RuntimeDeps::isolated();
     let tools = crate::agent::tools::registry::builtin_only_registry();
@@ -694,10 +848,16 @@ async fn activity_context_is_recorded_as_untrusted_transient_not_prompt_or_user_
     )
     .with_memory(&db, "activity-context-session")
     .with_transient_context(claimed.context.as_deref());
-    crate::agent::runtime::loop_::run_with_deps(&deps, request).await.unwrap();
+    crate::agent::runtime::loop_::run_with_deps(&deps, request)
+        .await
+        .unwrap();
 
     let captured = mock.last_request().unwrap();
-    assert!(!captured.system.as_deref().unwrap_or("").contains(&activity.goal));
+    assert!(!captured
+        .system
+        .as_deref()
+        .unwrap_or("")
+        .contains(&activity.goal));
     let user_text = captured
         .messages
         .iter()
@@ -713,7 +873,10 @@ async fn activity_context_is_recorded_as_untrusted_transient_not_prompt_or_user_
     assert!(user_text.contains(&activity.goal));
     assert!(user_text.contains("not authorization"));
     let rows = db.recent("activity-context-session", 100).unwrap();
-    let user_rows = rows.iter().filter(|row| row.role == "user").collect::<Vec<_>>();
+    let user_rows = rows
+        .iter()
+        .filter(|row| row.role == "user")
+        .collect::<Vec<_>>();
     assert_eq!(user_rows.len(), 1);
     assert_eq!(user_rows[0].content, job.prompt);
     assert!(rows.iter().any(|row| row.role == "injected"
@@ -735,7 +898,7 @@ fn activity_planning_context_is_bounded() {
             reference: "r".repeat(8000),
         })
         .collect();
-    let context = activity_execution_context(&activity, None);
+    let context = activity_execution_context(&activity, &[], None);
     assert!(context.chars().count() <= ACTIVITY_CONTEXT_MAX_CHARS);
     for heading in ["Goal:", "Completion criteria:", "Boundaries:", "Resources:"] {
         assert!(context.contains(heading));
@@ -1820,9 +1983,9 @@ async fn standalone_worker_hook_registry_records_runtime_audit() {
     let mock = crate::agent::llm::providers::mock::MockProvider::new(&config.model, &config);
     mock.push_response(crate::agent::llm::providers::mock::MockResponse::ToolUse(
         vec![crate::agent::llm::ToolCall {
-        id: "standalone-call".into(),
-        name: "echo".into(),
-        input: serde_json::json!({"text":"audit"}),
+            id: "standalone-call".into(),
+            name: "echo".into(),
+            input: serde_json::json!({"text":"audit"}),
         }],
     ));
     mock.push_response(crate::agent::llm::providers::mock::MockResponse::Text(

@@ -66,7 +66,8 @@ desktop or starting a model.
 
 Activities start `active`. Users can pause, resume, explicitly complete, or
 cancel them. A terminal Activity must be explicitly reopened with `resume`
-before it accepts new work or metadata edits.
+before it accepts new work or planning edits. Late receipts and object-state
+annotations remain recordable without reopening the goal.
 
 - Pausing prevents subsequent work from being admitted or claimed. It does
   not undo effects or automatically stop an already-running job.
@@ -100,7 +101,13 @@ worker isolation continue to govern every execution.
 App-owned object references can now be attached and described through the same
 backend; see [App-owned objects](app-objects.md). Declaration inspection does
 not fetch object data. Executable delegation policies, automatic event-driven
-progression, effect previews, and cross-device continuation remain later steps.
+progression and cross-device continuation remain later steps.
+
+[Object-state annotations](object-state.md) distinguish reported user
+statements, Agent inferences, linked App receipts, planning relationships and
+corrections. They share the same backend and preserve source/validity caveats;
+no annotation is authority or automatic goal completion. Associated jobs
+receive a bounded, recorded, untrusted snapshot when claimed.
 
 ## Broker contract
 
@@ -117,6 +124,8 @@ progression, effect previews, and cross-device continuation remain later steps.
 | `activity.operation.preview` | App-declared expected effects; no execution, authorization, or confirmed changes |
 | `activity.receipts` | Immutable caller-reported results for the authenticated owner's Activity |
 | `activity.receipt.record` | Append or idempotently retry a report; never execute or create authority |
+| `activity.object_state.list` | Bounded observations, relationships and correction history |
+| `activity.object_state.record` | Append an owner-scoped annotation or retraction without changing goal state |
 
 No request accepts an owner UID, capability set, or grant. Root does not receive
 an implicit cross-owner Activity view. Mutation routes use the existing

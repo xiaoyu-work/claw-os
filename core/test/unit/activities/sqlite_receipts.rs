@@ -1,4 +1,4 @@
-fn receipt_report() -> ReceiptReport {
+pub(super) fn receipt_report() -> ReceiptReport {
     ReceiptReport {
         id: uuid::Uuid::new_v4().to_string(),
         app_id: "sample".to_string(),
@@ -16,7 +16,7 @@ fn receipt_report() -> ReceiptReport {
     }
 }
 
-fn receipt_declaration() -> ReceiptDeclaration {
+pub(super) fn receipt_declaration() -> ReceiptDeclaration {
     ReceiptDeclaration {
         app_version: "1.0.0".to_string(),
         operation_label: "Read".to_string(),
@@ -29,7 +29,7 @@ fn receipt_declaration() -> ReceiptDeclaration {
     }
 }
 
-fn unverified_receipt(
+pub(super) fn unverified_receipt(
     service: &dyn ActivityService,
     owner: u32,
     activity: &str,
@@ -47,7 +47,7 @@ fn unverified_receipt(
 #[test]
 fn receipt_storage_version_is_independent_of_the_activity_wire_contract() {
     assert_eq!(super::super::SCHEMA_VERSION, 1);
-    assert_eq!(DATABASE_SCHEMA_VERSION, 2);
+    assert_eq!(DATABASE_SCHEMA_VERSION, 3);
     let service = SqliteActivityService::open_in_memory().unwrap();
     let version: u32 = service
         .lock()
@@ -512,7 +512,7 @@ fn corrupt_receipt_rows_fail_reads_and_cannot_be_repaired_by_retry() {
     }
 }
 
-fn schema_one_database(path: &Path) -> Vec<Activity> {
+pub(super) fn schema_one_database(path: &Path) -> Vec<Activity> {
     let conn = Connection::open(path).unwrap();
     conn.execute_batch(SCHEMA).unwrap();
     conn.pragma_update(None, "user_version", 1).unwrap();
@@ -574,7 +574,7 @@ fn receipt_schema_migration_preserves_every_activity_field_and_owner() {
             .unwrap()
             .pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
             .unwrap(),
-        2
+        DATABASE_SCHEMA_VERSION
     );
     for activity in records {
         assert_eq!(
@@ -655,7 +655,7 @@ fn receipt_schema_rejects_unsupported_old_versions_without_resetting_data() {
         SqliteActivityService::open(&path),
         Err(ActivityError::SchemaVersion {
             found: -1,
-            supported: 2
+            supported: 3
         })
     ));
     let conn = Connection::open(&path).unwrap();

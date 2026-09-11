@@ -1,3 +1,5 @@
+mod object_state;
+
 use std::fs::{self, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -10,7 +12,8 @@ use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBeha
 use super::{
     normalize_completion_note, normalize_resource, parse_id, validate_planning, validate_resources,
     Activity, ActivityDraft, ActivityError, ActivityPatch, ActivityReceipt, ActivityResource,
-    ActivityService, ActivityState, ReceiptDeclaration, ReceiptReport, ReceiptSource,
+    ActivityService, ActivityState, ObjectStateDraft, ObjectStateEntry, ReceiptDeclaration,
+    ReceiptReport, ReceiptSource,
     DATABASE_SCHEMA_VERSION, DEFAULT_LIST_LIMIT, MAX_ACTIVITIES_PER_OWNER, MAX_LIST_LIMIT,
 };
 
@@ -127,10 +130,14 @@ impl SqliteActivityService {
             tx.execute_batch(SCHEMA)?;
         }
         tx.prepare(&format!("{SELECT_ACTIVITY} LIMIT 0"))?;
-        if version < i64::from(DATABASE_SCHEMA_VERSION) {
+        if version < 2 {
             tx.execute_batch(MIGRATE_TO_V2)?;
         }
         tx.prepare(&format!("{SELECT_RECEIPT} LIMIT 0"))?;
+        if version < 3 {
+            tx.execute_batch(object_state::MIGRATE_TO_V3)?;
+        }
+        object_state::validate_schema(&tx)?;
         let integrity: String = tx.query_row("PRAGMA quick_check(1)", [], |row| row.get(0))?;
         if integrity != "ok" {
             return Err(ActivityError::Corrupt(format!(
@@ -144,10 +151,11 @@ impl SqliteActivityService {
         )?;
         if invalid_foreign_key {
             return Err(ActivityError::Corrupt(
-                "receipt ownership or Activity reference is invalid".to_string(),
+                "Activity ledger ownership or reference is invalid".to_string(),
             ));
         }
         if version < i64::from(DATABASE_SCHEMA_VERSION) {
+            object_state::validate_migration_records(&tx)?;
             tx.pragma_update(None, "user_version", DATABASE_SCHEMA_VERSION)?;
         }
         tx.commit()?;
@@ -452,6 +460,25 @@ impl ActivityService for SqliteActivityService {
         tx.commit()?;
         Ok(receipts)
     }
+
+    fn record_object_state(
+        &self,
+        owner_uid: u32,
+        activity_id: &str,
+        draft: ObjectStateDraft,
+    ) -> Result<ObjectStateEntry, ActivityError> {
+        object_state::record(self, owner_uid, activity_id, draft)
+    }
+
+    fn object_state(
+        &self,
+        owner_uid: u32,
+        activity_id: &str,
+        reference: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<ObjectStateEntry>, ActivityError> {
+        object_state::list(self, owner_uid, activity_id, reference, limit)
+    }
 }
 
 fn list_limit(limit: usize) -> Result<i64, ActivityError> {
@@ -480,7 +507,7 @@ fn check_version(conn: &Connection) -> Result<i64, ActivityError> {
                 ));
             }
         }
-        1 => {}
+        1 | 2 => {}
         version if version == i64::from(DATABASE_SCHEMA_VERSION) => {}
         found => {
             return Err(ActivityError::SchemaVersion {

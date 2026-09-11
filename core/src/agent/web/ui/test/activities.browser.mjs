@@ -16,6 +16,7 @@ const accessToken = "activity-browser-regression";
 const activities = new Map();
 const jobs = new Map();
 const receiptRecords = new Map();
+const objectStateRecords = new Map();
 const requests = [];
 const fixtureErrors = [];
 const browserErrors = [];
@@ -69,6 +70,7 @@ let jobNumber = 0;
 let invalidDetailOnce = null;
 let invalidObjectsOnce = null;
 let invalidReceiptsOnce = null;
+let invalidObjectStateAckOnce = false;
 let browser;
 let cdp;
 
@@ -215,11 +217,65 @@ async function fixture(req, res) {
     activities.set(item.id, item);
     return reply(req, res, item);
   }
-  const match = /^\/api\/activities\/([^/]+)(?:\/(update|transition|run|objects|operation-preview|receipts))?$/.exec(url.pathname);
+  const match = /^\/api\/activities\/([^/]+)(?:\/(update|transition|run|objects|operation-preview|receipts|object-state))?$/.exec(url.pathname);
   if (match) {
     const item = activities.get(decodeURIComponent(match[1]));
     assert.ok(item, "the requested Activity exists");
     const action = match[2];
+    if (action === "object-state") {
+      const entries = objectStateRecords.get(item.id) || [];
+      if (req.method === "GET") {
+        assert.equal(url.searchParams.get("limit"), "100");
+        return reply(req, res, { schema: 1, activity_id: item.id, entries });
+      }
+      assert.equal(req.method, "POST");
+      assert.deepEqual(Object.keys(body), ["entry"]);
+      const draft = clone(body.entry);
+      assert.deepEqual(Object.keys(draft).sort(), [
+        "content", "id", "observed_at", "reference", "supersedes", "valid_until",
+      ]);
+      assert.match(draft.id, /^[a-f0-9-]{36}$/);
+      assert.ok(item.resources.some((resource) => resource.reference === draft.reference));
+      const previous = entries.find((entry) => entry.id === draft.id);
+      if (previous) {
+        assert.deepEqual(previous.draft, draft);
+        return reply(req, res, previous);
+      }
+      if (draft.supersedes) {
+        const old = entries.find((entry) => entry.id === draft.supersedes);
+        assert.ok(old && old.draft.reference === draft.reference);
+        if (old.superseded_by) return reply(req, res, { error: "Entry was already superseded" }, 409);
+        old.superseded_by = draft.id;
+      }
+      let receipt = null;
+      if (draft.content.kind === "app_report") {
+        assert.deepEqual(Object.keys(draft.content).sort(), ["kind", "receipt_id"]);
+        const linked = (receiptRecords.get(item.id) || []).find((row) => row.id === draft.content.receipt_id);
+        assert.ok(linked);
+        receipt = clone(linked.report);
+        assert.equal(receipt.id, draft.content.receipt_id);
+      }
+      if (draft.content.kind === "relation") {
+        assert.ok(item.resources.some((resource) => resource.reference === draft.content.target));
+        assert.notEqual(draft.content.target, draft.reference);
+      }
+      if (draft.content.kind === "retracted") assert.ok(draft.supersedes && draft.content.reason.trim());
+      const validity = draft.observed_at === null ? "unknown"
+        : Date.parse(draft.observed_at) > Date.now() ? "not_yet_applicable"
+        : Date.parse(draft.valid_until) <= Date.now() ? "expired" : "within_reported_window";
+      const entry = {
+        id: draft.id, activity_id: item.id, owner_uid: item.owner_uid,
+        recorded_at: timestamp(), source: "caller_reported", draft,
+        receipt, superseded_by: null, validity,
+      };
+      entries.unshift(entry);
+      objectStateRecords.set(item.id, entries);
+      if (invalidObjectStateAckOnce) {
+        invalidObjectStateAckOnce = false;
+        return reply(req, res, { ...entry, activity_id: "another-activity" });
+      }
+      return reply(req, res, entry);
+    }
     if (action === "receipts") {
       assert.equal(req.method, "GET", "the Web receipt surface is read-only");
       assert.deepEqual([...url.searchParams.keys()], ["limit"]);
@@ -469,6 +525,8 @@ try {
   const objectPanel = `document.querySelector('[aria-label="App object references"]')`;
   const expectObjects = (text) => wait(`(${objectPanel}?.innerText || '').includes(${JSON.stringify(text)})`, text);
   const receiptsPanel = `document.querySelector('[aria-label="Caller-reported receipts"]')`;
+  const objectStatePanel = `document.querySelector('[aria-label="Object state and history"]')`;
+  const expectObjectState = (text) => wait(`(${objectStatePanel}?.innerText || '').includes(${JSON.stringify(text)})`, text);
   const expectReceipts = (text) => wait(`(${receiptsPanel}?.innerText || '').includes(${JSON.stringify(text)})`, text);
   const receiptsInState = async (state) => {
     assert.equal(activities.get("activity-1").state, state);
@@ -912,6 +970,90 @@ try {
   await wait("document.body.innerText.includes('No activities in this state.')", "owner-backed state filter");
   await filter("");
   await wait(`document.querySelectorAll('[aria-label="Activity list"] [aria-label^="Open activity:"]').length === 3`, "all persisted records refetched");
+
+  await open("Release preparation");
+  await expectObjectState("No object-state entries recorded.");
+  const beforeObjectState = clone(activities.get("activity-1"));
+  const beforeObjectJobs = clone([...jobs.values()]);
+  await fill("Object reference", objectDescription.reference);
+  await fill("Statement or inference", '<img src="https://state.invalid/data" onerror="window.objectStateExecuted=true"> Needs review');
+  invalidObjectStateAckOnce = true;
+  await clickText("Record object-state entry");
+  await expectObjectState("Keep entry ID");
+  const retryId = requests.filter((request) => request.method === "POST" && request.path.endsWith("/object-state")).at(-1).body.entry.id;
+  await clickText("Record object-state entry");
+  await expectObjectState("Needs review");
+  await expectObjectState("Validity unknown");
+  assert.equal(objectStateRecords.get("activity-1").length, 1, "retrying an uncertain acknowledgement reuses the entry");
+  assert.equal(requests.filter((request) => request.method === "POST" && request.path.endsWith("/object-state")).at(-1).body.entry.id, retryId);
+  const firstObjectEntry = objectStateRecords.get("activity-1")[0];
+  await reload();
+  await expectObjectState("Needs review");
+  assert.equal(await evaluate(`${objectStatePanel}.querySelectorAll('article img,article a,article script').length`), 0);
+  assert.equal(await evaluate("window.objectStateExecuted"), undefined);
+  await click(`${objectStatePanel}.querySelector('article button')`);
+  await fill("Reported source or entry kind", "agent_inference");
+  await fill("Statement or inference", "Probably not ready; this is an inference");
+  await fill("Reported window start (optional RFC3339)", "2000-01-01T00:00:00Z");
+  await fill("Reported window end (optional RFC3339)", "2000-01-02T00:00:00Z");
+  await clickText("Record object-state entry");
+  await expectObjectState("Probably not ready");
+  await expectObjectState("Reported window expired");
+  const correctedObjectEntry = objectStateRecords.get("activity-1")[0];
+  assert.equal(correctedObjectEntry.draft.supersedes, firstObjectEntry.id);
+  assert.equal(firstObjectEntry.superseded_by, correctedObjectEntry.id);
+  assert.equal(await evaluate(`${objectStatePanel}.querySelectorAll('article').length`), 1);
+  await click(`${objectStatePanel}.querySelector('input[type="checkbox"]')`);
+  await wait(`${objectStatePanel}.querySelectorAll('article').length === 2`, "superseded observation history");
+  const latestObjectArticle = `${objectStatePanel}.querySelector('[aria-label="Object state: ${correctedObjectEntry.id}"]')`;
+  await click(`Array.from(${latestObjectArticle}.querySelectorAll('button')).find(button => button.textContent === 'Retract entry')`);
+  await fill("Retraction reason", "The inference was not supported");
+  await clickText("Record object-state entry");
+  await expectObjectState("The inference was not supported");
+  assert.equal(objectStateRecords.get("activity-1")[0].draft.content.kind, "retracted");
+  const linkedReport = receiptRecord(randomUUID(), "indeterminate");
+  linkedReport.report.id = linkedReport.id;
+  linkedReport.report.result = null;
+  linkedReport.report.error = "The App result is unknown";
+  receiptRecords.get("activity-1").push(linkedReport);
+  await fill("Reported source or entry kind", "app_report");
+  await fill("Existing Activity receipt ID", linkedReport.id);
+  await clickText("Record object-state entry");
+  await expectObjectState("The App result is unknown");
+  assert.equal(objectStateRecords.get("activity-1")[0].draft.content.kind, "app_report");
+  await fill("Reported source or entry kind", "relation");
+  await fill("Relationship", "depends_on");
+  await fill("Related object", unpinnedDescription.reference);
+  await fill("Relationship note (optional)", "Planning only, not a scheduler");
+  await clickText("Record object-state entry");
+  await expectObjectState("Planning only, not a scheduler");
+  assert.equal(objectStateRecords.get("activity-1")[0].draft.content.kind, "relation");
+  assert.deepEqual(activities.get("activity-1"), beforeObjectState);
+  assert.deepEqual([...jobs.values()], beforeObjectJobs);
+  console.log("PASS object statements, reported windows, corrections, retractions and receipt/relationship links");
+
+  const oldObjectState = holdRequest("GET", "/api/activities/activity-1/object-state");
+  await clickLabel("Refresh object state");
+  await oldObjectState.seen;
+  await open("Second goal");
+  await expectObjectState("No object-state entries recorded.");
+  oldObjectState.release();
+  await delay(300);
+  assert.equal(await evaluate(`${objectStatePanel}.querySelectorAll('article').length`), 0);
+  await open("Release preparation");
+  await fill("Object reference", objectDescription.reference);
+  await fill("Statement or inference", "Saved against the original Activity");
+  const oldObjectWrite = holdRequest("POST", "/api/activities/activity-1/object-state");
+  await clickText("Record object-state entry");
+  await oldObjectWrite.seen;
+  await open("Second goal");
+  await fill("Statement or inference", "Preserve this other draft");
+  oldObjectWrite.release();
+  await delay(300);
+  assert.equal(await evaluate(`(${fieldExpression("Statement or inference")}).value`), "Preserve this other draft");
+  assert.equal(await evaluate(`(${objectStatePanel}.innerText).includes('Entry recorded.')`), false);
+  assert.equal((objectStateRecords.get("activity-2") || []).length, 0);
+  console.log("PASS late object-state reads and writes cannot replace another Activity or draft");
   assert.deepEqual(await evaluate("Object.keys(localStorage).filter(key => /activit/i.test(key))"), []);
   assert.deepEqual(fixtureErrors, []);
   assert.deepEqual(browserErrors, []);

@@ -9,9 +9,9 @@ use serde_json::{json, Value};
 
 use crate::clawd::routes::Command;
 use crate::clawd::wire::requests::{
-    ActivityCreate, ActivityGet, ActivityList, ActivityObjectAttach, ActivityObjects,
-    ActivityOperationPreview, ActivityReceipts, ActivityRun, ActivityTransition, ActivityUpdate,
-    NoBody,
+    ActivityCreate, ActivityGet, ActivityList, ActivityObjectAttach, ActivityObjectState,
+    ActivityObjectStateRecord, ActivityObjects, ActivityOperationPreview, ActivityReceipts,
+    ActivityRun, ActivityTransition, ActivityUpdate, NoBody,
 };
 
 use super::clawd::ApiError;
@@ -19,6 +19,13 @@ use super::clawd::ApiError;
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DetailQuery {
+    limit: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ObjectStateQuery {
+    reference: Option<String>,
     limit: Option<u64>,
 }
 
@@ -122,6 +129,34 @@ pub async fn receipts(
     request(
         Command::ActivityReceipts,
         with_id::<ActivityReceipts>(id, json!({ "limit": query.limit }))?,
+    )
+    .await
+}
+
+pub async fn object_state(
+    Path(id): Path<String>,
+    query: Result<Query<ObjectStateQuery>, QueryRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let Query(query) = query.map_err(|error| bad_request(error.body_text()))?;
+    request(
+        Command::ActivityObjectStateList,
+        with_id::<ActivityObjectState>(
+            id,
+            json!({
+                "reference":query.reference,"limit":query.limit,
+            }),
+        )?,
+    )
+    .await
+}
+
+pub async fn record_object_state(
+    Path(id): Path<String>,
+    body: Result<Json<Value>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    request(
+        Command::ActivityObjectStateRecord,
+        with_id::<ActivityObjectStateRecord>(id, json_body(body)?)?,
     )
     .await
 }

@@ -11,6 +11,7 @@ versioned desktop Agent protocol without importing clawd or core models.
 | --- | --- |
 | `src/main.rs` | Application assembly, top-level message routing, subscriptions, and startup |
 | `src/activities.rs` | Activity list/detail widgets, unsaved metadata/work/object forms, and generation-aware reduction of fetched responses; no lifecycle authority or persistence |
+| `src/activities/object_state.rs` | Fixed Object state section, bounded caller-report drafts, resource selection, receipt links and immutable history presentation inside the Activity reducer |
 | `src/session.rs` | Local sessions, history reconciliation, retry branches, and transcript models |
 | `src/stream_state.rs` | Generation-aware stream reduction, terminal states, cancellation, and stale-event rejection |
 | `src/bridge_state.rs` | Bridge connection, model availability, failure, and reconnect state |
@@ -73,6 +74,32 @@ Reading receipts remains available for terminal Activities and
 never changes jobs, goal state, object previews or permissions. There is no
 receipt authoring/execution endpoint or local persistence.
 
+The fixed Object state section reads and records annotations through
+`activity.object_state.list/record`, never through a desktop store. Reads are
+explicit and bounded to 100 entries, with an optional exact-reference filter.
+History, including superseded/retracted entries and detached subjects, remains
+visible for every Activity lifecycle state. All classifications are caller
+reports; within-window validity is not truth or verified freshness.
+
+Authoring selects existing App resource strings without constructing URIs.
+Statements, inferences, receipt links and planning relations use closed protocol
+variants. Receipt links reuse the existing inert bounded report renderer and
+remain `caller_reported`, not evidence that a result concerns the subject.
+Corrections/retractions append a fresh UUID with a fixed subject and predecessor;
+the broker owns membership, same-owner/Activity/App receipt binding and
+single-successor conflicts. Retracted entries cannot be corrected.
+
+An unchanged retry retains the submission UUID; editing after an attempted
+submission starts a new UUID. Pending writes freeze the form and never replay
+on reconnect. Selection generations, filter snapshots and acknowledged draft
+identity reject stale or mismatched replies. Success refetches shared history
+without locally changing Activity, task, receipt or approval state. Acknowledgements
+allow the broker's outer-text trimming, UUID canonicalization and UTC timestamp
+normalization, but reject changed identity, references, content, predecessor or
+instants. The protocol uses UUID/Chrono parsers for that comparison without
+rewriting the retry payload. RFC3339 inputs remain text; admission, canonical
+URI semantics and lifecycle authority remain broker-owned.
+
 ## Dependencies
 
 The UI consumes DTOs from `../protocol/` through `src/bridge.rs`. Views may
@@ -115,3 +142,9 @@ requested-target preservation, non-resource argument redaction, missing effect
 declarations, selection/draft guards and unchanged Activity/job state.
 Receipt coverage adds strict source/claim decoding, declaration absence and
 diagnostics, inert output, stale selection, terminal reads and GET-only routing.
+Object-state coverage under `test/unit/activities/object_state.rs` adds every
+content/relation/validity variant, immutable correction/retraction history,
+UTF-8 bounds, fixed resource selection, retry identities, detached/terminal
+reads and stale read/write rejection. Protocol, bridge translation, route and
+UI transport tests cover the matching list/record contract and owner/source
+input rejection.

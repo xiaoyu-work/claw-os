@@ -37,11 +37,12 @@ use super::wire::bounded::MAX_WAIT_MS;
 use super::wire::requests as body;
 use super::wire::{Fault, RequestId};
 use super::{
-    accessibility, activities, activity_objects, activity_receipts, app_sessions, audio, backup, bluetooth, camera, clipboard, config_editor,
-    containers, context, context_events, crash, credentials, desktop, display, event_center,
-    file_changes, firewall, hardware, journal as journal_ops, location, memory, network, notifications, packages,
-    operation_previews, permissions, power, printer, scheduler, security, snapshots, storage, system_journal, systemd,
-    tasks, transactions, usage, usb_guard, users,
+    accessibility, activities, activity_object_state, activity_objects, activity_receipts,
+    app_sessions, audio, backup, bluetooth, camera, clipboard, config_editor, containers, context,
+    context_events, crash, credentials, desktop, display, event_center, file_changes, firewall,
+    hardware, journal as journal_ops, location, memory, network, notifications, operation_previews,
+    packages, permissions, power, printer, scheduler, security, snapshots, storage, system_journal,
+    systemd, tasks, transactions, usage, usb_guard, users,
 };
 
 /// Who may reach a route at all.
@@ -558,6 +559,26 @@ routes! {
         body: body::ActivityObjectAttach,
         audit: &[("id", FieldRule::Token), ("label", FieldRule::Size)],
         run: |c| activity_objects::attach(c.params, c.client),
+    }
+    ActivityObjectStateList {
+        name: "activity.object_state.list",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Task),
+        body: body::ActivityObjectState,
+        audit: &[("id", FieldRule::Token), ("limit", FieldRule::Count)],
+        run: |c| activity_object_state::list(c.params, c.client),
+    }
+    ActivityObjectStateRecord {
+        name: "activity.object_state.record",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Task),
+        body: body::ActivityObjectStateRecord,
+        audit: &[("id", FieldRule::Token), ("entry", FieldRule::Size)],
+        run: |c| activity_object_state::record(c.params, c.client),
     }
     OperationPreview {
         name: "operation.preview",

@@ -153,11 +153,12 @@ Executable bytes are checked separately by the ordinary App launch path;
 manifest inspection is not a claim that changed executable code is valid.
 Object data remains owned by its App.
 
-Activity persistence stays at schema version 1: references use the existing
-`label`/`reference` fields, not a second store or a migrated data copy.
-Automatic object-data fetching, a global relationship graph, and event-driven
-delegation remain later increments. Shared metadata-only effect previews and
-permission-gated file plans are separate, explicit operations.
+References still use the existing `label`/`reference` fields. The shared
+Activity database also holds bounded [object-state annotations](object-state.md),
+planning relationships and correction history; it does not copy App databases.
+Schema 3 preserves Activity records and existing execution receipts while
+adding that history. Automatic object-data fetching, a global knowledge graph
+and event-driven delegation remain separate increments.
 
 The Files App also declares `change-plan`, whose ID is an absolute target path
 and whose optional revision selects a stored plan. Resolution remains an

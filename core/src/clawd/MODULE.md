@@ -36,6 +36,7 @@ and agent tasks.
 | `tasks.rs` | Task queue, summary/list, cancel, retry, and session continuity |
 | `activities.rs` | Shared Activity CRUD/lifecycle, related-job views, and submission through the existing task path |
 | `activity_objects.rs` | Owner-scoped reference attachment and authenticated object descriptions; never fetches App data |
+| `activity_object_state.rs` | Shared owner-scoped observation/relationship history and immutable correction/retraction submission |
 | `operation_previews.rs` | Shared App effect previews and owner-scoped Activity adaptation; never executes Apps |
 | `activity_receipts.rs` | Shared immutable receipt recording for owner-scoped peers and authenticated task reports, with separate declaration snapshots |
 | `file_changes.rs` | Exact read/write-capability atomic file replacement, owner-aware path protection, and effect-level indeterminate journal brackets |

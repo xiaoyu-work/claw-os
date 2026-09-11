@@ -3,12 +3,13 @@ import { Loader2 } from "lucide-react";
 
 import { ActivityForm } from "@/components/activity-form";
 import { ActivityObjectsPanel } from "@/components/activity-objects";
+import { ActivityObjectStatePanel } from "@/components/activity-object-state";
 import { ActivityReceiptsPanel } from "@/components/activity-receipts";
 import { ActivityWork } from "@/components/activity-work";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
-import { activityError, useActivity, useActivityObjects, useActivityReceipts } from "@/hooks/use-activities";
+import { activityError, useActivity, useActivityObjects, useActivityObjectState, useActivityReceipts } from "@/hooks/use-activities";
 import { activityApi, activityStateLabels, type ActivityState } from "@/lib/activities";
 import { cn } from "@/lib/utils";
 
@@ -32,6 +33,7 @@ export function ActivityDetailPanel({
   const view = useActivity(id);
   const objects = useActivityObjects(id);
   const receipts = useActivityReceipts(id);
+  const objectState = useActivityObjectState(id);
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [completionNote, setCompletionNote] = useState("");
@@ -58,6 +60,7 @@ export function ActivityDetailPanel({
       if (!mounted.current) return false;
       void objects.refresh();
       void receipts.refresh();
+      void objectState.refresh();
       const [fresh] = await Promise.all([view.refresh(), changed.current()]);
       if (!mounted.current) return false;
       setNotice(message);
@@ -89,7 +92,7 @@ export function ActivityDetailPanel({
         <h2 className="break-words text-lg font-semibold">{activity?.title ?? "Activity detail"}</h2>
         <Button size="sm" variant="outline" disabled={view.loading || busy}
           aria-label="Refresh activity detail"
-          onClick={() => void Promise.all([view.refresh(), objects.refresh(), receipts.refresh()])}>
+          onClick={() => void Promise.all([view.refresh(), objects.refresh(), receipts.refresh(), objectState.refresh()])}>
           {view.loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Refresh"}
         </Button>
       </div>
@@ -216,6 +219,8 @@ export function ActivityDetailPanel({
             )} />
           <ActivityWork detail={detail} disabled={disabled} mutate={mutate} />
           <ActivityReceiptsPanel view={receipts} ownerUid={activity.owner_uid} />
+          <ActivityObjectStatePanel key={id} activityId={id} ownerUid={activity.owner_uid}
+            resources={activity.resources} view={objectState} disabled={disabled} />
         </>
       )}
     </section>

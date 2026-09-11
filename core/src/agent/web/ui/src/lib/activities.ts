@@ -2,6 +2,7 @@ import { api } from "@/lib/api";
 import { readActivityReceipts } from "@/lib/activity-receipts";
 import { nullableString, record, strings } from "@/lib/api-shapes";
 import { readOperationPreview, type OperationInvocation } from "@/lib/operation-preview";
+import { readObjectState, readObjectStateEntry, type ObjectStateDraft } from "@/lib/object-state";
 
 export const ACTIVITY_STATES = ["active", "paused", "completed", "cancelled"] as const;
 export type ActivityState = (typeof ACTIVITY_STATES)[number];
@@ -252,4 +253,17 @@ export const activityApi = {
   receipts: async (id: string, signal?: AbortSignal) => readActivityReceipts(
     await api.get<unknown>(`${activityPath(id)}/receipts?limit=100`, { signal }), id,
   ),
+  objectState: async (id: string, signal?: AbortSignal) => readObjectState(
+    await api.get<unknown>(`${activityPath(id)}/object-state?limit=100`, { signal }), id,
+  ),
+  recordObjectState: async (id: string, entry: ObjectStateDraft) => {
+    const saved = readObjectStateEntry(
+      await api.post<unknown>(`${activityPath(id)}/object-state`, { entry }), id,
+    );
+    if (saved.id !== entry.id || saved.draft.reference !== entry.reference
+      || saved.draft.content.kind !== entry.content.kind || saved.draft.supersedes !== entry.supersedes) {
+      throw new Error("Object-state acknowledgement does not match the submitted entry. Keep its ID when retrying.");
+    }
+    return saved;
+  },
 };

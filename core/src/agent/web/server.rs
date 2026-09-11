@@ -34,7 +34,10 @@ pub fn build_app(state: AppState) -> Router {
             get(routes::activities::list).post(routes::activities::create),
         )
         .route("/api/activities/{id}", get(routes::activities::get))
-        .route("/api/activities/{id}/update", post(routes::activities::update))
+        .route(
+            "/api/activities/{id}/update",
+            post(routes::activities::update),
+        )
         .route(
             "/api/activities/{id}/transition",
             post(routes::activities::transition),
@@ -48,7 +51,14 @@ pub fn build_app(state: AppState) -> Router {
             "/api/activities/{id}/operation-preview",
             post(routes::activities::operation_preview),
         )
-        .route("/api/activities/{id}/receipts", get(routes::activities::receipts))
+        .route(
+            "/api/activities/{id}/receipts",
+            get(routes::activities::receipts),
+        )
+        .route(
+            "/api/activities/{id}/object-state",
+            get(routes::activities::object_state).post(routes::activities::record_object_state),
+        )
         .route("/api/sessions", get(routes::sessions::list))
         .route("/api/sessions/{id}", get(routes::sessions::detail))
         .route("/api/sessions/{id}/history", get(routes::sessions::history))
@@ -58,7 +68,10 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/tasks/{id}/resume", post(routes::tasks::resume))
         .route("/api/approvals/pending", get(routes::approvals::pending))
         .route("/api/approvals/recent", get(routes::approvals::recent))
-        .route("/api/approvals/{id}/approve", post(routes::approvals::approve))
+        .route(
+            "/api/approvals/{id}/approve",
+            post(routes::approvals::approve),
+        )
         .route("/api/approvals/{id}/deny", post(routes::approvals::deny))
         .route("/api/sysinfo/{command}", get(routes::sysinfo::command))
         .route("/api/inbox", get(routes::notifications::list))
@@ -96,18 +109,27 @@ pub fn build_app(state: AppState) -> Router {
         // Setup / configuration — surfaces the same wizard the CLI has,
         // so the web UI can be a complete first-run onboarding surface.
         .route("/api/setup/status", get(routes::setup::status_all))
-        .route("/api/setup/status/{modality}", get(routes::setup::status_modality))
-        .route("/api/setup/providers/{modality}", get(routes::setup::providers_modality))
-        .route("/api/setup/models/{modality}/{provider}", get(routes::setup::list_models_for_provider))
+        .route(
+            "/api/setup/status/{modality}",
+            get(routes::setup::status_modality),
+        )
+        .route(
+            "/api/setup/providers/{modality}",
+            get(routes::setup::providers_modality),
+        )
+        .route(
+            "/api/setup/models/{modality}/{provider}",
+            get(routes::setup::list_models_for_provider),
+        )
         .route("/api/setup/apply", post(routes::setup::apply))
         .route("/api/setup/test/{modality}", post(routes::setup::test))
-        .route("/api/setup/reset/{modality}", post(routes::setup::reset_modality))
+        .route(
+            "/api/setup/reset/{modality}",
+            post(routes::setup::reset_modality),
+        )
         .route("/api/setup/oauth/start", post(routes::setup::oauth_start))
         .route("/api/setup/oauth/poll", post(routes::setup::oauth_poll))
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            require_token,
-        ))
+        .layer(middleware::from_fn_with_state(state.clone(), require_token))
         .layer(cors)
         .with_state(state)
 }

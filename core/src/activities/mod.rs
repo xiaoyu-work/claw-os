@@ -4,11 +4,16 @@
 //! [`ActivityService`]. Activities grant no authority and never infer goal
 //! completion from an execution result.
 
+mod object_state;
 mod receipts;
 mod sqlite;
 
 use serde::{Deserialize, Serialize};
 
+pub use object_state::{
+    ObjectRelationKind, ObjectStateContent, ObjectStateDraft, ObjectStateEntry, ObjectStateSource,
+    ObjectStateValidity,
+};
 pub use receipts::{
     ActivityReceipt, ReceiptDeclaration, ReceiptEffect, ReceiptOutcome, ReceiptReport,
     ReceiptSource, ResultKind, ResultSummary,
@@ -18,7 +23,7 @@ pub use sqlite::SqliteActivityService;
 /// Public Activity wire-compatibility version; the broker versions responses independently.
 pub const SCHEMA_VERSION: u32 = 1;
 /// SQLite user_version; never emitted as an Activity response schema.
-pub const DATABASE_SCHEMA_VERSION: u32 = 2;
+pub const DATABASE_SCHEMA_VERSION: u32 = 3;
 pub const DEFAULT_LIST_LIMIT: usize = 50;
 pub const MAX_LIST_LIMIT: usize = 100;
 
@@ -39,7 +44,7 @@ pub enum ActivityError {
     NotFound,
     #[error("activity conflict: {0}")]
     Conflict(String),
-    #[error("activity or receipt limit reached")]
+    #[error("activity, receipt, or object-state limit reached")]
     LimitReached,
     #[error("activity database is unavailable: {0}")]
     Database(#[from] rusqlite::Error),
@@ -286,6 +291,25 @@ pub trait ActivityService: Send + Sync {
         activity_id: &str,
         limit: usize,
     ) -> Result<Vec<ActivityReceipt>, ActivityError>;
+
+    /// Append caller-reported metadata for attached objects, without resolving
+    /// App data, establishing authority, or changing Activity lifecycle state.
+    fn record_object_state(
+        &self,
+        owner_uid: u32,
+        activity_id: &str,
+        draft: ObjectStateDraft,
+    ) -> Result<ObjectStateEntry, ActivityError>;
+
+    /// Read immutable history, including detached references and corrections.
+    /// Validity describes only the caller's reported window, never freshness.
+    fn object_state(
+        &self,
+        owner_uid: u32,
+        activity_id: &str,
+        reference: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<ObjectStateEntry>, ActivityError>;
 }
 
 /// Daemon composition only. Direct clients use owner-scoped broker routes.

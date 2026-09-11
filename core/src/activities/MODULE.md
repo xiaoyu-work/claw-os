@@ -16,6 +16,8 @@ and the owner-scoped broker contract; only their presentations differ.
   their associations and execution state; the broker builds related views.
 - Append immutable caller-reported execution receipts without upgrading reports
   or App-declared effects into OS-confirmed changes or authority.
+- Keep bounded object observations, receipt links, planning relations and
+  correction/retraction history in the same owner-scoped Activity database.
 - Reject unreadable, invalid, unsupported-schema, and poisoned-lock storage
   explicitly rather than resetting the database or returning empty defaults.
 
@@ -26,6 +28,8 @@ and the owner-scoped broker contract; only their presentations differ.
 | `mod.rs` | Domain types, validation, and the `ActivityService` definition |
 | `sqlite.rs` | Transactional SQLite provider |
 | `receipts.rs` | Receipt types, strict report validation, and declaration bounds |
+| `object_state.rs` | Object-state domain, canonical references/windows, and strict draft validation |
+| `sqlite/object_state.rs` | Immutable object-state ledger, reference/receipt binding, schema-3 migration and integrity checks |
 | `../clawd/activities.rs` | Owner-scoped broker consumer and execution projections |
 | `../activity.rs` | Terminal presentation |
 | `../../test/unit/activities/` | Domain and provider unit tests |
@@ -37,9 +41,10 @@ Direct clients never open this file. The provider has no desktop, agent-loop,
 worker, or model-provider dependency, and Activity metadata grants no new
 capabilities or approvals.
 
-`ActivityDraft::validate`, `ActivityPatch::validate`, and `validate_id` validate
-inputs without opening storage. UUID lookups return a canonical `Activity.id`;
-job/session associations should store that returned value.
+`ActivityDraft::validate`, `ActivityPatch::validate`,
+`ObjectStateDraft::validate`, and `validate_id` validate inputs without opening
+storage. UUID lookups return a canonical `Activity.id`; job/session associations
+should store that returned value.
 
 On Unix, new private directories use `0700`; an existing non-listable,
 non-writable shared daemon root may retain its traversal bits (`0711`) so
@@ -48,19 +53,23 @@ sidecar files use `0600`. Symlink database files, sidecars, and immediate
 parent directories are rejected.
 
 Disk connections require WAL journaling, `synchronous=FULL`, and a five-second
-busy timeout. Creation, partial updates, transitions, and receipt appends use
-immediate transactions. A new empty database receives schema version 2.
-Opening schema 1 transactionally adds `activity_receipts` and its owner-scoped
-indexes/foreign key without rewriting Activity rows, resources, lifecycle
-state, timestamps, or completion confirmations. The version advances only
-after schema, integrity, and foreign-key checks succeed. An existing
+busy timeout. Creation, partial updates, transitions, receipt appends and
+object-state appends use immediate transactions. A new empty database receives
+schema version 3 through explicit sequential migrations. Schema 1 first adds
+the schema-2 `activity_receipts` ledger; schema 2 then adds
+`activity_object_state` and the receipt composite index needed for
+owner/Activity-bound links. Neither migration rewrites Activity rows,
+resources, lifecycle state, timestamps, completion confirmations or receipts.
+The version advances only after schema/index/foreign-key definitions, SQLite
+integrity, foreign-key relationships and persisted legacy metadata validate.
+A failure rolls back both schema additions and the version. An existing
 unversioned schema, unsupported old/future versions, missing columns, or failed
 integrity checks cause an error. Orphaned SQLite journals are preserved rather
 than initializing a replacement database over them. Reads validate stored
 metadata rather than silently repairing it. The in-memory provider is for
 tests and uses SQLite's in-memory journal instead of WAL.
 
-`DATABASE_SCHEMA_VERSION = 2` controls SQLite `user_version` and migration.
+`DATABASE_SCHEMA_VERSION = 3` controls SQLite `user_version` and migration.
 The broker independently owns `clawd::activities::WIRE_SCHEMA_VERSION = 1`
 for `activity.list` and `activity.get`; it does not emit the database version.
 The existing public `activities::SCHEMA_VERSION = 1` is retained for wire
@@ -165,8 +174,79 @@ on agent redaction/runtime modules. It validates stored receipt JSON, UUID
 relationships, source, timestamp, and report/declaration invariants; corruption
 is an explicit error, never a repaired or silently skipped record.
 
+## Object-State Reports and History
+
+`ActivityService::record_object_state` appends an `ObjectStateDraft`;
+`object_state` reads recent `ObjectStateEntry` history, optionally filtered by
+an exact canonical App reference. These are shared backend APIs, not another
+App store or a general graph. The provider only calls the pure public SDK
+reference parser/formatter re-exported by `crate::objects`; it never discovers,
+describes, resolves, executes or reads an App.
+
+New subjects and relationship targets must already be attached to the owned
+Activity. Relations use only `related_to`, `depends_on` or `derived_from`, and
+cannot point from a reference to itself. They are planning links, not
+execution dependencies. Detaching a subject or target does not remove its
+history, and exact retries of existing entries still work after detachment.
+New entries and corrections must satisfy the current attachment checks.
+
+The provider fixes `source` to `caller_reported` and supplies the owner,
+Activity ID and recording time. Drafts reject caller-supplied origin,
+authentication, owner, confirmation and derived-state fields. `user_statement`
+and `agent_inference` classify the content, not proven human/model authorship.
+Optional draft fields (`observed_at`, `valid_until`, `supersedes`) may be
+omitted on input, but output includes explicit JSON `null` when absent.
+Nullable entry fields (`receipt`, `superseded_by`) likewise serialize as `null`,
+never as omitted keys.
+`app_report` has only a receipt ID, never a text or output override. It links
+an existing immutable receipt with matching owner, Activity and reference App,
+including indeterminate reports. Its entry projects the already validated
+`ReceiptReport`, not original App data or declaration authority. This is not
+proof of execution or semantic binding between that report and the object.
+
+Statement/inference text and retraction reasons require 1..=4096 trimmed UTF-8
+bytes; relation notes allow 0..=2048. Only ordinary newline, carriage return
+and tab controls are allowed. References use the exact shared canonical URI
+format. UUID spellings for the entry, receipt and superseded entry are
+canonicalized consistently with receipts.
+
+`observed_at` and `valid_until` must both be absent or both be RFC3339
+timestamps, with the end strictly after the start. Storage canonicalizes them
+to nanosecond UTC, independently of the server's `recorded_at`. Relations and
+retractions reject these windows. Reads derive `unknown`,
+`not_yet_applicable`, `within_reported_window` or `expired` from UTC now. A
+reported window includes its start and excludes its end; being within it
+never establishes freshness, truth or verification.
+
+Corrections append a new ID with `supersedes` naming an existing entry on the
+exact same subject in the same owner/Activity. Only an unsuperseded,
+non-retracted entry can be corrected. Relations may change their target or
+kind while keeping that subject. Composite foreign keys, sequence ordering
+and unique supersession prevent missing/foreign predecessors, cycles and
+competing corrections. Retractions require a predecessor and preserve all
+earlier classifications and content. A retracted entry cannot itself be
+corrected; a fresh independent entry can be added instead.
+
+There are at most 1000 entries per Activity, including all superseded and
+retracted history. An exact canonical draft retry returns the original
+immutable data with current derived validity and supersession, even at the
+limit. A changed draft or Activity under the same owner's ID conflicts; other
+owners may reuse that UUID. Ownership, attachment, receipt binding,
+supersession and quota checks occur in the same immediate transaction. Late
+metadata is allowed in active, paused, completed and cancelled Activities
+without changing lifecycle, goal, timestamps or completion confirmation.
+
+Reads default to 50 entries, cap at 100 and sort by insertion sequence, not
+caller times or a monotonic wall clock. The provider validates the bounded
+ledger before applying a view's filter or limit, including canonical JSON,
+column consistency, fixed source, receipt binding and correction edges.
+Corruption fails explicitly, never disappearing through a filter or being
+repaired by retry.
+
 See [the Activity contract](../../../docs/activities.md) for presentations and
-[the system architecture](../../../ARCHITECTURE.md) for authority boundaries.
+[object-state annotations](../../../docs/object-state.md) for the cross-client
+contract, and [the system architecture](../../../ARCHITECTURE.md) for authority
+boundaries.
 
 ## Tests
 
@@ -179,3 +259,7 @@ cargo test -p cos --lib activities:: -- --test-threads=1
 Receipt unit coverage includes schema-1 preservation, failed migration
 rollback, process exit before migration commit, owner/root isolation, retries
 and conflicts, lifecycle independence, quotas, and corrupt storage.
+Object-state coverage adds strict wire/canonicalization and clock boundaries,
+attachment/receipt binding, concurrent corrections and retries, retractions,
+detached history, immutable appends, schema-1/2 preservation and failed or
+interrupted schema-3 migration rollback.

@@ -83,7 +83,9 @@ The additive Activity routes leave both versions unchanged.
 The UI and bridge both compile against `protocol/` (`cos-agent-protocol`).
 That crate exclusively owns the desktop presentation contract: endpoint DTOs,
 named SSE payloads, stable error envelopes, discovery metadata, and protocol
-version constants. It depends only on Serde and `serde_json`. The bridge
+version constants. Its only other dependencies beyond Serde/`serde_json` are
+UUID and clock-disabled Chrono parsing, used to compare normalized object-state
+acknowledgements without importing broker/domain code. The bridge
 remains the anti-corruption layer: `bridge/src/translation.rs` decodes generic
 clawd results, removes worker/task storage details and raw memory content, and
 emits only protocol types. The UI does not deserialize clawd or core models.
@@ -235,6 +237,47 @@ cannot synthesize reports or change jobs, permissions, previews or goal state.
 The core owns the schema-2 database migration; Activity and receipt wire
 schemas remain 1, and the desktop never opens or migrates that database.
 
+### Caller-reported object state
+
+The fixed **Object state** section reads the same owner-scoped
+`activity.object_state.list` history as terminal and Web clients. Refresh is
+explicit, includes superseded/retracted entries and remains available after
+resource detachment or pause/completion/cancellation. An optional exact App
+reference filter narrows the response; each read requests at most 100 entries
+from the shared, 1000-entry-per-Activity ledger. The frozen API has no cursor,
+so the desktop does not invent pagination or a local history store.
+
+Add a user statement, caller-classified agent inference, existing receipt ID
+or planning relation. Subject and relationship target selections use existing
+App resource strings; the desktop never constructs a canonical URI. The broker
+validates canonical membership and the linked receipt's owner, Activity and
+App. **All classifications are caller reports, not verified facts.** An
+App-linked receipt is still `caller_reported`, not proof that its result
+concerns the linked object. It uses the existing inert bounded result/error
+renderer, including indeterminate and truncation caveats, without copying or
+fetching original App data.
+
+Optional reported-window start/end fields accept RFC3339 text. Both must be
+absent or present; the broker validates timestamp syntax and end-after-start.
+Relations/retractions have no time window. Unknown, not-yet-applicable,
+within-reported-window and expired statuses remain reports, never proof of
+truth or freshness. Window status is the broker's projection at the last
+object-state refresh, and recording time is shown separately.
+
+**Correct with a new entry** and **Retract with a reason** append a new UUID
+with the same subject and a predecessor; they never edit/delete history.
+Only an unsuperseded, non-retracted entry with an attached subject can be
+superseded. Concurrent stale corrections surface broker conflicts. Retrying an
+unchanged submission retains its UUID; editing after submission uses a fresh
+UUID. Navigation/filter generations reject stale replies. An acknowledgement
+must preserve Activity/entry UUID identity, exact subject/target references,
+content kind, relation and predecessor, allowing only trimmed outer text,
+equivalent UUID spellings and RFC3339 timestamps denoting the same instants.
+UUID/Chrono parsers perform those comparisons without constructing App URIs or
+rewriting the retry payload. Shared history is then refetched.
+Nothing here invokes an App/model, changes lifecycle or confirms goal completion.
+See the shared [object-state contract](../../docs/object-state.md).
+
 ## Endpoint discovery
 
 The bridge binds an ephemeral port when `COS_AGENT_BRIDGE_PORT` is
@@ -284,6 +327,8 @@ the prior non-disruptive `start` behavior.
 | `POST /api/activities` | `ActivityCreateRequest` → `ActivityView`; `activity.create` |
 | `GET /api/activities/:id` | `ActivityDetailResponse`; `activity.get` plus associated `permission.pending` projections |
 | `GET /api/activities/:id/receipts?limit=…` | `ActivityReceiptsQuery` → schema-1 `ActivityReceiptsResponse`; read-only `activity.receipts` |
+| `GET /api/activities/:id/object-state?reference=…&limit=…` | `ActivityObjectStateQuery` → schema-1 `ActivityObjectStateResponse`; `activity.object_state.list` |
+| `POST /api/activities/:id/object-state` | `ActivityObjectStateRecordRequest` (`entry: ObjectStateDraft`) → `ObjectStateEntry`; append-only `activity.object_state.record` |
 | `GET /api/activities/:id/objects` | `ActivityObjectsResponse`; declaration-only `activity.objects` |
 | `POST /api/activities/:id/objects` | `ActivityObjectAttachRequest` → unchanged `ActivityView`; `activity.object.attach` |
 | `POST /api/activities/:id/operation-preview` | `ActivityOperationPreviewRequest` → schema-1 metadata-only `ActivityOperationPreview`; `activity.operation.preview` |
@@ -308,8 +353,10 @@ malformed known events fail decoding.
 Activity endpoints use the same bearer authentication, v1 negotiation, and
 typed error envelopes as chat. Request DTOs accept no owner or capability
 fields: clawd derives ownership from the bridge's kernel identity. The
-translation module validates the broker's Activity schema and removes owner
-internals and private job fields before emitting presentation DTOs. Additive
+translation module validates the broker's Activity schema and removes private
+job fields before emitting presentation DTOs. Object-state entries retain the
+contract's typed server-supplied `owner_uid`; it is never a caller selector.
+Other Activity views omit owner internals. Additive
 job/session/approval fields have defaults within presentation protocol v1.
 
 ## License

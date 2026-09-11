@@ -33,6 +33,11 @@ pub fn builtin_namespaces() -> Vec<NamespaceEntry> {
                 ("attach-object", "Attach a declared App object without reading its data"),
                 ("receipts", "Read immutable caller-reported operation results"),
                 ("record-receipt", "Record a bounded report from stdin without re-executing an App"),
+                ("object-state", "Read object observations, relations and correction history"),
+                ("observe", "Record a statement, inference or linked App receipt about an attached object"),
+                ("relate", "Record a planning relationship between attached App references"),
+                ("retract-object-state", "Retract an object-state entry without deleting its history"),
+                ("record-object-state", "Submit a bounded object-state entry from stdin"),
             ],
         ),
         (

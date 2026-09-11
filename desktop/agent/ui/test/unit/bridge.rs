@@ -179,3 +179,68 @@ fn activity_receipts_transport_is_authenticated_versioned_read_only_and_bounded(
     assert_eq!(request.url().query(), Some("limit=100"));
     assert!(request.body().is_none());
 }
+
+#[test]
+fn activity_object_state_list_transport_preserves_exact_reference_and_bounds() {
+    let endpoint = endpoint(1, 1);
+    let reference = "app://kv/entry?id=a%2Fb%3Fx%3D1%26y%3D2&rev=v%2F1";
+    let (request, selected) = object_state_list_request(
+        &endpoint, "activity/id?not-query",
+        &ActivityObjectStateQuery { reference: Some(reference.into()), limit: Some(100) },
+    ).unwrap();
+    let request = request.build().unwrap();
+    assert_eq!(selected, ProtocolVersion(1));
+    assert_eq!(request.method(), reqwest::Method::GET);
+    assert_eq!(request.headers()[PROTOCOL_VERSION_HEADER], "1");
+    assert!(request.headers().contains_key(reqwest::header::AUTHORIZATION));
+    assert_eq!(request.url().path_segments().unwrap().count(), 4);
+    assert!(request.url().path().ends_with("/object-state"));
+    assert!(request.url().fragment().is_none());
+    let query: std::collections::HashMap<_, _> = request.url().query_pairs().into_owned().collect();
+    assert_eq!(query["reference"], reference);
+    assert_eq!(query["limit"], "100");
+    assert_eq!(query.len(), 2);
+    assert!(request.body().is_none());
+    let (request, _) = object_state_list_request(
+        &endpoint, "activity", &ActivityObjectStateQuery::default(),
+    ).unwrap();
+    assert!(request.build().unwrap().url().query().is_none_or(str::is_empty));
+}
+
+#[test]
+fn activity_object_state_record_transport_reuses_uuid_and_serializes_only_the_draft() {
+    use cos_agent_protocol::{ObjectStateContent, ObjectStateDraft};
+    let endpoint = endpoint(1, 1);
+    let body = ActivityObjectStateRecordRequest {
+        entry: ObjectStateDraft {
+            id: "22222222-2222-4222-8222-222222222222".into(),
+            reference: "app://kv/entry?id=a%2Fb%3Fx%3D1".into(),
+            content: ObjectStateContent::Retracted { reason: "Not a verified observation".into() },
+            observed_at: None, valid_until: None,
+            supersedes: Some("33333333-3333-4333-8333-333333333333".into()),
+        },
+    };
+    let mut encoded = Vec::new();
+    for _ in 0..2 {
+        let (request, selected) = object_state_record_request(&endpoint, "activity", &body).unwrap();
+        let request = request.build().unwrap();
+        assert_eq!(selected, ProtocolVersion(1));
+        assert_eq!(request.method(), reqwest::Method::POST);
+        assert_eq!(request.url().path(), "/api/activities/activity/object-state");
+        assert_eq!(request.headers()[PROTOCOL_VERSION_HEADER], "1");
+        assert!(request.headers().contains_key(reqwest::header::AUTHORIZATION));
+        assert!(request.url().query().is_none());
+        let bytes = request.body().unwrap().as_bytes().unwrap();
+        assert_eq!(serde_json::from_slice::<ActivityObjectStateRecordRequest>(bytes).unwrap(), body);
+        encoded.push(bytes.to_vec());
+    }
+    assert_eq!(encoded[0], encoded[1]);
+    let sent: serde_json::Value = serde_json::from_slice(&encoded[0]).unwrap();
+    assert_eq!(sent.as_object().unwrap().len(), 1);
+    assert_eq!(sent["entry"].as_object().unwrap().len(), 6);
+    assert_eq!(sent["entry"]["content"]["kind"], "retracted");
+    for field in ["owner_uid", "activity_id", "source", "receipt", "validity", "execute"] {
+        assert!(sent.get(field).is_none());
+        assert!(sent["entry"].get(field).is_none());
+    }
+}

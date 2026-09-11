@@ -60,6 +60,16 @@ pub(crate) fn activity_task(endpoint: BridgeEndpoint, request: ActivityRequest) 
                 ActivityAction::Receipts(id) => bridge::fetch_activity_receipts(endpoint, &id)
                     .await
                     .map(ActivityResponse::Receipts),
+                ActivityAction::ObjectStateList { activity_id, query } => {
+                    bridge::fetch_activity_object_state(endpoint, &activity_id, query)
+                        .await
+                        .map(ActivityResponse::ObjectState)
+                }
+                ActivityAction::RecordObjectState { activity_id, request } => {
+                    bridge::record_activity_object_state(endpoint, &activity_id, request)
+                        .await
+                        .map(|entry| ActivityResponse::ObjectStateRecorded(Box::new(entry)))
+                }
                 ActivityAction::Objects(id) => bridge::fetch_activity_objects(endpoint, &id)
                     .await
                     .map(ActivityResponse::Objects),

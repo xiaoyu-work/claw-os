@@ -5,7 +5,12 @@ use serde_json::{json, Value};
 use crate::activities::{ActivityDraft, ActivityPatch};
 use crate::clawd::{client, config, protocol::Request, routes::Command};
 
+mod object_state;
+
 pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
+    if command == "record-object-state" {
+        return object_state::from_stdin(args);
+    }
     if command == "record-receipt" {
         use std::io::IsTerminal;
         if args.len() != 2 || args[1] != "--stdin" || std::io::stdin().is_terminal() {
@@ -19,6 +24,9 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         );
     }
     let (route, params) = parse(command, args)?;
+    if route == Command::ActivityObjectStateRecord {
+        return object_state::submit(params);
+    }
     let response = client::request_blocking(config::socket_path(), Request::build(route, params))?;
     if !response.ok {
         return Err(match response.error {
@@ -35,6 +43,9 @@ fn parse(command: &str, args: &[String]) -> Result<(Command, Value), String> {
     if command == "attach-object" {
         return parse_object_attachment(args);
     }
+    if matches!(command, "observe" | "relate" | "retract-object-state") {
+        return object_state::parse(command, args);
+    }
     let mut params = json!({});
     let route = match command {
         "create" => Command::ActivityCreate,
@@ -43,6 +54,7 @@ fn parse(command: &str, args: &[String]) -> Result<(Command, Value), String> {
         "update" => Command::ActivityUpdate,
         "run" => Command::ActivityRun,
         "objects" => Command::ActivityObjects,
+        "object-state" => Command::ActivityObjectStateList,
         "receipts" => Command::ActivityReceipts,
         "pause" | "resume" | "complete" | "cancel" => Command::ActivityTransition,
         other => {
@@ -108,7 +120,8 @@ fn parse(command: &str, args: &[String]) -> Result<(Command, Value), String> {
             ("create" | "update", "--resource") => "resource",
             ("update", "--title") => "title",
             ("list", "--state") => "state",
-            ("list" | "show" | "receipts", "--limit") => "limit",
+            ("list" | "show" | "receipts" | "object-state", "--limit") => "limit",
+            ("object-state", "--reference") => "reference",
             ("run", "--session") => "session_id",
             ("run", "--max-turns") => "max_turns",
             ("complete", "--note") => "completion_note",
@@ -182,6 +195,11 @@ fn parse(command: &str, args: &[String]) -> Result<(Command, Value), String> {
                 serde_json::from_value(fields).map_err(|error| error.to_string())?;
             patch.validate().map_err(|error| error.to_string())?;
         }
+        "object-state" => {
+            if let Some(reference) = params.get("reference").and_then(Value::as_str) {
+                crate::objects::parse_reference(reference).map_err(|error| error.to_string())?;
+            }
+        }
         _ => {}
     }
     Ok((route, params))
@@ -199,7 +217,9 @@ fn read_receipt(reader: impl std::io::Read) -> Result<crate::activities::Receipt
     use std::io::Read;
     const MAX_REPORT_BYTES: u64 = 16 * 1024;
     let mut data = Vec::new();
-    reader.take(MAX_REPORT_BYTES + 1).read_to_end(&mut data)
+    reader
+        .take(MAX_REPORT_BYTES + 1)
+        .read_to_end(&mut data)
         .map_err(|error| format!("read receipt report: {error}"))?;
     if data.len() as u64 > MAX_REPORT_BYTES {
         return Err("receipt report input exceeds 16 KiB".into());
@@ -211,7 +231,9 @@ fn read_receipt(reader: impl std::io::Read) -> Result<crate::activities::Receipt
 }
 
 fn parse_object_attachment(args: &[String]) -> Result<(Command, Value), String> {
-    let id = args.first().ok_or("attach-object requires an Activity ID")?;
+    let id = args
+        .first()
+        .ok_or("attach-object requires an Activity ID")?;
     crate::activities::validate_id(id).map_err(|error| error.to_string())?;
     let mut params = json!({"id": id, "object": {}});
     let mut index = 1;

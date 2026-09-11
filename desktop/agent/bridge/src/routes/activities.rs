@@ -10,9 +10,10 @@ use clawd_client::{Command, Error as BrokerError, ErrorCode as BrokerErrorCode};
 use cos_agent_protocol::{
     ActivityCreateRequest, ActivityDetailResponse, ActivityListQuery, ActivityListResponse,
     ActivityObjectAttachRequest, ActivityObjectsResponse, ActivityOperationPreview,
+    ActivityObjectStateQuery, ActivityObjectStateRecordRequest, ActivityObjectStateResponse,
     ActivityOperationPreviewRequest, ActivityReceiptsQuery, ActivityReceiptsResponse,
     ActivityRunRequest, ActivityTransitionRequest, ActivityUpdateRequest, ActivityView,
-    ActivityWorkResponse, ErrorCode,
+    ActivityWorkResponse, ErrorCode, ObjectStateEntry,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -149,6 +150,48 @@ pub async fn receipts(
         ));
     }
     Ok(Json(response))
+}
+
+pub async fn object_state_list(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    query: Result<Query<ActivityObjectStateQuery>, QueryRejection>,
+) -> Result<Json<ActivityObjectStateResponse>, ApiError> {
+    let Query(query) = query.map_err(|_| invalid("invalid Activity object state query"))?;
+    query.validate_shape().map_err(invalid)?;
+    let value = state
+        .clawd
+        .call(Command::ActivityObjectStateList, with_id(&id, &query)?)
+        .await
+        .map_err(upstream_error)?;
+    let response = translation::object_state(value).map_err(ApiError::bad_gateway)?;
+    if !response.matches_query(&id, &query) {
+        return Err(ApiError::bad_gateway(
+            "Activity object state response did not match the Activity, reference or limit",
+        ));
+    }
+    Ok(Json(response))
+}
+
+pub async fn object_state_record(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    request: Result<Json<ActivityObjectStateRecordRequest>, JsonRejection>,
+) -> Result<Json<ObjectStateEntry>, ApiError> {
+    let request = body(request)?;
+    request.entry.validate_shape().map_err(invalid)?;
+    let value = state
+        .clawd
+        .call(Command::ActivityObjectStateRecord, with_id(&id, &request)?)
+        .await
+        .map_err(upstream_error)?;
+    let entry = translation::object_state_entry(value).map_err(ApiError::bad_gateway)?;
+    if !entry.matches_submission(&id, &request.entry) {
+        return Err(ApiError::bad_gateway(
+            "Activity object state acknowledgement did not match the submitted entry",
+        ));
+    }
+    Ok(Json(entry))
 }
 
 pub async fn update(

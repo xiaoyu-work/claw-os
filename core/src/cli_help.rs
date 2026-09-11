@@ -574,7 +574,12 @@ fn activity_schemas() -> Vec<CommandSchema> {
     let metadata = |goal_required| {
         vec![
             Param::flag("--goal", "string", goal_required, "Desired outcome"),
-            Param::flag("--criteria", "string", false, "How goal achievement will be confirmed"),
+            Param::flag(
+                "--criteria",
+                "string",
+                false,
+                "How goal achievement will be confirmed",
+            ),
             Param::flag(
                 "--boundaries",
                 "string",
@@ -590,6 +595,85 @@ fn activity_schemas() -> Vec<CommandSchema> {
         ]
     };
     let id = || Param::positional("id", "uuid", true, "Activity ID");
+    let state_entry = || {
+        vec![
+            id(),
+            Param::flag(
+                "--reference",
+                "string",
+                true,
+                "Existing canonical App resource reference",
+            ),
+            Param::flag(
+                "--id",
+                "uuid",
+                false,
+                "Idempotency key; reuse it when retrying a submission",
+            ),
+            Param::flag(
+                "--supersedes",
+                "uuid",
+                false,
+                "Current entry to correct; history is preserved",
+            ),
+        ]
+    };
+    let mut observation = state_entry();
+    observation.extend([
+        Param::flag(
+            "--source",
+            "enum:user_statement|agent_inference",
+            false,
+            "Reported classification; not proof of authorship or truth",
+        ),
+        Param::flag(
+            "--text",
+            "string",
+            false,
+            "Statement or inference (required unless linking a receipt)",
+        ),
+        Param::flag(
+            "--receipt",
+            "uuid",
+            false,
+            "Link an existing Activity/App receipt instead of supplying text",
+        ),
+        Param::flag(
+            "--observed-at",
+            "RFC3339 timestamp",
+            false,
+            "Reported window start; requires --valid-until",
+        ),
+        Param::flag(
+            "--valid-until",
+            "RFC3339 timestamp",
+            false,
+            "Reported window end; not verified freshness",
+        ),
+    ]);
+    let mut relation = state_entry();
+    relation.extend([
+        Param::flag(
+            "--target",
+            "string",
+            true,
+            "Another attached canonical App reference",
+        ),
+        Param::flag(
+            "--relation",
+            "enum:related_to|depends_on|derived_from",
+            true,
+            "Planning relation; never an execution dependency",
+        ),
+        Param::flag("--note", "string", false, "Optional relationship note"),
+    ]);
+    let mut retraction = state_entry();
+    retraction.push(Param::flag(
+        "--reason",
+        "string",
+        true,
+        "Why the --supersedes entry is retracted",
+    ));
     let mut create = vec![Param::positional("title", "string", true, "Activity title")];
     create.extend(metadata(true));
     let mut update = vec![
@@ -604,6 +688,43 @@ fn activity_schemas() -> Vec<CommandSchema> {
         "Remove references without deleting the referenced data",
     ));
     let mut schemas = vec![
+        CommandSchema {
+            command: "object-state",
+            description: "Read caller-reported object state, time windows, relations and correction history",
+            params: vec![
+                id(),
+                Param::flag("--reference", "string", false, "Filter by exact attached App reference"),
+                Param::flag("--limit", "integer", false, "Maximum entries, 1-100 (default 50)"),
+            ],
+            example: "cos activity object-state 00000000-0000-4000-8000-000000000001",
+        },
+        CommandSchema {
+            command: "observe",
+            description: "Annotate an attached object without fetching its data or granting authority",
+            params: observation,
+            example: "cos activity observe 00000000-0000-4000-8000-000000000001 --reference 'app://kv/entry?id=release.status' --text 'Waiting for review'",
+        },
+        CommandSchema {
+            command: "relate",
+            description: "Add a non-executing planning relationship between attached objects",
+            params: relation,
+            example: "cos activity relate 00000000-0000-4000-8000-000000000001 --reference 'app://kv/entry?id=release.status' --target 'app://kv/entry?id=review.status' --relation depends_on",
+        },
+        CommandSchema {
+            command: "retract-object-state",
+            description: "Supersede an entry with an explicit retraction while preserving history",
+            params: retraction,
+            example: "cos activity retract-object-state 00000000-0000-4000-8000-000000000001 --reference 'app://kv/entry?id=release.status' --supersedes 00000000-0000-4000-8000-000000000002 --reason 'No longer supported'",
+        },
+        CommandSchema {
+            command: "record-object-state",
+            description: "Submit the same bounded object-state draft used by graphical clients",
+            params: vec![
+                id(),
+                Param::flag("--stdin", "bool", true, "Read at most 16 KiB of entry JSON from piped stdin"),
+            ],
+            example: "cos activity record-object-state 00000000-0000-4000-8000-000000000001 --stdin < entry.json",
+        },
         CommandSchema {
             command: "receipts",
             description: "Read caller-reported results without inferring goal completion or verified effects",
@@ -734,25 +855,42 @@ fn object_schemas() -> Vec<CommandSchema> {
         },
         CommandSchema {
             command: "reference",
-            description: "Create a canonical reference; this does not prove existence or grant access",
+            description:
+                "Create a canonical reference; this does not prove existence or grant access",
             params: vec![
                 Param::positional("app", "string", true, "App ID"),
                 Param::positional("type", "string", true, "App-declared object type"),
                 Param::positional("id", "string", true, "Opaque object ID"),
-                Param::flag("--revision", "string", false, "Optional revision constraint"),
+                Param::flag(
+                    "--revision",
+                    "string",
+                    false,
+                    "Optional revision constraint",
+                ),
             ],
             example: "cos object reference kv entry release.status",
         },
         CommandSchema {
             command: "describe",
             description: "Read authenticated declaration and invocation metadata, not object data",
-            params: vec![Param::positional("reference", "string", true, "Canonical App object URI")],
+            params: vec![Param::positional(
+                "reference",
+                "string",
+                true,
+                "Canonical App object URI",
+            )],
             example: "cos object describe 'app://kv/entry?id=release.status'",
         },
         CommandSchema {
             command: "resolve",
-            description: "Execute the declared App operation with its ordinary permissions and audit",
-            params: vec![Param::positional("reference", "string", true, "Canonical App object URI")],
+            description:
+                "Execute the declared App operation with its ordinary permissions and audit",
+            params: vec![Param::positional(
+                "reference",
+                "string",
+                true,
+                "Canonical App object URI",
+            )],
             example: "cos object resolve 'app://kv/entry?id=release.status'",
         },
     ]
@@ -760,7 +898,11 @@ fn object_schemas() -> Vec<CommandSchema> {
 
 fn append_object_schema(output: &mut Value, app: &apps::App) {
     match apps::verified_object_schema(app) {
-        Ok(objects) if objects.as_object().is_some_and(|objects| !objects.is_empty()) => {
+        Ok(objects)
+            if objects
+                .as_object()
+                .is_some_and(|objects| !objects.is_empty()) =>
+        {
             output["objects"] = objects;
         }
         Ok(_) => {}

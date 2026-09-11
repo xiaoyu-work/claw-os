@@ -161,6 +161,37 @@ pub struct ActivityObjectAttach {
     pub object: BoundedObjectRef,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(transparent)]
+pub struct BoundedObjectStateDraft(pub crate::activities::ObjectStateDraft);
+
+impl<'de> Deserialize<'de> for BoundedObjectStateDraft {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let draft = crate::activities::ObjectStateDraft::deserialize(deserializer)?;
+        draft
+            .validate()
+            .map_err(|_| serde::de::Error::custom("invalid or oversized object-state entry"))?;
+        Ok(Self(draft))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityObjectState {
+    pub id: Token,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<Text<4096>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityObjectStateRecord {
+    pub id: Token,
+    pub entry: BoundedObjectStateDraft,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OperationPreview {
@@ -187,7 +218,9 @@ pub struct BoundedReceiptReport(pub crate::activities::ReceiptReport);
 impl<'de> Deserialize<'de> for BoundedReceiptReport {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let report = crate::activities::ReceiptReport::deserialize(deserializer)?;
-        report.validate().map_err(|_| serde::de::Error::custom("invalid or oversized receipt report"))?;
+        report
+            .validate()
+            .map_err(|_| serde::de::Error::custom("invalid or oversized receipt report"))?;
         Ok(Self(report))
     }
 }
@@ -664,7 +697,11 @@ fn file_state_sha256<'de, D: serde::Deserializer<'de>>(de: D) -> Result<String, 
     let Some(hash) = value.as_str().strip_prefix("sha256:") else {
         return Err(serde::de::Error::custom("invalid file SHA-256"));
     };
-    if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+    if hash.len() != 64
+        || !hash
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
         return Err(serde::de::Error::custom("invalid file SHA-256"));
     }
     Ok(value.as_str().to_string())
@@ -678,7 +715,9 @@ fn file_state_size<'de, D: serde::Deserializer<'de>>(de: D) -> Result<u64, D::Er
     Ok(size)
 }
 
-fn required_file_state<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Option<FileState>, D::Error> {
+fn required_file_state<'de, D: serde::Deserializer<'de>>(
+    de: D,
+) -> Result<Option<FileState>, D::Error> {
     Option::<FileState>::deserialize(de)
 }
 

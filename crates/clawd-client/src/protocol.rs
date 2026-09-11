@@ -31,6 +31,10 @@ pub enum Command {
     ActivityObjects,
     #[serde(rename = "activity.object.attach")]
     ActivityObjectAttach,
+    #[serde(rename = "activity.object_state.list")]
+    ActivityObjectStateList,
+    #[serde(rename = "activity.object_state.record")]
+    ActivityObjectStateRecord,
     #[serde(rename = "activity.operation.preview")]
     ActivityOperationPreview,
     #[serde(rename = "activity.receipts")]
@@ -60,7 +64,7 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 23] = [
         Self::ActivityCreate,
         Self::ActivityList,
         Self::ActivityGet,
@@ -69,6 +73,8 @@ impl Command {
         Self::ActivityRun,
         Self::ActivityObjects,
         Self::ActivityObjectAttach,
+        Self::ActivityObjectStateList,
+        Self::ActivityObjectStateRecord,
         Self::ActivityOperationPreview,
         Self::ActivityReceipts,
         Self::TaskSubmit,
@@ -94,6 +100,8 @@ impl Command {
             Self::ActivityRun => "activity.run",
             Self::ActivityObjects => "activity.objects",
             Self::ActivityObjectAttach => "activity.object.attach",
+            Self::ActivityObjectStateList => "activity.object_state.list",
+            Self::ActivityObjectStateRecord => "activity.object_state.record",
             Self::ActivityOperationPreview => "activity.operation.preview",
             Self::ActivityReceipts => "activity.receipts",
             Self::TaskSubmit => "task.submit",

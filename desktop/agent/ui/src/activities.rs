@@ -1,11 +1,15 @@
 //! Fetched Activity views and unsaved forms. The broker, not this reducer,
 //! owns Activity lifecycle and durable work; leaving this view cancels nothing.
 
+mod object_state;
+
+pub use object_state::Message as ObjectStateMessage;
+
 use cos_agent_protocol::{
     ActivityJobView, ActivityObjectStatus, ActivityReceiptOutcome, ActivityReceiptSource,
-    ActivityReceiptView, ActivityResource, AppDeclaredEffect, AppEffectKind, AppEffectRecovery,
-    AppEffectTargetKind, AppEffectTargetState, AppObjectDescription, ReceiptDeclaredEffect,
-    ReceiptResultKind,
+    ActivityReceiptReport, ActivityReceiptView, ActivityResource, AppDeclaredEffect, AppEffectKind,
+    AppEffectRecovery, AppEffectTargetKind, AppEffectTargetState, AppObjectDescription,
+    ReceiptDeclaredEffect, ReceiptResultKind,
 };
 use cosmic::iced::{Alignment, Length};
 use cosmic::widget::{Column, Row, button, container, scrollable, text};
@@ -14,9 +18,10 @@ use cosmic::{Element, theme, widget};
 use crate::bridge::{
     ActivityCreateRequest, ActivityDetailResponse, ActivityListResponse,
     ActivityObjectAttachRequest, ActivityObjectsResponse, ActivityOperationPreview,
+    ActivityObjectStateQuery, ActivityObjectStateRecordRequest, ActivityObjectStateResponse,
     ActivityOperationPreviewRequest, ActivityReceiptsResponse, ActivityRunRequest, ActivityState,
     ActivityTransitionRequest, ActivityUpdateRequest, ActivityView, ActivityWorkResponse,
-    CancelResponse,
+    CancelResponse, ObjectStateEntry,
 };
 use crate::{Message as AppMessage, fl, styles};
 
@@ -45,6 +50,7 @@ pub enum Message {
     Back,
     Refresh,
     RefreshReceipts,
+    ObjectState(ObjectStateMessage),
     Tick,
     Filter(Option<ActivityState>),
     Open(String),
@@ -79,6 +85,14 @@ pub(crate) enum Action {
     List(Option<ActivityState>),
     Get(String),
     Receipts(String),
+    ObjectStateList {
+        activity_id: String,
+        query: ActivityObjectStateQuery,
+    },
+    RecordObjectState {
+        activity_id: String,
+        request: ActivityObjectStateRecordRequest,
+    },
     Objects(String),
     OperationPreview {
         activity_id: String,
@@ -105,6 +119,8 @@ pub enum Response {
     List(ActivityListResponse),
     Detail(Box<ActivityDetailResponse>),
     Receipts(ActivityReceiptsResponse),
+    ObjectState(ActivityObjectStateResponse),
+    ObjectStateRecorded(Box<ObjectStateEntry>),
     Objects(ActivityObjectsResponse),
     OperationPreview(Box<ActivityOperationPreview>),
     Saved(Box<ActivityView>),
@@ -122,6 +138,7 @@ pub(crate) struct Activities {
     selected: Option<String>,
     detail: Option<ActivityDetailResponse>,
     receipts: Option<ActivityReceiptsResponse>,
+    object_state: object_state::State,
     form: Option<ActivityCreateRequest>,
     object_form: Option<ActivityObjectAttachRequest>,
     objects: Option<ActivityObjectsResponse>,
@@ -151,6 +168,7 @@ impl Activities {
             && self.pending.is_none()
             && self.form.is_none()
             && self.object_form.is_none()
+            && self.object_state.form.is_none()
             && self.prompt.is_empty()
             && self.completion_note.is_empty()
             && self.error.is_none()
@@ -159,10 +177,12 @@ impl Activities {
     pub(crate) fn hide(&mut self) {
         self.visible = false;
         self.receipts = None;
+        self.object_state.entries = None;
         self.operation_preview = None;
         if !self.can_edit_forms() {
             self.form = None;
             self.object_form = None;
+            self.object_state.form = None;
         }
         self.invalidate();
     }
@@ -174,6 +194,7 @@ impl Activities {
                 Action::List(_)
                     | Action::Get(_)
                     | Action::Receipts(_)
+                    | Action::ObjectStateList { .. }
                     | Action::Objects(_)
                     | Action::OperationPreview { .. }
             )
@@ -223,6 +244,7 @@ impl Activities {
             && self.selected.as_deref() == Some(activity_id)
             && self.form.is_none()
             && self.object_form.is_none()
+            && self.object_state.form.is_none()
             && self
                 .declared_object_description(reference)
                 .is_some_and(|description| {
@@ -234,6 +256,7 @@ impl Activities {
         if !self.visible
             || self.form.is_some()
             || self.object_form.is_some()
+            || self.object_state.form.is_some()
             || self
                 .pending
                 .as_ref()
@@ -282,7 +305,11 @@ impl Activities {
     }
 
     fn refresh(&mut self, connected: bool) -> Option<Request> {
-        if self.pending.is_some() || self.form.is_some() || self.object_form.is_some() {
+        if self.pending.is_some()
+            || self.form.is_some()
+            || self.object_form.is_some()
+            || self.object_state.form.is_some()
+        {
             return None;
         }
         let action = self
@@ -298,6 +325,7 @@ impl Activities {
         self.selected = None;
         self.detail = None;
         self.receipts = None;
+        self.object_state = object_state::State::default();
         self.form = None;
         self.object_form = None;
         self.objects = None;
@@ -341,8 +369,9 @@ impl Activities {
             Message::PreviewObjectOperation(reference) => {
                 return self.begin_operation_preview(reference, connected);
             }
+            Message::ObjectState(message) => return self.update_object_state(message, connected),
             Message::Field(field, value) => {
-                if !self.can_edit_forms() {
+                if !self.can_edit_forms() || self.object_state.form.is_some() {
                     return None;
                 }
                 if matches!(field, Field::CompletionNote | Field::Prompt) || self.form.is_some() {
@@ -365,7 +394,7 @@ impl Activities {
                 }
             }
             Message::ObjectField(field, value) => {
-                if !self.can_edit_forms() {
+                if !self.can_edit_forms() || self.object_state.form.is_some() {
                     return None;
                 }
                 if self.object_form.is_some() {
@@ -384,6 +413,7 @@ impl Activities {
                 }
             }
             _ if self.pending.is_some() => {}
+            _ if self.object_state.form.is_some() => {}
             _ if self.object_form.is_some()
                 && !matches!(&message, Message::AttachObject | Message::DiscardObject) => {}
             Message::RefreshReceipts => {
@@ -605,6 +635,16 @@ impl Activities {
         };
         match (pending, response) {
             (Action::List(_), Response::List(response)) => self.list = response.activities,
+            (
+                Action::ObjectStateList { activity_id, query },
+                Response::ObjectState(response),
+            ) => self.object_state_loaded(&activity_id, &query, response),
+            (
+                Action::RecordObjectState { activity_id, request },
+                Response::ObjectStateRecorded(entry),
+            ) => {
+                return self.object_state_recorded(&activity_id, &request, *entry, connected);
+            }
             (Action::Receipts(id), Response::Receipts(receipts))
                 if self.selected.as_deref() == Some(id.as_str())
                     && receipts.matches_activity(&id) =>
@@ -727,7 +767,7 @@ impl Activities {
         header = header
             .push(text(fl!("activities")).size(24.0))
             .push(widget::space::horizontal());
-        if self.form.is_none() && self.object_form.is_none() {
+        if self.form.is_none() && self.object_form.is_none() && self.object_state.form.is_none() {
             header = header
                 .push(control(
                     fl!("activity-refresh"),
@@ -897,6 +937,8 @@ impl Activities {
         available: bool,
     ) -> Element<'a, AppMessage> {
         let activity = &detail.activity;
+        let object_state_available = available;
+        let available = available && self.object_state.form.is_none();
         let mut content = Column::new()
             .spacing(12)
             .push(text(&activity.title).size(22.0))
@@ -979,6 +1021,7 @@ impl Activities {
         content = content
             .push(text(fl!("activity-resources-hint")).size(12.0))
             .push(self.object_resources_view(editable(activity.state), available))
+            .push(self.object_state_view(detail, object_state_available))
             .push(text(fl!("activity-work")).size(18.0))
             .push(text(fl!("activity-work-hint")).size(12.0));
         if activity.state == ActivityState::Active {
@@ -1366,17 +1409,52 @@ fn receipt_view(receipt: &ActivityReceiptView) -> Element<'_, AppMessage> {
     let source = match receipt.source {
         ActivityReceiptSource::CallerReported => fl!("activity-receipt-caller-reported"),
     };
-    let report = &receipt.report;
     let mut content = Column::new()
         .spacing(8)
         .push(text(source).size(15.0))
-        .push(text(receipt_outcome_label(report.outcome)).size(16.0))
         .push(section(fl!("activity-receipt-id"), &receipt.id))
         .push(section(
             fl!("activity-receipt-recorded"),
             &receipt.received_at,
         ))
         .push(text(fl!("activity-receipt-recorded-hint")).size(12.0))
+        .push(receipt_report_view(&receipt.report));
+    if let Some(error) = &receipt.declaration_error {
+        content = content
+            .push(text(fl!("activity-receipt-declaration-unavailable")).size(14.0))
+            .push(error_card(error));
+    }
+    if let Some(declaration) = &receipt.declaration {
+        content = content
+            .push(text(fl!("activity-receipt-declaration")).size(14.0))
+            .push(text(fl!("activity-receipt-declaration-caveat")).size(12.0))
+            .push(
+                text(format!(
+                    "{} · {}",
+                    declaration.operation_label, declaration.app_version
+                ))
+                .size(13.0),
+            );
+        for effect in &declaration.effects {
+            content = content.push(receipt_declared_effect_view(effect));
+        }
+        if declaration.effects.is_empty() {
+            content = content.push(text(fl!("activity-receipt-no-declared-effects")).size(12.0));
+        }
+    } else if receipt.declaration_error.is_none() {
+        content = content.push(text(fl!("activity-receipt-declaration-unavailable")).size(12.0));
+    }
+    container(content)
+        .padding(12)
+        .width(Length::Fill)
+        .class(theme::Container::custom(styles::tool_card))
+        .into()
+}
+
+fn receipt_report_view(report: &ActivityReceiptReport) -> Element<'_, AppMessage> {
+    let mut content = Column::new()
+        .spacing(8)
+        .push(text(receipt_outcome_label(report.outcome)).size(16.0))
         .push(section(fl!("activity-receipt-report-id"), &report.id))
         .push(
             text(fl!(
@@ -1390,6 +1468,9 @@ fn receipt_view(receipt: &ActivityReceiptView) -> Element<'_, AppMessage> {
             fl!("activity-receipt-package-digest"),
             &report.package_digest,
         ));
+    if report.outcome == ActivityReceiptOutcome::Indeterminate {
+        content = content.push(text(fl!("activity-receipt-indeterminate-hint")).size(12.0));
+    }
     if let Some(result) = &report.result {
         let kind = match result.kind {
             ReceiptResultKind::Json => fl!("activity-receipt-result-json"),
@@ -1421,36 +1502,7 @@ fn receipt_view(receipt: &ActivityReceiptView) -> Element<'_, AppMessage> {
     if let Some(error) = &report.error {
         content = content.push(section(fl!("activity-receipt-error"), error));
     }
-    if let Some(error) = &receipt.declaration_error {
-        content = content
-            .push(text(fl!("activity-receipt-declaration-unavailable")).size(14.0))
-            .push(error_card(error));
-    }
-    if let Some(declaration) = &receipt.declaration {
-        content = content
-            .push(text(fl!("activity-receipt-declaration")).size(14.0))
-            .push(text(fl!("activity-receipt-declaration-caveat")).size(12.0))
-            .push(
-                text(format!(
-                    "{} · {}",
-                    declaration.operation_label, declaration.app_version
-                ))
-                .size(13.0),
-            );
-        for effect in &declaration.effects {
-            content = content.push(receipt_declared_effect_view(effect));
-        }
-        if declaration.effects.is_empty() {
-            content = content.push(text(fl!("activity-receipt-no-declared-effects")).size(12.0));
-        }
-    } else if receipt.declaration_error.is_none() {
-        content = content.push(text(fl!("activity-receipt-declaration-unavailable")).size(12.0));
-    }
-    container(content)
-        .padding(12)
-        .width(Length::Fill)
-        .class(theme::Container::custom(styles::tool_card))
-        .into()
+    content.into()
 }
 
 fn receipt_declared_effect_view(effect: &ReceiptDeclaredEffect) -> Element<'_, AppMessage> {

@@ -66,6 +66,8 @@ ownership, and work submission. The authenticated adapters are:
 | `POST /api/activities/{id}/objects` | `activity.object.attach` |
 | `POST /api/activities/{id}/operation-preview` | `activity.operation.preview` |
 | `GET /api/activities/{id}/receipts?limit=100` | `activity.receipts` |
+| `GET /api/activities/{id}/object-state?limit=100` | `activity.object_state.list` |
+| `POST /api/activities/{id}/object-state` | `activity.object_state.record` |
 
 Creation saves a goal without starting work. The detail view shows goal,
 completion criteria, planning boundaries, inert resource references, job
@@ -187,6 +189,25 @@ The existing abortable read guards keep late responses from replacing another
 Activity's reports. Receipt refreshes do not delay unrelated Activity actions.
 See the [shared receipt contract](../../../../../docs/execution-receipts.md).
 
+### Object state and history
+
+The fixed **Object state and history** card reads and submits the same bounded
+drafts as terminal/native clients. It distinguishes reported user statements,
+Agent inferences, existing App receipt links, planning relationships and
+retractions. Author classifications and reported time windows are not
+authentication, semantic truth or verified freshness.
+
+Subjects and relation targets are selected from existing App references;
+the UI does not construct App URIs or fetch App data. Corrections append a
+fresh entry with `supersedes`, while retractions keep the previous text and
+source in history. Submission retries keep the same UUID; stale corrections
+remain explicit conflicts. Forms and late responses are scoped to the selected
+Activity. Read errors or an owner mismatch hide the history, not substitute a
+local store. Terminal Activity states do not hide historical annotations.
+
+See [object-state semantics](../../../../../docs/object-state.md). This card
+neither authors execution receipts nor changes goal completion or permissions.
+
 ### Refresh behavior
 
 Views refetch after mutations and on focus/notification changes. Activity
@@ -204,7 +225,7 @@ Chromium-based browser:
 
 ```bash
 bun run typecheck
-bun test test/activities.test.ts test/activity-views.test.tsx test/operation-preview.test.ts test/activity-receipts.test.ts
+bun test test/activities.test.ts test/activity-views.test.tsx test/operation-preview.test.ts test/activity-receipts.test.ts test/object-state.test.ts
 bun run build --outDir .activity-validation/dist
 bun run test:browser
 ```
@@ -233,3 +254,8 @@ requests fail the test. It neither contacts a model nor uses real credentials.
 Browser profiles stay under `.activity-validation/` and are removed after the
 test; the build never touches `dist/`. Set `ACTIVITY_BROWSER` to an installed
 browser executable or `ACTIVITY_UI_DIST` to another prebuilt output if needed.
+
+Object-state cases exercise actual completed form submissions, correction and
+retraction history, expired/unknown window labels, inert statement/receipt
+content, relationship links, unchanged Activity/job state, persistence across
+reload and selection-safe late reads/writes.

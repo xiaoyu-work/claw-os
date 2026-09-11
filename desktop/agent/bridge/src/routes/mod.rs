@@ -32,6 +32,10 @@ pub fn api() -> Router<AppState> {
         .route("/activities/:id", get(activities::get).patch(activities::update))
         .route("/activities/:id/receipts", get(activities::receipts))
         .route(
+            "/activities/:id/object-state",
+            get(activities::object_state_list).post(activities::object_state_record),
+        )
+        .route(
             "/activities/:id/objects",
             get(activities::objects).post(activities::attach_object),
         )

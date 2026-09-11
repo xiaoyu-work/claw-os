@@ -1,15 +1,15 @@
 use super::*;
 
-struct TestDirectory(PathBuf);
+pub(super) struct TestDirectory(PathBuf);
 
 impl TestDirectory {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let path = PathBuf::from(format!(".activities-test-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&path).unwrap();
         Self(path)
     }
 
-    fn database(&self) -> PathBuf {
+    pub(super) fn database(&self) -> PathBuf {
         self.0.join("activities.db")
     }
 }
@@ -20,7 +20,7 @@ impl Drop for TestDirectory {
     }
 }
 
-fn draft() -> ActivityDraft {
+pub(super) fn draft() -> ActivityDraft {
     ActivityDraft {
         title: "Release".to_string(),
         goal: "Prepare a release.\n\tAsk for review.".to_string(),
@@ -630,7 +630,7 @@ fn future_schema_is_rejected_without_changing_version_or_existing_data() {
     {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
-            "PRAGMA user_version = 3;
+            "PRAGMA user_version = 4;
              CREATE TABLE future_data (value TEXT NOT NULL);
              INSERT INTO future_data VALUES ('preserve this');",
         )
@@ -639,15 +639,15 @@ fn future_schema_is_rejected_without_changing_version_or_existing_data() {
     assert!(matches!(
         SqliteActivityService::open(&path),
         Err(ActivityError::SchemaVersion {
-            found: 3,
-            supported: 2
+            found: 4,
+            supported: 3
         })
     ));
     let conn = Connection::open(&path).unwrap();
     assert_eq!(
         conn.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        3
+        4
     );
     assert_eq!(
         conn.query_row("SELECT value FROM future_data", [], |row| row

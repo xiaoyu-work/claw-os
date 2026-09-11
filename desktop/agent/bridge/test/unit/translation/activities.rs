@@ -18,6 +18,132 @@ fn metadata() -> Value {
     })
 }
 
+fn object_state_value() -> Value {
+    json!({
+        "schema": 1, "activity_id": "11111111-1111-4111-8111-111111111111",
+        "entries": [{
+            "id": "22222222-2222-4222-8222-222222222222",
+            "activity_id": "11111111-1111-4111-8111-111111111111",
+            "owner_uid": 1000, "recorded_at": "2026-09-11T12:00:00Z",
+            "source": "caller_reported", "draft": {
+                "id": "22222222-2222-4222-8222-222222222222",
+                "reference": "app://kv/entry?id=release.status",
+                "content": {"kind": "user_statement", "text": "Caller report"},
+                "observed_at": null, "valid_until": null, "supersedes": null
+            },
+            "receipt": null, "superseded_by": null, "validity": "unknown"
+        }]
+    })
+}
+
+#[test]
+fn activity_object_state_translation_keeps_all_classifications_without_truth_claims() {
+    use cos_agent_protocol::{ObjectStateContent, ObjectStateSource};
+    for content in [
+        json!({"kind": "user_statement", "text": "<script>inert</script>"}),
+        json!({"kind": "agent_inference", "text": "Caller-classified inference"}),
+        json!({"kind": "relation", "relation": "related_to", "target": "app://kv/entry?id=x", "note": ""}),
+        json!({"kind": "relation", "relation": "depends_on", "target": "app://kv/entry?id=x", "note": "Planning"}),
+        json!({"kind": "relation", "relation": "derived_from", "target": "app://kv/entry?id=x", "note": "Planning"}),
+        json!({"kind": "retracted", "reason": "Mistaken report"}),
+    ] {
+        let mut value = object_state_value();
+        value["entries"][0]["draft"]["content"] = content;
+        if value["entries"][0]["draft"]["content"]["kind"] == "retracted" {
+            value["entries"][0]["draft"]["supersedes"] =
+                json!("33333333-3333-4333-8333-333333333333");
+        }
+        value["private_future_data"] = json!({"hidden": true});
+        value["entries"][0]["verified"] = json!(true);
+        value["entries"][0]["app_data"] = json!("never forwarded");
+        let response = object_state(value).unwrap();
+        assert_eq!(response.entries[0].source, ObjectStateSource::CallerReported);
+        let entry = object_state_entry(serde_json::to_value(&response.entries[0]).unwrap()).unwrap();
+        assert!(entry.matches_activity(&response.activity_id));
+        if matches!(entry.draft.content, ObjectStateContent::Retracted { .. }) {
+            assert!(entry.draft.supersedes.is_some());
+        }
+        let encoded = serde_json::to_value(response).unwrap();
+        assert!(encoded.get("private_future_data").is_none());
+        assert!(encoded["entries"][0].get("verified").is_none());
+        assert!(encoded["entries"][0].get("app_data").is_none());
+    }
+}
+
+#[test]
+fn activity_object_state_translation_reuses_bounded_receipt_report_without_replacement_data() {
+    use cos_agent_protocol::ActivityReceiptOutcome;
+    let mut value = object_state_value();
+    value["entries"][0]["draft"]["content"] = json!({
+        "kind": "app_report", "receipt_id": "44444444-4444-4444-8444-444444444444"
+    });
+    value["entries"][0]["receipt"] = json!({
+        "id": "44444444-4444-4444-8444-444444444444", "app_id": "kv",
+        "operation": "get", "package_digest": "caller-digest", "outcome": "indeterminate",
+        "result": {
+            "kind": "json", "sha256": "caller-output-digest", "bytes": 9000,
+            "preview": "{\"verified\":true}", "preview_truncated": true
+        },
+        "error": "Reported uncertainty", "raw_app_data": {"not": "forwarded"}
+    });
+    let response = object_state(value.clone()).unwrap();
+    let report = response.entries[0].receipt.as_ref().unwrap();
+    assert_eq!(report.outcome, ActivityReceiptOutcome::Indeterminate);
+    assert!(report.result.as_ref().unwrap().preview_truncated);
+    assert_eq!(report.result.as_ref().unwrap().preview, "{\"verified\":true}");
+    assert_eq!(report.error.as_deref(), Some("Reported uncertainty"));
+    let encoded = serde_json::to_value(&response).unwrap();
+    assert!(encoded["entries"][0]["receipt"].get("raw_app_data").is_none());
+    value["entries"][0]["receipt"]["outcome"] = json!("os_confirmed");
+    assert!(object_state(value).is_err());
+}
+
+#[test]
+fn activity_object_state_translation_rejects_schema_identity_shape_and_claim_mismatches() {
+    for (field, replacement) in [
+        ("id", json!("different-id")),
+        ("activity_id", json!("other-activity")),
+        ("source", json!("verified")),
+        ("owner_uid", json!(-1)),
+        ("recorded_at", json!("")),
+        ("validity", json!("fresh")),
+        ("validity", json!("expired")),
+        ("superseded_by", json!("22222222-2222-4222-8222-222222222222")),
+    ] {
+        let mut value = object_state_value();
+        value["entries"][0][field] = replacement;
+        assert!(object_state(value).is_err(), "{field}");
+    }
+    let mut value = object_state_value();
+    value["schema"] = json!(2);
+    assert!(object_state(value).is_err());
+    let mut value = object_state_value();
+    value["entries"][0]["draft"]["content"] = json!({
+        "kind": "app_report", "receipt_id": "44444444-4444-4444-8444-444444444444"
+    });
+    assert!(object_state(value.clone()).is_err());
+    assert!(object_state_entry(value["entries"][0].clone()).is_err());
+    let mut value = object_state_value();
+    value["entries"][0]["draft"]["content"]["text"] = json!("\u{e9}".repeat(2049));
+    assert!(object_state(value).is_err());
+}
+
+#[test]
+fn activity_object_state_translation_keeps_expired_windows_and_immutable_history() {
+    use cos_agent_protocol::ObjectStateValidity;
+    for validity in ["not_yet_applicable", "within_reported_window", "expired"] {
+        let mut value = object_state_value();
+        value["entries"][0]["draft"]["observed_at"] = json!("2026-09-09T12:00:00Z");
+        value["entries"][0]["draft"]["valid_until"] = json!("2026-09-10T12:00:00Z");
+        value["entries"][0]["validity"] = json!(validity);
+        value["entries"][0]["superseded_by"] = json!("33333333-3333-4333-8333-333333333333");
+        let response = object_state(value).unwrap();
+        assert!(response.entries[0].superseded_by.is_some());
+        assert_ne!(response.entries[0].validity, ObjectStateValidity::Unknown);
+        assert_eq!(response.entries.len(), 1);
+    }
+}
+
 fn detail_value() -> Value {
     json!({
         "schema": 1,

@@ -48,7 +48,7 @@ function unsigned(value: unknown, max = Number.MAX_SAFE_INTEGER): value is numbe
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= max;
 }
 
-function recordedTime(value: unknown): value is string {
+export function recordedTime(value: unknown): value is string {
   return typeof value === "string"
     && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/i.test(value)
     && Number.isFinite(Date.parse(value));
@@ -60,7 +60,7 @@ function isResultSummary(value: unknown): value is ResultSummary {
     && typeof value.preview === "string" && typeof value.preview_truncated === "boolean";
 }
 
-function isReport(value: unknown): value is ReceiptReport {
+export function isReceiptReport(value: unknown): value is ReceiptReport {
   return record(value) && identifier(value.id) && identifier(value.app_id)
     && identifier(value.operation) && identifier(value.package_digest)
     && oneOf(["returned", "reported_error", "indeterminate"] as const, value.outcome)
@@ -79,7 +79,7 @@ function isDeclaration(value: unknown): value is ReceiptDeclaration {
 function isReceipt(value: unknown): value is ActivityReceipt {
   return record(value) && identifier(value.id) && identifier(value.activity_id)
     && unsigned(value.owner_uid, 0xffff_ffff) && recordedTime(value.received_at)
-    && value.source === "caller_reported" && isReport(value.report)
+    && value.source === "caller_reported" && isReceiptReport(value.report)
     && ((isDeclaration(value.declaration) && value.declaration_error === null)
       || (value.declaration === null && typeof value.declaration_error === "string"));
 }

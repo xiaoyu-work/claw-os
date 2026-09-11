@@ -142,6 +142,8 @@ async fn activity_http_routes_require_authentication() {
         ("POST", "/api/activities/activity-1/objects"),
         ("POST", "/api/activities/activity-1/operation-preview"),
         ("GET", "/api/activities/activity-1/receipts"),
+        ("GET", "/api/activities/activity-1/object-state"),
+        ("POST", "/api/activities/activity-1/object-state"),
     ] {
         let response = crate::agent::web::server::build_app(state.clone())
             .oneshot(
@@ -180,6 +182,36 @@ fn activity_receipt_queries_preserve_limits_and_reject_owner_or_source_overrides
         assert!(with_id::<ActivityReceipts>("activity-1".into(), body).is_err());
     }
     assert!(with_id::<ActivityReceipts>("../another".into(), json!({})).is_err());
+}
+
+#[test]
+fn object_state_http_uses_the_broker_draft_without_origin_or_identity_overrides() {
+    let draft = json!({
+        "id":"00000000-0000-4000-8000-000000000002",
+        "reference":"app://demo/entry?id=release",
+        "content":{"kind":"agent_inference","text":"Review might be needed"},
+    });
+    let body = json!({"entry":draft});
+    let request = with_id::<ActivityObjectStateRecord>("activity-1".into(), body.clone()).unwrap();
+    let request = serde_json::to_value(request).unwrap();
+    assert_eq!(request["id"], "activity-1");
+    assert_eq!(request["entry"]["id"], draft["id"]);
+    assert_eq!(request["entry"]["content"], draft["content"]);
+    for field in ["id", "owner_uid", "source", "verified"] {
+        let mut invalid = body.clone();
+        invalid[field] = json!("forged");
+        assert!(with_id::<ActivityObjectStateRecord>("activity-1".into(), invalid).is_err());
+    }
+    let mut forged = body;
+    forged["entry"]["source"] = json!("os_confirmed");
+    assert!(with_id::<ActivityObjectStateRecord>("activity-1".into(), forged).is_err());
+    let query = with_id::<ActivityObjectState>(
+        "activity-1".into(),
+        json!({"reference":"app://demo/entry?id=release","limit":20}),
+    )
+    .unwrap();
+    assert_eq!(serde_json::to_value(query).unwrap()["limit"], 20);
+    assert!(serde_json::from_value::<ObjectStateQuery>(json!({"owner_uid":0})).is_err());
 }
 
 #[tokio::test]

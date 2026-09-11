@@ -31,6 +31,8 @@ async fn every_activity_surface_requires_authentication_and_version() {
         (Method::POST, "/activities"),
         (Method::GET, "/activities/a"),
         (Method::GET, "/activities/a/receipts"),
+        (Method::GET, "/activities/a/object-state"),
+        (Method::POST, "/activities/a/object-state"),
         (Method::GET, "/activities/a/objects"),
         (Method::POST, "/activities/a/objects"),
         (Method::POST, "/activities/a/operation-preview"),
@@ -236,4 +238,129 @@ async fn broker_refusals_are_errors_not_local_success() {
     let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
     let error: ErrorEnvelope = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(error.code, ErrorCode::Unauthorized);
+}
+
+fn object_state_body() -> Value {
+    json!({"entry": {
+        "id": "22222222-2222-4222-8222-222222222222",
+        "reference": "app://kv/entry?id=a%2Fb%3Fx%3D1",
+        "content": {"kind": "user_statement", "text": "Caller report"},
+        "observed_at": null, "valid_until": null, "supersedes": null
+    }})
+}
+
+async fn object_state_http(method: Method, uri: &str, value: Option<Value>) -> axum::response::Response {
+    let body = value.map_or_else(Body::empty, |value| {
+        Body::from(serde_json::to_vec(&value).unwrap())
+    });
+    router().oneshot(Request::builder()
+        .method(method).uri(uri)
+        .header(PROTOCOL_VERSION_HEADER, "1")
+        .header("authorization", format!("Bearer {}", "activity-test-token"))
+        .header("content-type", "application/json")
+        .body(body).unwrap()
+    ).await.unwrap()
+}
+
+#[test]
+fn activity_object_state_params_preserve_draft_identity_and_only_path_activity_identity() {
+    let body = object_state_body();
+    let request: ActivityObjectStateRecordRequest = serde_json::from_value(body.clone()).unwrap();
+    assert_eq!(
+        with_id("11111111-1111-4111-8111-111111111111", &request).ok().unwrap(),
+        json!({
+            "id": "11111111-1111-4111-8111-111111111111",
+            "entry": body["entry"].clone()
+        }),
+    );
+    assert_eq!(
+        with_id("a", ActivityObjectStateQuery::default()).ok().unwrap(), json!({"id": "a"})
+    );
+    let reference = "app://kv/entry?id=a%2Fb%3Fx%3D1";
+    assert_eq!(
+        with_id("a", ActivityObjectStateQuery {
+            reference: Some(reference.into()), limit: Some(100),
+        }).ok().unwrap(),
+        json!({"id": "a", "reference": reference, "limit": 100}),
+    );
+}
+
+#[tokio::test]
+async fn activity_object_state_routes_reject_untrusted_selectors_and_malformed_shapes() {
+    for query in [
+        "owner_uid=0", "source=caller_reported", "limit=0", "limit=101",
+        "limit=not-a-number", "reference=", "execute=true",
+    ] {
+        let response = object_state_http(
+            Method::GET, &format!("/activities/a/object-state?{query}"), None,
+        ).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{query}");
+        let error: ErrorEnvelope = serde_json::from_slice(
+            &to_bytes(response.into_body(), 4096).await.unwrap()
+        ).unwrap();
+        assert_eq!(error.code, ErrorCode::InvalidRequest);
+    }
+    let mut invalid_bodies = Vec::new();
+    for field in ["id", "owner_uid", "source", "execute", "receipt"] {
+        let mut body = object_state_body();
+        body[field] = json!(0);
+        invalid_bodies.push(body);
+    }
+    for field in ["owner_uid", "source", "validity", "receipt"] {
+        let mut body = object_state_body();
+        body["entry"][field] = json!(0);
+        invalid_bodies.push(body);
+    }
+    for content in [
+        json!({"kind": "user_statement", "text": ""}),
+        json!({"kind": "agent_inference", "text": "\u{e9}".repeat(2049)}),
+        json!({"kind": "app_report", "receipt_id": ""}),
+        json!({"kind": "app_report", "receipt_id": "r", "text": "Replacement output"}),
+        json!({"kind": "relation", "relation": "related_to", "target": "", "note": ""}),
+        json!({"kind": "relation", "relation": "related_to", "target": "app://kv/entry?id=x",
+            "note": "\u{e9}".repeat(1025)}),
+        json!({"kind": "retracted", "reason": "Missing predecessor"}),
+        json!({"kind": "verified_fact", "text": "Not accepted"}),
+    ] {
+        let mut body = object_state_body();
+        body["entry"]["content"] = content;
+        invalid_bodies.push(body);
+    }
+    let mut half_window = object_state_body();
+    half_window["entry"]["observed_at"] = json!("2026-09-11T12:00:00Z");
+    invalid_bodies.push(half_window);
+    for body in invalid_bodies {
+        let response = object_state_http(
+            Method::POST, "/activities/a/object-state", Some(body),
+        ).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let error: ErrorEnvelope = serde_json::from_slice(
+            &to_bytes(response.into_body(), 4096).await.unwrap()
+        ).unwrap();
+        assert_eq!(error.code, ErrorCode::InvalidRequest);
+    }
+}
+
+#[tokio::test]
+async fn activity_object_state_valid_routes_surface_missing_broker_without_local_success() {
+    for (method, value) in [(Method::GET, None), (Method::POST, Some(object_state_body()))] {
+        let response = object_state_http(
+            method, "/activities/11111111-1111-4111-8111-111111111111/object-state", value,
+        ).await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let error: ErrorEnvelope = serde_json::from_slice(
+            &to_bytes(response.into_body(), 4096).await.unwrap()
+        ).unwrap();
+        assert_eq!(error.code, ErrorCode::ServiceUnavailable);
+    }
+}
+
+#[tokio::test]
+async fn activity_object_state_is_append_only_without_update_or_delete_routes() {
+    for method in [Method::PUT, Method::PATCH, Method::DELETE] {
+        let response = object_state_http(
+            method, "/activities/a/object-state", Some(object_state_body()),
+        ).await;
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
 }

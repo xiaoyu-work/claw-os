@@ -33,6 +33,9 @@ before returning similarity-ranked candidates; raw precomputed-vector queries
 retain the caller-managed vector-space contract.
 Desktop broker consumers depend on `clawd-client`; the client contains no
 desktop UI or privileged broker implementation.
+Its typed command inventory must be updated with every desktop-consumed broker
+route, including Activity object-state list/record; core route additions alone
+do not update this independent client.
 Keep Obscura changes scoped and preserve upstream licensing/provenance. Add a
 new crate only for a coherent reusable responsibility.
 

@@ -38,6 +38,7 @@ web UI.
 | `ui/src/components/activity-objects.tsx` | Typed object attachment, declaration-only status, inert references, and structured invocation metadata |
 | `ui/src/components/operation-effects.tsx`, `ui/src/lib/operation-preview.ts` | Per-object metadata-only effect previews and strict response validation |
 | `ui/src/components/activity-receipts.tsx`, `ui/src/lib/activity-receipts.ts` | Read-only caller-reported receipts, source/identity checks, inert summaries, and declaration diagnostics |
+| `ui/src/components/activity-object-state.tsx`, `ui/src/lib/object-state.ts` | Shared object-state forms/history, source/validity caveats and selection-safe correction/retraction |
 | `ui/src/lib/api-shapes.ts` | Shared response-shape guards used by Activity and preview adapters |
 | `mod.rs`, `server.rs` | Serve command and authenticated router assembly |
 
@@ -92,3 +93,10 @@ workflow over a mocked authenticated API, including stale selection responses,
 canonical object attachments, declaration failures, non-execution, unknown
 effects, requested-only targets, isolated late previews, receipt provenance,
 uncertain/error reports, declaration failures, and terminal-state receipt reads.
+
+Object state uses `activity.object_state.list/record`, with immutable drafts and
+server-derived owner/source/time. Its author classifications are caller reports,
+never verified facts; linked App output is projected from an existing receipt.
+The Web holds no authoritative copy, does not resolve an object, and never
+turns a relationship into scheduled work. See
+[`docs/object-state.md`](../../../../docs/object-state.md).

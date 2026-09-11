@@ -4,8 +4,8 @@
 use cos_agent_protocol::{
     ActivityApprovalView, ActivityDetailResponse, ActivityJobView, ActivityListResponse,
     ActivityObjectResourceView, ActivityObjectStatus, ActivityObjectsResponse,
-    ActivityOperationPreview, ActivityReceiptsResponse, ActivityResource, ActivityState,
-    ActivityView, ActivityWorkResponse,
+    ActivityObjectStateResponse, ActivityOperationPreview, ActivityReceiptsResponse,
+    ActivityResource, ActivityState, ActivityView, ActivityWorkResponse, ObjectStateEntry,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -135,6 +135,27 @@ pub fn receipts(value: Value) -> Result<ActivityReceiptsResponse, String> {
         return Err("activity.receipts returned an invalid schema or Activity identity".into());
     }
     Ok(response)
+}
+
+pub fn object_state(value: Value) -> Result<ActivityObjectStateResponse, String> {
+    let response: ActivityObjectStateResponse = serde_json::from_value(value)
+        .map_err(|error| format!("invalid activity.object_state.list result: {error}"))?;
+    if !response.matches_activity(&response.activity_id) {
+        return Err(
+            "activity.object_state.list returned an invalid schema, entry or Activity identity"
+                .into(),
+        );
+    }
+    Ok(response)
+}
+
+pub fn object_state_entry(value: Value) -> Result<ObjectStateEntry, String> {
+    let entry: ObjectStateEntry = serde_json::from_value(value)
+        .map_err(|error| format!("invalid activity.object_state.record result: {error}"))?;
+    if !entry.matches_activity(&entry.activity_id) {
+        return Err("activity.object_state.record returned an invalid entry or Activity identity".into());
+    }
+    Ok(entry)
 }
 
 pub fn list(value: Value) -> Result<ActivityListResponse, String> {

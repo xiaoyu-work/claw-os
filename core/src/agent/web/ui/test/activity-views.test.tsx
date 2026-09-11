@@ -5,11 +5,14 @@ import { createRoot, type Root } from "react-dom/client";
 
 import { OperationEffects } from "../src/components/operation-effects";
 import { ActivityReceiptsPanel } from "../src/components/activity-receipts";
-import { useActivity, useActivities, useActivityObjects, useActivityReceipts } from "../src/hooks/use-activities";
+import { ActivityObjectStatePanel } from "../src/components/activity-object-state";
+import { useActivity, useActivities, useActivityObjects, useActivityObjectState, useActivityReceipts } from "../src/hooks/use-activities";
 import { activityApi, type ActivityDetail, type ActivityObjects, type ActivityState } from "../src/lib/activities";
 import type { ActivityReceipts } from "../src/lib/activity-receipts";
 import type { OperationPreview } from "../src/lib/operation-preview";
 import { receiptFixture } from "./receipt-fixtures";
+import { objectStateFixture, OBJECT_REFERENCE, OBJECT_NEXT_ID } from "./object-state-fixtures";
+import type { ObjectStateView } from "../src/lib/object-state";
 
 function detail(id: string): ActivityDetail {
   return {
@@ -75,6 +78,55 @@ function ObjectsView({ id }: { id: string }) {
 function ReceiptsView({ id }: { id: string }) {
   return <ActivityReceiptsPanel view={useActivityReceipts(id)} ownerUid={1000} />;
 }
+
+function ObjectStatePanel({ id }: { id: string }) {
+  return <ActivityObjectStatePanel key={id} activityId={id} ownerUid={1000}
+    resources={[{ label: "Release", reference: OBJECT_REFERENCE }]}
+    view={useActivityObjectState(id)} disabled={false} />;
+}
+
+test("object-state reports and correction history remain inert and explicitly unverified", async () => {
+  const entry = objectStateFixture();
+  entry.validity = "expired";
+  entry.draft.observed_at = "2026-09-10T00:00:00Z";
+  entry.draft.valid_until = "2026-09-11T00:00:00Z";
+  const corrected = objectStateFixture(OBJECT_NEXT_ID);
+  corrected.draft.content = { kind: "agent_inference", text: "Possibly not ready" };
+  corrected.draft.supersedes = entry.id;
+  entry.superseded_by = corrected.id;
+  spyOn(activityApi, "objectState").mockResolvedValue({
+    schema: 1, activity_id: "activity-1", entries: [corrected, entry],
+  });
+  const run = spyOn(activityApi, "run");
+  const transition = spyOn(activityApi, "transition");
+  await act(async () => root.render(<ObjectStatePanel id="activity-1" />));
+  expect(container.textContent).toContain("Caller-reported annotations, not verified facts");
+  expect(container.textContent).toContain("Agent inference (reported)");
+  expect(container.querySelectorAll("article")).toHaveLength(1);
+  await act(async () => container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click());
+  expect(container.querySelectorAll("article")).toHaveLength(2);
+  expect(container.textContent).toContain("Reported window expired");
+  expect(container.textContent).toContain("Superseded by");
+  expect(container.querySelectorAll("article img,article script,article a")).toHaveLength(0);
+  expect(run).not.toHaveBeenCalled();
+  expect(transition).not.toHaveBeenCalled();
+});
+
+test("object-state owner failures and late reads cannot replace another Activity's data", async () => {
+  const first = deferred<ObjectStateView>();
+  const read = spyOn(activityApi, "objectState").mockImplementation((id) => id === "activity-1"
+    ? first.promise : Promise.resolve({ schema: 1, activity_id: id, entries: [] }));
+  await act(async () => root.render(<ObjectStatePanel id="activity-1" />));
+  await act(async () => root.render(<ObjectStatePanel id="activity-2" />));
+  await act(async () => first.resolve({ schema: 1, activity_id: "activity-1", entries: [objectStateFixture()] }));
+  expect(container.querySelectorAll("article")).toHaveLength(0);
+  read.mockResolvedValue({
+    schema: 1, activity_id: "activity-2", entries: [{ ...objectStateFixture(undefined, "activity-2"), owner_uid: 2000 }],
+  });
+  await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Refresh object state"]')!.click());
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("owner does not match");
+  expect(container.querySelectorAll("article")).toHaveLength(0);
+});
 
 test("receipts display inert caller reports and recording metadata without authoring or authority", async () => {
   const receipt = receiptFixture();

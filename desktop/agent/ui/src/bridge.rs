@@ -12,11 +12,13 @@ use anyhow::{Context, Result, anyhow};
 pub use cos_agent_protocol::{
     ActivityCreateRequest, ActivityDetailResponse, ActivityListQuery, ActivityListResponse,
     ActivityObjectAttachRequest, ActivityObjectsResponse,
+    ActivityObjectStateQuery, ActivityObjectStateRecordRequest, ActivityObjectStateResponse,
     ActivityOperationPreview, ActivityOperationPreviewRequest,
     ActivityReceiptsQuery, ActivityReceiptsResponse,
     ActivityRunRequest, ActivityState, ActivityTransitionRequest, ActivityUpdateRequest,
     ActivityView, ActivityWorkResponse, BridgeEndpoint, CancelResponse, ChatRequest, ErrorEnvelope,
-    HistoryMessage, ModelsResponse, SessionSummary, StreamEvent, ToolCallView, ToolResultView,
+    HistoryMessage, ModelsResponse, ObjectStateEntry, SessionSummary, StreamEvent, ToolCallView,
+    ToolResultView,
 };
 use cos_agent_protocol::{PROTOCOL_VERSION_HEADER, ProtocolMetadata, ProtocolVersion};
 use reqwest::header::HeaderMap;
@@ -474,6 +476,44 @@ pub async fn fetch_activity_receipts(
         request.query(&ActivityReceiptsQuery { limit: Some(100) }),
         selected,
     ).await
+}
+
+fn object_state_list_request(
+    endpoint: &BridgeEndpoint,
+    id: &str,
+    query: &ActivityObjectStateQuery,
+) -> Result<(reqwest::RequestBuilder, ProtocolVersion)> {
+    let (request, selected) =
+        activity_request(endpoint, reqwest::Method::GET, &["activities", id, "object-state"])?;
+    Ok((request.query(query), selected))
+}
+
+pub async fn fetch_activity_object_state(
+    endpoint: BridgeEndpoint,
+    id: &str,
+    query: ActivityObjectStateQuery,
+) -> Result<ActivityObjectStateResponse> {
+    let (request, selected) = object_state_list_request(&endpoint, id, &query)?;
+    activity_response(request, selected).await
+}
+
+fn object_state_record_request(
+    endpoint: &BridgeEndpoint,
+    id: &str,
+    body: &ActivityObjectStateRecordRequest,
+) -> Result<(reqwest::RequestBuilder, ProtocolVersion)> {
+    let (request, selected) =
+        activity_request(endpoint, reqwest::Method::POST, &["activities", id, "object-state"])?;
+    Ok((request.json(body), selected))
+}
+
+pub async fn record_activity_object_state(
+    endpoint: BridgeEndpoint,
+    id: &str,
+    body: ActivityObjectStateRecordRequest,
+) -> Result<ObjectStateEntry> {
+    let (request, selected) = object_state_record_request(&endpoint, id, &body)?;
+    activity_response(request, selected).await
 }
 
 pub async fn create_activity(
