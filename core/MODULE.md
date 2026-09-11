@@ -107,7 +107,14 @@ defaults and separate key/database/whole-store scopes. Signed fixtures in
 DB and KV retain independent owner/App partitions, without neighbouring App or
 Agent-memory mounts. `test/support/app_stage.rs` reuses the declared staging CLI,
 checks the prepared cache's exact Git revision/cleanliness without downloads,
-and supplies the OS-owned shared Python library separately from App payloads.
+and stages App-owned common support through public `--shared`, separately
+from App payloads and OS SDK/runtime. Both occupy the canonical
+`usr/lib/cos/python` import root; no OS Apps source or sibling helper copy is
+available to the fixture. The shared URL corpus is read from the pinned
+App-owned `tests/shared/vectors` directory, never from runtime payloads.
+The source-only check forbidding App-owned operation schema implementations
+belongs to App `tests/test_manifest_contracts.py`; core retains manifest/API
+schema checks, not a duplicate scan of App business source.
 Signed fixtures and the real KV session tests bind the manifest-selected
 entrypoint rather than assuming private implementation filenames.
 The KV planner regression verifies distinct key read/write/delete grants and

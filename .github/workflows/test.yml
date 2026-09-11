@@ -25,6 +25,7 @@ jobs:
             rootfs/features/claw-mail-ai/install.sh
             tools/install-mail-ai.sh
             packaging/deb/build-debs.sh
+            packaging/deb/build-desktop-deb.sh
             targets/docker/build.sh
             targets/docker/container-entrypoint.sh
             targets/wsl/build.sh
@@ -63,7 +64,7 @@ jobs:
       # rather than skip if it is somehow still unavailable, so a
       # missing dependency cannot turn those tests into a no-op.
       - name: Install worker sandbox dependencies
-        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends bubblewrap
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends bubblewrap python3-idna openssl
 
       - name: Cache cargo registry & target
         uses: actions/cache@v4
@@ -219,5 +220,5 @@ jobs:
         env:
           PYTHONPATH: claw-os-sdk/python/src:cos-runtime/python/src
         run: >-
-          python3 -m pytest -q apps adapters claw-os-sdk/python/src cos-runtime/python/src
+          python3 -m pytest -q adapters claw-os-sdk/python/src cos-runtime/python/src
           packaging/deb/tests/test_app_sources.py rootfs/features/claw-mail-ai/test_install.py

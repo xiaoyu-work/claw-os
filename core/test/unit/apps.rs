@@ -76,34 +76,6 @@ fn bundled_apps_declare_their_optional_path_defaults() {
 }
 
 #[test]
-fn bundled_python_entries_do_not_own_operation_schemas() {
-    fn inspect(dir: &std::path::Path, duplicates: &mut Vec<String>) {
-        for entry in std::fs::read_dir(dir).unwrap() {
-            let entry = entry.unwrap();
-            let path = entry.path();
-            if path.is_dir() {
-                inspect(&path, duplicates);
-            } else if path.extension().and_then(|extension| extension.to_str()) == Some("py") {
-                let source = std::fs::read_to_string(&path).unwrap();
-                if source.contains("def _schema(") || source.contains("__schema__") {
-                    duplicates.push(path.display().to_string());
-                }
-            }
-        }
-    }
-
-    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap();
-    let mut duplicates = Vec::new();
-    inspect(&repository.join("apps"), &mut duplicates);
-    assert!(
-        duplicates.is_empty(),
-        "app.json is the sole operation schema owner; duplicate runtime schemas: {duplicates:?}"
-    );
-}
-
-#[test]
 fn known_first_party_schema_drift_is_resolved_in_manifests() {
     let exec = Manifest::from_json(
         &std::fs::read_to_string(app_sources::app_dir("exec").join("app.json")).unwrap(),

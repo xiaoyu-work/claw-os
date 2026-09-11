@@ -37,10 +37,13 @@ This count includes native Notifications and `notify`, not their OS service
 or shared libraries. `doc` now belongs to the explicitly declared Document
 Engine capability-client group, not a new Documents business product. `db` and
 `kv` belong to Storage SDK, separate from the Storage business product. `net`
-belongs to the HTTP client group, with transport and authority still OS-owned.
+belongs to the HTTP client group, with brokered transport and authority still OS-owned.
 `summarize` belongs to AI Helpers as a client, not a provider or business product.
-No original production App manifest remains under OS `apps/`; the retained
-shared helpers/runtime exports are not extra Apps.
+No App production or helper source remains under OS `apps/`. App
+`shared/python` owns the common libraries and `tests/shared` owns their tests
+and vectors. The current Agent package stages that pinned support once under
+`/usr/lib/cos/python`, alongside OS SDK/runtime; independent App-package
+installed ownership remains a separate cutover.
 Source ownership does not complete M2, backend/state consolidation, identity
 and consent cutovers, or visual/installed-image acceptance.
 
@@ -62,7 +65,7 @@ and consent cutovers, or visual/installed-image acceptance.
 | `doc` | Complete legacy facade, unchanged manifest/server and tests moved to `clawos-app/capabilities/document-engine/apps/doc`, explicitly a shared-capability client. Its declared dependency consumes Files' single `claw_files` parser export in tests and Agent/Doc-only staging without calling Files Apps. Six operations, CLI bindings, outputs, existing grants, AI safety/budget/origin and `doc` memory identity remain unchanged; no user state moves |
 | `db` | Complete manifest, SQLite implementation, MCP server and tests moved to `clawos-app/capabilities/storage-sdk/apps/db`, explicitly a shared-capability client, not a new business product or privileged SDK/provider. Five MCP/CLI tools, exact grants, SQL/name boundaries, single-statement commits, 1,000-returned-row bound and `$COS_DATA_DIR/db/<name>.db` remain unchanged. No App calls, KV/Agent-memory merge, user-data import or new state transition |
 | `kv` | Complete MCP-only manifest, server/data implementation and `test_server.py` moved to `clawos-app/capabilities/storage-sdk/apps/kv`, without inventing a main module or copying OS SDK/provider code. Five tool/CLI shapes and independent `$COS_DATA_DIR/kv.json` persist; cache invalidation, locked read-modify-replace, failed-write handling and private atomic writes are corrected. List/dump explicitly require whole-store read rather than borrowed named-key grants; exact-key get/set/delete and stored grants remain separate. No DB/Storage/Agent-memory merge, App call or user-data transition |
-| `net` | Complete unchanged HTTP implementation, manifest and typed MCP server moved to `clawos-app/capabilities/http/apps/net` with existing unit tests and staged public MCP/CONNECT contracts. Two tool/CLI shapes, exact host/port and output grants, request/response/download bounds and failure behavior remain unchanged. `_shared.safe_http`, SDK/runtime and egress enforcement stay OS-owned; no other App calls, copied providers, new state or runtime source downloads |
+| `net` | Complete unchanged HTTP implementation, manifest and typed MCP server moved to `clawos-app/capabilities/http/apps/net` with existing unit tests and staged public MCP/CONNECT contracts. Two tool/CLI shapes, exact host/port and output grants, request/response/download bounds and failure behavior remain unchanged. App common support owns `_shared.safe_http`; SDK/runtime and egress enforcement stay OS-owned. No other App calls, copied providers, new state or runtime source downloads |
 | `summarize` | Complete client, manifest, typed MCP entry and tests moved to `clawos-app/capabilities/ai-helpers/apps/summarize`. Explicit-text SDK AI retains its own identity, strict external-content policy, 100,000-unit monthly budget, 4,000-unit request cap, summary/usage/budget/review fields and bounded `self:summarize` memory request. The manifest fixes its existing wildcard AI scope instead of borrowing incompatible model scopes; consent snapshots and stored grants are unchanged. No provider/SDK copy, App call, local memory store, data import or identity/budget union |
 | `docs` | Moved to `clawos-app/products/files/apps/docs`; four Recoll-backed tools, owner index state and scopes preserved; background indexing remains OS-owned |
 | `search` | Moved to `clawos-app/products/browser/apps/search`; explicit provider choice, two MCP tools and exact credential/network scopes preserved |
@@ -229,7 +232,7 @@ runtime capability, grant union, identity deprecation or backend/data redesign.
 | --- | --- | --- |
 | Document engine | `doc` | Source moved to the shared-capability client group; it consumes Files' declared parsing/conversion library. Existing Doc AI remains under the `doc` identity; product-specific AI stays with its consuming product. |
 | Storage SDK | `db`, `kv` | Both clients have moved to `capabilities/storage-sdk`. Existing owner/App SQLite and JSON namespaces and grants stay independent from one another, the Storage business product and Agent memory; no privileged SDK/provider is copied. |
-| HTTP | `net` | Source moved to `capabilities/http`; the unchanged client consumes the OS shared transport and policy exports, with exact per-hop destination and output authority. |
+| HTTP | `net` | Source moved to `capabilities/http`; the unchanged client consumes App-owned common HTTP support and OS brokered transport/policy, with exact per-hop destination and output authority. |
 | AI helpers client | `summarize` | Source moved to `capabilities/ai-helpers`; the client retains its own `summarize` consent, budget and memory namespace. The AI gate/providers remain OS-owned; other products use SDK AI directly under their own identities, never this App. |
 
 ### Connectors

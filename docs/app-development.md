@@ -41,8 +41,13 @@ AI Helpers owns the Summarize client, not the OS AI gate. It takes explicit
 text and calls SDK AI under `summarize` consent/budget, then requests bounded
 summary memory through the bundled `cos_runtime.memory.remember` export under
 `self:summarize`. Other products use SDK AI directly, not this App or its
-consent. All 75 original App sources are now external; OS `apps/` retains
-declared library exports, not a second production implementation.
+consent. All 75 original App sources and their common support are external.
+App `shared/python` owns `_shared`, `gateway._shared` and `canonical_argv`;
+`tests/shared` owns helper tests/vectors. There is no OS `apps/` source tree.
+The pinned common staging CLI installs these libraries in
+`/usr/lib/cos/python`, alongside separately owned OS SDK/runtime. Existing
+Agent package assembly still delivers those files until a coordinated
+independent App-package ownership transition.
 Compatible App changes use versioned public SDK/MCP/wire or declared bundled
 exports. Full staged payload fixtures must select the manifest entrypoint,
 not private App/SDK functions or a mutable sibling source layout.
@@ -226,9 +231,9 @@ The bridge calls `mod.run(command, args)` exactly once per invocation
 * `args` is a **list of strings**, not a dict — the bridge validates every
   declared positional and `--flag` value, rejects undeclared flags, and then
   passes the effective argv (including manifest defaults) to the handler. Apps
-  parse the already validated values; see
-  [`apps/notify/main.py:46-99`](../apps/notify/main.py) for the
-  conventional positional-vs-flag style.
+  parse the already validated values with App-owned
+  [`canonical_argv`](https://github.com/xiaoyu-work/clawos-app/blob/main/shared/python/canonical_argv.py),
+  preserving inline flag values and the `--` delimiter.
 
 Each argument declares a value `kind`: `path`, `host`, `name`, `text`,
 `number`, `integer`, or `bool`. `number` accepts decimal values while
@@ -305,7 +310,8 @@ recognized only in an App operation's pre-`--` option region, so command-owned
 (configurable with `COS_APP_STDIN_MAX_BYTES`) and fails before launch on
 overflow. The bridge never inherits or probes process stdin. Agent, MCP
 service, and ordinary CLI calls therefore keep child stdin closed. Python list
-handlers use the common App support package's `canonical_argv` module;
+handlers use App-owned common support's `canonical_argv` module from that
+same installed Python root;
 argparse and gateway parsers consume the same inline flags and `--` delimiter
 directly.
 
@@ -475,7 +481,7 @@ Declare it in `operations.<op>.needs[]`:
   ports and bracketed IPv6, and rejects schemes without a known or explicit
   port. App-side URL checks must derive the identical scope; HTTP clients use
   `_shared.safe_http.host_scope`, including for every redirect hop. The shared
-  `_shared/url_host_scope_vectors.json` corpus locks Rust and Python behavior
+  App-owned `tests/shared/vectors/url_host_scope_vectors.json` corpus locks Rust and Python behavior
   for UTS-46 ignored/mapped/contextual/rejected input, IDNA/punycode domains,
   legacy IPv4 forms, IPv6 compression, and ports. Production images provide
   `idna >= 3.3, < 4`; missing or unsupported versions fail closed. Core's
@@ -489,7 +495,8 @@ Declare it in `operations.<op>.needs[]`:
 * `"from-arg-map"` — map explicit argument values to predefined scopes:
   `{"kind": "from-arg-map", "arg": "mode", "values": {...}}`.
 * `"from-arg-or-wild"` — derive a scope from an argument normally, but use a
-  wildcard when it equals `wild_when`:
+  wildcard when the separately declared boolean argument named by `wild_when`
+  is `true`:
   `{"kind": "from-arg-or-wild", "arg": "target", "wild_when": "all"}`.
 
 Needs that apply only in one mode declare `when` explicitly:
@@ -506,9 +513,13 @@ Needs that apply only in one mode declare `when` explicitly:
 `arg-equals` gates provider/mode-specific fixed needs:
 `{"kind":"arg-equals","arg":"provider","value":"google"}`. An inactive
 condition omits only that declared need. Once active, missing arguments and
-unmapped `from-arg-map` values remain errors. Binding a capability
-unconditionally to an optional argument without a matching `required_when`
-condition is rejected at manifest load time. `arg-not-equals` provides the
+unmapped `from-arg-map` values remain errors. An optional scope argument needs
+a condition checking that argument, or a `when` exactly matching the argument's
+`required_when` (same kind, referenced argument and comparison value).
+The matching condition makes the argument mandatory before capability
+resolution; an inactive condition yields no capability. Conditional booleans
+have no implicit `false` default. Unconditional optional bindings and mismatched
+conditions are rejected at manifest load time. `arg-not-equals` provides the
 inverse comparison when one mode must omit authority.
 
 Check it at runtime by importing the internal runtime:
@@ -882,7 +893,7 @@ format, trust roots, revocation and rollback.
 * [`browser-attached-design.md`](browser-attached-design.md) —
   worked example of a non-trivial app with a Chromium extension and a
   native-messaging bridge.
-* [`apps/notify/`](../apps/notify/),
+* [`clawos-app/products/notifications/apps/notify/`](https://github.com/xiaoyu-work/clawos-app/tree/main/products/notifications/apps/notify),
   [`clawos-app/capabilities/storage-sdk/apps/kv/`](https://github.com/xiaoyu-work/clawos-app/tree/main/capabilities/storage-sdk/apps/kv),
   [`clawos-app/products/files/apps/fs/`](https://github.com/xiaoyu-work/clawos-app/tree/main/products/files/apps/fs) — small bundled apps that double as
   reference templates.

@@ -13,7 +13,8 @@
 # Inputs:
 #   target/<RUST_TARGET>/release/cos          (built by cargo for $ARCH)
 #   target/<RUST_TARGET:gnu>/release/cos-browser  (glibc — V8 needs it)
-#   apps/, skills/                                        (source tree)
+#   packaging/apps.lock.json                  (pinned App source/support)
+#   skills/                                               (source tree)
 #   rootfs/overlay/etc/cos/*, rootfs/overlay/usr/...      (source tree)
 #   rootfs/features/systemd/overlay/usr/lib/systemd/...   (source tree)
 #
@@ -500,31 +501,14 @@ sed -i "s/COS_VERSION=\".*\"/COS_VERSION=\"$VERSION\"/" \
 DESKTOP_APPS_FILE="$SCRIPT_DIR/claw-os-desktop/apps.list"
 while IFS= read -r app_id; do
     [ -n "$app_id" ] || continue
-    if [ ! -f "$PROJECT_DIR/apps/$app_id/app.json" ]; then
-        python3 "$PROJECT_DIR/scripts/app_sources.py" --app-path "$app_id" >/dev/null
-    fi
+    python3 "$PROJECT_DIR/scripts/app_sources.py" --app-path "$app_id" >/dev/null
 done < "$DESKTOP_APPS_FILE"
-for app_dir in "$PROJECT_DIR/apps"/*; do
-    [ -d "$app_dir" ] || continue
-    app_id="$(basename "$app_dir")"
-    [ "$app_id" = "__pycache__" ] && continue
-    if grep -Fxq "$app_id" "$DESKTOP_APPS_FILE"; then
-        continue
-    fi
-    cp -a "$app_dir" "$AGENT_STAGE/usr/lib/cos/apps/$app_id"
-done
-install -m 644 "$PROJECT_DIR/apps/canonical_argv.py" \
-    "$AGENT_STAGE/usr/lib/cos/python/canonical_argv.py"
-# Retired source directories containing only bytecode must not shadow pinned Apps.
-find "$AGENT_STAGE/usr/lib/cos/apps" -name '__pycache__' -type d \
-    -exec rm -rf {} + 2>/dev/null || true
-find "$AGENT_STAGE/usr/lib/cos/apps" -depth -mindepth 1 -type d -empty -delete
+# Compatibility delivery remains in Agent; the common source and staging
+# contract belong to Apps, independently of OS SDK/runtime and App payloads.
+python3 "$PROJECT_DIR/scripts/app_sources.py" --stage-shared "$AGENT_STAGE"
 python3 "$PROJECT_DIR/scripts/app_sources.py" --stage "$AGENT_STAGE" --package agent
-external_app_count="$(python3 "$PROJECT_DIR/scripts/app_sources.py" --count)"
 
-source_app_count="$(find "$PROJECT_DIR/apps" -mindepth 2 \
-    -name app.json -type f | wc -l)"
-source_app_count=$((source_app_count + external_app_count))
+source_app_count="$(python3 "$PROJECT_DIR/scripts/app_sources.py" --count)"
 agent_app_count="$(find "$AGENT_STAGE/usr/lib/cos/apps" -mindepth 2 \
     -name app.json -type f | wc -l)"
 desktop_app_count="$(grep -cve '^[[:space:]]*$' "$DESKTOP_APPS_FILE")"

@@ -978,39 +978,39 @@ fn explicit_stdin_bytes_reach_python_and_polyglot_children() {
 
 #[test]
 fn bundled_lone_limits_bind_before_optional_selectors() {
-    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap();
-    let load = |path: &[&str]| {
-        let path = path
-            .iter()
-            .fold(repository.join("apps"), |path, component| {
-                path.join(component)
-            })
-            .join("app.json");
-        Manifest::from_json(&std::fs::read_to_string(path).unwrap()).unwrap()
-    };
+    let events = Manifest::from_json(
+        &std::fs::read_to_string(app_sources::app_dir("event-center").join("app.json")).unwrap(),
+    )
+    .unwrap();
+    let recent = crate::apps::mcp_tool_for_command(&events, "recent").unwrap();
+    let supplied = crate::caps::args::bind_supplied_cli_args(&recent.args, &["25".into()]).unwrap();
+    let lone_limit = events.resolve_mcp_tool_args(&recent.name, &supplied).unwrap();
+    assert_eq!(lone_limit["limit"], serde_json::json!(25));
+    assert!(!lone_limit.contains_key("source"));
+    let supplied = crate::caps::args::bind_supplied_cli_args(
+        &recent.args,
+        &["--source".into(), "security".into()],
+    )
+    .unwrap();
+    let selected = events.resolve_mcp_tool_args(&recent.name, &supplied).unwrap();
+    assert_eq!(selected["source"], serde_json::json!("security"));
+    assert_eq!(selected["limit"], serde_json::json!(100));
 
-    let events = load(&["event-center"]);
-    let recent = &events.operations["recent"];
-    let lone_limit = bind_operation_args(recent, &["25".into()]).unwrap();
-    assert_eq!(lone_limit.values["limit"], serde_json::json!(25));
-    assert_eq!(lone_limit.argv, ["25"]);
-    let selected = bind_operation_args(recent, &["--source".into(), "security".into()]).unwrap();
-    assert_eq!(selected.values["source"], serde_json::json!("security"));
-    assert_eq!(selected.values["limit"], serde_json::json!(100));
-    assert_eq!(selected.argv, ["100", "--source", "security"]);
-
-    let net = load(&["net"]);
+    let net = Manifest::from_json(
+        &std::fs::read_to_string(app_sources::app_dir("net").join("app.json")).unwrap(),
+    )
+    .unwrap();
     let output = effective_app_home().join("download.bin");
     let args = vec![
         "https://example.test/download.bin".to_string(),
         output.to_string_lossy().into_owned(),
     ];
-    let download = bind_operation_args(&net.operations["download"], &args).unwrap();
-    assert_eq!(download.argv, args);
+    let tool = crate::apps::mcp_tool_for_command(&net, "download").unwrap();
+    let supplied = crate::caps::args::bind_supplied_cli_args(&tool.args, &args).unwrap();
+    let download = net.resolve_mcp_tool_args(&tool.name, &supplied).unwrap();
+    assert_eq!(download["url"], args[0]);
     assert_eq!(
-        download.values["output"],
+        download["output"],
         serde_json::json!(output.to_string_lossy())
     );
 }
@@ -1179,23 +1179,15 @@ fn webhook_target_requires_flag_binding() {
 
 #[test]
 fn bundled_removed_aliases_are_rejected() {
-    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap();
-    let load = |path: &[&str]| {
-        let path = path
-            .iter()
-            .fold(repository.join("apps"), |path, component| {
-                path.join(component)
-            })
-            .join("app.json");
-        Manifest::from_json(&std::fs::read_to_string(path).unwrap()).unwrap()
-    };
-    let net = load(&["net"]);
+    let net = Manifest::from_json(
+        &std::fs::read_to_string(app_sources::app_dir("net").join("app.json")).unwrap(),
+    )
+    .unwrap();
+    let tool = crate::apps::mcp_tool_for_command(&net, "download").unwrap();
     let output = effective_app_home().join("alias.bin");
     let url = "https://example.test/alias.bin".to_string();
-    assert!(bind_operation_args(
-        &net.operations["download"],
+    assert!(crate::caps::args::bind_supplied_cli_args(
+        &tool.args,
         &[
             url.clone(),
             "--output".into(),
@@ -1203,13 +1195,14 @@ fn bundled_removed_aliases_are_rejected() {
         ],
     )
     .is_err());
-    let positional = bind_operation_args(
-        &net.operations["download"],
+    let supplied = crate::caps::args::bind_supplied_cli_args(
+        &tool.args,
         &[url, output.to_string_lossy().into_owned()],
     )
     .unwrap();
+    let positional = net.resolve_mcp_tool_args(&tool.name, &supplied).unwrap();
     assert_eq!(
-        positional.values["output"],
+        positional["output"],
         serde_json::json!(output.to_string_lossy())
     );
 }

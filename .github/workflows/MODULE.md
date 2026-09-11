@@ -11,6 +11,10 @@ dispatched and reusable test/publication pipelines.
   preservation of the package-owned runtime during rootfs registration.
 - Prepare immutable product source inputs before cross-repository Rust tests,
   retaining real App/broker coverage without a second local implementation.
+- Run OS adapter/SDK/runtime and pinned staging/MCP fixtures, not the removed
+  OS `apps/` tests. App helper tests/vectors belong to App `tests/shared`;
+  process fixtures receive separately staged common support, the required
+  `python3-idna` runtime dependency and OpenSSL for private HTTPS certificates.
 - Build shared Docker/WSL images per architecture.
 - Build and sign independent multi-architecture APT packages/repository.
 - Build the React/Vite web desktop as an independent Pages input.

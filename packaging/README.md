@@ -61,10 +61,26 @@ enforcement, the native launcher and package signing. Product source changes
 are released by updating this pin and publishing the normal OS packages;
 installed systems do not fetch executable code from Git.
 
+Common App support comes from that same pin's `shared/python`. The OS wrapper
+`python3 scripts/app_sources.py --stage-shared <root>` invokes the public
+`tools/stage.py --shared --root <root>` contract once, separately from product
+staging and OS SDK/runtime. It installs the three owned names `_shared`,
+`gateway` and `canonical_argv.py` under `usr/lib/cos/python`; exact identical
+co-staging is reusable, while conflicting bytes, modes, symlinks or extra files
+fail before copying any common library. Tests, vectors and bytecode are excluded.
+No OS `apps/` source tree or duplicate support under `usr/lib/cos/apps` remains.
+Agent keeps its `python3-idna (>= 3.3), python3-idna (<< 4)` dependency.
+
+This is the existing source-pin compatibility delivery: `claw-os-agent` still
+owns the installed common files. Independent App APT/common packages must replace
+that delivery in a separately coordinated ownership cutover. This checkpoint
+adds neither a permanent new source-build dependency for that cutover nor an
+installed Git updater.
+
 A compatible App business change needs no OS core implementation change.
 The remaining coupling is explicit source composition and release delivery:
 package metadata and the staging CLI are build contracts, development selects
-SDK/runtime source-directory exports at an immutable platform revision, and
+the versioned SDK/runtime/toolkit platform artifact, and
 installed changes still require an App-pin/package release here. Bundled
 `cos_runtime` is not an independently published third-party SDK. Paired
 migration commits are cutover choreography, not a requirement to edit both
@@ -103,8 +119,8 @@ Desktop still has 12. Normal signed package updates remain the only installed
 update path; source relocation adds no data transition.
 KV's manifest and MCP-only data implementation install at `/usr/lib/cos/apps/kv`;
 its string map remains at `$COS_DATA_DIR/kv.json` in the independent `kv`
-partition. No `main.py` is invented. The OS supplies `_shared.atomic` as a
-separate library export, alongside SDK/runtime. KV fixes stale caches, lost
+partition. No `main.py` is invented. App common support supplies `_shared.atomic`
+alongside the separately owned OS SDK/runtime. KV fixes stale caches, lost
 concurrent updates, failed-write cache publication and non-private replacement.
 List/dump now require fixed whole-store read authority instead of borrowing
 named-key grants; get/set/delete keep separate exact-key needs and no stored
@@ -112,8 +128,8 @@ grant changes. See [the update contract](../docs/updating.md#app-data-moves-into
 
 HTTP supplies `net` from `capabilities/http/apps/net` at the same immutable pin.
 Its original manifest, HTTP implementation and MCP server install at
-`/usr/lib/cos/apps/net`; the OS separately supplies `_shared.safe_http`,
-SDK/runtime, policy, egress enforcement and worker isolation. Existing two
+`/usr/lib/cos/apps/net`; App common support supplies `_shared.safe_http`, while
+OS supplies SDK/runtime, policy, egress enforcement and worker isolation. Existing two
 MCP/CLI contracts, exact endpoint/output grants, size bounds and atomic download
 behavior are unchanged. No provider, user data, additional identity or runtime
 source-fetch/update mechanism moves into this capability group.
@@ -126,8 +142,7 @@ request cap, result shape and `self:summarize` memory namespace remain unchanged
 The manifest's fixed wildcard AI binding now matches its existing runtime
 check; [the update note](../docs/updating.md#summarize-source-and-ai-scope-binding)
 explains this correction without rewriting grants or AI consent.
-No original production App manifests remain under OS `apps/`; shared helpers
-are retained exports, not additional Apps. Source completion does not establish
+No App production or helper source remains under OS `apps/`. Source completion does not establish
 full boot/upgrade acceptance or complete backend/state/identity consolidation.
 
 DB/KV/Net/Summarize integration fixtures compare the entire staged runtime payload, including
@@ -184,7 +199,10 @@ No Player binary/resources or test-fixture executable enter the headless payload
 Notifications is composed at `build/native-apps/cosmic-notifications`, including
 the full original daemon, config/util crates and standalone default/optional
 graph. Desktop owns `/usr/bin/cosmic-notifications` and its MCP descriptor;
-its panel/applets link the same explicitly exported product libraries.
+its panel/applets retain their existing links to the component's private
+config/util sources. Those inputs are still composed with the whole native
+component, but are no longer declared `native_libraries` exports; the source
+stager does not invent exports to preserve these legacy links.
 Agent provides `claw-os-notifications-v1`, preserving authoritative SQLite,
 owner/source validation, DND/preferences, audit and delivery leases/retries.
 MCP 0.2 uses durable strings instead of desktop integer IDs and explicitly

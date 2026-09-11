@@ -121,6 +121,22 @@ def desktop_apps():
     return (ROOT / "packaging/deb/claw-os-desktop/apps.list").read_text().split()
 
 
+def stage_shared(destination):
+    lock = read_lock()
+    source = prepare_sources(lock)
+    locked_app_paths(lock, source)
+    destination = destination.resolve()
+    python = destination / "usr/lib/cos/python"
+    result = subprocess.check_output(
+        [sys.executable, str(source / "tools/stage.py"),
+         "--shared", "--root", str(destination)],
+        cwd=source, text=True,
+    )
+    if json.loads(result) != str(python) or not python.is_dir():
+        raise RuntimeError("Shared App support did not stage its declared Python root")
+    return python
+
+
 def stage_products(destination, package=None):
     lock = read_lock()
     source = prepare_sources(lock)
@@ -227,12 +243,18 @@ def app_path(app_id):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--stage", type=Path)
+    parser.add_argument("--stage-shared", type=Path,
+                        help="stage pinned App common support separately from product payloads")
     parser.add_argument("--package", choices=["agent", "desktop"])
     parser.add_argument("--native", action="store_true")
     parser.add_argument("--app-path")
     parser.add_argument("--count", action="store_true")
     args = parser.parse_args()
-    if args.native:
+    if args.stage_shared and any((args.stage, args.package, args.native, args.app_path, args.count)):
+        parser.error("--stage-shared cannot be combined with product or source selectors")
+    if args.stage_shared:
+        print(stage_shared(args.stage_shared))
+    elif args.native:
         print(prepare_native())
     elif args.app_path:
         print(app_path(args.app_path))

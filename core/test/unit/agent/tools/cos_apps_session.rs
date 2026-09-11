@@ -74,27 +74,19 @@ fn write_kv_app(root: &Path) {
     crate::test_env::sign_test_package(&dir, crate::provenance::PackageKind::App, "kv");
 }
 
-/// Stage the complete immutable KV payload and OS-owned library export, then sign it.
+/// Stage the immutable KV payload, App support and OS SDK/runtime, then sign KV.
 fn signed_copy_of_repo_apps() -> tempfile::TempDir {
     let root = tempfile::tempdir().unwrap();
-    let kv_dst = app_stage::capability(
+    let kv_dst = app_stage::app(
         &app_sources::app_dir("kv"),
+        "capability",
         "storage-sdk",
         "kv",
         root.path(),
     );
-    app_stage::shared_python(kv_dst.parent().unwrap());
+    app_stage::python_runtime(&app_sources::app_dir("kv"), root.path());
     crate::test_env::sign_test_package(&kv_dst, crate::provenance::PackageKind::App, "kv");
     root
-}
-
-fn source_python_sdk() -> std::path::PathBuf {
-    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("repository root")
-        .join("claw-os-sdk")
-        .join("python")
-        .join("src")
 }
 
 fn test_call_context() -> crate::agent::tools::app_gateway::McpCallContext {
@@ -293,8 +285,10 @@ async fn pilot_kv_e2e_call_chain() {
     std::env::set_var("COS_CAPS_MODE", "permissive");
     let _session = crate::test_env::TestSessionGuard::admin(data.path());
     let _local_sessions = crate::test_env::TestEnvVarGuard::set("COS_TEST_LOCAL_APP_SESSIONS", "1");
-    let _source_sdk =
-        crate::test_env::TestEnvVarGuard::set("COS_SDK_PYTHON_DIR", source_python_sdk());
+    let _source_sdk = crate::test_env::TestEnvVarGuard::set(
+        "COS_SDK_PYTHON_DIR",
+        staged.path().join("usr/lib/cos/python"),
+    );
 
     // Make sure no stale entry from a previous test run survives.
     let _ = close_session("kv").await;
@@ -396,8 +390,10 @@ async fn open_race_single_child() {
     std::env::set_var("COS_CAPS_MODE", "permissive");
     let _session = crate::test_env::TestSessionGuard::admin(data.path());
     let _local_sessions = crate::test_env::TestEnvVarGuard::set("COS_TEST_LOCAL_APP_SESSIONS", "1");
-    let _source_sdk =
-        crate::test_env::TestEnvVarGuard::set("COS_SDK_PYTHON_DIR", source_python_sdk());
+    let _source_sdk = crate::test_env::TestEnvVarGuard::set(
+        "COS_SDK_PYTHON_DIR",
+        staged.path().join("usr/lib/cos/python"),
+    );
 
     let _ = close_session("kv").await;
 
@@ -452,8 +448,10 @@ async fn injected_app_root_is_used_for_discovery_and_execution() {
     let _caps = crate::test_env::TestEnvVarGuard::set("COS_CAPS_MODE", "permissive");
     let _session = crate::test_env::TestSessionGuard::admin(temp.path());
     let _local_sessions = crate::test_env::TestEnvVarGuard::set("COS_TEST_LOCAL_APP_SESSIONS", "1");
-    let _source_sdk =
-        crate::test_env::TestEnvVarGuard::set("COS_SDK_PYTHON_DIR", source_python_sdk());
+    let _source_sdk = crate::test_env::TestEnvVarGuard::set(
+        "COS_SDK_PYTHON_DIR",
+        staged.path().join("usr/lib/cos/python"),
+    );
     let app = crate::apps::find_verified(&injected_root, "kv").expect("injected kv app");
 
     let _ = close_session_at("kv", &injected_root).await;

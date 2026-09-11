@@ -136,8 +136,21 @@ and data paths are unchanged, and runtime discovery never downloads from Git.
 The migrated outbound delivery adapter retains `gateway-email` and its
 `/usr/lib/cos/apps/gateway/email` directory. Its policy/SMTP runtime is required;
 missing runtime libraries no longer enable unguarded standalone SMTP. The
-Agent package also installs the shared `canonical_argv.py` module with the
-Python runtime so legacy packaged entrypoints can resolve their parser.
+Agent compatibility assembly now obtains `_shared`, `gateway._shared` and
+`canonical_argv.py` from App-owned `shared/python` at the same immutable source
+pin. The public common staging contract installs them once in
+`/usr/lib/cos/python`, beside separately staged OS SDK/runtime, not as sibling
+libraries under `/usr/lib/cos/apps`. Helper tests/vectors are App-owned test
+inputs and are not installed. `python3-idna (>= 3.3), python3-idna (<< 4)`
+remains an Agent dependency. No OS helper source, symlink or import fallback
+is retained.
+
+These files still belong to the existing Agent Debian package. This source
+ownership checkpoint preserves current package delivery and legacy native/Mail
+launch contracts; it does not complete the independent App APT/common-package
+ownership transition. Normal signed package replacement handles the library
+path change without moving user data, grants, review state or security floors.
+Installed systems never fetch App code from Git.
 
 Text Editor's complete native source and descriptor are now built from the
 same immutable App repository pin. The signed `claw-os-desktop` package still
@@ -435,8 +448,8 @@ owner-private store is inside its sandbox.
 The source-only relocation of `net` to `clawos-app/capabilities/http/apps/net`
 preserves `/usr/lib/cos/apps/net` in the signed Agent package. Its two MCP/CLI
 contracts, exact endpoint/output needs, size limits and download behavior are
-unchanged. The OS supplies policy, SDK/runtime, `_shared.safe_http` and brokered
-egress separately. There is no new local store, data migration, provider copy,
+unchanged. App-owned common support supplies `_shared.safe_http`; the OS
+separately supplies policy, SDK/runtime and brokered egress. There is no new local store, data migration, provider copy,
 runtime source download or independent updater.
 
 The source-only relocation of `db` to

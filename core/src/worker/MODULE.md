@@ -173,9 +173,12 @@ and the path inside the sandbox are one string.
 An operation also gets a writable **App data partition**: `COS_DATA_DIR`
 is `<owner-data-root>/apps/<app-id>`, created `0700` and bound at that
 same path. The owner's data root itself — credentials, sessions, the
-journal, every other App's partition — is never mounted, and the
-read-only `_shared` library directories the bundled Apps import are the
-only other part of the apps tree a launch receives.
+journal, every other App's partition — is never mounted. App-owned common
+support and OS SDK/runtime use the existing read-only `/usr/lib/cos/python`
+runtime root, with an explicit staged equivalent in integration fixtures.
+The optional sibling `_shared` mounts in `derive.rs` remain legacy installed
+compatibility only; current pinned Apps do not require them, and no OS helper
+source or neighbouring App tree is staged or exposed for this purpose.
 
 Notify's historical `notifications.json` is intentionally excluded from the
 automatic state-move table. Existing files stay in their original namespace,
@@ -250,17 +253,19 @@ resolved. The caller runs TLS over the returned stream against the
 hostname it asked for, so the broker pins the transport and TLS pins the
 identity. A redirect is a new `CONNECT`, authorized from scratch.
 
-Bundled consumers are migrated: `apps/_shared/safe_http.py`,
-`apps/gateway/_shared/safe_egress.py`, the `calendar`, `search` and
-`email` HTTP paths, and both SMTP senders (`apps/email`,
-`apps/gateway/email`) via `cos_runtime.smtp`. Each uses the broker
+Bundled consumers use App-owned `shared/python/_shared/safe_http.py` and
+`shared/python/gateway/_shared/safe_egress.py`, the `calendar`, `search` and
+`email` HTTP paths, and both SMTP senders (`email` and `gateway-email`) via
+OS `cos_runtime.smtp`. Each uses the broker
 inside a sandbox and its ordinary pinned dial outside one.
 `netdiag` never receives a network transport. Its MCP worker submits a
 closed diagnostic request through the per-launch relay; `clawd` reads the
 host interface and route view, resolves the exact authorized target, and
 performs bounded TCP probes against that one resolution.
-`apps/test_no_direct_network.py` fails the build if a sandboxed bundled
-operation grows a new direct dial.
+The App repository's `tests/shared/test_no_direct_network.py` contract rejects
+new direct dials in sandboxed App consumers. OS process fixtures stage the
+exact external product and common payload before exercising real egress
+isolation; they mount neither App nor OS source checkouts.
 
 ## Failing closed
 

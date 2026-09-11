@@ -58,10 +58,7 @@ DESKTOP_APPS_FILE="$SCRIPT_DIR/claw-os-desktop/apps.list"
 mkdir -p "$STAGE_ROOT/usr/lib/cos/apps"
 while IFS= read -r app_id; do
     [ -n "$app_id" ] || continue
-    app_src="$PROJECT_DIR/apps/$app_id"
-    if [ ! -f "$app_src/app.json" ]; then
-        app_src="$(python3 "$PROJECT_DIR/scripts/app_sources.py" --app-path "$app_id")"
-    fi
+    app_src="$(python3 "$PROJECT_DIR/scripts/app_sources.py" --app-path "$app_id")"
     rm -rf "$STAGE_ROOT/usr/lib/cos/apps/$app_id"
     cp -a "$app_src" "$STAGE_ROOT/usr/lib/cos/apps/$app_id"
 done < "$DESKTOP_APPS_FILE"

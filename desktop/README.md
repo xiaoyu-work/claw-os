@@ -59,8 +59,11 @@ is built with `just notifications-build` from the immutable App pin at
 `build/native-apps/cosmic-notifications`. All 40 original native files, both
 configuration/util crates, GPL license, original git toolkit/panel and optional
 systemd graph move together; this fork has no standalone icon or locale tree.
-The OS applet and panel link the explicitly exported config/util crates from
-the same generated inputs, not another App's handlers or a second vendored copy.
+The OS applet and panel retain their existing links to private config/util
+crates from the same generated component inputs, not another App's handlers
+or a second vendored copy. These are no longer declared `native_libraries`
+exports; source preparation preserves the private files without inventing
+public metadata.
 The desktop package retains the native binary/descriptor and depends on
 Agent's `claw-os-notifications-v1`. MCP has no session bus and uses durable
 owner/source-scoped OS records; one desktop delivery consumer renders them,

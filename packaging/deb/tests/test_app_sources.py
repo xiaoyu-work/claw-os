@@ -32,6 +32,11 @@ sources = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(sources)
 
 
+@pytest.fixture(scope="module")
+def published_source():
+    return sources.prepare_sources(sources.read_lock())
+
+
 @pytest.fixture
 def locked_source(tmp_path, monkeypatch):
     upstream = tmp_path / "upstream"
@@ -80,6 +85,139 @@ def test_modified_cached_source_is_rejected(locked_source):
     (cached / "tools" / "stage.py").write_text("raise RuntimeError('modified')\n")
     with pytest.raises(RuntimeError, match="modified"):
         sources.prepare_sources(lock)
+
+
+def _pin_fixture(root, lock, *paths):
+    git = ["git", "-C", lock["repository"]]
+    subprocess.run([*git, "add", "--", *paths], check=True)
+    subprocess.run([*git, "commit", "--quiet", "-m", "shared staging fixture"], check=True)
+    lock["revision"] = subprocess.check_output([*git, "rev-parse", "HEAD"], text=True).strip()
+    (root / "packaging/apps.lock.json").write_text(json.dumps(lock))
+
+
+@pytest.fixture
+def shared_source(published_source, locked_source):
+    root, lock = locked_source
+    upstream = Path(lock["repository"])
+    shutil.copy2(published_source / "tools/stage.py", upstream / "tools/stage.py")
+    shutil.copytree(published_source / "shared/python", upstream / "shared/python")
+    _pin_fixture(root, lock, "tools/stage.py", "shared/python")
+    return root, lock
+
+
+def test_shared_runtime_uses_pinned_public_stage_without_os_apps(shared_source, tmp_path):
+    root, lock = shared_source
+    assert not (root / "apps").exists()
+    target = tmp_path / "stage"
+    python = target / "usr/lib/cos/python"
+    sdk = python / "claw_os_sdk"
+    sdk.mkdir(parents=True)
+    (sdk / "owned.py").write_text("OS_SDK = True\n")
+    original_sdk = _app_payload(sdk)
+    assert sources.stage_shared(target) == python
+    common = sources.prepare_sources(lock) / "shared/python"
+    for name in ("_shared", "gateway", "canonical_argv.py"):
+        assert _app_payload(python / name) == _app_payload(common / name, source=True)
+    assert {path.name for path in python.iterdir()} == {
+        "_shared", "gateway", "canonical_argv.py", "claw_os_sdk",
+    }
+    assert not (target / "usr/lib/cos/apps").exists()
+    assert _app_payload(sdk) == original_sdk
+    before = {path: (path.stat().st_ino, path.stat().st_mtime_ns) for path in python.rglob("*")}
+    assert sources.stage_shared(target) == python
+    assert before == {path: (path.stat().st_ino, path.stat().st_mtime_ns) for path in python.rglob("*")}
+    assert not (root / "apps").exists()
+
+
+@pytest.mark.parametrize("missing", [
+    "_shared/__init__.py", "gateway/__init__.py",
+    "gateway/_shared/__init__.py", "canonical_argv.py",
+])
+def test_missing_pinned_common_library_refuses_before_staging(shared_source, tmp_path, capfd, missing):
+    root, lock = shared_source
+    (Path(lock["repository"]) / "shared/python" / missing).unlink()
+    _pin_fixture(root, lock, "shared/python")
+    target = tmp_path / "stage"
+    with pytest.raises(subprocess.CalledProcessError):
+        sources.stage_shared(target)
+    assert "Missing or invalid App shared Python libraries" in capfd.readouterr().err
+    assert not target.exists()
+    assert not (root / "apps").exists()
+
+
+@pytest.mark.parametrize("conflict", ["bytes", "mode", "symlink", "extra"])
+def test_common_library_conflicts_do_not_merge_or_partially_stage(shared_source, tmp_path, conflict):
+    _, lock = shared_source
+    target = tmp_path / "stage"
+    python = target / "usr/lib/cos/python"
+    python.mkdir(parents=True)
+    source = sources.prepare_sources(lock) / "shared/python"
+    if conflict == "bytes":
+        (python / "canonical_argv.py").write_text("FOREIGN_OWNER = True\n")
+    elif conflict == "mode":
+        shutil.copy2(source / "canonical_argv.py", python / "canonical_argv.py")
+        (python / "canonical_argv.py").chmod(0o600)
+    elif conflict == "symlink":
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "kept").write_text("unrelated content")
+        (python / "gateway").symlink_to(outside, target_is_directory=True)
+    else:
+        shutil.copytree(source / "_shared", python / "_shared")
+        (python / "_shared/foreign.py").write_text("FOREIGN_OWNER = True\n")
+    before = _app_payload(python)
+    with pytest.raises(subprocess.CalledProcessError):
+        sources.stage_shared(target)
+    assert _app_payload(python) == before
+
+
+def test_common_library_payload_excludes_tests_and_bytecode(shared_source, tmp_path):
+    root, lock = shared_source
+    common = Path(lock["repository"]) / "shared/python"
+    for relative in [
+        "_shared/tests/fixture.json", "gateway/_shared/test/fixture.py",
+        "_shared/conftest.py", "_shared/test_probe.py", "_shared/probe_test.py",
+        "_shared/__pycache__/probe.pyc", "gateway/probe.pyc", "gateway/probe.pyo",
+    ]:
+        path = common / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"test-only payload")
+    _pin_fixture(root, lock, "shared/python")
+    python = sources.stage_shared(tmp_path / "stage")
+    assert _app_payload(python) == _app_payload(common, source=True)
+    assert len([path for path in python.rglob("*") if path.is_file()]) == 16
+
+
+@pytest.mark.parametrize("output", ['[]', 'null', '{"root":"wrong"}', '"wrong"'])
+def test_shared_stage_rejects_an_unexpected_public_result(locked_source, tmp_path, output):
+    root, lock = locked_source
+    (Path(lock["repository"]) / "tools/stage.py").write_text(f"print({output!r})\n")
+    _pin_fixture(root, lock, "tools/stage.py")
+    with pytest.raises(RuntimeError, match="declared Python root"):
+        sources.stage_shared(tmp_path / "stage")
+
+
+def test_common_stage_cli_is_separate_from_product_selection(tmp_path):
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts/app_sources.py"),
+         "--stage-shared", str(tmp_path / "stage"), "--package", "agent"],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 2
+    assert "--stage-shared cannot be combined" in result.stderr
+    assert not (tmp_path / "stage").exists()
+
+
+def test_shared_stage_requires_the_returned_directory_to_exist(locked_source, tmp_path):
+    root, lock = locked_source
+    (Path(lock["repository"]) / "tools/stage.py").write_text(
+        'import json, pathlib, sys\n'
+        'root = pathlib.Path(sys.argv[sys.argv.index("--root") + 1])\n'
+        'print(json.dumps(str(root / "usr/lib/cos/python")))\n'
+    )
+    _pin_fixture(root, lock, "tools/stage.py")
+    with pytest.raises(RuntimeError, match="declared Python root"):
+        sources.stage_shared(tmp_path / "stage")
 
 
 def test_moving_branch_is_not_a_valid_pin(locked_source):
@@ -301,31 +439,29 @@ def test_browser_installer_copies_extension_assets_without_development_tests(tmp
         assert path.stat().st_mode & 0o777 == 0o644
 
 
-def test_real_app_staging_counts_nested_apps_and_installs_shared_parser(tmp_path):
+def test_real_agent_block_stages_common_once_and_counts_external_nested_apps(tmp_path):
     project = tmp_path / "project"
-    for relative in ("alpha", "desktop-app", "gateway/slack"):
-        app = project / "apps" / relative
-        app.mkdir(parents=True)
-        (app / "app.json").write_text(json.dumps({"id": relative.replace("/", "-")}))
-    cached = project / "apps/gateway/email/__pycache__"
-    cached.mkdir(parents=True)
-    (cached / "main.pyc").write_bytes(b"stale migrated bytecode")
-    shared = project / "apps/gateway/_shared"
-    shared.mkdir()
-    (shared / "__init__.py").write_text("SHARED_GATEWAY = True\n")
-    (project / "apps/canonical_argv.py").write_text("SHARED_PARSER = True\n")
     packaging = project / "packaging/deb"
     (packaging / "claw-os-desktop").mkdir(parents=True)
     (packaging / "claw-os-desktop/apps.list").write_text("desktop-app\n")
     (project / "scripts").mkdir()
     (project / "scripts/app_sources.py").write_text(
+        'import json\n'
         'from pathlib import Path\n'
         'import sys\n'
+        'with Path(__file__).with_name("calls.jsonl").open("a") as log:\n'
+        '    log.write(json.dumps(sys.argv[1:]) + "\\n")\n'
         'if "--stage" in sys.argv:\n'
-        '    app = Path(sys.argv[sys.argv.index("--stage") + 1]) / "usr/lib/cos/apps/gateway/email"\n'
-        '    app.mkdir(parents=True)\n'
-        '    (app / "app.json").write_text(\'{"id":"gateway-email"}\')\n'
-        'print(1)\n'
+        '    for relative in ("alpha", "gateway/slack", "gateway/email"):\n'
+        '        app = Path(sys.argv[sys.argv.index("--stage") + 1]) / "usr/lib/cos/apps" / relative\n'
+        '        app.mkdir(parents=True)\n'
+        '        (app / "app.json").write_text(json.dumps({"id": relative.replace("/", "-")}))\n'
+        'elif "--stage-shared" in sys.argv:\n'
+        '    python = Path(sys.argv[sys.argv.index("--stage-shared") + 1]) / "usr/lib/cos/python"\n'
+        '    (python / "canonical_argv.py").write_text("SHARED_PARSER = True\\n")\n'
+        'elif "--app-path" in sys.argv:\n'
+        '    assert sys.argv[-1] == "desktop-app"\n'
+        'print(4)\n'
     )
     stage = tmp_path / "stage"
     (stage / "usr/lib/cos/apps").mkdir(parents=True)
@@ -342,9 +478,15 @@ def test_real_app_staging_counts_nested_apps_and_installs_shared_parser(tmp_path
     assert (stage / "usr/lib/cos/apps/gateway/slack/app.json").is_file()
     assert not (stage / "usr/lib/cos/apps/desktop-app").exists()
     assert not (stage / "usr/lib/cos/apps/gateway/email/__pycache__").exists()
-    assert (stage / "usr/lib/cos/apps/gateway/_shared/__init__.py").is_file()
-    assert (cached / "main.pyc").is_file()
+    assert not (stage / "usr/lib/cos/apps/_shared").exists()
+    assert not (stage / "usr/lib/cos/apps/gateway/_shared").exists()
     assert (stage / "usr/lib/cos/python/canonical_argv.py").read_text() == "SHARED_PARSER = True\n"
+    calls = [json.loads(line) for line in (project / "scripts/calls.jsonl").read_text().splitlines()]
+    assert calls == [
+        ["--app-path", "desktop-app"], ["--stage-shared", str(stage)],
+        ["--stage", str(stage), "--package", "agent"], ["--count"],
+    ]
+    assert not (project / "apps").exists()
 
 
 def _app_payload(directory, *, source=False):
@@ -352,7 +494,8 @@ def _app_payload(directory, *, source=False):
     for path in [directory, *sorted(directory.rglob("*"))]:
         relative = path.relative_to(directory)
         if source and any(
-            part in {"__pycache__", ".pytest_cache"} or fnmatch.fnmatch(part, "test_*.py")
+            part in {"__pycache__", ".pytest_cache", "test", "tests", "conftest.py"}
+            or any(fnmatch.fnmatch(part, pattern) for pattern in ("test_*.py", "*_test.py", "*.pyc", "*.pyo"))
             for part in relative.parts
         ):
             continue
@@ -508,12 +651,12 @@ def test_published_capability_pin_stages_all_partitions_and_real_agent_runtime(t
     assert sources.app_path("kv") == source / "capabilities/storage-sdk/apps/kv"
     assert sources.app_path("net") == source / "capabilities/http/apps/net"
     assert sources.app_path("summarize") == source / "capabilities/ai-helpers/apps/summarize"
-    assert not (ROOT / "apps/doc").exists()
-    assert not (ROOT / "apps/db").exists()
-    assert not (ROOT / "apps/kv").exists()
-    assert not (ROOT / "apps/net").exists()
-    assert not (ROOT / "apps/summarize").exists()
-    assert not list((ROOT / "apps").rglob("app.json"))
+    assert not (ROOT / "apps").exists()
+    for partition_name in ("all", "agent", "desktop"):
+        assert not (tmp_path / partition_name / "usr/lib/cos/apps/_shared").exists()
+        assert not (tmp_path / partition_name / "usr/lib/cos/apps/gateway/_shared").exists()
+        for library in ("_shared", "gateway", "canonical_argv.py"):
+            assert not (tmp_path / partition_name / "usr/lib/cos/python" / library).exists()
     for app_id in ("db", "kv", "net", "summarize"):
         assert app_id not in desktop
         assert not (tmp_path / "desktop/usr/lib/cos/apps" / app_id).exists()
@@ -533,6 +676,21 @@ def test_published_capability_pin_stages_all_partitions_and_real_agent_runtime(t
         **os.environ, "PROJECT_DIR": str(ROOT), "SCRIPT_DIR": str(ROOT / "packaging/deb"),
         "AGENT_STAGE": str(staged),
     })
+    for name in ("_shared", "gateway", "canonical_argv.py"):
+        assert _app_payload(python / name) == _app_payload(source / "shared/python" / name, source=True)
+    assert not (staged / "usr/lib/cos/apps/_shared").exists()
+    assert not (staged / "usr/lib/cos/apps/gateway/_shared").exists()
+    imports = subprocess.run(
+        [sys.executable, "-I", "-B", "-c",
+         "import importlib, json, pathlib, sys; sys.path.insert(0, sys.argv[1]); "
+         "names = ['_shared.atomic', '_shared.credentials', '_shared.safe_http', "
+         "'gateway._shared.gateway_args', 'gateway._shared.safe_egress', 'canonical_argv']; "
+         "print(json.dumps({name: importlib.import_module(name).__file__ for name in names}))",
+         str(python)],
+        cwd=tmp_path, capture_output=True, text=True, check=True,
+        env={"PATH": os.defpath, "PYTHONDONTWRITEBYTECODE": "1"},
+    )
+    assert all(Path(path).is_relative_to(python) for path in json.loads(imports.stdout).values())
     for app_id, group in (
         ("doc", "document-engine"), ("db", "storage-sdk"), ("kv", "storage-sdk"), ("net", "http"),
         ("summarize", "ai-helpers"),
@@ -594,7 +752,7 @@ def test_published_capability_pin_stages_all_partitions_and_real_agent_runtime(t
     output = tmp_path / "not-downloaded.bin"
     with mcp_process(net, env={
         "PATH": os.defpath,
-        "PYTHONPATH": os.pathsep.join([str(python), str(staged / "usr/lib/cos/apps")]),
+        "PYTHONPATH": str(python),
         "COS_DATA_DIR": str(tmp_path / "net-data"), "CLAW_COS_BIN": str(denied_policy),
     }) as request:
         catalog = request("tools/list", {})
@@ -703,7 +861,7 @@ def test_published_capability_pin_stages_all_partitions_and_real_agent_runtime(t
         neighbour.write_bytes(b"unrelated private state")
     kv_app = staged / "usr/lib/cos/apps/kv"
     environment = {
-        "PATH": os.defpath, "PYTHONPATH": os.pathsep.join([str(python), str(kv_app.parent)]),
+        "PATH": os.defpath, "PYTHONPATH": str(python),
         "COS_DATA_DIR": str(kv_data), "COS_SESSION": "kv-fixture",
     }
 
@@ -1018,7 +1176,7 @@ def test_notifications_is_package_only_for_hot_swap(tmp_path):
     assert "qcow2 missing" not in result.stderr
 
 
-def test_native_notifications_share_exported_libraries_and_leave_legacy_state_separate():
+def test_native_notifications_keep_private_inputs_and_legacy_state_separate(published_source, tmp_path):
     lock = sources.read_lock()
     assert lock["apps"].count("cosmic-notifications") == 1
     assert "notifications" in lock["products"]
@@ -1033,6 +1191,19 @@ def test_native_notifications_share_exported_libraries_and_leave_legacy_state_se
         assert f'cosmic-notifications/{library}/Cargo.toml' in (
             ROOT / "rootfs/features/desktop/install.sh"
         ).read_text()
+    product = published_source / "products/notifications"
+    package = json.loads((product / "package.json").read_text())
+    assert sources.native_libraries(package, product) == {}
+    staged = tmp_path / "native"
+    output = subprocess.check_output(
+        [sys.executable, str(published_source / "tools/stage_native.py"),
+         "notifications", "--root", str(staged)],
+        text=True, cwd=published_source,
+    )
+    assert json.loads(output) == ["cosmic-notifications"]
+    component = product / package["native"]["cosmic-notifications"]
+    for library in ("cosmic-notifications-config", "cosmic-notifications-util"):
+        assert _app_payload(staged / "cosmic-notifications" / library) == _app_payload(component / library)
     assert "../../../build/native-apps/cosmic-notifications/cosmic-notifications-config" in panel
     assert 'git = "https://github.com/pop-os/cosmic-notifications"' not in applet + panel
     panel_just = (ROOT / "desktop/panel/justfile").read_text()

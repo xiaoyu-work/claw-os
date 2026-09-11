@@ -256,10 +256,7 @@ fn version_one_product_only_locks_remain_supported() {
         }),
     );
     assert!(app_sources::app_dir_in(root.path(), "fs").ends_with("products/files/apps/fs"));
-    assert_eq!(
-        app_sources::app_dir_in(root.path(), "doc"),
-        root.path().join("apps/doc")
-    );
+    assert!(std::panic::catch_unwind(|| app_sources::app_dir_in(root.path(), "doc")).is_err());
 }
 
 #[test]

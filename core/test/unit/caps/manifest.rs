@@ -537,6 +537,143 @@ fn optional_capability_bindings_require_conditions() {
 }
 
 #[test]
+fn conditional_capability_bindings_use_matching_required_when_on_both_surfaces() {
+    use serde_json::json;
+
+    for mcp in [false, true] {
+        for condition in [
+            json!({"kind":"arg-present","arg":"mode"}),
+            json!({"kind":"arg-equals","arg":"mode","value":"remote"}),
+            json!({"kind":"arg-not-equals","arg":"mode","value":"local"}),
+        ] {
+            for scope in [
+                json!({"kind":"from-arg","arg":"resource"}),
+                json!({"kind":"from-arg-map","arg":"resource",
+                    "values":{"hardware":{"kind":"name","value":"hardware"}}}),
+                json!({"kind":"from-arg-or-wild","arg":"resource","wild_when":"all"}),
+            ] {
+                let args = json!([
+                    {"name":"mode","kind":"name","binding":"flag"},
+                    {"name":"resource","kind":"name","binding":"flag","required_when":condition},
+                    {"name":"all","kind":"bool","binding":"flag"}
+                ]);
+                let need = json!({
+                    "verb":"sys.observe","scope":scope,"when":condition,"why":{"en":"Inspect resource"}
+                });
+                let manifest = conditional_capability_fixture(args, need, mcp).unwrap();
+                let resolve = |args: &BTreeMap<String, serde_json::Value>| {
+                    if mcp {
+                        manifest.resolve_mcp_tool_needs("conditional-scope.inspect", args)
+                    } else {
+                        manifest.resolve_needs("inspect", args)
+                    }
+                };
+                assert_eq!(resolve(&BTreeMap::new()).unwrap(), [Vec::new()]);
+                assert_eq!(
+                    resolve(&BTreeMap::from([("all".into(), json!(true))])).unwrap(),
+                    [Vec::new()]
+                );
+                let mut active = BTreeMap::from([("mode".into(), json!("remote"))]);
+                assert!(resolve(&active).is_err());
+                active.insert("resource".into(), json!("hardware"));
+                let needs = resolve(&active).unwrap();
+                assert_eq!(needs.len(), 1);
+                assert_eq!(
+                    needs[0],
+                    [crate::caps::Cap::new(Verb::SYS_OBSERVE, Scope::name("hardware"))]
+                );
+                active.insert("all".into(), json!(true));
+                let expected_scope = if scope["kind"] == "from-arg-or-wild" {
+                    Scope::Wild
+                } else {
+                    Scope::name("hardware")
+                };
+                assert_eq!(resolve(&active).unwrap()[0][0].scope, expected_scope);
+                active.remove("mode");
+                assert!(resolve(&active).is_err());
+            }
+        }
+    }
+}
+
+#[test]
+fn conditional_capability_bindings_reject_missing_or_different_guards() {
+    use serde_json::json;
+
+    for mcp in [false, true] {
+        for guard in [
+            None,
+            Some(json!({"kind":"arg-present","arg":"mode"})),
+            Some(json!({"kind":"arg-equals","arg":"mode","value":"local"})),
+            Some(json!({"kind":"arg-not-equals","arg":"mode","value":"remote"})),
+            Some(json!({"kind":"arg-equals","arg":"other","value":"remote"})),
+        ] {
+            let args = json!([
+                {"name":"mode","kind":"name","binding":"flag"},
+                {"name":"other","kind":"name","binding":"flag"},
+                {"name":"resource","kind":"name","binding":"flag",
+                    "required_when":{"kind":"arg-equals","arg":"mode","value":"remote"}}
+            ]);
+            let mut need = json!({
+                "verb":"sys.observe","scope":{"kind":"from-arg","arg":"resource"},
+                "why":{"en":"Inspect resource"}
+            });
+            if let Some(guard) = guard {
+                need["when"] = guard;
+            }
+            let error = conditional_capability_fixture(args, need, mcp).unwrap_err();
+            assert!(error.to_string().contains("optional arg `resource`"), "{error}");
+        }
+    }
+}
+
+#[test]
+fn conditional_capability_bindings_do_not_assume_a_conditional_boolean_default() {
+    use serde_json::json;
+
+    let mut argument: Arg = serde_json::from_value(json!({
+        "name":"enabled","kind":"bool","binding":"flag",
+        "required_when":{"kind":"arg-equals","arg":"mode","value":"remote"}
+    }))
+    .unwrap();
+    let need: Need = serde_json::from_value(json!({
+        "verb":"sys.observe","scope":{"kind":"from-arg","arg":"enabled"},
+        "why":{"en":"Inspect selected state"}
+    }))
+    .unwrap();
+    assert!(validate_optional_need_binding(
+        &need,
+        &BTreeMap::from([("enabled", &argument)])
+    )
+    .is_err());
+    argument.required_when = None;
+    validate_optional_need_binding(&need, &BTreeMap::from([("enabled", &argument)])).unwrap();
+}
+
+fn conditional_capability_fixture(
+    args: serde_json::Value,
+    need: serde_json::Value,
+    mcp: bool,
+) -> Result<Manifest, ManifestError> {
+    use serde_json::json;
+
+    let mut body = json!({
+        "schema_version":2,"id":"conditional-scope","version":"1","name":{"en":"Conditional scope"}
+    });
+    if mcp {
+        body["mcp"] = json!({"entry":"server.py","tools":[{
+            "name":"conditional-scope.inspect","summary":{"en":"Inspect"},
+            "args":args,"needs":[need]
+        }]});
+    } else {
+        body["operations"] = json!({"inspect":{
+            "label":{"en":"Inspect"},"args":args,"needs":[need]
+        }});
+    }
+    Manifest::from_json(&body.to_string())
+}
+
+#[test]
 fn repeatable_scope_arguments_resolve_one_capability_per_value() {
     let manifest = Manifest::from_json(
         r#"{
@@ -631,12 +768,11 @@ fn scope_transforms_derive_exact_parent_and_url_host_resources() {
 
 #[test]
 fn python_and_rust_share_url_host_scope_vectors() {
-    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap();
     let vectors: Vec<serde_json::Value> = serde_json::from_str(
-        &std::fs::read_to_string(repository.join("apps/_shared/url_host_scope_vectors.json"))
-            .unwrap(),
+        &std::fs::read_to_string(
+            app_sources::source_root().join("tests/shared/vectors/url_host_scope_vectors.json"),
+        )
+        .unwrap(),
     )
     .unwrap();
     let manifest = Manifest::from_json(
@@ -1242,22 +1378,24 @@ fn mcp_block_parses_with_minimal_tool() {
 
 #[test]
 fn mcp_first_service_bundled_access_contract() {
-    let mut directories = vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../apps")];
+    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let lock: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(repository.join("packaging/apps.lock.json")).unwrap(),
+    )
+    .unwrap();
+    let apps = lock["apps"].as_array().unwrap();
+    assert_eq!(apps.len(), 75);
     let mut checked = 0;
-    while let Some(directory) = directories.pop() {
-        for entry in std::fs::read_dir(directory).unwrap() {
-            let entry = entry.unwrap();
-            if entry.file_type().unwrap().is_dir() {
-                directories.push(entry.path());
-            } else if entry.file_name() == "app.json" {
-                let value: serde_json::Value =
-                    serde_json::from_slice(&std::fs::read(entry.path()).unwrap()).unwrap();
-                if let Some(access) = value.get("mcp").and_then(|mcp| mcp.get("access")) {
-                    serde_json::from_value::<McpAccess>(access.clone())
-                        .unwrap_or_else(|error| panic!("{}: {error}", entry.path().display()));
-                    checked += 1;
-                }
-            }
+    for id in apps {
+        let path = app_sources::app_dir(id.as_str().unwrap()).join("app.json");
+        let value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        if let Some(access) = value.get("mcp").and_then(|mcp| mcp.get("access")) {
+            serde_json::from_value::<McpAccess>(access.clone())
+                .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+            checked += 1;
         }
     }
     assert!(checked > 0);

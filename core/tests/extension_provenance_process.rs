@@ -30,6 +30,29 @@ mod app_sources;
 #[path = "../test/support/app_stage.rs"]
 mod app_stage;
 
+struct PythonPathScope {
+    directory: PathBuf,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl PythonPathScope {
+    fn stage(source: &Path, root: &Path) -> Self {
+        let directory = app_stage::python_runtime(source, root);
+        let previous = std::env::var_os("COS_SDK_PYTHON_DIR");
+        std::env::set_var("COS_SDK_PYTHON_DIR", &directory);
+        Self { directory, previous }
+    }
+}
+
+impl Drop for PythonPathScope {
+    fn drop(&mut self) {
+        match &self.previous {
+            Some(value) => std::env::set_var("COS_SDK_PYTHON_DIR", value),
+            None => std::env::remove_var("COS_SDK_PYTHON_DIR"),
+        }
+    }
+}
+
 #[test]
 fn published_doc_signed_fixture_preserves_manifest_and_worker_authority() {
     use std::collections::BTreeMap;
@@ -39,12 +62,10 @@ fn published_doc_signed_fixture_preserves_manifest_and_worker_authority() {
 
     let fx = Fixture::new("published-doc");
     let source = app_sources::app_dir("doc");
-    let apps = fx.root.join("apps");
-    let directory = apps.join("doc");
-    fs::create_dir_all(&directory).unwrap();
-    for name in ["app.json", "main.py", "server.py"] {
-        fs::copy(source.join(name), directory.join(name)).unwrap();
-    }
+    let stage = fx.root.join("stage");
+    let directory = app_stage::app(&source, "capability", "document-engine", "doc", &stage);
+    let apps = directory.parent().unwrap();
+    let _python = PythonPathScope::stage(&source, &stage);
     let original = fs::read_to_string(source.join("app.json")).unwrap();
     let declaration: serde_json::Value = serde_json::from_str(&original).unwrap();
     sign::sign_directory(
@@ -199,8 +220,9 @@ fn signed_capability_client(
     group: &str,
     app_id: &str,
 ) -> (cos::bridge::AppLaunch, String) {
-    let directory = app_stage::capability(
+    let directory = app_stage::app(
         &app_sources::app_dir(app_id),
+        "capability",
         group,
         app_id,
         &fx.root.join("stage"),
@@ -253,7 +275,7 @@ fn published_net_signed_fixture_preserves_scoped_egress_and_output_authority() {
     let (launch, entry) = signed_capability_client(&fx, "http", "net");
     let directory = launch.dir().to_path_buf();
     let apps = directory.parent().unwrap();
-    app_stage::shared_python(apps);
+    let python = PythonPathScope::stage(&app_sources::app_dir("net"), &fx.root.join("stage"));
     let binding = launch.bind(std::slice::from_ref(&entry)).unwrap();
     let data = fx.root.join("owner-data");
     let output = fx.root.join("downloads/result.bin");
@@ -315,10 +337,11 @@ fn published_net_signed_fixture_preserves_scoped_egress_and_output_authority() {
         .iter()
         .filter(|mount| mount.class == MountClass::Package)
         .all(|mount| mount.mode == MountMode::ReadOnly));
-    assert!(worker
-        .mounts
-        .iter()
-        .any(|mount| mount.source == apps.join("_shared") && mount.mode == MountMode::ReadOnly));
+    assert!(worker.mounts.iter().any(|mount| {
+        mount.source == python.directory
+            && mount.mode == MountMode::ReadOnly
+            && mount.class == MountClass::Runtime
+    }));
     write(
         &directory.join(&entry),
         "raise RuntimeError('modified fixture')\n",
@@ -445,7 +468,7 @@ fn published_kv_signed_fixture_preserves_independent_json_namespace_and_worker_a
     let (launch, entry) = signed_capability_client(&fx, "storage-sdk", "kv");
     let directory = launch.dir().to_path_buf();
     let apps = directory.parent().unwrap();
-    let shared = app_stage::shared_python(apps);
+    let python = PythonPathScope::stage(&app_sources::app_dir("kv"), &fx.root.join("stage"));
     let binding = launch.bind(std::slice::from_ref(&entry)).unwrap();
     assert_eq!(launch.app_id(), "kv");
     assert!(cos::apps::is_mcp_only_cli(launch.manifest()));
@@ -525,7 +548,7 @@ fn published_kv_signed_fixture_preserves_independent_json_namespace_and_worker_a
             let library = worker
                 .mounts
                 .iter()
-                .find(|mount| mount.source == shared)
+                .find(|mount| mount.source == python.directory)
                 .unwrap();
             assert_eq!(library.mode, cos::worker::MountMode::ReadOnly);
             assert_eq!(library.class, cos::worker::MountClass::Runtime);

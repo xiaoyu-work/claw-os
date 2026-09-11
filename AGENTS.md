@@ -24,7 +24,7 @@ Read only the documents relevant to the task:
    [`desktop/README.md`](desktop/README.md) before desktop work.
 7. The nearest maintained `MODULE.md` for local responsibilities, key files,
    dependencies, and tests. Guides cover the major core/agent subsystems,
-   apps/adapters, SDK/runtime/crates/extensions, rootfs/targets/packaging,
+   adapters, SDK/runtime/crates/extensions, rootfs/targets/packaging,
    scripts, and workflows.
 
 Source code and manifests are authoritative when prose is stale.
@@ -55,7 +55,7 @@ editing additional surfaces.
 | App client/business/MCP operation | External `clawos-app` guide and owning `products/<group>/package.json` or `capabilities/<group>/package.json` | Declared App manifest, entrypoint and tests; versioned SDK/runtime; OS source-pin/package delivery |
 | App installation or requested-permission disclosure | `core/src/router/app_commands.rs`, `core/src/apps/permission_review.rs` | Verified snapshots, OS catalog, protected review controller, separate runtime authorization and AI consent |
 | OS permission review UI or decision | `core/src/clawd/system_review.rs`, `crates/clawd-client/MODULE.md` | Shared App/capability DTO, protected display revisions, terminal and native renderers, bounded polkit helper, owner-only cancellation and existing approval authority |
-| Bundled App product boundary or source fork | `docs/app-product-redesign.md`, `apps/MODULE.md` | Product UI/backend, manifests, provenance/licenses, native launchers, account/state migration, packaging |
+| Bundled App product boundary or source fork | `docs/app-product-redesign.md`, external `clawos-app` guides, `packaging/MODULE.md` | Product UI/backend, App-owned common support, manifests, provenance/licenses, native launchers, account/state migration, compatibility packaging |
 | Adapter | `adapters/<id>/app.json`, `adapters/<id>/main.py` | adapter tests and external binary dependency |
 | App/SDK wire contract | `claw-os-sdk/wire/`, language SDK package | generated bindings, conformance tests, `publish-sdk-release.yml` |
 | App development platform release | `packaging/app-platform.json`, `scripts/app_platform.py`, `docs/app-platform.md` | Versioned SDK/runtime/toolkit exports; `publish-app-platform.yml`; never App helpers or private OS providers |
@@ -114,7 +114,12 @@ group as a business product. Cross-repository runtime fixtures stage complete pa
 and invoke manifest-selected entrypoints over public MCP, not private App modules.
 All 75 original App sources now belong to `clawos-app`: 24 business groups and
 four shared-capability groups, with 63 Agent and 12 desktop identities.
-`apps/` retains OS library exports, not original production App manifests.
+App-owned helpers live in external `shared/python`, with tests/vectors in
+`tests/shared`; no OS `apps/` source tree remains. Fixtures stage their common
+support through the pinned public CLI into `usr/lib/cos/python`, separately
+from OS SDK/runtime and App payloads. Agent still delivers this support through
+existing compatibility package assembly; installed ownership has not moved to
+independent App APT packages.
 Summarize fixtures use isolated synthetic public AI/policy/memory wire, never
 paid/live models. The OS still owns AI consent, budgets, providers and memory
 authority; source completion is not backend/state/identity or release independence.
@@ -151,7 +156,8 @@ cargo test --manifest-path desktop/applets/Cargo.toml -p claw-applet-services --
 
 # OS-owned Python suite; external App tests run in clawos-app
 PYTHONPATH=claw-os-sdk/python/src:cos-runtime/python/src \
-  python3 -m pytest -q apps adapters claw-os-sdk/python/src cos-runtime/python/src
+  python3 -m pytest -q adapters claw-os-sdk/python/src cos-runtime/python/src \
+    packaging/deb/tests/test_app_sources.py
 ```
 
 Documentation-only changes do not require code tests.

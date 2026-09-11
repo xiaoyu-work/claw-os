@@ -13,15 +13,29 @@
 
 #![cfg(target_os = "linux")]
 
+use std::collections::BTreeMap;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use cos::agent::tools::app_gateway::{McpCallContext, McpPrincipal, McpPrincipalKind};
+use cos::agent::tools::mcp::client::{ClientError, McpClient};
+use cos::agent::tools::mcp::protocol::{
+    CallToolResult, ClientCapabilities, ContentItem, Implementation,
+};
+use cos::agent::tools::mcp::transport::StdioTransport;
 use cos::caps::{Cap, CapSet, Scope, Verb};
 use cos::worker::derive::{AgentExecInput, McpServerInput};
 use cos::worker::{Limits, WorkerLaunch, WorkerOutput};
+use serde_json::{json, Value};
 
 mod app_sources {
     include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/support/app_sources.rs"));
+}
+
+mod app_stage {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/support/app_stage.rs"));
 }
 
 /// Run `script` under the hostile-worker sandbox with `workspace`
@@ -1279,8 +1293,15 @@ print('partition', sorted(p.name for p in data.iterdir()))
 /// recorded `CONNECT` target proves which endpoint it asked for.
 struct StubEgress {
     socket: PathBuf,
-    targets: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
-    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    log: Arc<Mutex<EgressLog>>,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct EgressLog {
+    targets: Vec<String>,
+    exchanges: Vec<String>,
 }
 
 /// What the fixture says once the tunnel is established.
@@ -1295,63 +1316,71 @@ enum Fixture {
 }
 
 impl StubEgress {
-    fn start(socket: PathBuf, fixture: Fixture) -> Self {
-        use std::io::Read;
+    fn start(socket: PathBuf, fixture: Fixture, tls: Option<Arc<rustls::ServerConfig>>) -> Self {
         use std::os::unix::net::UnixListener;
 
         let listener = UnixListener::bind(&socket).expect("bind stub egress");
-        let targets = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let recorded = std::sync::Arc::clone(&targets);
-        let stopped = std::sync::Arc::clone(&stop);
-        std::thread::spawn(move || {
+        let log = Arc::new(Mutex::new(EgressLog::default()));
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let recorded = Arc::clone(&log);
+        let stopped = Arc::clone(&stop);
+        let thread = std::thread::spawn(move || {
             for stream in listener.incoming() {
                 if stopped.load(std::sync::atomic::Ordering::Relaxed) {
                     return;
                 }
-                let Ok(mut stream) = stream else { continue };
-                let recorded = std::sync::Arc::clone(&recorded);
-                std::thread::spawn(move || {
-                    let mut head = Vec::new();
-                    let mut byte = [0_u8; 1];
-                    while !head.ends_with(b"\r\n\r\n") && head.len() < 4096 {
-                        match stream.read(&mut byte) {
-                            Ok(0) | Err(_) => return,
-                            Ok(_) => head.push(byte[0]),
-                        }
+                let mut stream = stream.expect("accept fixture tunnel");
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(10)))
+                    .unwrap();
+                stream
+                    .set_write_timeout(Some(Duration::from_secs(10)))
+                    .unwrap();
+                let head = read_http_headers(&mut stream);
+                let line = head.lines().next().expect("CONNECT request");
+                let words = line.split_whitespace().collect::<Vec<_>>();
+                assert_eq!(words.len(), 3, "{head}");
+                assert_eq!(words[0], "CONNECT", "{head}");
+                assert_eq!(words[2], "HTTP/1.1", "{head}");
+                recorded.lock().unwrap().targets.push(words[1].to_string());
+                stream
+                    .write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
+                    .expect("accept CONNECT");
+                let exchange = match fixture {
+                    Fixture::Smtp => serve_smtp(&mut stream),
+                    Fixture::Http(_) | Fixture::Redirect(_) => {
+                        let connection = rustls::ServerConnection::new(Arc::clone(
+                            tls.as_ref().expect("HTTPS fixture configuration"),
+                        ))
+                        .unwrap();
+                        let mut stream = rustls::StreamOwned::new(connection, stream);
+                        serve_http(&mut stream, fixture)
                     }
-                    let text = String::from_utf8_lossy(&head).into_owned();
-                    let target = text
-                        .lines()
-                        .next()
-                        .and_then(|line| line.split_whitespace().nth(1))
-                        .unwrap_or_default()
-                        .to_string();
-                    recorded.lock().unwrap().push(target);
-                    use std::io::Write;
-                    if stream
-                        .write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
-                        .is_err()
-                    {
-                        return;
-                    }
-                    match fixture {
-                        Fixture::Http(body) => serve_http(&mut stream, body),
-                        Fixture::Redirect(location) => serve_redirect(&mut stream, location),
-                        Fixture::Smtp => serve_smtp(&mut stream),
-                    }
-                });
+                };
+                recorded.lock().unwrap().exchanges.push(exchange);
             }
         });
         Self {
             socket,
-            targets,
+            log,
             stop,
+            thread: Some(thread),
         }
     }
 
     fn targets(&self) -> Vec<String> {
-        self.targets.lock().unwrap().clone()
+        self.log.lock().unwrap().targets.clone()
+    }
+
+    fn finish(mut self) -> EgressLog {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = std::os::unix::net::UnixStream::connect(&self.socket);
+        self.thread
+            .take()
+            .unwrap()
+            .join()
+            .expect("egress fixture failed");
+        self.log.lock().unwrap().clone()
     }
 }
 
@@ -1359,69 +1388,72 @@ impl Drop for StubEgress {
     fn drop(&mut self) {
         self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
         let _ = std::os::unix::net::UnixStream::connect(&self.socket);
+        if let Some(thread) = self.thread.take() {
+            if thread.join().is_err() {
+                eprintln!("egress fixture failed during cleanup");
+            }
+        }
         let _ = std::fs::remove_file(&self.socket);
     }
 }
 
-/// Read one HTTP request and answer with `body`.
-fn serve_http(stream: &mut std::os::unix::net::UnixStream, body: &str) {
-    use std::io::{Read, Write};
-
+fn read_http_headers(stream: &mut impl Read) -> String {
     let mut request = Vec::new();
     let mut byte = [0_u8; 1];
     while !request.ends_with(b"\r\n\r\n") && request.len() < 65536 {
-        match stream.read(&mut byte) {
-            Ok(0) | Err(_) => return,
-            Ok(_) => request.push(byte[0]),
-        }
+        stream
+            .read_exact(&mut byte)
+            .expect("read bounded fixture request");
+        request.push(byte[0]);
     }
-    let response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
-         Connection: close\r\n\r\n{}",
-        body.len(),
-        body
+    assert!(
+        request.ends_with(b"\r\n\r\n"),
+        "fixture request header exceeds limit"
     );
-    let _ = stream.write_all(response.as_bytes());
-    let _ = stream.shutdown(std::net::Shutdown::Write);
+    String::from_utf8(request).expect("fixture request is UTF-8")
 }
 
-/// A minimal ESMTP server: enough for `EHLO`, `MAIL`, `RCPT`, `DATA`.
-fn serve_redirect(stream: &mut std::os::unix::net::UnixStream, location: &str) {
-    use std::io::{Read, Write};
-
-    let mut request = Vec::new();
-    let mut byte = [0_u8; 1];
-    while !request.ends_with(b"\r\n\r\n") && request.len() < 65536 {
-        match stream.read(&mut byte) {
-            Ok(0) | Err(_) => return,
-            Ok(_) => request.push(byte[0]),
-        }
-    }
-    let response = format!(
-        "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\n\
-         Connection: close\r\n\r\n"
-    );
-    let _ = stream.write_all(response.as_bytes());
-    let _ = stream.shutdown(std::net::Shutdown::Write);
-}
-
-fn serve_smtp(stream: &mut std::os::unix::net::UnixStream) {
-    use std::io::{BufRead, BufReader, Write};
-
-    let Ok(reader_stream) = stream.try_clone() else {
-        return;
+fn serve_http(stream: &mut (impl Read + Write), fixture: Fixture) -> String {
+    let request = read_http_headers(stream);
+    let response = match fixture {
+        Fixture::Http(body) => format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+             Connection: close\r\n\r\n{body}",
+            body.len()
+        ),
+        Fixture::Redirect(location) => format!(
+            "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\n\
+             Connection: close\r\n\r\n"
+        ),
+        Fixture::Smtp => panic!("SMTP is not an HTTP fixture"),
     };
+    stream
+        .write_all(response.as_bytes())
+        .expect("write HTTPS fixture");
+    stream.flush().expect("flush HTTPS fixture");
+    request
+}
+
+fn serve_smtp(stream: &mut std::os::unix::net::UnixStream) -> String {
+    use std::io::{BufRead, BufReader};
+
+    let reader_stream = stream.try_clone().unwrap();
     let mut reader = BufReader::new(reader_stream);
-    if stream.write_all(b"220 fixture ESMTP\r\n").is_err() {
-        return;
-    }
+    stream.write_all(b"220 fixture ESMTP\r\n").unwrap();
     let mut in_data = false;
+    let mut transcript = String::new();
     loop {
         let mut line = String::new();
-        match reader.read_line(&mut line) {
-            Ok(0) | Err(_) => return,
-            Ok(_) => {}
-        }
+        let count = reader.by_ref().take(65536).read_line(&mut line).unwrap();
+        assert!(
+            count > 0 && line.ends_with('\n'),
+            "incomplete SMTP fixture request"
+        );
+        transcript.push_str(&line);
+        assert!(
+            transcript.len() <= 65536,
+            "SMTP fixture request exceeds limit"
+        );
         let upper = line.trim_end().to_ascii_uppercase();
         let reply: &[u8] = if in_data {
             if line.trim_end() == "." {
@@ -1431,44 +1463,247 @@ fn serve_smtp(stream: &mut std::os::unix::net::UnixStream) {
                 continue;
             }
         } else if upper.starts_with("EHLO") {
-            b"250-fixture\r\n250 SIZE 1000000\r\n"
+            b"250-fixture\r\n250-AUTH PLAIN\r\n250 SIZE 1000000\r\n"
         } else if upper.starts_with("HELO") {
             b"250 fixture\r\n"
+        } else if upper.starts_with("AUTH PLAIN ") {
+            b"235 authenticated\r\n"
         } else if upper.starts_with("MAIL") || upper.starts_with("RCPT") {
             b"250 ok\r\n"
         } else if upper.starts_with("DATA") {
             in_data = true;
             b"354 send it\r\n"
         } else if upper.starts_with("QUIT") {
-            let _ = stream.write_all(b"221 bye\r\n");
-            return;
+            stream.write_all(b"221 bye\r\n").unwrap();
+            return transcript;
         } else {
-            b"250 ok\r\n"
+            panic!("unexpected SMTP fixture command: {upper}");
         };
-        if stream.write_all(reply).is_err() {
-            return;
-        }
+        stream.write_all(reply).unwrap();
     }
 }
 
-/// Run a shipped App's module in the sandbox with a stub broker.
-///
-/// The stub socket lives inside the App's own writable data partition,
-/// which is already mounted, so no extra host path is exposed.
-fn run_shipped_app(
+fn fixture_tls(python: &Path, host: &str) -> Arc<rustls::ServerConfig> {
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+
+    let private = workspace();
+    let key = private.path().join("key.pem");
+    let certificate = python.join("fixture-ca.pem");
+    let der_certificate = private.path().join("cert.der");
+    let der_key = private.path().join("key.der");
+    let commands = [
+        vec![
+            "req".to_string(),
+            "-x509".into(),
+            "-newkey".into(),
+            "rsa:2048".into(),
+            "-noenc".into(),
+            "-days".into(),
+            "1".into(),
+            "-subj".into(),
+            format!("/CN={host}"),
+            "-addext".into(),
+            format!("subjectAltName=DNS:{host}"),
+            "-addext".into(),
+            "basicConstraints=critical,CA:TRUE".into(),
+            "-keyout".into(),
+            key.to_string_lossy().into_owned(),
+            "-out".into(),
+            certificate.to_string_lossy().into_owned(),
+        ],
+        vec![
+            "x509".into(),
+            "-in".into(),
+            certificate.to_string_lossy().into_owned(),
+            "-outform".into(),
+            "DER".into(),
+            "-out".into(),
+            der_certificate.to_string_lossy().into_owned(),
+        ],
+        vec![
+            "pkcs8".into(),
+            "-topk8".into(),
+            "-nocrypt".into(),
+            "-in".into(),
+            key.to_string_lossy().into_owned(),
+            "-outform".into(),
+            "DER".into(),
+            "-out".into(),
+            der_key.to_string_lossy().into_owned(),
+        ],
+    ];
+    for args in commands {
+        let output = std::process::Command::new("openssl")
+            .args(args)
+            .output()
+            .expect("openssl is required for private HTTPS fixtures");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let certificate = CertificateDer::from(std::fs::read(der_certificate).unwrap());
+    let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(std::fs::read(der_key).unwrap()));
+    Arc::new(
+        rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(vec![certificate], key)
+        .unwrap(),
+    )
+}
+
+/// Synthetic credential/memory responses, with every policy check delegated
+/// to the real sandboxed CLI/broker. No user stores or embedding models enter.
+fn fixture_services(python: &Path, app_id: &str, caps: &CapSet) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let names = caps
+        .iter()
+        .filter(|cap| cap.verb == Verb::SECRET_READ)
+        .map(|cap| match &cap.scope {
+            Scope::Name(name) => name.strip_prefix("default/").unwrap().to_string(),
+            _ => panic!("credential fixture requires an exact declared name"),
+        })
+        .collect::<Vec<_>>();
+    let mut script = format!(
+        "#!/usr/bin/python3\nCOS = {}\nAPP = {}\nCREDENTIALS = {}\n",
+        serde_json::to_string(env!("CARGO_BIN_EXE_cos")).unwrap(),
+        serde_json::to_string(app_id).unwrap(),
+        serde_json::to_string(&names).unwrap(),
+    );
+    script.push_str(
+        r#"
+import json
+import os
+import pathlib
+import sys
+from cos_runtime import policy
+
+args = sys.argv[1:]
+if args[:2] == ["--wire=1", "__policy"]:
+    os.execv(COS, [COS, *args])
+
+def record(value):
+    with (pathlib.Path(os.environ["COS_DATA_DIR"]) / "fixture-services.jsonl").open("a") as log:
+        log.write(json.dumps(value) + "\n")
+
+if len(args) == 5 and args[:2] == ["credential", "load"] and args[3:] == ["--namespace", "default"]:
+    name = args[2]
+    assert name in CREDENTIALS, "undeclared fixture credential"
+    policy.require("secret.read", name="default/" + name)
+    record({"command": "credential.load", "name": name, "namespace": "default"})
+    print(json.dumps({"value": "fixture-credential"}))
+elif len(args) == 5 and args[:4] == ["--wire=1", "__memory", "remember", "--json"]:
+    payload = json.loads(args[4])
+    assert payload["source"] == APP and payload["kind"] == "event"
+    assert isinstance(payload["text"], str) and payload["text"]
+    policy.require("memory.write", self_ref=APP)
+    record({"command": "memory.remember", "payload": payload})
+    print(json.dumps({"ok": True, "wire_version": 1, "data": {
+        "row_id": 1, "source": APP, "indexed_semantic": False
+    }}))
+else:
+    raise RuntimeError("unsupported fixture service request: " + repr(args))
+"#,
+    );
+    let path = python.join("fixture-cos");
+    std::fs::write(&path, script).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+struct WorkerCleanup {
+    resources: cos::worker::LaunchResources,
+    pid: u32,
+}
+
+impl Drop for WorkerCleanup {
+    fn drop(&mut self) {
+        self.resources.kill_all(Some(self.pid));
+    }
+}
+
+struct ShippedCall {
+    result: CallToolResult,
+    egress: EgressLog,
+    services: Vec<Value>,
+}
+
+fn result_json(result: &CallToolResult) -> Value {
+    assert_eq!(result.content.len(), 1, "{result:?}");
+    let ContentItem::Text { text } = &result.content[0] else {
+        panic!("App fixture returned non-text content");
+    };
+    serde_json::from_str(text).expect("App's public JSON result")
+}
+
+async fn run_shipped_app(
+    product: &str,
     app_id: &str,
-    operation: &str,
-    argv: Vec<String>,
-    endpoint: cos::worker::Endpoint,
+    tool: &str,
+    arguments: Value,
     fixture: Fixture,
-    caps: CapSet,
-) -> (WorkerOutput, Vec<String>) {
-    let apps_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("apps")
-        .canonicalize()
-        .expect("apps root");
+    expected_caps: CapSet,
+) -> ShippedCall {
+    use cos::worker::derive::{AppSessionInput, SessionLifetime};
+    use std::os::unix::fs::MetadataExt;
+    use std::process::Stdio;
+    use tokio::io::AsyncReadExt;
+
+    let stage = workspace();
+    let source = app_sources::app_dir(app_id);
+    let directory = app_stage::app(&source, "product", product, app_id, stage.path());
+    let apps_root = directory.parent().unwrap();
+    let python = app_stage::python_runtime(&source, stage.path());
+    let manifest_path = directory.join("app.json");
+    let manifest = cos::caps::manifest::Manifest::from_json(
+        &std::fs::read_to_string(&manifest_path).unwrap(),
+    )
+    .expect("published App manifest must pass normal admission validation");
+    let service = manifest.mcp.as_ref().expect("published MCP declaration");
+    let entry = directory.join(
+        service
+            .entry
+            .as_deref()
+            .unwrap_or(manifest.runtime.default_mcp_entry()),
+    );
+    assert!(entry.is_file() && entry.canonicalize().unwrap().starts_with(&directory));
+    let supplied: BTreeMap<String, Value> = serde_json::from_value(arguments).unwrap();
     let owner_data = workspace();
+    let effective = manifest
+        .resolve_mcp_tool_call(
+            tool,
+            &supplied,
+            &cos::caps::args::PathContext {
+                home: owner_data.path().to_path_buf(),
+                cwd: None,
+            },
+        )
+        .expect("bind the actual declared public tool");
+    let caps = CapSet::from_caps(
+        effective
+            .needs
+            .into_iter()
+            .filter(|alternatives| !alternatives.is_empty())
+            .map(|mut alternatives| {
+                assert_eq!(
+                    alternatives.len(),
+                    1,
+                    "fixture does not choose or union alternatives"
+                );
+                alternatives.pop().unwrap()
+            }),
+    );
+    assert_eq!(caps, expected_caps, "published operation needs changed");
+    let arguments = serde_json::to_value(effective.values).unwrap();
+    let network = cos::worker::derive::egress_from_caps(&caps);
+    assert_eq!(network.endpoints().len(), 1);
+    let endpoint = network.endpoints()[0].clone();
     let partition = owner_data
         .path()
         .canonicalize()
@@ -1476,47 +1711,80 @@ fn run_shipped_app(
         .join("apps")
         .join(app_id);
     std::fs::create_dir_all(&partition).expect("partition");
+    let service_log = partition.join("fixture-services.jsonl");
+    std::fs::write(&service_log, "").unwrap();
+    let fixture_cos = fixture_services(&python, app_id, &caps);
+    let tls = match fixture {
+        Fixture::Smtp => None,
+        _ => Some(fixture_tls(&python, &endpoint.host)),
+    };
     let stub_socket = partition.join("egress.sock");
-    let stub = StubEgress::start(stub_socket.clone(), fixture);
+    let stub = StubEgress::start(stub_socket.clone(), fixture, tls);
 
-    std::env::set_var("COS_SDK_PYTHON_DIR", source_python_path());
-    // The freshly built binary, so `cos_runtime.policy`'s shell-out
-    // reaches *this* kernel rather than whatever is installed on the
-    // host. `cos_binary()` mounts it read-only into the sandbox.
+    std::env::set_var("COS_SDK_PYTHON_DIR", &python);
     std::env::set_var("COS_BIN", env!("CARGO_BIN_EXE_cos"));
-    let mut extra_env = std::collections::BTreeMap::new();
-    // The apps tree is on `sys.path` for `_shared`, exactly as the
-    // bundled wrapper arranges it.
-    let mut python_dirs = source_python_dirs();
-    python_dirs.push(apps_root.clone());
-    extra_env.insert(
-        "PYTHONPATH".to_string(),
-        std::env::join_paths(python_dirs)
-            .expect("App Python path list")
-            .to_string_lossy()
-            .into_owned(),
-    );
-
-    let mut policy = cos::worker::derive::app_operation(cos::worker::derive::AppOperationInput {
-        package_identity: None,
-        pinned_entries: Vec::new(),
-        developer: false,
+    let metadata = std::fs::metadata(&directory).unwrap();
+    let pinned_entries = [&entry, &manifest_path]
+        .into_iter()
+        .map(|path| {
+            let metadata = std::fs::metadata(path).unwrap();
+            (path.clone(), (metadata.dev(), metadata.ino()))
+        })
+        .collect();
+    let authorized = cos::worker::derive::authorize_granted_path_mounts(&caps).unwrap();
+    let mut extra_env = BTreeMap::from([
+        (
+            "COS_APP_MANIFEST".to_string(),
+            manifest_path.to_string_lossy().into_owned(),
+        ),
+        (
+            "COS_BIN".to_string(),
+            fixture_cos.to_string_lossy().into_owned(),
+        ),
+        (
+            "CLAW_COS_BIN".to_string(),
+            fixture_cos.to_string_lossy().into_owned(),
+        ),
+        (
+            "SSL_CERT_FILE".to_string(),
+            python.join("fixture-ca.pem").to_string_lossy().into_owned(),
+        ),
+    ]);
+    if matches!(fixture, Fixture::Smtp) {
+        // Exercise configured SMTP on the exact manifest-derived egress port.
+        extra_env.insert("SMTP_PORT".into(), endpoint.port.to_string());
+        extra_env.insert("SMTP_USER".into(), "sender@example.test".into());
+        extra_env.insert("SMTP_FROM".into(), "sender@example.test".into());
+    }
+    let mut policy = cos::worker::derive::app_session(AppSessionInput {
+        package_identity: Some((metadata.dev(), metadata.ino())),
+        pinned_entries,
         app_id,
-        app_dir: &app_sources::app_dir(app_id),
-        operation,
+        app_dir: &directory,
         program: PathBuf::from("/usr/bin/python3"),
-        argv,
+        argv: vec![entry.to_string_lossy().into_owned()],
         caps: &caps,
+        authorized_mounts: &authorized,
+        lifetime: SessionLifetime::SingleCall,
         session_id: "app-shipped",
         data_dir: &owner_data.path().to_string_lossy(),
         apps_dir: &apps_root.to_string_lossy(),
         extra_env,
-        stdio: cos::worker::StdioPlan::Captured,
-        desktop: false,
+        transports: &[],
     })
     .expect("derive policy");
     std::env::remove_var("COS_SDK_PYTHON_DIR");
     std::env::remove_var("COS_BIN");
+    assert!(policy.mounts.iter().any(|mount| {
+        mount.source == python
+            && mount.class == cos::worker::MountClass::Runtime
+            && mount.mode == cos::worker::MountMode::ReadOnly
+    }));
+    let pinned = app_sources::source_root();
+    assert!(policy
+        .mounts
+        .iter()
+        .all(|mount| !mount.source.starts_with(&pinned)));
 
     // Everything else — namespaces, seccomp, netns, mounts — stays as
     // production derives it. Only the socket the egress client dials
@@ -1537,213 +1805,335 @@ fn run_shipped_app(
         stub_socket.to_string_lossy().into_owned(),
     );
 
-    let limits = policy.limits;
     let launch = WorkerLaunch::new(policy).with_authority(cos::worker::BrokerAuthority::new(
         "app-shipped",
         Some(app_id.to_string()),
         caps,
         cos::worker::relay_slot(),
     ));
-    let prepared = cos::worker::prepare(&launch).expect("prepare");
-    let output = cos::worker::run_captured(prepared, None, limits, |_| Ok(())).expect("run");
-    let targets = stub.targets();
-    (output, targets)
+    let cos::worker::PreparedLaunch {
+        command, resources, ..
+    } = cos::worker::prepare(&launch).expect("prepare actual App MCP worker");
+    let mut command = tokio::process::Command::from(command);
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    command.kill_on_drop(true);
+    let mut child = command.spawn().expect("spawn prepared MCP worker");
+    let cleanup = WorkerCleanup {
+        resources,
+        pid: child.id().unwrap(),
+    };
+    let mut stderr = child.stderr.take().unwrap().take(65537);
+    let errors = tokio::spawn(async move {
+        let mut bytes = Vec::new();
+        stderr.read_to_end(&mut bytes).await.unwrap();
+        bytes
+    });
+    let client = McpClient::new(StdioTransport::from_pair(
+        Box::new(child.stdout.take().unwrap()),
+        Box::new(child.stdin.take().unwrap()),
+    ));
+    client.start().await;
+    let exchange = tokio::time::timeout(Duration::from_secs(20), async {
+        client
+            .initialize(
+                Implementation {
+                    name: "staged-worker-fixture".into(),
+                    version: "1".into(),
+                },
+                ClientCapabilities::default(),
+            )
+            .await?;
+        let mut listed = client
+            .list_tools()
+            .await?
+            .tools
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<Vec<_>>();
+        let mut declared = service
+            .tools
+            .iter()
+            .map(|tool| tool.name.clone())
+            .collect::<Vec<_>>();
+        listed.sort();
+        declared.sort();
+        assert_eq!(listed, declared);
+        let unauthenticated = client.call_tool(tool, Some(arguments.clone())).await;
+        assert!(
+            matches!(unauthenticated, Err(ClientError::Server { ref message, .. })
+                if message.contains("missing authenticated")),
+            "{unauthenticated:?}"
+        );
+        assert!(stub.targets().is_empty());
+        assert!(std::fs::read_to_string(&service_log).unwrap().is_empty());
+        client
+            .call_tool_with_context(
+                tool,
+                Some(arguments),
+                McpCallContext {
+                    wire_version: cos::agent::tools::app_gateway::CALL_CONTEXT_WIRE_VERSION,
+                    call_id: "call-shipped-fixture".into(),
+                    trace_id: "call-shipped-fixture".into(),
+                    deadline_unix_ms: Some(cos::agentd::grant::now_ms() + 15_000),
+                    session_id: Some("app-shipped".into()),
+                    task_id: Some("task-shipped-fixture".into()),
+                    caller: McpPrincipal {
+                        kind: McpPrincipalKind::SystemAgent,
+                        id: "fixture-system-agent".into(),
+                        owner_uid: 1000,
+                    },
+                },
+            )
+            .await
+    })
+    .await;
+    drop(client);
+    let status = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+    cleanup.resources.kill_all(Some(cleanup.pid));
+    if status.is_err() {
+        child.wait().await.expect("reap timed-out MCP worker");
+    }
+    let errors = tokio::time::timeout(Duration::from_secs(5), errors)
+        .await
+        .unwrap()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&errors);
+    let egress = stub.finish();
+    assert!(
+        errors.len() <= 65536,
+        "MCP fixture stderr exceeded its bound"
+    );
+    assert!(
+        status
+            .expect("MCP worker did not exit after EOF")
+            .unwrap()
+            .success(),
+        "{stderr}"
+    );
+    let result = exchange
+        .expect("public MCP fixture deadline")
+        .unwrap_or_else(|error| panic!("public MCP fixture failed: {error}; stderr: {stderr}"));
+    let services = std::fs::read_to_string(service_log)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    ShippedCall {
+        result,
+        egress,
+        services,
+    }
 }
 
-#[test]
-fn the_search_operation_reaches_its_endpoint_only_through_the_broker() {
+#[tokio::test]
+async fn the_search_operation_reaches_its_endpoint_only_through_the_broker() {
     require_sandbox!();
-    let endpoint = cos::worker::Endpoint::new("api.duckduckgo.com", 80);
-    let script = format!(
-        r#"
-import sys
-sys.argv = ['main.py']
-import importlib.util
-spec = importlib.util.spec_from_file_location('app', {main:?})
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
-body = mod._request_json('http://api.duckduckgo.com/?q=x')
-print('body', body)
-import socket
-try:
-    socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    print('DIRECT-OPENED')
-except OSError as failure:
-    print('direct refused', failure.errno)
-"#,
-        main = app_sources::app_dir("search")
-            .join("main.py")
-            .canonicalize()
-            .expect("search main")
-            .to_string_lossy(),
-    );
-    let (output, targets) = run_shipped_app(
+    let call = run_shipped_app(
+        "browser",
         "search",
-        "web",
-        vec!["-c".to_string(), script],
-        endpoint.clone(),
-        Fixture::Http(r#"{"AbstractText":"brokered","RelatedTopics":[]}"#),
-        CapSet::from_caps(vec![Cap::new(
-            Verb::NET_DIAL,
-            Scope::host(endpoint.authority()),
-        )]),
-    );
-    let seen = output.stdout_string() + &output.stderr_string();
-    assert!(output.status.success(), "search request failed: {seen}");
-    assert!(seen.contains("brokered"), "{seen}");
-    assert!(!seen.contains("DIRECT-OPENED"), "{seen}");
-    assert!(seen.contains("direct refused"), "{seen}");
+        "search.web",
+        json!({"provider": "brave", "query": "worker fixture", "max_results": 1}),
+        Fixture::Http(r#"{"web":{"totalResults":1,"results":[{"title":"Brokered result","url":"https://result.example.test/item","description":"Actual public Search"}]}}"#),
+        search_caps(),
+    ).await;
+    assert_ne!(call.result.is_error, Some(true), "{:?}", call.result);
     assert_eq!(
-        targets,
-        vec!["api.duckduckgo.com:80".to_string()],
-        "the search operation did not reach its endpoint through the broker"
+        result_json(&call.result),
+        json!({
+            "query": "worker fixture", "provider": "brave", "count": 1, "total_results": 1,
+            "results": [{"title": "Brokered result", "url": "https://result.example.test/item", "snippet": "Actual public Search"}],
+        })
     );
+    assert_eq!(call.egress.targets, ["api.search.brave.com:443"]);
+    assert_eq!(call.egress.exchanges.len(), 1);
+    let request = &call.egress.exchanges[0];
+    assert!(
+        request.starts_with("GET /res/v1/web/search?q=worker+fixture&count=1 HTTP/1.1"),
+        "{request}"
+    );
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("x-subscription-token: fixture-credential"),
+        "{request}"
+    );
+    assert_eq!(call.services.len(), 2);
+    assert_eq!(call.services[0]["name"], "BRAVE_SEARCH_API_KEY");
+    assert_eq!(call.services[1]["command"], "memory.remember");
+    assert_eq!(call.services[1]["payload"]["source"], "search");
 }
 
-#[test]
-fn a_shipped_operation_reauthorizes_every_redirect_hop() {
+fn search_caps() -> CapSet {
+    CapSet::from_caps([
+        Cap::new(Verb::NET_DIAL, Scope::host("api.search.brave.com")),
+        Cap::new(Verb::MEMORY_WRITE, Scope::self_ref("search")),
+        Cap::new(
+            Verb::SECRET_READ,
+            Scope::name("default/BRAVE_SEARCH_API_KEY"),
+        ),
+    ])
+}
+
+#[tokio::test]
+async fn a_shipped_operation_reauthorizes_every_redirect_hop() {
     require_sandbox!();
-    let endpoint = cos::worker::Endpoint::new("api.duckduckgo.com", 80);
-    let script = format!(
-        r#"
-import sys
-sys.argv = ['main.py']
-import importlib.util
-spec = importlib.util.spec_from_file_location('app', {main:?})
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
-body = mod._request_json('http://api.duckduckgo.com/?q=x')
-print('body', body)
-"#,
-        main = app_sources::app_dir("search")
-            .join("main.py")
-            .canonicalize()
-            .expect("search main")
-            .to_string_lossy(),
-    );
-    let (output, targets) = run_shipped_app(
+    let call = run_shipped_app(
+        "browser",
         "search",
-        "web",
-        vec!["-c".to_string(), script],
-        endpoint.clone(),
-        Fixture::Redirect("http://elsewhere.example/steal"),
-        CapSet::from_caps(vec![Cap::new(
-            Verb::NET_DIAL,
-            Scope::host(endpoint.authority()),
-        )]),
-    );
-    let seen = output.stdout_string() + &output.stderr_string();
+        "search.web",
+        json!({"provider": "brave", "query": "worker fixture", "max_results": 1}),
+        Fixture::Redirect("https://elsewhere.example.test/steal"),
+        search_caps(),
+    )
+    .await;
+    assert_eq!(call.result.is_error, Some(true), "{:?}", call.result);
+    let seen = serde_json::to_string(&call.result).unwrap();
     assert!(
-        !output.status.success(),
-        "unauthorized redirect succeeded: {seen}"
-    );
-    assert!(
-        seen.contains("Permission denied") && seen.contains("elsewhere.example"),
+        seen.contains("Permission denied") && seen.contains("elsewhere.example.test"),
         "a redirect to an ungranted host was followed: {seen}"
     );
+    assert_eq!(call.egress.targets, ["api.search.brave.com:443"]);
+    assert_eq!(call.egress.exchanges.len(), 1);
     assert_eq!(
-        targets,
-        vec!["api.duckduckgo.com:80".to_string()],
-        "the redirect target was dialled before it was authorized"
+        call.services.len(),
+        1,
+        "failed searches must not emit success memory"
     );
+    assert_eq!(call.services[0]["name"], "BRAVE_SEARCH_API_KEY");
 }
 
-#[test]
-fn the_calendar_sync_reaches_its_endpoint_only_through_the_broker() {
+#[tokio::test]
+async fn the_calendar_list_reaches_its_endpoint_only_through_the_broker() {
     require_sandbox!();
-    let endpoint = cos::worker::Endpoint::new("www.googleapis.com", 80);
-    let script = format!(
-        r#"
-import sys
-sys.argv = ['main.py']
-import importlib.util
-spec = importlib.util.spec_from_file_location('app', {main:?})
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
-print('result', mod._google_request('GET', 'http://www.googleapis.com/calendar/v3/x', token='t'))
-import socket
-try:
-    socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    print('DIRECT-OPENED')
-except OSError as failure:
-    print('direct refused', failure.errno)
-"#,
-        main = app_sources::app_dir("calendar")
-            .join("main.py")
-            .canonicalize()
-            .expect("calendar main")
-            .to_string_lossy(),
-    );
-    let (output, targets) = run_shipped_app(
+    let call = run_shipped_app(
         "calendar",
-        "sync",
-        vec!["-c".to_string(), script],
-        endpoint.clone(),
-        Fixture::Http(r#"{"items":[],"kind":"calendar#events"}"#),
-        CapSet::from_caps(vec![Cap::new(
-            Verb::NET_DIAL,
-            Scope::host(endpoint.authority()),
-        )]),
-    );
-    let seen = output.stdout_string() + &output.stderr_string();
-    assert!(
-        seen.contains("calendar#events") || seen.contains("'items': []"),
-        "{seen}"
-    );
-    assert!(!seen.contains("DIRECT-OPENED"), "{seen}");
+        "calendar",
+        "calendar.list",
+        json!({"provider": "google", "from": "2026-01-01T00:00:00Z", "to": "2026-01-02T00:00:00Z"}),
+        Fixture::Http(r#"{"items":[{"id":"fixture-event","summary":"Brokered calendar","start":{"dateTime":"2026-01-01T12:00:00Z"},"end":{"dateTime":"2026-01-01T13:00:00Z"}}]}"#),
+        CapSet::from_caps([
+            Cap::new(Verb::NET_DIAL, Scope::host("www.googleapis.com")),
+            Cap::new(Verb::SECRET_READ, Scope::name("default/GOOGLE_ACCESS_TOKEN")),
+        ]),
+    ).await;
+    assert_ne!(call.result.is_error, Some(true), "{:?}", call.result);
+    let result = result_json(&call.result);
+    assert_eq!(result["provider"], "google");
+    assert_eq!(result["count"], 1);
     assert_eq!(
-        targets,
-        vec!["www.googleapis.com:80".to_string()],
-        "the calendar sync did not reach its endpoint through the broker"
+        result["events"][0],
+        json!({
+            "id": "fixture-event", "title": "Brokered calendar",
+            "start": "2026-01-01T12:00:00Z", "end": "2026-01-01T13:00:00Z",
+            "description": "", "location": "",
+        })
+    );
+    assert_eq!(call.egress.targets, ["www.googleapis.com:443"]);
+    assert_eq!(call.egress.exchanges.len(), 1);
+    let request = &call.egress.exchanges[0];
+    assert!(
+        request.starts_with("GET /calendar/v3/calendars/primary/events?"),
+        "{request}"
+    );
+    assert!(
+        request.contains("timeMin=2026-01-01T00%3A00%3A00Z"),
+        "{request}"
+    );
+    assert!(
+        request.contains("timeMax=2026-01-02T00%3A00%3A00Z"),
+        "{request}"
+    );
+    assert!(
+        request.to_ascii_lowercase().contains(
+            "authorization: Bearer fixture-credential"
+                .to_ascii_lowercase()
+                .as_str()
+        ),
+        "{request}"
+    );
+    assert_eq!(
+        call.services,
+        [
+            json!({"command": "credential.load", "name": "GOOGLE_ACCESS_TOKEN", "namespace": "default"})
+        ]
     );
 }
 
-#[test]
-fn smtp_send_reaches_its_server_only_through_the_broker() {
+#[tokio::test]
+async fn smtp_send_reaches_its_server_only_through_the_broker() {
     require_sandbox!();
-    let endpoint = cos::worker::Endpoint::new("smtp.example.com", 25);
-    let script = r#"
-from email.message import EmailMessage
-from cos_runtime import smtp as cos_smtp
-import socket
-
-message = EmailMessage()
-message['From'] = 'a@example.com'
-message['To'] = 'b@example.com'
-message['Subject'] = 'brokered'
-message.set_content('hello')
-
-with cos_smtp.connect('smtp.example.com', 25, timeout=10, starttls=False) as server:
-    server.send_message(message)
-    print('sent')
-
-try:
-    socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    print('DIRECT-OPENED')
-except OSError as failure:
-    print('direct refused', failure.errno)
-"#
-    .to_string();
-    let (output, targets) = run_shipped_app(
+    let call = run_shipped_app(
+        "mail",
         "email",
-        "send",
-        vec!["-c".to_string(), script],
-        endpoint.clone(),
+        "email.send",
+        json!({"provider": "smtp", "host": "smtp.example.test", "to": "recipient@example.test", "subject": "Brokered message", "body": "Actual public Email"}),
         Fixture::Smtp,
-        CapSet::from_caps(vec![Cap::new(
-            Verb::NET_DIAL,
-            Scope::host(endpoint.authority()),
-        )]),
-    );
-    let seen = output.stdout_string() + &output.stderr_string();
-    assert!(seen.contains("sent"), "{seen}");
-    assert!(!seen.contains("DIRECT-OPENED"), "{seen}");
-    assert!(seen.contains("direct refused"), "{seen}");
+        CapSet::from_caps([
+            Cap::new(Verb::NET_DIAL, Scope::host("smtp.example.test")),
+            Cap::new(Verb::SECRET_READ, Scope::name("default/SMTP_PASSWORD")),
+            Cap::new(Verb::MEMORY_WRITE, Scope::self_ref("email")),
+        ]),
+    ).await;
+    assert_ne!(call.result.is_error, Some(true), "{:?}", call.result);
     assert_eq!(
-        targets,
-        vec!["smtp.example.com:25".to_string()],
-        "the SMTP send did not reach its server through the broker"
+        result_json(&call.result),
+        json!({
+            "sent": true, "to": "recipient@example.test",
+            "subject": "Brokered message", "provider": "smtp",
+        })
     );
+    assert_eq!(call.egress.targets, ["smtp.example.test:443"]);
+    assert_eq!(call.egress.exchanges.len(), 1);
+    let transcript = &call.egress.exchanges[0];
+    assert!(transcript.contains("AUTH PLAIN "), "{transcript}");
+    assert!(
+        transcript
+            .to_ascii_lowercase()
+            .contains("mail from:<sender@example.test>"),
+        "{transcript}"
+    );
+    assert!(
+        transcript
+            .to_ascii_lowercase()
+            .contains("rcpt to:<recipient@example.test>"),
+        "{transcript}"
+    );
+    assert!(
+        transcript.contains("Subject: Brokered message"),
+        "{transcript}"
+    );
+    assert!(transcript.contains("\r\n\r\nActual public Email\r\n"), "{transcript}");
+    assert_eq!(call.services.len(), 2);
+    assert_eq!(call.services[0]["name"], "SMTP_PASSWORD");
+    assert_eq!(call.services[1]["command"], "memory.remember");
+    assert_eq!(call.services[1]["payload"]["source"], "email");
+}
+
+#[test]
+fn generic_egress_grant_does_not_allow_direct_sockets() {
+    require_sandbox!();
+    let output = run_with_egress(
+        r#"
+import errno
+import socket
+for family in (socket.AF_INET, socket.AF_INET6):
+    try:
+        socket.socket(family, socket.SOCK_STREAM)
+    except OSError as error:
+        assert error.errno == errno.EPERM, error
+    else:
+        raise AssertionError("direct socket bypassed broker-only transport")
+print("direct sockets refused with an egress grant")
+"#,
+        vec![cos::worker::Endpoint::new("api.search.brave.com", 443)],
+    );
+    assert!(output.status.success(), "{}", output.stderr_string());
+    assert!(output
+        .stdout_string()
+        .contains("direct sockets refused with an egress grant"));
 }
 
 #[test]

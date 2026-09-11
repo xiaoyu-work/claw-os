@@ -24,6 +24,7 @@ Debian packages and a signed multi-architecture APT repository.
 | `deb/build-debs.sh` | Package staging and `.deb` assembly |
 | `apps.lock.json` | Immutable clawos-app revision, distinct product/capability groups and exact App payload |
 | `../scripts/app_sources.py` | Fetch pinned, explicitly kinded sources and stage their package-owned payload |
+| `../scripts/app_sources.py --stage-shared <root>` | Invoke App-owned common support staging once into `usr/lib/cos/python`, separately from SDK/runtime and product payloads |
 | External Files `python/claw_files/` | Shared document parsing/conversion staged in the Agent package; native Files embeds the same source, and both executables stay desktop-owned |
 | `../tools/install-browser-agent.sh` | Manual Browser extension/Native Host deployment from the same product pin |
 | `deb/tests/test_app_sources.py` | Immutable source/cache, payload identity, and OS native-launcher ownership |
@@ -108,7 +109,7 @@ The provider controls only the authenticated owner's installed Player and
 reads its live state under separate exact grants; no worker bus is granted.
 Source/partition tests cover the generated native path, versioned service and
 refusal of unsafe binary-only hot-swap.
-Notifications' complete native source, config/util libraries and descriptor
+Notifications' complete native source, private config/util libraries and descriptor
 follow the same immutable pin. Desktop owns the binary and manifest and links
 the product libraries into its panel/applets; Agent owns the versioned
 `claw-os-notifications-v1` durable service. Worker intent retains `ui.notify`
@@ -123,19 +124,23 @@ identities; all 75 belong to 24 business product groups plus four explicitly
 shared-capability source groups. Historical JSON is preserved in its
 old namespace and excluded from new service lists, never copied into payloads
 or automatically imported at installation/launch.
-App partition accounting includes nested gateway manifests. Shared gateway
-libraries remain OS-owned, and the canonical argument module is installed in
-`/usr/lib/cos/python` for the packaged legacy App entrypoints.
+App partition accounting includes nested gateway manifests. App-owned
+`shared/python` supplies `_shared`, `gateway._shared` and `canonical_argv`
+through the pinned public common staging CLI. Agent stages them once in
+`/usr/lib/cos/python`, separately from SDK/runtime and App payloads, preserving
+the required `python3-idna` dependency. Tests/vectors and bytecode are excluded.
+No OS `apps/` source or duplicate libraries under the installed Apps root remain.
+The current Agent Debian package still owns the compatibility payload;
+independent App APT/common-package ownership is a separate coordinated cutover.
 
 Document Engine owns `doc` under the external `capabilities/` root; the lock's
 optional `capabilities` list is distinct from `products`. Its explicit named
 Files parser dependency ships in Agent alongside Doc even for Doc-only staging.
 Identical library co-staging is accepted; conflicting bytes/modes/symlinks or
 extra files are refused, not merged. No public SDK/provider or installed
-identity/state moves. Agent assembly removes bytecode and resulting empty
-directories from its staged local tree before adding pinned Apps, so old
-cache-only source directories cannot shadow migrated payloads. Source and
-dependency caches are left untouched.
+identity/state moves. The App stager excludes tests and bytecode; Agent
+assembly no longer reads a local Apps source tree. Source and dependency
+caches are left untouched.
 
 Storage SDK supplies independent `db` and `kv` clients from
 `capabilities/storage-sdk/apps/<id>`, separate from the Storage business product.
@@ -148,7 +153,7 @@ No App data is imported or joined with Agent memory.
 Agent still contains 63 total identities (all externally source-owned);
 Desktop still contains 12. The real package-block fixture checks exact identities
 and full payload bytes/modes/symlinks, then runs DB/KV manifest-selected MCP over
-stdio through installed SDK/runtime and OS helper exports. It covers KV restart,
+stdio through installed OS SDK/runtime and App-owned common support. It covers KV restart,
 multiple writers, private atomic replacement, corrupt-state errors and namespace
 isolation without importing App internals or fixing a list of private filenames.
 
@@ -156,7 +161,7 @@ HTTP supplies `net` from `capabilities/http/apps/net` to Agent only. The full
 payload is compared with its immutable source, and the real Agent build-block
 fixture invokes the manifest-selected MCP entrypoint through installed OS
 libraries. The unchanged client keeps both command shapes and exact needs.
-The OS retains `_shared.safe_http`, policy, egress enforcement and signing;
+App common support owns `_shared.safe_http`; OS retains policy, egress enforcement and signing;
 no provider, SDK, user state or independent updater enters the App payload.
 
 AI Helpers supplies `summarize` from `capabilities/ai-helpers/apps/summarize`
@@ -167,9 +172,9 @@ The AI binding correction matches the unchanged runtime check and preserves
 the AI consent snapshot, budgets, result shape and `self:summarize` namespace.
 Real all/Agent/Desktop and Agent build-block fixtures check exact 75/63/12
 identities, full payload bytes/modes/symlinks and public staged MCP/wire with
-synthetic responses and private data. No original production App manifest
-remains under OS `apps/`; shared helper exports stay. Signed package delivery
-and declared library source exports remain distribution/build coupling.
+synthetic responses and private data. No App production or helper source
+remains under OS `apps/`. Signed compatibility package delivery and declared
+source staging remain distribution/build coupling.
 
 ## Tests
 

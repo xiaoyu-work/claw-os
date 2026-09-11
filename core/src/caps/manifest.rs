@@ -748,7 +748,7 @@ pub struct Need {
     pub why: LocalizedText,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum NeedCondition {
     ArgPresent {
@@ -2058,8 +2058,13 @@ fn validate_optional_need_binding(need: &Need, args: &BTreeMap<&str, &Arg>) -> R
     let Some(declaration) = args.get(bound_arg.as_str()) else {
         return Ok(());
     };
-    let guaranteed =
-        declaration.required || declaration.default.is_some() || declaration.kind == ArgKind::Bool;
+    let guaranteed = declaration.required
+        || declaration.default.is_some()
+        || (declaration.kind == ArgKind::Bool && declaration.required_when.is_none())
+        || declaration
+            .required_when
+            .as_ref()
+            .is_some_and(|condition| need.when.as_ref() == Some(condition));
     let explicitly_guarded = matches!(
         &need.when,
         Some(

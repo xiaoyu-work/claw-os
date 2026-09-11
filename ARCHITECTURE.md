@@ -573,7 +573,7 @@ same owner/App partition. KV and Agent memory remain separate. No SDK/provider,
 grant union, data import or new state transition moves with the source.
 KV's complete MCP-only manifest, server/data logic and tests live alongside DB,
 but retain the independent `kv` identity and `$COS_DATA_DIR/kv.json` string map.
-KV consumes the declared OS `_shared.atomic` library export; it does not copy a
+KV consumes the App-owned common `_shared.atomic` library; it does not copy a
 privileged provider or SDK. Cache refresh and locked private atomic replacement
 prevent stale reads, lost concurrent writes and publication of failed writes.
 Get/set/delete retain exact-key read/write/delete authority. List/dump explicitly
@@ -582,9 +582,9 @@ require fixed whole-store read authority, not borrowed named-key grants; see
 
 HTTP owns the complete `net` client at `capabilities/http/apps/net`. The two
 existing MCP/CLI tools keep their request validation, bounded responses,
-atomic download behavior and exact endpoint/output needs. The OS still supplies
-`_shared.safe_http`, SDK/runtime, per-hop host/port authorization, brokered
-transport, sandbox authority and signed installation. No network provider,
+atomic download behavior and exact endpoint/output needs. App common support
+owns `_shared.safe_http`; the OS supplies SDK/runtime, per-hop host/port
+authorization, brokered transport, sandbox authority and signed installation. No network provider,
 credential store, other App implementation or user state moves with the client.
 
 AI Helpers owns the complete `summarize` client at
@@ -605,12 +605,20 @@ cross-repository imports of private source. OS core builds do not require an
 App checkout; package composition and integration fixtures deliberately use
 the immutable App pin. Client fixtures consume full staged payloads and the
 manifest-selected stdio endpoint. Pins establish reproducibility, not complete
-build/release independence: platform source-directory exports, source-package
-staging and OS package publication remain explicit coupling, as described in
+build/release independence: source-package compatibility staging and OS package
+publication remain explicit coupling, as described in
 [`packaging/README.md`](packaging/README.md).
-No original production App manifest remains under OS `apps/`; shared library
-exports remain OS-owned. This completes source relocation, not backend/state,
-identity consolidation, independent distribution, or boot/upgrade/visual acceptance.
+The OS has no `apps/` source tree. App `shared/python` owns `_shared`,
+`gateway._shared` and `canonical_argv`; its tests/vectors live in App
+`tests/shared`. Compatibility assembly calls the pinned public
+`tools/stage.py --shared --root <root>` once through `scripts/app_sources.py`,
+installing support into `usr/lib/cos/python` beside separately staged OS
+SDK/runtime. Product payloads contain no duplicate common libraries.
+The App development platform is the versioned SDK/runtime/toolkit artifact,
+not an export of App helpers from OS source. Agent still owns the installed
+compatibility files; independent App APT/common-package ownership is a later
+coordinated cutover, not an installed Git updater. Source relocation does not
+establish backend/state or identity consolidation, or boot/upgrade/visual acceptance.
 
 Cross-repository App contract and worker tests select real declared source by
 the same lock through `core/test/support/app_sources.rs`. CI explicitly prepares

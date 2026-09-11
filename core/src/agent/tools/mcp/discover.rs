@@ -24,7 +24,7 @@
 //!   "transport": "mcp+stdio",         // only stdio is supported today
 //!   "command": "python3",
 //!   "args":    ["${manifest_dir}/main.py"],
-//!   "env":     { "PYTHONPATH": "${manifest_dir}/../../apps" },
+//!   "env":     { "PYTHONPATH": "/usr/lib/cos/python" },
 //!   "cwd":     null,
 //!   "timeout_secs": 30,
 //!   "enabled": true,

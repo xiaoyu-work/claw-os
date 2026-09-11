@@ -175,14 +175,17 @@ is loaded from a local OS copy. KV has only its manifest-selected MCP entrypoint
 not a `main.py`; runtime fixtures use public stdio calls and complete staged
 payloads. See [the KV compatibility note](docs/updating.md#app-data-moves-into-per-app-directories).
 `net` is owned by the HTTP capability group. Its two MCP/CLI tools consume the
-OS policy/transport exports; contracts use the public MCP entrypoint rather than
-legacy operation schemas or private client modules.
+App-owned common HTTP support and OS policy/transport; contracts use the public
+MCP entrypoint rather than legacy operation schemas or private client modules.
 `summarize` is owned by AI Helpers, using public SDK AI and the bundled
 policy/memory exports under its own identity, consent and budget. Its fixture
 calls must use isolated synthetic wire peers, never paid/live models.
-All 75 original App sources are external; OS `apps/` retains shared libraries,
-not production App manifests. Source completion is separate from distribution
-and backend/state/identity integration.
+All 75 original App sources and their common libraries are external. The OS
+has no `apps/` source tree. App `shared/python` stages separately into
+`usr/lib/cos/python`, beside OS SDK/runtime, through
+`python3 scripts/app_sources.py --stage-shared <root>`. Its helper tests/vectors
+belong to App `tests/shared`. Current Agent package assembly remains
+compatibility delivery, not the independent App APT ownership cutover.
 
 ```bash
 python3 scripts/app_sources.py
@@ -198,7 +201,8 @@ cargo test -p cos --test app_source_fixtures -- --test-threads=1
 
 # OS-owned Python tests, from the repository root. App tests live in clawos-app.
 PYTHONPATH=claw-os-sdk/python/src:cos-runtime/python/src \
-  python3 -m pytest -q apps adapters claw-os-sdk/python/src cos-runtime/python/src
+  python3 -m pytest -q adapters claw-os-sdk/python/src cos-runtime/python/src \
+    packaging/deb/tests/test_app_sources.py
 
 # Browser crate.
 cargo test -p cos-browser
@@ -225,7 +229,7 @@ claw-os/
 │       ├── audit.rs       JSONL audit logging
 │       ├── sysinfo.rs     Native system info
 │       └── apps.rs        App manifest discovery
-├── apps/              OS-owned shared Python exports; App clients are external
+├── packaging/         OS packages and immutable external App compatibility pin
 ├── rootfs/            Linux rootfs build scripts + overlay
 ├── targets/           Per-distribution build scripts (docker, wsl, iso, vm)
 │   └── docker/          Dockerfiles + build.sh for the docker target

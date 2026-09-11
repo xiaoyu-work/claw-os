@@ -48,9 +48,11 @@ Wayland, SDK, or MCP boundaries. Preserve licenses and avoid pulling privileged
 agent logic into GPL desktop processes. Component workspaces remain independent
 of the root Rust workspace.
 
-Notifications config/util crates are explicitly exported product libraries,
-linked by `applets/cosmic-applet-notifications` and `panel/cosmic-panel-bin`
-from `build/native-apps/cosmic-notifications`. Their manual and chroot builds
+Notifications config/util crates remain private native component inputs,
+linked by the current `applets/cosmic-applet-notifications` and `panel/cosmic-panel-bin`
+from `build/native-apps/cosmic-notifications`. They are no longer declared
+`native_libraries` exports; preparation keeps the full component without
+inventing public metadata. Their manual and chroot builds
 prepare/validate the same immutable inputs. The original daemon graph is built
 separately, not unified with the applet renderer. Connection-local handles and
 popup retirement are presentation, never a second durable notification store.

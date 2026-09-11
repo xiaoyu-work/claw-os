@@ -24,11 +24,7 @@ pub fn app_dir(relative: &str) -> PathBuf {
     app_dir_in(repository, relative)
 }
 
-pub fn app_dir_in(repository: &Path, relative: &str) -> PathBuf {
-    assert!(
-        relative.split('/').all(valid_name),
-        "invalid App fixture path"
-    );
+fn read_lock(repository: &Path) -> SourceLock {
     let lock: SourceLock = serde_json::from_str(
         &std::fs::read_to_string(repository.join("packaging/apps.lock.json"))
             .expect("App source lock"),
@@ -61,15 +57,36 @@ pub fn app_dir_in(repository: &Path, relative: &str) -> PathBuf {
             .any(|name| lock.capabilities.contains(name)),
         "duplicate source group across products and capabilities"
     );
-    let id = relative.replace('/', "-");
-    if !lock.apps.contains(&id) {
-        return repository.join("apps").join(relative);
-    }
+    lock
+}
+
+fn source_cache(repository: &Path, lock: &SourceLock) -> PathBuf {
     let source = repository.join("build/app-sources").join(&lock.revision);
     assert!(
         source.is_dir(),
         "Run `python3 scripts/app_sources.py` from the OS repository before App integration tests"
     );
+    source
+}
+
+#[allow(dead_code)]
+pub fn source_root() -> PathBuf {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    source_cache(repository, &read_lock(repository))
+}
+
+pub fn app_dir_in(repository: &Path, relative: &str) -> PathBuf {
+    assert!(
+        relative.split('/').all(valid_name),
+        "invalid App fixture path"
+    );
+    let lock = read_lock(repository);
+    let id = relative.replace('/', "-");
+    assert!(
+        lock.apps.contains(&id),
+        "App fixture is not in the source lock: {id}"
+    );
+    let source = source_cache(repository, &lock);
     let mut apps = BTreeMap::new();
     for (root, kind, names) in [
         ("products", "product", &lock.products),
