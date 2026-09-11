@@ -219,7 +219,13 @@ fallback. No system service hardening or host protection is relaxed.
 
 Settings' Applications page now manages owner-scoped **brokered** App
 permissions. Its four permission MCP tools require `sys.permissions:manage`,
-not the permissions of the Apps being managed. The desktop package depends
+not the permissions of the Apps being managed. The OS service now applies that
+same existing High-risk capability and owner check to other permission-manager
+Apps; it does not grant the capability automatically or replace the trusted
+human restoration decision. The requester cannot select another owner, widen
+target manifests or manage unsupported direct resources. Existing Settings
+requests and owner/App policy receipts stay compatible; no grant migration,
+new capability or reapproval is implied. The desktop package depends
 on `claw-os-app-permissions-v1`, provided by the matching newer Agent package:
 APT cannot install the feature with an old `cos`/`clawd` that lacks its routes.
 Restart Settings after upgrade. Source-only development against an older

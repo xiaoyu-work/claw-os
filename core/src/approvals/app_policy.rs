@@ -183,7 +183,7 @@ pub fn blocks(uid: u32, app: &str) -> Result<Vec<Block>, String> {
 
 pub fn revoke(uid: u32, app: &str, cap: Cap) -> Result<Block, String> {
     if !supported(cap.verb) {
-        return Err("this permission requires containment of direct resources and cannot yet be changed in Settings".into());
+        return Err("this permission requires containment of direct resources and cannot yet be managed".into());
     }
     super::generations::block_app_cap(uid, app, cap)
 }

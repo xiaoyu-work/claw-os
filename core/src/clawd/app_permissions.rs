@@ -1,4 +1,4 @@
-//! Shared Settings UI/App service. All target state remains owner scoped in clawd.
+//! OS App-permission service; capability and owner binding are independent of UI identity.
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
@@ -37,7 +37,9 @@ pub async fn control(
         super::permissions::required_string(&params, "reason")?;
     }
     if let Some(authority) = authority {
-        authority.require_app("cosmic-settings")?;
+        if authority.owner_uid() != uid {
+            return Err("App permission authority belongs to another owner".into());
+        }
         let _authorized =
             authority.require(Cap::new(Verb::SYS_PERMISSIONS, Scope::name("manage")))?;
     } else {
@@ -86,7 +88,7 @@ pub async fn control(
                     "capability": cap, "manageable": manageable, "enabled": enabled,
                     "within_package_ceiling": within_ceiling,
                     "live_granted": cap.as_ref().map(|cap| live.covers(cap) && enabled == Some(true)),
-                    "limitation": if manageable { None } else { Some("Argument-bound or direct-resource permission: Settings cannot safely revoke its worker mounts/native authority yet.") },
+                    "limitation": if manageable { None } else { Some("Argument-bound or direct-resource permission: the OS cannot safely revoke its worker mounts/native authority yet.") },
                 }))
             }).collect::<Result<Vec<_>, String>>()?;
             let prefix = format!("{}{uid}:{app_id}:", app_policy::SESSION_PREFIX);
@@ -100,10 +102,10 @@ pub async fn control(
         }
         let key = super::permissions::required_string(&params, "permission_id")?;
         let need = needs.iter().find(|need| permission_id(need) == key)
-            .ok_or("permission is not declared by the currently verified App; refresh Settings")?;
-        let cap = fixed_cap(need).ok_or("argument-bound permissions cannot yet be changed in Settings")?;
+            .ok_or("permission is not declared by the currently verified App; refresh permission details")?;
+        let cap = fixed_cap(need).ok_or("argument-bound permissions cannot yet be managed")?;
         if !app_policy::supported(cap.verb) {
-            return Err("direct-resource permissions cannot yet be changed in Settings".into());
+            return Err("direct-resource permissions cannot yet be managed".into());
         }
         if !ceiling.clamp(&crate::caps::CapSet::from_caps([cap.clone()])).1.is_empty() {
             return Err("permission exceeds the verified package's trust ceiling".into());
@@ -132,7 +134,7 @@ pub async fn control(
         }
         let reason = super::permissions::required_string(&params, "reason")?;
         let block = blocks.iter().find(|block| block.cap == cap)
-            .ok_or("permission is already enabled; Settings does not expand the manifest or launcher ceiling")?;
+            .ok_or("permission is already enabled; permission management does not expand the manifest or launcher ceiling")?;
         if block.enabled(uid, &app_id)? {
             return Err("permission is already enabled".into());
         }
@@ -140,7 +142,7 @@ pub async fn control(
         let id = match approvals::find_pending_exact(&session, &cap, Some(uid), None) {
             Some(request) => request.id,
             None => approvals::submit_owned(cap.verb, cap.scope, session, reason,
-                Some(format!("Settings restore {app_id}")), Some(uid))?,
+                Some(format!("App permission restore {app_id}")), Some(uid))?,
         };
         Ok(json!({"id":id, "status":"pending", "enabled":false, "app_id":app_id,
             "required_duration":"forever", "approval":"trusted human helper; never an MCP tool"}))

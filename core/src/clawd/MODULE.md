@@ -41,7 +41,7 @@ and agent tasks.
 | `tasks.rs` | Task queue, summary/list, cancel, retry, and session continuity |
 | `usage.rs` | Peer-UID-scoped Agent token usage queries |
 | `app_sessions.rs` | App/native/MCP session authority: derives identity and capabilities, plans approvals, issues launch grants, consumes service-bound call tickets |
-| `app_permissions.rs` | Shared Settings permission service: verified declarations, owner/App deny gates, pending durable restoration, fine-grained revocation; no approval authority |
+| `app_permissions.rs` | Capability-gated App permission service: verified declarations, owner/App deny gates, pending durable restoration, fine-grained revocation; no approval authority or fixed UI identity |
 | `gui/`, `app_sessions/gui.rs` | Root-supervised GUI instances; operation-only needs, live parent/grant/policy checks, independent selection rights and checked retirement |
 | `../display_session/` | Root PAM/login activation and compositor control; owner sockets or Wayland labels cannot register authority |
 | `system_review.rs`, `system_review/presentation.rs` | Shared App/capability review projection, owner-scoped display revisions, root-only choices, fresh package verification and one-use App confirmation |
@@ -72,7 +72,16 @@ when the product gains another tool. Native launch still requires the
 root-owned launcher and Thunderbird parent; consent and AI accounting remain
 in the broker gate.
 
-Settings restores are non-execution receipts in the existing approvals store,
+The `system.app-permissions` service accepts any authenticated session holding
+the existing High-risk `sys.permissions:manage` capability for the request's
+owner. Settings is one consumer, not a privileged App class. Default Agent and
+unregistered-launcher ceilings still deny that capability, and worker relays
+cannot invoke the human `permission.apps` or privileged approval routes.
+The service does not execute another App or grant its requested capabilities.
+Target manifests, trust ceilings, supported scopes and checked GUI retirement
+remain enforced; restoration is only a request to the trusted OS presenter.
+
+App permission restores are non-execution receipts in the existing approvals store,
 bound to the exact owner/App/capability and both App and owner/session
 generations. Expired legacy Settings execution-shaped receipts retain policy
 consent only; ordinary grant redemption refuses them. Decisions and revocations

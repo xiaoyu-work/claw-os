@@ -54,8 +54,12 @@ not private App/SDK functions or a mutable sibling source layout.
 
 Settings permission management does not delegate target-App capabilities.
 Its manifest declares only `sys.permissions` with fixed scope `manage`;
-the OS restricts the service to the authenticated Settings identity and
-owner. Revocation attenuates declared brokered capabilities at launch and
+the OS service accepts any explicitly authorized App holding that High-risk
+capability for the authenticated owner. Settings is one client, not an identity
+exception. Default Agent/local-launcher authority does not include this
+capability. The App can inspect, request restoration and revoke supported
+permissions, never approve its own requests or execute the target App.
+Revocation attenuates declared brokered capabilities at launch and
 live broker spending. Restoration is pending until the trusted human helper
 decides it, and never bypasses the signed manifest or caller's ceiling.
 Dynamic/direct-resource permissions are explicitly unsupported by this first

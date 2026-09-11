@@ -1,5 +1,10 @@
 use super::*;
 use crate::test_env::TestEnvVarGuard;
+use crate::clawd::authority::{
+    authority, Audience, AudienceSet, Binding, Issuance, Issuer, Presentation, Principal,
+    Requirement, Subject, Uses,
+};
+use std::time::Duration;
 
 fn client(uid: u32) -> ClientIdentity {
     ClientIdentity {
@@ -11,6 +16,114 @@ fn client(uid: u32) -> ClientIdentity {
         attended_local: true,
         extension_host: None,
     }
+}
+
+fn manager_decision(app: &str, caps: Vec<Cap>, uses: Uses, lifetime: Duration) -> Decision {
+    let uid = unsafe { libc::geteuid() };
+    let session = format!("permission-manager-{}", uuid::Uuid::new_v4().simple());
+    let (_, view) = authority()
+        .issue(Issuance {
+            issuer: Issuer::AppSessionAuthority,
+            principal: Principal::of_process(uid, std::process::id()).unwrap(),
+            binding: Binding::ProcessTree,
+            subject: Subject::session(session.clone()).with_app(Some(app.into())),
+            audience: AudienceSet::one(Audience::SystemService),
+            caps: crate::caps::CapSet::from_caps(caps),
+            lifetime,
+            uses,
+            index_session: true,
+        })
+        .unwrap();
+    Decision::for_test(
+        view,
+        "system.app-permissions",
+        Audience::SystemService,
+        Presentation {
+            uid,
+            pid: std::process::id(),
+            start_time_ticks: crate::proc::read_start_time_ticks_pub(std::process::id()),
+            audience: Audience::SystemService,
+            route: "system.app-permissions",
+            session_id: Some(session),
+        },
+        None,
+        &Requirement::RouteDerived,
+    )
+}
+
+fn manage_cap() -> Cap {
+    Cap::new(Verb::SYS_PERMISSIONS, Scope::name("manage"))
+}
+
+#[tokio::test]
+async fn any_explicitly_authorized_app_can_use_the_owner_permission_service() {
+    let _lock = crate::test_env::lock_env();
+    let directory = tempfile::tempdir().unwrap();
+    let _data = TestEnvVarGuard::set("COS_DATA_DIR", directory.path().join("data"));
+    let apps = directory.path().join("apps");
+    std::fs::create_dir(&apps).unwrap();
+    let _apps = TestEnvVarGuard::set("COS_APPS_DIR", &apps);
+    let owner = client(unsafe { libc::geteuid() });
+    let home = directory.path().join("owner-home");
+    std::fs::create_dir(&home).unwrap();
+    assert!(!crate::clawd::system_caps::system_agent_caps(owner.uid.unwrap(), &home).covers(&manage_cap()));
+    assert!(!crate::clawd::system_caps::local_launcher_ceiling(&home).covers(&manage_cap()));
+    for app in ["cosmic-settings", "independent-permission-manager"] {
+        let decision = manager_decision(app, vec![manage_cap()], Uses::Budget(1), Duration::from_secs(60));
+        for invalid in [
+            json!({"action":"approve"}),
+            json!({"action":"show","app_id":"../other-owner"}),
+            json!({"action":"revoke","app_id":"permission-fixture","permission_id":"bad-key"}),
+        ] {
+            assert!(control(invalid, &owner, Some(&decision)).await.is_err());
+            assert!(!crate::clawd::authority::obligation_met(Some(&decision)));
+        }
+        let response = control(json!({"action":"list"}), &owner, Some(&decision)).await.unwrap();
+        assert_eq!(response["apps"], json!([]));
+        assert!(crate::clawd::authority::obligation_met(Some(&decision)));
+        assert!(control(json!({"action":"list"}), &owner, Some(&decision)).await.is_err());
+    }
+}
+
+#[tokio::test]
+async fn app_permission_management_requires_live_exact_owner_authority() {
+    let _lock = crate::test_env::lock_env();
+    let directory = tempfile::tempdir().unwrap();
+    let _data = TestEnvVarGuard::set("COS_DATA_DIR", directory.path().join("data"));
+    let apps = directory.path().join("apps");
+    std::fs::create_dir(&apps).unwrap();
+    let _apps = TestEnvVarGuard::set("COS_APPS_DIR", &apps);
+    let uid = unsafe { libc::geteuid() };
+    let owner = client(uid);
+    for app in ["cosmic-settings", "independent-permission-manager"] {
+        for caps in [
+            vec![],
+            vec![Cap::new(Verb::SYS_PERMISSIONS, Scope::name("another-scope"))],
+            vec![Cap::new(Verb::SYS_IDENTITY, Scope::name("manage"))],
+        ] {
+            let decision = manager_decision(app, caps, Uses::Unbounded, Duration::from_secs(60));
+            assert!(control(json!({"action":"list"}), &owner, Some(&decision)).await.is_err());
+            assert!(!crate::clawd::authority::obligation_met(Some(&decision)));
+        }
+    }
+    let one_use = manager_decision(
+        "independent-permission-manager", vec![manage_cap()], Uses::Budget(1), Duration::from_secs(60),
+    );
+    let wrong_owner = control(json!({"action":"list"}), &client(uid + 1), Some(&one_use)).await.unwrap_err();
+    assert!(wrong_owner.contains("another owner"), "{wrong_owner}");
+    assert!(!crate::clawd::authority::obligation_met(Some(&one_use)));
+    assert!(control(json!({"action":"list"}), &owner, Some(&one_use)).await.is_ok());
+    let revoked = manager_decision(
+        "independent-permission-manager", vec![manage_cap()], Uses::Unbounded, Duration::from_secs(60),
+    );
+    authority().revoke_session(revoked.session_id().unwrap());
+    assert!(control(json!({"action":"list"}), &owner, Some(&revoked)).await.is_err());
+    let expired = manager_decision(
+        "independent-permission-manager", vec![manage_cap()], Uses::Unbounded, Duration::from_millis(1),
+    );
+    std::thread::sleep(Duration::from_millis(5));
+    assert!(control(json!({"action":"list"}), &owner, Some(&expired)).await.is_err());
+    assert!(app_policy::blocks(uid, "permission-fixture").unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -82,15 +195,20 @@ async fn verified_app_request_trusted_approval_and_revocation_share_owner_policy
     )
     .unwrap();
     let owner = client(uid);
+    let manager = manager_decision(
+        "independent-permission-manager", vec![manage_cap()], Uses::Unbounded, Duration::from_secs(60),
+    );
     let query = json!({"action":"show","app_id":"permission-fixture"});
     let initial = control(query.clone(), &owner, None).await.unwrap();
+    let app_view = control(query.clone(), &owner, Some(&manager)).await.unwrap();
+    assert_eq!(app_view["permissions"], initial["permissions"]);
     let permission = initial["permissions"][0]["permission_id"].as_str().unwrap();
     assert_eq!(initial["permissions"][0]["enabled"], true);
     assert_eq!(initial["permissions"][0]["live_granted"], false);
     let revoke =
         json!({"action":"revoke","app_id":"permission-fixture","permission_id":permission});
     assert_eq!(
-        control(revoke.clone(), &owner, None).await.unwrap()["revoked"],
+        control(revoke.clone(), &owner, Some(&manager)).await.unwrap()["revoked"],
         true
     );
     assert_eq!(
@@ -98,8 +216,10 @@ async fn verified_app_request_trusted_approval_and_revocation_share_owner_policy
         false
     );
     let request = json!({"action":"request","app_id":"permission-fixture","permission_id":permission,"reason":"restore status"});
-    let pending = control(request.clone(), &owner, None).await.unwrap();
+    let pending = control(request.clone(), &owner, Some(&manager)).await.unwrap();
     assert_eq!(pending["status"], "pending");
+    assert!(control(json!({"action":"approve"}), &owner, Some(&manager)).await.is_err());
+    assert!(pending.get("grant").is_none());
     assert_eq!(
         control(request, &owner, None).await.unwrap()["id"],
         pending["id"]

@@ -432,7 +432,7 @@ async fn settings_request_crosses_the_private_worker_proxy_without_exposing_appr
     });
     let slot = crate::worker::relay_slot();
     crate::worker::install_relay(&slot, Some("daemon-only-handle".into()));
-    let authority = BrokerAuthority::new("app-settings-test", Some("cosmic-settings".into()),
+    let authority = BrokerAuthority::new("app-settings-test", Some("independent-permission-manager".into()),
         CapSet::from_caps([Cap::new(Verb::SYS_PERMISSIONS, Scope::name("manage"))]), slot);
     let endpoint = BrokerEndpoint::start(dir.path().join("worker.sock"), authority, uid).unwrap();
     let socket = endpoint.socket_path().to_path_buf();
