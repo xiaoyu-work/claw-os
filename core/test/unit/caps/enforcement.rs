@@ -77,6 +77,38 @@ impl Drop for EnvGuard {
 // (which mutate the same `COS_*` vars).
 use crate::caps::test_env_lock::env_lock;
 
+#[tokio::test]
+async fn trusted_non_app_task_checks_caps_without_opening_extension_runtime_state() {
+    let _lock = crate::test_env::lock_env();
+    let directory = tempfile::tempdir().unwrap();
+    let blocked = directory.path().join("not-a-directory");
+    std::fs::write(&blocked, "cannot hold a provenance store").unwrap();
+    let _runtime = crate::test_env::TestEnvVarGuard::set("COS_PROVENANCE_RUNTIME_DIR", blocked);
+    let uid = current_euid().unwrap();
+    let base: crate::proc::SessionInfo = serde_json::from_value(serde_json::json!({
+        "session_id":"task-scope","pid":std::process::id(),"command":["task"],
+        "started_at":"now","stdout_path":"","stderr_path":"","group":"agent",
+        "caps":CapSet::from_caps([Cap::new(Verb::AGENT_INVOKE, Scope::name("demo"))])
+    })).unwrap();
+    for (group, app, allowed) in [
+        ("agent", None, true),
+        ("app", Some("demo"), false),
+        ("mcp", None, false),
+    ] {
+        let mut session = base.clone();
+        session.group = Some(group.to_string());
+        session.app_id = app.map(str::to_string);
+        crate::paths::with_routed_job(crate::paths::with_user_override(
+            uid, directory.path().to_path_buf(),
+            crate::proc::with_trusted_session_override(session, async {
+                let result = require_impl(Verb::AGENT_INVOKE, Scope::name("demo"), Mode::Strict, Some("task-scope"));
+                assert_eq!(result.is_ok(), allowed, "{group}: {result:?}");
+                assert!(require_impl(Verb::AGENT_INVOKE, Scope::name("other"), Mode::Strict, Some("task-scope")).is_err());
+            }),
+        )).await;
+    }
+}
+
 fn registry_with_caps(sid: &str, caps_json: &str) -> String {
     // pid=0 disables the ancestry check (see the require() body).
     format!(

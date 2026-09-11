@@ -1013,6 +1013,13 @@ pub fn terminate(owner: u32, session_id: &str, grace: Duration) -> Result<bool, 
 /// group and would otherwise outlive the parent. The group id is
 /// re-read from the kernel and used only when the process really is its
 /// own group leader, so this can never be aimed at an unrelated group.
+pub(crate) fn terminate_process_identity(identity: &ProcessIdentity, grace: Duration) -> bool {
+    if !identity.still_matches() {
+        return false;
+    }
+    signal_group(identity, grace)
+}
+
 #[cfg(unix)]
 fn signal_group(identity: &ProcessIdentity, grace: Duration) -> bool {
     let pid = identity.pid as libc::pid_t;

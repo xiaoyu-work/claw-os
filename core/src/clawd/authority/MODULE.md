@@ -68,6 +68,13 @@ Two related refusals close the same gap from the other side: an empty capability
 set is not an authorization, and only a *successful* spend marks the route's
 obligation met, so a provider that dropped an `Err` has its response withheld.
 
+Relayed decisions retain a private proof identifying the launcher grant and
+the exact App session. Resolving a relay once is not enough: capability
+consumption rechecks the live, process-bound relay grant and the live App
+grant under the same store lock before spending. Revocation, wrong launcher,
+wrong session and exhausted budgets still fail closed. Direct consumption
+keeps its ordinary process-binding checks.
+
 ## What Is Not Authority
 
 - **A handle.** Possession is necessary and insufficient. Every resolve

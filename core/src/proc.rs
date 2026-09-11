@@ -437,12 +437,16 @@ pub fn deregister_session(session_id: &str) {
 }
 
 pub fn deregister_session_for_owner(session_id: &str, uid: u32) {
-    let _ = update_owner_registry(uid, |mut registry| {
+    let _ = try_deregister_session_for_owner(session_id, uid);
+}
+
+pub(crate) fn try_deregister_session_for_owner(session_id: &str, uid: u32) -> Result<(), String> {
+    update_owner_registry(uid, |mut registry| {
         registry
             .sessions
             .retain(|session| session.session_id != session_id);
         registry
-    });
+    })
 }
 
 /// Remove a session only when it is still bound to the calling process

@@ -27,6 +27,7 @@ supervises, but does not execute it.
 | `grant.rs` | HMAC-signed job grant, its bindings, and both verification directions |
 | `protocol.rs` | Frames, route allowlist, protocol version, bounded framing, permission-mediation types |
 | `receipts.rs` | Reporting-only Activity receipt association from the authenticated lease and broker-owned Job |
+| `app_host/` | Controlled one-shot App hosting, retained original invocations and root-owned session lifecycle |
 | `supervisor.rs` | Broker-side claim → spawn → lease → pump → finish, permission mediation, reconciliation |
 | `worker.rs` | Worker-side handshake, dedicated channel thread, sinks, audit forwarding, approval gateway, cancellation |
 
@@ -48,8 +49,8 @@ anyway.
 
 `/run/cos/clawd.sock` is unchanged (`0660 root:sudo`). Because the worker's
 supplementary groups are cleared it cannot open that socket at all, so it has
-no broker route: no admin, App-session, scheduler or permission-decision
-surface is reachable. Its only authority is the grant, bound to owner uid,
+no general broker route: admin, scheduler and permission-decision surfaces
+remain unreachable. Its only authority is the grant, bound to owner uid,
 worker pid plus kernel start time, task and session id, a lease deadline and
 the routes in `protocol::WORKER_ROUTES`. The signing key never leaves the
 broker process, so a grant cannot be minted, edited, replayed against another
@@ -100,7 +101,7 @@ and the supervisor requeues it after approval.
 
 ## Activity receipt reporting
 
-Worker protocol v5 adds a reporting-only request/reply. The broker marks
+The reporting request/reply remains reporting-only in worker protocol v6. The broker marks
 Activity-associated assignments for capture; an enabled assignment requires
 the signed `receipt` route. The supervisor retains that handshake decision
 and checks the route, task and live lease before recording.
@@ -116,7 +117,36 @@ waiters. Channel loss releases waiting calls explicitly.
 Reporting failures never retry an App invocation. Late reports may arrive
 during cancellation, and receipt persistence does not change Activity state.
 This route provides no App launch, broker proxy, capability, or approval
-decision. The App/MCP launch limitation below is unchanged.
+decision. One-shot App execution uses the separate controlled host below.
+
+## Controlled one-shot App host
+
+The existing unprivileged worker acts as the App host; it does not become
+root or receive the general broker socket. A process-local gateway uses the
+signed `app_host` route for a closed set of operations. Root retains the
+original App, operation, arguments and verified package digest behind a
+task-owned ID, returns canonical argv, and checks later registration against
+that retained original rather than against host-supplied registration data.
+
+App registration reuses the ordinary manifest, provenance, ceiling,
+capability and all-or-none approval logic. Its private exception requires
+the live leased `NoNewPrivs` worker; public registration still refuses
+`NoNewPrivs` callers. Bound Apps use the existing sandbox and exact-capability
+broker relay. The daemon shares its ordinary admission limits, authority,
+state, audit and mutation journal with this path.
+
+Root owns runtime provenance records and checks the retained snapshot before
+binding. It reads back the exact package/class/process identity before relay,
+and handles liveness checks without granting workers write access to protected
+state. Cancellation closes admission but lets admitted privileged mutations
+finish; cleanup then revokes only owned sessions, identity-checks and stops
+their children, and removes matching records.
+
+Ordinary App-launch approval waits retain their existing bounded launcher
+semantics. The dedicated channel thread keeps heartbeats live while a
+synchronous App or approval request waits. Runtime-selected arguments absent
+from the original invocation fail closed rather than introducing new targets.
+See [the App host module](app_host/MODULE.md) for bounds and privileged tests.
 
 ## Residual Same-UID Boundary
 
@@ -147,14 +177,11 @@ the agent its own unprivileged account; there is no opt-out switch.
 Removing the worker's broker access is deliberate, and two things change with
 it:
 
-- **App and MCP sessions started from inside a task.** Registering one needs
-  either an `app_session.*` broker route or a write to the root-owned routed
-  capability registry at `/run/cos/caps/<uid>` (`0750 root:<gid>`, read-only to
-  the owner precisely so the delegated account cannot forge its own
-  capabilities). A worker has neither, so such a launch now fails closed
-  instead of running with the broker's authority. Restoring it needs a
-  sandboxed App/MCP host, which is tracked separately; widening either surface
-  here would put back the authority this change removes.
+- **Stateful App/MCP sessions and GUI launches.** The controlled host currently
+  admits only one-shot operations. Session-tool attachment, transient
+  re-scoping and GUI launch are not on that control surface and still fail
+  closed. Extending them must preserve the same owner, provenance, permission
+  and sandbox boundaries; it must not expose arbitrary `app_session.*` calls.
 - **Scheduler mutation from inside a task.** `cos cron` / `cos triggers` state
   lives in the root-owned daemon tree, so a worker can read its own scope but
   cannot persist system schedules. `scheduler.run` is a broker route and is not

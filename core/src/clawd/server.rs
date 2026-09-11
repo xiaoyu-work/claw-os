@@ -148,10 +148,12 @@ pub async fn run(options: ServerOptions) -> Result<(), DaemonError> {
     // fatal path: a worker exiting — normally or not — must never take
     // the broker down, and supervision stopping still leaves every
     // non-agent primitive served.
-    let _agentd = crate::agentd::supervisor::spawn_supervisor(agentd_shutdown);
+    let admission = Admission::new(Limits::default());
+    let _agentd = crate::agentd::supervisor::spawn_supervisor(
+        agentd_shutdown, state.clone(), admission.clone(),
+    );
     let _notification_dispatcher = super::notifications::spawn_external_dispatcher();
     spawn_heartbeat();
-    let admission = Admission::new(Limits::default());
     let serve = async move {
         loop {
             let (stream, _addr) =
@@ -457,22 +459,22 @@ async fn serve_connection(stream: UnixStream, state: DaemonState, admission: Arc
 const DRAIN_DEADLINE: std::time::Duration = std::time::Duration::from_millis(200);
 
 /// A request that cleared every check before dispatch.
-struct Admitted {
-    route: &'static Route,
-    id: RequestId,
-    params: Value,
+pub(crate) struct Admitted {
+    pub(crate) route: &'static Route,
+    pub(crate) id: RequestId,
+    pub(crate) params: Value,
     /// The authority decision the middleware took. `None` only for
     /// peer-scoped routes, which resolve no grant.
-    decision: Option<super::authority::Decision>,
+    pub(crate) decision: Option<super::authority::Decision>,
     /// Held for the lifetime of the request; dropping them returns the
     /// global, per-principal and per-route slots.
     _request_permit: super::transport::limits::RequestPermit,
     _route_permit: super::transport::limits::RoutePermit,
 }
 
-struct Refusal {
-    fault: Fault,
-    id: RequestId,
+pub(crate) struct Refusal {
+    pub(crate) fault: Fault,
+    pub(crate) id: RequestId,
     /// The registry's own name for the route, when one was resolved.
     /// Never the caller's string.
     command: Option<&'static str>,
@@ -490,7 +492,7 @@ impl std::fmt::Debug for Refusal {
     }
 }
 
-async fn admit(
+pub(crate) async fn admit(
     body: &[u8],
     client: &ClientIdentity,
     admission: &Arc<Admission>,
@@ -573,7 +575,7 @@ async fn admit(
     })
 }
 
-async fn dispatch(
+pub(crate) async fn dispatch(
     route: &'static Route,
     id: RequestId,
     params: Value,

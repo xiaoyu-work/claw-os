@@ -30,7 +30,7 @@ use crate::proc::SessionInfo;
 
 use super::grant::{Audience, Issuer, Requirement, Subject};
 use super::handle::{GrantId, GrantRef};
-use super::store::{authority, GrantView, Presentation};
+use super::store::{authority, GrantView, Presentation, RelayProof};
 
 /// Proof that the authority spent an exact capability set for this
 /// request.
@@ -72,6 +72,7 @@ pub struct Decision {
     caps: CapSet,
     owner_uid: u32,
     presentation: Presentation,
+    relay: Option<RelayProof>,
     /// The registry row the subject session refers to, resolved once
     /// under the owner's own path view. Providers that need the row
     /// read it from here instead of looking it up again.
@@ -100,10 +101,16 @@ impl Decision {
             caps: view.caps,
             owner_uid: view.owner_uid,
             presentation,
+            relay: None,
             session,
             obligation: requirement.is_route_derived(),
             exercised: AtomicBool::new(false),
         }
+    }
+
+    pub(super) fn with_relay(mut self, relay: Option<RelayProof>) -> Self {
+        self.relay = relay;
+        self
     }
 
     /// Keyed, non-reversible reference for audit records.
@@ -188,7 +195,13 @@ impl Decision {
             super::audit::record_empty_requirement(self);
             return Err("a capability check must name at least one capability".to_string());
         }
-        match authority().consume(self.grant_id, required, &self.presentation) {
+        let consumed = match &self.relay {
+            Some(proof) => {
+                authority().consume_relayed(self.grant_id, required, &self.presentation, proof)
+            }
+            None => authority().consume(self.grant_id, required, &self.presentation),
+        };
+        match consumed {
             Ok(view) => {
                 // Only a *successful* spend satisfies the obligation.
                 // A refusal the provider ignored leaves the route owing

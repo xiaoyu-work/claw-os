@@ -535,16 +535,34 @@ fn authorize_session_caps(
     // rather than on the strength of a check that predates the
     // revocation. The session is also marked for bounded shutdown so
     // the supervisor stops the process itself.
-    let owner = crate::provenance::runtime::current_owner();
-    let trust = crate::provenance::trust_store();
     // An App session is package-backed by construction, so a missing or
     // unreadable record is a denial rather than "not an extension".
     // Non-App sessions — the operator's shell, a daemon task — have no
     // record to lose and pass through.
-    let liveness = if is_app {
-        crate::provenance::runtime::assert_live_instance(owner, session_id, &trust)
+    let trusted_task = !is_app
+        && crate::paths::is_routed_job()
+        && crate::paths::current_owner_uid_override().is_some_and(|owner| Some(owner) == current_euid())
+        && crate::proc::current_trusted_session_for_caps().is_some_and(|session| {
+            session.session_id == session_id
+                && session.pid == std::process::id()
+                && session.app_id.is_none()
+                && !matches!(session.group.as_deref(), Some("app" | "mcp"))
+                && !session.pending_bind
+                && session.ended_at.is_none()
+                && session.exit_code.is_none()
+        });
+    // The authenticated task itself is not an extension instance. It must not
+    // open the broker's writable provenance lock to check its own capabilities.
+    let liveness = if trusted_task {
+        Ok(())
     } else {
-        crate::provenance::runtime::assert_live(owner, session_id, &trust)
+        let owner = crate::provenance::runtime::current_owner();
+        let trust = crate::provenance::trust_store();
+        if is_app {
+            crate::provenance::runtime::assert_live_instance(owner, session_id, &trust)
+        } else {
+            crate::provenance::runtime::assert_live(owner, session_id, &trust)
+        }
     };
     if let Err(reason) = liveness {
         return Err(Denial::verb_not_granted(verb, scope).with_hint(format!(

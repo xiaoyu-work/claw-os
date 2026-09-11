@@ -135,6 +135,7 @@ fn gateway() -> (ChannelApprovalGateway, mpsc::UnboundedReceiver<WorkerFrame>) {
         next_correlation: AtomicU64::new(1),
         asks_used: AtomicU32::new(0),
         receipts_used: AtomicU32::new(0),
+        app_calls_used: AtomicU32::new(0),
     });
     (
         ChannelApprovalGateway {
@@ -459,6 +460,167 @@ fn cancellation_does_not_discard_a_late_report_or_create_an_approval() {
     assert_eq!(state.asks_used.load(Ordering::SeqCst), 0);
 }
 
+fn app_gateway() -> (ChannelAppGateway, mpsc::UnboundedReceiver<WorkerFrame>) {
+    let (gateway, rx) = gateway();
+    (
+        ChannelAppGateway {
+            task_id: gateway.task_id,
+            state: gateway.state,
+        },
+        rx,
+    )
+}
+
+fn app_registration() -> crate::clawd::protocol::Request {
+    crate::clawd::protocol::Request::build(
+        crate::clawd::routes::Command::AppSessionRegister,
+        serde_json::json!({
+            "app_id":"demo","kind":"operation","operation":"read","args":[]
+        }),
+    )
+}
+
+fn next_app_request(rx: &mut mpsc::UnboundedReceiver<WorkerFrame>) -> protocol::AppHostRequest {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let frame = runtime.block_on(async {
+        tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .unwrap()
+            .unwrap()
+    });
+    let WorkerFrame::AppHost(request) = frame else {
+        panic!("expected App-host control")
+    };
+    *request
+}
+
+#[test]
+fn app_control_carries_retained_context_and_accepts_only_its_own_reply() {
+    use crate::clawd::client::BrokerGateway;
+    let (gateway, mut rx) = app_gateway();
+    let state = gateway.state.clone();
+    let request = app_registration();
+    let id = request.id.clone();
+    let invocation = uuid::Uuid::new_v4().to_string();
+    let expected = invocation.clone();
+    let waiter = std::thread::spawn(move || gateway.request(request, Some(invocation)));
+    let request = next_app_request(&mut rx);
+    assert_eq!(request.task_id, "task-a");
+    assert_eq!(request.request_id, id);
+    let protocol::AppHostCall::Register(registration) = request.call else {
+        panic!("registration")
+    };
+    assert_eq!(registration.invocation_id.as_str(), expected);
+    assert_eq!(registration.request.app_id.as_str(), "demo");
+    state.deliver(
+        request.correlation_id,
+        ChannelReply::AppHost(Box::new(crate::clawd::protocol::Response::ok(
+            id,
+            serde_json::json!({"registered":true}),
+        ))),
+    );
+    assert!(waiter.join().unwrap().unwrap().ok);
+}
+
+#[test]
+fn app_control_rejects_unscoped_registration_and_unrelated_broker_commands() {
+    use crate::clawd::client::BrokerGateway;
+    let (gateway, mut rx) = app_gateway();
+    assert!(gateway.request(app_registration(), None).is_err());
+    assert!(gateway
+        .request(
+            crate::clawd::protocol::Request::build(
+                crate::clawd::routes::Command::DaemonHealth,
+                serde_json::json!({}),
+            ),
+            None,
+        )
+        .is_err());
+    assert!(rx.try_recv().is_err());
+    gateway.state.cancelled.store(true, Ordering::SeqCst);
+    assert!(gateway
+        .request(app_registration(), Some(uuid::Uuid::new_v4().to_string()))
+        .is_err());
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn package_checks_use_the_host_channel_without_a_writable_runtime_store() {
+    use crate::clawd::client::BrokerGateway;
+    let (gateway, mut rx) = app_gateway();
+    let state = gateway.state.clone();
+    let waiter = std::thread::spawn(move || {
+        gateway.check_app("app-fixture", &format!("sha256:{}", "b".repeat(64)))
+    });
+    let request = next_app_request(&mut rx);
+    assert!(matches!(request.call, protocol::AppHostCall::Check(_)));
+    state.deliver(
+        request.correlation_id,
+        ChannelReply::AppHost(Box::new(crate::clawd::protocol::Response::ok(
+            request.request_id,
+            serde_json::json!({"live":true}),
+        ))),
+    );
+    assert_eq!(waiter.join().unwrap(), Ok(()));
+}
+
+#[test]
+fn app_control_never_treats_receipt_or_mismatched_responses_as_success() {
+    use crate::clawd::client::BrokerGateway;
+    for wrong_kind in [false, true] {
+        let (gateway, mut rx) = app_gateway();
+        let state = gateway.state.clone();
+        let waiter = std::thread::spawn(move || {
+            gateway.request(app_registration(), Some(uuid::Uuid::new_v4().to_string()))
+        });
+        let request = next_app_request(&mut rx);
+        if wrong_kind {
+            state.deliver(
+                request.correlation_id,
+                ReceiptReply::Recorded {
+                    receipt_id: "unrelated".into(),
+                },
+            );
+        } else {
+            state.deliver(
+                request.correlation_id,
+                ChannelReply::AppHost(Box::new(crate::clawd::protocol::Response::ok(
+                    crate::clawd::protocol::RequestId::generate(),
+                    serde_json::json!({}),
+                ))),
+            );
+        }
+        assert!(waiter.join().unwrap().is_err());
+    }
+}
+
+#[tokio::test]
+async fn trusted_task_scope_is_rebound_to_the_authenticated_worker_process() {
+    let session: crate::proc::SessionInfo = serde_json::from_value(serde_json::json!({
+        "session_id":"task-session","pid":1,"command":["task"],"started_at":"now",
+        "stdout_path":"","stderr_path":"","caps":[],"role":"worker"
+    }))
+    .unwrap();
+    with_session(Some(session), async {
+        let current = crate::proc::current_session_info_for_caps().unwrap();
+        assert_eq!(current.session_id, "task-session");
+        assert_eq!(current.pid, std::process::id());
+        assert_eq!(
+            current.start_time_ticks,
+            crate::proc::read_start_time_ticks_pub(std::process::id())
+        );
+        crate::caps::enforcement::require_current_session_identity(
+            &current.session_id,
+            current.pid,
+        )
+        .unwrap();
+    })
+    .await;
+}
+
 #[test]
 fn a_hand_started_worker_has_no_channel() {
     let _lock = crate::test_env::lock_env();
@@ -477,4 +639,12 @@ fn a_hand_started_worker_has_no_channel() {
         Some(value) => std::env::set_var(protocol::CHANNEL_FD_ENV, value),
         None => std::env::remove_var(protocol::CHANNEL_FD_ENV),
     }
+}
+
+#[cfg(target_os = "linux")]
+mod app_host_process {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/agentd/app_host/worker_process.rs"
+    ));
 }

@@ -23,7 +23,13 @@ pub fn root() -> PathBuf {
             return path.join("cos-worker");
         }
     }
-    crate::paths::data_dir().join("worker")
+    let data =
+        if crate::paths::is_routed_job() || crate::paths::current_owner_uid_override().is_some() {
+            crate::paths::user_data_dir()
+        } else {
+            crate::paths::data_dir()
+        };
+    data.join("worker")
 }
 
 /// A private launch directory, removed on drop.
@@ -96,4 +102,12 @@ fn harden(_path: &Path, _owner: Option<(u32, u32)>) -> Result<(), String> {
 /// directory and the cgroup name; never derived from worker input.
 pub fn launch_id() -> String {
     uuid::Uuid::new_v4().simple().to_string()[..16].to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/worker/runtime.rs"
+    ));
 }

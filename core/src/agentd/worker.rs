@@ -60,6 +60,7 @@ const INTERRUPT_RETRY: Duration = Duration::from_millis(100);
 /// supervisor can cost a tool call.
 const APPROVAL_TIMEOUT: Duration = Duration::from_secs(15);
 const RECEIPT_TIMEOUT: Duration = Duration::from_secs(15);
+const APP_HOST_TIMEOUT: Duration = Duration::from_secs(120);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(60);
 const IO_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -102,6 +103,10 @@ fn run() -> Result<(), String> {
         task_id: task_id.clone(),
         state: io.state.clone(),
     }));
+    crate::clawd::client::install_gateway(Arc::new(ChannelAppGateway {
+        task_id: task_id.clone(),
+        state: io.state.clone(),
+    }))?;
 
     // Routed tool paths use `block_in_place`, which needs the
     // multi-thread scheduler — the same requirement the in-process
@@ -238,10 +243,11 @@ impl LocalIdentity {
 // Channel I/O
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 enum ChannelReply {
     Approval(ApprovalReply),
     Receipt(ReceiptReply),
+    AppHost(Box<crate::clawd::protocol::Response>),
     Refused(String),
 }
 
@@ -267,6 +273,7 @@ struct ChannelState {
     next_correlation: AtomicU64,
     asks_used: AtomicU32,
     receipts_used: AtomicU32,
+    app_calls_used: AtomicU32,
 }
 
 impl ChannelState {
@@ -345,6 +352,7 @@ impl ChannelIo {
             next_correlation: AtomicU64::new(1),
             asks_used: AtomicU32::new(0),
             receipts_used: AtomicU32::new(0),
+            app_calls_used: AtomicU32::new(0),
         });
         let (handshake_tx, handshake_rx) = sync_channel(1);
         let io_state = state.clone();
@@ -457,17 +465,31 @@ async fn io_main(
     }
 
     let control_state = state.clone();
+    let control_task = task_id.clone();
     let control = tokio::spawn(async move {
-        watch_control(frames, task_id, control_state).await;
+        watch_control(frames, control_task, control_state).await;
     });
 
-    while let Some(frame) = outbound.recv().await {
+    let mut heartbeat = tokio::time::interval(HEARTBEAT_INTERVAL);
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        let frame = tokio::select! {
+            frame = outbound.recv() => match frame {
+                Some(frame) => frame,
+                None => break,
+            },
+            _ = heartbeat.tick() => WorkerFrame::Heartbeat { task_id: task_id.clone() },
+        };
         // The result is terminal: the sinks and the audit hook keep
         // sender handles alive (the hook registry is global), so the
         // pump ends on the frame rather than on the channel closing.
         let terminal = matches!(frame, WorkerFrame::Result { .. });
-        let Ok(encoded) = protocol::encode(&frame) else {
-            continue;
+        let encoded = match protocol::encode(&frame) {
+            Ok(encoded) => encoded,
+            Err(error) => {
+                state.refuse_all(&format!("agent worker could not encode its frame: {error}"));
+                break;
+            }
         };
         if writer.write_all(encoded.as_bytes()).await.is_err() {
             break;
@@ -534,6 +556,13 @@ where
     {
         return Err("agentd grant does not allow Activity receipt reporting".to_string());
     }
+    if !assignment
+        .grant
+        .claims
+        .allows_route(protocol::ROUTE_APP_HOST)
+    {
+        return Err("agentd grant does not allow controlled App hosting".to_string());
+    }
     if assignment.job.owner_uid != identity.uid {
         return Err(format!(
             "assignment names owner uid {} but this worker runs as {}",
@@ -565,6 +594,12 @@ where
                 reply,
             })) => {
                 state.deliver(correlation_id, reply);
+            }
+            Ok(Some(BrokerFrame::AppHostReply {
+                correlation_id,
+                response,
+            })) => {
+                state.deliver(correlation_id, ChannelReply::AppHost(response));
             }
             Ok(Some(BrokerFrame::Cancel { task_id: target })) if target == task_id => break,
             Ok(Some(BrokerFrame::Shutdown)) => break,
@@ -630,6 +665,9 @@ impl ChannelApprovalGateway {
             Ok(ChannelReply::Refused(message)) => Err(message),
             Ok(ChannelReply::Receipt(_)) => {
                 Err("supervisor answered a permission request with a receipt reply".to_string())
+            }
+            Ok(ChannelReply::AppHost(_)) => {
+                Err("supervisor answered a permission request with an App-host reply".to_string())
             }
             Err(_) => {
                 self.state.forget(correlation_id);
@@ -717,11 +755,144 @@ impl ReceiptRecorder for ChannelReceiptRecorder {
             Ok(ChannelReply::Approval(_)) => {
                 Err("supervisor answered a receipt report with a permission reply".to_string())
             }
+            Ok(ChannelReply::AppHost(_)) => {
+                Err("supervisor answered a receipt report with an App-host reply".to_string())
+            }
             Err(error) => {
                 self.state.forget(correlation_id);
                 Err(format!("receipt acknowledgement was unavailable: {error}"))
             }
         }
+    }
+}
+
+#[derive(Debug)]
+struct ChannelAppGateway {
+    task_id: String,
+    state: Arc<ChannelState>,
+}
+
+impl ChannelAppGateway {
+    fn exchange(
+        &self,
+        request_id: crate::clawd::protocol::RequestId,
+        call: super::app_host::protocol::AppHostCall,
+    ) -> Result<crate::clawd::protocol::Response, String> {
+        use super::app_host::protocol::{AppHostCall, AppHostRequest, MAX_CONTROL_CALLS};
+
+        call.validate()?;
+        if self.state.cancelled.load(Ordering::SeqCst)
+            && !matches!(call, AppHostCall::Deregister(_) | AppHostCall::End(_))
+        {
+            return Err("the task App host was cancelled".to_string());
+        }
+        if self.state.app_calls_used.fetch_add(1, Ordering::SeqCst) >= MAX_CONTROL_CALLS {
+            return Err("the task exhausted its App-host control budget".to_string());
+        }
+        let correlation_id = self.state.next_correlation.fetch_add(1, Ordering::SeqCst);
+        let waiter = self.state.register(correlation_id)?;
+        if self
+            .state
+            .tx
+            .send(WorkerFrame::AppHost(Box::new(AppHostRequest {
+                task_id: self.task_id.clone(),
+                correlation_id,
+                request_id: request_id.clone(),
+                call,
+            })))
+            .is_err()
+        {
+            self.state.forget(correlation_id);
+            return Err("the task App host lost its supervisor channel".to_string());
+        }
+        match waiter.recv_timeout(APP_HOST_TIMEOUT) {
+            Ok(ChannelReply::AppHost(response)) => {
+                if response.id != request_id || response.v != crate::clawd::wire::PROTOCOL_VERSION {
+                    return Err("App-host response did not match the request".to_string());
+                }
+                Ok(*response)
+            }
+            Ok(ChannelReply::Refused(message)) => Err(message),
+            Ok(_) => Err("supervisor answered App control with another reply type".to_string()),
+            Err(error) => {
+                self.state.forget(correlation_id);
+                Err(format!(
+                    "App-host response is unavailable; effects may be indeterminate: {error}"
+                ))
+            }
+        }
+    }
+}
+
+impl crate::clawd::client::BrokerGateway for ChannelAppGateway {
+    fn request(
+        &self,
+        request: crate::clawd::protocol::Request,
+        invocation_id: Option<String>,
+    ) -> Result<crate::clawd::protocol::Response, String> {
+        let call = super::app_host::protocol::AppHostCall::from_request(&request, invocation_id)?;
+        self.exchange(request.id, call)
+    }
+
+    fn prepare_app(
+        &self,
+        invocation: crate::operations::invocation::AppInvocation,
+    ) -> Result<crate::operations::invocation::PreparedInvocation, String> {
+        let response = self.exchange(
+            crate::clawd::protocol::RequestId::generate(),
+            super::app_host::protocol::AppHostCall::Begin(invocation),
+        )?;
+        if !response.ok {
+            return Err(response.error.map(|error| error.message)
+                .unwrap_or_else(|| "App invocation preparation failed".to_string()));
+        }
+        let prepared: crate::operations::invocation::PreparedInvocation =
+            serde_json::from_value(response.result.ok_or_else(|| "App preparation returned no result".to_string())?)
+                .map_err(|error| format!("invalid App preparation result: {error}"))?;
+        if uuid::Uuid::parse_str(&prepared.id).map_err(|error| error.to_string())?.to_string() != prepared.id {
+            return Err("App preparation returned a noncanonical identifier".to_string());
+        }
+        Ok(prepared)
+    }
+
+    fn finish_app(&self, invocation_id: &str) -> Result<(), String> {
+        let response = self.exchange(
+            crate::clawd::protocol::RequestId::generate(),
+            super::app_host::protocol::AppHostCall::End(
+                super::app_host::protocol::InvocationEnd {
+                    invocation_id: crate::clawd::wire::bounded::Token::parse(invocation_id).map_err(str::to_string)?,
+                },
+            ),
+        )?;
+        if response.ok {
+            Ok(())
+        } else {
+            Err(response.error.map(|error| error.message)
+                .unwrap_or_else(|| "App invocation retirement failed".to_string()))
+        }
+    }
+
+    fn check_app(&self, session_id: &str, package_digest: &str) -> Result<(), String> {
+        use super::app_host::protocol::{AppCheck, AppHostCall};
+        let check = AppCheck {
+            session_id: crate::clawd::wire::bounded::Token::parse(session_id)
+                .map_err(str::to_string)?,
+            package_digest: package_digest.to_string(),
+        };
+        let response = self.exchange(
+            crate::clawd::protocol::RequestId::generate(),
+            AppHostCall::Check(check),
+        )?;
+        if response.ok
+            && response.result.as_ref().and_then(|value| value.get("live"))
+                == Some(&Value::Bool(true))
+        {
+            return Ok(());
+        }
+        Err(response
+            .error
+            .map(|error| error.message)
+            .unwrap_or_else(|| "App-host package liveness was not confirmed".to_string()))
     }
 }
 
@@ -842,7 +1013,11 @@ where
     F: std::future::Future,
 {
     match session {
-        Some(session) => crate::proc::with_trusted_session_override(session, future).await,
+        Some(mut session) => {
+            session.pid = std::process::id();
+            session.start_time_ticks = crate::proc::read_start_time_ticks_pub(session.pid);
+            crate::proc::with_trusted_session_override(session, future).await
+        }
         None => future.await,
     }
 }

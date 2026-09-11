@@ -2,8 +2,9 @@
 //!
 //! The channel is a private `socketpair(2)` handed to the child as fd
 //! 3 and carries newline-delimited JSON. It exposes nothing but the
-//! lifecycle of the single task the worker was spawned for: there is no
-//! admin, App-session, scheduler or permission-decision route here, and
+//! lifecycle of the single task the worker was spawned for, including a
+//! closed one-shot App-host control surface. There is no general broker
+//! proxy, admin, scheduler or permission-decision route here, and
 //! every payload is a typed, already policy-projected structure rather
 //! than free-form JSON, so a compromised worker cannot widen what it
 //! reports.
@@ -23,12 +24,13 @@ use crate::audit_policy::{TextDigest, ToolFacts};
 use crate::caps::Scope;
 use crate::proc::SessionInfo;
 
+pub use super::app_host::protocol::{AppHostCall, AppHostRequest};
 use super::grant::SignedGrant;
 
 /// Bumped whenever a frame changes shape. `clawd` refuses a worker that
 /// reports a different version, and the worker refuses an assignment
 /// that carries one.
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 
 /// Descriptor the broker dups the worker end of the channel onto.
 pub const CHANNEL_FD: i32 = 3;
@@ -58,6 +60,7 @@ pub const ROUTE_RESULT: &str = "result";
 /// capability set.
 pub const ROUTE_APPROVAL: &str = "approval";
 pub const ROUTE_RECEIPT: &str = "receipt";
+pub const ROUTE_APP_HOST: &str = "app_host";
 
 /// The complete route surface a worker grant may carry. Nothing else
 /// exists on this channel, so a leaked descriptor is still only an
@@ -71,6 +74,7 @@ pub const WORKER_ROUTES: &[&str] = &[
     ROUTE_RESULT,
     ROUTE_APPROVAL,
     ROUTE_RECEIPT,
+    ROUTE_APP_HOST,
 ];
 
 /// Hard ceiling on permission mediation for one task, so a looping
@@ -113,6 +117,10 @@ pub enum BrokerFrame {
     ReceiptReply {
         correlation_id: u64,
         reply: ReceiptReply,
+    },
+    AppHostReply {
+        correlation_id: u64,
+        response: Box<crate::clawd::protocol::Response>,
     },
 }
 
@@ -261,6 +269,7 @@ pub enum WorkerFrame {
         ask: ApprovalAsk,
     },
     Receipt(Box<ReceiptRequest>),
+    AppHost(Box<AppHostRequest>),
     Result {
         task_id: String,
         outcome: Box<WorkerOutcome>,
@@ -277,6 +286,7 @@ impl WorkerFrame {
             WorkerFrame::Heartbeat { .. } => ROUTE_HEARTBEAT,
             WorkerFrame::Approval { .. } => ROUTE_APPROVAL,
             WorkerFrame::Receipt(_) => ROUTE_RECEIPT,
+            WorkerFrame::AppHost(_) => ROUTE_APP_HOST,
             WorkerFrame::Result { .. } => ROUTE_RESULT,
         }
     }
@@ -287,6 +297,7 @@ impl WorkerFrame {
         match self {
             WorkerFrame::Hello(hello) => Some(hello.grant.claims.task_id.as_str()),
             WorkerFrame::Receipt(request) => Some(request.task_id.as_str()),
+            WorkerFrame::AppHost(request) => Some(request.task_id.as_str()),
             WorkerFrame::Stream { task_id, .. }
             | WorkerFrame::Progress { task_id, .. }
             | WorkerFrame::Audit { task_id, .. }

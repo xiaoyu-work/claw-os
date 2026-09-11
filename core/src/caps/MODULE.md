@@ -46,3 +46,9 @@ cargo test -p cos caps:: -- --test-threads=1
 
 Changes require containment/normalization tests plus an end-to-end consumer or
 enforcement test.
+
+A broker-authenticated, identity-matched non-App task scope checks its granted
+capabilities without opening the extension runtime's protected write lock.
+This does not create authority or skip capability containment. App and MCP
+identities still require their provenance/liveness checks; a forged environment
+session name cannot create a trusted task-local scope.

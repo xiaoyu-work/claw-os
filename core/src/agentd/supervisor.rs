@@ -101,7 +101,17 @@ fn env_u64(key: &str) -> Option<u64> {
 /// Start supervision on the daemon's runtime. The returned handle is
 /// deliberately not joined into `clawd`'s fatal path: supervision
 /// stopping must never take the broker down with it.
-pub fn spawn_supervisor(shutdown: Arc<AtomicBool>) -> tokio::task::JoinHandle<()> {
+#[derive(Clone)]
+struct BrokerServices {
+    state: crate::clawd::state::DaemonState,
+    admission: Arc<crate::clawd::transport::limits::Admission>,
+}
+
+pub fn spawn_supervisor(
+    shutdown: Arc<AtomicBool>,
+    state: crate::clawd::state::DaemonState,
+    admission: Arc<crate::clawd::transport::limits::Admission>,
+) -> tokio::task::JoinHandle<()> {
     let config = SupervisorConfig::from_env();
     tokio::spawn(async move {
         if !config.enabled {
@@ -111,7 +121,12 @@ pub fn spawn_supervisor(shutdown: Arc<AtomicBool>) -> tokio::task::JoinHandle<()
             );
             return;
         }
-        if let Err(error) = run(config, shutdown).await {
+        let services = BrokerServices { state, admission };
+        let result = match Store::open_default() {
+            Ok(store) => run_with_services(config, shutdown, store, services).await,
+            Err(error) => Err(error.to_string()),
+        };
+        if let Err(error) = result {
             tracing::error!(
                 error = %error,
                 "agentd supervision stopped; clawd continues serving non-agent primitives"
@@ -133,6 +148,21 @@ pub async fn run_with_store(
     config: SupervisorConfig,
     shutdown: Arc<AtomicBool>,
     store: Store,
+) -> Result<(), String> {
+    let services = BrokerServices {
+        state: crate::clawd::state::DaemonState::try_new().map_err(|error| error.to_string())?,
+        admission: crate::clawd::transport::limits::Admission::new(
+            crate::clawd::transport::limits::Limits::default(),
+        ),
+    };
+    run_with_services(config, shutdown, store, services).await
+}
+
+async fn run_with_services(
+    config: SupervisorConfig,
+    shutdown: Arc<AtomicBool>,
+    store: Store,
+    services: BrokerServices,
 ) -> Result<(), String> {
     let signer = Arc::new(GrantSigner::generate()?);
     let permits = Arc::new(Semaphore::new(config.max_workers));
@@ -199,6 +229,7 @@ pub async fn run_with_store(
         let config = config.clone();
         let throttle = throttle.clone();
         let shutdown = shutdown.clone();
+        let services = services.clone();
         tokio::spawn(async move {
             let _permit = permit;
             let job_id = job.id.clone();
@@ -212,6 +243,7 @@ pub async fn run_with_store(
                 shutdown,
                 broker_pid,
                 job,
+                services,
             )
             .await;
             if let Err(error) = supervised {
@@ -320,12 +352,15 @@ struct Lease {
     task_id: String,
     session_id: Option<String>,
     owner_uid: u32,
+    owner_gid: u32,
     worker_pid: u32,
     worker_start_time_ticks: Option<u64>,
     deadline: Instant,
     receipts_authorized: bool,
+    app_host_authorized: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn supervise(
     store: Store,
     signer: Arc<GrantSigner>,
@@ -334,6 +369,7 @@ async fn supervise(
     shutdown: Arc<AtomicBool>,
     broker_pid: u32,
     job: Job,
+    services: BrokerServices,
 ) -> Result<(), String> {
     let Some(owner_uid) = job.owner_uid else {
         finish_error(
@@ -420,14 +456,16 @@ async fn supervise(
         task_id: job.id.clone(),
         session_id: job.session_id.clone(),
         owner_uid,
+        owner_gid: identity.gid,
         worker_pid: pid,
         worker_start_time_ticks: start_time_ticks,
         deadline: Instant::now() + config.lease,
         receipts_authorized: false,
+        app_host_authorized: false,
     };
 
     let outcome = pump(
-        &store, &signer, &config, &shutdown, broker_pid, &job, session, lease, channel, &mut child,
+        &store, &signer, &config, &shutdown, broker_pid, &job, session, lease, channel, &mut child, services,
     )
     .await;
 
@@ -493,6 +531,7 @@ async fn pump(
     mut lease: Lease,
     channel: tokio::net::UnixStream,
     child: &mut tokio::process::Child,
+    services: BrokerServices,
 ) -> TaskOutcome {
     // Authority on this channel comes from the grant, not from the
     // socket: `socketpair` is created before the fork, so `SO_PEERCRED`
@@ -502,6 +541,21 @@ async fn pump(
     // start-time the kernel gave this child.
     let (reader, mut writer) = channel.into_split();
     let mut frames = FrameReader::new(BufReader::new(reader));
+    let host = super::app_host::broker::AppHost::new(
+        job.id.clone(),
+        crate::clawd::client_identity::ClientIdentity {
+            pid: Some(lease.worker_pid),
+            uid: Some(lease.owner_uid),
+            gid: Some(lease.owner_gid),
+            start_time_ticks: lease.worker_start_time_ticks,
+        },
+        session.clone(),
+        services.state,
+        services.admission,
+        lease.deadline,
+    );
+    let _host_lifetime = host.lifetime();
+    let (host_tx, mut host_rx) = tokio::sync::mpsc::unbounded_channel();
 
     let assignment = Assignment {
         protocol: protocol::PROTOCOL_VERSION,
@@ -609,6 +663,32 @@ async fn pump(
                         }
                         WorkerFrame::Heartbeat { .. } => {
                             lease.deadline = Instant::now() + config.lease;
+                            if let Err(error) = host.renew(lease.deadline) {
+                                return TaskOutcome::Failed(error);
+                            }
+                        }
+                        WorkerFrame::AppHost(request) => {
+                            let correlation_id = request.correlation_id;
+                            match host.reserve() {
+                                Ok(permit) => {
+                                    let host = host.clone();
+                                    let reply = host_tx.clone();
+                                    // The task lifetime closes admission and schedules cleanup,
+                                    // but never cancels an already admitted privileged mutation.
+                                    tokio::spawn(async move {
+                                        let _permit = permit;
+                                        let response = host.handle(*request).await;
+                                        let _ = reply.send((correlation_id, response));
+                                    });
+                                }
+                                Err(error) => {
+                                    let response = crate::clawd::protocol::Response::handler_error(
+                                        request.request_id,
+                                        crate::clawd::protocol::BrokerError::unavailable(error),
+                                    );
+                                    let _ = host_tx.send((correlation_id, response));
+                                }
+                            }
                         }
                         WorkerFrame::Receipt(request) => {
                             let reply = super::receipts::record(
@@ -660,12 +740,26 @@ async fn pump(
                     TaskOutcome::Retry(detail)
                 };
             },
+            Some((correlation_id, response)) = host_rx.recv() => {
+                if let Err(error) = send(
+                    &mut writer,
+                    &BrokerFrame::AppHostReply {
+                        correlation_id,
+                        response: Box::new(response),
+                    },
+                ).await {
+                    return TaskOutcome::Failed(format!(
+                        "App-host response could not be delivered; effects may be indeterminate: {error}"
+                    ));
+                }
+            },
             _ = ticker.tick() => {
                 if !cancel_sent
                     && (shutdown.load(Ordering::SeqCst)
                         || store.cancellation_requested(&job.id).unwrap_or(false))
                 {
                     cancel_sent = true;
+                    let _ = host.close();
                     cancelled_at = Some(Instant::now());
                     let _ = send(
                         &mut writer,
@@ -711,7 +805,7 @@ fn claims_for(broker_pid: u32, lease: &Lease, ttl: Duration) -> GrantClaims {
         task_id: lease.task_id.clone(),
         session_id: lease.session_id.clone(),
         owner_uid: lease.owner_uid,
-        owner_gid: 0,
+        owner_gid: lease.owner_gid,
         worker_pid: lease.worker_pid,
         worker_start_time_ticks: lease.worker_start_time_ticks,
         issued_at_ms,
@@ -764,6 +858,9 @@ fn accept(
     if matches!(frame, WorkerFrame::Receipt(_)) && !lease.receipts_authorized {
         return Err("worker grant does not allow receipt reporting".to_string());
     }
+    if matches!(frame, WorkerFrame::AppHost(_)) && !lease.app_host_authorized {
+        return Err("worker grant does not allow controlled App hosting".to_string());
+    }
     if Instant::now() > lease.deadline {
         return Err("worker lease has expired".to_string());
     }
@@ -772,6 +869,7 @@ fn accept(
     }
     if let WorkerFrame::Hello(hello) = frame {
         lease.receipts_authorized = hello.grant.claims.allows_route(protocol::ROUTE_RECEIPT);
+        lease.app_host_authorized = hello.grant.claims.allows_route(protocol::ROUTE_APP_HOST);
     }
     Ok(())
 }

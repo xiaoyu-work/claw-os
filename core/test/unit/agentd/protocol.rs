@@ -40,7 +40,8 @@ fn the_worker_channel_exposes_only_job_lifecycle_routes() {
             ROUTE_HEARTBEAT,
             ROUTE_RESULT,
             ROUTE_APPROVAL,
-            ROUTE_RECEIPT
+            ROUTE_RECEIPT,
+            ROUTE_APP_HOST
         ]
     );
 }

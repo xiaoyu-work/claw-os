@@ -8,10 +8,12 @@ fn new_lease() -> Lease {
         task_id: "task-a".to_string(),
         session_id: Some("session-a".to_string()),
         owner_uid: 1000,
+        owner_gid: 1000,
         worker_pid: std::process::id(),
         worker_start_time_ticks: crate::proc::read_start_time_ticks_pub(std::process::id()),
         deadline: Instant::now() + Duration::from_secs(60),
         receipts_authorized: false,
+        app_host_authorized: false,
     }
 }
 
@@ -104,6 +106,42 @@ fn receipt_reporting_requires_its_signed_route_and_the_exact_live_task() {
     assert!(accept(&signer, std::process::id(), &mut lease, &frame, true).is_err());
     accept(&signer, std::process::id(), &mut lease, &hello, false).unwrap();
     lease.deadline = Instant::now() - Duration::from_secs(1);
+    assert!(accept(&signer, std::process::id(), &mut lease, &frame, true).is_err());
+}
+
+#[test]
+fn app_host_control_requires_the_signed_host_route_and_a_current_task() {
+    let mut lease = new_lease();
+    let (signer, hello) = signer_and_hello(&lease);
+    let call: protocol::AppHostCall = serde_json::from_value(serde_json::json!({
+        "method":"check","params":{
+            "session_id":"app-test","package_digest":format!("sha256:{}", "a".repeat(64))
+        }
+    }))
+    .unwrap();
+    let frame = WorkerFrame::AppHost(Box::new(protocol::AppHostRequest {
+        task_id: lease.task_id.clone(),
+        correlation_id: 1,
+        request_id: crate::clawd::protocol::RequestId::generate(),
+        call,
+    }));
+    assert!(accept(&signer, std::process::id(), &mut lease, &frame, true).is_err());
+    accept(&signer, std::process::id(), &mut lease, &hello, false).unwrap();
+    accept(&signer, std::process::id(), &mut lease, &frame, true).unwrap();
+    let mut other = frame.clone();
+    if let WorkerFrame::AppHost(request) = &mut other {
+        request.task_id = "another-task".into();
+    }
+    assert!(accept(&signer, std::process::id(), &mut lease, &other, true).is_err());
+    let mut restricted = hello;
+    if let WorkerFrame::Hello(hello) = &mut restricted {
+        let mut claims = hello.grant.claims.clone();
+        claims
+            .routes
+            .retain(|route| route != protocol::ROUTE_APP_HOST);
+        hello.grant = signer.issue(claims);
+    }
+    accept(&signer, std::process::id(), &mut lease, &restricted, false).unwrap();
     assert!(accept(&signer, std::process::id(), &mut lease, &frame, true).is_err());
 }
 
@@ -667,5 +705,13 @@ fn broker_side_mediation_is_bounded_per_task() {
             &consume_ask(&crate::caps::Scope::path("/tmp/x"))
         ),
         ApprovalReply::Refused { .. }
+    ));
+}
+
+#[cfg(target_os = "linux")]
+mod app_host_process {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/agentd/app_host/supervisor_process.rs"
     ));
 }

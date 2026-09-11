@@ -13,7 +13,8 @@
 //! * the ceiling is the launcher's authenticated authority — either a
 //!   trusted parent row resolved from the peer's process ancestry, or,
 //!   when the peer belongs to no registered session, the daemon's own
-//!   unprivileged home-bounded policy;
+//!   unprivileged home-bounded policy. The private task-host entry point
+//!   instead takes the parent from the authenticated root controller;
 //! * `parent_caps` supplied by the caller may only *narrow* that
 //!   ceiling, never widen it;
 //! * anything above the ceiling needs an approved permission grant,
@@ -33,6 +34,10 @@
 //! drive somebody else's launch. Binding derives the narrower session
 //! grant the App itself runs under; see
 //! [`crate::clawd::authority`].
+//!
+//! [`register_for_task_host`] permits only a root-assigned one-shot
+//! invocation by its exact supervised NoNewPrivs process. It shares the
+//! registration policy below; public launcher admission is unchanged.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -50,6 +55,11 @@ use super::authority;
 use super::client_identity::ClientIdentity;
 use super::routes::{Access, Command, Route, RouteCall};
 use super::state::DaemonState;
+
+mod task_host;
+pub(crate) use task_host::{
+    prepare_for_task_host, register_for_task_host, TaskHostInvocation,
+};
 
 /// How long an issued handle may be used to bind a child process.
 /// Long enough for a slow interpreter start, short enough that a
@@ -242,7 +252,22 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
     let kind = launch_kind(&params)?;
     let launcher = authenticate_launcher(client, uid, home.clone()).await?;
     let delegation = Delegation::new(&launcher, uid, &home, &params)?;
-    let app = installed_app(&app_id)?;
+    register_with_launcher(params, home, &app_id, kind, launcher, delegation, None).await
+}
+
+async fn register_with_launcher(
+    params: Value,
+    home: std::path::PathBuf,
+    app_id: &str,
+    kind: LaunchKind,
+    launcher: LauncherAuthority,
+    delegation: Delegation,
+    invocation: Option<&TaskHostInvocation<'_>>,
+) -> Result<Value, BrokerError> {
+    let app = installed_app(app_id)?;
+    if let Some(invocation) = invocation {
+        invocation.validate_package(&app)?;
+    }
     // Resolved before any plan is built: the ceiling decides whether
     // this launch kind is available at all, and every capability and
     // audience below is filtered through it.
@@ -260,7 +285,14 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
         LaunchKind::Operation => {
             let operation = required_string(&params, "operation")?;
             let args = string_array(&params, "args")?;
-            let plan = operation_plan(&app, &operation, &args, &delegation, &ceiling)?;
+            let args = match invocation {
+                Some(invocation) => {
+                    invocation.validate_args(&app, &args, &delegation)?;
+                    invocation.args
+                }
+                None => &args,
+            };
+            let plan = operation_plan(&app, &operation, args, &delegation, &ceiling)?;
             (format!("cos app {app_id} {operation}"), plan)
         }
         LaunchKind::Gui => {
@@ -271,10 +303,10 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
         LaunchKind::Mcp => (format!("cos app {app_id} session"), LaunchPlan::default()),
     };
     plan.require(
-        Cap::new(Verb::AGENT_INVOKE, Scope::name(&app_id)),
+        Cap::new(Verb::AGENT_INVOKE, Scope::name(app_id)),
         &delegation,
     );
-    let caps = authorize_plan(&delegation, plan, &ceiling, &app_id)?;
+    let caps = authorize_plan(&delegation, plan, &ceiling, app_id)?;
     let grant_caps = caps.clone();
 
     let session_id = format!("app-{}", uuid::Uuid::new_v4().simple());
@@ -299,16 +331,16 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
         caps: Some(caps),
         transient_caps: None,
         role: launcher.role.clone(),
-        app_id: Some(app_id.clone()),
+        app_id: Some(app_id.to_string()),
         pending_bind: true,
         start_time_ticks: None,
     };
 
-    let proc_dir = install_session(uid, home, info).await?;
+    let proc_dir = install_session(delegation.uid, home, info).await?;
     let handle = issue_launch_grant(
         &session_id,
-        Some(&app_id),
-        uid,
+        Some(app_id),
+        delegation.uid,
         &launcher,
         &grant_caps,
         Some(&ceiling),
@@ -1076,6 +1108,28 @@ fn operation_plan(
     delegation: &Delegation,
     ceiling: &Ceiling,
 ) -> Result<LaunchPlan, BrokerError> {
+    let (declared, effective) = operation_call(app, operation, args, delegation)?;
+    derive_plan(
+        &declared.needs,
+        &effective.needs,
+        delegation,
+        ceiling,
+        &app.manifest.id,
+    )
+}
+
+fn operation_call<'a>(
+    app: &'a App,
+    operation: &str,
+    args: &[String],
+    delegation: &Delegation,
+) -> Result<
+    (
+        &'a crate::caps::manifest::Operation,
+        crate::caps::manifest::EffectiveCall,
+    ),
+    BrokerError,
+> {
     if operation == "__schema__" {
         return Err("App schema inspection does not run App code"
             .to_string()
@@ -1092,13 +1146,7 @@ fn operation_plan(
         .manifest
         .resolve_operation_call(operation, &supplied, &delegation.paths)
         .map_err(|error| format!("resolve `{operation}` capabilities: {error}"))?;
-    derive_plan(
-        &declared.needs,
-        &effective.needs,
-        delegation,
-        ceiling,
-        &app.manifest.id,
-    )
+    Ok((declared, effective))
 }
 
 fn session_tool_plan(

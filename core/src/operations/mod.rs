@@ -6,6 +6,7 @@ use crate::apps::App;
 use crate::caps::manifest::{ArgKind, EffectKind, EffectRecovery, Manifest};
 
 pub mod cli;
+pub mod invocation;
 pub mod receipts;
 pub mod reporting;
 

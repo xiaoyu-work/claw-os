@@ -351,7 +351,7 @@ the manifest-selected runtime once and captures its result. For an
 Activity-associated task, `operations::reporting` supplies a task-local
 recorder backed by the authenticated worker channel.
 
-Worker protocol v5 carries a bounded report and a correlated acknowledgement.
+Worker protocol v6 carries a bounded report and a correlated acknowledgement.
 The supervisor checks the signed reporting route and live task lease, derives
 the owner and Activity from the lease and its own Job, then calls the same
 receipt service used by direct clients. A metadata-only task-stream link
@@ -362,8 +362,8 @@ attests to execution.
 This path owns no new store, App launcher, permission or UI-specific lifecycle.
 Recording errors preserve the original tool result and expose a report-only
 retry, never repeat the operation. Unassociated tasks and schema inspection
-do not enable automatic capture. The existing isolated-worker App/MCP launch
-limitation remains; reporting does not bypass it.
+do not enable automatic capture. One-shot execution uses the separate
+controlled App host; reporting does not bypass its authority checks.
 
 ### Staged file changes
 
@@ -535,8 +535,9 @@ root:sudo`) is unreachable from it, and the only authority it holds is the
 grant in `core/src/agentd/grant.rs`: HMAC-signed with a per-broker-process key
 and bound to owner uid, worker pid plus kernel start time, task and session id,
 a lease deadline, and the route allowlist in `core/src/agentd/protocol.rs`. No
-admin, App-session, scheduler or permission-decision route exists on that
-channel. `SO_PEERCRED` is not used to authenticate it: the socket pair predates
+general broker proxy, admin, scheduler or permission-decision route exists on
+that channel. App hosting has a closed, task-bound control surface.
+`SO_PEERCRED` is not used to authenticate it: the socket pair predates
 the fork, so the kernel stamps it with the broker's own identity.
 
 Consent still works. `core/src/caps/approval_gateway.rs` is the seam
@@ -723,6 +724,29 @@ launched App never receives it. Binding derives a strictly narrower session
 grant — launch authority dropped, bound to the App's own process tree — which is
 what every privileged provider route the App later calls is authorized against.
 Deregistration revokes the launch grant, and the session grant with it.
+
+### Controlled task App hosting
+
+The existing non-root `claw-agentd` process hosts one-shot Apps through a
+process-local gateway and the signed `app_host` job-channel route. It receives
+neither the general broker socket nor write access to the routed capability
+registry. The broker retains the original App/operation/args/package digest,
+returns canonical argv and a task-owned ID, and compares registration against
+that retained original.
+
+The private task-host registration entry shares ordinary App planning,
+provenance, permissions, approvals and grant issuance. Public `NoNewPrivs`
+registration remains refused. Other controls reuse the same daemon state,
+admission limits, capability middleware, audit and mutation journal as socket
+clients; relay remains limited to the App's authorized session-service routes.
+
+Root owns runtime provenance, checks the retained package before bind, and
+reads back the exact package/class/UID/PID/start/cgroup before allowing use.
+Liveness queries stay at root. Cancellation stops new control calls without
+dropping an admitted privileged mutation; teardown then revokes owned grants,
+identity-checks and stops the child, and removes matching records. App
+execution itself still uses the shared sandbox, never the broker runtime.
+Stateful App/MCP and GUI hosting are not included in this initial surface.
 
 ### Proactive scheduling
 

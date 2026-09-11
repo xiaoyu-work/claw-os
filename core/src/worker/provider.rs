@@ -102,6 +102,14 @@ impl BrokerAuthority {
     /// path that answers "allow" from a check that predates the
     /// revocation.
     pub fn assert_live(&self) -> Result<(), String> {
+        if let Some(package) = &self.package {
+            if let Some(result) = crate::clawd::client::check_hosted_app(
+                &self.session_id,
+                &package.content_digest,
+            ) {
+                return result;
+            }
+        }
         let owner = crate::provenance::runtime::current_owner();
         let trust = crate::provenance::trust_store();
         if let Some(package) = &self.package {

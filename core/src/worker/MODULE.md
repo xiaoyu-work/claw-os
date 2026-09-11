@@ -59,6 +59,12 @@ root-owned interpreter, root-owned entry), and taking it writes a
 | `runtime.rs` | Private per-launch runtime directory |
 | `audit.rs` | Typed, path-free and secret-free launch records |
 
+Per-launch sockets prefer `XDG_RUNTIME_DIR/cos-worker`. Without a usable XDG
+runtime directory, routed/owner-scoped launches use the owner's user data
+directory, not the broker's `COS_DATA_DIR`; ordinary unscoped launches retain
+their existing data-directory fallback. Runtime directories remain private
+and are removed when the launch ends.
+
 ## Policy derivation
 
 Mounts come from the capabilities the authority already granted:
@@ -94,6 +100,11 @@ outside the sandbox, without changing any of the mount rules above.
 The launch endpoint and its local policy/memory clients use the same broker
 protocol version as clawd. Both request version and response correlation are
 checked; a forwarded successful mutation must not become an unusable v1 reply.
+When the launcher is a leased Agent task, its process-local App-host gateway
+forwards only the closed control methods. Package liveness is checked at root,
+where the protected runtime record is owned, instead of giving the launcher
+write access to that record or its lock. The ordinary socket-backed launcher
+path remains unchanged outside this gateway.
 
 Granted paths are mounted at the *same absolute path* they have on the
 host, so the argument the App receives, the scope the authority granted,

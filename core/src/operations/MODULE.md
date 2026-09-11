@@ -11,6 +11,7 @@ grant, a filesystem diff, or proof that an effect will occur.
 | Path | Role |
 | --- | --- |
 | `mod.rs` | Verified manifest preview, bounded input binding, and requested target projection |
+| `invocation.rs` | Requested App operation and canonical preparation data; neither is execution authority |
 | `cli.rs` | Thin terminal client of the shared broker |
 | `receipts.rs` | Bounded, redacted capture of App return values as reports, not verified effects |
 | `reporting.rs` | Task-scoped recorder definition; delivery is supplied by the worker, never a second store or execution path |

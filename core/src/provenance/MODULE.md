@@ -55,3 +55,8 @@ install bounds and CLI argument handling.
 against a real filesystem: real Ed25519 signatures, real renames,
 TOCTOU replacement, concurrent update/verify, hostile tree shapes and a
 spawned process.
+
+Controlled App-host cleanup retains the exact `ProcessIdentity` through
+termination. It checks UID/PID/start/cgroup before signalling, and verifies
+the matching runtime record before removing it; a bookkeeping mismatch must
+not become a signal to another process or an erased recovery record.

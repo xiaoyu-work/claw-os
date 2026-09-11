@@ -3,8 +3,8 @@ use crate::clawd::authority::{MAX_CHILDREN, MAX_LINEAGE_DEPTH};
 
 use crate::caps::{Cap, Scope, Verb};
 
-/// Every test binds to the running test process, which is the only
-/// process a unit test can prove anything about.
+/// Most fixtures bind to this process; relay tests keep a separate live
+/// App process so resolving and consuming cannot confuse the two principals.
 fn self_principal() -> Principal {
     Principal::of_process(current_uid(), std::process::id())
         .expect("the test process can name itself")
@@ -59,6 +59,149 @@ fn issuance(session: &str, audience: &[Audience]) -> Issuance {
 
 fn store() -> Authority {
     Authority::new()
+}
+
+#[cfg(unix)]
+struct RelayFixture {
+    child: std::process::Child,
+    relay: GrantView,
+    session: GrantView,
+    presentation: Presentation,
+    proof: RelayProof,
+}
+
+#[cfg(unix)]
+impl RelayFixture {
+    fn new(store: &Authority, uses: u32) -> Self {
+        let child = std::process::Command::new("/bin/sleep")
+            .arg("60")
+            .spawn()
+            .unwrap();
+        let mut session = issuance("relayed-app", &[Audience::SystemService]);
+        session.principal = Principal::of_process(current_uid(), child.id()).unwrap();
+        session.uses = Uses::Budget(uses);
+        let (_, session) = store.issue(session).unwrap();
+        let mut relay = issuance("relayed-app", &[Audience::AppRelay]);
+        relay.binding = Binding::Process;
+        relay.caps = CapSet::new();
+        relay.index_session = false;
+        let (_, relay) = store.issue(relay).unwrap();
+        let mut presentation = presentation(Audience::SystemService);
+        presentation.session_id = Some("relayed-app".into());
+        let proof = RelayProof::for_session("relayed-app", relay.id);
+        Self {
+            child,
+            relay,
+            session,
+            presentation,
+            proof,
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for RelayFixture {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn relayed_consumption_preserves_both_principals_and_the_all_or_none_budget() {
+    let store = store();
+    let fixture = RelayFixture::new(&store, 1);
+    store
+        .resolve_session_relayed("relayed-app", &fixture.presentation, &fixture.proof)
+        .unwrap();
+    assert_eq!(
+        store
+            .consume(fixture.session.id, &[read_cap()], &fixture.presentation)
+            .unwrap_err(),
+        AuthorityError::PrincipalMismatch,
+    );
+    let missing = Cap::new(Verb::FS_READ, Scope::path("/not-granted"));
+    assert!(matches!(
+        store.consume_relayed(
+            fixture.session.id,
+            &[read_cap(), missing],
+            &fixture.presentation,
+            &fixture.proof
+        ),
+        Err(AuthorityError::Capability { .. })
+    ));
+    store
+        .consume_relayed(
+            fixture.session.id,
+            &[read_cap(), write_cap()],
+            &fixture.presentation,
+            &fixture.proof,
+        )
+        .unwrap();
+    assert!(store
+        .consume_relayed(
+            fixture.session.id,
+            &[read_cap()],
+            &fixture.presentation,
+            &fixture.proof
+        )
+        .is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn relayed_consumption_rechecks_revocation_session_and_presenting_process() {
+    let store = store();
+    let fixture = RelayFixture::new(&store, 2);
+    store
+        .resolve_session_relayed("relayed-app", &fixture.presentation, &fixture.proof)
+        .unwrap();
+    let mut wrong_process = fixture.presentation.clone();
+    wrong_process.pid = fixture.child.id();
+    wrong_process.start_time_ticks = crate::proc::read_start_time_ticks_pub(fixture.child.id());
+    assert_eq!(
+        store
+            .consume_relayed(
+                fixture.session.id,
+                &[read_cap()],
+                &wrong_process,
+                &fixture.proof
+            )
+            .unwrap_err(),
+        AuthorityError::PrincipalMismatch,
+    );
+    let wrong_session = RelayProof::for_session("other-session", fixture.relay.id);
+    assert!(store
+        .consume_relayed(
+            fixture.session.id,
+            &[read_cap()],
+            &fixture.presentation,
+            &wrong_session
+        )
+        .is_err());
+    store.revoke(fixture.relay.id);
+    assert!(store
+        .consume_relayed(
+            fixture.session.id,
+            &[read_cap()],
+            &fixture.presentation,
+            &fixture.proof
+        )
+        .is_err());
+    assert!(store
+        .resolve_session_relayed("relayed-app", &fixture.presentation, &fixture.proof)
+        .is_err());
+    let direct = Presentation {
+        uid: current_uid(),
+        pid: fixture.child.id(),
+        start_time_ticks: crate::proc::read_start_time_ticks_pub(fixture.child.id()),
+        audience: Audience::SystemService,
+        route: "direct-test",
+        session_id: Some("relayed-app".into()),
+    };
+    let remaining = store.resolve_session("relayed-app", &direct).unwrap();
+    assert_eq!(remaining.uses_remaining, Some(2));
 }
 
 #[test]

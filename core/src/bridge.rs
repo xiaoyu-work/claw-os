@@ -38,6 +38,7 @@ pub(crate) fn app_runner_path() -> std::path::PathBuf {
 pub struct AppLaunch {
     package: std::sync::Arc<crate::provenance::VerifiedPackage>,
     manifest: Manifest,
+    hosted_invocation: Option<String>,
 }
 
 impl AppLaunch {
@@ -57,7 +58,7 @@ impl AppLaunch {
                 package.id()
             ));
         }
-        Ok(Self { package, manifest })
+        Ok(Self { package, manifest, hosted_invocation: None })
     }
 
     pub fn package(&self) -> &std::sync::Arc<crate::provenance::VerifiedPackage> {
@@ -248,6 +249,7 @@ enum LaunchRequest<'a> {
     Operation {
         operation: &'a str,
         args: &'a [String],
+        hosted_invocation: Option<&'a str>,
     },
     Gui {
         exec: &'a str,
@@ -498,6 +500,7 @@ impl AppIdentitySession {
             LaunchRequest::Operation {
                 operation,
                 args: &effective_args,
+                hosted_invocation: launch.hosted_invocation.as_deref(),
             },
             Some(ceiling),
             |parent_caps| match declared {
@@ -609,7 +612,7 @@ impl AppIdentitySession {
             "parent_caps": parent_caps,
         });
         match request {
-            LaunchRequest::Operation { operation, args } => {
+            LaunchRequest::Operation { operation, args, .. } => {
                 params["operation"] = serde_json::Value::String((*operation).to_string());
                 params["args"] = serde_json::to_value(args)
                     .map_err(|error| format!("failed to serialize App arguments: {error}"))?;
@@ -624,7 +627,26 @@ impl AppIdentitySession {
         // requests the daemon filed. This process stays alive and waits,
         // then retries over the same connection identity, so the user
         // never has to rerun anything and no secret has to travel.
-        let result = match clawd_request(ClawdCommand::AppSessionRegister, params.clone()) {
+        let register = |params| match request {
+            LaunchRequest::Operation { hosted_invocation, .. }
+                if crate::clawd::client::has_gateway() =>
+            {
+                let invocation = hosted_invocation.ok_or_else(|| ClawdCallError {
+                    message: "App host has no prepared original invocation".to_string(),
+                    data: None,
+                })?;
+                let command = ClawdCommand::AppSessionRegister;
+                clawd_response(
+                    command,
+                    crate::clawd::client::request_app_registration(
+                        crate::clawd::protocol::Request::build(command, params),
+                        invocation,
+                    ),
+                )
+            }
+            _ => clawd_request(ClawdCommand::AppSessionRegister, params),
+        };
+        let result = match register(params.clone()) {
             Ok(result) => result,
             Err(error) => {
                 let ids = approval_requests(&error);
@@ -632,7 +654,7 @@ impl AppIdentitySession {
                     return Err(error.message);
                 }
                 wait_for_approvals(&ids)?;
-                clawd_request(ClawdCommand::AppSessionRegister, params).map_err(String::from)?
+                register(params).map_err(String::from)?
             }
         };
         let session_id = result
@@ -1035,6 +1057,9 @@ fn set_app_session_transient_call(
 }
 
 fn use_clawd_app_session_backend() -> bool {
+    if crate::clawd::client::has_gateway() {
+        return true;
+    }
     #[cfg(test)]
     if std::env::var_os("COS_TEST_LOCAL_APP_SESSIONS").is_some() {
         return false;
@@ -1072,11 +1097,17 @@ fn clawd_request(
     command: ClawdCommand,
     params: serde_json::Value,
 ) -> Result<serde_json::Value, ClawdCallError> {
-    let response = crate::clawd::client::request_blocking(
+    clawd_response(command, crate::clawd::client::request_blocking(
         crate::paths::clawd_socket_path(),
         crate::clawd::protocol::Request::build(command, params),
-    )
-    .map_err(|message| ClawdCallError {
+    ))
+}
+
+fn clawd_response(
+    command: ClawdCommand,
+    response: Result<crate::clawd::protocol::Response, String>,
+) -> Result<serde_json::Value, ClawdCallError> {
+    let response = response.map_err(|message| ClawdCallError {
         message,
         data: None,
     })?;
@@ -1947,6 +1978,14 @@ pub fn run_python_app_with_stdin(
     // Dynamic App execution is model-reachable, so it belongs in the
     // unprivileged worker, never in the root broker's address space.
     crate::agentd::guard::ensure_agent_runtime_allowed("Python App execution")?;
+    let hosted = prepare_hosted_invocation(launch, command, args)?;
+    let hosted_launch = hosted.as_ref().map(|hosted| {
+        let mut launch = launch.clone();
+        launch.hosted_invocation = Some(hosted.prepared.id.clone());
+        launch
+    });
+    let launch = hosted_launch.as_ref().unwrap_or(launch);
+    let args = hosted.as_ref().map(|hosted| hosted.prepared.args.as_slice()).unwrap_or(args);
 
     let app_dir = launch.dir();
     let main_py = app_dir.join("main.py");
@@ -1988,16 +2027,22 @@ pub fn run_python_app_with_stdin(
         // the child gets any authority, so a revocation later can find
         // and stop it.
         let owner = crate::provenance::runtime::current_owner();
-        crate::provenance::runtime::register(owner, app_session.id(), launch.package());
+        if !crate::clawd::client::has_gateway() {
+            crate::provenance::runtime::register(owner, app_session.id(), launch.package());
+        }
         // Bind the exact process, so a revocation can signal *this*
         // group and nothing that later inherits the number.
-        crate::provenance::runtime::bind_process(owner, app_session.id(), pid);
+        if !crate::clawd::client::has_gateway() {
+            crate::provenance::runtime::bind_process(owner, app_session.id(), pid);
+        }
         app_session.bind_process(pid)
     })?;
-    crate::provenance::runtime::deregister(
-        crate::provenance::runtime::current_owner(),
-        app_session.id(),
-    );
+    if !crate::clawd::client::has_gateway() {
+        crate::provenance::runtime::deregister(
+            crate::provenance::runtime::current_owner(),
+            app_session.id(),
+        );
+    }
     crate::worker::audit::outcome(
         &policy_digest,
         &format!("app:{app_id}/{command}"),
@@ -2106,6 +2151,14 @@ pub fn run_app_with_stdin(
     stdin_data: Option<Vec<u8>>,
 ) -> Result<Option<String>, String> {
     crate::agentd::guard::ensure_agent_runtime_allowed("App execution")?;
+    let hosted = prepare_hosted_invocation(launch, command, args)?;
+    let hosted_launch = hosted.as_ref().map(|hosted| {
+        let mut launch = launch.clone();
+        launch.hosted_invocation = Some(hosted.prepared.id.clone());
+        launch
+    });
+    let launch = hosted_launch.as_ref().unwrap_or(launch);
+    let args = hosted.as_ref().map(|hosted| hosted.prepared.args.as_slice()).unwrap_or(args);
     // Runtime and entry come from the verified snapshot's manifest,
     // parsed once. There is no path re-read here and no unsigned
     // fallback: a package that did not verify never reaches this
@@ -2197,16 +2250,22 @@ pub fn run_app_with_stdin(
         // the child gets any authority, so a revocation later can find
         // and stop it.
         let owner = crate::provenance::runtime::current_owner();
-        crate::provenance::runtime::register(owner, app_session.id(), launch.package());
+        if !crate::clawd::client::has_gateway() {
+            crate::provenance::runtime::register(owner, app_session.id(), launch.package());
+        }
         // Bind the exact process, so a revocation can signal *this*
         // group and nothing that later inherits the number.
-        crate::provenance::runtime::bind_process(owner, app_session.id(), pid);
+        if !crate::clawd::client::has_gateway() {
+            crate::provenance::runtime::bind_process(owner, app_session.id(), pid);
+        }
         app_session.bind_process(pid)
     })?;
-    crate::provenance::runtime::deregister(
-        crate::provenance::runtime::current_owner(),
-        app_session.id(),
-    );
+    if !crate::clawd::client::has_gateway() {
+        crate::provenance::runtime::deregister(
+            crate::provenance::runtime::current_owner(),
+            app_session.id(),
+        );
+    }
     crate::worker::audit::outcome(
         &policy_digest,
         &format!("app:{app_id}/{command}"),
@@ -2228,6 +2287,7 @@ pub fn run_app_with_stdin(
                 return Ok(Some(stdout.trim().to_string()));
             }
         }
+
         let msg = if stderr.is_empty() {
             format!("exit code {}", status.code().unwrap_or(-1))
         } else {
@@ -2242,6 +2302,22 @@ pub fn run_app_with_stdin(
     } else {
         Ok(Some(trimmed.to_string()))
     }
+}
+
+fn prepare_hosted_invocation(
+    launch: &AppLaunch,
+    command: &str,
+    args: &[String],
+) -> Result<Option<crate::clawd::client::HostedInvocation>, String> {
+    if launch.hosted_invocation.is_some() {
+        return Ok(None);
+    }
+    crate::clawd::client::prepare_app(crate::operations::invocation::AppInvocation {
+        app_id: launch.app_id().to_string(),
+        operation: command.to_string(),
+        args: args.to_vec(),
+        package_digest: launch.package().content_digest().to_string(),
+    })
 }
 
 /// Launch an app's **desktop GUI surface**.

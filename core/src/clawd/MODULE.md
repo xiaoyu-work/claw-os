@@ -41,6 +41,7 @@ and agent tasks.
 | `file_changes.rs` | Exact read/write-capability atomic file replacement, owner-aware path protection, and effect-level indeterminate journal brackets |
 | `usage.rs` | Peer-UID-scoped Agent token usage queries |
 | `app_sessions.rs` | App/native/MCP session authority: derives identity and capabilities, plans approvals, issues launch grants |
+| `app_sessions/task_host.rs` | Private leased-task App preparation/registration, sharing ordinary policy without exposing a public NoNewPrivs exception |
 | `scheduler.rs` | Proactive-scheduler authority: validates `cos cron` / `cos triggers` requests and derives what a job may carry |
 | `notifications.rs` | Notification RPC handlers, due-nudge fanout, and external delivery dispatcher |
 | `system_caps.rs` | System capability derivation |

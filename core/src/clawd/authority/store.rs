@@ -205,13 +205,45 @@ impl Presentation {
 #[derive(Debug, Clone)]
 pub(super) struct RelayProof {
     session_id: String,
+    relay_id: GrantId,
 }
 
 impl RelayProof {
-    pub(super) fn for_session(session_id: &str) -> Self {
+    pub(super) fn for_session(session_id: &str, relay_id: GrantId) -> Self {
         Self {
             session_id: session_id.to_string(),
+            relay_id,
         }
+    }
+
+    fn validate(
+        &self,
+        inner: &Inner,
+        presentation: &Presentation,
+        now: Instant,
+    ) -> Result<(), AuthorityError> {
+        if presentation.audience != Audience::SystemService
+            || presentation.session_id.as_deref() != Some(self.session_id.as_str())
+        {
+            return Err(AuthorityError::Subject);
+        }
+        let key = inner
+            .id_index
+            .get(&self.relay_id)
+            .ok_or(AuthorityError::UnknownGrant)?;
+        let grant = inner.grants.get(key).ok_or(AuthorityError::UnknownGrant)?;
+        if grant.binding != Binding::Process || !self.covers(grant) {
+            return Err(AuthorityError::PrincipalMismatch);
+        }
+        let relay_presentation = Presentation {
+            uid: presentation.uid,
+            pid: presentation.pid,
+            start_time_ticks: presentation.start_time_ticks,
+            audience: Audience::AppRelay,
+            route: presentation.route,
+            session_id: Some(self.session_id.clone()),
+        };
+        check_presentation(grant, &relay_presentation, now)
     }
 
     /// Does this proof authorize presenting `grant`?
@@ -427,6 +459,9 @@ impl Authority {
         let now = Instant::now();
         let mut inner = self.lock();
         inner.sweep(now);
+        if let Some(proof) = relay {
+            proof.validate(&inner, presentation, now)?;
+        }
         let key = *inner
             .by_session
             .get(session_id)
@@ -449,15 +484,38 @@ impl Authority {
         required: &[Cap],
         presentation: &Presentation,
     ) -> Result<GrantView, AuthorityError> {
+        self.consume_inner(id, required, presentation, None)
+    }
+
+    pub(super) fn consume_relayed(
+        &self,
+        id: GrantId,
+        required: &[Cap],
+        presentation: &Presentation,
+        proof: &RelayProof,
+    ) -> Result<GrantView, AuthorityError> {
+        self.consume_inner(id, required, presentation, Some(proof))
+    }
+
+    fn consume_inner(
+        &self,
+        id: GrantId,
+        required: &[Cap],
+        presentation: &Presentation,
+        relay: Option<&RelayProof>,
+    ) -> Result<GrantView, AuthorityError> {
         let now = Instant::now();
         let mut inner = self.lock();
         inner.sweep(now);
+        if let Some(proof) = relay {
+            proof.validate(&inner, presentation, now)?;
+        }
         let key = *inner
             .id_index
             .get(&id)
             .ok_or(AuthorityError::UnknownGrant)?;
         let grant = inner.grants.get(&key).ok_or(AuthorityError::UnknownGrant)?;
-        check_presentation(grant, presentation, now)?;
+        check_presentation_with(grant, presentation, now, relay)?;
         for cap in required {
             if !grant.caps.covers(cap) {
                 return Err(AuthorityError::Capability {

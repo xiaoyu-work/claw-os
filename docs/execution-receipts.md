@@ -79,13 +79,12 @@ error with the bounded report for a recording-only retry. They never rerun an
 App to repair receipt storage. Reports may still arrive during cancellation
 and do not reopen or complete the Activity.
 
-This is a **reporting-only** channel. It does not restore the App/MCP launch
-path currently unavailable to isolated `agentd` workers; those ordinary launch
-refusals remain errors and can be reported as indeterminate. Successful
-Agent-to-App execution still requires the controlled App-host integration
-described in [the worker boundary](../core/src/agentd/MODULE.md).
-Stateful App-session/MCP calls retain their existing audit path; this initial
-capture surface covers one-shot App operations.
+The receipt route is **reporting-only**. One-shot App execution uses the
+separate [controlled App host](../core/src/agentd/app_host/MODULE.md), which
+retains original invocations at the broker and applies ordinary App
+permissions and sandboxing. A receipt never grants that execution authority.
+Stateful App-session/MCP hosting and automatic capture are not part of this
+initial one-shot surface.
 
 ## Read the same receipts everywhere
 

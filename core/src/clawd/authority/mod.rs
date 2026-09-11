@@ -362,7 +362,7 @@ pub async fn authorize(
         requirement,
         view,
         presentation,
-        uid,
+        None,
         client,
     )
     .await
@@ -377,9 +377,10 @@ async fn finish(
     requirement: Requirement,
     view: GrantView,
     presentation: Presentation,
-    uid: u32,
+    relay: Option<RelayProof>,
     client: &ClientIdentity,
 ) -> Result<Option<Decision>, Fault> {
+    let uid = view.owner_uid;
     // The routed registry is partitioned per owner, so the row is read
     // under the owner's own path view — the same view the provider used
     // to read it before this decision existed.
@@ -399,7 +400,7 @@ async fn finish(
         presentation,
         session,
         &requirement,
-    );
+    ).with_relay(relay);
 
     if let Requirement::Exact(caps) = &requirement {
         if !caps.is_empty() {
@@ -480,7 +481,7 @@ pub async fn authorize_relayed(
         tracing::debug!(route = route_name, error = %error, "relayed route refused its own request shape");
         Fault::InvalidParams
     })?;
-    let proof = RelayProof::for_session(session_id);
+    let proof = RelayProof::for_session(session_id, relay.id);
     // The subject is named *before* the resolve, not patched in after
     // it, so the store's own subject check decides this call: a relay
     // proof answers "who is speaking", and the grant still has to be
@@ -503,7 +504,7 @@ pub async fn authorize_relayed(
         requirement,
         view,
         presentation,
-        uid,
+        Some(proof),
         client,
     )
     .await
