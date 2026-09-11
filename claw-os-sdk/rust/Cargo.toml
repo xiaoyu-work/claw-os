@@ -15,12 +15,15 @@ categories = ["api-bindings", "os"]
 async-trait = "0.1"
 base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["arbitrary_precision"] }
+serde_json = { version = "1", features = ["arbitrary_precision", "raw_value"] }
 num-bigint = "0.4"
 num-traits = "0.2"
 regex = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["io-std", "io-util", "macros", "process", "rt", "sync", "time"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"

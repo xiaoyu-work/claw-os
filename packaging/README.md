@@ -40,6 +40,14 @@ packaging/
 | `claw-os-base` | `cos-init`, managed agent-home setup, Claw OS boot/service policy | `all` | `claw-os-agent` |
 | `claw-os-desktop` | COSMIC desktop, graphical Agent UI/bridge, desktop-only apps and assets | `amd64`, `arm64` | `claw-os-base` |
 
+The Desktop source also installs `/usr/libexec/claw-os-applet-provider` and
+provides `claw-os-applet-services-v1 (= 1)`. Assembly refuses a missing,
+non-regular, non-executable, truncated or wrong-architecture helper before
+declaring that ABI. The [public client contract](../claw-os-sdk/wire/v1/applet-services.md)
+enters a later SDK release; provider implementation stays in the OS package.
+This source wiring does not cut over existing App payloads, change grants or
+clear GUI/Clipboard resource-admission gates; see [updating](../docs/updating.md).
+
 `claw-os-agent` is the exact same package on Ubuntu and Claw OS. It includes
 `cos-browser`, the per-task App/MCP extension host, and all command-style apps.
 It also owns the Mail XPI at

@@ -72,6 +72,15 @@ third-party SDK calls are capability-checked by the `cos` kernel.
 
 App manifests (`app.json`) are validated against `manifest.schema.json`.
 
+## App data service helper
+
+The separate [App data service v1](applet-services.md) uses private Linux pipes
+to a fixed OS helper, not this CLI envelope or an App-to-App route. Its public
+Rust client and [shared conformance cases](applet-services.cases.json) cover
+Calendar, task and telemetry records plus a history-permission preflight.
+The generated CLI/MCP decoder set is unchanged; installing this interface
+does not grant App or desktop-resource authority.
+
 ## Private App MCP calls
 
 MCP-first Apps serve their manifest-declared tools over private stdio owned

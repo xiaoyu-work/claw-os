@@ -213,12 +213,39 @@ jobs:
       - name: Run cos-browser tests
         run: cargo test -p cos-browser
 
+      - name: Run App data SDK and provider contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          export CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target"
+          manifest=desktop/applets/claw-applet-services/Cargo.toml
+          cargo test -p claw-os-sdk --lib --locked -- --test-threads=1
+          cargo clippy -p claw-os-sdk --all-targets --locked -- -D warnings
+          cargo test --manifest-path "$manifest" --lib --locked -- --test-threads=1
+          cargo test --manifest-path "$manifest" --features provider --locked -- --test-threads=1
+          cargo clippy --manifest-path "$manifest" --features provider --all-targets --locked -- -D warnings
+          cargo build -p cos --bin cos --locked
+          cargo test --manifest-path "$manifest" --features provider --test kernel_policy \
+            --no-run --locked --message-format=json > "$CARGO_TARGET_DIR/applet-kernel-tests.jsonl"
+          test_binary="$(python3 -c '
+          import json, sys
+          records = [json.loads(line) for line in open(sys.argv[1])]
+          print(next(row["executable"] for row in records if row.get("executable") and row["target"]["name"] == "kernel_policy"))
+          ' "$CARGO_TARGET_DIR/applet-kernel-tests.jsonl")"
+          sudo python3 desktop/applets/claw-applet-services/test/support/run_kernel_fixture.py \
+            --kernel "$CARGO_TARGET_DIR/debug/cos" \
+            --provider "$CARGO_TARGET_DIR/debug/claw-os-applet-provider" \
+            --test-binary "$test_binary" \
+            --work-dir "$CARGO_TARGET_DIR/applet-kernel-fixtures"
+
       - name: Install Python test dependencies
         run: python3 -m pip install --disable-pip-version-check pytest
 
       - name: Run Python tests
         env:
           PYTHONPATH: claw-os-sdk/python/src:cos-runtime/python/src
+          CLAW_APPLET_TEST_BINARY: ${{ github.workspace }}/target/debug/claw-os-applet-provider
         run: >-
           python3 -m pytest -q adapters claw-os-sdk/python/src cos-runtime/python/src
           packaging/deb/tests/test_app_sources.py rootfs/features/claw-mail-ai/test_install.py
+          scripts/tests/test_app_platform.py packaging/deb/tests/test_applet_provider.py

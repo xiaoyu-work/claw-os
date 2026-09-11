@@ -207,9 +207,9 @@ PYTHONPATH=claw-os-sdk/python/src:cos-runtime/python/src \
 # Browser crate.
 cargo test -p cos-browser
 
-# Desktop applets consume pinned product-owned Calendar and Clipboard sources.
-python3 scripts/app_sources.py --native
-cargo test --manifest-path desktop/applets/Cargo.toml -p claw-applet-services --lib
+# OS Applet providers build independently, without App sources or GUI inputs.
+cargo test --manifest-path desktop/applets/claw-applet-services/Cargo.toml --lib --locked -- --test-threads=1
+cargo test --manifest-path desktop/applets/claw-applet-services/Cargo.toml --features provider --locked -- --test-threads=1
 ```
 
 ### Project Structure

@@ -20,7 +20,7 @@ component crates plus Claw-specific agent bridges and applets.
 | `README.md` | Component map, build instructions, product-fork boundary |
 | `PROVENANCE.md` | Upstream origin and revision per component |
 | `justfile` | Desktop build/install orchestration |
-| `applets/claw-applet-services/` | Shared policy, read-only Calendar/task-list providers and system telemetry; no UI/App dependencies |
+| `applets/claw-applet-services/` | Independent OS policy/data library and versioned private-pipe provider executable; Calendar/task-list/telemetry and history preflight, no UI/App dependencies |
 | `../scripts/app_sources.py --native` | Materialize product-declared native libraries, workspaces and assets under ignored build storage before direct Cargo use |
 | `launcher-backend/` | Shared launcher library/service; native frontend is owned by external `clawos-app/products/launcher` |
 | `applets/cosmic-applets/` | Host native libraries; inject Calendar agenda, Clipboard history-policy and Widget Rail typed data callbacks, and generate product-owned desktop entries |

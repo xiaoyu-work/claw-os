@@ -7,6 +7,7 @@ Maintainer: Claw OS <noreply@github.com>
 Homepage: https://github.com/xiaoyu-work/claw-os
 XB-Claw-Os-Security-Epoch: __SECURITY_EPOCH__
 XB-Claw-Os-Abi: __ABI__
+Provides: claw-os-applet-services-v1 (= 1)
 Depends: claw-os-base (>= __MIN_BASE__), claw-os-abi-__ABI__, claw-os-app-permissions-v1, claw-os-capture-v1, claw-os-media-player-v1, claw-os-notifications-v1, adduser,
  greetd, gnome-keyring, libpam-gnome-keyring, polkitd, pkexec, dbus,
  pipewire, pipewire-pulse, pipewire-alsa, wireplumber, alsa-utils,

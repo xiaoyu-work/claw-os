@@ -20,9 +20,9 @@ members = [
     "cosmic-applet-a11y",
     "claw-applet-agent-activity",
     "claw-applet-approval-gate",
-    "claw-applet-services",
     "cosmic-applets-config",
 ]
+exclude = ["claw-applet-services"]
 
 resolver = "3"
 

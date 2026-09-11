@@ -4,7 +4,7 @@
 
 use serde::Deserialize;
 use std::{process::Command, time::Duration};
-use tokio::{process::Command as TokioCommand, time::timeout};
+use tokio::process::Command as TokioCommand;
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct Task {
@@ -32,9 +32,7 @@ pub struct LeaseInfo {
 
 #[derive(Debug, Clone, Deserialize)]
 struct LsEnvelope {
-    #[serde(default)]
     n: usize,
-    #[serde(default)]
     tasks: Vec<Task>,
 }
 
@@ -42,7 +40,7 @@ struct LsEnvelope {
 pub struct LoadError(pub String);
 
 pub fn load_tasks() -> Result<Vec<Task>, LoadError> {
-    let output = Command::new(cos_binary())
+    let output = Command::new(crate::command::cos_binary())
         .args(["agent", "ls"])
         .output()
         .map_err(|e| LoadError(format!("spawn cos: {e}")))?;
@@ -50,12 +48,15 @@ pub fn load_tasks() -> Result<Vec<Task>, LoadError> {
 }
 
 pub async fn load_tasks_async() -> Result<Vec<Task>, LoadError> {
-    let mut command = TokioCommand::new(cos_binary());
-    command.args(["agent", "ls"]).kill_on_drop(true);
-    let output = timeout(Duration::from_secs(3), command.output())
-        .await
-        .map_err(|_| LoadError("cos agent ls timed out".to_string()))?
-        .map_err(|e| LoadError(format!("spawn cos: {e}")))?;
+    let mut command = TokioCommand::new(crate::command::cos_binary());
+    command.args(["agent", "ls"]);
+    let output = crate::command::output(
+        &mut command,
+        crate::command::OUTPUT_BYTES,
+        Duration::from_secs(3),
+    )
+    .await
+    .map_err(|e| LoadError(format!("spawn cos: {e}")))?;
     parse_tasks_output(output)
 }
 
@@ -75,12 +76,12 @@ fn parse_tasks_output(output: std::process::Output) -> Result<Vec<Task>, LoadErr
     }
     let envelope: LsEnvelope = serde_json::from_slice(&output.stdout)
         .map_err(|e| LoadError(format!("parse cos agent ls output: {e}")))?;
-    debug_assert_eq!(envelope.n, envelope.tasks.len());
+    if envelope.n != envelope.tasks.len() {
+        return Err(LoadError(
+            "cos agent ls returned an inconsistent task count".into(),
+        ));
+    }
     Ok(envelope.tasks)
-}
-
-fn cos_binary() -> String {
-    std::env::var("COS_BIN").unwrap_or_else(|_| "cos".to_string())
 }
 
 #[cfg(test)]

@@ -33,6 +33,7 @@ Rust, Python, Node, and Go bindings.
 | `wire/v1/mcp_call_context.schema.json` | Gateway-authenticated caller identity, task/session correlation, and deadline |
 | `rust/` | Rust public SDK |
 | `rust/src/lib.rs` | Shared CLI wire/error decoder, including explicit executable selection and bounded stdin for controlled primitive business data |
+| `rust/src/applet/`, `wire/v1/applet-services.md`, `wire/v1/applet-services.cases.json` | Public fixed-helper Calendar/task/telemetry client and history preflight, closed records and shared conformance cases; no OS provider or App implementation |
 | `rust/notification-presentation/`, `wire/v1/notification-presentation.md` | OS-defined rendering/preferences companion contract; no App config/UI dependency, authority store or renderer feature coupling |
 | `python/` | Python public SDK |
 | `node/` | Node public SDK |

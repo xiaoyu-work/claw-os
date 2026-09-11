@@ -26,6 +26,32 @@ if [ ! -d "$STAGE_ROOT" ]; then
     echo "error: desktop package root not found: $STAGE_ROOT" >&2
     exit 1
 fi
+APPLET_PROVIDER="$STAGE_ROOT/usr/libexec/claw-os-applet-provider"
+if [ ! -f "$APPLET_PROVIDER" ] || [ ! -x "$APPLET_PROVIDER" ] || [ -L "$APPLET_PROVIDER" ]; then
+    echo "error: required Applet service ELF missing or not a regular executable: $APPLET_PROVIDER" >&2
+    exit 1
+fi
+python3 - "$APPLET_PROVIDER" "$DEB_ARCH" <<'PY'
+from pathlib import Path
+import struct
+import sys
+
+path, arch = Path(sys.argv[1]), sys.argv[2]
+with path.open("rb") as source:
+    header = source.read(64)
+if len(header) != 64 or header[:7] != b"\x7fELF\x02\x01\x01":
+    raise SystemExit(f"error: Applet service is not a complete little-endian ELF64: {path}")
+(_, kind, machine, version, entry, phoff, _, _, ehsize, phentsize, phnum, _, _, _) = struct.unpack(
+    "<16sHHIQQQIHHHHHH", header,
+)
+if (
+    machine != {"amd64": 62, "arm64": 183}.get(arch)
+    or kind not in (2, 3) or version != 1 or entry == 0
+    or ehsize != 64 or phentsize != 56 or phnum == 0
+    or phoff < 64 or phoff + phnum * phentsize > path.stat().st_size
+):
+    raise SystemExit(f"error: Applet service has an invalid executable header or architecture for {arch}: {path}")
+PY
 for binary in cos-agent-ui cos-agent-bridge cos-ask-claw-launcher; do
     if [ ! -x "$STAGE_ROOT/usr/local/bin/$binary" ]; then
         echo "error: required desktop Agent binary missing: $binary" >&2

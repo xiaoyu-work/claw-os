@@ -6,7 +6,7 @@ use std::{
     fs,
     time::{Duration, Instant},
 };
-use tokio::{process::Command, time::timeout};
+use tokio::process::Command;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(3);
 
@@ -28,11 +28,10 @@ pub struct Usage {
 
 impl Usage {
     pub fn percent(self) -> u64 {
-        if self.total_mb == 0 {
-            0
-        } else {
-            self.used_mb.saturating_mul(100) / self.total_mb
-        }
+        self.used_mb
+            .saturating_mul(100)
+            .checked_div(self.total_mb)
+            .unwrap_or(0)
     }
 }
 
@@ -81,7 +80,12 @@ struct ResourceUsage {
 
 pub async fn load(previous: RawSample) -> Result<(SystemSummary, RawSample), String> {
     policy::require("sys.observe", Scope::Wild).await?;
+    load_authorized(previous).await
+}
 
+pub(crate) async fn load_authorized(
+    previous: RawSample,
+) -> Result<(SystemSummary, RawSample), String> {
     let current = RawSample {
         cpu: read_cpu_times().ok(),
         network: read_network_totals().ok(),
@@ -109,18 +113,18 @@ pub async fn load(previous: RawSample) -> Result<(SystemSummary, RawSample), Str
 }
 
 async fn load_cos_resources() -> Result<SystemSummary, String> {
-    let mut command = Command::new(cos_binary());
-    command.args(["sys", "resources"]).kill_on_drop(true);
-    let output = timeout(COMMAND_TIMEOUT, command.output())
-        .await
-        .map_err(|_| "System telemetry timed out.".to_string())?
-        .map_err(|error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
-                "The ClawOS system service is not installed.".to_string()
-            } else {
-                format!("Could not start system telemetry: {error}")
-            }
-        })?;
+    let mut command = Command::new(crate::command::cos_binary());
+    command.args(["sys", "resources"]);
+    let output =
+        crate::command::output(&mut command, crate::command::OUTPUT_BYTES, COMMAND_TIMEOUT)
+            .await
+            .map_err(|error| {
+                if error.kind() == std::io::ErrorKind::NotFound {
+                    "The ClawOS system service is not installed.".to_string()
+                } else {
+                    format!("Could not start system telemetry: {error}")
+                }
+            })?;
     if !output.status.success() {
         let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(if detail.is_empty() {
@@ -189,11 +193,10 @@ fn parse_kb(value: &str) -> Option<u64> {
 
 async fn load_df_usage() -> Option<Usage> {
     let path = std::env::var("HOME").unwrap_or_else(|_| "/".to_string());
-    let mut command = Command::new("df");
-    command.args(["-Pk", &path]).kill_on_drop(true);
-    let output = timeout(COMMAND_TIMEOUT, command.output())
+    let mut command = Command::new("/usr/bin/df");
+    command.args(["-Pk", "--", &path]);
+    let output = crate::command::output(&mut command, 16 * 1024, COMMAND_TIMEOUT)
         .await
-        .ok()?
         .ok()?;
     if !output.status.success() {
         return None;
@@ -202,7 +205,7 @@ async fn load_df_usage() -> Option<Usage> {
 }
 
 fn parse_df(raw: &str) -> Option<Usage> {
-    let line = raw.lines().filter(|line| !line.trim().is_empty()).last()?;
+    let line = raw.lines().rfind(|line| !line.trim().is_empty())?;
     let fields: Vec<&str> = line.split_whitespace().collect();
     if fields.len() < 6 {
         return None;
@@ -283,14 +286,7 @@ fn parse_network_totals(raw: &str) -> Option<NetworkTotals> {
     found.then_some(totals)
 }
 
-fn cos_binary() -> String {
-    std::env::var("COS_BIN").unwrap_or_else(|_| "cos".to_string())
-}
-
 #[cfg(test)]
 mod tests {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/test/unit/system.rs"
-    ));
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/system.rs"));
 }

@@ -25,6 +25,7 @@
 //! | Module        | Wire family | Equivalent CLI                  |
 //! |---------------|-------------|---------------------------------|
 //! | [`ai`]        | `ai`        | stable `cos ai chat`            |
+//! | [`applet`]    | data v1     | public OS App data services      |
 //! | [`mcp`]       | MCP         | App-hosted tools over JSON-RPC  |
 //! | [`tools`]     | `tool`      | `cos ai tool <name> --app <id>` |
 //! | [`envelope`]  | shared      | the common reply envelope       |
@@ -65,6 +66,7 @@ use std::process::{Command, Stdio};
 use serde::de::DeserializeOwned;
 
 pub mod ai;
+pub mod applet;
 pub mod envelope;
 pub mod generated;
 pub mod gui;

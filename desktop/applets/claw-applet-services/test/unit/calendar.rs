@@ -1,5 +1,15 @@
 use super::*;
 
+fn filtered(events: Vec<CalendarEvent>, day: Date, time_zone: TimeZone) -> Vec<CalendarEvent> {
+    filter_events_for_day(
+        events.into_iter().map(Ok),
+        day,
+        time_zone,
+        Instant::now() + QUERY_TIMEOUT,
+    )
+    .unwrap()
+}
+
 fn event(id: &str, title: &str, start: &str) -> CalendarEvent {
     CalendarEvent {
         id: id.to_string(),
@@ -25,7 +35,7 @@ fn filters_local_day_across_offsets_date_only_and_naive_values() {
         event("malformed", "Malformed", "not-a-date"),
     ];
 
-    let matched = filter_events_for_day(events, day, time_zone);
+    let matched = filtered(events, day, time_zone);
     assert_eq!(
         matched
             .iter()
@@ -45,7 +55,7 @@ fn filters_events_for_the_selected_day_instead_of_today() {
         event("next", "Next", "2031-11-19"),
     ];
 
-    let matched = filter_events_for_day(events, selected, time_zone);
+    let matched = filtered(events, selected, time_zone);
     assert_eq!(
         matched
             .iter()
@@ -68,7 +78,7 @@ fn sorts_all_day_first_then_by_instant_with_deterministic_ties() {
         event("all-a", "Alpha", "2026-08-05"),
     ];
 
-    let sorted = filter_events_for_day(events, day, time_zone);
+    let sorted = filtered(events, day, time_zone);
     assert_eq!(
         sorted
             .iter()
@@ -89,7 +99,7 @@ fn includes_events_that_overlap_the_local_day() {
     let mut ended = event("ended", "Ended", "2026-08-04T20:00:00Z");
     ended.end = Some("2026-08-04T22:00:00Z".to_string());
 
-    let matched = filter_events_for_day(vec![overnight, multi_day, ended], day, time_zone);
+    let matched = filtered(vec![overnight, multi_day, ended], day, time_zone);
     assert_eq!(
         matched
             .iter()
@@ -97,4 +107,32 @@ fn includes_events_that_overlap_the_local_day() {
             .collect::<Vec<_>>(),
         ["multi-day", "overnight"]
     );
+}
+
+#[test]
+fn result_bounds_and_deadlines_fail_without_returning_partial_events() {
+    let day = "2026-08-05".parse().unwrap();
+    let zone = TimeZone::UTC;
+    let ordinary = event("first", "First", "2026-08-05");
+    let oversized = event(
+        "large",
+        &"\0".repeat(MAX_CALENDAR_BYTES / 6 + 1),
+        "2026-08-05",
+    );
+    let error = filter_events_for_day(
+        [Ok(ordinary.clone()), Ok(oversized)],
+        day,
+        zone.clone(),
+        Instant::now() + QUERY_TIMEOUT,
+    )
+    .unwrap_err();
+    assert!(error.contains("byte limit"));
+    let error = filter_events_for_day(
+        [Ok(ordinary)],
+        day,
+        zone,
+        Instant::now() - Duration::from_secs(1),
+    )
+    .unwrap_err();
+    assert!(error.contains("deadline"));
 }

@@ -1,0 +1,39 @@
+{
+  "schema": "claw.applet-services.cases/v1",
+  "requests": [
+    {"name":"selected leap day","wire":"{\"version\":1,\"id\":1,\"operation\":{\"kind\":\"calendar-day\",\"date\":{\"year\":2024,\"month\":2,\"day\":29}}}","error":null},
+    {"name":"today","wire":"{\"version\":1,\"id\":2,\"operation\":{\"kind\":\"calendar-today\"}}","error":null},
+    {"name":"tasks","wire":"{\"version\":1,\"id\":3,\"operation\":{\"kind\":\"tasks\"}}","error":null},
+    {"name":"system","wire":"{\"version\":1,\"id\":4,\"operation\":{\"kind\":\"system\"}}","error":null},
+    {"name":"history read","wire":"{\"version\":1,\"id\":5,\"operation\":{\"kind\":\"history-check\",\"permission\":\"read\"}}","error":null},
+    {"name":"history write and maximum ID","wire":"{\"version\":1,\"id\":18446744073709551615,\"operation\":{\"kind\":\"history-check\",\"permission\":\"write\"}}","error":null},
+    {"name":"unsupported version","wire":"{\"version\":2,\"id\":7,\"operation\":{\"kind\":\"tasks\"}}","error":"unsupported-version"},
+    {"name":"zero ID","wire":"{\"version\":1,\"id\":0,\"operation\":{\"kind\":\"tasks\"}}","error":"invalid-request"},
+    {"name":"ID overflow","wire":"{\"version\":1,\"id\":18446744073709551616,\"operation\":{\"kind\":\"tasks\"}}","error":"invalid-request"},
+    {"name":"noninteger ID token","wire":"{\"version\":1,\"id\":1.0,\"operation\":{\"kind\":\"tasks\"}}","error":"invalid-request"},
+    {"name":"invalid day","wire":"{\"version\":1,\"id\":9,\"operation\":{\"kind\":\"calendar-day\",\"date\":{\"year\":2026,\"month\":2,\"day\":30}}}","error":"invalid-request"},
+    {"name":"invalid year","wire":"{\"version\":1,\"id\":10,\"operation\":{\"kind\":\"calendar-day\",\"date\":{\"year\":10000,\"month\":1,\"day\":1}}}","error":"invalid-request"},
+    {"name":"unknown operation","wire":"{\"version\":1,\"id\":11,\"operation\":{\"kind\":\"agent-run\"}}","error":"invalid-request"},
+    {"name":"owner injection","wire":"{\"version\":1,\"id\":12,\"owner\":42,\"operation\":{\"kind\":\"tasks\"}}","error":"invalid-request"},
+    {"name":"scope injection","wire":"{\"version\":1,\"id\":13,\"operation\":{\"kind\":\"history-check\",\"permission\":\"read\",\"scope\":\"selection\"}}","error":"invalid-request"},
+    {"name":"program injection","wire":"{\"version\":1,\"id\":14,\"operation\":{\"kind\":\"system\",\"program\":\"/bin/true\"}}","error":"invalid-request"},
+    {"name":"duplicate ID","wire":"{\"version\":1,\"id\":15,\"id\":16,\"operation\":{\"kind\":\"tasks\"}}","error":"invalid-request"},
+    {"name":"malformed JSON","wire":"{\"version\":","error":"invalid-request"}
+  ],
+  "responses": [
+    {"name":"calendar","wire":"{\"version\":1,\"id\":1,\"outcome\":{\"status\":\"ok\",\"data\":{\"kind\":\"calendar\",\"events\":[{\"id\":\"event\",\"title\":\"Review\",\"start\":\"2026-09-09\",\"end\":null,\"location\":\"\"}]}}}","valid":true},
+    {"name":"tasks","wire":"{\"version\":1,\"id\":2,\"outcome\":{\"status\":\"ok\",\"data\":{\"kind\":\"tasks\",\"tasks\":[]}}}","valid":true},
+    {"name":"fractional CPU","wire":"{\"version\":1,\"id\":3,\"outcome\":{\"status\":\"ok\",\"data\":{\"kind\":\"system\",\"summary\":{\"cpu_percent\":42.5,\"memory\":{\"used_mb\":1,\"total_mb\":18446744073709551615},\"fallback\":false}}}}","valid":true},
+    {"name":"history","wire":"{\"version\":1,\"id\":4,\"outcome\":{\"status\":\"ok\",\"data\":{\"kind\":\"history-allowed\"}}}","valid":true},
+    {"name":"unattributed framing refusal","wire":"{\"version\":1,\"id\":0,\"outcome\":{\"status\":\"error\",\"error\":{\"code\":\"invalid-request\",\"message\":\"oversized frame\"}}}","valid":true},
+    {"name":"typed denial","wire":"{\"version\":1,\"id\":5,\"outcome\":{\"status\":\"error\",\"error\":{\"code\":\"permission-denied\",\"message\":\"denied\"}}}","valid":true},
+    {"name":"numeric object","wire":"{\"version\":1,\"id\":6,\"outcome\":{\"status\":\"ok\",\"data\":{\"kind\":\"system\",\"summary\":{\"cpu_percent\":{\"$serde_json::private::Number\":\"42.5\"},\"fallback\":false}}}}","valid":false},
+    {"name":"CPU overflow","wire":"{\"version\":1,\"id\":7,\"outcome\":{\"status\":\"ok\",\"data\":{\"kind\":\"system\",\"summary\":{\"cpu_percent\":1e999,\"fallback\":false}}}}","valid":false},
+    {"name":"CPU out of range","wire":"{\"version\":1,\"id\":8,\"outcome\":{\"status\":\"ok\",\"data\":{\"kind\":\"system\",\"summary\":{\"cpu_percent\":101,\"fallback\":false}}}}","valid":false},
+    {"name":"missing telemetry provenance","wire":"{\"version\":1,\"id\":9,\"outcome\":{\"status\":\"ok\",\"data\":{\"kind\":\"system\",\"summary\":{}}}}","valid":false},
+    {"name":"negative byte count","wire":"{\"version\":1,\"id\":10,\"outcome\":{\"status\":\"ok\",\"data\":{\"kind\":\"system\",\"summary\":{\"memory\":{\"used_mb\":-1,\"total_mb\":1},\"fallback\":false}}}}","valid":false},
+    {"name":"response authority injection","wire":"{\"version\":1,\"id\":11,\"owner\":42,\"outcome\":{\"status\":\"ok\",\"data\":{\"kind\":\"tasks\",\"tasks\":[]}}}","valid":false},
+    {"name":"unknown error code","wire":"{\"version\":1,\"id\":12,\"outcome\":{\"status\":\"error\",\"error\":{\"code\":\"other\",\"message\":\"error\"}}}","valid":false},
+    {"name":"duplicate response ID","wire":"{\"version\":1,\"id\":13,\"id\":14,\"outcome\":{\"status\":\"ok\",\"data\":{\"kind\":\"tasks\",\"tasks\":[]}}}","valid":false}
+  ]
+}

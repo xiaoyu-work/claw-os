@@ -152,6 +152,18 @@ ownership transition. Normal signed package replacement handles the library
 path change without moving user data, grants, review state or security floors.
 Installed systems never fetch App code from Git.
 
+The OS-owned Applet data helper is installed as
+`/usr/libexec/claw-os-applet-provider`. Desktop package source provides
+`claw-os-applet-services-v1 (= 1)` and rejects a missing, non-executable or
+wrong-architecture helper before advertising that interface. It updates
+through the existing signed OS APT package, never an SDK archive or runtime
+source download. The [public client contract](../claw-os-sdk/wire/v1/applet-services.md)
+requires a later real SDK/platform release and explicit consumer pin; this
+source wiring neither publishes one nor cuts over linked shell/App payloads.
+No identity, grant, Calendar database, history, user namespace or GUI resource
+is moved. History preflight and package dependency satisfaction do not establish
+CopyQ/Wayland isolation or clear GUI publication gates.
+
 Text Editor's complete native source and descriptor are now built from the
 same immutable App repository pin. The signed `claw-os-desktop` package still
 owns `/usr/bin/cosmic-edit`, `/usr/lib/cos/apps/cosmic-edit` and the

@@ -9,6 +9,7 @@ The official Rust SDK for Claw OS. Use this crate to talk to the
 |-------------|---------------------------------------------------------------------------------|
 | `ai`        | Stable `chat` / `chat-untrusted` access through `cos ai chat`.                  |
 | `mcp`       | Manifest-bound App MCP runtime, call context, and stdio transport.                |
+| `applet`    | Versioned OS Calendar/task/telemetry client and separate history-permission preflight. |
 | `tools`     | `cos ai tool <name>` — fulfil catalog tools the model proposed.                 |
 | `gui`       | Desktop GUI bootstrap and kernel-provided launch context.                       |
 | `envelope`  | Wire-v1 envelope adapter; SDKs handle the migration to native v1 transparently. |
@@ -32,6 +33,24 @@ desktop clients, not App-to-App calls. Broker admission rejects App processes
 and App-owned agents even if they hold invoke grants. App code uses gated AI,
 controlled system services, and shared libraries; the built-in system Agent
 owns cross-App workflows.
+
+## App data services
+
+`applet::Client::installed()` owns a private, bounded connection to
+`/usr/libexec/claw-os-applet-provider`. It exposes `calendar_day`,
+`calendar_today`, `tasks`, `system` and `require_history`. Clones serialize
+requests on one connection; separate clients retain independent sampling and
+refresh state. Invalid replies, deadlines and cancellation discard the
+connection and stop its owned helper processes without automatically retrying.
+`with_binary` selects an explicit absolute development fixture, never a
+different identity or authority tier.
+
+See the [versioned App data contract](../wire/v1/applet-services.md) for exact
+records, limits and per-operation scopes. History checks are preflight, not a
+grant, CopyQ execution or evidence of resource isolation/revocation. Consumers
+still need authenticated OS admission and existing independent grants.
+This source addition requires a later real SDK/platform release and explicit
+consumer pin; it does not change the immutable SDK 1.0.0 artifact.
 
 ## Expose manifest-declared MCP tools
 

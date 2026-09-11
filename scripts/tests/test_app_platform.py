@@ -30,6 +30,18 @@ def source(tmp_path):
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("must not enter an App SDK release\n")
+    for relative in (
+        "claw-os-sdk/rust/src/applet/mod.rs",
+        "claw-os-sdk/rust/src/applet/client.rs",
+        "claw-os-sdk/rust/src/applet/protocol.rs",
+        "claw-os-sdk/wire/v1/applet-services.md",
+        "claw-os-sdk/wire/v1/applet-services.cases.json",
+        "desktop/applets/claw-applet-services/src/service.rs",
+        "desktop/applets/claw-applet-services/src/bin/claw-os-applet-provider.rs",
+    ):
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes((ROOT / relative).read_bytes())
     subprocess.run(["git", "init", "--quiet", str(root)], check=True)
     subprocess.run(["git", "-C", str(root), "add", "."], check=True)
     subprocess.run(
@@ -64,6 +76,20 @@ def test_platform_exports_are_complete_and_source_reproducible(source, tmp_path)
 def test_release_version_cannot_override_source_contract(source, tmp_path):
     with pytest.raises(ValueError, match="must match"):
         platform.build(tmp_path / "release", "2.0.0", source)
+
+
+def test_applet_export_contains_public_client_and_contract_but_no_os_provider(source, tmp_path):
+    archive_path = platform.build(tmp_path / "applet-client", "1.0.0", source)
+    with tarfile.open(archive_path) as archive:
+        for relative in (
+            "claw-os-sdk/rust/src/applet/mod.rs",
+            "claw-os-sdk/rust/src/applet/client.rs",
+            "claw-os-sdk/rust/src/applet/protocol.rs",
+            "claw-os-sdk/wire/v1/applet-services.md",
+            "claw-os-sdk/wire/v1/applet-services.cases.json",
+        ):
+            assert archive.extractfile(relative).read() == (ROOT / relative).read_bytes()
+        assert not any(name.startswith(("desktop/applets/", "usr/libexec/")) for name in archive.getnames())
 
 
 def test_modified_export_is_not_published(source, tmp_path):

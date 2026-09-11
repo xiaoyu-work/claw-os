@@ -249,6 +249,16 @@ remain in the OS. No new state store or cross-App call is introduced.
 `panel-calendar`, `panel-clipboard` and `widget-rail` remain owned by the desktop
 Debian package, with original launcher identities and independent grants
 unchanged; installed updates remain signed APT packages.
+Standalone consumers use the public Rust SDK's versioned
+[`applet` pipe protocol](claw-os-sdk/wire/v1/applet-services.md) and the OS-owned
+`/usr/libexec/claw-os-applet-provider`, built independently from
+`desktop/applets/claw-applet-services`. Its Calendar, task and telemetry access
+checks the same separate resource scopes; Clipboard history checks are preflight
+only. Provider/data/authority implementation is excluded from the public
+development export. This source interface does not release a new SDK, replace
+the current App pin, complete authenticated GUI/resource admission, or authorize
+CopyQ/Wayland access. The existing linked shell paths above remain until their
+separate coordinated cutover.
 The complete standalone native Launcher is also owned by
 `clawos-app/products/launcher` and built from `build/native-apps/cosmic-launcher`.
 Its executable/resources and `cosmic-launcher` descriptor stay in the desktop

@@ -15,6 +15,9 @@ dispatched and reusable test/publication pipelines.
   OS `apps/` tests. App helper tests/vectors belong to App `tests/shared`;
   process fixtures receive separately staged common support, the required
   `python3-idna` runtime dependency and OpenSSL for private HTTPS certificates.
+- Exercise the public App data codec/client, independent OS provider library and
+  executable, exact export/ELF guards, and private real-kernel fixtures whose
+  clients remain non-Root. No GUI/Clipboard admission or release gate is relaxed.
 - Build shared Docker/WSL images per architecture.
 - Build and sign independent multi-architecture APT packages/repository.
 - Build the React/Vite web desktop as an independent Pages input.

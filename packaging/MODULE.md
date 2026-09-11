@@ -28,6 +28,7 @@ Debian packages and a signed multi-architecture APT repository.
 | External Files `python/claw_files/` | Shared document parsing/conversion staged in the Agent package; native Files embeds the same source, and both executables stay desktop-owned |
 | `../tools/install-browser-agent.sh` | Manual Browser extension/Native Host deployment from the same product pin |
 | `deb/tests/test_app_sources.py` | Immutable source/cache, payload identity, and OS native-launcher ownership |
+| `deb/build-desktop-deb.sh`, `deb/tests/test_applet_provider.py` | Require the actual native Applet provider before declaring the Desktop-owned `claw-os-applet-services-v1` interface; no App/GUI grant or publication cutover |
 | `deb/*/control` | Package metadata, ABI generation, and runtime dependencies |
 | `deb/*/{preinst,postinst,prerm,postrm}` | Upgrade/install/remove behavior and the downgrade gates |
 | `deb/claw-os-agent/extension-gid-scan.py` | Root-owned mount/ownership/ACL proof used during Agent postinstall |
