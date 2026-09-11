@@ -1,4 +1,5 @@
 pub mod activities;
+pub mod activity_objects;
 pub mod agent_client;
 pub mod app_sessions;
 pub mod accessibility;

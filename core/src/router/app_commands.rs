@@ -139,7 +139,7 @@ pub(super) fn dispatch_app(
 /// Refuse to run a quarantined App, and re-assert the verified snapshot
 /// immediately before dispatch so a package replaced between discovery
 /// and launch is caught.
-fn require_runnable(app: &apps::App) -> Result<(), String> {
+pub(super) fn require_runnable(app: &apps::App) -> Result<(), String> {
     let verified = app.require_verified()?;
     verified
         .assert_current(&crate::provenance::trust_store())

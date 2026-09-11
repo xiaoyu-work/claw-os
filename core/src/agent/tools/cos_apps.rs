@@ -451,7 +451,12 @@ fn render_catalog_search(
         let m = &app.manifest;
         let mut matched = m.id.to_lowercase().contains(&needle)
             || m.name.current().to_lowercase().contains(&needle)
-            || m.summary.current().to_lowercase().contains(&needle);
+            || m.summary.current().to_lowercase().contains(&needle)
+            || m.objects.iter().any(|(name, object)| {
+                name.to_lowercase().contains(&needle)
+                    || object.label.current().to_lowercase().contains(&needle)
+                    || object.summary.current().to_lowercase().contains(&needle)
+            });
         if !matched {
             for op in m.operations.values() {
                 if op.label.current().to_lowercase().contains(&needle)
@@ -503,6 +508,17 @@ fn render_app_detail(app: &crate::apps::App) -> String {
     }
     out.push_str(&format!("Runtime: {:?}\n", m.runtime));
     out.push_str(&format!("Directory: {}\n", app.dir.display()));
+
+    if !m.objects.is_empty() {
+        match crate::apps::verified_object_schema(app) {
+            Ok(schema) => {
+                out.push_str("\nObject types (references are data, not permissions):\n");
+                out.push_str(&schema.to_string());
+                out.push_str("\nResolve through the declared operation using cos_app_run and its normal policy checks.\n");
+            }
+            Err(error) => out.push_str(&format!("\nObject declarations unavailable: {error}\n")),
+        }
+    }
 
     if let Some(ai) = &m.ai {
         out.push_str("AI policy:\n");

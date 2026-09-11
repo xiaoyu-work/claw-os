@@ -9,8 +9,9 @@ use axum::{
 use clawd_client::{Command, Error as BrokerError, ErrorCode as BrokerErrorCode};
 use cos_agent_protocol::{
     ActivityCreateRequest, ActivityDetailResponse, ActivityListQuery, ActivityListResponse,
-    ActivityRunRequest, ActivityTransitionRequest, ActivityUpdateRequest, ActivityView,
-    ActivityWorkResponse, ErrorCode,
+    ActivityObjectAttachRequest, ActivityObjectsResponse, ActivityRunRequest,
+    ActivityTransitionRequest, ActivityUpdateRequest, ActivityView, ActivityWorkResponse,
+    ErrorCode,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -78,6 +79,32 @@ pub async fn create(
     translation::activity(value)
         .map(Json)
         .map_err(ApiError::bad_gateway)
+}
+
+pub async fn objects(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<ActivityObjectsResponse>, ApiError> {
+    let value = state
+        .clawd
+        .call(Command::ActivityObjects, with_id(&id, json!({}))?)
+        .await
+        .map_err(upstream_error)?;
+    let response = translation::objects(value).map_err(ApiError::bad_gateway)?;
+    if response.activity_id != id {
+        return Err(ApiError::bad_gateway(
+            "Activity object response id did not match the request",
+        ));
+    }
+    Ok(Json(response))
+}
+
+pub async fn attach_object(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    request: Result<Json<ActivityObjectAttachRequest>, JsonRejection>,
+) -> Result<Json<ActivityView>, ApiError> {
+    mutate(&state, &id, Command::ActivityObjectAttach, body(request)?).await
 }
 
 pub async fn update(

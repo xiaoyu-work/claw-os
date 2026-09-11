@@ -720,6 +720,7 @@ dependencies = [
  "bytes",
  "chrono",
  "claw-embed",
+ "claw-os-sdk",
  "clawd-client",
  "cosmic-client-toolkit",
  "crc32fast",

@@ -42,6 +42,31 @@ export type ActivityRun = {
   max_turns?: number;
   use_memory?: boolean;
 };
+export type AppObjectRef = {
+  app_id: string;
+  object_type: string;
+  object_id: string;
+  revision?: string;
+};
+export type ActivityObjectAttachment = { label: string; object: AppObjectRef };
+export type ObjectDescription = {
+  object: AppObjectRef;
+  reference: string;
+  app_name: string;
+  app_version: string;
+  object_label: string;
+  object_summary: string;
+  invocation: { app_id: string; operation: string; args: string[] };
+};
+export type ActivityObject = { label: string; reference: string } & (
+  | { status: "declared"; description: ObjectDescription; error: null }
+  | { status: "unavailable" | "invalid"; description: null; error: string }
+);
+export type ActivityObjects = {
+  schema: 1;
+  activity_id: string;
+  objects: ActivityObject[];
+};
 type SubmittedJob = {
   id: string;
   status: JobStatus;
@@ -144,6 +169,43 @@ export function readActivityDetail(value: unknown, id: string): ActivityDetail {
   return { schema: 1, activity: value.activity, jobs: value.jobs, sessions: value.sessions };
 }
 
+function isObjectDescription(value: unknown): value is ObjectDescription {
+  return record(value) && record(value.object)
+    && typeof value.object.app_id === "string"
+    && typeof value.object.object_type === "string"
+    && typeof value.object.object_id === "string"
+    && (value.object.revision === undefined || typeof value.object.revision === "string")
+    && typeof value.reference === "string"
+    && typeof value.app_name === "string"
+    && typeof value.app_version === "string"
+    && typeof value.object_label === "string"
+    && typeof value.object_summary === "string"
+    && record(value.invocation)
+    && value.invocation.app_id === value.object.app_id
+    && typeof value.invocation.operation === "string"
+    && strings(value.invocation.args);
+}
+
+function isActivityObject(value: unknown): value is ActivityObject {
+  if (!record(value) || typeof value.label !== "string" || typeof value.reference !== "string") {
+    return false;
+  }
+  if (value.status === "declared") {
+    return value.error === null && isObjectDescription(value.description)
+      && value.description.reference === value.reference;
+  }
+  return (value.status === "unavailable" || value.status === "invalid")
+    && value.description === null && typeof value.error === "string";
+}
+
+export function readActivityObjects(value: unknown, id: string): ActivityObjects {
+  if (!record(value) || value.schema !== 1 || value.activity_id !== id
+      || !Array.isArray(value.objects) || !value.objects.every(isActivityObject)) {
+    throw new Error("Invalid App object descriptions from the server.");
+  }
+  return { schema: 1, activity_id: id, objects: value.objects };
+}
+
 function readSubmittedJob(value: unknown, id: string): SubmittedJob {
   if (!record(value) || typeof value.id !== "string" || !isJobStatus(value.status)
       || value.activity_id !== id
@@ -182,4 +244,12 @@ export const activityApi = {
   run: async (id: string, input: ActivityRun) => readSubmittedJob(
     await api.post<unknown>(`${activityPath(id)}/run`, input), id,
   ),
+  objects: async (id: string, signal?: AbortSignal) => readActivityObjects(
+    await api.get<unknown>(`${activityPath(id)}/objects`, { signal }), id,
+  ),
+  attachObject: async (id: string, attachment: ActivityObjectAttachment) => {
+    const activity = readActivity(await api.post<unknown>(`${activityPath(id)}/objects`, attachment));
+    if (activity.id !== id) throw new Error("Invalid attached Activity from the server. Refresh before retrying.");
+    return activity;
+  },
 };

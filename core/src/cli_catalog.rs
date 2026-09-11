@@ -29,6 +29,18 @@ pub fn builtin_namespaces() -> Vec<NamespaceEntry> {
                 ("resume", "Resume or explicitly reopen an Activity"),
                 ("complete", "Confirm goal achievement with an explicit note"),
                 ("cancel", "End an Activity without claiming its goal was achieved"),
+                ("objects", "Inspect authenticated App object declarations for attached references"),
+                ("attach-object", "Attach a declared App object without reading its data"),
+            ],
+        ),
+        (
+            "object",
+            "App-owned object references; resolution uses ordinary App permissions",
+            vec![
+                ("catalog", "List authenticated App object types without executing Apps"),
+                ("reference", "Format a canonical App object URI without accessing data"),
+                ("describe", "Describe a declared object's normal App invocation"),
+                ("resolve", "Invoke the declared App operation through its existing policy boundary"),
             ],
         ),
         (
@@ -157,7 +169,7 @@ pub fn builtin_namespaces() -> Vec<NamespaceEntry> {
                     "Inspect token usage by provider, model, session, App, verb, time range, or status",
                 ),
                 ("sessions", "Inspect and manage recorded conversations"),
-                ("recall", "Search recorded conversations"),
+                ("recall", "Search recorded conversations or read a source with --message <id>"),
                 ("service", "Inspect and manage daemon-backed Agent tasks"),
                 ("notes", "Manage Agent memory notes"),
                 ("memory", "Inspect or forget App-emitted memory"),

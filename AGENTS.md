@@ -38,6 +38,7 @@ editing additional surfaces.
 | --- | --- | --- |
 | `cos` CLI command or primitive | `core/src/main.rs`, `core/src/router.rs` | The primitive module, `core/src/clawd/`, inline Rust tests |
 | Activity goal/lifecycle or presentation | `core/src/activities/`, `core/src/clawd/activities.rs`, `docs/activities.md` | `core/src/activity.rs`, task/session associations, Agent Web, `desktop/agent/`; one shared backend for headless and desktop |
+| App object contract or Activity object reference | `core/src/objects/`, `core/src/caps/manifest/objects.rs`, `docs/app-objects.md` | SDK wire/types/helpers, `clawd/activity_objects.rs`, ordinary App dispatch, Web/native presentations |
 | Agent ask/chat loop | `core/src/agent/runtime/loop_.rs`, `core/src/agent/runtime/turn.rs` | `prompt/`, `tools/`, `memory/`, `llm/` |
 | Agent worker process / broker isolation | `core/src/agentd/`, `core/src/bin/claw-agentd.rs` | `clawd/server.rs`, `agent/service.rs`, `clawd.service`, `packaging/deb/build-debs.sh` |
 | LLM provider or model setup | `core/src/agent/llm/providers/`, `core/src/agent/llm/registry.rs`, `core/src/agent/setup.rs` | `types.rs`, `accumulate.rs`, streaming and non-streaming tests |
@@ -205,6 +206,12 @@ associations backward compatible; an execution completing never proves that
 the Activity goal was achieved. Preserve explicit completion confirmation and
 the existing capability, approval, task-cancellation and audit boundaries.
 Update [`docs/activities.md`](docs/activities.md) with user-facing changes.
+
+App object declarations must be authenticated before labels or resolvers are
+trusted. Keep canonical reference semantics shared through the public SDK;
+describing or attaching a reference must not execute an App, copy its data,
+or create authority. Explicit resolution reuses the normal App invocation
+pipeline. See [`docs/app-objects.md`](docs/app-objects.md).
 
 ### LLM provider change
 

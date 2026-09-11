@@ -125,3 +125,95 @@ fn work_acknowledgement_keeps_identity_without_private_job_payloads() {
     assert!(value.get("worker_pid").is_none());
     assert!(value.get("state").is_none());
 }
+
+fn object_envelope() -> Value {
+    json!({
+        "schema": 1, "activity_id": "activity-1", "owner_uid": 0,
+        "objects": [
+            {
+                "label": "Release status", "reference": "app://kv/entry?id=release.status",
+                "status": "declared", "error": null,
+                "description": {
+                    "object": {"app_id": "kv", "object_type": "entry", "object_id": "release.status"},
+                    "reference": "app://kv/entry?id=release.status",
+                    "app_name": "Key/value", "app_version": "1.0",
+                    "object_label": "Entry", "object_summary": "A key/value entry",
+                    "invocation": {"app_id": "kv", "operation": "get", "args": ["--key", "release.status"]},
+                    "provenance": {"publisher": "verified upstream"},
+                    "exists": true, "readable": true, "data": {"must": "not leak"}
+                }
+            },
+            {
+                "label": "Unavailable", "reference": "app://missing/entry?id=x",
+                "status": "unavailable", "description": null, "error": "publisher revoked"
+            },
+            {
+                "label": "Malformed", "reference": "app:malformed",
+                "status": "invalid", "description": null, "error": "invalid object reference"
+            }
+        ]
+    })
+}
+
+#[test]
+fn object_translation_retains_status_diagnostics_and_only_presentation_fields() {
+    let response = objects(object_envelope()).unwrap();
+    assert_eq!(response.activity_id, "activity-1");
+    assert_eq!(response.objects[0].status, ActivityObjectStatus::Declared);
+    assert_eq!(
+        response.objects[1].error.as_deref(),
+        Some("publisher revoked")
+    );
+    assert_eq!(response.objects[2].reference, "app:malformed");
+    assert_eq!(
+        response.objects[2].error.as_deref(),
+        Some("invalid object reference")
+    );
+    let encoded = serde_json::to_value(&response).unwrap();
+    assert!(encoded.get("owner_uid").is_none());
+    for field in ["provenance", "exists", "readable", "data"] {
+        assert!(encoded["objects"][0]["description"].get(field).is_none());
+    }
+    assert_eq!(
+        encoded["objects"][0]["description"]["invocation"]["args"],
+        json!(["--key", "release.status"])
+    );
+}
+
+#[test]
+fn object_translation_refuses_unknown_schemas_and_inconsistent_declarations() {
+    let mut value = object_envelope();
+    value["schema"] = json!(2);
+    assert!(objects(value).is_err());
+    let mut value = object_envelope();
+    value["activity_id"] = json!("");
+    assert!(objects(value).is_err());
+    let mut value = object_envelope();
+    value["objects"][0]["status"] = json!("readable");
+    assert!(objects(value).is_err());
+    let mut value = object_envelope();
+    value["objects"][0]["description"] = Value::Null;
+    assert!(objects(value).is_err());
+    let mut value = object_envelope();
+    value["objects"][0]["description"]["invocation"]["app_id"] = json!("other-app");
+    assert!(objects(value).is_err());
+    let mut value = object_envelope();
+    value["objects"][0]["status"] = json!("unavailable");
+    assert!(objects(value).is_err());
+}
+
+#[test]
+fn object_translation_preserves_noncanonical_resources_and_broker_canonical_descriptions() {
+    let mut value = object_envelope();
+    value["objects"][0]["reference"] = json!("app://kv/entry?id=release%2Estatus");
+    let response = objects(value).unwrap();
+    assert_eq!(response.objects[0].status, ActivityObjectStatus::Declared);
+    assert_eq!(
+        response.objects[0].reference,
+        "app://kv/entry?id=release%2Estatus"
+    );
+    assert_eq!(
+        response.objects[0].description.as_ref().unwrap().reference,
+        "app://kv/entry?id=release.status",
+    );
+}

@@ -19,12 +19,40 @@
       "description": "One-shot operations keyed by command name. Each is invokable as `cos app <id> <op>` and auto-exposed to the agent. Values conform to #/$defs/operation.",
       "additionalProperties": { "$ref": "#/$defs/operation" }
     },
+    "objects": {
+      "type": "object",
+      "description": "Optional App-owned object types. These declarations identify data and select ordinary App operations for resolution; they do not grant authority or promise that a resolver is pure.",
+      "maxProperties": 64,
+      "propertyNames": { "type": "string", "pattern": "^[a-z][a-z0-9_-]*$(?![\\s\\S])", "maxLength": 64 },
+      "additionalProperties": { "$ref": "#/$defs/objectType" }
+    },
     "ai": { "$ref": "#/$defs/aiPolicy", "description": "AI policy. Required iff any operation / session tool declares an ai.* need." },
     "session": { "$ref": "#/$defs/session", "description": "Optional long-lived MCP server exposing stateful, agent-driven tools." },
     "desktop": { "$ref": "#/$defs/desktop", "description": "Optional desktop GUI surface. Declaring it makes the app a launchable GUI; the installer generates a .desktop entry whose Exec routes through `cos app <id> --gui` so the GUI process is kernel-spawned and shares the app's identity, caps, consent, and audit." },
     "dependencies": { "type": "object", "additionalProperties": true, "description": "Free-form dependency declarations (e.g. {\"binaries\": [...]}) consumed by the bridge's resolver." }
   },
   "$defs": {
+    "objectType": {
+      "type": "object",
+      "required": ["label", "resolve"],
+      "additionalProperties": false,
+      "properties": {
+        "label": { "$ref": "#/$defs/localizedText" },
+        "summary": { "$ref": "#/$defs/localizedText" },
+        "resolve": { "$ref": "#/$defs/objectResolver" }
+      }
+    },
+    "objectResolver": {
+      "type": "object",
+      "description": "The kernel verifies operation and argument bindings. Resolution always uses normal App operation dispatch, capabilities, approvals, and audit.",
+      "required": ["operation", "id_arg"],
+      "additionalProperties": false,
+      "properties": {
+        "operation": { "type": "string" },
+        "id_arg": { "type": "string" },
+        "revision_arg": { "type": "string" }
+      }
+    },
     "localizedText": {
       "type": "object",
       "description": "Localized string map. The `en` key is required; other locales (zh-CN, ...) are optional fallbacks.",

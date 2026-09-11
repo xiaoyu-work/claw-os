@@ -144,6 +144,8 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operations: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub objects: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ai: Option<Aipolicy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<Session>,
@@ -151,6 +153,26 @@ pub struct Manifest {
     pub desktop: Option<Desktop>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dependencies: Option<serde_json::Value>,
+}
+
+/// objectType
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Objecttype {
+    pub label: Localizedtext,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<Localizedtext>,
+    pub resolve: Objectresolver,
+}
+
+/// objectResolver
+/// The kernel verifies operation and argument bindings. Resolution always uses
+/// normal App operation dispatch, capabilities, approvals, and audit.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Objectresolver {
+    pub operation: String,
+    pub id_arg: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision_arg: Option<String>,
 }
 
 /// localizedText
@@ -351,6 +373,19 @@ pub struct Desktop {
     pub single_instance: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub panel_applet: Option<bool>,
+}
+
+/// App object reference
+/// A portable identifier for App-owned data, not authority, a payload, or proof
+/// of existence or readability. Component, UTF-8, and canonical URI semantics are
+/// specified in object-references.md and enforced by the public objects helpers.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ObjectRef {
+    pub app_id: String,
+    pub object_type: String,
+    pub object_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
 }
 
 /// Permissions request / reply
@@ -738,6 +773,19 @@ pub fn validate_budget_show(value: &serde_json::Value) -> Result<(), WireDecodeE
 
 pub fn normalize_budget_show_integers(value: &mut serde_json::Value) {
     let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_BUDGET_SHOW)
+        .expect("generated wire schema must be valid JSON");
+    normalize_wire_integers(&schema, &schema, value);
+}
+
+const _WIRE_SCHEMA_OBJECT_REF: &str = r###"{"$id":"https://claw-os.dev/wire/v1/object_ref.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"description":"A portable identifier for App-owned data, not authority, a payload, or proof of existence or readability. Component, UTF-8, and canonical URI semantics are specified in object-references.md and enforced by the public objects helpers.","properties":{"app_id":{"description":"App identifier; lowercase ASCII component, at most 128 UTF-8 bytes.","type":"string"},"object_id":{"description":"Opaque, nonempty UTF-8 identifier, at most 1024 bytes, without Unicode control characters. Never trimmed or normalized.","type":"string"},"object_type":{"description":"Object type declared by the App; lowercase ASCII component, at most 64 UTF-8 bytes.","type":"string"},"revision":{"description":"Optional opaque, nonempty UTF-8 revision, at most 128 bytes, without Unicode control characters. Absence differs from an empty string.","type":"string","x-go-type":"*string"}},"required":["app_id","object_type","object_id"],"title":"App object reference","type":"object"}"###;
+pub fn validate_object_ref(value: &serde_json::Value) -> Result<(), WireDecodeError> {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_OBJECT_REF)
+        .expect("generated wire schema must be valid JSON");
+    validate_wire_schema(&schema, &schema, value, "ObjectRef", "$")
+}
+
+pub fn normalize_object_ref_integers(value: &mut serde_json::Value) {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_OBJECT_REF)
         .expect("generated wire schema must be valid JSON");
     normalize_wire_integers(&schema, &schema, value);
 }

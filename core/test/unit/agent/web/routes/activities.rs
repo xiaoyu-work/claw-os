@@ -80,6 +80,49 @@ fn activity_completion_confirmation_is_forwarded_not_inferred() {
         .is_none());
 }
 
+#[test]
+fn activity_object_requests_preserve_typed_opaque_ids_and_reject_overrides() {
+    let object = json!({
+        "app_id": "archive", "object_type": "entry",
+        "object_id": " release.status /?#& ", "revision": "rev 2",
+    });
+    let body = json!({ "label": "Release status", "object": object });
+    let request = with_id::<ActivityObjectAttach>("activity-1".into(), body.clone()).unwrap();
+    assert_eq!(
+        serde_json::to_value(request).unwrap(),
+        json!({ "id": "activity-1", "label": "Release status", "object": object })
+    );
+    for (field, value) in [
+        ("owner_uid", json!(0)),
+        ("id", json!("another")),
+        ("reference", json!("app://unverified/entry?id=x")),
+        ("resources", json!([])),
+        ("label", json!("x".repeat(241))),
+        (
+            "object",
+            json!({ "app_id": "archive", "object_type": "entry", "object_id": "x".repeat(1025) }),
+        ),
+    ] {
+        let mut invalid = body.clone();
+        invalid[field] = value;
+        assert!(with_id::<ActivityObjectAttach>("activity-1".into(), invalid).is_err());
+    }
+    let mut nested_owner = body.clone();
+    nested_owner["object"]["owner_uid"] = json!(0);
+    // SDK value types may discard unknown fields, but cannot forward identity.
+    if let Ok(request) = with_id::<ActivityObjectAttach>("activity-1".into(), nested_owner) {
+        assert_eq!(
+            serde_json::to_value(request).unwrap(),
+            json!({ "id": "activity-1", "label": "Release status", "object": object })
+        );
+    }
+    let objects = with_id::<ActivityObjects>("activity-1".into(), json!({})).unwrap();
+    assert_eq!(
+        serde_json::to_value(objects).unwrap(),
+        json!({ "id": "activity-1" })
+    );
+}
+
 #[tokio::test]
 async fn activity_http_routes_require_authentication() {
     use axum::body::Body;
@@ -95,6 +138,8 @@ async fn activity_http_routes_require_authentication() {
         ("POST", "/api/activities/activity-1/update"),
         ("POST", "/api/activities/activity-1/transition"),
         ("POST", "/api/activities/activity-1/run"),
+        ("GET", "/api/activities/activity-1/objects"),
+        ("POST", "/api/activities/activity-1/objects"),
     ] {
         let response = crate::agent::web::server::build_app(state.clone())
             .oneshot(
@@ -137,8 +182,28 @@ async fn activity_run_and_read_errors_use_the_shared_broker_without_fallback() {
         "activity_id": "activity-1", "session_id": "session-1",
     });
     let submitted = job.clone();
+    let object_view = json!({
+        "schema": 1, "activity_id": "activity-1",
+        "objects": [{
+            "label": "Release status", "reference": "app://archive/entry?id=release.status",
+            "status": "unavailable", "description": null, "error": "App package is quarantined",
+        }],
+    });
+    let object_projection = object_view.clone();
+    let attached_activity = json!({
+        "id": "activity-1", "owner_uid": 1000, "title": "Release", "goal": "Prepare",
+        "completion_criteria": "", "boundaries": "", "state": "active", "completion_note": null,
+        "created_at": "2026-09-10T12:00:00Z", "updated_at": "2026-09-10T13:00:00Z",
+        "resources": [{ "label": "Release status", "reference": "app://archive/entry?id=release.status" }],
+    });
+    let attachment_result = attached_activity.clone();
     let broker = tokio::spawn(async move {
-        for command in [Command::ActivityRun, Command::ActivityGet] {
+        for command in [
+            Command::ActivityRun,
+            Command::ActivityGet,
+            Command::ActivityObjects,
+            Command::ActivityObjectAttach,
+        ] {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut header = [0; HEADER_BYTES];
             socket.read_exact(&mut header).await.unwrap();
@@ -149,13 +214,31 @@ async fn activity_run_and_read_errors_use_the_shared_broker_without_fallback() {
             assert_eq!(request.command, command);
             assert_eq!(request.params["id"], "activity-1");
             assert!(request.params.get("owner_uid").is_none());
-            let response = if command == Command::ActivityRun {
-                assert_eq!(request.params["prompt"], "Continue the saved goal");
-                assert_eq!(request.params["session_id"], "session-1");
-                Response::ok(request.id, submitted.clone())
-            } else {
-                assert_eq!(request.params["limit"], 20);
-                Response::error(request.id, "unavailable", "Activity store unavailable")
+            let response = match command {
+                Command::ActivityRun => {
+                    assert_eq!(request.params["prompt"], "Continue the saved goal");
+                    assert_eq!(request.params["session_id"], "session-1");
+                    Response::ok(request.id, submitted.clone())
+                }
+                Command::ActivityGet => {
+                    assert_eq!(request.params["limit"], 20);
+                    Response::error(request.id, "unavailable", "Activity store unavailable")
+                }
+                Command::ActivityObjects => {
+                    assert_eq!(request.params, json!({ "id": "activity-1" }));
+                    Response::ok(request.id, object_projection.clone())
+                }
+                Command::ActivityObjectAttach => {
+                    assert_eq!(
+                        request.params,
+                        json!({
+                            "id": "activity-1", "label": "Release status",
+                            "object": { "app_id": "archive", "object_type": "entry", "object_id": "release.status" },
+                        })
+                    );
+                    Response::ok(request.id, attachment_result.clone())
+                }
+                _ => unreachable!(),
             };
             socket
                 .write_all(&frame::encode_frame(
@@ -192,6 +275,28 @@ async fn activity_run_and_read_errors_use_the_shared_broker_without_fallback() {
     let (status, Json(body)) = error;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"], "Activity store unavailable");
+    let described = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        objects(Path("activity-1".into()), Ok(Query(NoBody::default()))),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(described.0, object_view);
+    let attached = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        attach_object(
+            Path("activity-1".into()),
+            Ok(Json(json!({
+                "label": "Release status",
+                "object": { "app_id": "archive", "object_type": "entry", "object_id": "release.status" },
+            }))),
+        ),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(attached.0, attached_activity);
     broker.await.unwrap();
     let unavailable = list(Ok(Query(ActivityList {
         state: None,
@@ -212,6 +317,10 @@ async fn activity_decode_failures_are_readable_json_errors_before_broker_access(
 
     let router = Router::new()
         .route("/activities", http_get(list).post(create))
+        .route(
+            "/activities/{id}/objects",
+            http_get(objects).post(attach_object),
+        )
         .route("/activities/{id}/update", post(update));
     for (method, path, body) in [
         (
@@ -221,6 +330,17 @@ async fn activity_decode_failures_are_readable_json_errors_before_broker_access(
         ),
         ("GET", "/activities?owner_uid=0", ""),
         ("GET", "/activities?state=running", ""),
+        ("GET", "/activities/activity-1/objects?owner_uid=0", ""),
+        (
+            "POST",
+            "/activities/activity-1/objects",
+            r#"{"label":"Ref","reference":"app://archive/entry?id=x"}"#,
+        ),
+        (
+            "POST",
+            "/activities/activity-1/objects",
+            r#"{"id":"other","label":"Ref","object":{"app_id":"archive","object_type":"entry","object_id":"x"}}"#,
+        ),
         (
             "POST",
             "/activities/activity-1/update",

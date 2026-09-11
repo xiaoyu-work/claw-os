@@ -57,6 +57,14 @@ pub(crate) fn activity_task(endpoint: BridgeEndpoint, request: ActivityRequest) 
                 ActivityAction::Get(id) => bridge::fetch_activity(endpoint, &id)
                     .await
                     .map(|detail| ActivityResponse::Detail(Box::new(detail))),
+                ActivityAction::Objects(id) => bridge::fetch_activity_objects(endpoint, &id)
+                    .await
+                    .map(ActivityResponse::Objects),
+                ActivityAction::AttachObject(id, body) => {
+                    bridge::attach_activity_object(endpoint, &id, body)
+                        .await
+                        .map(|activity| ActivityResponse::Saved(Box::new(activity)))
+                }
                 ActivityAction::Create(body) => bridge::create_activity(endpoint, body)
                     .await
                     .map(|activity| ActivityResponse::Saved(Box::new(activity))),

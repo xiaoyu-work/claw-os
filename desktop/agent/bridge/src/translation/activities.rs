@@ -3,7 +3,8 @@
 
 use cos_agent_protocol::{
     ActivityApprovalView, ActivityDetailResponse, ActivityJobView, ActivityListResponse,
-    ActivityResource, ActivityState, ActivityView, ActivityWorkResponse,
+    ActivityObjectResourceView, ActivityObjectStatus, ActivityObjectsResponse, ActivityResource,
+    ActivityState, ActivityView, ActivityWorkResponse,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -86,6 +87,35 @@ pub fn activity(value: Value) -> Result<ActivityView, String> {
     serde_json::from_value::<CoreActivity>(value)
         .map_err(|error| format!("invalid Activity result: {error}"))?
         .into_view()
+}
+
+pub fn objects(value: Value) -> Result<ActivityObjectsResponse, String> {
+    #[derive(Deserialize)]
+    struct Envelope {
+        schema: u32,
+        activity_id: String,
+        objects: Vec<ActivityObjectResourceView>,
+    }
+    let envelope: Envelope = serde_json::from_value(value)
+        .map_err(|error| format!("invalid activity.objects result: {error}"))?;
+    check_schema(envelope.schema)?;
+    if envelope.activity_id.trim().is_empty() {
+        return Err("clawd returned an empty Activity id for object descriptions".into());
+    }
+    for object in &envelope.objects {
+        // Resource text may be noncanonical. Only the broker interprets it
+        // and supplies the catalogue's canonical description.reference.
+        match (object.status, &object.description) {
+            (ActivityObjectStatus::Declared, Some(description))
+                if description.object.app_id == description.invocation.app_id => {}
+            (ActivityObjectStatus::Unavailable | ActivityObjectStatus::Invalid, None) => {}
+            _ => return Err("inconsistent activity.objects declaration or App identity".into()),
+        }
+    }
+    Ok(ActivityObjectsResponse {
+        activity_id: envelope.activity_id,
+        objects: envelope.objects,
+    })
 }
 
 pub fn list(value: Value) -> Result<ActivityListResponse, String> {

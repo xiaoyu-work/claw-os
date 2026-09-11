@@ -12,6 +12,8 @@ const EXPECTED_USER_COMMANDS: &[&str] = &[
     "activity.update",
     "activity.transition",
     "activity.run",
+    "activity.objects",
+    "activity.object.attach",
     "task.submit",
     "task.list",
     "task.get",
@@ -259,6 +261,8 @@ fn activity_routes_record_identity_and_sizes_not_private_planning_text() {
         Command::ActivityUpdate,
         Command::ActivityTransition,
         Command::ActivityRun,
+        Command::ActivityObjects,
+        Command::ActivityObjectAttach,
     ] {
         let route = command.route();
         assert_eq!(route.authority.subject, SubjectSource::Peer);
@@ -274,6 +278,7 @@ fn activity_routes_record_identity_and_sizes_not_private_planning_text() {
                 "completion_note": private_text,
                 "prompt": private_text,
                 "resources": [{"label": private_text, "reference": private_text}],
+                "object": {"app_id":"demo","object_type":"entry","object_id":private_text},
             }),
         );
         let recorded = serde_json::to_string(&facts).unwrap();
@@ -321,6 +326,7 @@ fn read_only_routes_are_classified_as_queries() {
     for name in [
         "activity.list",
         "activity.get",
+        "activity.objects",
         "daemon.health",
         "daemon.status",
         "task.list",
@@ -350,6 +356,7 @@ fn state_changing_routes_are_classified_as_mutations() {
         "activity.update",
         "activity.transition",
         "activity.run",
+        "activity.object.attach",
         "task.submit",
         "task.cancel",
         "task.retry",

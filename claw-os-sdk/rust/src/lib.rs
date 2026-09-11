@@ -27,6 +27,7 @@
 //! | [`ai`]        | `ai`        | stable `cos ai chat`            |
 //! | [`tools`]     | `tool`      | `cos ai tool <name> --app <id>` |
 //! | [`envelope`]  | shared      | the common reply envelope       |
+//! | [`objects`]   | object_ref  | pure App object identifiers; no dispatch |
 //! | [`generated`] | shared      | typed structs codegen'd from `wire/v1/*.schema.json` |
 //!
 //! Everything except `generated` is hand-written. `generated.rs` is
@@ -35,7 +36,7 @@
 //!
 //! ## Transport
 //!
-//! Every call shells out to the `cos` binary on `$PATH`. The
+//! Transport-backed calls shell out to the `cos` binary on `$PATH`. The
 //! subprocess model is intentional — identity, audit, and session
 //! context come from process ancestry. Set `CLAW_COS_BIN` to override
 //! the resolved binary (used by tests + dev setups).
@@ -56,7 +57,10 @@ pub mod ai;
 pub mod envelope;
 pub mod generated;
 pub mod gui;
+pub mod objects;
 pub mod tools;
+
+pub use objects::ObjectRefError;
 
 /// Errors returned by every bridge call.
 #[derive(Debug, thiserror::Error)]

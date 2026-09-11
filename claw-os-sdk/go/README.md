@@ -27,6 +27,7 @@ import clawossdk "github.com/xiaoyu-work/claw-os/claw-os-sdk/go"
 | AI            | Stable `Chat` / chat-untrusted access; multimodal compatibility shims; `Budget` | `cos ai chat --app <id>`          |
 | Tools         | `CallTool`, `Catalog`, `ForChat`                                   | `cos ai tool <name> --app <id>`   |
 | GUI           | `IsGUILaunch`, `Context`, `(*GuiContext).OpenAgentOverlay`         | launched via `cos app <id> --gui` |
+| Objects       | `FormatReference`, `ParseReference`                               | Pure identifiers; no transport |
 | Transport     | `CosBinary`, error types (advanced)                                | —                                 |
 | (generated)   | Typed structs from `wire/v1/*.schema.json` (`generated.go`)        | —                                 |
 
@@ -67,6 +68,32 @@ func run(command string, args map[string]any) (any, error) {
 }
 ```
 
+## App object references
+
+```go
+func objectReferenceExample() error {
+	ref := clawossdk.ObjectRef{
+		AppId: "notes", ObjectType: "note", ObjectId: "draft/1",
+	}
+	uri, err := clawossdk.FormatReference(ref)
+	if err != nil {
+		return err
+	}
+	_, err = clawossdk.ParseReference(uri) // app://notes/note?id=draft%2F1
+	return err
+}
+```
+
+`ObjectRef` is generated; `Revision` is `*string` so absence differs from a
+present empty revision. Invalid references return `*ObjectRefError`.
+Formatting and parsing preserve opaque IDs, reject invalid UTF-8 and
+noncanonical URIs, and perform no discovery, filesystem access, or dispatch.
+A reference does not assert existence, freshness, or permission.
+
+Use generated `ValidateObjectRef` on decoded JSON before materializing the
+struct. See [the shared contract](../wire/v1/object-references.md) for bounds
+and the optional App manifest `objects` resolver declaration.
+
 ## AI support
 
 - **Stable:** `Chat`. Setting `Origin: "external-content"`
@@ -97,6 +124,7 @@ Each domain returns typed errors you can switch on:
   (binary missing, timeout, non-JSON output).
 - `*AiUnsupportedError` — a multimodal compatibility shim was called.
 - `*ToolDeniedError` — capability / unknown-tool / arg-shape refusal.
+- `*ObjectRefError` — pure object-reference validation; no operation was invoked.
 
 ## Binary resolution
 
@@ -107,7 +135,7 @@ The SDK runs `cos` from `$PATH`. Override with `CLAW_COS_BIN` (or
 
 ```sh
 go vet ./...
-go test ./...     # runs against a fake `cos` (no kernel required)
+go test -count=1 ./...  # fake cos; also reloads shared wire vectors outside this module
 ```
 
 Generated types in `generated.go` are produced by

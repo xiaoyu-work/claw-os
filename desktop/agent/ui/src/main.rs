@@ -69,6 +69,7 @@ impl CosmicFlags for Flags {
 pub enum Message {
     Activities(activities::Message),
     OpenActivitySession(String),
+    CopyActivityObjectOperation(String),
     EditorAction(text_editor::Action),
     SetPrompt(String),
     Submit,
@@ -197,6 +198,15 @@ impl Application for App {
         match message {
             Message::Activities(message) => self.update_activities(message),
             Message::OpenActivitySession(id) => self.open_activity_session(id),
+            Message::CopyActivityObjectOperation(reference) => {
+                if self.flags.overlay || !self.activities.is_visible() {
+                    return Task::none();
+                }
+                match self.activities.object_operation_text(&reference) {
+                    Some(description) => cosmic::iced::clipboard::write(description),
+                    None => Task::none(),
+                }
+            }
             Message::EditorAction(action) => {
                 if !self.voice.is_active() {
                     self.input.perform(action);

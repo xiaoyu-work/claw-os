@@ -1,5 +1,26 @@
 use super::*;
 
+#[test]
+fn app_catalog_exposes_verified_object_contracts_without_running_apps() {
+    let _lock = crate::test_env::lock_env();
+    let root = tempfile::tempdir().unwrap();
+    let app_dir = root.path().join("demo");
+    std::fs::create_dir(&app_dir).unwrap();
+    std::fs::write(app_dir.join("app.json"), json!({
+        "id":"demo","version":"1","name":{"en":"Demo"},
+        "objects":{"entry":{"label":{"en":"Tracked record"},"resolve":{"operation":"get","id_arg":"key"}}},
+        "operations":{"get":{"label":{"en":"Get"},"args":[{"name":"key","kind":"name","required":true}]}}
+    }).to_string()).unwrap();
+    std::fs::write(app_dir.join("main.py"), "raise AssertionError('catalogue executed App')\n").unwrap();
+    crate::test_env::sign_test_package(&app_dir, crate::provenance::PackageKind::App, "demo");
+    let apps = crate::apps::discover_verified(root.path());
+    let detail = render_app_detail(&apps["demo"]);
+    assert!(detail.contains("Object types (references are data, not permissions)"));
+    assert!(detail.contains("Tracked record"));
+    assert!(detail.contains("cos_app_run"));
+    assert!(render_catalog_search(&apps, "Tracked record").contains("demo"));
+}
+
 /// Build a small tempdir holding two synthetic apps so the
 /// dynamic registration path can be exercised without depending
 /// on what's installed on the host.

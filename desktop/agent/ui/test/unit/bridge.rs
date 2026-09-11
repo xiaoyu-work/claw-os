@@ -112,3 +112,30 @@ fn activity_requests_authenticate_negotiate_and_escape_resource_identity() {
         serde_json::from_slice(request.body().unwrap().as_bytes().unwrap()).unwrap();
     assert_eq!(body.session_id.as_deref(), Some("session-1"));
 }
+
+#[test]
+fn activity_object_transport_uses_the_versioned_endpoint_and_typed_components() {
+    let endpoint = endpoint(1, 1);
+    let body = ActivityObjectAttachRequest {
+        label: "Release status".into(),
+        object: cos_agent_protocol::AppObjectReference {
+            app_id: "kv".into(),
+            object_type: "entry".into(),
+            object_id: " a/b?x=1&y=2 ".into(),
+            revision: Some("v1/#? ".into()),
+        },
+    };
+    let (request, selected) = activity_request(
+        &endpoint,
+        reqwest::Method::POST,
+        &["activities", "activity-1", "objects"],
+    ).unwrap();
+    let request = request.json(&body).build().unwrap();
+    assert_eq!(selected, ProtocolVersion(1));
+    assert_eq!(request.headers()[PROTOCOL_VERSION_HEADER], "1");
+    assert!(request.headers().contains_key(reqwest::header::AUTHORIZATION));
+    assert_eq!(request.url().path(), "/api/activities/activity-1/objects");
+    let sent: ActivityObjectAttachRequest =
+        serde_json::from_slice(request.body().unwrap().as_bytes().unwrap()).unwrap();
+    assert_eq!(sent, body);
+}

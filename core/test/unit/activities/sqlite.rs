@@ -41,6 +41,69 @@ fn title_patch(title: &str) -> ActivityPatch {
 }
 
 #[test]
+fn object_reference_attachment_is_atomic_idempotent_and_does_not_change_goal_state() {
+    let service = SqliteActivityService::open_in_memory().unwrap();
+    let activity = service.create(1000, draft()).unwrap();
+    let resource = ActivityResource {
+        label: "Status".into(),
+        reference: "app://kv/entry?id=release.status".into(),
+    };
+    let first = service.add_resource(1000, &activity.id, resource.clone()).unwrap();
+    let mut renamed = resource.clone();
+    renamed.label = "Current status".into();
+    let second = service.add_resource(1000, &activity.id, renamed).unwrap();
+    assert_eq!(first.resources.len(), 2);
+    assert_eq!(second.resources.len(), 2);
+    assert_eq!(second.resources[1].label, "Current status");
+    assert_eq!(second.goal, activity.goal);
+    assert_eq!(second.state, ActivityState::Active);
+    assert!(matches!(service.add_resource(0, &activity.id, resource.clone()), Err(ActivityError::NotFound)));
+    service.transition(1000, &activity.id, ActivityState::Completed, Some("Confirmed".into())).unwrap();
+    assert!(service.add_resource(1000, &activity.id, resource).is_err());
+    let version: u32 = service.lock().unwrap().pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
+    assert_eq!(version, 1);
+}
+
+#[test]
+fn concurrent_object_attachments_do_not_lose_other_resource_updates() {
+    let directory = TestDirectory::new();
+    let path = directory.database();
+    let service = SqliteActivityService::open(&path).unwrap();
+    let activity = service.create(1000, draft()).unwrap();
+    let mut handles = Vec::new();
+    for index in 0..8 {
+        let path = path.clone();
+        let id = activity.id.clone();
+        handles.push(std::thread::spawn(move || {
+            SqliteActivityService::open(&path)?.add_resource(1000, &id, ActivityResource {
+                label: format!("Object {index}"),
+                reference: format!("app://kv/entry?id=key{index}"),
+            })
+        }));
+    }
+    for handle in handles {
+        handle.join().unwrap().unwrap();
+    }
+    assert_eq!(service.get(1000, &activity.id).unwrap().resources.len(), 9);
+}
+
+#[test]
+fn object_attachment_quota_failure_preserves_all_existing_resources() {
+    let service = SqliteActivityService::open_in_memory().unwrap();
+    let mut value = draft();
+    value.resources = (0..32).map(|index| ActivityResource {
+        label: format!("Object {index}"),
+        reference: format!("app://kv/entry?id=key{index}"),
+    }).collect();
+    let activity = service.create(1000, value).unwrap();
+    assert!(service.add_resource(1000, &activity.id, ActivityResource {
+        label: "Too many".into(),
+        reference: "app://kv/entry?id=extra".into(),
+    }).is_err());
+    assert_eq!(service.get(1000, &activity.id).unwrap(), activity);
+}
+
+#[test]
 fn persists_all_metadata_and_confirmation_across_reopen() {
     let directory = TestDirectory::new();
     let path = directory.database();

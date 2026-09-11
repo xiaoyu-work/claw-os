@@ -37,7 +37,7 @@ use super::wire::bounded::MAX_WAIT_MS;
 use super::wire::requests as body;
 use super::wire::{Fault, RequestId};
 use super::{
-    accessibility, activities, app_sessions, audio, backup, bluetooth, camera, clipboard, config_editor,
+    accessibility, activities, activity_objects, app_sessions, audio, backup, bluetooth, camera, clipboard, config_editor,
     containers, context, context_events, crash, credentials, desktop, display, event_center,
     firewall, hardware, journal as journal_ops, location, memory, network, notifications, packages,
     permissions, power, printer, scheduler, security, snapshots, storage, system_journal, systemd,
@@ -538,6 +538,26 @@ routes! {
             ("prompt", FieldRule::Size),
         ],
         run: |c| activities::run(c.params, c.client).await,
+    }
+    ActivityObjects {
+        name: "activity.objects",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Task),
+        body: body::ActivityObjects,
+        audit: &[("id", FieldRule::Token)],
+        run: |c| activity_objects::list(c.params, c.client),
+    }
+    ActivityObjectAttach {
+        name: "activity.object.attach",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Task),
+        body: body::ActivityObjectAttach,
+        audit: &[("id", FieldRule::Token), ("label", FieldRule::Size)],
+        run: |c| activity_objects::attach(c.params, c.client),
     }
     // -----------------------------------------------------------------
     // Agent tasks

@@ -97,9 +97,10 @@ be new user messages. **Free-text boundaries are not a new policy language or
 an authorization grant.** Existing capabilities, approvals, budgets, and
 worker isolation continue to govern every execution.
 
-Structured App objects, executable delegation policies, automatic
-event-triggered progression, and cross-device continuation are later roadmap
-steps, not implied guarantees of the first Activity increment.
+App-owned object references can now be attached and described through the same
+backend; see [App-owned objects](app-objects.md). Declaration inspection does
+not fetch object data. Executable delegation policies, automatic event-driven
+progression, effect previews, and cross-device continuation remain later steps.
 
 ## Broker contract
 
@@ -111,6 +112,8 @@ steps, not implied guarantees of the first Activity increment.
 | `activity.update` | Updated metadata; only supplied fields change |
 | `activity.transition` | Updated explicit lifecycle state |
 | `activity.run` | An ordinary submitted Agent job associated with the Activity |
+| `activity.objects` | Authenticated declaration metadata or explicit diagnostics for App references |
+| `activity.object.attach` | Atomically attached reference; no App execution or new authority |
 
 No request accepts an owner UID, capability set, or grant. Root does not receive
 an implicit cross-owner Activity view. Mutation routes use the existing

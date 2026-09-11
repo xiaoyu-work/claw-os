@@ -1,6 +1,30 @@
 use super::*;
 
 #[test]
+fn object_schema_requires_provenance_and_does_not_pollute_operation_schema() {
+    let _lock = crate::test_env::lock_env();
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("demo");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::write(dir.join("app.json"), json!({
+        "id":"demo","version":"1","name":{"en":"Demo"},
+        "objects":{"entry":{"label":{"en":"Entry"},"resolve":{"operation":"get","id_arg":"key"}}},
+        "operations":{"get":{"label":{"en":"Get"},"args":[{"name":"key","kind":"name","required":true}]}}
+    }).to_string()).unwrap();
+    std::fs::write(dir.join("main.py"), "raise AssertionError('schema must not execute')\n").unwrap();
+    let unverified = find(root.path(), "demo").unwrap();
+    assert!(verified_object_schema(&unverified).is_err());
+    crate::test_env::sign_test_package(&dir, crate::provenance::PackageKind::App, "demo");
+    let app = find_verified(root.path(), "demo").unwrap();
+    let schema = verified_object_schema(&app).unwrap();
+    assert_eq!(schema["entry"]["resolve"]["operation"], "get");
+    assert!(manifest_schema(&app.manifest).get("objects").is_none());
+    let help = crate::cli_help::show_app_schema("demo", &app).unwrap().unwrap();
+    let help: Value = serde_json::from_str(&help).unwrap();
+    assert_eq!(help["objects"], schema);
+}
+
+#[test]
 fn operation_schema_preserves_literal_and_bound_defaults() {
     let manifest = Manifest::from_json(
         r#"{

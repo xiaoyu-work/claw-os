@@ -20,6 +20,8 @@ claw-os-sdk/
 │   │   ├── budget_show.schema.json cos agent budget show reply
 │   │   ├── tool.schema.json        catalog tool invocation
 │   │   ├── tool_catalog.schema.json catalog tool list
+│   │   ├── object_ref.schema.json portable App object identifier
+│   │   ├── object-references.md    canonical URI and manifest semantics
 │   │   ├── contract.json           validators + stable error codes
 │   │   ├── app.schema.json         cos app <id> <verb>
 │   │   └── manifest.schema.json    app.json schema
@@ -36,6 +38,7 @@ claw-os-sdk/
 │       ├── envelope.rs          common envelope parse / error
 │       ├── ai.rs                stable chat + unsupported compatibility shims
 │       ├── tools.rs             tools::call / tools::catalog
+│       ├── objects.rs           pure App object reference helpers
 │       └── generated.rs         codegen output (envelope types)
 │
 ├── python/              Python SDK (pip package `claw-os-sdk`)
@@ -43,7 +46,7 @@ claw-os-sdk/
 │   ├── README.md
 │   └── src/claw_os_sdk/
 │       ├── __init__.py
-│       ├── ai.py, tools.py, serve.py, claw_os_session.py
+│       ├── ai.py, tools.py, objects.py, serve.py, claw_os_session.py
 │       └── generated.py
 │
 ├── node/                Node SDK (npm package `@claw-os/sdk`)
@@ -52,14 +55,14 @@ claw-os-sdk/
 │   └── src/
 │       ├── index.ts             top-level re-exports
 │       ├── transport.ts         subprocess transport
-│       ├── ai.ts, tools.ts
+│       ├── ai.ts, tools.ts, objects.ts
 │       └── generated.ts         codegen output
 │
 ├── go/                  Go SDK (module github.com/xiaoyu-work/claw-os/claw-os-sdk/go)
 │   ├── go.mod
 │   ├── README.md
 │   ├── transport.go
-│   ├── ai.go, tools.go
+│   ├── ai.go, tools.go, objects.go
 │   └── generated.go
 │
 └── README.md
@@ -104,6 +107,23 @@ session context are inherited from process ancestry** (kernel-spawned
 parent → app process → cos child). A pure-library binding can't claim
 "App X is making this call" without that lineage.
 
+## App object references
+
+Every binding exports the generated `ObjectRef` data contract and pure
+format/parse helpers for canonical references such as
+`app://notes/note?id=draft%2F1&revision=7`. References contain only an App ID,
+object type, opaque object ID, and optional revision. They carry no owner,
+grant, URI field, or data payload.
+
+These helpers do not invoke `cos`, discover Apps, read data, or assert
+existence, freshness, or permission. Terminal and desktop presentations share
+the same identity semantics and backend. Actual resolution belongs to normal,
+verified App operation dispatch, with the existing capability and audit gates.
+
+See [the normative object-reference contract](wire/v1/object-references.md)
+for byte limits, strict URI spelling, generated validation, shared golden
+vectors, and the optional manifest `objects` declaration.
+
 ## AI support
 
 Across Rust, Python, Node, and Go, the stable hand-written AI surface is
@@ -128,6 +148,7 @@ Codegen handles the **boring** part:
 | Request / reply struct types | The transport (how to spawn `cos`) |
 | Error code enum   | The high-level wrappers (`ai.chat("…")`)    |
 | Manifest schema bindings | Examples, docs, language-idiomatic helpers |
+| `ObjectRef` and structural validators | Pure canonical URI helpers and semantic bounds |
 
 Run codegen with:
 

@@ -144,10 +144,32 @@ class Manifest(_ManifestRequired, total=False):
     runtime: str
     entry: str
     operations: Dict[str, Any]
+    objects: Dict[str, Any]
     ai: "Aipolicy"
     session: "Session"
     desktop: "Desktop"
     dependencies: Dict[str, Any]
+
+class _ObjecttypeRequired(TypedDict):
+    label: "Localizedtext"
+    resolve: "Objectresolver"
+
+class Objecttype(_ObjecttypeRequired, total=False):
+    """objectType.
+    """
+    summary: "Localizedtext"
+
+class _ObjectresolverRequired(TypedDict):
+    operation: str
+    id_arg: str
+
+class Objectresolver(_ObjectresolverRequired, total=False):
+    """objectResolver.
+
+    The kernel verifies operation and argument bindings. Resolution always uses
+    normal App operation dispatch, capabilities, approvals, and audit.
+    """
+    revision_arg: str
 
 class Localizedtext(TypedDict):
     """localizedText.
@@ -321,6 +343,21 @@ class Desktop(TypedDict, total=False):
     mime_types: List[str]
     single_instance: bool
     panel_applet: bool
+
+class _ObjectRefRequired(TypedDict):
+    app_id: str
+    object_type: str
+    object_id: str
+
+class ObjectRef(_ObjectRefRequired, total=False):
+    """App object reference.
+
+    A portable identifier for App-owned data, not authority, a payload, or proof
+    of existence or readability. Component, UTF-8, and canonical URI semantics
+    are specified in object-references.md and enforced by the public objects
+    helpers.
+    """
+    revision: str
 
 class _PermsRequired(TypedDict):
     decision: str
@@ -704,6 +741,12 @@ _WIRE_SCHEMA_BUDGET_SHOW: Dict[str, Any] = decode_wire_json(r'''{"$id":"https://
 def validate_budget_show(value: Any) -> None:
     """Validate a value against wire/v1/budget_show.schema.json."""
     _validate_wire_schema(_WIRE_SCHEMA_BUDGET_SHOW, _WIRE_SCHEMA_BUDGET_SHOW, value, "BudgetShow", "$")
+
+_WIRE_SCHEMA_OBJECT_REF: Dict[str, Any] = decode_wire_json(r'''{"$id":"https://claw-os.dev/wire/v1/object_ref.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"description":"A portable identifier for App-owned data, not authority, a payload, or proof of existence or readability. Component, UTF-8, and canonical URI semantics are specified in object-references.md and enforced by the public objects helpers.","properties":{"app_id":{"description":"App identifier; lowercase ASCII component, at most 128 UTF-8 bytes.","type":"string"},"object_id":{"description":"Opaque, nonempty UTF-8 identifier, at most 1024 bytes, without Unicode control characters. Never trimmed or normalized.","type":"string"},"object_type":{"description":"Object type declared by the App; lowercase ASCII component, at most 64 UTF-8 bytes.","type":"string"},"revision":{"description":"Optional opaque, nonempty UTF-8 revision, at most 128 bytes, without Unicode control characters. Absence differs from an empty string.","type":"string","x-go-type":"*string"}},"required":["app_id","object_type","object_id"],"title":"App object reference","type":"object"}''')
+
+def validate_object_ref(value: Any) -> None:
+    """Validate a value against wire/v1/object_ref.schema.json."""
+    _validate_wire_schema(_WIRE_SCHEMA_OBJECT_REF, _WIRE_SCHEMA_OBJECT_REF, value, "ObjectRef", "$")
 
 _WIRE_SCHEMA_TOOL_CATALOG: Dict[str, Any] = decode_wire_json(r'''{"$defs":{"WireCatalogEntry":{"additionalProperties":true,"properties":{"args_schema":{"additionalProperties":true,"type":"object"},"name":{"type":"string"},"returns_schema":{"additionalProperties":true,"type":"object"},"stability":{"enum":["stable","experimental"],"type":"string"},"summary":{"type":"string"},"verb":{"type":"string"}},"required":["name","summary","verb","stability","args_schema","returns_schema"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/tool_catalog.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Shape returned by `cos ai tools`.","properties":{"tools":{"items":{"$ref":"#/$defs/WireCatalogEntry"},"type":"array"}},"required":["tools"],"title":"Catalog tool list reply","type":"object"}''')
 

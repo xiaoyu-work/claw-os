@@ -9,7 +9,8 @@ use serde_json::{json, Value};
 
 use crate::clawd::routes::Command;
 use crate::clawd::wire::requests::{
-    ActivityCreate, ActivityGet, ActivityList, ActivityRun, ActivityTransition, ActivityUpdate,
+    ActivityCreate, ActivityGet, ActivityList, ActivityObjectAttach, ActivityObjects, ActivityRun,
+    ActivityTransition, ActivityUpdate, NoBody,
 };
 
 use super::clawd::ApiError;
@@ -74,6 +75,29 @@ pub async fn run(
     request(
         Command::ActivityRun,
         with_id::<ActivityRun>(id, json_body(body)?)?,
+    )
+    .await
+}
+
+pub async fn objects(
+    Path(id): Path<String>,
+    query: Result<Query<NoBody>, QueryRejection>,
+) -> Result<Json<Value>, ApiError> {
+    query.map_err(|error| bad_request(error.body_text()))?;
+    request(
+        Command::ActivityObjects,
+        with_id::<ActivityObjects>(id, json!({}))?,
+    )
+    .await
+}
+
+pub async fn attach_object(
+    Path(id): Path<String>,
+    body: Result<Json<Value>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    request(
+        Command::ActivityObjectAttach,
+        with_id::<ActivityObjectAttach>(id, json_body(body)?)?,
     )
     .await
 }

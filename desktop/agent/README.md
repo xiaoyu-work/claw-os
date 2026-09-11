@@ -162,6 +162,31 @@ success; approval-queue failures are reported separately from the goal detail.
 Reconnect re-discovers the authenticated bridge without replaying a mutation.
 See the shared [Activity contract](../../docs/activities.md).
 
+### App object references
+
+**Attach App object** accepts a label, App ID, object type, opaque object ID,
+and optional revision while the Activity is active or paused. The desktop
+sends those components to `activity.object.attach`; only the shared broker
+verifies the signed declaration and formats/upserts the canonical reference
+in the existing resources list. Ordinary file/URL resources and their editor
+are unchanged. There is no new desktop persistence or Activity metadata shape.
+
+**Describe App objects** calls `activity.objects` without executing an App or
+reading object data. `Declared` is displayed as **Verified declaration only**:
+it authenticates the manifest's object-type declaration, not object existence,
+freshness, readability or permission to access it. Unavailable and malformed
+references retain their diagnostics. Completed/cancelled Activities can still
+be described, but must be reopened before attachment.
+Original resource text and the catalogue's canonical reference are displayed
+separately when they differ; the desktop does not interpret URI equivalence.
+
+Descriptions show the normal App operation and its arguments as a JSON argv
+array. **Copy operation details** copies labeled fields and JSON, not a shell
+command; there is no execute/open action or automatic object resolution. Lookups are
+explicit, with metadata and descriptions refetched after attachment or changes
+to already-inspected resources. Generation checks reject stale responses, and
+failed attachments preserve the form without inventing a local resource.
+
 ## Endpoint discovery
 
 The bridge binds an ephemeral port when `COS_AGENT_BRIDGE_PORT` is
@@ -210,6 +235,8 @@ the prior non-disruptive `start` behavior.
 | `GET /api/activities?state=…&limit=…` | `ActivityListQuery` → `ActivityListResponse`; `activity.list` |
 | `POST /api/activities` | `ActivityCreateRequest` → `ActivityView`; `activity.create` |
 | `GET /api/activities/:id` | `ActivityDetailResponse`; `activity.get` plus associated `permission.pending` projections |
+| `GET /api/activities/:id/objects` | `ActivityObjectsResponse`; declaration-only `activity.objects` |
+| `POST /api/activities/:id/objects` | `ActivityObjectAttachRequest` → unchanged `ActivityView`; `activity.object.attach` |
 | `PATCH /api/activities/:id` | `ActivityUpdateRequest` → `ActivityView`; `activity.update` |
 | `POST /api/activities/:id/transition` | `ActivityTransitionRequest` → `ActivityView`; `activity.transition` |
 | `POST /api/activities/:id/run` | `ActivityRunRequest` → `ActivityWorkResponse`; durable `activity.run` |

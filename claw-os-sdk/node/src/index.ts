@@ -2,7 +2,7 @@
 //
 // This package is the AI-facing surface a third-party Linux developer
 // uses when their Node app touches the kernel's AI features or runs as
-// a desktop GUI. Every call is a thin client over wire protocol v1: it
+// a desktop GUI. Transport calls are thin clients over wire protocol v1: each
 // shells out to the `cos` binary, which enforces capabilities, budget,
 // safety, and audit. See ../README.md and ../wire/v1/README.md.
 //
@@ -22,6 +22,7 @@
 export * as ai from "./ai";
 export * as tools from "./tools";
 export * as gui from "./gui";
+export * as objects from "./objects";
 export * as transport from "./transport";
 export * from "./generated";
 

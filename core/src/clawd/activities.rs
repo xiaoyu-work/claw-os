@@ -145,7 +145,7 @@ pub async fn run(params: Value, client: &ClientIdentity) -> Result<Value, Broker
         .map_err(BrokerError::from)
 }
 
-fn owner(client: &ClientIdentity) -> Result<u32, BrokerError> {
+pub(super) fn owner(client: &ClientIdentity) -> Result<u32, BrokerError> {
     client.require_uid().map_err(BrokerError::authorization)
 }
 
@@ -159,17 +159,17 @@ fn list_limit(limit: Option<u64>) -> Result<usize, BrokerError> {
     }
 }
 
-fn decode<T: DeserializeOwned>(params: Value) -> Result<T, BrokerError> {
+pub(super) fn decode<T: DeserializeOwned>(params: Value) -> Result<T, BrokerError> {
     serde_json::from_value(params)
         .map_err(|error| BrokerError::execution(format!("invalid Activity request: {error}")))
 }
 
-fn encode(value: impl serde::Serialize) -> Result<Value, BrokerError> {
+pub(super) fn encode(value: impl serde::Serialize) -> Result<Value, BrokerError> {
     serde_json::to_value(value)
         .map_err(|error| BrokerError::unavailable(format!("encode Activity response: {error}")))
 }
 
-fn service_error(error: ActivityError) -> BrokerError {
+pub(super) fn service_error(error: ActivityError) -> BrokerError {
     let message = error.to_string();
     match error {
         ActivityError::Invalid(_) => BrokerError::execution(message).classified("activity_invalid"),

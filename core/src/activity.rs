@@ -20,6 +20,9 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
 }
 
 fn parse(command: &str, args: &[String]) -> Result<(Command, Value), String> {
+    if command == "attach-object" {
+        return parse_object_attachment(args);
+    }
     let mut params = json!({});
     let route = match command {
         "create" => Command::ActivityCreate,
@@ -27,6 +30,7 @@ fn parse(command: &str, args: &[String]) -> Result<(Command, Value), String> {
         "show" => Command::ActivityGet,
         "update" => Command::ActivityUpdate,
         "run" => Command::ActivityRun,
+        "objects" => Command::ActivityObjects,
         "pause" | "resume" | "complete" | "cancel" => Command::ActivityTransition,
         other => {
             return Err(format!(
@@ -176,6 +180,44 @@ fn set(params: &mut Value, key: &str, value: Value) -> Result<(), String> {
     }
     params[key] = value;
     Ok(())
+}
+
+fn parse_object_attachment(args: &[String]) -> Result<(Command, Value), String> {
+    let id = args.first().ok_or("attach-object requires an Activity ID")?;
+    crate::activities::validate_id(id).map_err(|error| error.to_string())?;
+    let mut params = json!({"id": id, "object": {}});
+    let mut index = 1;
+    while index < args.len() {
+        let (flag, inline) = match args[index].split_once('=') {
+            Some((flag, value)) => (flag, Some(value)),
+            None => (args[index].as_str(), None),
+        };
+        let key = match flag {
+            "--label" => "label",
+            "--app" => "app_id",
+            "--type" => "object_type",
+            "--object-id" => "object_id",
+            "--revision" => "revision",
+            _ => return Err(format!("unknown attach-object flag: {flag}")),
+        };
+        let value = match inline {
+            Some(value) => value,
+            None => args
+                .get(index + 1)
+                .map(String::as_str)
+                .ok_or_else(|| format!("{flag} requires a value"))?,
+        };
+        if key == "label" {
+            set(&mut params, key, json!(value))?;
+        } else {
+            set(&mut params["object"], key, json!(value))?;
+        }
+        index += if inline.is_some() { 1 } else { 2 };
+    }
+    let route = Command::ActivityObjectAttach;
+    let params = (route.route().decode)(params)
+        .map_err(|error| format!("invalid object attachment: {}", error.message()))?;
+    Ok((route, params))
 }
 
 #[cfg(test)]

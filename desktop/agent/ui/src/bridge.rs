@@ -11,6 +11,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow};
 pub use cos_agent_protocol::{
     ActivityCreateRequest, ActivityDetailResponse, ActivityListQuery, ActivityListResponse,
+    ActivityObjectAttachRequest, ActivityObjectsResponse,
     ActivityRunRequest, ActivityState, ActivityTransitionRequest, ActivityUpdateRequest,
     ActivityView, ActivityWorkResponse, BridgeEndpoint, CancelResponse, ChatRequest, ErrorEnvelope,
     HistoryMessage, ModelsResponse, SessionSummary, StreamEvent, ToolCallView, ToolResultView,
@@ -418,6 +419,31 @@ pub async fn fetch_activities(
 pub async fn fetch_activity(endpoint: BridgeEndpoint, id: &str) -> Result<ActivityDetailResponse> {
     let (request, selected) = activity_request(&endpoint, reqwest::Method::GET, &["activities", id])?;
     activity_response(request, selected).await
+}
+
+pub async fn fetch_activity_objects(
+    endpoint: BridgeEndpoint,
+    id: &str,
+) -> Result<ActivityObjectsResponse> {
+    let (request, selected) = activity_request(
+        &endpoint,
+        reqwest::Method::GET,
+        &["activities", id, "objects"],
+    )?;
+    activity_response(request, selected).await
+}
+
+pub async fn attach_activity_object(
+    endpoint: BridgeEndpoint,
+    id: &str,
+    body: ActivityObjectAttachRequest,
+) -> Result<ActivityView> {
+    let (request, selected) = activity_request(
+        &endpoint,
+        reqwest::Method::POST,
+        &["activities", id, "objects"],
+    )?;
+    activity_response(request.json(&body), selected).await
 }
 
 pub async fn create_activity(

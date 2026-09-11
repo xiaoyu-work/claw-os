@@ -84,7 +84,7 @@ def run(command, args):
         if command == "set":
             if len(args) < 2:
                 return {"error": "usage: kv set <key> <value>"}
-            key = args[0]
+            key = str(args[0])
             value = " ".join(args[1:])
             policy.require("data.kv.write", name=key)
             data = _load()
@@ -95,7 +95,7 @@ def run(command, args):
         elif command == "get":
             if len(args) < 1:
                 return {"error": "usage: kv get <key>"}
-            key = args[0]
+            key = str(args[0])
             policy.require("data.kv.read", name=key)
             data = _load()
             if key not in data:
@@ -105,7 +105,7 @@ def run(command, args):
         elif command == "del":
             if len(args) < 1:
                 return {"error": "usage: kv del <key>"}
-            key = args[0]
+            key = str(args[0])
             policy.require("data.kv.delete", name=key)
             data = _load()
             if key not in data:
@@ -116,7 +116,7 @@ def run(command, args):
 
         elif command == "list":
             policy.require("data.kv.read", wild=True)
-            pattern = args[0] if args else "*"
+            pattern = str(args[0]) if args else "*"
             data = _load()
             keys = sorted(k for k in data if fnmatch.fnmatch(k, pattern))
             return {"pattern": pattern, "keys": keys}

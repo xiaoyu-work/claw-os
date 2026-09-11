@@ -80,3 +80,8 @@ export function useActivity(id: string) {
   const read = useCallback((signal: AbortSignal) => activityApi.get(id, signal), [id]);
   return useActivityView(read, detailInterval);
 }
+
+export function useActivityObjects(id: string) {
+  const read = useCallback((signal: AbortSignal) => activityApi.objects(id, signal), [id]);
+  return useActivityView(read, listInterval);
+}

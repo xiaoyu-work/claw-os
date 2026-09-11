@@ -40,6 +40,10 @@ pub fn build_app(state: AppState) -> Router {
             post(routes::activities::transition),
         )
         .route("/api/activities/{id}/run", post(routes::activities::run))
+        .route(
+            "/api/activities/{id}/objects",
+            get(routes::activities::objects).post(routes::activities::attach_object),
+        )
         .route("/api/sessions", get(routes::sessions::list))
         .route("/api/sessions/{id}", get(routes::sessions::detail))
         .route("/api/sessions/{id}/history", get(routes::sessions::history))

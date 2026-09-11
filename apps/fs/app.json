@@ -11,6 +11,13 @@
   "icon": "📁",
   "runtime": "python",
   "entry": "main.py",
+  "objects": {
+    "file": {
+      "label": { "en": "File", "zh-CN": "文件" },
+      "summary": { "en": "Metadata for the filesystem object at an absolute path. Renames require updating the reference." },
+      "resolve": { "operation": "stat", "id_arg": "path" }
+    }
+  },
   "operations": {
     "ls": {
       "label": {

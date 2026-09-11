@@ -32,6 +32,7 @@ def handle_summarize(args):
 | `claw_os_sdk.ai`        | Stable `chat` / `chat-untrusted` access through `cos ai chat`.          |
 | `claw_os_sdk.tools`     | `cos ai tool <name>` — fulfil catalog tools the model proposed.        |
 | `claw_os_sdk.gui`       | Desktop GUI bootstrap and kernel-provided launch context.              |
+| `claw_os_sdk.objects`   | Pure canonical App object identifiers, without discovery or dispatch. |
 | `claw_os_sdk.serve`     | `App.run(...)` — boilerplate for an app's main loop.                   |
 | `claw_os_sdk.claw_os_session` | Read / observe `COS_SESSION` from inside an app.                 |
 | `claw_os_sdk.generated` | TypedDicts generated from `wire/v1/*.schema.json`.                     |
@@ -41,6 +42,31 @@ The package does not export `policy`. Capability gating
 OS-internal **`cos_runtime`** package, which is unavailable to
 third-party SDK consumers. The `cos` kernel performs capability checks
 when public SDK operations run.
+
+## App object references
+
+```python
+from claw_os_sdk import objects
+from claw_os_sdk.generated import ObjectRef
+
+reference: ObjectRef = {
+    "app_id": "notes",
+    "object_type": "note",
+    "object_id": "draft/1",
+}
+uri = objects.format_reference(reference)
+assert uri == "app://notes/note?id=draft%2F1"
+assert objects.parse_reference(uri) == reference
+```
+
+`objects.ObjectRefError` is a `ValueError`. These pure helpers enforce the
+generated structural contract plus component/UTF-8 bounds and canonical
+spelling. Omit an absent `revision`; do not supply `None` or an empty string.
+They never trim opaque IDs, discover Apps, access files, or invoke an
+operation. A reference does not assert existence, freshness, or permission.
+
+See [the shared contract](../wire/v1/object-references.md) for byte limits and
+the optional App manifest `objects` resolver declaration.
 
 ## AI support
 

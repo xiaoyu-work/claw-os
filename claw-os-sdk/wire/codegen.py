@@ -1900,6 +1900,8 @@ def main() -> int:
         print("generated wire bindings are up to date")
         return 0
     for path, content in outputs.items():
+        if path.exists() and path.read_text(encoding="utf-8") == content:
+            continue
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
         print(f"wrote {path.relative_to(ROOT.parent)}")

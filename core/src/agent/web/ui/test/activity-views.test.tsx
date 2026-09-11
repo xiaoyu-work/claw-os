@@ -3,8 +3,8 @@ import { JSDOM } from "jsdom";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
-import { useActivity, useActivities } from "../src/hooks/use-activities";
-import { activityApi, type ActivityDetail, type ActivityState } from "../src/lib/activities";
+import { useActivity, useActivities, useActivityObjects } from "../src/hooks/use-activities";
+import { activityApi, type ActivityDetail, type ActivityObjects, type ActivityState } from "../src/lib/activities";
 
 function detail(id: string): ActivityDetail {
   return {
@@ -61,6 +61,29 @@ function ListView({ state }: { state: ActivityState }) {
   const view = useActivities(state);
   return <div>{view.data?.map((item) => item.title).join(",") ?? "Loading"}{view.error}</div>;
 }
+
+function ObjectsView({ id }: { id: string }) {
+  const view = useActivityObjects(id);
+  return <div>{view.data?.activity_id ?? "Loading"}{view.error}</div>;
+}
+
+test("an old object description response cannot replace the selected Activity's metadata", async () => {
+  const first = deferred<ActivityObjects>();
+  let previousSignal: AbortSignal | undefined;
+  spyOn(activityApi, "objects").mockImplementation((id, signal) => {
+    if (id === "first") {
+      previousSignal = signal;
+      return first.promise;
+    }
+    return Promise.resolve({ schema: 1, activity_id: id, objects: [] });
+  });
+  await act(async () => root.render(<ObjectsView id="first" />));
+  await act(async () => root.render(<ObjectsView id="second" />));
+  expect(previousSignal?.aborted).toBe(true);
+  expect(container.textContent).toBe("second");
+  await act(async () => first.resolve({ schema: 1, activity_id: "first", objects: [] }));
+  expect(container.textContent).toBe("second");
+});
 
 test("an older Activity response cannot overwrite a newly selected Activity", async () => {
   const first = deferred<ActivityDetail>();

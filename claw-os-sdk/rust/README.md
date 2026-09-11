@@ -10,6 +10,7 @@ The official Rust SDK for Claw OS. Use this crate to talk to the
 | `ai`        | Stable `chat` / `chat-untrusted` access through `cos ai chat`.                  |
 | `tools`     | `cos ai tool <name>` — fulfil catalog tools the model proposed.                 |
 | `gui`       | Desktop GUI bootstrap and kernel-provided launch context.                       |
+| `objects`   | Pure, canonical references to App-owned objects; no discovery or dispatch.      |
 | `envelope`  | Wire-v1 envelope adapter; SDKs handle the migration to native v1 transparently. |
 | `generated` | Typed structs generated from `wire/v1/*.schema.json`.                          |
 
@@ -43,6 +44,35 @@ fn summarise_email(body: &str) -> Result<String, Box<dyn std::error::Error>> {
     Ok(response.text)
 }
 ```
+
+## App object references
+
+```rust
+use claw_os_sdk::{generated::ObjectRef, objects, ObjectRefError};
+
+fn object_reference_example() -> Result<(), ObjectRefError> {
+    let reference = ObjectRef {
+        app_id: "notes".into(),
+        object_type: "note".into(),
+        object_id: "draft/1".into(),
+        revision: None,
+    };
+    objects::validate(&reference)?;
+    let uri = objects::format_reference(&reference)?;
+    assert_eq!(uri, "app://notes/note?id=draft%2F1");
+    assert_eq!(objects::parse_reference(&uri)?.object_id, "draft/1");
+    Ok(())
+}
+```
+
+The helpers are pure and use the generated type. They preserve opaque
+identifiers, reject noncanonical URIs, and return `ObjectRefError` without
+opening storage or invoking an App. A reference is not permission or proof
+that data exists. When decoding JSON, run `generated::validate_object_ref`
+before deserializing into `ObjectRef`.
+
+See [the shared contract](../wire/v1/object-references.md) for limits and the
+optional App manifest `objects` resolver declaration.
 
 ## AI support
 

@@ -101,6 +101,7 @@ semver = "1"
 # and trait definitions are reusable from claw-semantic and any other
 # future consumer.
 claw-embed = { path = "../crates/claw-embed" }
+claw-os-sdk = { path = "../claw-os-sdk/rust" }
 
 # `cos agent serve` — built-in web UI for headless / WSL setups. axum +
 # tower-http give us SSE streaming and a minimal HTTP surface without

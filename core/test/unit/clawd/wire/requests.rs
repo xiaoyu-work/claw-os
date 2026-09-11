@@ -2,6 +2,32 @@ use super::*;
 use serde_json::json;
 
 #[test]
+fn activity_object_requests_are_bounded_closed_references_not_authority() {
+    let valid = json!({
+        "id":"00000000-0000-4000-8000-000000000001",
+        "label":"Status",
+        "object":{"app_id":"kv","object_type":"entry","object_id":"release.status"}
+    });
+    assert!(serde_json::from_value::<ActivityObjectAttach>(valid.clone()).is_ok());
+    for field in ["owner_uid", "grant", "operation"] {
+        let mut forged = valid.clone();
+        forged["object"][field] = json!("unexpected");
+        assert!(serde_json::from_value::<ActivityObjectAttach>(forged).is_err());
+    }
+    for id in ["".to_string(), "x".repeat(1025), "line\nbreak".to_string()] {
+        let mut invalid = valid.clone();
+        invalid["object"]["object_id"] = json!(id);
+        assert!(serde_json::from_value::<ActivityObjectAttach>(invalid).is_err());
+    }
+    let mut bad_app = valid;
+    bad_app["object"]["app_id"] = json!("../other");
+    assert!(serde_json::from_value::<ActivityObjectAttach>(bad_app).is_err());
+    assert!(serde_json::from_value::<ActivityObjects>(
+        json!({"id":"activity-id","owner_uid":0})
+    ).is_err());
+}
+
+#[test]
 fn activity_requests_are_closed_bounded_and_never_choose_an_owner() {
     let create = json!({
         "title": "Release v2",

@@ -27,6 +27,10 @@ pub enum Command {
     ActivityTransition,
     #[serde(rename = "activity.run")]
     ActivityRun,
+    #[serde(rename = "activity.objects")]
+    ActivityObjects,
+    #[serde(rename = "activity.object.attach")]
+    ActivityObjectAttach,
     #[serde(rename = "task.submit")]
     TaskSubmit,
     #[serde(rename = "task.get")]
@@ -52,13 +56,15 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 19] = [
         Self::ActivityCreate,
         Self::ActivityList,
         Self::ActivityGet,
         Self::ActivityUpdate,
         Self::ActivityTransition,
         Self::ActivityRun,
+        Self::ActivityObjects,
+        Self::ActivityObjectAttach,
         Self::TaskSubmit,
         Self::TaskGet,
         Self::TaskRetry,
@@ -80,6 +86,8 @@ impl Command {
             Self::ActivityUpdate => "activity.update",
             Self::ActivityTransition => "activity.transition",
             Self::ActivityRun => "activity.run",
+            Self::ActivityObjects => "activity.objects",
+            Self::ActivityObjectAttach => "activity.object.attach",
             Self::TaskSubmit => "task.submit",
             Self::TaskGet => "task.get",
             Self::TaskRetry => "task.retry",

@@ -240,6 +240,15 @@ pub trait ActivityService: Send + Sync {
         patch: ActivityPatch,
     ) -> Result<Activity, ActivityError>;
 
+    /// Atomically append a display reference, or update its label if already
+    /// attached. This does not resolve the resource or grant access to it.
+    fn add_resource(
+        &self,
+        owner_uid: u32,
+        id: &str,
+        resource: ActivityResource,
+    ) -> Result<Activity, ActivityError>;
+
     /// Completion requires a user confirmation note. Other transitions reject
     /// notes, and reopening clears the previous completion confirmation.
     /// State gates future work; it never cancels an existing worker.
@@ -340,13 +349,14 @@ fn validate_text(
 }
 
 fn normalize_resources(resources: Vec<ActivityResource>) -> Vec<ActivityResource> {
-    resources
-        .into_iter()
-        .map(|resource| ActivityResource {
-            label: resource.label.trim().to_string(),
-            reference: resource.reference.trim().to_string(),
-        })
-        .collect()
+    resources.into_iter().map(normalize_resource).collect()
+}
+
+fn normalize_resource(resource: ActivityResource) -> ActivityResource {
+    ActivityResource {
+        label: resource.label.trim().to_string(),
+        reference: resource.reference.trim().to_string(),
+    }
 }
 
 fn normalize_completion_note(

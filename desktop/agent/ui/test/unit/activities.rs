@@ -427,6 +427,393 @@ fn switching_to_chat_preserves_unsent_forms_but_does_not_replay_pending_saves() 
     ));
 }
 
+fn object_response(id: &str) -> ActivityObjectsResponse {
+    use cos_agent_protocol::{ActivityObjectResourceView, AppObjectInvocation, AppObjectReference};
+    ActivityObjectsResponse {
+        activity_id: id.into(),
+        objects: vec![ActivityObjectResourceView {
+            label: "Release status".into(),
+            reference: "app://kv/entry?id=release.status".into(),
+            status: ActivityObjectStatus::Declared,
+            description: Some(AppObjectDescription {
+                object: AppObjectReference {
+                    app_id: "kv".into(),
+                    object_type: "entry".into(),
+                    object_id: "release.status".into(),
+                    revision: None,
+                },
+                reference: "app://kv/entry?id=release.status".into(),
+                app_name: "Key/value".into(),
+                app_version: "1".into(),
+                object_label: "Entry".into(),
+                object_summary: "Key/value entry".into(),
+                invocation: AppObjectInvocation {
+                    app_id: "kv".into(),
+                    operation: "get".into(),
+                    args: vec!["--key".into(), "release.status".into()],
+                },
+            }),
+            error: None,
+        }],
+    }
+}
+
+fn fill_object_form(state: &mut Activities) {
+    state.update(Message::NewObject, true);
+    for (field, value) in [
+        (ObjectField::Label, "Release status"),
+        (ObjectField::AppId, "kv"),
+        (ObjectField::ObjectType, "entry"),
+        (ObjectField::ObjectId, "release.status"),
+    ] {
+        state.update(Message::ObjectField(field, value.into()), true);
+    }
+}
+
+#[test]
+fn object_attachment_uses_typed_opaque_components_and_preserves_failed_forms() {
+    let mut state = ready(ActivityState::Paused);
+    fill_object_form(&mut state);
+    state.update(
+        Message::ObjectField(ObjectField::ObjectId, " a/b?x=1&y=2 ".into()),
+        true,
+    );
+    state.update(
+        Message::ObjectField(ObjectField::Revision, "version/#? ".into()),
+        true,
+    );
+    assert!(!state.should_poll());
+    let request = state.update(Message::AttachObject, true).unwrap();
+    let Action::AttachObject(id, body) = &request.action else {
+        panic!("expected attachment")
+    };
+    assert_eq!(id, "activity-1");
+    assert_eq!(body.object.object_id, " a/b?x=1&y=2 ");
+    assert_eq!(body.object.revision.as_deref(), Some("version/#? "));
+    let encoded = serde_json::to_value(body).unwrap();
+    assert!(encoded.get("owner_uid").is_none());
+    assert!(encoded.get("reference").is_none());
+    assert_eq!(
+        state.detail.as_ref().unwrap().activity.resources[0].reference,
+        "notes.txt"
+    );
+    assert!(state.update(Message::AttachObject, true).is_none());
+    finish(&mut state, request, Err("App signature was revoked".into()));
+    assert_eq!(state.error.as_deref(), Some("App signature was revoked"));
+    assert_eq!(
+        state.object_form.as_ref().unwrap().object.object_id,
+        " a/b?x=1&y=2 "
+    );
+    assert_eq!(state.detail.as_ref().unwrap().activity.resources.len(), 1);
+}
+
+#[test]
+fn object_attachment_refetches_metadata_and_descriptions_without_local_upsert() {
+    for activity_state in [ActivityState::Active, ActivityState::Paused] {
+        let mut state = ready(activity_state);
+        state.completion_note = "Unsent confirmation".into();
+        fill_object_form(&mut state);
+        let request = state.update(Message::AttachObject, true).unwrap();
+        assert_eq!(state.detail.as_ref().unwrap().activity.resources.len(), 1);
+        let mut fetched = detail("activity-1", activity_state);
+        fetched.activity.resources.push(ActivityResource {
+            label: "Canonical label".into(),
+            reference: "app://kv/entry?id=release.status".into(),
+        });
+        let refresh = finish(
+            &mut state,
+            request,
+            Ok(Response::Saved(Box::new(fetched.activity.clone()))),
+        )
+        .unwrap();
+        assert!(matches!(refresh.action, Action::Get(_)));
+        assert!(state.object_form.is_none());
+        assert!(state.detail.is_none());
+        let describe =
+            finish(&mut state, refresh, Ok(Response::Detail(Box::new(fetched)))).unwrap();
+        assert!(matches!(describe.action, Action::Objects(_)));
+        assert_eq!(
+            state.detail.as_ref().unwrap().activity.resources[0].reference,
+            "notes.txt"
+        );
+        assert_eq!(
+            state.detail.as_ref().unwrap().activity.resources[1].label,
+            "Canonical label"
+        );
+        assert!(
+            finish(
+                &mut state,
+                describe,
+                Ok(Response::Objects(object_response("activity-1")))
+            )
+            .is_none()
+        );
+        assert_eq!(
+            state.detail.as_ref().unwrap().activity.state,
+            activity_state
+        );
+        assert_eq!(state.completion_note, "Unsent confirmation");
+    }
+}
+
+#[test]
+fn object_attachment_preserves_terminal_rules_and_does_not_submit_empty_fields() {
+    let mut state = ready(ActivityState::Active);
+    state.update(Message::NewObject, true);
+    assert!(state.update(Message::AttachObject, true).is_none());
+    assert!(state.error.is_some());
+    for terminal in [ActivityState::Completed, ActivityState::Cancelled] {
+        let mut state = ready(terminal);
+        state.update(Message::NewObject, true);
+        assert!(state.object_form.is_none());
+        assert!(state.error.is_some());
+        state.object_form = Some(ActivityObjectAttachRequest::default());
+        assert!(state.update(Message::AttachObject, true).is_none());
+        state.object_form = None;
+        let request = state.update(Message::DescribeObjects, true).unwrap();
+        assert!(
+            matches!(request.action, Action::Objects(_)),
+            "terminal goals remain readable"
+        );
+    }
+}
+
+#[test]
+fn object_declaration_is_read_only_and_stale_errors_cannot_replace_new_details() {
+    let mut state = ready(ActivityState::Active);
+    let request = state.update(Message::DescribeObjects, true).unwrap();
+    let old = request.clone();
+    assert!(
+        finish(
+            &mut state,
+            request,
+            Ok(Response::Objects(object_response("activity-1")))
+        )
+        .is_none()
+    );
+    assert_eq!(
+        state.detail.as_ref().unwrap().activity.state,
+        ActivityState::Active
+    );
+    assert!(
+        state
+            .detail
+            .as_ref()
+            .unwrap()
+            .activity
+            .completion_note
+            .is_none()
+    );
+    let next = state
+        .update(Message::Open("activity-2".into()), true)
+        .unwrap();
+    finish(&mut state, old.clone(), Err("stale signature error".into()));
+    assert!(state.error.is_none());
+    assert!(state.objects.is_none());
+    finish(
+        &mut state,
+        next,
+        Ok(Response::Detail(Box::new(detail(
+            "activity-2",
+            ActivityState::Active,
+        )))),
+    );
+    finish(
+        &mut state,
+        old,
+        Ok(Response::Objects(object_response("activity-1"))),
+    );
+    assert!(state.objects.is_none());
+    assert_eq!(state.detail.as_ref().unwrap().activity.id, "activity-2");
+}
+
+#[test]
+fn object_identity_mismatches_and_lookup_failures_remain_visible() {
+    let mut state = ready(ActivityState::Active);
+    let request = state.update(Message::DescribeObjects, true).unwrap();
+    finish(
+        &mut state,
+        request,
+        Ok(Response::Objects(object_response("other-activity"))),
+    );
+    assert!(state.error.is_some());
+    assert!(state.objects.is_none());
+    let request = state.update(Message::DescribeObjects, true).unwrap();
+    finish(
+        &mut state,
+        request,
+        Err("declaration service unavailable".into()),
+    );
+    assert_eq!(
+        state.error.as_deref(),
+        Some("declaration service unavailable")
+    );
+    assert!(state.objects.is_none());
+    assert!(!state.should_poll());
+}
+
+#[test]
+fn object_descriptions_are_invalidated_when_ordinary_resource_edits_change_references() {
+    let mut state = ready(ActivityState::Active);
+    state.objects = Some(object_response("activity-1"));
+    let request = state.update(Message::Refresh, true).unwrap();
+    let mut fetched = detail("activity-1", ActivityState::Active);
+    fetched.activity.resources.clear();
+    let next = finish(&mut state, request, Ok(Response::Detail(Box::new(fetched)))).unwrap();
+    assert!(state.objects.is_none());
+    assert!(matches!(next.action, Action::Objects(_)));
+}
+
+#[test]
+fn object_forms_survive_navigation_but_pending_attachments_are_not_replayed() {
+    let mut state = ready(ActivityState::Active);
+    fill_object_form(&mut state);
+    state.hide();
+    assert!(state.update(Message::Show, true).is_none());
+    assert_eq!(
+        state.object_form.as_ref().unwrap().object.object_id,
+        "release.status"
+    );
+    let request = state.update(Message::AttachObject, true).unwrap();
+    state.hide();
+    assert!(state.object_form.is_none());
+    assert!(
+        finish(
+            &mut state,
+            request,
+            Ok(Response::Saved(Box::new(
+                detail("activity-1", ActivityState::Active).activity
+            )))
+        )
+        .is_none()
+    );
+    let next = state.update(Message::Show, true).unwrap();
+    assert!(matches!(next.action, Action::Get(_)));
+}
+
+#[test]
+fn object_invocation_details_are_inert_and_unverified_descriptions_are_not_copyable() {
+    let mut state = ready(ActivityState::Active);
+    let mut response = object_response("activity-1");
+    response.objects[0]
+        .description
+        .as_mut()
+        .unwrap()
+        .invocation
+        .args = vec![
+        "value with spaces".into(),
+        "line\nbreak;not a command".into(),
+    ];
+    state.objects = Some(response);
+    let copied = state
+        .object_operation_text("app://kv/entry?id=release.status")
+        .unwrap();
+    assert!(copied.contains(&fl!("activity-object-operation-name", operation = "get")));
+    assert!(copied.contains("\"value with spaces\""));
+    assert!(copied.contains("\"line\\nbreak;not a command\""));
+    assert!(state.pending.is_none());
+    for status in [
+        ActivityObjectStatus::Declared,
+        ActivityObjectStatus::Unavailable,
+        ActivityObjectStatus::Invalid,
+    ] {
+        let object = &mut state.objects.as_mut().unwrap().objects[0];
+        object.status = status;
+        object.error =
+            (status != ActivityObjectStatus::Declared).then(|| "retained diagnostic".into());
+        let _ = state.view(true);
+        if status != ActivityObjectStatus::Declared {
+            assert!(
+                state
+                    .object_operation_text("app://kv/entry?id=release.status")
+                    .is_none()
+            );
+        }
+    }
+    fill_object_form(&mut state);
+    let _ = state.view(true);
+}
+
+#[test]
+fn object_forms_do_not_overlap_metadata_edits_or_replay_stale_controls() {
+    let mut state = ready(ActivityState::Active);
+    state.update(Message::Edit, true);
+    state.update(Message::NewObject, true);
+    assert!(state.object_form.is_none());
+    assert!(state.form.is_some());
+    state.form = None;
+    fill_object_form(&mut state);
+    for message in [
+        Message::NewObject,
+        Message::Edit,
+        Message::Run,
+        Message::Transition(ActivityState::Cancelled),
+    ] {
+        assert!(state.update(message, true).is_none());
+    }
+    assert!(state.form.is_none());
+    assert_eq!(
+        state.object_form.as_ref().unwrap().object.object_id,
+        "release.status"
+    );
+    assert_eq!(
+        state.detail.as_ref().unwrap().activity.state,
+        ActivityState::Active
+    );
+}
+
+#[test]
+fn object_cards_keep_original_references_separate_from_canonical_descriptions() {
+    let mut state = ready(ActivityState::Active);
+    let mut response = object_response("activity-1");
+    response.objects[0].reference = "app://kv/entry?id=release%2Estatus".into();
+    state.objects = Some(response);
+    let _ = state.view(true);
+    assert!(
+        state
+            .object_operation_text("app://kv/entry?id=release%2Estatus")
+            .is_some()
+    );
+    assert!(
+        state
+            .object_operation_text("app://kv/entry?id=release.status")
+            .is_none()
+    );
+}
+
+#[test]
+fn object_invocation_arguments_round_trip_as_opaque_json_argv() {
+    let mut state = ready(ActivityState::Active);
+    let args = [
+        "",
+        "two words",
+        "a'b\"c\\d",
+        "; | & $() > < * ?",
+        "line\nbreak\t\0\u{001b}",
+        "\u{03bb}",
+        r#"{"operation":"data, not execution"}"#,
+    ]
+    .map(str::to_string)
+    .to_vec();
+    for args in [Vec::new(), args] {
+        let mut response = object_response("activity-1");
+        response.objects[0]
+            .description
+            .as_mut()
+            .unwrap()
+            .invocation
+            .args = args.clone();
+        state.objects = Some(response);
+        let copied = state
+            .object_operation_text("app://kv/entry?id=release.status")
+            .unwrap();
+        let marker = format!("{}\n", fl!("activity-object-operation-args"));
+        let (_, argv) = copied.split_once(&marker).unwrap();
+        assert_eq!(serde_json::from_str::<Vec<String>>(argv).unwrap(), args);
+        assert!(state.pending.is_none());
+    }
+}
+
 #[test]
 fn native_views_build_for_list_forms_and_all_backend_states() {
     for activity_state in [

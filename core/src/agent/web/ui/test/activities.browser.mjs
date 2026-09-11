@@ -19,9 +19,31 @@ const requests = [];
 const fixtureErrors = [];
 const browserErrors = [];
 const holds = [];
+const objectDescription = {
+  object: { app_id: "archive", object_type: "entry", object_id: " release.status /?#& ", revision: "rev 2" },
+  reference: "app://archive/entry?id=%20release.status%20%2F%3F%23%26%20&revision=rev%202",
+  app_name: "Archive",
+  app_version: "1.0.0",
+  object_label: "Archived entry",
+  object_summary: '<img src="https://objects.invalid/private" onerror="window.objectMetadataExecuted=true">',
+  invocation: { app_id: "archive", operation: "get", args: ["--revision=rev 2", "--", " release.status /?#& "] },
+  provenance: { publisher: "fixture-only", ignored_metadata: "Not a UI permission grant" },
+};
+const declaredMetadata = { status: "declared", description: objectDescription, error: null };
+const unpinnedDescription = {
+  ...objectDescription,
+  object: { app_id: "archive", object_type: "entry", object_id: " release.status /?#& " },
+  reference: "app://archive/entry?id=%20release.status%20%2F%3F%23%26%20",
+  invocation: { app_id: "archive", operation: "get", args: ["--", " release.status /?#& "] },
+};
+const objectMetadata = new Map([
+  [objectDescription.reference, declaredMetadata],
+  [unpinnedDescription.reference, { status: "declared", description: unpinnedDescription, error: null }],
+]);
 let activityNumber = 0;
 let jobNumber = 0;
 let invalidDetailOnce = null;
+let invalidObjectsOnce = null;
 let browser;
 let cdp;
 
@@ -148,11 +170,36 @@ async function fixture(req, res) {
     activities.set(item.id, item);
     return reply(req, res, item);
   }
-  const match = /^\/api\/activities\/([^/]+)(?:\/(update|transition|run))?$/.exec(url.pathname);
+  const match = /^\/api\/activities\/([^/]+)(?:\/(update|transition|run|objects))?$/.exec(url.pathname);
   if (match) {
     const item = activities.get(decodeURIComponent(match[1]));
     assert.ok(item, "the requested Activity exists");
     const action = match[2];
+    if (action === "objects") {
+      if (req.method === "GET") {
+        if (invalidObjectsOnce?.id === item.id) {
+          const invalid = invalidObjectsOnce;
+          invalidObjectsOnce = null;
+          return reply(req, res, { schema: 1, activity_id: item.id, objects: [invalid.entry] });
+        }
+        return reply(req, res, {
+          schema: 1, activity_id: item.id,
+          objects: item.resources.filter((resource) => objectMetadata.has(resource.reference))
+            .map((resource) => ({ ...resource, ...objectMetadata.get(resource.reference) })),
+        });
+      }
+      assert.equal(req.method, "POST");
+      assert.deepEqual(Object.keys(body).sort(), ["label", "object"], "attachments carry no URI, resources, or owner");
+      const description = Object.hasOwn(body.object, "revision") ? objectDescription : unpinnedDescription;
+      assert.deepEqual(body.object, description.object, "opaque identity and optional revision are sent unchanged");
+      assert.ok(item.state === "active" || item.state === "paused");
+      const resource = { label: body.label, reference: description.reference };
+      const index = item.resources.findIndex((entry) => entry.reference === resource.reference);
+      if (index < 0) item.resources.push(resource);
+      else item.resources[index] = resource;
+      item.updated_at = timestamp();
+      return reply(req, res, item);
+    }
     if (!action) {
       assert.equal(req.method, "GET");
       if (invalidDetailOnce === item.id) {
@@ -352,6 +399,15 @@ try {
   };
   const detailText = `document.querySelector('[aria-label="Activity detail"]')?.innerText || ''`;
   const expectDetail = (text) => wait(`(${detailText}).includes(${JSON.stringify(text)})`, text);
+  const objectPanel = `document.querySelector('[aria-label="App object references"]')`;
+  const expectObjects = (text) => wait(`(${objectPanel}?.innerText || '').includes(${JSON.stringify(text)})`, text);
+  const fillObject = async (label) => {
+    await fill("Reference label", label);
+    await fill("App ID", objectDescription.object.app_id);
+    await fill("Object type", objectDescription.object.object_type);
+    await fill("Opaque object ID", objectDescription.object.object_id);
+    await fill("Revision (optional)", objectDescription.object.revision);
+  };
   const open = async (title) => {
     await clickLabel(`Open activity: ${title}`);
     await wait(`document.querySelector('[aria-label="Activity detail"] h2')?.textContent === ${JSON.stringify(title)}`, title);
@@ -381,6 +437,66 @@ try {
   await expectDetail("I verified the release draft");
   assert.equal(await evaluate("location.hash"), "#/activities/activity-1");
   console.log("PASS authenticated create/list/detail and reload persistence");
+
+  await expectObjects("No App object references.");
+  await fillObject("Draft object");
+  await clickText("Edit activity");
+  assert.equal(await evaluate(`(${fieldExpression("Reference label")}).matches(':disabled')`), true);
+  await clickText("Cancel editing");
+  const concurrentResource = { label: "From another client", reference: "notes:keep-this" };
+  activities.get("activity-1").resources.push(concurrentResource);
+  await clickText("Attach object reference");
+  await expectObjects("Draft object");
+  await expectObjects(objectDescription.reference);
+  assert.equal(jobs.size, 0, "attaching an object does not execute work");
+  assert.deepEqual(activities.get("activity-1").resources, [
+    { label: "Reference only", reference: "javascript:window.activityReferenceExecuted=true" },
+    concurrentResource, { label: "Draft object", reference: objectDescription.reference },
+  ]);
+  await fillObject("Release status");
+  await clickText("Attach object reference");
+  await expectObjects("Release status");
+  assert.equal(activities.get("activity-1").resources.filter((entry) => entry.reference === objectDescription.reference).length, 1);
+  await reload();
+  await expectObjects("Declared (manifest only)");
+  await expectObjects("not object existence");
+  await expectObjects(objectDescription.object_summary);
+  await click(`${objectPanel}.querySelector('summary')`);
+  await expectObjects("Structured arguments only");
+  assert.deepEqual(await evaluate(`JSON.parse(${objectPanel}.querySelector('pre').textContent)`), objectDescription.invocation);
+  assert.equal(await evaluate(`${objectPanel}.querySelectorAll('a,script,img').length`), 0);
+  assert.equal(await evaluate("window.objectMetadataExecuted"), undefined);
+  await click(`${objectPanel}.querySelector('code')`);
+  assert.equal(await evaluate("location.hash"), "#/activities/activity-1");
+  objectMetadata.set(objectDescription.reference, {
+    status: "unavailable", description: null, error: "App package is quarantined; review its publisher trust.",
+  });
+  await clickLabel("Refresh object descriptions");
+  await expectObjects("Unavailable");
+  await expectObjects("App package is quarantined; review its publisher trust.");
+  assert.equal(await evaluate(`(${objectPanel}.innerText).includes('Archived entry')`), false);
+  assert.ok(activities.get("activity-1").resources.some((entry) => entry.reference === objectDescription.reference));
+  objectMetadata.set("app:invalid", { status: "invalid", description: null, error: "Stored reference is not canonical." });
+  activities.get("activity-1").resources.push({ label: "Invalid stored reference", reference: "app:invalid" });
+  await clickLabel("Refresh object descriptions");
+  await expectObjects("Invalid reference");
+  await expectObjects("Stored reference is not canonical.");
+  objectMetadata.set(objectDescription.reference, declaredMetadata);
+  for (const entry of [
+    { label: "Untrusted metadata", reference: objectDescription.reference, status: "unavailable", description: objectDescription, error: "Revoked" },
+    { label: "Malformed metadata", reference: objectDescription.reference, status: "declared",
+      description: { ...objectDescription, invocation: { ...objectDescription.invocation, args: "not structured argv" } }, error: null },
+  ]) {
+    invalidObjectsOnce = { id: "activity-1", entry };
+    await clickLabel("Refresh object descriptions");
+    await expectObjects("Invalid App object descriptions from the server.");
+    assert.equal(await evaluate(`${objectPanel}.querySelectorAll('[aria-label^="Object reference:"]').length`), 0);
+    await clickLabel("Refresh object descriptions");
+    await expectObjects("Declared (manifest only)");
+  }
+  assert.equal(jobs.size, 0);
+  assert.equal(requests.some((request) => /\/(?:apps|resolve)(?:\/|$)/.test(request.path)), false);
+  console.log("PASS typed object attachment, canonical backend upsert, declaration diagnostics and non-execution");
 
   await fill("Work instructions (optional)", "Review the release draft");
   await clickText("Submit work");
@@ -427,8 +543,12 @@ try {
   await clickText("Save changes");
   await expectDetail("Prepare a reviewed and signed draft");
   assert.equal(activities.get("activity-1").boundaries, "Planning guidance is not permission");
+  const slowObjects = holdRequest("GET", "/api/activities/activity-1/objects");
   await clickText("Pause activity");
+  await slowObjects.seen;
   await expectDetail("Activity paused.");
+  await wait(`!(${buttonExpression("Edit activity")}).matches(':disabled')`, "state controls do not wait for object metadata");
+  slowObjects.release();
   await reload();
   await expectDetail("Resume activity");
   assert.equal(await evaluate(`(${buttonExpression("Submit work")}).matches(':disabled')`), true);
@@ -443,6 +563,7 @@ try {
   assert.equal(activities.get("activity-1").state, "completed");
   await reload();
   await expectDetail("I reviewed the signed draft against the criteria.");
+  assert.equal(await evaluate(`(${fieldExpression("Reference label")}).matches(':disabled')`), true);
   await clickText("Reopen activity");
   await expectDetail("Activity explicitly reopened.");
   await clickText("Cancel activity");
@@ -475,6 +596,33 @@ try {
   await delay(300);
   assert.equal(await evaluate("location.hash"), "#/activities/activity-2");
   await expectDetail("Keep this selection stable");
+
+  const oldObjects = holdRequest("GET", "/api/activities/activity-1/objects");
+  await open("Release preparation");
+  await oldObjects.seen;
+  await open("Second goal");
+  await expectObjects("No App object references.");
+  oldObjects.release();
+  await delay(300);
+  assert.equal(await evaluate(`${objectPanel}.querySelectorAll('[aria-label^="Object reference:"]').length`), 0);
+  assert.equal(await evaluate("location.hash"), "#/activities/activity-2");
+  await open("Release preparation");
+  await fillObject("Attached while looking elsewhere");
+  await fill("Revision (optional)", "");
+  const oldAttach = holdRequest("POST", "/api/activities/activity-1/objects");
+  await clickText("Attach object reference");
+  await oldAttach.seen;
+  assert.equal(Object.hasOwn(requests.filter((request) => request.method === "POST" && request.path.endsWith("/objects")).at(-1).body.object, "revision"), false);
+  await open("Second goal");
+  await fill("Reference label", "Second Activity draft");
+  oldAttach.release();
+  await delay(300);
+  assert.equal(await evaluate("location.hash"), "#/activities/activity-2");
+  assert.equal(await evaluate(`(${fieldExpression("Reference label")}).value`), "Second Activity draft");
+  assert.equal(await evaluate(`(${detailText}).includes('Object reference attached.')`), false);
+  assert.equal(activities.get("activity-2").resources.length, 0);
+  assert.ok(activities.get("activity-1").resources.some((entry) => entry.reference === unpinnedDescription.reference));
+  console.log("PASS late object descriptions and attachments cannot overwrite a newer selection or draft");
 
   await open("Release preparation");
   await clickText("Edit activity");

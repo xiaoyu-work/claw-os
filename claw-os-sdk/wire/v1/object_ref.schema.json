@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://claw-os.dev/wire/v1/object_ref.schema.json",
+  "title": "App object reference",
+  "description": "A portable identifier for App-owned data, not authority, a payload, or proof of existence or readability. Component, UTF-8, and canonical URI semantics are specified in object-references.md and enforced by the public objects helpers.",
+  "type": "object",
+  "required": ["app_id", "object_type", "object_id"],
+  "additionalProperties": false,
+  "properties": {
+    "app_id": { "type": "string", "description": "App identifier; lowercase ASCII component, at most 128 UTF-8 bytes." },
+    "object_type": { "type": "string", "description": "Object type declared by the App; lowercase ASCII component, at most 64 UTF-8 bytes." },
+    "object_id": { "type": "string", "description": "Opaque, nonempty UTF-8 identifier, at most 1024 bytes, without Unicode control characters. Never trimmed or normalized." },
+    "revision": { "type": "string", "x-go-type": "*string", "description": "Optional opaque, nonempty UTF-8 revision, at most 128 bytes, without Unicode control characters. Absence differs from an empty string." }
+  }
+}

@@ -30,6 +30,8 @@ async fn every_activity_surface_requires_authentication_and_version() {
         (Method::GET, "/activities"),
         (Method::POST, "/activities"),
         (Method::GET, "/activities/a"),
+        (Method::GET, "/activities/a/objects"),
+        (Method::POST, "/activities/a/objects"),
         (Method::PATCH, "/activities/a"),
         (Method::POST, "/activities/a/transition"),
         (Method::POST, "/activities/a/run"),
@@ -83,6 +85,16 @@ async fn owner_injection_and_malformed_requests_return_typed_errors() {
             r#"{"state":"active","owner_uid":0}"#,
         ),
         (Method::POST, "/activities/a/run", r#"{"owner_uid":0}"#),
+        (
+            Method::POST,
+            "/activities/a/objects",
+            r#"{"label":"Object","object":{"app_id":"kv","object_type":"entry","object_id":"x"},"owner_uid":0}"#,
+        ),
+        (
+            Method::POST,
+            "/activities/a/objects",
+            r#"{"label":"Object","reference":"app://kv/entry?id=x"}"#,
+        ),
         (Method::GET, "/activities?owner_uid=0", ""),
         (Method::GET, "/activities?limit=101", ""),
     ] {
@@ -118,6 +130,29 @@ fn typed_params_forward_only_activity_fields_and_path_identity() {
         json!({"id": "activity", "prompt": "Continue", "session_id": "session"})
     );
     assert!(with_id("", json!({})).is_err());
+}
+
+#[test]
+fn object_params_forward_opaque_identity_without_constructing_a_uri() {
+    let request: ActivityObjectAttachRequest = serde_json::from_value(json!({
+        "label": "Object",
+        "object": {
+            "app_id": "kv", "object_type": "entry",
+            "object_id": " a/b?x=1&y=2 ", "revision": "version/#? "
+        }
+    }))
+    .unwrap();
+    let params = with_id("activity", request).ok().unwrap();
+    assert_eq!(params["id"], "activity");
+    assert_eq!(params["object"]["object_id"], " a/b?x=1&y=2 ");
+    assert_eq!(params["object"]["revision"], "version/#? ");
+    assert!(params.get("owner_uid").is_none());
+    assert!(params.get("reference").is_none());
+    assert!(params.get("invocation").is_none());
+    assert_eq!(
+        with_id("activity", json!({})).ok().unwrap(),
+        json!({"id": "activity"})
+    );
 }
 
 #[tokio::test]

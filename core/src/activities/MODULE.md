@@ -72,7 +72,10 @@ the broker may reject out-of-range client requests earlier. NUL and unsupported
 control characters are rejected, including controls in titles, labels, and
 references. Goal, criteria, boundaries, and confirmation text support normal
 newlines, carriage returns, and tabs. Resource references are never read,
-opened, copied, or executed; typed App objects belong to a later phase.
+opened, copied, or executed by the store. App object attachments use canonical
+URIs in this same field and an atomic append/upsert operation; the broker's
+separate metadata catalogue authenticates declarations without fetching data.
+See [App-owned objects](../../../docs/app-objects.md).
 
 Activities start `active`. Active and paused records can pause/resume or
 explicitly complete/cancel. Terminal records can only reopen to `active`;

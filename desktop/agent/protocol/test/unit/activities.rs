@@ -111,3 +111,71 @@ fn job_acknowledgement_has_no_activity_lifecycle_or_worker_state() {
     assert!(value.get("worker_pid").is_none());
     assert!(value["activity_id"].is_null());
 }
+
+#[test]
+fn object_attachment_sends_components_without_owner_uri_or_execution_fields() {
+    let value = json!({
+        "label": "Release status",
+        "object": {"app_id": "kv", "object_type": "entry", "object_id": " a/b?x=1&y=2 "}
+    });
+    let request: ActivityObjectAttachRequest = serde_json::from_value(value.clone()).unwrap();
+    assert!(request.object.revision.is_none());
+    assert_eq!(serde_json::to_value(&request).unwrap(), value);
+    for field in ["owner_uid", "reference", "invocation", "caps"] {
+        let mut invalid = value.clone();
+        invalid[field] = json!("not caller authority");
+        assert!(serde_json::from_value::<ActivityObjectAttachRequest>(invalid).is_err());
+    }
+    assert!(
+        serde_json::from_value::<ActivityObjectAttachRequest>(json!({
+            "label": "Raw URI", "object": "app://kv/entry?id=x"
+        }))
+        .is_err()
+    );
+}
+
+#[test]
+fn object_presentation_v1_defaults_preserve_additive_compatibility() {
+    let response: ActivityObjectsResponse = serde_json::from_value(json!({
+        "activity_id": "a", "future": true,
+        "objects": [{"label": "Missing", "reference": "app://missing/entry?id=x", "status": "unavailable"}]
+    })).unwrap();
+    assert!(response.objects[0].description.is_none());
+    assert!(response.objects[0].error.is_none());
+    let description: AppObjectDescription = serde_json::from_value(json!({
+        "object": {"app_id": "kv", "object_type": "entry", "object_id": "x", "future": true},
+        "reference": "app://kv/entry?id=x",
+        "invocation": {"app_id": "kv", "operation": "get"},
+        "provenance": {"publisher": "not in the desktop DTO"}
+    }))
+    .unwrap();
+    assert!(description.object.revision.is_none());
+    assert!(description.invocation.args.is_empty());
+    assert!(description.object_summary.is_empty());
+    let encoded = serde_json::to_value(&description).unwrap();
+    assert!(encoded.get("provenance").is_none());
+    assert!(encoded["object"].get("future").is_none());
+    assert_eq!(
+        serde_json::from_value::<AppObjectDescription>(encoded).unwrap(),
+        description
+    );
+}
+
+#[test]
+fn object_descriptions_do_not_accept_arbitrary_json_arguments_or_access_claims() {
+    assert!(
+        serde_json::from_value::<AppObjectInvocation>(json!({
+            "app_id": "kv", "operation": "get", "args": [{"execute": true}]
+        }))
+        .is_err()
+    );
+    assert!(serde_json::from_value::<ActivityObjectStatus>(json!("readable")).is_err());
+    assert_eq!(
+        serde_json::to_value(ActivityResource {
+            label: "File".into(),
+            reference: "notes.txt".into(),
+        })
+        .unwrap(),
+        json!({"label": "File", "reference": "notes.txt"})
+    );
+}

@@ -1,15 +1,18 @@
 //! Fetched Activity views and unsaved forms. The broker, not this reducer,
 //! owns Activity lifecycle and durable work; leaving this view cancels nothing.
 
-use cos_agent_protocol::{ActivityJobView, ActivityResource};
+use cos_agent_protocol::{
+    ActivityJobView, ActivityObjectStatus, ActivityResource, AppObjectDescription,
+};
 use cosmic::iced::{Alignment, Length};
 use cosmic::widget::{Column, Row, button, container, scrollable, text};
 use cosmic::{Element, theme, widget};
 
 use crate::bridge::{
-    ActivityCreateRequest, ActivityDetailResponse, ActivityListResponse, ActivityRunRequest,
-    ActivityState, ActivityTransitionRequest, ActivityUpdateRequest, ActivityView,
-    ActivityWorkResponse, CancelResponse,
+    ActivityCreateRequest, ActivityDetailResponse, ActivityListResponse,
+    ActivityObjectAttachRequest, ActivityObjectsResponse, ActivityRunRequest, ActivityState,
+    ActivityTransitionRequest, ActivityUpdateRequest, ActivityView, ActivityWorkResponse,
+    CancelResponse,
 };
 use crate::{Message as AppMessage, fl, styles};
 
@@ -21,6 +24,15 @@ pub enum Field {
     Boundaries,
     CompletionNote,
     Prompt,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ObjectField {
+    Label,
+    AppId,
+    ObjectType,
+    ObjectId,
+    Revision,
 }
 
 #[derive(Debug, Clone)]
@@ -39,6 +51,11 @@ pub enum Message {
     ResourceLabel(usize, String),
     ResourceReference(usize, String),
     RemoveResource(usize),
+    DescribeObjects,
+    NewObject,
+    ObjectField(ObjectField, String),
+    AttachObject,
+    DiscardObject,
     Save,
     Transition(ActivityState),
     UseSession(Option<String>),
@@ -55,6 +72,8 @@ pub enum Message {
 pub(crate) enum Action {
     List(Option<ActivityState>),
     Get(String),
+    Objects(String),
+    AttachObject(String, ActivityObjectAttachRequest),
     Create(ActivityCreateRequest),
     Update(String, ActivityUpdateRequest),
     Transition(String, ActivityTransitionRequest),
@@ -73,6 +92,7 @@ pub(crate) struct Request {
 pub enum Response {
     List(ActivityListResponse),
     Detail(Box<ActivityDetailResponse>),
+    Objects(ActivityObjectsResponse),
     Saved(Box<ActivityView>),
     Work(ActivityWorkResponse),
     JobCancellation(CancelResponse),
@@ -88,6 +108,9 @@ pub(crate) struct Activities {
     selected: Option<String>,
     detail: Option<ActivityDetailResponse>,
     form: Option<ActivityCreateRequest>,
+    object_form: Option<ActivityObjectAttachRequest>,
+    objects: Option<ActivityObjectsResponse>,
+    refresh_objects_after_detail: bool,
     completion_note: String,
     prompt: String,
     continue_session: Option<String>,
@@ -104,6 +127,7 @@ impl Activities {
         self.visible
             && self.pending.is_none()
             && self.form.is_none()
+            && self.object_form.is_none()
             && self.prompt.is_empty()
             && self.completion_note.is_empty()
             && self.error.is_none()
@@ -113,14 +137,18 @@ impl Activities {
         self.visible = false;
         if !self.can_edit_forms() {
             self.form = None;
+            self.object_form = None;
         }
         self.invalidate();
     }
 
     fn can_edit_forms(&self) -> bool {
-        self.pending
-            .as_ref()
-            .is_none_or(|action| matches!(action, Action::List(_) | Action::Get(_)))
+        self.pending.as_ref().is_none_or(|action| {
+            matches!(
+                action,
+                Action::List(_) | Action::Get(_) | Action::Objects(_)
+            )
+        })
     }
 
     pub(crate) fn session_title(&self, id: &str) -> Option<String> {
@@ -134,6 +162,19 @@ impl Activities {
                         .any(|job| job.session_id.as_deref() == Some(id))
             })
             .map(|detail| detail.activity.title.clone())
+    }
+
+    pub(crate) fn object_operation_text(&self, reference: &str) -> Option<String> {
+        self.objects
+            .as_ref()?
+            .objects
+            .iter()
+            .find(|object| {
+                object.reference == reference && object.status == ActivityObjectStatus::Declared
+            })?
+            .description
+            .as_ref()
+            .map(object_operation_text)
     }
 
     fn invalidate(&mut self) {
@@ -156,7 +197,7 @@ impl Activities {
     }
 
     fn refresh(&mut self, connected: bool) -> Option<Request> {
-        if self.pending.is_some() || self.form.is_some() {
+        if self.pending.is_some() || self.form.is_some() || self.object_form.is_some() {
             return None;
         }
         let action = self
@@ -172,6 +213,9 @@ impl Activities {
         self.selected = None;
         self.detail = None;
         self.form = None;
+        self.object_form = None;
+        self.objects = None;
+        self.refresh_objects_after_detail = false;
         self.completion_note.clear();
         self.prompt.clear();
         self.continue_session = None;
@@ -227,7 +271,70 @@ impl Activities {
                     }
                 }
             }
+            Message::ObjectField(field, value) => {
+                if !self.can_edit_forms() {
+                    return None;
+                }
+                if let Some(form) = &mut self.object_form {
+                    match field {
+                        ObjectField::Label => form.label = value,
+                        ObjectField::AppId => form.object.app_id = value,
+                        ObjectField::ObjectType => form.object.object_type = value,
+                        ObjectField::ObjectId => form.object.object_id = value,
+                        ObjectField::Revision => {
+                            form.object.revision = (!value.is_empty()).then_some(value);
+                        }
+                    }
+                }
+            }
             _ if self.pending.is_some() => {}
+            _ if self.object_form.is_some()
+                && !matches!(&message, Message::AttachObject | Message::DiscardObject) => {}
+            Message::DescribeObjects => {
+                let id = self.selected.clone()?;
+                self.objects = None;
+                self.refresh_objects_after_detail = true;
+                return self.begin(Action::Objects(id), connected);
+            }
+            Message::NewObject => {
+                if self.form.is_some() {
+                    return None;
+                }
+                if self
+                    .detail
+                    .as_ref()
+                    .is_some_and(|detail| editable(detail.activity.state))
+                {
+                    self.object_form = Some(ActivityObjectAttachRequest::default());
+                    self.error = None;
+                } else {
+                    self.error = Some(fl!("activity-object-readonly"));
+                }
+            }
+            Message::DiscardObject => {
+                self.object_form = None;
+                self.error = None;
+                return self.refresh(connected);
+            }
+            Message::AttachObject => {
+                let form = self.object_form.as_ref()?;
+                let detail = self.detail.as_ref()?;
+                if !editable(detail.activity.state) {
+                    self.error = Some(fl!("activity-object-readonly"));
+                    return None;
+                }
+                if form.label.trim().is_empty()
+                    || form.object.app_id.trim().is_empty()
+                    || form.object.object_type.trim().is_empty()
+                    || form.object.object_id.is_empty()
+                {
+                    self.error = Some(fl!("activity-object-required"));
+                    return None;
+                }
+                let action = Action::AttachObject(detail.activity.id.clone(), form.clone());
+                self.refresh_objects_after_detail = true;
+                return self.begin(action, connected);
+            }
             Message::Filter(filter) => {
                 self.filter = filter;
                 return self.refresh(connected);
@@ -383,7 +490,29 @@ impl Activities {
         match (pending, response) {
             (Action::List(_), Response::List(response)) => self.list = response.activities,
             (Action::Get(id), Response::Detail(detail)) if detail.activity.id == id => {
+                if self.objects.is_some()
+                    && self.detail.as_ref().is_some_and(|previous| {
+                        previous.activity.resources != detail.activity.resources
+                    })
+                {
+                    self.objects = None;
+                    self.refresh_objects_after_detail = true;
+                }
                 self.detail = Some(*detail);
+                if self.refresh_objects_after_detail {
+                    return self.begin(Action::Objects(id), connected);
+                }
+            }
+            (Action::Objects(id), Response::Objects(objects)) if objects.activity_id == id => {
+                self.objects = Some(objects);
+                self.refresh_objects_after_detail = false;
+            }
+            (Action::AttachObject(id, _), Response::Saved(activity)) if activity.id == id => {
+                self.object_form = None;
+                self.objects = None;
+                self.detail = None;
+                self.refresh_objects_after_detail = true;
+                return self.refresh(connected);
             }
             (Action::Create(_), Response::Saved(activity)) => {
                 return self.saved(*activity, connected);
@@ -425,6 +554,15 @@ impl Activities {
     }
 
     fn saved(&mut self, activity: ActivityView, connected: bool) -> Option<Request> {
+        if self.objects.is_some()
+            && self
+                .detail
+                .as_ref()
+                .is_none_or(|previous| previous.activity.resources != activity.resources)
+        {
+            self.objects = None;
+            self.refresh_objects_after_detail = true;
+        }
         self.selected = Some(activity.id);
         self.detail = None;
         self.form = None;
@@ -444,7 +582,7 @@ impl Activities {
         header = header
             .push(text(fl!("activities")).size(24.0))
             .push(widget::space::horizontal());
-        if self.form.is_none() {
+        if self.form.is_none() && self.object_form.is_none() {
             header = header
                 .push(control(
                     fl!("activity-refresh"),
@@ -475,6 +613,8 @@ impl Activities {
         }
         let body = if let Some(form) = &self.form {
             self.form_view(form, available)
+        } else if let Some(form) = &self.object_form {
+            self.object_form_view(form, available)
         } else if let Some(detail) = &self.detail {
             self.detail_view(detail, available)
         } else if self.selected.is_none() {
@@ -693,6 +833,7 @@ impl Activities {
         }
         content = content
             .push(text(fl!("activity-resources-hint")).size(12.0))
+            .push(self.object_resources_view(editable(activity.state), available))
             .push(text(fl!("activity-work")).size(18.0))
             .push(text(fl!("activity-work-hint")).size(12.0));
         if activity.state == ActivityState::Active {
@@ -768,6 +909,178 @@ impl Activities {
         }
         content.into()
     }
+
+    fn object_form_view<'a>(
+        &'a self,
+        form: &'a ActivityObjectAttachRequest,
+        available: bool,
+    ) -> Element<'a, AppMessage> {
+        Column::new()
+            .spacing(12)
+            .push(text(fl!("activity-object-attach")).size(18.0))
+            .push(text(fl!("activity-object-attach-hint")).size(12.0))
+            .push(object_field(
+                fl!("activity-resource-label"),
+                &form.label,
+                ObjectField::Label,
+            ))
+            .push(object_field(
+                fl!("activity-object-app-id"),
+                &form.object.app_id,
+                ObjectField::AppId,
+            ))
+            .push(object_field(
+                fl!("activity-object-type"),
+                &form.object.object_type,
+                ObjectField::ObjectType,
+            ))
+            .push(object_field(
+                fl!("activity-object-id"),
+                &form.object.object_id,
+                ObjectField::ObjectId,
+            ))
+            .push(object_field(
+                fl!("activity-object-revision"),
+                form.object.revision.as_deref().unwrap_or_default(),
+                ObjectField::Revision,
+            ))
+            .push(text(fl!("activity-object-declaration-hint")).size(12.0))
+            .push(
+                Row::new()
+                    .spacing(8)
+                    .push(control(
+                        fl!("activity-object-attach"),
+                        Message::AttachObject,
+                        available,
+                    ))
+                    .push(control(
+                        fl!("cancel"),
+                        Message::DiscardObject,
+                        self.pending.is_none(),
+                    )),
+            )
+            .into()
+    }
+
+    fn object_resources_view(&self, can_attach: bool, available: bool) -> Element<'_, AppMessage> {
+        let mut content = Column::new()
+            .spacing(12)
+            .push(text(fl!("activity-object-declarations")).size(18.0))
+            .push(text(fl!("activity-object-declaration-hint")).size(12.0))
+            .push(
+                Row::new()
+                    .spacing(8)
+                    .push(control(
+                        fl!("activity-object-describe"),
+                        Message::DescribeObjects,
+                        available,
+                    ))
+                    .push(control(
+                        fl!("activity-object-attach"),
+                        Message::NewObject,
+                        available && can_attach,
+                    )),
+            );
+        let Some(objects) = &self.objects else {
+            return content
+                .push(text(fl!("activity-object-describe-hint")).size(12.0))
+                .into();
+        };
+        if objects.objects.is_empty() {
+            content = content.push(text(fl!("activity-object-empty")).size(12.0));
+        }
+        for object in &objects.objects {
+            let status = match object.status {
+                ActivityObjectStatus::Declared => fl!("activity-object-declared"),
+                ActivityObjectStatus::Unavailable => fl!("activity-object-unavailable"),
+                ActivityObjectStatus::Invalid => fl!("activity-object-invalid"),
+            };
+            let mut card = Column::new()
+                .spacing(6)
+                .push(text(&object.label).size(15.0))
+                .push(text(status).size(13.0))
+                .push(text(&object.reference).size(12.0));
+            if let Some(error) = &object.error {
+                card = card.push(error_card(error));
+            }
+            if object.status == ActivityObjectStatus::Declared
+                && let Some(description) = &object.description
+            {
+                if description.reference != object.reference {
+                    card = card.push(section(
+                        fl!("activity-object-canonical-reference"),
+                        &description.reference,
+                    ));
+                }
+                card = card
+                    .push(
+                        text(format!(
+                            "{} · {}",
+                            description.app_name, description.app_version
+                        ))
+                        .size(14.0),
+                    )
+                    .push(section(
+                        description.object_label.clone(),
+                        &description.object_summary,
+                    ))
+                    .push(section(
+                        fl!("activity-object-type"),
+                        &description.object.object_type,
+                    ))
+                    .push(section(
+                        fl!("activity-object-id"),
+                        &description.object.object_id,
+                    ));
+                if let Some(revision) = &description.object.revision {
+                    card = card.push(section(fl!("activity-object-revision"), revision));
+                }
+                card = card
+                    .push(text(fl!("activity-object-operation-hint")).size(12.0))
+                    .push(text(object_operation_text(description)).size(12.0))
+                    .push(
+                        button::text(fl!("activity-object-copy-operation")).on_press(
+                            AppMessage::CopyActivityObjectOperation(object.reference.clone()),
+                        ),
+                    );
+            }
+            content = content.push(
+                container(card)
+                    .padding(12)
+                    .width(Length::Fill)
+                    .class(theme::Container::custom(styles::tool_card)),
+            );
+        }
+        content.into()
+    }
+}
+
+fn object_operation_text(description: &AppObjectDescription) -> String {
+    let invocation = &description.invocation;
+    format!(
+        "{}\n{}\n{}\n{}",
+        fl!(
+            "activity-object-operation-app",
+            id = invocation.app_id.clone()
+        ),
+        fl!(
+            "activity-object-operation-name",
+            operation = invocation.operation.clone()
+        ),
+        fl!("activity-object-operation-args"),
+        serde_json::Value::from(invocation.args.clone()),
+    )
+}
+
+fn object_field(label: String, value: &str, field: ObjectField) -> Element<'_, AppMessage> {
+    Column::new()
+        .spacing(4)
+        .push(text(label.clone()).size(13.0))
+        .push(
+            widget::text_input(label, value)
+                .on_input(move |value| AppMessage::Activities(Message::ObjectField(field, value))),
+        )
+        .into()
 }
 
 fn editable(state: ActivityState) -> bool {

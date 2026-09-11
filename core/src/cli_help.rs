@@ -99,7 +99,7 @@ pub(crate) fn show_app_help(name: &str, app: &apps::App) -> Result<Option<String
         .iter()
         .map(|(k, op)| (k.clone(), json!(op.label.current())))
         .collect();
-    let output = json!({
+    let mut output = json!({
         "app": name,
         "label": app.manifest.name.current(),
         "version": app.manifest.version,
@@ -107,6 +107,7 @@ pub(crate) fn show_app_help(name: &str, app: &apps::App) -> Result<Option<String
         "commands": cmds,
         "hint": format!("Run: cos app {name} <command> [args]"),
     });
+    append_object_schema(&mut output, app);
     Ok(Some(output.to_string()))
 }
 
@@ -175,6 +176,11 @@ pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandS
             "activity",
             "Owner-scoped goals shared by terminal, Web, and desktop",
             activity_schemas(),
+        ),
+        (
+            "object",
+            "Authenticated App object contracts and explicit resolution",
+            object_schemas(),
         ),
         (
             "checkpoint",
@@ -574,6 +580,25 @@ fn activity_schemas() -> Vec<CommandSchema> {
     ));
     let mut schemas = vec![
         CommandSchema {
+            command: "objects",
+            description: "Describe attached App references without reading their data",
+            params: vec![id()],
+            example: "cos activity objects 00000000-0000-4000-8000-000000000001",
+        },
+        CommandSchema {
+            command: "attach-object",
+            description: "Atomically attach a declared App object without invoking it",
+            params: vec![
+                id(),
+                Param::flag("--label", "string", true, "User-facing label"),
+                Param::flag("--app", "string", true, "Installed App ID"),
+                Param::flag("--type", "string", true, "Object type declared by the App"),
+                Param::flag("--object-id", "string", true, "Opaque App-owned object ID"),
+                Param::flag("--revision", "string", false, "Optional App revision constraint"),
+            ],
+            example: "cos activity attach-object 00000000-0000-4000-8000-000000000001 --label Release --app kv --type entry --object-id release.status",
+        },
+        CommandSchema {
             command: "create",
             description: "Create a persistent Activity without starting a task",
             params: create,
@@ -654,6 +679,50 @@ fn activity_schemas() -> Vec<CommandSchema> {
         });
     }
     schemas
+}
+
+fn object_schemas() -> Vec<CommandSchema> {
+    vec![
+        CommandSchema {
+            command: "catalog",
+            description: "List verified App object declarations without executing Apps",
+            params: vec![Param::positional("app", "string", false, "Optional App ID")],
+            example: "cos object catalog kv",
+        },
+        CommandSchema {
+            command: "reference",
+            description: "Create a canonical reference; this does not prove existence or grant access",
+            params: vec![
+                Param::positional("app", "string", true, "App ID"),
+                Param::positional("type", "string", true, "App-declared object type"),
+                Param::positional("id", "string", true, "Opaque object ID"),
+                Param::flag("--revision", "string", false, "Optional revision constraint"),
+            ],
+            example: "cos object reference kv entry release.status",
+        },
+        CommandSchema {
+            command: "describe",
+            description: "Read authenticated declaration and invocation metadata, not object data",
+            params: vec![Param::positional("reference", "string", true, "Canonical App object URI")],
+            example: "cos object describe 'app://kv/entry?id=release.status'",
+        },
+        CommandSchema {
+            command: "resolve",
+            description: "Execute the declared App operation with its ordinary permissions and audit",
+            params: vec![Param::positional("reference", "string", true, "Canonical App object URI")],
+            example: "cos object resolve 'app://kv/entry?id=release.status'",
+        },
+    ]
+}
+
+fn append_object_schema(output: &mut Value, app: &apps::App) {
+    match apps::verified_object_schema(app) {
+        Ok(objects) if objects.as_object().is_some_and(|objects| !objects.is_empty()) => {
+            output["objects"] = objects;
+        }
+        Ok(_) => {}
+        Err(error) => output["objects_error"] = json!(error),
+    }
 }
 
 fn command_schema_value(app_name: &str, command: &str) -> Result<Value, String> {
@@ -751,11 +820,12 @@ pub(crate) fn show_app_schema(app_name: &str, app: &apps::App) -> Result<Option<
         commands.push(entry);
     }
 
-    let output = json!({
+    let mut output = json!({
         "app": app_name,
         "label": app.manifest.name.current(),
         "description": app.manifest.summary.current(),
         "commands": commands,
     });
+    append_object_schema(&mut output, app);
     Ok(Some(output.to_string()))
 }

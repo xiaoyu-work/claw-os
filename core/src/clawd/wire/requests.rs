@@ -130,6 +130,37 @@ pub struct ActivityRun {
     pub use_memory: Option<bool>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(transparent)]
+pub struct BoundedObjectRef(pub crate::objects::ObjectRef);
+
+impl<'de> Deserialize<'de> for BoundedObjectRef {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        claw_os_sdk::generated::validate_object_ref(&value)
+            .map_err(|_| serde::de::Error::custom("invalid App object reference fields"))?;
+        let object: crate::objects::ObjectRef = serde_json::from_value(value)
+            .map_err(|_| serde::de::Error::custom("invalid App object reference types"))?;
+        crate::objects::validate(&object)
+            .map_err(|_| serde::de::Error::custom("invalid or oversized App object reference"))?;
+        Ok(Self(object))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityObjects {
+    pub id: Token,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityObjectAttach {
+    pub id: Token,
+    pub label: Text<240>,
+    pub object: BoundedObjectRef,
+}
+
 // ---------------------------------------------------------------------------
 // Agent tasks
 // ---------------------------------------------------------------------------

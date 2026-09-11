@@ -225,6 +225,17 @@ directly.
 The return value (a dict, list, or scalar) is JSON-dumped to stdout.
 Return `None` to print nothing.
 
+### App-owned object references
+
+Apps may optionally declare an `objects` map that binds named object types to
+existing operations. The shared OS catalogue authenticates these declarations
+without executing the App; explicit resolution still uses the ordinary App
+permission and runtime path. Public SDK helpers format portable references,
+and Activities can attach them without copying or reading the App's data.
+See [App-owned objects](app-objects.md) for the manifest contract, canonical
+URI format, examples, and the distinction between a verified declaration and
+an existing, readable object.
+
 ## 4. The dev loop — no rebuild, no restart
 
 Every one-shot `cos app <id> <op>` invocation launches the app entry point

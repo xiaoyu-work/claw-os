@@ -6,9 +6,11 @@ import {
   hasLiveActivityJobs,
   readActivityDetail,
   readActivityList,
+  readActivityObjects,
   type Activity,
   type ActivityDraft,
   type ActivityJob,
+  type ObjectDescription,
 } from "../src/lib/activities";
 
 const draft: ActivityDraft = {
@@ -50,6 +52,89 @@ describe("Activity presentation contract", () => {
     expect(detail.activity.completion_note).toBeNull();
     expect(detail.jobs[0].status).toBe("ok");
     expect(detail.activity.resources).toEqual(draft.resources);
+  });
+
+  const objectDescription: ObjectDescription = {
+    object: { app_id: "archive", object_type: "entry", object_id: " release.status /?#& ", revision: "rev 2" },
+    reference: "app://archive/entry?id=%20release.status%20%2F%3F%23%26%20&revision=rev%202",
+    app_name: "Archive",
+    app_version: "1.0.0",
+    object_label: "Release entry",
+    object_summary: '<img src="https://invalid.example" onerror="execute()">',
+    invocation: { app_id: "archive", operation: "get", args: ["--revision=rev 2", "--", " release.status /?#& "] },
+  };
+  const declaredObject = {
+    label: "Release status", reference: objectDescription.reference,
+    status: "declared", description: objectDescription, error: null,
+  };
+
+  describe("Activity App object presentation", () => {
+    test("accepts only the broker's declaration statuses and preserves diagnostics", () => {
+      const objects = [
+        { ...declaredObject, description: { ...objectDescription, provenance: { publisher: "fixture" } } },
+        { label: "Missing", reference: "app://missing/entry?id=x", status: "unavailable", description: null, error: "App is quarantined" },
+        { label: "Invalid", reference: "app:invalid", status: "invalid", description: null, error: "Noncanonical reference" },
+      ];
+      const result = readActivityObjects({ schema: 1, activity_id: activity.id, objects }, activity.id);
+      expect(result.objects.map((entry) => entry.status)).toEqual(["declared", "unavailable", "invalid"]);
+      expect(result.objects[1].error).toBe("App is quarantined");
+      expect(result.objects[0].description?.object_summary).toBe(objectDescription.object_summary);
+    });
+
+    test("rejects malformed, mismatched, and undeclared descriptions rather than trusting them", () => {
+      for (const entry of [
+        { ...declaredObject, status: "verified" },
+        { ...declaredObject, description: null },
+        { ...declaredObject, status: "unavailable", error: "Revoked" },
+        { ...declaredObject, status: "invalid", error: "Malformed" },
+        { ...declaredObject, description: { ...objectDescription, reference: "another object" } },
+        { ...declaredObject, description: { ...objectDescription, object: { ...objectDescription.object, object_id: 2 } } },
+        { ...declaredObject, description: { ...objectDescription, invocation: { app_id: "another", operation: "get", args: [] } } },
+        { ...declaredObject, description: { ...objectDescription, invocation: { app_id: "archive", operation: "get", args: "shell command" } } },
+      ]) {
+        expect(() => readActivityObjects({
+          schema: 1, activity_id: activity.id, objects: [entry],
+        }, activity.id)).toThrow("Invalid App object descriptions");
+      }
+      expect(() => readActivityObjects({ schema: 1, activity_id: "other", objects: [] }, activity.id)).toThrow();
+      expect(() => readActivityObjects({ schema: 2, activity_id: activity.id, objects: [] }, activity.id)).toThrow();
+      expect(() => readActivityObjects({ error: "unavailable" }, activity.id)).toThrow();
+    });
+
+    test("sends typed opaque fields only and takes the canonical resource from the backend", async () => {
+      const attachment = { label: "Release status", object: objectDescription.object };
+      const updated = { ...activity, resources: [...activity.resources, { label: attachment.label, reference: objectDescription.reference }] };
+      const post = spyOn(api, "post").mockResolvedValue(updated);
+      expect(await activityApi.attachObject(activity.id, attachment)).toEqual(updated);
+      expect(post).toHaveBeenCalledTimes(1);
+      expect(post).toHaveBeenLastCalledWith("/api/activities/activity-1/objects", attachment);
+      expect(post.mock.calls[0][1]).not.toHaveProperty("reference");
+      expect(post.mock.calls[0][1]).not.toHaveProperty("resources");
+      expect(post.mock.calls[0][1]).not.toHaveProperty("owner_uid");
+      expect(activity.resources).toEqual(draft.resources);
+      const unpinned = {
+        label: "Unpinned",
+        object: { app_id: "archive", object_type: "entry", object_id: " release.status /?#& " },
+      };
+      await activityApi.attachObject(activity.id, unpinned);
+      expect(post).toHaveBeenLastCalledWith("/api/activities/activity-1/objects", unpinned);
+      expect(post.mock.calls.at(-1)?.[1].object).not.toHaveProperty("revision");
+      post.mockResolvedValue({ ...updated, id: "another" });
+      await expect(activityApi.attachObject(activity.id, attachment)).rejects.toThrow("Invalid attached Activity");
+    });
+
+    test("metadata reads use the authenticated adapter and surface failures without resolution", async () => {
+      const controller = new AbortController();
+      const result = { schema: 1, activity_id: activity.id, objects: [declaredObject] };
+      const get = spyOn(api, "get").mockResolvedValue(result);
+      const post = spyOn(api, "post");
+      expect(await activityApi.objects(activity.id, controller.signal)).toEqual(result);
+      expect(get).toHaveBeenCalledTimes(1);
+      expect(get).toHaveBeenLastCalledWith("/api/activities/activity-1/objects", { signal: controller.signal });
+      expect(post).not.toHaveBeenCalled();
+      get.mockRejectedValue(new Error("Object catalogue unavailable"));
+      await expect(activityApi.objects(activity.id)).rejects.toThrow("Object catalogue unavailable");
+    });
   });
 
   test("invalid or mismatched responses fail rather than becoming empty or local state", () => {

@@ -11,6 +11,8 @@ web UI.
 - Map HTTP routes to agent/session/setup operations.
 - Present the shared Activity broker's goals, planning metadata, explicit state
   changes, and associated job/session views without a Web-owned store or lifecycle.
+- Attach typed App object references and display the broker's authenticated
+  declaration metadata and diagnostics, without URI parsing or App execution.
 - Stream text, tools, reasoning presentation, usage, and terminal state.
 - Subscribe to owner-scoped notifications and expose live unread,
   acknowledgement, dismissal, and delivery-preference UI.
@@ -24,10 +26,11 @@ web UI.
 | --- | --- |
 | `routes/` | HTTP and SSE endpoint handlers |
 | `routes/notifications.rs` | Notification list, SSE, state, and preference bridge to `clawd` |
-| `routes/activities.rs` | Activity HTTP adapters using the broker's bounded request DTOs and existing authenticated transport |
+| `routes/activities.rs` | Activity and object-reference HTTP adapters using the broker's bounded request DTOs and existing authenticated transport |
 | `ui/` | TypeScript/React source and generated distribution assets |
 | `ui/src/pages/activities.tsx`, `ui/src/components/activity-*.tsx` | Fixed Activity list, planning forms, detail cards, and existing task/approval/session navigation |
 | `ui/src/lib/activities.ts`, `ui/src/hooks/use-activities.ts` | Validated fetched views and abortable, selection-safe refreshes |
+| `ui/src/components/activity-objects.tsx` | Typed object attachment, declaration-only status, inert references, and structured invocation metadata |
 | `mod.rs`, `server.rs` | Serve command and authenticated router assembly |
 
 ## Dependencies
@@ -39,6 +42,12 @@ Activities always cross `clawd`; they have no private fallback if a read or
 mutation fails. Resources are inert text, boundaries do not grant permissions,
 and successful jobs never imply completed goals. The shared contract is in
 [`docs/activities.md`](../../../../docs/activities.md).
+Object attachments use `activity.object.attach`, not a client-side replacement
+of the resource list. `activity.objects` supplies descriptions only after App
+verification; `declared` does not prove data existence, freshness, or permission.
+Invalid/unavailable references retain their diagnostics. Malformed responses
+hide stale descriptions instead of becoming local object truth. See
+[`docs/app-objects.md`](../../../../docs/app-objects.md).
 
 ## Tests
 
@@ -51,6 +60,8 @@ cargo test -p cos agent::web::routes::activities::tests -- --test-threads=1
 ```
 
 Activity adapter tests cover authentication, bounded/closed request decoding,
-explicit confirmation forwarding, broker transport, and visible failures.
+explicit confirmation forwarding, typed object attachment, broker transport,
+and visible failures.
 [`ui/README.md`](ui/README.md) documents focused UI tests and a real Chromium
-workflow over a mocked authenticated API, including stale selection responses.
+workflow over a mocked authenticated API, including stale selection responses,
+canonical object attachments, declaration failures, and non-execution.

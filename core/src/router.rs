@@ -1,4 +1,5 @@
 mod app_commands;
+mod object_commands;
 
 use std::env;
 use std::io::Read;
@@ -1495,6 +1496,7 @@ fn dispatch_with_stdin_impl(
     // Built-in OS primitives
     match name.as_str() {
         "activity" => dispatch_builtin(args, "activity", crate::activity::run),
+        "object" => dispatch_builtin(args, "object", object_commands::run),
         "sys" => dispatch_builtin(args, "sys", sysinfo::run),
         "service" => dispatch_builtin(args, "service", service::run),
         "checkpoint" => dispatch_builtin(args, "checkpoint", checkpoint::run),
@@ -1788,8 +1790,8 @@ fn dispatch_builtin(
     let command = &args[1];
     let cmd_args: Vec<String> = args[2..].to_vec();
 
-    // If --schema is in args, return schema instead of executing
-    if cmd_args.contains(&"--schema".to_string()) {
+    // Operands after -- are data, including an object ID named --schema.
+    if app_commands::schema_requested(&cmd_args) {
         return cli_help::show_command_schema(app_name, command);
     }
 

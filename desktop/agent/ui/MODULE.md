@@ -10,7 +10,7 @@ versioned desktop Agent protocol without importing clawd or core models.
 | Module | Ownership |
 | --- | --- |
 | `src/main.rs` | Application assembly, top-level message routing, subscriptions, and startup |
-| `src/activities.rs` | Activity list/detail widgets, unsaved metadata/work forms, and generation-aware reduction of fetched responses; no lifecycle authority or persistence |
+| `src/activities.rs` | Activity list/detail widgets, unsaved metadata/work/object forms, and generation-aware reduction of fetched responses; no lifecycle authority or persistence |
 | `src/session.rs` | Local sessions, history reconciliation, retry branches, and transcript models |
 | `src/stream_state.rs` | Generation-aware stream reduction, terminal states, cancellation, and stale-event rejection |
 | `src/bridge_state.rs` | Bridge connection, model availability, failure, and reconnect state |
@@ -39,6 +39,15 @@ The reducer keeps at most one request for the current generation. Navigation
 invalidates stale responses without cancelling backend work. Visible views
 poll every five seconds; edits, in-flight requests and visible request errors
 suspend automatic refresh. Async calls remain in `effects.rs` and `bridge.rs`.
+
+App object attachment sends typed components to the broker; this UI never
+parses or formats their URIs. Declaration lookup is explicit and refreshed
+after attachment or changes to inspected resources, not on every job poll.
+The read-only results distinguish authenticated declarations from unavailable
+or invalid references. A declaration proves neither object existence nor
+readability. Normal operation details can be copied as labeled fields with
+JSON argv, but never executed or resolved by the UI. Ordinary resources and
+terminal Activity edit restrictions remain unchanged.
 
 ## Dependencies
 
@@ -74,4 +83,7 @@ cargo clippy --manifest-path desktop/agent/Cargo.toml -p cos-agent-ui -- -D warn
 
 The matching `../protocol/` and `../bridge/` Activity tests cover additive v1
 DTO defaults, owner-input rejection, schema translation, pending-approval
-scoping, authenticated routes and explicit broker errors.
+scoping, authenticated routes and explicit broker errors. Object regressions
+also cover opaque components, retained diagnostics, no local attachment or
+completion inference, stale lookup/attachment responses, terminal restrictions,
+and inert operation details.

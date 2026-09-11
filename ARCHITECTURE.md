@@ -48,6 +48,7 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | Credential service | Validated credential identities, cryptography and master-key ownership, encrypted atomic persistence, authorization, refresh lifecycle, OAuth flows, and stable CLI facade | `core/src/credential/` |
 | Memory and sessions | SQLite/FTS memory, semantic recall, session/message persistence, curation, and checkpoints | `core/src/agent/memory/`, `core/src/session/`, `core/src/checkpoint.rs` |
 | Activities | Desktop-independent persistent user goals, explicit completion, planning metadata, and owner-scoped task/session projections | `core/src/activities/`, `core/src/clawd/activities.rs`, `core/src/activity.rs` |
+| App object catalogue | Authenticated App-owned object declarations, portable SDK references, and explicit resolution through ordinary App operations | `core/src/objects/`, `core/src/caps/manifest/objects.rs`, `core/src/clawd/activity_objects.rs` |
 | Session event journal | Root-owned, MAC-chained record of session lifecycle and privileged mutation brackets; the ordering and recovery authority the other session/audit views project from | `core/src/session/journal/`, `core/src/clawd/journal.rs` |
 | Audit | Hash-chained JSONL events and agent audit/query commands | `core/src/audit.rs`, `core/src/agent/audit_cli.rs` |
 | Notification service | Durable owner-scoped user-attention records, delivery policy, DND, deduplication, retries, and channel leases | `core/src/notifications/`, `core/src/clawd/notifications.rs` |
@@ -283,6 +284,24 @@ Activity mutations retain the broker's normal authorization, bounded decoding,
 audit projection and journal bracketing. Related job results are projections
 from the existing task store, not a second copy of its state. See
 [`docs/activities.md`](docs/activities.md) for commands and the initial scope.
+
+### App-owned object references
+
+Public SDK wire definitions and pure URI helpers identify an object by App,
+type, opaque ID and optional revision. `core/src/objects/` consumes those
+definitions and authenticated App manifests; it maintains no object-data store.
+Manifest `objects` entries bind a type to an existing operation and explicit
+ID/revision arguments. Catalogue descriptions retain the verified package
+snapshot and do not execute the App or infer access to its data.
+
+`cos object resolve` reuses the existing App dispatch, capability, provenance,
+worker and audit path. Terminal, Web and native desktop Activities attach and
+describe references through `activity.object.attach` and `activity.objects`.
+The owner-scoped core service atomically stores the URI in its existing
+resource list, preserving schema version 1 and ordinary resource compatibility.
+Missing or revoked declarations remain visible as diagnostics; `declared`
+proves authenticated metadata, not existence, freshness or successful access.
+See [`docs/app-objects.md`](docs/app-objects.md).
 
 ### Agent ask/chat turn
 

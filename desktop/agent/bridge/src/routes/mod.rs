@@ -30,6 +30,10 @@ pub fn api() -> Router<AppState> {
         .route("/chat/:task_id/cancel", post(chat::cancel_chat))
         .route("/activities", get(activities::list).post(activities::create))
         .route("/activities/:id", get(activities::get).patch(activities::update))
+        .route(
+            "/activities/:id/objects",
+            get(activities::objects).post(activities::attach_object),
+        )
         .route("/activities/:id/transition", post(activities::transition))
         .route("/activities/:id/run", post(activities::run))
         .route("/tasks/:task_id/retry", post(activities::retry_job))

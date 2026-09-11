@@ -8,9 +8,9 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 
 use super::{
-    normalize_completion_note, parse_id, validate_planning, Activity, ActivityDraft, ActivityError,
-    ActivityPatch, ActivityResource, ActivityService, ActivityState, DEFAULT_LIST_LIMIT,
-    MAX_ACTIVITIES_PER_OWNER, MAX_LIST_LIMIT, SCHEMA_VERSION,
+    normalize_completion_note, normalize_resource, parse_id, validate_planning, validate_resources,
+    Activity, ActivityDraft, ActivityError, ActivityPatch, ActivityResource, ActivityService,
+    ActivityState, DEFAULT_LIST_LIMIT, MAX_ACTIVITIES_PER_OWNER, MAX_LIST_LIMIT, SCHEMA_VERSION,
 };
 
 const SCHEMA: &str = r#"
@@ -224,6 +224,51 @@ impl ActivityService for SqliteActivityService {
                 activity.completion_criteria,
                 activity.boundaries,
                 resources_json,
+                activity.updated_at,
+                owner_uid,
+                id,
+            ],
+        )?;
+        tx.commit()?;
+        Ok(activity)
+    }
+
+    fn add_resource(
+        &self,
+        owner_uid: u32,
+        id: &str,
+        resource: ActivityResource,
+    ) -> Result<Activity, ActivityError> {
+        let id = parse_id(id)?;
+        validate_resources(std::slice::from_ref(&resource))?;
+        let resource = normalize_resource(resource);
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut activity = load_activity(&tx, owner_uid, &id)?;
+        if matches!(
+            activity.state,
+            ActivityState::Completed | ActivityState::Cancelled
+        ) {
+            return Err(ActivityError::Conflict(
+                "reopen a terminal activity before attaching resources".to_string(),
+            ));
+        }
+        if let Some(existing) = activity
+            .resources
+            .iter_mut()
+            .find(|existing| existing.reference == resource.reference)
+        {
+            *existing = resource;
+        } else {
+            activity.resources.push(resource);
+        }
+        validate_resources(&activity.resources)?;
+        activity.updated_at = timestamp().max(activity.updated_at);
+        tx.execute(
+            "UPDATE activities SET resources_json = ?1, updated_at = ?2
+             WHERE owner_uid = ?3 AND id = ?4",
+            params![
+                serde_json::to_string(&activity.resources)?,
                 activity.updated_at,
                 owner_uid,
                 id,

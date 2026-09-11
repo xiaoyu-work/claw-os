@@ -10,6 +10,8 @@ Rust, Python, Node, and Go bindings.
 - Maintain versioned wire types and operation/capability schemas.
 - Provide public SDK calls without exposing internal broker details.
 - Keep language bindings behaviorally compatible.
+- Define pure, canonical App object references without discovery, authority,
+  or a presentation-specific store.
 - Own decoder validation and JSON-RPC error codes in `wire/v1/contract.json`
   plus the versioned schemas.
 - Release every language binding at the same SDK SemVer through GitHub.
@@ -21,6 +23,8 @@ Rust, Python, Node, and Go bindings.
 | --- | --- |
 | `wire/` | Versioned contract and code generation |
 | `wire/v1/contract.json` | Generated decoder set, stable validation errors, and JSON-RPC codes |
+| `wire/v1/object_ref.schema.json`, `wire/v1/object-references.md` | Object reference shape and normative identity/URI semantics |
+| `wire/v1/object_ref.vectors.json` | Shared four-language object-reference conformance vectors |
 | `wire/v1/ask-claw-launcher.md` | Versioned secure desktop overlay launcher handshake |
 | `rust/` | Rust public SDK |
 | `python/` | Python public SDK |
@@ -67,9 +71,22 @@ python3 wire/codegen.py --check
 ```
 
 The generator writes the four SDK bindings plus the core and
-`cos-mcp-serve` JSON-RPC constant modules.
+`cos-mcp-serve` JSON-RPC constant modules, leaving unchanged outputs untouched.
 
-Then run the affected language tests plus the repository Python suite:
+Object-reference helper tests share `wire/v1/object_ref.vectors.json`.
+From the SDK root, focused checks are:
+
+```bash
+python3 wire/codegen.py --check
+cargo test -p claw-os-sdk --lib objects:: -- --test-threads=1
+PYTHONPATH=python/src python3 -m pytest -q \
+  python/src/claw_os_sdk/test_objects.py python/src/claw_os_sdk/test_wire.py
+(cd node && node node_modules/typescript/bin/tsc -p tsconfig.test.json \
+  && node --test dist-test/objects.test.js dist-test/wire.test.js)
+(cd go && go test -count=1 ./... -run ObjectReference)
+```
+
+For broader affected-language checks, from the repository root:
 
 ```bash
 PYTHONPATH=claw-os-sdk/python/src:cos-runtime/python/src \

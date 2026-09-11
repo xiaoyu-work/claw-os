@@ -1,0 +1,172 @@
+{
+  "valid": [
+    {
+      "reference": {"app_id": "notes", "object_type": "note", "object_id": "note-1"},
+      "uri": "app://notes/note?id=note-1"
+    },
+    {
+      "reference": {"app_id": "alpha_1", "object_type": "type-2", "object_id": "AZaz09-._~"},
+      "uri": "app://alpha_1/type-2?id=AZaz09-._~"
+    },
+    {
+      "reference": {"app_id": "mail", "object_type": "message", "object_id": " a b ", "revision": " rev 1 "},
+      "uri": "app://mail/message?id=%20a%20b%20&revision=%20rev%201%20"
+    },
+    {
+      "reference": {"app_id": "files", "object_type": "file", "object_id": "../a//./b?x=1&y=2#z"},
+      "uri": "app://files/file?id=..%2Fa%2F%2F.%2Fb%3Fx%3D1%26y%3D2%23z"
+    },
+    {
+      "reference": {"app_id": "files", "object_type": "file", "object_id": "../.."},
+      "uri": "app://files/file?id=..%2F.."
+    },
+    {
+      "reference": {"app_id": "notes", "object_type": "note", "object_id": "!$&'()*+,/:;=?@[]\\%\""},
+      "uri": "app://notes/note?id=%21%24%26%27%28%29%2A%2B%2C%2F%3A%3B%3D%3F%40%5B%5D%5C%25%22"
+    },
+    {
+      "reference": {"app_id": "notes", "object_type": "note", "object_id": "\u7b14\u8bb0/\ud83d\ude80", "revision": "\u00e9"},
+      "uri": "app://notes/note?id=%E7%AC%94%E8%AE%B0%2F%F0%9F%9A%80&revision=%C3%A9"
+    },
+    {
+      "reference": {"app_id": "notes", "object_type": "note", "object_id": "caf\u00e9"},
+      "uri": "app://notes/note?id=caf%C3%A9"
+    },
+    {
+      "reference": {"app_id": "notes", "object_type": "note", "object_id": "cafe\u0301"},
+      "uri": "app://notes/note?id=cafe%CC%81"
+    },
+    {
+      "reference": {"app_id": "notes", "object_type": "note", "object_id": "\ufeffnote", "revision": "\ufeff1"},
+      "uri": "app://notes/note?id=%EF%BB%BFnote&revision=%EF%BB%BF1"
+    },
+    {
+      "reference": {"app_id": "notes", "object_type": "note", "object_id": "\u2028\u2029"},
+      "uri": "app://notes/note?id=%E2%80%A8%E2%80%A9"
+    },
+    {
+      "reference": {"app_id": "notes", "object_type": "note", "object_id": "%2f"},
+      "uri": "app://notes/note?id=%252f"
+    },
+    {
+      "reference": {"app_id": "notes", "object_type": "note", "object_id": " ", "revision": " "},
+      "uri": "app://notes/note?id=%20&revision=%20"
+    },
+    {
+      "reference": {"app_id": "notes", "object_type": "note", "object_id": " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"},
+      "uri": "app://notes/note?id=%20%21%22%23%24%25%26%27%28%29%2A%2B%2C-.%2F0123456789%3A%3B%3C%3D%3E%3F%40ABCDEFGHIJKLMNOPQRSTUVWXYZ%5B%5C%5D%5E_%60abcdefghijklmnopqrstuvwxyz%7B%7C%7D~"
+    }
+  ],
+  "invalid_uris": [
+    "",
+    "https://notes/note?id=x",
+    "APP://notes/note?id=x",
+    " app://notes/note?id=x",
+    "app:///note?id=x",
+    "app://notes",
+    "app://notes/note",
+    "app://notes/note?",
+    "app://notes/?id=x",
+    "app://notes/note/extra?id=x",
+    "app://notes/../note?id=x",
+    "app://Notes/note?id=x",
+    "app://notes/Note?id=x",
+    "app://notes.example/note?id=x",
+    "app://_notes/note?id=x",
+    "app://notes/_note?id=x",
+    "app://user@notes/note?id=x",
+    "app://user:password@notes/note?id=x",
+    "app://notes:80/note?id=x",
+    "app://[::1]/note?id=x",
+    "app://notes/note?revision=1",
+    "app://notes/note?ID=x",
+    "app://notes/note?%69d=x",
+    "app://notes/note?id=",
+    "app://notes/note?id=x&revision=",
+    "app://notes/note?revision=1&id=x",
+    "app://notes/note?id=x&id=y",
+    "app://notes/note?id=x&revision=1&revision=2",
+    "app://notes/note?id=x&owner=0",
+    "app://notes/note?id=x&grant=read",
+    "app://notes/note?id=x&",
+    "app://notes/note?id=x#fragment",
+    "app://notes/note?id=x#",
+    "app://notes/note?id=a b",
+    "app://notes/note?id=a+b",
+    "app://notes/note?id=x/y",
+    "app://notes/note?id=x?y",
+    "app://notes/note?id=x=y",
+    "app://notes/note?id=\u00e9",
+    "app://notes/note?id=%61",
+    "app://notes/note?id=%7E",
+    "app://notes/note?id=%2f",
+    "app://notes/note?id=%c3%a9",
+    "app://notes/note?id=%",
+    "app://notes/note?id=%0",
+    "app://notes/note?id=%GG",
+    "app://notes/note?id=%00",
+    "app://notes/note?id=%09",
+    "app://notes/note?id=%0A",
+    "app://notes/note?id=%7F",
+    "app://notes/note?id=%C2%85",
+    "app://notes/note?id=%C2%9F",
+    "app://notes/note?id=%80",
+    "app://notes/note?id=%FF",
+    "app://notes/note?id=%C0%AF",
+    "app://notes/note?id=%E0%80%AF",
+    "app://notes/note?id=%E2%82",
+    "app://notes/note?id=%ED%A0%80",
+    "app://notes/note?id=%F4%90%80%80",
+    "app://notes/note?id=x&revision=%ED%B0%80",
+    "app://notes/note?id=x&revision=%00",
+    "app://notes/note?id=x&revision=a+b"
+  ],
+  "invalid_refs": [
+    {"app_id": "", "object_type": "note", "object_id": "x"},
+    {"app_id": "Notes", "object_type": "note", "object_id": "x"},
+    {"app_id": "notes.app", "object_type": "note", "object_id": "x"},
+    {"app_id": "-notes", "object_type": "note", "object_id": "x"},
+    {"app_id": "notes\n", "object_type": "note", "object_id": "x"},
+    {"app_id": "notes\u2028", "object_type": "note", "object_id": "x"},
+    {"app_id": "notes", "object_type": "", "object_id": "x"},
+    {"app_id": "notes", "object_type": "Note", "object_id": "x"},
+    {"app_id": "notes", "object_type": "../note", "object_id": "x"},
+    {"app_id": "notes", "object_type": "note/child", "object_id": "x"},
+    {"app_id": "notes", "object_type": "note\n", "object_id": "x"},
+    {"app_id": "notes", "object_type": "note\u2029", "object_id": "x"},
+    {"app_id": "notes", "object_type": "note", "object_id": ""},
+    {"app_id": "notes", "object_type": "note", "object_id": "x\u0000"},
+    {"app_id": "notes", "object_type": "note", "object_id": "x\n"},
+    {"app_id": "notes", "object_type": "note", "object_id": "x\u007f"},
+    {"app_id": "notes", "object_type": "note", "object_id": "x\u0085"},
+    {"app_id": "notes", "object_type": "note", "object_id": "x", "revision": ""},
+    {"app_id": "notes", "object_type": "note", "object_id": "x", "revision": "\t"},
+    {"app_id": "notes", "object_type": "note", "object_id": "x", "revision": "x\u009f"}
+  ],
+  "limits": [
+    {"field": "app_id", "unit": "a", "count": 128, "bytes": 128},
+    {"field": "object_type", "unit": "a", "count": 64, "bytes": 64},
+    {"field": "object_id", "unit": "\u00e9", "count": 512, "bytes": 1024},
+    {"field": "revision", "unit": "\u00e9", "count": 64, "bytes": 128}
+  ],
+  "wire_cases": [
+    {"value": {"app_id": "notes", "object_type": "note", "object_id": "x"}, "code": null, "path": null},
+    {"value": {"app_id": "notes", "object_type": "note", "object_id": "x", "revision": "1"}, "code": null, "path": null},
+    {"value": null, "code": "WIRE_TYPE", "path": "$"},
+    {"value": [], "code": "WIRE_TYPE", "path": "$"},
+    {"value": {"object_type": "note", "object_id": "x"}, "code": "WIRE_REQUIRED", "path": "$.app_id"},
+    {"value": {"app_id": "notes", "object_id": "x"}, "code": "WIRE_REQUIRED", "path": "$.object_type"},
+    {"value": {"app_id": "notes", "object_type": "note"}, "code": "WIRE_REQUIRED", "path": "$.object_id"},
+    {"value": {"app_id": 1, "object_type": "note", "object_id": "x"}, "code": "WIRE_TYPE", "path": "$.app_id"},
+    {"value": {"app_id": "notes", "object_type": [], "object_id": "x"}, "code": "WIRE_TYPE", "path": "$.object_type"},
+    {"value": {"app_id": "notes", "object_type": "note", "object_id": 1}, "code": "WIRE_TYPE", "path": "$.object_id"},
+    {"value": {"app_id": "notes", "object_type": "note", "object_id": "x", "revision": null}, "code": "WIRE_TYPE", "path": "$.revision"},
+    {"value": {"app_id": "notes", "object_type": "note", "object_id": "x", "revision": false}, "code": "WIRE_TYPE", "path": "$.revision"},
+    {"value": {"app_id": "notes", "object_type": "note", "object_id": "x", "owner": 0}, "code": "WIRE_UNKNOWN_FIELD", "path": "$.owner"},
+    {"value": {"app_id": "notes", "object_type": "note", "object_id": "x", "owner_uid": 0}, "code": "WIRE_UNKNOWN_FIELD", "path": "$.owner_uid"},
+    {"value": {"app_id": "notes", "object_type": "note", "object_id": "x", "grant": "read"}, "code": "WIRE_UNKNOWN_FIELD", "path": "$.grant"},
+    {"value": {"app_id": "notes", "object_type": "note", "object_id": "x", "uri": "app://notes/note?id=x"}, "code": "WIRE_UNKNOWN_FIELD", "path": "$.uri"},
+    {"value": {"app_id": "notes", "object_type": "note", "object_id": "x", "data": {}}, "code": "WIRE_UNKNOWN_FIELD", "path": "$.data"},
+    {"value": {"app_id": "notes", "object_type": "note", "object_id": "x", "wire_version": 1}, "code": "WIRE_UNKNOWN_FIELD", "path": "$.wire_version"}
+  ]
+}

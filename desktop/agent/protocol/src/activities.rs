@@ -18,6 +18,73 @@ pub struct ActivityResource {
     pub reference: String,
 }
 
+/// Components only; canonical URI semantics belong to the shared broker/SDK.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppObjectReference {
+    pub app_id: String,
+    pub object_type: String,
+    pub object_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityObjectAttachRequest {
+    pub label: String,
+    pub object: AppObjectReference,
+}
+
+/// A declaration is authenticated metadata, not proof of object access.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActivityObjectStatus {
+    Declared,
+    Unavailable,
+    Invalid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppObjectInvocation {
+    pub app_id: String,
+    pub operation: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppObjectDescription {
+    pub object: AppObjectReference,
+    pub reference: String,
+    #[serde(default)]
+    pub app_name: String,
+    #[serde(default)]
+    pub app_version: String,
+    #[serde(default)]
+    pub object_label: String,
+    #[serde(default)]
+    pub object_summary: String,
+    pub invocation: AppObjectInvocation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActivityObjectResourceView {
+    pub label: String,
+    pub reference: String,
+    pub status: ActivityObjectStatus,
+    #[serde(default)]
+    pub description: Option<AppObjectDescription>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActivityObjectsResponse {
+    pub activity_id: String,
+    #[serde(default)]
+    pub objects: Vec<ActivityObjectResourceView>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ActivityView {
     pub id: String,

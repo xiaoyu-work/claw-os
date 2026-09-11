@@ -262,6 +262,32 @@ pub fn manifest_schema(manifest: &Manifest) -> Value {
     Value::Object(commands)
 }
 
+/// Object declarations are metadata, but only authenticated package metadata
+/// may describe a resolver or enter model-visible discovery.
+pub fn verified_object_schema(app: &App) -> Result<Value, String> {
+    let verified = app.require_verified()?;
+    verified
+        .assert_current(&provenance::trust_store())
+        .map_err(|error| error.to_string())?;
+    verified.manifest_text().map_err(|error| error.to_string())?;
+    let objects: serde_json::Map<_, _> = app
+        .manifest
+        .objects
+        .iter()
+        .map(|(name, object)| {
+            (
+                name.clone(),
+                json!({
+                    "label": object.label.current(),
+                    "summary": object.summary.current(),
+                    "resolve": object.resolve,
+                }),
+            )
+        })
+        .collect();
+    Ok(Value::Object(objects))
+}
+
 pub fn operation_schema(operation: &Operation) -> Value {
     let parameters = operation
         .args

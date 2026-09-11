@@ -84,6 +84,9 @@ use crate::i18n::LocalizedText;
 use super::scope::Scope;
 use super::verb::Verb;
 
+mod objects;
+pub use objects::{ObjectResolver, ObjectType};
+
 // ---------------------------------------------------------------------------
 // Top-level manifest
 // ---------------------------------------------------------------------------
@@ -113,6 +116,11 @@ pub struct Manifest {
     /// capability needs.
     #[serde(default)]
     pub operations: BTreeMap<String, Operation>,
+
+    /// Optional App-owned object types. References identify data; resolution
+    /// still invokes a declared operation through the normal App gate.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub objects: BTreeMap<String, ObjectType>,
 
     /// AI policy. Required iff any operation declares an `ai.*` need.
     /// Absent means the app cannot exercise any AI verb at all — even
@@ -1002,6 +1010,8 @@ pub enum ManifestError {
     InvalidId(String),
     #[error("invalid operation key `{0}`: must match [a-z][a-z0-9_.]*")]
     InvalidOperationKey(String),
+    #[error("object type `{object_type}`: {detail}")]
+    ObjectInvalid { object_type: String, detail: String },
     #[error("operation `{op}`: arg `{arg}` declared twice")]
     DuplicateArg { op: String, arg: String },
     #[error("operation `{op}`: arg `{arg}` default is invalid: {detail}")]
@@ -1902,6 +1912,7 @@ impl Manifest {
                 }
             }
         }
+        objects::validate(self)?;
         Ok(())
     }
     /// Resolve effective argument values and aligned capabilities together.

@@ -116,10 +116,31 @@ export interface Manifest {
   runtime?: "python" | "node" | "shell" | "binary";
   entry?: string;
   operations?: Record<string, unknown>;
+  objects?: Record<string, unknown>;
   ai?: Aipolicy;
   session?: Session;
   desktop?: Desktop;
   dependencies?: Record<string, unknown>;
+}
+
+/**
+ * objectType.
+ */
+export interface Objecttype {
+  label: Localizedtext;
+  summary?: Localizedtext;
+  resolve: Objectresolver;
+}
+
+/**
+ * objectResolver.
+ * The kernel verifies operation and argument bindings. Resolution always uses
+ * normal App operation dispatch, capabilities, approvals, and audit.
+ */
+export interface Objectresolver {
+  operation: string;
+  id_arg: string;
+  revision_arg?: string;
 }
 
 /**
@@ -296,6 +317,20 @@ export interface Desktop {
   mime_types?: string[];
   single_instance?: boolean;
   panel_applet?: boolean;
+}
+
+/**
+ * App object reference.
+ * A portable identifier for App-owned data, not authority, a payload, or proof
+ * of existence or readability. Component, UTF-8, and canonical URI semantics
+ * are specified in object-references.md and enforced by the public objects
+ * helpers.
+ */
+export interface ObjectRef {
+  app_id: string;
+  object_type: string;
+  object_id: string;
+  revision?: string;
 }
 
 /**
@@ -653,6 +688,17 @@ export function validateBudgetShow(value: unknown): asserts value is BudgetShow 
 
 export function normalizeBudgetShowIntegers(value: unknown): void {
   normalizeWireIntegers(_WIRE_SCHEMA_BUDGET_SHOW, _WIRE_SCHEMA_BUDGET_SHOW, value);
+}
+
+const _WIRE_SCHEMA_OBJECT_REF: WireRule = decodeWireJson("{\"$id\":\"https://claw-os.dev/wire/v1/object_ref.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":\"A portable identifier for App-owned data, not authority, a payload, or proof of existence or readability. Component, UTF-8, and canonical URI semantics are specified in object-references.md and enforced by the public objects helpers.\",\"properties\":{\"app_id\":{\"description\":\"App identifier; lowercase ASCII component, at most 128 UTF-8 bytes.\",\"type\":\"string\"},\"object_id\":{\"description\":\"Opaque, nonempty UTF-8 identifier, at most 1024 bytes, without Unicode control characters. Never trimmed or normalized.\",\"type\":\"string\"},\"object_type\":{\"description\":\"Object type declared by the App; lowercase ASCII component, at most 64 UTF-8 bytes.\",\"type\":\"string\"},\"revision\":{\"description\":\"Optional opaque, nonempty UTF-8 revision, at most 128 bytes, without Unicode control characters. Absence differs from an empty string.\",\"type\":\"string\",\"x-go-type\":\"*string\"}},\"required\":[\"app_id\",\"object_type\",\"object_id\"],\"title\":\"App object reference\",\"type\":\"object\"}") as WireRule;
+
+export function validateObjectRef(value: unknown): asserts value is ObjectRef & Record<string, unknown> {
+  validateWireSchema(_WIRE_SCHEMA_OBJECT_REF, _WIRE_SCHEMA_OBJECT_REF, value, "ObjectRef", "$");
+  normalizeWireIntegers(_WIRE_SCHEMA_OBJECT_REF, _WIRE_SCHEMA_OBJECT_REF, value);
+}
+
+export function normalizeObjectRefIntegers(value: unknown): void {
+  normalizeWireIntegers(_WIRE_SCHEMA_OBJECT_REF, _WIRE_SCHEMA_OBJECT_REF, value);
 }
 
 const _WIRE_SCHEMA_TOOL_CATALOG: WireRule = decodeWireJson("{\"$defs\":{\"WireCatalogEntry\":{\"additionalProperties\":true,\"properties\":{\"args_schema\":{\"additionalProperties\":true,\"type\":\"object\"},\"name\":{\"type\":\"string\"},\"returns_schema\":{\"additionalProperties\":true,\"type\":\"object\"},\"stability\":{\"enum\":[\"stable\",\"experimental\"],\"type\":\"string\"},\"summary\":{\"type\":\"string\"},\"verb\":{\"type\":\"string\"}},\"required\":[\"name\",\"summary\",\"verb\",\"stability\",\"args_schema\",\"returns_schema\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/tool_catalog.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":true,\"description\":\"Shape returned by `cos ai tools`.\",\"properties\":{\"tools\":{\"items\":{\"$ref\":\"#/$defs/WireCatalogEntry\"},\"type\":\"array\"}},\"required\":[\"tools\"],\"title\":\"Catalog tool list reply\",\"type\":\"object\"}") as WireRule;

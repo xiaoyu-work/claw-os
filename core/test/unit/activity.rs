@@ -2,6 +2,30 @@ use super::*;
 
 const ID: &str = "00000000-0000-4000-8000-000000000001";
 
+#[test]
+fn object_attachment_uses_the_shared_typed_broker_without_local_uri_logic() {
+    let (command, params) = parse(
+        "attach-object",
+        &args(&[
+            ID, "--label", "Status", "--app", "kv", "--type", "entry",
+            "--object-id=--schema", "--revision=v1",
+        ]),
+    ).unwrap();
+    assert_eq!(command, Command::ActivityObjectAttach);
+    assert_eq!(params["object"]["object_id"], "--schema");
+    assert_eq!(params["object"]["revision"], "v1");
+    assert!(params.get("owner_uid").is_none());
+    assert!(params.get("reference").is_none());
+    assert!(parse("attach-object", &args(&[ID, "--app", "kv"])).is_err());
+    assert!(parse("attach-object", &args(&[
+        ID, "--label", "Status", "--app", "kv", "--type", "entry",
+        "--object-id", "key", "--owner", "0",
+    ])).is_err());
+    let (command, params) = parse("objects", &args(&[ID])).unwrap();
+    assert_eq!(command, Command::ActivityObjects);
+    assert_eq!(params, json!({"id":ID}));
+}
+
 fn args(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| value.to_string()).collect()
 }

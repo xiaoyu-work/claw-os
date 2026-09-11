@@ -82,6 +82,15 @@ third-party SDK calls are capability-checked by the `cos` kernel.
 
 App manifests (`app.json`) are validated against `manifest.schema.json`.
 
+## App object data contract
+
+[`object_ref.schema.json`](object_ref.schema.json) describes a portable
+identifier, not another request family or transport. The pure helpers across
+all four SDKs use [one canonical URI contract](object-references.md), with
+shared byte limits and golden vectors. App manifests can optionally declare
+`objects` with ordinary operation resolvers. References carry no owner, grant,
+data payload, or nested `wire_version`.
+
 ## Error codes
 
 See `error_codes.md` for the canonical list. The minimum:

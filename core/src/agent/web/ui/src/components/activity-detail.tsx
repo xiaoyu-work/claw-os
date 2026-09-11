@@ -2,11 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 
 import { ActivityForm } from "@/components/activity-form";
+import { ActivityObjectsPanel } from "@/components/activity-objects";
 import { ActivityWork } from "@/components/activity-work";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
-import { activityError, useActivity } from "@/hooks/use-activities";
+import { activityError, useActivity, useActivityObjects } from "@/hooks/use-activities";
 import { activityApi, activityStateLabels, type ActivityState } from "@/lib/activities";
 import { cn } from "@/lib/utils";
 
@@ -28,6 +29,7 @@ export function ActivityDetailPanel({
   id, onChanged,
 }: { id: string; onChanged: () => Promise<unknown> }) {
   const view = useActivity(id);
+  const objects = useActivityObjects(id);
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [completionNote, setCompletionNote] = useState("");
@@ -52,6 +54,7 @@ export function ActivityDetailPanel({
     try {
       await action();
       if (!mounted.current) return false;
+      void objects.refresh();
       const [fresh] = await Promise.all([view.refresh(), changed.current()]);
       if (!mounted.current) return false;
       setNotice(message);
@@ -82,7 +85,8 @@ export function ActivityDetailPanel({
       <div className="flex items-center justify-between gap-3">
         <h2 className="break-words text-lg font-semibold">{activity?.title ?? "Activity detail"}</h2>
         <Button size="sm" variant="outline" disabled={view.loading || busy}
-          aria-label="Refresh activity detail" onClick={() => void view.refresh()}>
+          aria-label="Refresh activity detail"
+          onClick={() => void Promise.all([view.refresh(), objects.refresh()])}>
           {view.loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Refresh"}
         </Button>
       </div>
@@ -202,6 +206,11 @@ export function ActivityDetailPanel({
               </Card>
             </div>
           )}
+          <ActivityObjectsPanel view={objects} editable={editable} editing={editing} disabled={disabled}
+            onAttach={(attachment) => mutate(
+              () => activityApi.attachObject(id, attachment),
+              "Object reference attached. No App code was executed.",
+            )} />
           <ActivityWork detail={detail} disabled={disabled} mutate={mutate} />
         </>
       )}

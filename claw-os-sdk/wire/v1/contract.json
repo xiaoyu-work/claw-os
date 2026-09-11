@@ -4,6 +4,7 @@
     "schemas": [
       "ai",
       "budget_show",
+      "object_ref",
       "tool_catalog",
       "tool"
     ],

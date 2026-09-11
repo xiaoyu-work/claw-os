@@ -9,6 +9,13 @@
   },
   "icon": "🔑",
   "runtime": "python",
+  "objects": {
+    "entry": {
+      "label": { "en": "Key-value entry" },
+      "summary": { "en": "An App-owned entry addressed by its exact key." },
+      "resolve": { "operation": "get", "id_arg": "key" }
+    }
+  },
   "operations": {
     "get": {
       "label": {

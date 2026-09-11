@@ -62,6 +62,8 @@ ownership, and work submission. The authenticated adapters are:
 | `POST /api/activities/{id}/update` | `activity.update` |
 | `POST /api/activities/{id}/transition` | `activity.transition` |
 | `POST /api/activities/{id}/run` | `activity.run` |
+| `GET /api/activities/{id}/objects` | `activity.objects` |
+| `POST /api/activities/{id}/objects` | `activity.object.attach` |
 
 Creation saves a goal without starting work. The detail view shows goal,
 completion criteria, planning boundaries, inert resource references, job
@@ -77,9 +79,49 @@ Completed/cancelled goals must be explicitly reopened before editing or running.
 Boundaries are planning text, not enforced permissions; ordinary capabilities
 and approval checks remain in force.
 
+### App object references
+
+The detail view's **App object references** card attaches references using a
+label, App ID, object type, opaque object ID, and optional revision. For example,
+the attachment API takes typed fields, never a client-formatted URI:
+
+```json
+{
+  "label": "Release status",
+  "object": {
+    "app_id": "kv",
+    "object_type": "entry",
+    "object_id": "release.status"
+  }
+}
+```
+
+The broker verifies the App/type and atomically appends or relabels the canonical
+reference in the current Activity resource list. The UI refetches that metadata;
+it does not parse/format App URIs, replace resources to attach an object, or
+maintain an object-data store. Plain resources and existing create/edit/state
+controls remain available. Finish a planning edit before attaching an object,
+so an older edit form cannot overwrite the new resource.
+
+`declared` authenticates only the current signed App manifest and object type.
+It does **not** establish object existence, freshness, or permission to access
+data. `unavailable` and `invalid` display the broker's diagnostic while retaining
+the saved reference. Neither describing nor attaching an object runs App code.
+References, labels, summaries, and optional invocation previews are inert text;
+invocation arguments remain structured JSON, not a shell command or an
+execution action. Ordinary capability and approval gates still govern explicit
+App execution. See the [shared object contract](../../../../../docs/app-objects.md).
+
+Object descriptions use the same abortable refresh guards as Activity views.
+They refetch after attachment and other metadata changes; read failures or
+malformed/untrusted descriptions are visible and hide stale descriptions until
+a successful refresh, without disabling unrelated Activity work.
+
+### Refresh behavior
+
 Views refetch after mutations, on focus/notification changes, every three
 seconds while associated jobs are queued/running/waiting for approval, and
-every ten seconds otherwise. Stale reads are aborted and cannot replace a newer
+every ten seconds otherwise (including object declarations). Stale reads are aborted and cannot replace a newer
 selection. Read errors remain visible; there is no local fallback. Lists and
 job projections show at most 100 records.
 
@@ -95,11 +137,18 @@ bun run build --outDir .activity-validation/dist
 bun run test:browser
 ```
 
+When Bun is not on the native PATH, `npm exec --yes --package=bun -- bun test`
+runs the same unit suite without adding a project dependency.
+
 The browser regression serves that isolated production build, exercises the
 token exchange and authenticated mocked API, and requires completed UI actions:
 create/list/detail, persistence across reloads, live job progress, existing
 approval/session/task flows, continuation, edits, explicit state changes, and
-stale read/mutation/creation races. Console errors and unexpected outbound
+stale read/mutation/creation races. Object coverage includes typed attachment
+with and without a revision, canonical backend resources, concurrent plain
+resources, declaration status/errors, malformed or untrusted descriptions,
+inert metadata/invocations, and stale object-read/attachment races.
+Console errors and unexpected outbound
 requests fail the test. It neither contacts a model nor uses real credentials.
 Browser profiles stay under `.activity-validation/` and are removed after the
 test; the build never touches `dist/`. Set `ACTIVITY_BROWSER` to an installed

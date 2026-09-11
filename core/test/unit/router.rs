@@ -604,6 +604,7 @@ fn consent_grant_yes_writes_record_and_show_reads_it_back() {
         runtime: Runtime::default(),
         entry: None,
         operations: BTreeMap::new(),
+        objects: BTreeMap::new(),
         ai: Some(AiPolicy {
             budget: AiBudget {
                 monthly_units: 1000,

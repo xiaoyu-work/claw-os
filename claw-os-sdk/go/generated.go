@@ -118,10 +118,27 @@ type Manifest struct {
 	Runtime string `json:"runtime,omitempty"`
 	Entry string `json:"entry,omitempty"`
 	Operations map[string]interface{} `json:"operations,omitempty"`
+	Objects map[string]interface{} `json:"objects,omitempty"`
 	Ai *Aipolicy `json:"ai,omitempty"`
 	Session *Session `json:"session,omitempty"`
 	Desktop *Desktop `json:"desktop,omitempty"`
 	Dependencies map[string]interface{} `json:"dependencies,omitempty"`
+}
+
+// Objecttype — objectType.
+type Objecttype struct {
+	Label Localizedtext `json:"label"`
+	Summary *Localizedtext `json:"summary,omitempty"`
+	Resolve Objectresolver `json:"resolve"`
+}
+
+// Objectresolver — objectResolver.
+// The kernel verifies operation and argument bindings. Resolution always uses
+// normal App operation dispatch, capabilities, approvals, and audit.
+type Objectresolver struct {
+	Operation string `json:"operation"`
+	IdArg string `json:"id_arg"`
+	RevisionArg string `json:"revision_arg,omitempty"`
 }
 
 // Localizedtext — localizedText.
@@ -263,6 +280,17 @@ type Desktop struct {
 	MimeTypes []string `json:"mime_types,omitempty"`
 	SingleInstance bool `json:"single_instance,omitempty"`
 	PanelApplet bool `json:"panel_applet,omitempty"`
+}
+
+// ObjectRef — App object reference.
+// A portable identifier for App-owned data, not authority, a payload, or proof
+// of existence or readability. Component, UTF-8, and canonical URI semantics are
+// specified in object-references.md and enforced by the public objects helpers.
+type ObjectRef struct {
+	AppId string `json:"app_id"`
+	ObjectType string `json:"object_type"`
+	ObjectId string `json:"object_id"`
+	Revision *string `json:"revision,omitempty"`
 }
 
 // Perms — Permissions request / reply.
@@ -614,6 +642,19 @@ func ValidateBudgetShow(value any) error {
 		panic("generated wire schema is invalid: " + err.Error())
 	}
 	return validateWireSchema(schema, schema, value, "BudgetShow", "$")
+}
+
+const wireSchemaObjectRef = "{\"$id\":\"https://claw-os.dev/wire/v1/object_ref.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":\"A portable identifier for App-owned data, not authority, a payload, or proof of existence or readability. Component, UTF-8, and canonical URI semantics are specified in object-references.md and enforced by the public objects helpers.\",\"properties\":{\"app_id\":{\"description\":\"App identifier; lowercase ASCII component, at most 128 UTF-8 bytes.\",\"type\":\"string\"},\"object_id\":{\"description\":\"Opaque, nonempty UTF-8 identifier, at most 1024 bytes, without Unicode control characters. Never trimmed or normalized.\",\"type\":\"string\"},\"object_type\":{\"description\":\"Object type declared by the App; lowercase ASCII component, at most 64 UTF-8 bytes.\",\"type\":\"string\"},\"revision\":{\"description\":\"Optional opaque, nonempty UTF-8 revision, at most 128 bytes, without Unicode control characters. Absence differs from an empty string.\",\"type\":\"string\",\"x-go-type\":\"*string\"}},\"required\":[\"app_id\",\"object_type\",\"object_id\"],\"title\":\"App object reference\",\"type\":\"object\"}"
+
+// ValidateObjectRef validates a value against wire/v1/object_ref.schema.json.
+func ValidateObjectRef(value any) error {
+	var schema map[string]any
+	decoder := json.NewDecoder(strings.NewReader(wireSchemaObjectRef))
+	decoder.UseNumber()
+	if err := decoder.Decode(&schema); err != nil {
+		panic("generated wire schema is invalid: " + err.Error())
+	}
+	return validateWireSchema(schema, schema, value, "ObjectRef", "$")
 }
 
 const wireSchemaToolCatalog = "{\"$defs\":{\"WireCatalogEntry\":{\"additionalProperties\":true,\"properties\":{\"args_schema\":{\"additionalProperties\":true,\"type\":\"object\"},\"name\":{\"type\":\"string\"},\"returns_schema\":{\"additionalProperties\":true,\"type\":\"object\"},\"stability\":{\"enum\":[\"stable\",\"experimental\"],\"type\":\"string\"},\"summary\":{\"type\":\"string\"},\"verb\":{\"type\":\"string\"}},\"required\":[\"name\",\"summary\",\"verb\",\"stability\",\"args_schema\",\"returns_schema\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/tool_catalog.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":true,\"description\":\"Shape returned by `cos ai tools`.\",\"properties\":{\"tools\":{\"items\":{\"$ref\":\"#/$defs/WireCatalogEntry\"},\"type\":\"array\"}},\"required\":[\"tools\"],\"title\":\"Catalog tool list reply\",\"type\":\"object\"}"
