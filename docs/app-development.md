@@ -65,6 +65,16 @@ decides it, and never bypasses the signed manifest or caller's ceiling.
 Dynamic/direct-resource permissions are explicitly unsupported by this first
 management surface; see [installed compatibility and limits](updating.md).
 
+System package clients use `system.package.install` / `system.package.control`
+with the existing **Critical** `sys.package` capability. Authorization names an
+exact package; global index/upgrade actions require explicit wildcard authority.
+The OS checks the authenticated owner and session rather than requiring the
+caller to be the `pkg` App. Store, terminal and other clients do not inherit this
+grant by identity, and default Agent/local-launcher ceilings still deny it.
+Effects apply to the system and can affect all users; owner binding is not a
+per-user package sandbox. Rollback remains tied to its recorded inverse and
+fresh authority. No App-to-App invocation or installation approval is implied.
+
 A staged migration is moving ordinary App calls onto `mcp.tools`, while
 explicit manifest operations remain available. The human
 `cos app <id> <command>` selects a declared ordinary operation first. Otherwise

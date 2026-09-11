@@ -1753,7 +1753,7 @@ routes! {
         ],
         run: |c| {
             let authority = c.authority()?;
-    packages::restore(c.params, authority).await.map_err(BrokerError::from)
+    packages::restore(c.params, c.client, authority).await.map_err(BrokerError::from)
         },
     }
     SystemPowerControl {

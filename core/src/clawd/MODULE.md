@@ -60,6 +60,7 @@ and agent tasks.
 | `client_identity.rs` | Peer/owner identity and synchronous thread-local filesystem credentials; trusted owner primary/supplementary groups, distinct from extension execution GID, with restoration on every exit |
 | `users.rs` | User Manager provider: status requires `sys.observe:identities`; mutations require `sys.identity:manage`, with exact secret reads for passwords; OS-owned account state and rollback |
 | `regional_settings/` | Closed locale/owner-language/static-hostname service; three separate exact grants, authenticated owner, root-owned D-Bus backends and confirmed/indeterminate outcomes |
+| `packages.rs` | System-wide package effects gated by the caller's Critical `sys.package` scope and owner-bound session, not a fixed client App identity; recorded inverse checks for rollback |
 | `system_caps.rs` | System capability derivation |
 | `session_scope.rs` | Trusted-session override and its owner-policy clamp |
 | Service modules | One privileged capability provider per domain |
@@ -92,6 +93,18 @@ requires root solely for owner-UID dropping; it exercises the installed
 harmless processes, never real Settings, polkit or user grants.
 
 ## Wire Protocol
+
+`system.package.install` and `system.package.control` accept any authenticated
+client with the existing Critical `sys.package` grant for the exact requested
+package. Global actions still require explicit wildcard authority. The `pkg`
+App and Store have no identity-based entitlement: every client retains its own
+grant and audit/session identity. Default Agent and unregistered-launcher
+ceilings remain denied, and a mismatched owner or missing session fails before
+grant spending. Package effects are system-wide, not confined to that owner's
+home; owner binding controls attribution and access to session state.
+`system.package.restore` retains its peer-session/transient authorization and
+requires the exact recorded package/version/hold inverse. This interface does
+not invoke another App or approve an installation review.
 
 `system.regional-settings.control` is available to authenticated sessions and
 their existing private Host provider relay, never as a Host lifecycle action.

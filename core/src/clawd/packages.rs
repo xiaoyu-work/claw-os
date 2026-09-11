@@ -60,7 +60,7 @@ pub async fn control(
         } else {
             Scope::name(package.as_deref().unwrap_or_default())
         };
-        let (session, authorized) = authorize_package_session(authority, requested_scope, true)?;
+        let (session, authorized) = authorize_package_session(authority, requested_scope, uid)?;
 
         let _guard = APT_LOCK
             .get_or_init(|| tokio::sync::Mutex::new(()))
@@ -127,10 +127,14 @@ pub async fn control(
     }
 }
 
-pub async fn restore(params: Value, authority: &Decision) -> Result<Value, String> {
+pub async fn restore(
+    params: Value,
+    client: &ClientIdentity,
+    authority: &Decision,
+) -> Result<Value, String> {
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (params, authority);
+        let _ = (params, client, authority);
         return Err("system package restore requires Linux".to_string());
     }
 
@@ -139,6 +143,7 @@ pub async fn restore(params: Value, authority: &Decision) -> Result<Value, Strin
         if unsafe { libc::geteuid() } != 0 {
             return Err("system package restore requires root clawd".to_string());
         }
+        let uid = client.require_uid()?;
         let mutation_session = required_string(&params, "mutation_session")?;
         let mutation_seq = required_u64(&params, "mutation_seq")?;
         let package = required_string(&params, "package")?;
@@ -150,7 +155,7 @@ pub async fn restore(params: Value, authority: &Decision) -> Result<Value, Strin
         let was_held = required_bool(&params, "was_held")?;
 
         let (_session, authorized) =
-            authorize_package_session(authority, Scope::name(&package), false)?;
+            authorize_package_session(authority, Scope::name(&package), uid)?;
         validate_restore_record(
             &mutation_session,
             mutation_seq,
@@ -233,13 +238,14 @@ pub fn restore_package_state(
 fn authorize_package_session(
     authority: &Decision,
     scope: Scope,
-    require_pkg_app: bool,
+    owner_uid: u32,
 ) -> Result<(SessionInfo, Authorized), String> {
-    if require_pkg_app {
-        authority.require_app("pkg")?;
+    if authority.owner_uid() != owner_uid {
+        return Err("package authority belongs to another owner".into());
     }
+    let session = authority.session()?.clone();
     let proof = authority.require(Cap::new(Verb::SYS_PACKAGE, scope))?;
-    Ok((authority.session()?.clone(), proof))
+    Ok((session, proof))
 }
 
 async fn query_package_state(package: &str) -> Result<PackageState, String> {

@@ -537,6 +537,18 @@ App's own process registry starts empty there. Apps still write to the shared
 agent memory through `cos_runtime.memory`, which the launcher carries out on
 their behalf.
 
+## Capability-based package clients
+
+System package management no longer requires the calling App to use the `pkg`
+identity. Any client must still hold the existing Critical `sys.package`
+authority for the requested package (or explicit wildcard for global actions)
+and match its authenticated owner/session. No client receives new default
+grants, and no stored grant, installed package, user data or release-security
+floor is migrated by this source change. Restore still validates the recorded
+package/version/hold state before executing its inverse. Package effects remain
+system-wide; this change is not per-user package isolation, App installation
+review, or release authorization.
+
 ## Root-managed desktop session lifetime
 
 These requirements describe the unpublished Root-managed display implementation,
