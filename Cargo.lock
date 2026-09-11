@@ -764,6 +764,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "socket2",
  "tar",
  "tempfile",
  "thiserror 1.0.69",

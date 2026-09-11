@@ -143,6 +143,7 @@ claw-display-control = { path = "../crates/claw-display-control" }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+socket2 = "0.6"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 wayland-client = "0.31.11"

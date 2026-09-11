@@ -293,12 +293,17 @@ fn serve(
     if tunnel.stopping() {
         return false;
     }
-    let Ok(upstream) = TcpStream::connect_timeout(&address, CONNECT_DEADLINE) else {
-        let _ = stream.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
-        return false;
+    let upstream = match tunnel.connect(&address, CONNECT_DEADLINE) {
+        Ok(upstream) => upstream,
+        Err(error) => {
+            tracing::debug!(%error, "worker egress TCP connection failed or retired");
+            if !tunnel.stopping() {
+                let _ = stream.write_all(b"HTTP/1.1 502 Bad Gateway\r\n\r\n");
+            }
+            return false;
+        }
     };
-    if let Err(error) = tunnel.upstream(&upstream) {
-        tracing::warn!(%error, "worker egress was retired before upstream activation");
+    if tunnel.stopping() {
         return false;
     }
     if stream

@@ -262,6 +262,20 @@ resolved. The caller runs TLS over the returned stream against the
 hostname it asked for, so the broker pins the transport and TLS pins the
 identity. A redirect is a new `CONNECT`, authorized from scratch.
 
+The egress lifetime retains the TCP socket before its single nonblocking
+connection attempt. Retirement can therefore interrupt an in-progress connect,
+not only an established relay. The wait keeps the existing connection deadline
+and checks cancellation at most every 50 ms; timeout/error releases the pending
+socket without retrying another connection. Exact endpoint and public-address
+checks remain unchanged. DNS resolution is still synchronous and is a separate
+cancellation limitation, not covered by this TCP guarantee.
+
+The ignored `worker::net_broker::tests::retiring_endpoint_cancels_a_pending_tcp_connect`
+case requires Root in a private network namespace with `93.184.216.34/32`
+assigned to loopback. It fills a real listener queue, observes SYN-SENT and
+requires checked endpoint retirement within one second. Never run that setup
+against the real network; CI creates and discards its own namespace.
+
 Bundled consumers use App-owned `shared/python/_shared/safe_http.py` and
 `shared/python/gateway/_shared/safe_egress.py`, the `calendar`, `search` and
 `email` HTTP paths, and both SMTP senders (`email` and `gateway-email`) via

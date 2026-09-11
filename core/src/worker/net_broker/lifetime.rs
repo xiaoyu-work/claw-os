@@ -1,8 +1,13 @@
 use std::collections::HashMap;
-use std::net::{Shutdown, TcpStream};
+use std::io;
+use std::net::{Shutdown, SocketAddr, TcpStream};
+use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use socket2::{Domain, Protocol, Socket, Type};
 
 #[derive(Debug, Default)]
 pub(super) struct Lifetime {
@@ -84,18 +89,131 @@ impl Tunnel {
         self.lifetime.stopped.load(Ordering::Acquire)
     }
 
-    pub fn upstream(&self, stream: &TcpStream) -> Result<(), String> {
-        let mut upstream = self
-            .sockets
-            .upstream
-            .lock()
-            .map_err(|_| "egress upstream lock poisoned")?;
-        if self.stopping() {
-            return Err("egress authority retired while connecting".to_string());
+    pub fn connect(&self, address: &SocketAddr, timeout: Duration) -> io::Result<TcpStream> {
+        if timeout.is_zero() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "zero TCP connect timeout",
+            ));
         }
-        *upstream = Some(stream.try_clone().map_err(|error| error.to_string())?);
-        Ok(())
+        let deadline = Instant::now().checked_add(timeout).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "TCP connect timeout overflow")
+        })?;
+        let socket = Socket::new(
+            Domain::for_address(*address),
+            Type::STREAM,
+            Some(Protocol::TCP),
+        )?;
+        socket.set_nonblocking(true)?;
+        let connected = {
+            let mut upstream = self
+                .sockets
+                .upstream
+                .lock()
+                .map_err(|_| io::Error::other("egress upstream lock poisoned"))?;
+            if self.stopping() {
+                return Err(connect_cancelled());
+            }
+            if upstream.is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::AlreadyExists,
+                    "egress upstream already exists",
+                ));
+            }
+            // Stop must own this socket before the first nonblocking connect.
+            *upstream = Some(socket.try_clone()?.into());
+            match socket.connect(&(*address).into()) {
+                Ok(()) => true,
+                Err(error)
+                    if error.raw_os_error() == Some(libc::EINPROGRESS)
+                        || error.kind() == io::ErrorKind::WouldBlock =>
+                {
+                    false
+                }
+                Err(error) => {
+                    upstream.take();
+                    return Err(error);
+                }
+            }
+        };
+        let stream: TcpStream = socket.into();
+        let result = self
+            .wait_connected(&stream, connected, deadline)
+            .and_then(|()| stream.set_nonblocking(false));
+        if let Err(error) = result {
+            self.sockets
+                .upstream
+                .lock()
+                .map_err(|_| io::Error::other("egress upstream lock poisoned during cleanup"))?
+                .take();
+            return Err(error);
+        }
+        Ok(stream)
     }
+
+    fn wait_connected(
+        &self,
+        stream: &TcpStream,
+        mut connected: bool,
+        deadline: Instant,
+    ) -> io::Result<()> {
+        loop {
+            if self.stopping() {
+                return Err(connect_cancelled());
+            }
+            if connected {
+                return Ok(());
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "egress TCP connection timed out",
+                ));
+            }
+            let wait_ms = remaining.as_millis().clamp(1, 50) as libc::c_int;
+            let mut ready = libc::pollfd {
+                fd: stream.as_raw_fd(),
+                events: libc::POLLOUT,
+                revents: 0,
+            };
+            let result = unsafe { libc::poll(&mut ready, 1, wait_ms) };
+            if result < 0 {
+                let error = io::Error::last_os_error();
+                if error.kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(error);
+            }
+            if result == 0 {
+                continue;
+            }
+            if self.stopping() {
+                return Err(connect_cancelled());
+            }
+            if ready.revents & libc::POLLNVAL != 0 {
+                return Err(io::Error::from_raw_os_error(libc::EBADF));
+            }
+            if let Some(error) = stream.take_error()? {
+                return Err(error);
+            }
+            if ready.revents & libc::POLLOUT == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::ConnectionAborted,
+                    "egress TCP connection closed before completion",
+                ));
+            }
+            stream.peer_addr()?;
+            connected = true;
+        }
+    }
+}
+
+fn connect_cancelled() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::Interrupted,
+        "egress authority retired while connecting",
+    )
 }
 
 impl Drop for Tunnel {

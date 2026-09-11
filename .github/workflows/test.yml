@@ -69,7 +69,7 @@ jobs:
       # rather than skip if it is somehow still unavailable, so a
       # missing dependency cannot turn those tests into a no-op.
       - name: Install worker sandbox dependencies
-        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends bubblewrap python3-idna openssl libpam0g-dev dbus-daemon
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends bubblewrap python3-idna openssl libpam0g-dev dbus-daemon iproute2
 
       - name: Cache cargo registry & target
         uses: actions/cache@v4
@@ -238,6 +238,15 @@ jobs:
           retired_group="$(sed -n 's/.*private retirement cgroup: //p' "$RUNNER_TEMP/gui-retirement.log")"
           [[ "$retired_group" =~ ^/sys/fs/cgroup/claw-display-retirement-[0-9]+-[0-9a-f]+$ ]]
           sudo test ! -e "$retired_group"
+          sudo timeout 15 unshare --mount --net --fork \
+            bash --noprofile --norc -c '
+              set -euo pipefail
+              mount --make-rprivate /
+              ip link set lo up
+              ip address add 93.184.216.34/32 dev lo
+              exec "$1" --exact worker::net_broker::tests::retiring_endpoint_cancels_a_pending_tcp_connect \
+                --ignored --nocapture --test-threads=1
+            ' private-egress "$test_binary"
 
       # Downgrade protection is exercised against real .deb archives,
       # real maintainer scripts, real dpkg/apt transactions and real

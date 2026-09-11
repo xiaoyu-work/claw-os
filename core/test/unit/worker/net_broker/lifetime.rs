@@ -6,9 +6,13 @@ use std::time::Duration;
 #[test]
 fn checked_stop_closes_both_directions_of_an_established_private_tunnel() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-    let mut upstream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-    let (mut remote, _) = listener.accept().unwrap();
     let (mut downstream, mut app) = UnixStream::pair().unwrap();
+    let lifetime = Arc::new(Lifetime::default());
+    let tunnel = lifetime.track(&downstream).unwrap();
+    let mut upstream = tunnel
+        .connect(&listener.local_addr().unwrap(), Duration::from_secs(3))
+        .unwrap();
+    let (mut remote, _) = listener.accept().unwrap();
     for stream in [&upstream, &remote] {
         stream
             .set_read_timeout(Some(Duration::from_secs(3)))
@@ -18,9 +22,6 @@ fn checked_stop_closes_both_directions_of_an_established_private_tunnel() {
         .set_read_timeout(Some(Duration::from_secs(3)))
         .unwrap();
     app.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
-    let lifetime = Arc::new(Lifetime::default());
-    let tunnel = lifetime.track(&downstream).unwrap();
-    tunnel.upstream(&upstream).unwrap();
     let mut outgoing = upstream.try_clone().unwrap();
     let mut incoming = downstream.try_clone().unwrap();
     let (completed, result) = std::sync::mpsc::channel();
@@ -58,7 +59,9 @@ fn checked_stop_closes_both_directions_of_an_established_private_tunnel() {
     assert_eq!(app.read(&mut bytes).unwrap(), 0);
     assert!(tunnel.stopping());
     assert!(lifetime.track(&app).is_err());
-    assert!(tunnel.upstream(&remote).is_err());
+    assert!(tunnel
+        .connect(&listener.local_addr().unwrap(), Duration::from_secs(3))
+        .is_err());
     drop(tunnel);
     assert!(lifetime.tunnels.lock().unwrap().is_empty());
     lifetime.stop().unwrap();
