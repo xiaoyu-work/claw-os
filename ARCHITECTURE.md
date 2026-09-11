@@ -198,10 +198,13 @@ not a direct privileged setter or App-owned approval. System defaults and
 owner preferences are independent, non-atomic effects. No broad polkit policy,
 GUI authority bootstrap or account-administration permission is inherited.
 
-The OS exposes `system.media-player.control` for native Media Player clients.
-The seven closed actions address only `cosmic-player`, with independent exact
-`desktop.media.observe` and `desktop.media.control` grants scoped to that
-identity. Both are denied by default. A bounded OS subprocess enters only the
+The OS exposes `system.media-player.control` to independently authorized
+sessions, without a fixed caller App identity. The seven closed actions still
+address only `cosmic-player`, with independent exact `desktop.media.observe`
+and `desktop.media.control` grants scoped to that target. Neither is in the
+default System Agent authority; existing local-launch policy is unchanged.
+Callers retain their own identity and App permission-denial policy.
+A bounded OS subprocess enters only the
 authenticated owner's session bus, verifies the installed D-Bus service and
 native Player executable/PID, and pins its unique connection. A fresh broker
 authorization gate follows discovery. No matching Player, multiple instances,

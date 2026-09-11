@@ -1,5 +1,5 @@
-//! Owner/App-bound adapter to the installed Media Player, not a general MPRIS
-//! controller. Only this short-lived OS helper enters the owner's session bus.
+//! Owner-bound, capability-gated adapter to the installed Media Player, not a
+//! general MPRIS controller. Only this OS helper enters the owner's session bus.
 
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::net::UnixStream;
@@ -36,7 +36,6 @@ fn authorize(
     action: MediaPlayerAction,
     owner: u32,
 ) -> Result<Authorized, String> {
-    authority.require_app("cosmic-player")?;
     if authority.owner_uid() != owner {
         return Err("Media Player owner mismatch".into());
     }

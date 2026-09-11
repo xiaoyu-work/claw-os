@@ -81,8 +81,14 @@ OS records are durable across App/service restarts.
 Agent provides the versioned `claw-os-media-player-v1` playback adapter for
 newer native Media Player packages. It requires separate exact
 `desktop.media.observe:cosmic-player` and
-`desktop.media.control:cosmic-player` consent; old unscoped MPRIS access does
-not confer either grant. It only observes/controls an already-running native
+`desktop.media.control:cosmic-player` authority; old unscoped MPRIS access does
+not confer either grant. Callers keep their own authenticated identity; the
+service no longer requires the calling App to be `cosmic-player`. The existing
+capabilities still name that fixed target. Neither is in the default System
+Agent authority; existing authenticated local-launch policy is unchanged.
+Installation or default-App selection is not a broker grant, and each calling
+App's denial policy remains enforced.
+It only observes/controls an already-running native
 Player for the authenticated owner. Restart the native Player after an update
 to replace its executable and MPRIS registration; a retired executable is
 refused rather than redirected to another player. Missing or ambiguous

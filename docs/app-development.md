@@ -75,6 +75,17 @@ Effects apply to the system and can affect all users; owner binding is not a
 per-user package sandbox. Rollback remains tied to its recorded inverse and
 fresh authority. No App-to-App invocation or installation approval is implied.
 
+Media clients use `system.media-player.control` under their own authenticated
+identity, without impersonating the `cosmic-player` App. Status requires
+`desktop.media.observe:cosmic-player`; the six playback actions separately
+require `desktop.media.control:cosmic-player`. The scope identifies the fixed
+target, not the caller. Neither capability is in the default System Agent
+authority; existing authenticated local-launch policy is unchanged, and each
+calling App's permission-denial policy remains authoritative. The provider
+addresses only the owner's already-running, executable-verified native Player:
+no other-player selection, media URL, program launch or session-bus access is
+exposed to the caller.
+
 A staged migration is moving ordinary App calls onto `mcp.tools`, while
 explicit manifest operations remain available. The human
 `cos app <id> <command>` selects a declared ordinary operation first. Otherwise

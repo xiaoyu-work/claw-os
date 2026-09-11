@@ -54,7 +54,7 @@ and agent tasks.
 | `network_diagnostics.rs` | Host-network diagnostic provider: interface/route inspection, bounded DNS resolution, and DNS-pinned TCP probes for the `netdiag` App |
 | `filesystem.rs` | Exact-scope bounded text reads and atomic writes/replacements for App workers; pinned paths, task-owned inverse snapshots, no App dispatch |
 | `capture.rs` | App-bound non-interactive screenshot service; fixed native portal client, owner session, screen plus exact output grants, bounded PNG, pinned non-overwriting persistence |
-| `media_player.rs`, `media_player/mpris.rs` | Fixed Media Player adapter; separate exact observation/control grants, authenticated owner bus and native executable/unique-name binding, fresh dispatch authorization and deadlines |
+| `media_player.rs`, `media_player/mpris.rs` | Capability-gated media clients without a fixed caller identity; exact observation/control grants, fixed native target, authenticated owner bus/executable/unique-name binding, fresh dispatch authorization and deadlines |
 | `desktop.rs` | Owner desktop service; Files reveals only its fixed target; Terminal, Store and Settings open only their fixed binaries with an optional directory/package/page under their original independent process-spawn grants |
 | `desktop/settings.rs` | Fixed Settings user-service activation; authenticated owner manager, closed GUI environment, independent lifetime and startup acknowledgement without weakening daemon/worker NoNewPrivileges |
 | `client_identity.rs` | Peer/owner identity and synchronous thread-local filesystem credentials; trusted owner primary/supplementary groups, distinct from extension execution GID, with restoration on every exit |
@@ -173,10 +173,14 @@ JSON namespaces without reading them, and verifies real native presentation,
 acknowledgement and dismissal. It shares the native fixture's broker and
 delivery consumer rather than implementing another notification provider.
 
-`system.media-player.control` is restricted to `cosmic-player`. Status spends
+`system.media-player.control` accepts independently authorized sessions, not
+only the `cosmic-player` App. Status spends
 `desktop.media.observe:cosmic-player`; the six playback actions spend only
-`desktop.media.control:cosmic-player`. Both require explicit consent and
-support the existing Settings deny gate. The fixed helper runs with the
+`desktop.media.control:cosmic-player`. The scope names the fixed playback
+target, not the caller. Neither is in the default System Agent authority.
+The existing Medium-risk local-launch ceiling and authenticated manifest/grant
+derivation are unchanged. Each App keeps its own identity, session and
+permission-denial policy. The fixed helper runs with the
 owner's UID, no supplementary groups or GUI environment, inherited
 NoNewPrivileges, a five-second ceiling and a root-parent socket. After
 discovery it waits for a fresh broker grant check before dispatch. Only the
@@ -185,9 +189,12 @@ missing, spoofed or multiple instances fail closed. No media is opened and
 no other player is selected. Accepted playback actions cannot be rolled back
 by a later cancellation.
 
-Private-bus unit tests cover exact scopes, owner/executable identity, all
-seven actions, live UI metadata, missing/ambiguous instances and a withdrawn
-dispatch gate. The ignored
+Private-bus unit tests cover independently authorized clients, exact scopes,
+owner/executable identity, all seven actions, live UI metadata,
+missing/ambiguous instances and a caller grant revoked at the dispatch gate.
+Authority tests retain separate read/control grants, owner/session attribution,
+per-App denials and grant-use limits; private worker relays expose neither
+human approval nor App registration. The ignored
 `media_player_actual_native_mcp_crosses_worker_relay` test takes explicitly
 built `COS_MEDIA_PLAYER_BINARY`, `COS_MEDIA_PLAYER_MPRIS_FIXTURE`,
 `COS_MEDIA_PLAYER_MANIFEST` and `COS_MEDIA_PLAYER_COS` inputs and exercises

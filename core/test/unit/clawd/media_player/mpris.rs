@@ -328,6 +328,99 @@ async fn media_player_private_bus_controls_only_own_live_state_for_all_seven_too
 }
 
 #[tokio::test]
+async fn media_player_independent_client_uses_live_authority_for_the_fixed_target() {
+    use super::super::tests::decision;
+    use super::super::{authorize, required_cap};
+    use crate::clawd::authority::Uses;
+
+    let _lock = crate::test_env::lock_env();
+    let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", root.path().join("data"));
+    let bus = Bus::new();
+    let state = Arc::new(Mutex::new(State {
+        status: "Paused".into(),
+        title: "native UI state".into(),
+        ..Default::default()
+    }));
+    let other = Arc::new(Mutex::new(State::default()));
+    let _own = player(
+        &bus,
+        &format!("{PREFIX}pid{}", std::process::id()),
+        state.clone(),
+        Duration::ZERO,
+    )
+    .await;
+    let _other = player(
+        &bus,
+        "org.mpris.MediaPlayer2.vlc",
+        other.clone(),
+        Duration::ZERO,
+    )
+    .await;
+    let connection = bus.connection().await;
+    let executable = fixture_executable();
+    let uid = unsafe { libc::geteuid() };
+    for action in [
+        MediaPlayerAction::Status,
+        MediaPlayerAction::Play,
+        MediaPlayerAction::Pause,
+        MediaPlayerAction::Stop,
+        MediaPlayerAction::Next,
+        MediaPlayerAction::Previous,
+        MediaPlayerAction::Toggle,
+    ] {
+        let granted = decision(
+            Some("independent-media-client"),
+            vec![required_cap(action)],
+            Uses::Unbounded,
+        );
+        let _authorized = authorize(&granted, action, uid).unwrap();
+        let result = super::execute(
+            &connection,
+            uid,
+            &executable,
+            action,
+            deadline(),
+            async { authorize(&granted, action, uid).map(|_proof| ()) },
+        )
+        .await
+        .unwrap();
+        let _authorized = authorize(&granted, action, uid).unwrap();
+        if action == MediaPlayerAction::Status {
+            assert_eq!(result["title"], "native UI state");
+        } else {
+            assert_eq!(result, json!({"ok":true}));
+        }
+        assert_eq!(granted.app_id(), Some("independent-media-client"));
+    }
+    let calls = state.lock().unwrap().calls.clone();
+    assert_eq!(calls, ["play", "pause", "stop", "next", "previous", "toggle"]);
+    let cap = required_cap(MediaPlayerAction::Pause);
+    let revoked = decision(
+        Some("independent-media-client"),
+        vec![cap.clone()],
+        Uses::Unbounded,
+    );
+    let _authorized = authorize(&revoked, MediaPlayerAction::Pause, uid).unwrap();
+    let error = super::execute(
+        &connection,
+        uid,
+        &executable,
+        MediaPlayerAction::Pause,
+        deadline(),
+        async {
+            crate::approvals::app_policy::revoke(uid, "independent-media-client", cap)?;
+            authorize(&revoked, MediaPlayerAction::Pause, uid).map(|_proof| ())
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(error.contains("revoked"), "{error}");
+    assert_eq!(state.lock().unwrap().calls, calls);
+    assert!(other.lock().unwrap().calls.is_empty());
+}
+
+#[tokio::test]
 async fn media_player_expired_and_stalled_discovery_cannot_dispatch_a_control() {
     let bus = Bus::new();
     let state = Arc::new(Mutex::new(State::default()));
