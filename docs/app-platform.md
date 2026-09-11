@@ -49,19 +49,22 @@ The public Rust `applet` client and its
 binary do not enter the archive. Source-cohort checks may canonically prepare
 native workspaces against a separate, explicitly unpublished copy of these
 public libraries. They must not alter a verified artifact/cache or claim
-compatibility with an unchanged released pin. The 1.1.0 platform contract adds
-this client and the `sys.locale`, `sys.language` and `sys.hostname` manifest
-vocabulary while retaining runtime ABI 1. SDK 1.0.0 remains unchanged and lacks
-these additions. Consumers must pin the actual published artifact and still
-need the installed `claw-os-applet-services-v1` provider and OS admission.
+compatibility with a published pin. The development contract is version 0.1.0
+with runtime ABI 1 and is not published. Earlier development-platform releases
+have been withdrawn. The Applet client and regional capability vocabulary remain
+source changes, not an available release. Do not fabricate artifact URLs or
+digests. Publication requires an explicit owner decision; committing or pushing
+source changes is not permission to publish. Consumers still need the installed
+`claw-os-applet-services-v1` provider and OS admission.
 
 From the repository root:
 
 ```bash
 python3 -m pytest -q scripts/tests/test_app_platform.py
-python3 scripts/app_platform.py --version 1.1.0
+python3 scripts/app_platform.py --version 0.1.0
 ```
 
-The App platform release is neither an OS image nor an installed App update.
+The build command only creates a local archive; it must not trigger publication.
+An App platform release is neither an OS image nor an installed App update.
 SDK artifacts are build inputs; installed App downloads and updates use the
 separate signed App APT channel.

@@ -95,10 +95,10 @@ mutation journal.
 
 ## Rollout boundary
 
-The generic primitive transport exists in published SDK 1.0.0. The platform
-1.1.0 contract adds these three capability names to the manifest vocabulary.
-Consumers must pin its actual published artifact; the immutable 1.0.0 archive
-is unchanged. Do not pin a fake release or import a mutable OS checkout.
+The generic primitive transport and these capability names are available in
+the unpublished development-platform 0.1.0 source. Earlier platform releases
+have been withdrawn. Consumers must wait for an explicitly approved real artifact;
+do not fabricate a release pin or import a mutable OS checkout.
 
 Settings' GUI operation declarations must request only its actual regional
 needs. Such declarations neither acquire missing High-risk authority nor

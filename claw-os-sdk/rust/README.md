@@ -49,9 +49,10 @@ See the [versioned App data contract](../wire/v1/applet-services.md) for exact
 records, limits and per-operation scopes. History checks are preflight, not a
 grant, CopyQ execution or evidence of resource isolation/revocation. Consumers
 still need authenticated OS admission and existing independent grants.
-The App development platform 1.1.0 contract includes this client. Consumers
-must select its actual published artifact explicitly; SDK 1.0.0 remains
-immutable and does not contain the module.
+This client is part of the unpublished development-platform 0.1.0 source.
+The earlier platform releases have been withdrawn. Consumers must not assume
+an artifact exists or fabricate a download pin; publication requires an explicit
+owner decision.
 
 ## Expose manifest-declared MCP tools
 

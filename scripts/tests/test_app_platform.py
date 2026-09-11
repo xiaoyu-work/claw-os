@@ -20,7 +20,7 @@ def source(tmp_path):
     root = tmp_path / "source"
     root.mkdir()
     contract = platform.read_contract(ROOT)
-    contract["version"] = "1.0.0"
+    contract["version"] = "0.1.0"
     (root / "packaging").mkdir()
     (root / "packaging/app-platform.json").write_text(json.dumps(contract))
     for path in contract["exports"].values():
@@ -54,13 +54,13 @@ def source(tmp_path):
 
 
 def test_platform_exports_are_complete_and_source_reproducible(source, tmp_path):
-    first = platform.build(tmp_path / "first", "1.0.0", source)
-    second = platform.build(tmp_path / "second", "1.0.0", source)
+    first = platform.build(tmp_path / "first", "0.1.0", source)
+    second = platform.build(tmp_path / "second", "0.1.0", source)
     assert first.read_bytes() == second.read_bytes()
     with tarfile.open(first) as archive:
         manifest = json.load(archive.extractfile("platform.json"))
         assert manifest["schema"] == "claw.app-platform/v1"
-        assert manifest["version"] == "1.0.0"
+        assert manifest["version"] == "0.1.0"
         assert manifest["runtime_abi"] == 1
         assert set(manifest["exports"]) == platform.EXPORT_NAMES
         assert len(manifest["source_revision"]) == 40
@@ -81,7 +81,7 @@ def test_release_version_cannot_override_source_contract(source, tmp_path):
 
 
 def test_applet_export_contains_public_client_and_contract_but_no_os_provider(source, tmp_path):
-    archive_path = platform.build(tmp_path / "applet-client", "1.0.0", source)
+    archive_path = platform.build(tmp_path / "applet-client", "0.1.0", source)
     with tarfile.open(archive_path) as archive:
         for relative in (
             "claw-os-sdk/rust/src/applet/mod.rs",
@@ -97,14 +97,14 @@ def test_applet_export_contains_public_client_and_contract_but_no_os_provider(so
 def test_modified_export_is_not_published(source, tmp_path):
     (source / "cos-runtime/rust/library.txt").write_text("uncommitted change\n")
     with pytest.raises(ValueError, match="Commit the SDK"):
-        platform.build(tmp_path / "release", "1.0.0", source)
+        platform.build(tmp_path / "release", "0.1.0", source)
 
 
 def test_release_output_cannot_be_rebound(source, tmp_path):
     output = tmp_path / "release"
-    platform.build(output, "1.0.0", source)
+    platform.build(output, "0.1.0", source)
     with pytest.raises(FileExistsError, match="immutable"):
-        platform.build(output, "1.0.0", source)
+        platform.build(output, "0.1.0", source)
 
 
 def test_contract_cannot_export_os_implementation(source):
@@ -132,4 +132,4 @@ def test_symlink_cannot_smuggle_private_os_sources(source, tmp_path):
         check=True,
     )
     with pytest.raises(ValueError, match="escapes"):
-        platform.build(tmp_path / "release", "1.0.0", source)
+        platform.build(tmp_path / "release", "0.1.0", source)

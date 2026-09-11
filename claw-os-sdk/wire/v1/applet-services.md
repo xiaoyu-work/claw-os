@@ -127,8 +127,8 @@ The [Rust protocol types](../../rust/src/applet/protocol.rs),
 [shared conformance cases](applet-services.cases.json) and real SDK/provider
 process tests cover this versioned family. Any language can use the documented framing;
 existing generated CLI/MCP wire schemas and other language bindings are unchanged.
-Source compatibility does not update released SDK 1.0.0. The platform 1.1.0
-contract includes this client; its actual immutable artifact, an explicit
-consumer pin and OS-owned GUI/resource admission remain prerequisites.
+This client belongs to unpublished development-platform 0.1.0 source.
+Earlier platform releases have been withdrawn. An explicitly approved immutable
+artifact, a real consumer pin and OS-owned GUI/resource admission remain prerequisites.
 In particular no history/selection backend,
 Wayland custody, Clipboard revocation or GUI publication gate is cleared here.
