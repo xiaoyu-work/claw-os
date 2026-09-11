@@ -106,6 +106,39 @@ fn bundled_apps_declare_their_optional_path_defaults() {
 }
 
 #[test]
+fn file_plan_operations_keep_target_authority_explicit_and_do_not_widen_to_directories() {
+    use crate::caps::manifest::ScopeBinding;
+    use crate::caps::Verb;
+
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let manifest = Manifest::from_json(
+        &std::fs::read_to_string(root.join("apps/fs/app.json")).unwrap(),
+    ).unwrap();
+    let resolver = &manifest.objects["change-plan"].resolve;
+    assert_eq!(resolver.operation, "plan_show");
+    assert_eq!(resolver.id_arg, "path");
+    assert_eq!(resolver.revision_arg.as_deref(), Some("plan"));
+    for operation in ["plan_write", "plan_show", "plan_apply", "plan_prune"] {
+        let declared = &manifest.operations[operation];
+        assert!(declared.args.iter().any(|arg| arg.name == "path" && arg.required));
+        for need in &declared.needs {
+            if matches!(need.verb, Verb::FS_READ | Verb::FS_WRITE | Verb::FS_DELETE) {
+                assert!(matches!(&need.scope, ScopeBinding::FromArg { arg, .. } if arg == "path"));
+            }
+        }
+    }
+    let apply = &manifest.operations["plan_apply"];
+    assert!(apply.needs.iter().any(|need| need.verb == Verb::FS_WRITE));
+    let confirm = apply.args.iter().find(|arg| arg.name == "confirm").unwrap();
+    assert!(confirm.required);
+    assert_eq!(confirm.choices, vec![json!(true)]);
+    for operation in ["plan_write", "plan_show", "plan_prune"] {
+        assert!(!manifest.operations[operation].needs.iter().any(|need|
+            matches!(need.verb, Verb::FS_WRITE | Verb::FS_DELETE)));
+    }
+}
+
+#[test]
 fn bundled_python_entries_do_not_own_operation_schemas() {
     fn inspect(dir: &std::path::Path, duplicates: &mut Vec<String>) {
         for entry in std::fs::read_dir(dir).unwrap() {

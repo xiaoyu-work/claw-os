@@ -303,6 +303,79 @@ fn request_clawd(command: Command, params: Value) -> Result<Value, String> {
     }
 }
 
+const FILE_REPLACE_STDIN_BYTES: usize = 128 * 1024;
+
+fn file_replace_params(input: &[u8], session: &str) -> Result<Value, String> {
+    if input.len() > FILE_REPLACE_STDIN_BYTES {
+        return Err("internal file replacement stdin exceeds 128 KiB".to_string());
+    }
+    if session.is_empty() {
+        return Err("internal file replacement requires COS_SESSION".to_string());
+    }
+    let mut params: Value = serde_json::from_slice(input)
+        .map_err(|_| "internal file replacement requires a JSON object on stdin".to_string())?;
+    let object = params
+        .as_object_mut()
+        .ok_or_else(|| "internal file replacement requires a JSON object".to_string())?;
+    if object.len() != 3
+        || !["path", "expected", "content_base64"].iter().all(|key| object.contains_key(*key))
+    {
+        return Err("internal file replacement requires exactly path, expected and content_base64".to_string());
+    }
+    object.insert("session".to_string(), Value::String(session.to_string()));
+    (Command::SystemFileReplace.route().decode)(params)
+        .map_err(|_| "invalid internal file replacement parameters".to_string())
+}
+
+fn file_replace_bridge(args: &[String], stdin_data: Option<Vec<u8>>) -> Result<Option<String>, String> {
+    use std::io::{IsTerminal, Read};
+
+    if args.len() != 2 || args[1] != "replace" {
+        return Err("internal file bridge accepts only: cos __file replace < request.json".to_string());
+    }
+    let session = env::var("COS_SESSION")
+        .map_err(|_| "internal file replacement requires COS_SESSION".to_string())?;
+    let input = match stdin_data {
+        Some(input) => input,
+        None => {
+            let stdin = std::io::stdin();
+            if stdin.is_terminal() {
+                return Err("internal file replacement requires explicit noninteractive stdin".to_string());
+            }
+            let mut input = Vec::new();
+            stdin.lock().take((FILE_REPLACE_STDIN_BYTES + 1) as u64)
+                .read_to_end(&mut input)
+                .map_err(|error| format!("read internal file replacement stdin: {error}"))?;
+            input
+        }
+    };
+    let params = file_replace_params(&input, &session)?;
+    let response = crate::clawd::client::request_blocking(
+        crate::paths::clawd_socket_path(),
+        crate::clawd::protocol::Request::build(Command::SystemFileReplace, params),
+    ).map_err(|message| json!({"error": message, "indeterminate": true}).to_string())?;
+    let value = file_replace_response(response)?;
+    Ok(Some(value.to_string()))
+}
+
+fn file_replace_response(response: crate::clawd::protocol::Response) -> Result<Value, String> {
+    if response.ok {
+        response.result.ok_or_else(|| {
+            json!({"error": "file replacement returned no result", "indeterminate": true}).to_string()
+        })
+    } else {
+        // The worker relay may have flattened the provider's classification.
+        // Preserve an explicit code, but never claim a non-indeterminate code
+        // proves that no replacement happened.
+        Err(match response.error {
+            Some(error) => json!({
+                "error": error.message, "code": error.code, "indeterminate": true,
+            }),
+            None => json!({"error": "file replacement failed without details", "indeterminate": true}),
+        }.to_string())
+    }
+}
+
 fn should_proxy_scheduler_command() -> bool {
     #[cfg(unix)]
     {
@@ -470,6 +543,10 @@ fn dispatch_with_stdin_impl(
             .ok_or_else(|| "internal memory command required".to_string())?;
         let value = mem_bridge::run(command, &args[2..])?;
         return Ok(Some(value.to_string()));
+    }
+
+    if name == "__file" {
+        return file_replace_bridge(args, stdin_data);
     }
 
     if name == "__package" {

@@ -39,7 +39,7 @@ use super::wire::{Fault, RequestId};
 use super::{
     accessibility, activities, activity_objects, activity_receipts, app_sessions, audio, backup, bluetooth, camera, clipboard, config_editor,
     containers, context, context_events, crash, credentials, desktop, display, event_center,
-    firewall, hardware, journal as journal_ops, location, memory, network, notifications, packages,
+    file_changes, firewall, hardware, journal as journal_ops, location, memory, network, notifications, packages,
     operation_previews, permissions, power, printer, scheduler, security, snapshots, storage, system_journal, systemd,
     tasks, transactions, usage, usb_guard, users,
 };
@@ -1195,7 +1195,6 @@ routes! {
             let authority = c.authority()?;
             app_sessions::relay(c.state, c.params.clone(), c.client, authority)
                 .await
-                .map_err(BrokerError::from)
         },
     }
 
@@ -1479,6 +1478,19 @@ routes! {
         event_center::control(c.params, authority)
             .await
             .map_err(BrokerError::from)
+        },
+    }
+    SystemFileReplace {
+        name: "system.file.replace",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: session(Audience::SystemService),
+        body: body::FileReplace,
+        audit: &[("session", FieldRule::Token)],
+        run: |c| {
+            let authority = c.authority()?;
+            file_changes::replace(c.params, authority).await
         },
     }
     SystemFirewallControl {

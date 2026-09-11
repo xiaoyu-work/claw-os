@@ -43,6 +43,7 @@ const EXPECTED_USER_COMMANDS: &[&str] = &[
     "system.desktop.control",
     "system.display.control",
     "system.events.control",
+    "system.file.replace",
     "system.firewall.control",
     "system.hardware.inspect",
     "system.location.query",
@@ -252,6 +253,26 @@ fn a_peer_without_credentials_reaches_no_route_at_all() {
             "{}",
             route.name
         );
+    }
+}
+
+#[test]
+fn file_replace_is_a_session_authorized_mutation_with_no_content_audit_fields() {
+    let route = Command::SystemFileReplace.route();
+    assert_eq!(route.name, "system.file.replace");
+    assert_eq!(route.access, Access::User);
+    assert_eq!(route.kind, Kind::Mutation);
+    assert_eq!(route.budget.deadline, Deadline::Uninterruptible);
+    assert_eq!(route.authority.subject, SubjectSource::Session);
+    assert_eq!(route.authority.audience, Audience::SystemService);
+    assert_eq!((route.authority.requirement)(&json!({})).unwrap(), authority::Requirement::RouteDerived);
+    let facts = crate::audit_policy::request_facts_for_route(
+        route.name, route.audit_fields,
+        &json!({"session":"session-1","path":"/private/file","content_base64":"private-content","expected":{"sha256":"private-hash"}}),
+    );
+    let recorded = serde_json::to_string(&facts).unwrap();
+    for private in ["/private/file", "private-content", "private-hash"] {
+        assert!(!recorded.contains(private));
     }
 }
 

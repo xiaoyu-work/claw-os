@@ -124,6 +124,19 @@ See [the normative object-reference contract](wire/v1/object-references.md)
 for byte limits, strict URI spelling, generated validation, shared golden
 vectors, and the optional manifest `objects` declaration.
 
+## App-reported file change plans
+
+The generated `FileChangePlan` value and validators describe a bounded,
+App-owned staged proposal, including its public diff and lifecycle state.
+The App owns private before/proposed contents and the plan's lifecycle;
+the SDK introduces no plan store, apply transport, or authority.
+
+Review fingerprints bind proposal data, not permission. Normal authorization
+and current-file checks still apply, and uncooperative writers may race after
+the final check: this is not atomic compare-and-swap or universal rollback.
+See [the file change plan contract](wire/v1/file-change-plans.md) for exact
+fields, nullable values, reference semantics, and validation limits.
+
 ## App effect declarations
 
 An operation may declare up to 16 effects in its manifest for a metadata-only

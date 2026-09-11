@@ -85,6 +85,16 @@ Mounts come from the capabilities the authority already granted:
   (`/proc`, `/sys`, `/run/cos`, `/var/lib/cos`, `~/.ssh`, `~/.gnupg`, …)
   fails the launch instead of being silently skipped.
 
+Protected-root checks also reject canonical aliases of credential stores in
+the submitting owner's home. The shared broker check takes that home from
+authenticated owner identity rather than the root daemon's `HOME`.
+`system.file.replace` has a narrow `fs.write` admission rule; clawd still
+requires both exact target read/write capabilities. It does the atomic rename
+outside the sandbox, without changing any of the mount rules above.
+The launch endpoint and its local policy/memory clients use the same broker
+protocol version as clawd. Both request version and response correlation are
+checked; a forwarded successful mutation must not become an unusable v1 reply.
+
 Granted paths are mounted at the *same absolute path* they have on the
 host, so the argument the App receives, the scope the authority granted,
 and the path inside the sandbox are one string.
@@ -93,8 +103,10 @@ An operation also gets a writable **App data partition**: `COS_DATA_DIR`
 is `<owner-data-root>/apps/<app-id>`, created `0700` and bound at that
 same path. The owner's data root itself — credentials, sessions, the
 journal, every other App's partition — is never mounted, and the
-read-only `_shared` library directories the bundled Apps import are the
-only other part of the apps tree a launch receives.
+read-only `_shared` library directories and the single `canonical_argv.py`
+parser file the bundled Apps import are the only other parts of the apps
+tree a launch receives. The apps root and neighbouring App packages are
+never mounted for these imports.
 
 State a bundled App wrote before isolation is brought forward once, by
 `migrate.rs`, before its first sandboxed launch. The paths are a fixed

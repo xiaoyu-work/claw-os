@@ -399,21 +399,27 @@ fn desktop_transports() -> (Vec<Mount>, BTreeMap<String, String>) {
 /// helpers that hold the safe filesystem, subprocess and egress
 /// behaviour. Mounting only the App's own directory would leave every
 /// one of them unimportable, so the sibling `_shared` and the apps
-/// root's `_shared` come with it, read-only. Nothing else from the apps
-/// root is exposed: a neighbouring App stays invisible.
+/// root's `_shared` come with it, read-only. The canonical argv parser is
+/// a separate shared file; neighbouring Apps remain invisible.
 fn shared_library_mounts(app_dir: &Path, apps_root: &Path) -> Vec<Mount> {
     let mut candidates = Vec::new();
     if let Some(parent) = app_dir.parent() {
-        candidates.push(parent.join("_shared"));
+        candidates.push((parent.join("_shared"), true));
     }
-    candidates.push(apps_root.join("_shared"));
+    candidates.push((apps_root.join("_shared"), true));
+    candidates.push((apps_root.join("canonical_argv.py"), false));
     let mut mounts = Vec::new();
     let mut seen: BTreeSet<PathBuf> = BTreeSet::new();
-    for candidate in candidates {
+    for (candidate, directory) in candidates {
         let Ok(canonical) = candidate.canonicalize() else {
             continue;
         };
-        if !canonical.is_dir() || !seen.insert(canonical.clone()) {
+        let expected_type = if directory {
+            canonical.is_dir()
+        } else {
+            canonical.is_file()
+        };
+        if !expected_type || !seen.insert(canonical.clone()) {
             continue;
         }
         mounts.push(Mount::read_only(
@@ -839,6 +845,19 @@ fn expand_home(pattern: &str) -> String {
 /// This is a hard failure, not a silent skip: a launch that believes it
 /// was granted `~/.ssh` must not proceed as if it had been.
 pub fn reject_forbidden(path: &Path) -> Result<(), String> {
+    let home = crate::paths::current_home_override()
+        .or_else(|| std::env::var_os("HOME").map(PathBuf::from));
+    reject_forbidden_with_home(path, home.as_deref())
+}
+
+/// Broker providers use the authenticated session owner's passwd home, not
+/// the root daemon's HOME. Canonical roots also exclude symlinked stores
+/// addressed through an otherwise innocuous alias.
+pub(crate) fn reject_forbidden_for_owner(path: &Path, home: &Path) -> Result<(), String> {
+    reject_forbidden_with_home(path, Some(home))
+}
+
+fn reject_forbidden_with_home(path: &Path, home: Option<&Path>) -> Result<(), String> {
     let text = path.to_string_lossy();
     for root in FORBIDDEN_ROOTS {
         if text == *root || text.starts_with(&format!("{root}/")) {
@@ -846,6 +865,7 @@ pub fn reject_forbidden(path: &Path) -> Result<(), String> {
                 "worker sandbox refuses to expose kernel-owned path `{root}`"
             ));
         }
+        reject_store_alias(path, Path::new(root))?;
     }
     for component in FORBIDDEN_COMPONENTS {
         if text.contains(&format!("/{component}/")) || text.ends_with(&format!("/{component}")) {
@@ -853,8 +873,22 @@ pub fn reject_forbidden(path: &Path) -> Result<(), String> {
                 "worker sandbox refuses to expose credential store `{component}`"
             ));
         }
+        if let Some(home) = home {
+            reject_store_alias(path, &home.join(component))?;
+        }
     }
     Ok(())
+}
+
+fn reject_store_alias(path: &Path, store: &Path) -> Result<(), String> {
+    match store.canonicalize() {
+        Ok(root) if path.starts_with(&root) => {
+            Err("worker sandbox refuses an alias of a protected store".to_string())
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("cannot resolve a protected worker path: {error}")),
+    }
 }
 
 /// Only directories and regular files are mountable. A socket, FIFO,

@@ -101,6 +101,38 @@ export interface Envelope {
 }
 
 /**
+ * App-reported file change plan.
+ * Public App-reported staged-plan data, not OS-confirmed mutation, authority,
+ * or universal rollback. Semantic validation is owned by the App/core; see
+ * file-change-plans.md. Private before/proposed contents are never fields of
+ * this value.
+ */
+export interface FileChangePlan {
+  schema: 1;
+  kind: "file_change_plan";
+  plan_id: string;
+  path: string;
+  state: "draft" | "applying" | "applied" | "conflicted" | "indeterminate" | "expired";
+  before_exists: boolean;
+  before_sha256: string | null;
+  after_sha256: string;
+  before_bytes: number;
+  after_bytes: number;
+  would_change: boolean;
+  review: string;
+  reference: string;
+  diff: string;
+  diff_truncated: boolean;
+  created_at: string;
+  expires_at: string;
+  warnings: string[];
+  snapshot?: string | null;
+  applied_at?: string | null;
+  changed?: boolean | null;
+  diagnostic?: string | null;
+}
+
+/**
  * App manifest (app.json).
  * The manifest every app under COS_APPS_DIR must provide. The kernel parses
  * and validates this (core/src/caps/manifest.rs) to derive the app's
@@ -702,6 +734,17 @@ export function validateBudgetShow(value: unknown): asserts value is BudgetShow 
 
 export function normalizeBudgetShowIntegers(value: unknown): void {
   normalizeWireIntegers(_WIRE_SCHEMA_BUDGET_SHOW, _WIRE_SCHEMA_BUDGET_SHOW, value);
+}
+
+const _WIRE_SCHEMA_FILE_CHANGE_PLAN: WireRule = decodeWireJson("{\"$id\":\"https://claw-os.dev/wire/v1/file_change_plan.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":\"Public App-reported staged-plan data, not OS-confirmed mutation, authority, or universal rollback. Semantic validation is owned by the App/core; see file-change-plans.md. Private before/proposed contents are never fields of this value.\",\"properties\":{\"after_bytes\":{\"maximum\":65536,\"minimum\":0,\"type\":\"integer\"},\"after_sha256\":{\"description\":\"Canonical sha256: plus 64 lowercase hexadecimal digits for the proposal. App/core validates the digest.\",\"type\":\"string\"},\"applied_at\":{\"description\":\"Optional App-reported RFC3339 application timestamp, not OS confirmation.\",\"oneOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"x-go-type\":\"*string\",\"x-rust-type\":\"String\",\"x-ts-type\":\"string | null\"},\"before_bytes\":{\"maximum\":65536,\"minimum\":0,\"type\":\"integer\"},\"before_exists\":{\"type\":\"boolean\"},\"before_sha256\":{\"description\":\"Canonical sha256: plus 64 lowercase hexadecimal digits for an existing preimage, otherwise null. Validated semantically by the App/core.\",\"oneOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"x-go-type\":\"*string\",\"x-rust-type\":\"Option<String>\",\"x-ts-type\":\"string | null\"},\"changed\":{\"description\":\"Optional App-reported change result, not OS-confirmed mutation.\",\"oneOf\":[{\"type\":\"boolean\"},{\"type\":\"null\"}],\"x-go-type\":\"*bool\",\"x-rust-type\":\"bool\",\"x-ts-type\":\"boolean | null\"},\"created_at\":{\"description\":\"App-reported RFC3339 creation timestamp.\",\"type\":\"string\"},\"diagnostic\":{\"oneOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"x-go-type\":\"*string\",\"x-rust-type\":\"String\",\"x-ts-type\":\"string | null\"},\"diff\":{\"description\":\"App-reported staged diff, at most 65536 UTF-8 bytes. This is not a private before/proposed-content field.\",\"type\":\"string\"},\"diff_truncated\":{\"type\":\"boolean\"},\"expires_at\":{\"description\":\"App-reported RFC3339 expiration timestamp.\",\"type\":\"string\"},\"kind\":{\"const\":\"file_change_plan\",\"type\":\"string\"},\"path\":{\"description\":\"Absolute target path, at most 4096 UTF-8 bytes. Existing object-reference bounds also apply.\",\"type\":\"string\"},\"plan_id\":{\"description\":\"UUID identifying the immutable proposal.\",\"type\":\"string\"},\"reference\":{\"description\":\"Canonical app://fs/change-plan?id=<encoded absolute path>&revision=<encoded plan UUID>, using the existing ObjectRef helpers.\",\"type\":\"string\"},\"review\":{\"description\":\"Canonical sha256 fingerprint binding the immutable proposal. Data only, never authorization or permission to apply.\",\"type\":\"string\"},\"schema\":{\"const\":1,\"type\":\"integer\"},\"snapshot\":{\"description\":\"Optional App-reported snapshot identifier, not snapshot contents or proof of rollback capability.\",\"oneOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"x-go-type\":\"*string\",\"x-rust-type\":\"String\",\"x-ts-type\":\"string | null\"},\"state\":{\"enum\":[\"draft\",\"applying\",\"applied\",\"conflicted\",\"indeterminate\",\"expired\"],\"type\":\"string\"},\"warnings\":{\"description\":\"At most 16 App-reported warnings. External writers can race after the final precondition check; this plan does not provide atomic compare-and-swap.\",\"items\":{\"description\":\"At most 1024 UTF-8 bytes; validated by the App/core.\",\"type\":\"string\"},\"maxItems\":16,\"type\":\"array\"},\"would_change\":{\"type\":\"boolean\"}},\"required\":[\"schema\",\"kind\",\"plan_id\",\"path\",\"state\",\"before_exists\",\"before_sha256\",\"after_sha256\",\"before_bytes\",\"after_bytes\",\"would_change\",\"review\",\"reference\",\"diff\",\"diff_truncated\",\"created_at\",\"expires_at\",\"warnings\"],\"title\":\"App-reported file change plan\",\"type\":\"object\"}") as WireRule;
+
+export function validateFileChangePlan(value: unknown): asserts value is FileChangePlan & Record<string, unknown> {
+  validateWireSchema(_WIRE_SCHEMA_FILE_CHANGE_PLAN, _WIRE_SCHEMA_FILE_CHANGE_PLAN, value, "FileChangePlan", "$");
+  normalizeWireIntegers(_WIRE_SCHEMA_FILE_CHANGE_PLAN, _WIRE_SCHEMA_FILE_CHANGE_PLAN, value);
+}
+
+export function normalizeFileChangePlanIntegers(value: unknown): void {
+  normalizeWireIntegers(_WIRE_SCHEMA_FILE_CHANGE_PLAN, _WIRE_SCHEMA_FILE_CHANGE_PLAN, value);
 }
 
 const _WIRE_SCHEMA_OBJECT_REF: WireRule = decodeWireJson("{\"$id\":\"https://claw-os.dev/wire/v1/object_ref.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":\"A portable identifier for App-owned data, not authority, a payload, or proof of existence or readability. Component, UTF-8, and canonical URI semantics are specified in object-references.md and enforced by the public objects helpers.\",\"properties\":{\"app_id\":{\"description\":\"App identifier; lowercase ASCII component, at most 128 UTF-8 bytes.\",\"type\":\"string\"},\"object_id\":{\"description\":\"Opaque, nonempty UTF-8 identifier, at most 1024 bytes, without Unicode control characters. Never trimmed or normalized.\",\"type\":\"string\"},\"object_type\":{\"description\":\"Object type declared by the App; lowercase ASCII component, at most 64 UTF-8 bytes.\",\"type\":\"string\"},\"revision\":{\"description\":\"Optional opaque, nonempty UTF-8 revision, at most 128 bytes, without Unicode control characters. Absence differs from an empty string.\",\"type\":\"string\",\"x-go-type\":\"*string\"}},\"required\":[\"app_id\",\"object_type\",\"object_id\"],\"title\":\"App object reference\",\"type\":\"object\"}") as WireRule;

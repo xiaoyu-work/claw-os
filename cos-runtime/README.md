@@ -20,9 +20,11 @@ detail:
 | `cos_runtime::net` | (not applicable) | Route `net.*` ops similarly |
 | `cos_runtime::ask_claw` | (not applicable) | Serialize bounded typed desktop context and directly supervise a transient Agent overlay |
 | (not applicable) | `cos_runtime.snapshot` | Copy-on-write before every gated fs mutation |
+| (not applicable) | `cos_runtime.file_changes` | Bounded, preconditioned atomic replacement through the capability-gated broker |
 
-These modules talk wire-v1 too, but they're the *kernel side* of that wire —
-the consumers are the bundled apps in this repo, not external apps.
+These modules use internal kernel bridges or App wire contracts. Their
+consumers are the bundled apps in this repo, not external apps; adding one does
+not extend the public SDK.
 
 ## Why a separate crate / package
 
@@ -33,6 +35,41 @@ the consumers are the bundled apps in this repo, not external apps.
   where someone installs `cos-runtime` separately.
 - Importing `cos_runtime` from a non-claw-os process **will fail loudly**
   (`cos` binary not on PATH, no `COS_SESSION` env, etc.) — by design.
+
+## Guarded file replacement
+
+`cos_runtime.file_changes.replace_file(path: str, expected: dict | None,
+content: bytes) -> dict` calls the fixed `cos __file replace` bridge using the
+runtime's existing executable discovery. It sends the closed JSON request on
+stdin, never content in arguments or environment, and has no direct-write
+fallback. The bridge derives `COS_SESSION` and forwards to `system.file.replace`.
+Content is at most 65,536 bytes; stdin JSON is at most 128 KiB.
+`validate_path(path)` exposes the same pure literal-path check to plan
+preparation, so an unsupported target is refused before permission requests
+or proposal storage. It performs no I/O and grants no authority.
+
+`expected=None` explicitly requires absence. An existing file's closed
+fingerprint has `sha256` (`sha256:` plus 64 lowercase hex digits), `size`,
+`device`, `inode`, full `mode` (`st_mode`), `modified_ns` and `changed_ns`.
+UID/GID are intentionally absent because worker user namespaces remap them;
+the provider preserves host ownership internally. The result has exactly
+`path`, `bytes`, `sha256` and boolean `changed`. Identical content is a no-op.
+
+The broker requires both exact target `fs.read` and `fs.write`, pins the
+canonical parent, refuses protected paths, symlinks, non-regular or multiply
+linked files, special mode bits and unpreservable extended attributes, and
+never expands worker mounts. It stages in the same directory, syncs the stage,
+rechecks the baseline, atomically replaces an existing entry or creates a new
+one without overwrite, then syncs the parent. New files are owner-private
+`0600`; existing host UID/GID and basic mode are preserved.
+
+The final check/commit interval is **not CAS against uncooperative host
+writers**. `FileChangeError` reports every failure; after invoking cos its
+`indeterminate` flag stays conservative even when a worker relay reports an ordinary
+error code. An unknown commit or durability outcome keeps an effect-level
+journal bracket unresolved and refuses replay until operator resolution.
+The provider does not implement rollback: the App owns its plan baseline and
+snapshot. See [file-change plans](../docs/file-change-plans.md).
 
 ## Ask Claw desktop integration
 

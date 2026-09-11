@@ -14,6 +14,8 @@ Rust, Python, Node, and Go bindings.
   or a presentation-specific store.
 - Define optional App effect metadata without treating declarations or
   metadata-only previews as authority or confirmed execution outcomes.
+- Define public App-reported file-plan values without exposing private proposal
+  contents or treating review fingerprints as authority.
 - Own decoder validation and JSON-RPC error codes in `wire/v1/contract.json`
   plus the versioned schemas.
 - Release every language binding at the same SDK SemVer through GitHub.
@@ -28,6 +30,8 @@ Rust, Python, Node, and Go bindings.
 | `wire/v1/object_ref.schema.json`, `wire/v1/object-references.md` | Object reference shape and normative identity/URI semantics |
 | `wire/v1/object_ref.vectors.json` | Shared four-language object-reference conformance vectors |
 | `wire/v1/manifest.schema.json`, `wire/v1/operation-effects.md` | Optional effect declarations and truthful metadata-only preview semantics |
+| `wire/v1/file_change_plan.schema.json`, `wire/v1/file-change-plans.md` | Closed App-reported staged-plan value and semantic validation boundaries |
+| `wire/v1/file_change_plan.vectors.json` | Shared file-plan decoder conformance cases |
 | `wire/v1/ask-claw-launcher.md` | Versioned secure desktop overlay launcher handshake |
 | `rust/` | Rust public SDK |
 | `python/` | Python public SDK |
@@ -87,6 +91,18 @@ PYTHONPATH=python/src python3 -m pytest -q \
 (cd node && node node_modules/typescript/bin/tsc -p tsconfig.test.json \
   && node --test dist-test/objects.test.js dist-test/wire.test.js)
 (cd go && go test -count=1 ./... -run ObjectReference)
+```
+
+File-plan schema checks use the existing wire conformance tests. From the SDK
+root:
+
+```bash
+python3 wire/codegen.py --check
+cargo test -p claw-os-sdk --lib generated_tests::file_change_plan
+PYTHONPATH=python/src python3 -m pytest -q python/src/claw_os_sdk/test_wire.py -k file_change_plan
+(cd node && node node_modules/typescript/bin/tsc -p tsconfig.test.json \
+  && node --test --test-name-pattern="file change plan" dist-test/wire.test.js)
+(cd go && go test -count=1 ./... -run FileChangePlan)
 ```
 
 For broader affected-language checks, from the repository root:

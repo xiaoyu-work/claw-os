@@ -80,7 +80,12 @@ fn route_audiences_match_their_families() {
     for route in ROUTES {
         let expected = match route.name {
             name if name.starts_with("daemon.") || name.starts_with("journal.") => Audience::Daemon,
-            name if name.starts_with("task.") => Audience::Task,
+            name if name.starts_with("task.")
+                || name.starts_with("activity.")
+                || name == "operation.preview" =>
+            {
+                Audience::Task
+            }
             name if name.starts_with("memory.")
                 || name.starts_with("context.")
                 || name == "agent.usage"

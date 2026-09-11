@@ -151,6 +151,78 @@ fn root_types_and_budget_show_have_stable_contracts() {
     assert_eq!(chat_budget.path, "$.app");
 }
 
+fn file_change_plan_vectors() -> serde_json::Value {
+    serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../wire/v1/file_change_plan.vectors.json"
+    )))
+    .unwrap()
+}
+
+#[test]
+fn file_change_plan_shared_vectors_and_required_fields() {
+    use crate::generated::validate_file_change_plan;
+
+    let vectors = file_change_plan_vectors();
+    for case in vectors["cases"].as_array().unwrap() {
+        let mut value = case.get("root").unwrap_or(&vectors["base"]).clone();
+        if let Some(fields) = case.get("set").and_then(serde_json::Value::as_object) {
+            for (field, replacement) in fields {
+                value[field] = replacement.clone();
+            }
+        }
+        match case["code"].as_str() {
+            None => validate_file_change_plan(&value).unwrap(),
+            Some(code) => {
+                let error = validate_file_change_plan(&value).unwrap_err();
+                assert_eq!(error.code, code, "{}", case["name"]);
+                assert_eq!(error.path, case["path"].as_str().unwrap(), "{}", case["name"]);
+            }
+        }
+    }
+    for field in vectors["base"].as_object().unwrap().keys() {
+        let mut value = vectors["base"].clone();
+        value.as_object_mut().unwrap().remove(field);
+        let error = validate_file_change_plan(&value).unwrap_err();
+        assert_eq!(error.code, WIRE_REQUIRED);
+        assert_eq!(error.path, format!("$.{field}"));
+    }
+}
+
+#[test]
+fn file_change_plan_generated_type_preserves_required_null_and_optional_values() {
+    use crate::generated::{validate_file_change_plan, FileChangePlan};
+
+    let mut value = file_change_plan_vectors()["base"].clone();
+    for field in ["snapshot", "applied_at", "changed", "diagnostic"] {
+        value[field] = serde_json::Value::Null;
+    }
+    validate_file_change_plan(&value).unwrap();
+    let typed: FileChangePlan = serde_json::from_value(value).unwrap();
+    assert!(typed.before_sha256.is_none());
+    assert!(typed.snapshot.is_none());
+    assert!(typed.applied_at.is_none());
+    assert!(typed.changed.is_none());
+    assert!(typed.diagnostic.is_none());
+    let serialized = serde_json::to_value(typed).unwrap();
+    assert!(serialized.as_object().unwrap().contains_key("before_sha256"));
+    assert!(serialized["before_sha256"].is_null());
+    validate_file_change_plan(&serialized).unwrap();
+
+    let mut value = file_change_plan_vectors()["base"].clone();
+    value["state"] = serde_json::json!("applied");
+    value["before_exists"] = serde_json::json!(true);
+    value["before_sha256"] = serde_json::json!(format!("sha256:{}", "c".repeat(64)));
+    value["snapshot"] = serde_json::json!("snapshot-1");
+    value["applied_at"] = serde_json::json!("2026-09-10T12:05:00Z");
+    value["changed"] = serde_json::json!(false);
+    value["diagnostic"] = serde_json::json!("App-reported result");
+    validate_file_change_plan(&value).unwrap();
+    let typed: FileChangePlan = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(typed.changed, Some(false));
+    assert_eq!(serde_json::to_value(typed).unwrap(), value);
+}
+
 #[test]
 fn operation_effect_bindings_preserve_omission_and_explicit_declarations() {
     use crate::generated::{Operation, Operationeffect};

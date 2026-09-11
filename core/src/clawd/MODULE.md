@@ -38,6 +38,7 @@ and agent tasks.
 | `activity_objects.rs` | Owner-scoped reference attachment and authenticated object descriptions; never fetches App data |
 | `operation_previews.rs` | Shared App effect previews and owner-scoped Activity adaptation; never executes Apps |
 | `activity_receipts.rs` | Owner-scoped immutable caller reports and separately authenticated declaration snapshots |
+| `file_changes.rs` | Exact read/write-capability atomic file replacement, owner-aware path protection, and effect-level indeterminate journal brackets |
 | `usage.rs` | Peer-UID-scoped Agent token usage queries |
 | `app_sessions.rs` | App/native/MCP session authority: derives identity and capabilities, plans approvals, issues launch grants |
 | `scheduler.rs` | Proactive-scheduler authority: validates `cos cron` / `cos triggers` requests and derives what a job may carry |
@@ -198,6 +199,15 @@ flooding the socket.
 
 ## Error Boundaries
 
+- `system.file.replace` is a Session/SystemService mutation. Its provider
+  requires both exact target read/write capabilities, pins the parent and
+  refuses unsafe metadata rather than widening a worker mount. It retains an
+  effect-level bracket with a stable proposal identity on both direct and
+  relay paths, independently of a launcher's transport correlation id.
+  The root relay preserves typed provider errors, so an unknown rename/link
+  or durability result leaves both its outer bracket and the file bracket
+  unresolved. Worker-side error flattening is not a claim of no effect.
+  No rollback or universal filesystem CAS is claimed.
 - `state::StateError` owns transaction recovery, in-memory context/transaction
   locks, ownership conflicts, and corrupted daemon state. Poisoned locks are
   unavailable state and are never recovered with `PoisonError::into_inner`.

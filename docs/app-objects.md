@@ -155,5 +155,12 @@ Object data remains owned by its App.
 
 Activity persistence stays at schema version 1: references use the existing
 `label`/`reference` fields, not a second store or a migrated data copy.
-Automatic object-data fetching, a global relationship graph, effect previews,
-and event-driven delegation are later increments.
+Automatic object-data fetching, a global relationship graph, and event-driven
+delegation remain later increments. Shared metadata-only effect previews and
+permission-gated file plans are separate, explicit operations.
+
+The Files App also declares `change-plan`, whose ID is an absolute target path
+and whose optional revision selects a stored plan. Resolution remains an
+ordinary, permission-gated `plan_show` call. See
+[staged file changes](file-change-plans.md); references and review fingerprints
+are data, never write permission.

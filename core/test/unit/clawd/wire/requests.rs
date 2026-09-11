@@ -1,6 +1,91 @@
 use super::*;
 use serde_json::json;
 
+fn file_replace_body() -> serde_json::Value {
+    json!({
+        "session":"session-1",
+        "path":"/home/owner/document",
+        "expected":{
+            "sha256":format!("sha256:{}", "a".repeat(64)), "size":65536,
+            "device":1, "inode":2, "mode":33152,
+            "modified_ns":-1, "changed_ns":1
+        },
+        "content_base64":""
+    })
+}
+
+#[test]
+fn file_replace_wire_is_closed_and_requires_an_explicit_nullable_precondition() {
+    let body = file_replace_body();
+    assert!(serde_json::from_value::<FileReplace>(body.clone()).is_ok());
+    let mut absent = body.clone();
+    absent["expected"] = serde_json::Value::Null;
+    let canonical = serde_json::to_value(serde_json::from_value::<FileReplace>(absent.clone()).unwrap()).unwrap();
+    assert!(canonical.get("expected").unwrap().is_null());
+    absent.as_object_mut().unwrap().remove("expected");
+    assert!(serde_json::from_value::<FileReplace>(absent).is_err());
+    for field in ["owner_uid", "grant", "directory", "force", "follow_symlinks"] {
+        let mut forged = body.clone();
+        forged[field] = json!(true);
+        assert!(serde_json::from_value::<FileReplace>(forged).is_err(), "{field}");
+    }
+    for field in ["uid", "gid", "owner_uid", "grant", "link_count"] {
+        let mut forged = body.clone();
+        forged["expected"][field] = json!(0);
+        assert!(serde_json::from_value::<FileReplace>(forged).is_err(), "{field}");
+    }
+    for key in ["sha256", "size", "device", "inode", "mode", "modified_ns", "changed_ns"] {
+        let mut missing = body.clone();
+        missing["expected"].as_object_mut().unwrap().remove(key);
+        assert!(serde_json::from_value::<FileReplace>(missing).is_err(), "{key}");
+    }
+}
+
+#[test]
+fn file_replace_wire_enforces_hash_integer_path_and_content_bounds() {
+    let body = file_replace_body();
+    for hash in ["sha256:ABC".to_string(), format!("sha256:{}", "A".repeat(64)), "a".repeat(64), format!("sha256:{}", "f".repeat(65))] {
+        let mut bad = body.clone();
+        bad["expected"]["sha256"] = json!(hash);
+        assert!(serde_json::from_value::<FileReplace>(bad).is_err());
+    }
+    for (field, value) in [
+        ("size", json!(65537)), ("size", json!(-1)), ("size", json!(true)),
+        ("device", json!(-1)), ("inode", json!("3")),
+        ("mode", json!(u64::from(u32::MAX) + 1)),
+        ("modified_ns", json!(u64::MAX)), ("changed_ns", json!(1.5)),
+    ] {
+        let mut bad = body.clone();
+        bad["expected"][field] = value;
+        assert!(serde_json::from_value::<FileReplace>(bad).is_err(), "{field}");
+    }
+    for (field, size) in [("path",4097), ("content_base64",90001), ("session",129)] {
+        let mut bad = body.clone();
+        bad[field] = json!("x".repeat(size));
+        assert!(serde_json::from_value::<FileReplace>(bad).is_err(), "{field}");
+    }
+    let mut exact = body;
+    exact["path"] = json!("x".repeat(4096));
+    exact["content_base64"] = json!("x".repeat(90000));
+    assert!(serde_json::from_value::<FileReplace>(exact).is_ok());
+}
+
+#[test]
+fn file_replace_full_size_payload_passes_relay_without_loosening_other_structured_bodies() {
+    let mut body = file_replace_body();
+    body["content_base64"] = json!("A".repeat(87384));
+    assert!(Structured::parse(body.clone()).is_err());
+    let relay = json!({"session_id":"session-1","handle":"opaque","command":"system.file.replace","params":body});
+    let decoded: AppSessionRelay = serde_json::from_value(relay.clone()).unwrap();
+    assert_eq!(serde_json::to_value(decoded).unwrap(), relay);
+    let mut forged = relay.clone();
+    forged["params"]["unexpected"] = json!("extra");
+    assert!(serde_json::from_value::<AppSessionRelay>(forged).is_err());
+    let mut unrelated = relay;
+    unrelated["params"] = json!({"large_text":"x".repeat(65537)});
+    assert!(serde_json::from_value::<AppSessionRelay>(unrelated).is_err());
+}
+
 #[test]
 fn receipt_reports_are_bounded_data_and_cannot_claim_authority_or_os_verification() {
     let report = json!({

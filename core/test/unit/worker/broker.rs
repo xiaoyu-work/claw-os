@@ -88,6 +88,18 @@ fn a_launch_holding_the_family_verb_is_admitted() {
 }
 
 #[test]
+fn file_replace_admission_only_prechecks_the_write_family() {
+    let command = Command::SystemFileReplace;
+    assert_eq!(required_verbs(command), &[Verb::FS_WRITE]);
+    assert!(admit(command, &relaying_authority(vec![Cap::new(Verb::FS_READ, Scope::path("/srv/document"))])).is_err());
+    assert!(admit(command, &authority(vec![Cap::new(Verb::FS_WRITE, Scope::path("/srv/document"))])).is_err());
+    admit(command, &relaying_authority(vec![Cap::new(Verb::FS_WRITE, Scope::path("/srv/document"))])).unwrap();
+    // Admission has not authorized any particular path or supplied fs.read.
+    // Those checks are mandatory in the provider's single Decision.
+    assert!(required_verbs(Command::PermissionRequest).is_empty());
+}
+
+#[test]
 fn admission_and_policy_read_the_capability_set_live() {
     // The registry row is absent in a unit test, so the fallback is
     // what is seen. The assertion is that `live_caps()` — a read, not a
@@ -168,10 +180,10 @@ fn the_endpoint_answers_a_policy_check_and_refuses_identity_control() {
     )
     .expect("start endpoint");
 
-    let ask = |command: &str, params: serde_json::Value| -> serde_json::Value {
+    let ask = |version: u32, command: &str, params: serde_json::Value| -> serde_json::Value {
         let mut stream = UnixStream::connect(endpoint.socket_path()).expect("connect");
         let body = serde_json::json!({
-            "v": 1,
+            "v": version,
             "id": "test",
             "command": command,
             "params": params,
@@ -197,16 +209,19 @@ fn the_endpoint_answers_a_policy_check_and_refuses_identity_control() {
     };
 
     let allowed = ask(
+        PROTOCOL_VERSION,
         POLICY_CHECK_COMMAND,
         serde_json::json!({
             "verb": "fs.read",
             "scope": { "kind": "path", "value": "/srv/a.txt" },
         }),
     );
+    assert_eq!(allowed["v"], PROTOCOL_VERSION);
+    assert_eq!(allowed["id"], "test");
     assert_eq!(allowed["ok"], true);
     assert_eq!(allowed["result"]["decision"], "allow");
 
-    let refused = ask("app_session.register", serde_json::json!({}));
+    let refused = ask(PROTOCOL_VERSION, "app_session.register", serde_json::json!({}));
     assert_eq!(refused["ok"], false);
     assert!(
         refused["error"]["message"]
@@ -216,8 +231,17 @@ fn the_endpoint_answers_a_policy_check_and_refuses_identity_control() {
         "{refused}"
     );
 
-    let unknown = ask("not.a.route", serde_json::json!({}));
+    let unknown = ask(PROTOCOL_VERSION, "not.a.route", serde_json::json!({}));
     assert_eq!(unknown["ok"], false);
+    for version in [0, PROTOCOL_VERSION - 1, PROTOCOL_VERSION + 1] {
+        let incompatible = ask(version, POLICY_CHECK_COMMAND, serde_json::json!({}));
+        assert_eq!(incompatible["ok"], false);
+        assert_eq!(incompatible["v"], PROTOCOL_VERSION);
+        assert_eq!(
+            incompatible["error"]["code"],
+            Fault::UnsupportedVersion.class()
+        );
+    }
 
     // Nothing the worker can see names the relay grant.
     let rendered = format!("{allowed}{refused}{unknown}");
@@ -227,6 +251,21 @@ fn the_endpoint_answers_a_policy_check_and_refuses_identity_control() {
     assert!(facts["served"].as_u64().unwrap_or(0) >= 1);
     assert!(facts["denied"].as_u64().unwrap_or(0) >= 2);
     assert!(!facts.to_string().contains("relay-handle"));
+}
+
+#[cfg(unix)]
+#[test]
+fn sandbox_responses_must_match_the_protocol_and_request() {
+    let request = serde_json::json!({"v": PROTOCOL_VERSION, "id": "request"});
+    let response = serde_json::json!({"v": PROTOCOL_VERSION, "id": "request", "ok": true});
+    check_sandbox_response(&request, &response).unwrap();
+    for response in [
+        serde_json::json!({"v": PROTOCOL_VERSION - 1, "id": "request", "ok": true}),
+        serde_json::json!({"v": PROTOCOL_VERSION, "id": "other", "ok": true}),
+        serde_json::json!({"v": PROTOCOL_VERSION, "ok": true}),
+    ] {
+        assert!(check_sandbox_response(&request, &response).is_err());
+    }
 }
 
 #[cfg(unix)]

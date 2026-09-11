@@ -123,6 +123,41 @@ pub struct Envelope {
     pub detail: Option<serde_json::Value>,
 }
 
+/// App-reported file change plan
+/// Public App-reported staged-plan data, not OS-confirmed mutation, authority, or
+/// universal rollback. Semantic validation is owned by the App/core; see file-
+/// change-plans.md. Private before/proposed contents are never fields of this
+/// value.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FileChangePlan {
+    pub schema: i64,
+    pub kind: String,
+    pub plan_id: String,
+    pub path: String,
+    pub state: String,
+    pub before_exists: bool,
+    pub before_sha256: Option<String>,
+    pub after_sha256: String,
+    pub before_bytes: u64,
+    pub after_bytes: u64,
+    pub would_change: bool,
+    pub review: String,
+    pub reference: String,
+    pub diff: String,
+    pub diff_truncated: bool,
+    pub created_at: String,
+    pub expires_at: String,
+    pub warnings: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagnostic: Option<String>,
+}
+
 /// App manifest (app.json)
 /// The manifest every app under COS_APPS_DIR must provide. The kernel parses and
 /// validates this (core/src/caps/manifest.rs) to derive the app's operations,
@@ -475,6 +510,19 @@ pub fn validate_ai_review_safety(value: &str) -> Result<(), String> {
     }
 }
 
+/// Reject values outside the file_change_plan.state enum.
+///
+/// The wire schema lists a closed set of allowed values; a kernel
+/// that emits an unknown one should not be silently accepted.
+pub fn validate_file_change_plan_state(value: &str) -> Result<(), String> {
+    const ALLOWED: &[&str] = &["draft", "applying", "applied", "conflicted", "indeterminate", "expired"];
+    if ALLOWED.iter().any(|a| *a == value) {
+        Ok(())
+    } else {
+        Err(format!("invalid file_change_plan.state value: {value}"))
+    }
+}
+
 /// Reject values outside the manifest.runtime enum.
 ///
 /// The wire schema lists a closed set of allowed values; a kernel
@@ -789,6 +837,19 @@ pub fn validate_budget_show(value: &serde_json::Value) -> Result<(), WireDecodeE
 
 pub fn normalize_budget_show_integers(value: &mut serde_json::Value) {
     let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_BUDGET_SHOW)
+        .expect("generated wire schema must be valid JSON");
+    normalize_wire_integers(&schema, &schema, value);
+}
+
+const _WIRE_SCHEMA_FILE_CHANGE_PLAN: &str = r###"{"$id":"https://claw-os.dev/wire/v1/file_change_plan.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"description":"Public App-reported staged-plan data, not OS-confirmed mutation, authority, or universal rollback. Semantic validation is owned by the App/core; see file-change-plans.md. Private before/proposed contents are never fields of this value.","properties":{"after_bytes":{"maximum":65536,"minimum":0,"type":"integer"},"after_sha256":{"description":"Canonical sha256: plus 64 lowercase hexadecimal digits for the proposal. App/core validates the digest.","type":"string"},"applied_at":{"description":"Optional App-reported RFC3339 application timestamp, not OS confirmation.","oneOf":[{"type":"string"},{"type":"null"}],"x-go-type":"*string","x-rust-type":"String","x-ts-type":"string | null"},"before_bytes":{"maximum":65536,"minimum":0,"type":"integer"},"before_exists":{"type":"boolean"},"before_sha256":{"description":"Canonical sha256: plus 64 lowercase hexadecimal digits for an existing preimage, otherwise null. Validated semantically by the App/core.","oneOf":[{"type":"string"},{"type":"null"}],"x-go-type":"*string","x-rust-type":"Option<String>","x-ts-type":"string | null"},"changed":{"description":"Optional App-reported change result, not OS-confirmed mutation.","oneOf":[{"type":"boolean"},{"type":"null"}],"x-go-type":"*bool","x-rust-type":"bool","x-ts-type":"boolean | null"},"created_at":{"description":"App-reported RFC3339 creation timestamp.","type":"string"},"diagnostic":{"oneOf":[{"type":"string"},{"type":"null"}],"x-go-type":"*string","x-rust-type":"String","x-ts-type":"string | null"},"diff":{"description":"App-reported staged diff, at most 65536 UTF-8 bytes. This is not a private before/proposed-content field.","type":"string"},"diff_truncated":{"type":"boolean"},"expires_at":{"description":"App-reported RFC3339 expiration timestamp.","type":"string"},"kind":{"const":"file_change_plan","type":"string"},"path":{"description":"Absolute target path, at most 4096 UTF-8 bytes. Existing object-reference bounds also apply.","type":"string"},"plan_id":{"description":"UUID identifying the immutable proposal.","type":"string"},"reference":{"description":"Canonical app://fs/change-plan?id=<encoded absolute path>&revision=<encoded plan UUID>, using the existing ObjectRef helpers.","type":"string"},"review":{"description":"Canonical sha256 fingerprint binding the immutable proposal. Data only, never authorization or permission to apply.","type":"string"},"schema":{"const":1,"type":"integer"},"snapshot":{"description":"Optional App-reported snapshot identifier, not snapshot contents or proof of rollback capability.","oneOf":[{"type":"string"},{"type":"null"}],"x-go-type":"*string","x-rust-type":"String","x-ts-type":"string | null"},"state":{"enum":["draft","applying","applied","conflicted","indeterminate","expired"],"type":"string"},"warnings":{"description":"At most 16 App-reported warnings. External writers can race after the final precondition check; this plan does not provide atomic compare-and-swap.","items":{"description":"At most 1024 UTF-8 bytes; validated by the App/core.","type":"string"},"maxItems":16,"type":"array"},"would_change":{"type":"boolean"}},"required":["schema","kind","plan_id","path","state","before_exists","before_sha256","after_sha256","before_bytes","after_bytes","would_change","review","reference","diff","diff_truncated","created_at","expires_at","warnings"],"title":"App-reported file change plan","type":"object"}"###;
+pub fn validate_file_change_plan(value: &serde_json::Value) -> Result<(), WireDecodeError> {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_FILE_CHANGE_PLAN)
+        .expect("generated wire schema must be valid JSON");
+    validate_wire_schema(&schema, &schema, value, "FileChangePlan", "$")
+}
+
+pub fn normalize_file_change_plan_integers(value: &mut serde_json::Value) {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_FILE_CHANGE_PLAN)
         .expect("generated wire schema must be valid JSON");
     normalize_wire_integers(&schema, &schema, value);
 }

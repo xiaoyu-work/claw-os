@@ -25,6 +25,7 @@ pub mod desktop;
 pub mod desktop_wayland;
 pub mod display;
 pub mod event_center;
+pub mod file_changes;
 pub mod firewall;
 pub mod hardware;
 pub mod heartbeat;

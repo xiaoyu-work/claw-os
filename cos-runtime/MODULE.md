@@ -9,6 +9,8 @@ with Claw OS.
 
 - Perform capability policy checks against the hidden core bridge.
 - Provide internal runtime/session helpers consistently across languages.
+- Transport bounded file replacement requests on stdin through the broker,
+  without direct-write fallbacks or parent-directory mount grants.
 - Own the typed, bounded Ask Claw context and desktop overlay launch contract.
 - Keep bundled-app conveniences separate from the public SDK.
 
@@ -17,6 +19,7 @@ with Claw OS.
 | Path | Role |
 | --- | --- |
 | `python/src/cos_runtime/` | Python policy/runtime helpers |
+| `python/src/cos_runtime/file_changes.py` | Shared literal-path validation, stdin-only guarded replacement transport, and conservative failure reporting |
 | `rust/` | Rust internal runtime crate |
 | `rust/src/ask_claw.rs` | Typed context serialization, authenticated/readiness-gated Unix sockets, process isolation, and asynchronous child supervision |
 | `README.md` | Boundary and usage |

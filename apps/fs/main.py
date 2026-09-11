@@ -621,8 +621,12 @@ COMMANDS = {
 
 def run(command, args):
     from canonical_argv import normalize_canonical_argv
-    args = normalize_canonical_argv(args)
-    handler = COMMANDS.get(command)
+    if command in ("plan_write", "plan_show", "plan_apply", "plan_prune"):
+        import file_plans
+        handler = lambda values: file_plans.run(command, values)
+    else:
+        args = normalize_canonical_argv(args)
+        handler = COMMANDS.get(command)
     if handler is None:
         return {"error": f"unknown command: {command}"}
     try:

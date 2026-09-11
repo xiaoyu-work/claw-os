@@ -38,6 +38,10 @@ The router's explicit execution path captures results through `receipts.rs`
 and records them in the shared Activity service. It preserves App errors and
 indeterminate outcomes and never retries an operation to repair receipt
 storage. See [execution receipts](../../../docs/execution-receipts.md).
+Public file-change-plan replies are validated before projecting their real
+unified diffs into the same receipt view. The original output digest is
+retained, truncation is explicit, and App-reported plans are never promoted
+to OS-confirmed effects. See [file change plans](../../../docs/file-change-plans.md).
 
 ## Tests
 

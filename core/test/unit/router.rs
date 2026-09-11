@@ -3,6 +3,40 @@ use super::*;
 use crate::cli_help::{command_schemas, show_builtin_schema, show_command_schema};
 
 #[test]
+fn file_replace_stdin_body_is_closed_bounded_and_derives_its_session() {
+    let body = serde_json::json!({"path":"/srv/document","expected":null,"content_base64":"YWZ0ZXI="});
+    let params = file_replace_params(&serde_json::to_vec(&body).unwrap(), "session-1").unwrap();
+    assert_eq!(params["session"], "session-1");
+    assert!(params["expected"].is_null());
+    let mut forged = body.clone();
+    forged["session"] = serde_json::json!("other-session");
+    assert!(file_replace_params(&serde_json::to_vec(&forged).unwrap(), "session-1").is_err());
+    let mut omitted = body;
+    omitted.as_object_mut().unwrap().remove("expected");
+    assert!(file_replace_params(&serde_json::to_vec(&omitted).unwrap(), "session-1").is_err());
+    assert!(file_replace_params(&vec![b' '; FILE_REPLACE_STDIN_BYTES + 1], "session-1").is_err());
+    assert!(file_replace_params(b"{}", "").is_err());
+    assert!(file_replace_params(b"not json", "session-1").is_err());
+    for args in [vec!["__file"], vec!["__file","replace","private-content"], vec!["__file","write"]] {
+        let args: Vec<String> = args.into_iter().map(str::to_string).collect();
+        assert!(file_replace_bridge(&args, Some(Vec::new())).is_err());
+    }
+}
+
+#[test]
+fn file_replace_bridge_preserves_codes_but_does_not_infer_safety_from_relay_errors() {
+    use crate::clawd::protocol::{RequestId, Response};
+    for code in ["indeterminate", "not_authorized", "execution_failed"] {
+        let error = file_replace_response(Response::error(RequestId::generate(), code, "provider error")).unwrap_err();
+        let error: Value = serde_json::from_str(&error).unwrap();
+        assert_eq!(error["code"], code);
+        assert_eq!(error["indeterminate"], true);
+    }
+    let result = serde_json::json!({"path":"/srv/document","bytes":0,"sha256":"hash","changed":true});
+    assert_eq!(file_replace_response(Response::ok(RequestId::generate(), result.clone())).unwrap(), result);
+}
+
+#[test]
 fn app_stdin_opt_in_resolves_only_installed_manifest_operations() {
     let root = tempfile::tempdir().unwrap();
     let app = root.path().join("pipe");

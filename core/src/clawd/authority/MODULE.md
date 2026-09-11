@@ -39,7 +39,7 @@ before its handler runs.
 
 | Subject | Meaning | Used by |
 | --- | --- | --- |
-| `Peer` | Acts for the connecting process; no grant is resolved | daemon, task, context, permission, transaction, App registration, scheduler |
+| `Peer` | Acts for the connecting process; no grant is resolved | daemon, task/Activity views, operation previews, context, permission, transaction, App registration, scheduler |
 | `Session` | Addressed by an App/MCP session; runs under the grant derived at bind | privileged system providers |
 | `PeerSession` | Addressed by the caller's own registered session; authenticated from process ancestry and given a single-use request-scoped grant | `system.package.restore`, `system.service.restore`, `credential.oauth-refresh` |
 | `Handle` | Addressed by the opaque handle itself | App session bind / set-transient / deregister |

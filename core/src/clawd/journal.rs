@@ -13,7 +13,8 @@
 //!    there is no privileged effect the chain does not know about.
 //! 2. [`finish`] runs after the handler returns, once the effect's
 //!    durable result is known, and appends `MutationCommitted` or
-//!    `MutationFailed`.
+//!    `MutationFailed`. An indeterminate provider outcome flags the bracket
+//!    without closing it, so it continues refusing replay.
 //! 3. If *that* append fails, the effect already happened and the
 //!    journal cannot say what it did. The response is replaced with an
 //!    explicit indeterminate error — never an ordinary success — and an
@@ -157,6 +158,26 @@ pub fn finish(guard: MutationGuard, id: &RequestId, response: &Response) -> Opti
     let (partition, operation, start_seq) = guard.reference();
     let command = guard.command;
     let owner_uid = guard.owner_uid;
+    if !response.ok
+        && response.error.as_ref().is_some_and(|error| {
+            error.code == super::protocol::BrokerErrorKind::Indeterminate.code()
+        })
+    {
+        let unresolved = guard.bracket.indeterminate();
+        super::system_journal::record_journal_mutation(
+            command,
+            &partition,
+            &operation,
+            start_seq,
+            "indeterminate",
+            owner_uid,
+        );
+        return Some(Response::indeterminate(
+            id.clone(),
+            "mutation_indeterminate",
+            unresolved.detail,
+        ));
+    }
     let outcome = if response.ok {
         guard.bracket.commit()
     } else {

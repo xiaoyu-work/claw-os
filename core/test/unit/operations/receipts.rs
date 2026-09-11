@@ -60,3 +60,71 @@ fn receipt_previews_are_bounded_redacted_and_control_safe() {
     assert_eq!(oversized.outcome, ReceiptOutcome::Indeterminate);
     assert!(oversized.result.is_none());
 }
+
+fn file_plan() -> serde_json::Value {
+    serde_json::json!({
+        "schema":1,"kind":"file_change_plan",
+        "plan_id":"00000000-0000-4000-8000-000000000001",
+        "path":"/home/user/config.txt","state":"draft",
+        "before_exists":true,"before_sha256":format!("sha256:{}", "a".repeat(64)),
+        "after_sha256":format!("sha256:{}", "b".repeat(64)),
+        "before_bytes":4,"after_bytes":4,"would_change":true,
+        "review":format!("sha256:{}", "c".repeat(64)),
+        "reference":"app://fs/change-plan?id=%2Fhome%2Fuser%2Fconfig.txt&revision=00000000-0000-4000-8000-000000000001",
+        "diff":"--- before\n+++ proposed\n@@ -1 +1 @@\n-old\n+new\n",
+        "diff_truncated":false,"created_at":"2026-09-10T00:00:00Z",
+        "expires_at":"2026-09-10T01:00:00Z","warnings":["App-reported, not authority"]
+    })
+}
+
+#[test]
+fn typed_file_plan_receipts_render_real_diff_as_untrusted_text() {
+    let raw = file_plan().to_string();
+    let capture = |raw| {
+        capture(
+            uuid::Uuid::new_v4().to_string(),
+            "fs".into(),
+            "plan_show".into(),
+            format!("sha256:{}", "a".repeat(64)),
+            Ok(Some(raw)),
+        )
+    };
+    let captured = capture(raw.clone());
+    captured.validate().unwrap();
+    assert_eq!(captured.outcome, ReceiptOutcome::Returned);
+    let summary = captured.result.unwrap();
+    assert_eq!(summary.kind, ResultKind::Json);
+    assert_eq!(
+        summary.sha256,
+        format!("sha256:{}", crate::crypto::sha256_hex(raw.as_bytes()))
+    );
+    assert!(summary.preview.contains("-old\n+new\n"));
+    assert!(summary
+        .preview
+        .contains("not authorization or OS-confirmed effects"));
+    let mut truncated = file_plan();
+    truncated["diff_truncated"] = serde_json::json!(true);
+    assert!(
+        capture(truncated.to_string())
+            .result
+            .unwrap()
+            .preview_truncated
+    );
+}
+
+#[test]
+fn malformed_typed_file_plan_is_not_interpreted_as_a_valid_proposal() {
+    let mut invalid = file_plan();
+    invalid["authority"] = serde_json::json!("os_verified");
+    let captured = report(Ok(Some(invalid.to_string())));
+    captured.validate().unwrap();
+    assert_eq!(captured.outcome, ReceiptOutcome::Indeterminate);
+    assert!(captured.result.is_none());
+    assert!(captured.error.unwrap().contains("no plan was trusted"));
+    let legacy = report(Ok(Some(
+        r#"{"kind":"file_change_plan","legacy":"ordinary App data"}"#.into(),
+    )));
+    legacy.validate().unwrap();
+    assert_eq!(legacy.outcome, ReceiptOutcome::Returned);
+    assert!(legacy.result.unwrap().preview.contains("ordinary App data"));
+}

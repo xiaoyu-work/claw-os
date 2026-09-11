@@ -2,6 +2,8 @@ package clawossdk
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -177,6 +179,108 @@ func TestRootTypeAndBudgetShowContract(t *testing.T) {
 		t,
 		`{"app":"notes","period":"2026-08","units_used":7}`,
 	)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type filePlanVectors struct {
+	Base  json.RawMessage `json:"base"`
+	Cases []struct {
+		Name string                     `json:"name"`
+		Root json.RawMessage            `json:"root"`
+		Set  map[string]json.RawMessage `json:"set"`
+		Code *string                    `json:"code"`
+		Path *string                    `json:"path"`
+	} `json:"cases"`
+}
+
+func loadFilePlanVectors(t *testing.T) filePlanVectors {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "wire", "v1", "file_change_plan.vectors.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vectors filePlanVectors
+	if err := json.Unmarshal(data, &vectors); err != nil {
+		t.Fatal(err)
+	}
+	return vectors
+}
+
+func TestFileChangePlanSharedVectorsAndRequiredFields(t *testing.T) {
+	vectors := loadFilePlanVectors(t)
+	for _, entry := range vectors.Cases {
+		value := decodeWireValue(t, string(vectors.Base))
+		if len(entry.Root) != 0 {
+			value = decodeWireValue(t, string(entry.Root))
+		} else {
+			fields := value.(map[string]any)
+			for field, replacement := range entry.Set {
+				fields[field] = decodeWireValue(t, string(replacement))
+			}
+		}
+		err := ValidateFileChangePlan(value)
+		if entry.Code == nil {
+			if err != nil {
+				t.Fatalf("%s: %v", entry.Name, err)
+			}
+		} else {
+			wireErr, ok := err.(*WireDecodeError)
+			if !ok || wireErr.Code != *entry.Code || entry.Path == nil || wireErr.Path != *entry.Path {
+				t.Fatalf("%s: unexpected error %#v", entry.Name, err)
+			}
+		}
+	}
+	for field := range decodeWireTest(t, string(vectors.Base)) {
+		value := decodeWireTest(t, string(vectors.Base))
+		delete(value, field)
+		err, ok := ValidateFileChangePlan(value).(*WireDecodeError)
+		if !ok || err.Code != WireRequired || err.Path != "$."+field {
+			t.Fatalf("missing %s: %#v", field, err)
+		}
+	}
+}
+
+func TestFileChangePlanGeneratedTypeNullableFields(t *testing.T) {
+	value := decodeWireTest(t, string(loadFilePlanVectors(t).Base))
+	for _, field := range []string{"snapshot", "applied_at", "changed", "diagnostic"} {
+		value[field] = nil
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plan FileChangePlan
+	if err := json.Unmarshal(encoded, &plan); err != nil {
+		t.Fatal(err)
+	}
+	if plan.BeforeSha256 != nil || plan.Snapshot != nil || plan.AppliedAt != nil || plan.Changed != nil || plan.Diagnostic != nil {
+		t.Fatal("nullable fields did not remain unknown")
+	}
+	encoded, err = json.Marshal(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roundTrip := decodeWireTest(t, string(encoded))
+	if before, present := roundTrip["before_sha256"]; !present || before != nil {
+		t.Fatal("required null before_sha256 was omitted")
+	}
+	if err := ValidateFileChangePlan(roundTrip); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, appliedAt, diagnostic := "snapshot-1", "2026-09-10T12:05:00Z", "App-reported result"
+	changed := false
+	plan.Snapshot, plan.AppliedAt, plan.Diagnostic, plan.Changed = &snapshot, &appliedAt, &diagnostic, &changed
+	plan.State = "applied"
+	encoded, err = json.Marshal(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roundTrip = decodeWireTest(t, string(encoded))
+	if roundTrip["changed"] != false || roundTrip["snapshot"] != snapshot || roundTrip["applied_at"] != appliedAt {
+		t.Fatal("non-null optional fields were lost")
+	}
+	if err := ValidateFileChangePlan(roundTrip); err != nil {
 		t.Fatal(err)
 	}
 }

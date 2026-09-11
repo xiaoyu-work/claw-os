@@ -45,6 +45,12 @@ previews are capped at 2048 UTF-8 bytes. A digest of reported output is not a
 cryptographic execution attestation. Previews may be redacted or truncated and
 cannot be used to reconstruct the original bytes.
 
+Well-formed [file change plans](file-change-plans.md) receive an inert,
+human-readable unified-diff projection instead of escaped JSON. The digest
+still names the original reported output, and the preview remains
+caller-reported and possibly redacted/truncated. Malformed typed plan replies
+are not treated as trusted proposals.
+
 ## Read the same receipts everywhere
 
 ```bash

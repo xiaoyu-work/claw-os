@@ -51,6 +51,7 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | App object catalogue | Authenticated App-owned object declarations, portable SDK references, and explicit resolution through ordinary App operations | `core/src/objects/`, `core/src/caps/manifest/objects.rs`, `core/src/clawd/activity_objects.rs` |
 | Operation previews | Non-executing, authenticated App effect declarations and requested target projections; never execution permission or confirmed effects | `core/src/operations/`, `core/src/clawd/operation_previews.rs` |
 | Activity execution receipts | Immutable owner-scoped caller reports, separate authenticated declaration snapshots, and normal App execution capture | `core/src/activities/receipts.rs`, `core/src/clawd/activity_receipts.rs`, `core/src/router/operation_commands.rs` |
+| Staged file changes | App-owned bounded proposals and review fingerprints, applied through exact-capability broker replacement without expanding target mounts for rename | `apps/fs/file_plans.py`, `core/src/clawd/file_changes.rs` |
 | Session event journal | Root-owned, MAC-chained record of session lifecycle and privileged mutation brackets; the ordering and recovery authority the other session/audit views project from | `core/src/session/journal/`, `core/src/clawd/journal.rs` |
 | Audit | Hash-chained JSONL events and agent audit/query commands | `core/src/audit.rs`, `core/src/agent/audit_cli.rs` |
 | Notification service | Durable owner-scoped user-attention records, delivery policy, DND, deduplication, retries, and channel leases | `core/src/notifications/`, `core/src/clawd/notifications.rs` |
@@ -342,6 +343,28 @@ Activity wire schema 1. Terminal, Web and native desktop read the same records.
 Session/mutation journals remain the source for OS-observed privileged changes;
 caller reports are not promoted into that evidence. See
 [`docs/execution-receipts.md`](docs/execution-receipts.md).
+
+### Staged file changes
+
+The Files App prepares bounded UTF-8 proposals in its own private data
+partition. Public plan values contain real diffs and immutable proposal
+fingerprints, not private content fields or authority. `plan_show` requires
+current target read permission before disclosing cached plan data; the
+`change-plan` object binds an absolute path and an optional plan revision.
+
+Apply takes the target path, plan ID, review fingerprint and confirmation
+explicitly. Normal App permissions grant only the target's read/write scopes.
+The App durably opens an apply bracket, then calls a Session/SystemService
+file-replacement route through the existing worker relay. The root provider
+independently checks exact capabilities, protected paths and file state,
+performs bounded atomic replacement or no-replace creation, and retains the
+broker journal's indeterminate semantics. It does not grant a parent-directory
+mount to a worker merely to enable rename.
+
+App plan state and receipts remain reports, not OS execution attestation.
+Unknown outcomes are not automatically replayed, and the final precondition
+check is not a universal CAS guarantee against uncooperative host writers.
+See [`docs/file-change-plans.md`](docs/file-change-plans.md).
 
 ### Agent ask/chat turn
 

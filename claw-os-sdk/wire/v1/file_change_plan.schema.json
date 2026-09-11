@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://claw-os.dev/wire/v1/file_change_plan.schema.json",
+  "title": "App-reported file change plan",
+  "description": "Public App-reported staged-plan data, not OS-confirmed mutation, authority, or universal rollback. Semantic validation is owned by the App/core; see file-change-plans.md. Private before/proposed contents are never fields of this value.",
+  "type": "object",
+  "required": [
+    "schema", "kind", "plan_id", "path", "state", "before_exists",
+    "before_sha256", "after_sha256", "before_bytes", "after_bytes",
+    "would_change", "review", "reference", "diff", "diff_truncated",
+    "created_at", "expires_at", "warnings"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": { "type": "integer", "const": 1 },
+    "kind": { "type": "string", "const": "file_change_plan" },
+    "plan_id": { "type": "string", "description": "UUID identifying the immutable proposal." },
+    "path": { "type": "string", "description": "Absolute target path, at most 4096 UTF-8 bytes. Existing object-reference bounds also apply." },
+    "state": { "type": "string", "enum": ["draft", "applying", "applied", "conflicted", "indeterminate", "expired"] },
+    "before_exists": { "type": "boolean" },
+    "before_sha256": {
+      "oneOf": [{ "type": "string" }, { "type": "null" }],
+      "x-rust-type": "Option<String>",
+      "x-go-type": "*string",
+      "x-ts-type": "string | null",
+      "description": "Canonical sha256: plus 64 lowercase hexadecimal digits for an existing preimage, otherwise null. Validated semantically by the App/core."
+    },
+    "after_sha256": { "type": "string", "description": "Canonical sha256: plus 64 lowercase hexadecimal digits for the proposal. App/core validates the digest." },
+    "before_bytes": { "type": "integer", "minimum": 0, "maximum": 65536 },
+    "after_bytes": { "type": "integer", "minimum": 0, "maximum": 65536 },
+    "would_change": { "type": "boolean" },
+    "review": { "type": "string", "description": "Canonical sha256 fingerprint binding the immutable proposal. Data only, never authorization or permission to apply." },
+    "reference": { "type": "string", "description": "Canonical app://fs/change-plan?id=<encoded absolute path>&revision=<encoded plan UUID>, using the existing ObjectRef helpers." },
+    "diff": { "type": "string", "description": "App-reported staged diff, at most 65536 UTF-8 bytes. This is not a private before/proposed-content field." },
+    "diff_truncated": { "type": "boolean" },
+    "created_at": { "type": "string", "description": "App-reported RFC3339 creation timestamp." },
+    "expires_at": { "type": "string", "description": "App-reported RFC3339 expiration timestamp." },
+    "warnings": {
+      "type": "array",
+      "maxItems": 16,
+      "items": { "type": "string", "description": "At most 1024 UTF-8 bytes; validated by the App/core." },
+      "description": "At most 16 App-reported warnings. External writers can race after the final precondition check; this plan does not provide atomic compare-and-swap."
+    },
+    "snapshot": {
+      "oneOf": [{ "type": "string" }, { "type": "null" }],
+      "x-rust-type": "String",
+      "x-go-type": "*string",
+      "x-ts-type": "string | null",
+      "description": "Optional App-reported snapshot identifier, not snapshot contents or proof of rollback capability."
+    },
+    "applied_at": {
+      "oneOf": [{ "type": "string" }, { "type": "null" }],
+      "x-rust-type": "String",
+      "x-go-type": "*string",
+      "x-ts-type": "string | null",
+      "description": "Optional App-reported RFC3339 application timestamp, not OS confirmation."
+    },
+    "changed": {
+      "oneOf": [{ "type": "boolean" }, { "type": "null" }],
+      "x-rust-type": "bool",
+      "x-go-type": "*bool",
+      "x-ts-type": "boolean | null",
+      "description": "Optional App-reported change result, not OS-confirmed mutation."
+    },
+    "diagnostic": {
+      "oneOf": [{ "type": "string" }, { "type": "null" }],
+      "x-rust-type": "String",
+      "x-go-type": "*string",
+      "x-ts-type": "string | null"
+    }
+  }
+}

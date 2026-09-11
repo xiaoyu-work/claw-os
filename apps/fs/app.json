@@ -16,9 +16,80 @@
       "label": { "en": "File", "zh-CN": "文件" },
       "summary": { "en": "Metadata for the filesystem object at an absolute path. Renames require updating the reference." },
       "resolve": { "operation": "stat", "id_arg": "path" }
+    },
+    "change-plan": {
+      "label": { "en": "File change plan" },
+      "summary": { "en": "An App-owned write proposal for an absolute path. Its revision selects a plan, not write authority." },
+      "resolve": { "operation": "plan_show", "id_arg": "path", "revision_arg": "plan" }
     }
   },
   "operations": {
+    "plan_write": {
+      "label": { "en": "Prepare a bounded UTF-8 file write plan without changing the target" },
+      "stdin": true,
+      "args": [
+        {"name": "path", "kind": "path", "required": true},
+        {"name": "content", "kind": "text", "binding": "flag"},
+        {"name": "ttl_seconds", "kind": "integer", "binding": "flag", "default": 3600}
+      ],
+      "needs": [
+        {"verb": "fs.read", "scope": {"kind": "from-arg", "arg": "path"}, "why": {"en": "Read the target baseline to compute a real diff."}},
+        {"verb": "data.db.write", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "fs-change-plans"}}, "why": {"en": "Persist the private App-owned proposal and review fingerprint."}}
+      ],
+      "effects": [
+        {"kind": "read", "label": {"en": "Read the requested file baseline"}, "target_arg": "path", "recovery": "not_applicable"},
+        {"kind": "create", "label": {"en": "Save App-owned plan data; the target file is not changed"}, "recovery": "unknown"}
+      ]
+    },
+    "plan_show": {
+      "label": { "en": "Read a stored file plan; omit --plan to select the newest for this path" },
+      "args": [
+        {"name": "path", "kind": "path", "required": true},
+        {"name": "plan", "kind": "name", "binding": "flag"}
+      ],
+      "needs": [
+        {"verb": "fs.read", "scope": {"kind": "from-arg", "arg": "path"}, "why": {"en": "Require current read authority before disclosing cached content for this target."}},
+        {"verb": "data.db.read", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "fs-change-plans"}}, "why": {"en": "Read the App-owned proposal data."}}
+      ],
+      "effects": [
+        {"kind": "read", "label": {"en": "Read a cached proposal for the requested target, not its current contents"}, "target_arg": "path", "recovery": "not_applicable"}
+      ]
+    },
+    "plan_apply": {
+      "label": { "en": "Apply a reviewed plan through the file broker after conflict checks" },
+      "args": [
+        {"name": "path", "kind": "path", "required": true},
+        {"name": "plan", "kind": "name", "binding": "flag", "required": true},
+        {"name": "review", "kind": "name", "binding": "flag", "required": true},
+        {"name": "confirm", "kind": "bool", "binding": "flag", "required": true, "choices": [true]}
+      ],
+      "needs": [
+        {"verb": "fs.read", "scope": {"kind": "from-arg", "arg": "path"}, "why": {"en": "Check that the reviewed file baseline still matches."}},
+        {"verb": "fs.write", "scope": {"kind": "from-arg", "arg": "path"}, "why": {"en": "Apply the reviewed bytes only to the explicitly authorized target."}},
+        {"verb": "data.db.read", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "fs-change-plans"}}, "why": {"en": "Read the proposal and its review fingerprint."}},
+        {"verb": "data.db.write", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "fs-change-plans"}}, "why": {"en": "Durably bracket apply and record its reported outcome."}}
+      ],
+      "effects": [
+        {"kind": "update", "label": {"en": "Apply reviewed content only if the file state still matches"}, "target_arg": "path", "recovery": "unknown"},
+        {"kind": "update", "label": {"en": "Record the plan lifecycle; uncertain outcomes cannot be replayed"}, "recovery": "unknown"}
+      ]
+    },
+    "plan_prune": {
+      "label": { "en": "Explicitly prune consumed or expired plans without changing target files" },
+      "args": [
+        {"name": "path", "kind": "path", "required": true},
+        {"name": "keep", "kind": "integer", "binding": "flag", "default": 10},
+        {"name": "confirm", "kind": "bool", "binding": "flag", "required": true, "choices": [true]}
+      ],
+      "needs": [
+        {"verb": "fs.read", "scope": {"kind": "from-arg", "arg": "path"}, "why": {"en": "Require target read authority before inspecting its cached plan records."}},
+        {"verb": "data.db.read", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "fs-change-plans"}}, "why": {"en": "Inspect only this target's plan lifecycle records."}},
+        {"verb": "data.db.write", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "fs-change-plans"}}, "why": {"en": "Remove only consumed or expired App-owned plan records."}}
+      ],
+      "effects": [
+        {"kind": "delete", "label": {"en": "Delete retired App-owned plan records, never the target file"}, "recovery": "unknown"}
+      ]
+    },
     "ls": {
       "label": {
         "en": "List files",

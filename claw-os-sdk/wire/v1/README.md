@@ -96,6 +96,15 @@ shared byte limits and golden vectors. App manifests can optionally declare
 `objects` with ordinary operation resolvers. References carry no owner, grant,
 data payload, or nested `wire_version`.
 
+## App-reported file change plans
+
+[`file_change_plan.schema.json`](file_change_plan.schema.json) defines the
+public staged-plan value, including a bounded App-reported diff. See
+[file change plans](file-change-plans.md) for the closed shape, semantic
+validation, existing App object reference, and external-writer race
+limitations. Plan IDs and review fingerprints are data, never authority or
+OS-confirmed mutation.
+
 ## Error codes
 
 See `error_codes.md` for the canonical list. The minimum:

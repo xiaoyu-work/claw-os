@@ -8,6 +8,31 @@ fn caps(items: Vec<Cap>) -> CapSet {
 }
 
 #[test]
+fn shared_argv_parser_is_mounted_read_only_without_exposing_other_apps() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let app = root.join("fs");
+    std::fs::create_dir(&app).unwrap();
+    std::fs::create_dir(root.join("_shared")).unwrap();
+    std::fs::create_dir(root.join("other-app")).unwrap();
+    let parser = root.join("canonical_argv.py");
+    std::fs::write(&parser, "# shared parser\n").unwrap();
+
+    let mounts = shared_library_mounts(&app, &root);
+    assert_eq!(mounts.len(), 2);
+    assert!(mounts.iter().all(|mount| mount.mode == MountMode::ReadOnly));
+    assert!(mounts.iter().any(|mount| mount.source == parser));
+    assert!(mounts.iter().any(|mount| mount.source == root.join("_shared")));
+    assert!(!mounts.iter().any(|mount| {
+        mount.source == root || mount.source == root.join("other-app")
+    }));
+
+    std::fs::remove_file(&parser).unwrap();
+    std::fs::create_dir(&parser).unwrap();
+    assert_eq!(shared_library_mounts(&app, &root).len(), 1);
+}
+
+#[test]
 fn a_segment_glob_binds_each_match_and_not_their_children() {
     let dir = tempfile::tempdir().expect("tempdir");
     let documents = dir.path().join("Documents");

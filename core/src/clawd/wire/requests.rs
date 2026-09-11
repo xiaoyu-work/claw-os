@@ -593,7 +593,16 @@ pub struct AppSessionRelay {
     /// The inner route's own parameters, decoded by that route's typed
     /// body before it is authorized or dispatched.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub params: Option<Structured>,
+    pub params: Option<RelayParams>,
+}
+
+/// Keep the generic relay ceiling unchanged. Only the closed replacement
+/// body may carry a base64 string larger than Structured's 64 KiB ceiling.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum RelayParams {
+    FileReplace(FileReplace),
+    Structured(Structured),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -634,6 +643,55 @@ pub struct CredentialOauthRefresh {
 // ---------------------------------------------------------------------------
 // System services
 // ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileState {
+    #[serde(deserialize_with = "file_state_sha256")]
+    pub sha256: String,
+    #[serde(deserialize_with = "file_state_size")]
+    pub size: u64,
+    pub device: u64,
+    pub inode: u64,
+    /// Full st_mode, including the regular-file type bits.
+    pub mode: u32,
+    pub modified_ns: i64,
+    pub changed_ns: i64,
+}
+
+fn file_state_sha256<'de, D: serde::Deserializer<'de>>(de: D) -> Result<String, D::Error> {
+    let value = Text::<71>::deserialize(de)?;
+    let Some(hash) = value.as_str().strip_prefix("sha256:") else {
+        return Err(serde::de::Error::custom("invalid file SHA-256"));
+    };
+    if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+        return Err(serde::de::Error::custom("invalid file SHA-256"));
+    }
+    Ok(value.as_str().to_string())
+}
+
+fn file_state_size<'de, D: serde::Deserializer<'de>>(de: D) -> Result<u64, D::Error> {
+    let size = u64::deserialize(de)?;
+    if size > 65_536 {
+        return Err(serde::de::Error::custom("file state exceeds 64 KiB"));
+    }
+    Ok(size)
+}
+
+fn required_file_state<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Option<FileState>, D::Error> {
+    Option::<FileState>::deserialize(de)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileReplace {
+    pub session: Token,
+    pub path: Text<PATH_BYTES>,
+    // An omitted precondition is not an assertion that the target is absent.
+    #[serde(deserialize_with = "required_file_state")]
+    pub expected: Option<FileState>,
+    pub content_base64: Text<90_000>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

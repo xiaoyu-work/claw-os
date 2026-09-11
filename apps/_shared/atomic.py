@@ -24,39 +24,47 @@ import uuid
 from typing import Any
 
 
-def _fsync_dir(path: str) -> None:
+def _fsync_dir(path: str, *, strict: bool = False) -> None:
     """``fsync`` the directory at ``path``.
 
-    Required after ``os.replace`` to make the new directory entry
-    durable. Best-effort: silently ignored on platforms (Windows)
-    that don't allow opening directories.
+    Required after ``os.replace`` to make the new directory entry durable.
+    Legacy callers are best-effort; strict callers receive every open/fsync
+    failure, including failures after replacement may already have occurred.
     """
     try:
         fd = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     except (OSError, ValueError):
+        if strict:
+            raise
         return
     try:
         try:
             os.fsync(fd)
         except OSError:
-            pass
+            if strict:
+                raise
     finally:
         os.close(fd)
 
 
-def atomic_write_bytes(path: str, data: bytes, mode: int = 0o644) -> None:
+def atomic_write_bytes(
+    path: str, data: bytes, mode: int = 0o644, *, strict: bool = False
+) -> None:
     """Atomically replace ``path`` with ``data``.
 
     Creates parent directories on demand. ``mode`` is applied to the
     temp file before the rename so a concurrent ``open`` after the
-    rename sees the intended mode.
+    rename sees the intended mode. ``strict`` requires durable fsyncs and
+    exclusive no-follow staging; a failure after replacement may be indeterminate.
     """
     if not isinstance(data, (bytes, bytearray, memoryview)):
         raise TypeError(f"data must be bytes-like, got {type(data).__name__}")
     parent = os.path.dirname(path) or "."
     os.makedirs(parent, exist_ok=True)
     tmp = f"{path}.tmp.{os.getpid()}.{uuid.uuid4().hex[:8]}"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    flags = os.O_WRONLY | os.O_CREAT
+    flags |= (os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)) if strict else os.O_TRUNC
+    fd = os.open(tmp, flags, mode)
     try:
         with os.fdopen(fd, "wb", closefd=True) as f:
             f.write(bytes(data))
@@ -64,7 +72,8 @@ def atomic_write_bytes(path: str, data: bytes, mode: int = 0o644) -> None:
             try:
                 os.fsync(f.fileno())
             except OSError:
-                pass
+                if strict:
+                    raise
     except Exception:
         try:
             os.unlink(tmp)
@@ -79,7 +88,7 @@ def atomic_write_bytes(path: str, data: bytes, mode: int = 0o644) -> None:
         except OSError:
             pass
         raise
-    _fsync_dir(parent)
+    _fsync_dir(parent, strict=strict)
 
 
 def atomic_write_text(path: str, text: str, mode: int = 0o644, encoding: str = "utf-8") -> None:
@@ -87,7 +96,9 @@ def atomic_write_text(path: str, text: str, mode: int = 0o644, encoding: str = "
     atomic_write_bytes(path, text.encode(encoding), mode=mode)
 
 
-def atomic_write_json(path: str, obj: Any, *, indent: int = 2, mode: int = 0o644) -> None:
+def atomic_write_json(
+    path: str, obj: Any, *, indent: int = 2, mode: int = 0o644, strict: bool = False
+) -> None:
     """Atomically replace ``path`` with ``json.dumps(obj)`` bytes."""
     payload = json.dumps(obj, indent=indent, ensure_ascii=False).encode("utf-8")
-    atomic_write_bytes(path, payload, mode=mode)
+    atomic_write_bytes(path, payload, mode=mode, strict=strict)

@@ -98,3 +98,7 @@ The explicit [execution receipt path](execution-receipts.md) now captures App
 return values as caller-reported evidence while preserving the normal App
 permission boundary. It does not promote preview declarations or reports into
 OS-confirmed changes.
+
+[Staged file plans](file-change-plans.md) provide a separate, permission-gated
+baseline read and real diff. They do not turn this metadata-only preview
+service into a file reader or execution authority.

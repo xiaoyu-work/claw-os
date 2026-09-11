@@ -10,7 +10,7 @@ from decimal import Decimal
 from pathlib import Path
 from unittest import mock
 
-from claw_os_sdk import ai, tools
+from claw_os_sdk import ai, objects, tools
 from claw_os_sdk.generated import (
     WIRE_ENUM,
     WIRE_MAXIMUM,
@@ -18,6 +18,7 @@ from claw_os_sdk.generated import (
     WIRE_REQUIRED,
     WIRE_TYPE,
     WIRE_UNKNOWN_FIELD,
+    FileChangePlan,
     Operation,
     Operationeffect,
     WireDecodeError,
@@ -27,6 +28,7 @@ from claw_os_sdk.generated import (
     encode_wire_json,
     validate_ai,
     validate_budget_show,
+    validate_file_change_plan,
     validate_tool,
     validate_tool_catalog,
     wire_integer_to_int,
@@ -342,6 +344,69 @@ class WireValidationTests(unittest.TestCase):
             ai._raise_for_error({"error": "opaque", "code": "budget_exceeded"})
         with self.assertRaises(ai.AiSafetyViolation):
             ai._raise_for_error({"error": "opaque", "code": "SaFeTy_ViOlAtIoN"})
+
+
+class FileChangePlanWireTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        root = Path(__file__).resolve().parents[3] / "wire" / "v1"
+        cls.vectors = json.loads((root / "file_change_plan.vectors.json").read_text(encoding="utf-8"))
+        cls.schema = json.loads((root / "file_change_plan.schema.json").read_text(encoding="utf-8"))
+
+    def test_file_change_plan_shared_vectors(self) -> None:
+        for case in self.vectors["cases"]:
+            value = copy.deepcopy(case["root"] if "root" in case else self.vectors["base"])
+            if "set" in case:
+                value.update(case["set"])
+            with self.subTest(name=case["name"]):
+                if case["code"] is None:
+                    validate_file_change_plan(value)
+                else:
+                    with self.assertRaises(WireDecodeError) as raised:
+                        validate_file_change_plan(value)
+                    self.assertEqual(raised.exception.code, case["code"])
+                    self.assertEqual(raised.exception.path, case["path"])
+
+    def test_file_change_plan_required_and_nullable_fields(self) -> None:
+        self.assertEqual(FileChangePlan.__required_keys__, set(self.vectors["base"]))
+        self.assertEqual(
+            FileChangePlan.__optional_keys__,
+            {"snapshot", "applied_at", "changed", "diagnostic"},
+        )
+        for field in self.vectors["base"]:
+            value = copy.deepcopy(self.vectors["base"])
+            del value[field]
+            with self.subTest(field=field), self.assertRaises(WireDecodeError) as raised:
+                validate_file_change_plan(value)
+            self.assertEqual(raised.exception.code, WIRE_REQUIRED)
+            self.assertEqual(raised.exception.path, f"$.{field}")
+        value = copy.deepcopy(self.vectors["base"])
+        value.update(snapshot=None, applied_at=None, changed=None, diagnostic=None)
+        validate_file_change_plan(value)
+        self.assertEqual(json.loads(encode_wire_json(value)), value)
+
+    def test_file_change_plan_schema_distinguishes_wire_and_semantic_bounds(self) -> None:
+        self.assertFalse(self.schema["additionalProperties"])
+        properties = self.schema["properties"]
+        for field in ("before_bytes", "after_bytes"):
+            self.assertEqual(properties[field]["minimum"], 0)
+            self.assertEqual(properties[field]["maximum"], 65536)
+        self.assertEqual(properties["warnings"]["maxItems"], 16)
+        self.assertIn("65536 UTF-8 bytes", properties["diff"]["description"])
+        self.assertIn("4096 UTF-8 bytes", properties["path"]["description"])
+        self.assertIn("1024 UTF-8 bytes", properties["warnings"]["items"]["description"])
+        for field in ("diff", "path"):
+            self.assertNotIn("maxLength", properties[field])
+        self.assertNotIn("wire_version", properties)
+
+    def test_file_change_plan_reference_uses_existing_object_helpers(self) -> None:
+        value = self.vectors["base"]
+        reference = objects.parse_reference(value["reference"])
+        self.assertEqual(reference["app_id"], "fs")
+        self.assertEqual(reference["object_type"], "change-plan")
+        self.assertEqual(reference["object_id"], value["path"])
+        self.assertEqual(reference["revision"], value["plan_id"])
+        self.assertEqual(objects.format_reference(reference), value["reference"])
 
 
 class OperationEffectSchemaTests(unittest.TestCase):

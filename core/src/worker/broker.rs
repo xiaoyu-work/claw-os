@@ -58,7 +58,9 @@ use serde_json::Value;
 use super::provider::BrokerAuthority;
 use crate::caps::{Cap, CapSet, Scope, Verb};
 use crate::clawd::routes::Command;
-use crate::clawd::wire::{Fault, HEADER_BYTES, KIND_REQUEST, KIND_RESPONSE, MAX_REQUEST_BYTES};
+use crate::clawd::wire::{
+    Fault, HEADER_BYTES, KIND_REQUEST, KIND_RESPONSE, MAX_REQUEST_BYTES, PROTOCOL_VERSION,
+};
 
 /// Route name the endpoint answers itself.
 pub const POLICY_CHECK_COMMAND: &str = "worker.policy.check";
@@ -251,6 +253,10 @@ fn serve(
         .and_then(Value::as_str)
         .unwrap_or("unknown")
         .to_string();
+    if envelope.get("v").and_then(Value::as_u64) != Some(u64::from(PROTOCOL_VERSION)) {
+        respond_fault(&mut stream, &id, Fault::UnsupportedVersion);
+        return Outcome::Denied;
+    }
     let Some(name) = envelope.get("command").and_then(Value::as_str) else {
         respond_fault(&mut stream, &id, Fault::InvalidEnvelope);
         return Outcome::Denied;
@@ -395,6 +401,7 @@ fn required_verbs(command: Command) -> &'static [Verb] {
     match command.as_str() {
         "system.network.control" => &[Verb::NET_MANAGE],
         "system.firewall.control" => &[Verb::NET_FIREWALL],
+        "system.file.replace" => &[Verb::FS_WRITE],
         "system.audio.control" => &[Verb::DEVICE_AUDIO, Verb::DEVICE_MEDIA_ROUTE],
         "system.bluetooth.control" => &[Verb::DEVICE_BLUETOOTH],
         "system.camera.control" => &[Verb::DEVICE_CAMERA],
@@ -579,7 +586,7 @@ fn relay(_authority: &BrokerAuthority, _command: Command, _params: Value) -> Res
 #[cfg(unix)]
 fn respond_ok(stream: &mut std::os::unix::net::UnixStream, id: &str, result: Value) {
     let body = serde_json::json!({
-        "v": 1,
+        "v": PROTOCOL_VERSION,
         "id": id,
         "ok": true,
         "result": result,
@@ -590,7 +597,7 @@ fn respond_ok(stream: &mut std::os::unix::net::UnixStream, id: &str, result: Val
 #[cfg(unix)]
 fn respond_denied(stream: &mut std::os::unix::net::UnixStream, id: &str, message: &str) {
     let body = serde_json::json!({
-        "v": 1,
+        "v": PROTOCOL_VERSION,
         "id": id,
         "ok": false,
         "error": { "code": "not_authorized", "message": message },
@@ -601,7 +608,7 @@ fn respond_denied(stream: &mut std::os::unix::net::UnixStream, id: &str, message
 #[cfg(unix)]
 fn respond_fault(stream: &mut std::os::unix::net::UnixStream, id: &str, fault: Fault) {
     let body = serde_json::json!({
-        "v": 1,
+        "v": PROTOCOL_VERSION,
         "id": id,
         "ok": false,
         "error": { "code": fault.class(), "message": fault.message() },
@@ -716,7 +723,7 @@ fn sandbox_exchange(command: &str, params: Value) -> Result<Value, String> {
     let _ = stream.set_read_timeout(Some(IO_DEADLINE));
     let _ = stream.set_write_timeout(Some(IO_DEADLINE));
     let body = serde_json::json!({
-        "v": 1,
+        "v": PROTOCOL_VERSION,
         "id": uuid::Uuid::new_v4().simple().to_string(),
         "command": command,
         "params": params,
@@ -741,7 +748,19 @@ fn sandbox_exchange(command: &str, params: Value) -> Result<Value, String> {
         .map_err(|error| format!("worker sandbox authority truncated: {error}"))?;
     let value: Value = serde_json::from_slice(&response)
         .map_err(|_| "worker sandbox authority answered with a malformed body".to_string())?;
+    check_sandbox_response(&body, &value)?;
     Ok(value)
+}
+
+#[cfg(unix)]
+fn check_sandbox_response(request: &Value, response: &Value) -> Result<(), String> {
+    if response.get("v").and_then(Value::as_u64) != Some(u64::from(PROTOCOL_VERSION)) {
+        return Err("worker sandbox authority answered with a different protocol version".to_string());
+    }
+    if response.get("id") != request.get("id") {
+        return Err("worker sandbox authority response did not correlate with the request".to_string());
+    }
+    Ok(())
 }
 
 /// The launch's current capability set, read from the routed registry

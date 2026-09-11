@@ -97,6 +97,42 @@ fn a_handler_failure_is_recorded_as_failed() {
 }
 
 #[test]
+fn a_handler_indeterminate_is_never_closed_as_a_failure_and_replay_stays_refused() {
+    let harness = Harness::new();
+    let route = Command::SystemFileReplace.route();
+    let peer = client(harness.owner_uid());
+    let guard = begin(route, &request_id(), None, &peer).unwrap().unwrap();
+    let response = Response::indeterminate(request_id(), "file_replace_indeterminate", "parent fsync failed");
+    let replacement = finish(guard, &request_id(), &response).unwrap();
+    assert_eq!(replacement.error.unwrap().code, "indeterminate");
+    let partition = Partition::Owner(harness.owner_uid());
+    let view = projection::build(&partition, harness.owner_uid()).unwrap();
+    assert_eq!(view.mutations[0].status, "indeterminate");
+    assert_eq!(begin(route, &request_id(), None, &peer).unwrap_err(), Fault::DuplicateRequest);
+    for _ in 0..2 {
+        harness.cold_restart();
+        crate::session::journal::startup_recovery(crate::session::journal::RecoverySource::DaemonStart).unwrap();
+        assert_eq!(begin(route, &request_id(), None, &peer).unwrap_err(), Fault::DuplicateRequest);
+    }
+}
+
+#[test]
+fn an_unrecordable_provider_indeterminate_flag_does_not_resolve_the_start() {
+    let harness = Harness::new();
+    let route = Command::SystemFileReplace.route();
+    let peer = client(harness.owner_uid());
+    let guard = begin(route, &request_id(), None, &peer).unwrap().unwrap();
+    crate::session::journal::faults::arm(crate::session::journal::faults::Fault::AppendWrite);
+    let response = Response::indeterminate(request_id(), "file_replace_indeterminate", "commit unknown");
+    assert!(finish(guard, &request_id(), &response).is_some());
+    crate::session::journal::faults::disarm();
+    assert_eq!(begin(route, &request_id(), None, &peer).unwrap_err(), Fault::DuplicateRequest);
+    harness.cold_restart();
+    crate::session::journal::startup_recovery(crate::session::journal::RecoverySource::DaemonStart).unwrap();
+    assert_eq!(begin(route, &request_id(), None, &peer).unwrap_err(), Fault::DuplicateRequest);
+}
+
+#[test]
 fn a_completion_that_cannot_be_recorded_answers_indeterminate() {
     let harness = Harness::new();
     let route = Command::SystemPackageControl.route();

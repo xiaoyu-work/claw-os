@@ -52,6 +52,16 @@ cmd_search = fs_main.cmd_search
 
 
 class TestBoundDefaultPaths(unittest.TestCase):
+    def test_plan_dispatch_keeps_full_canonical_argv_for_the_plan_parser(self):
+        import types
+
+        raw = ["/workspace/file", "--content=--literal", "--", "--not-a-flag"]
+        handler = mock.Mock(return_value={"kind": "file_change_plan"})
+        with mock.patch.dict(sys.modules, {"file_plans": types.SimpleNamespace(run=handler)}):
+            result = fs_main.run("plan_write", raw)
+        handler.assert_called_once_with("plan_write", raw)
+        self.assertEqual(result["kind"], "file_change_plan")
+
     def test_ls_uses_bridge_bound_path_exactly(self):
         with tempfile.TemporaryDirectory() as directory, mock.patch.object(
             fs_main.policy, "require"
