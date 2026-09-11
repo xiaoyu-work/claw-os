@@ -20,6 +20,7 @@ def source(tmp_path):
     root = tmp_path / "source"
     root.mkdir()
     contract = platform.read_contract(ROOT)
+    contract["version"] = "1.0.0"
     (root / "packaging").mkdir()
     (root / "packaging/app-platform.json").write_text(json.dumps(contract))
     for path in contract["exports"].values():
@@ -59,6 +60,7 @@ def test_platform_exports_are_complete_and_source_reproducible(source, tmp_path)
     with tarfile.open(first) as archive:
         manifest = json.load(archive.extractfile("platform.json"))
         assert manifest["schema"] == "claw.app-platform/v1"
+        assert manifest["version"] == "1.0.0"
         assert manifest["runtime_abi"] == 1
         assert set(manifest["exports"]) == platform.EXPORT_NAMES
         assert len(manifest["source_revision"]) == 40
