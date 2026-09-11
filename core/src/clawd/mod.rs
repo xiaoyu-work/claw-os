@@ -32,6 +32,7 @@ pub mod location;
 pub mod memory;
 pub mod network;
 pub mod notifications;
+pub mod operation_previews;
 pub mod packages;
 pub mod permissions;
 pub mod power;

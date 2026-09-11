@@ -40,7 +40,7 @@ use super::{
     accessibility, activities, activity_objects, app_sessions, audio, backup, bluetooth, camera, clipboard, config_editor,
     containers, context, context_events, crash, credentials, desktop, display, event_center,
     firewall, hardware, journal as journal_ops, location, memory, network, notifications, packages,
-    permissions, power, printer, scheduler, security, snapshots, storage, system_journal, systemd,
+    operation_previews, permissions, power, printer, scheduler, security, snapshots, storage, system_journal, systemd,
     tasks, transactions, usage, usb_guard, users,
 };
 
@@ -558,6 +558,26 @@ routes! {
         body: body::ActivityObjectAttach,
         audit: &[("id", FieldRule::Token), ("label", FieldRule::Size)],
         run: |c| activity_objects::attach(c.params, c.client),
+    }
+    OperationPreview {
+        name: "operation.preview",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Task),
+        body: body::OperationPreview,
+        audit: &[("app_id", FieldRule::Token), ("operation", FieldRule::Token), ("args", FieldRule::Size)],
+        run: |c| operation_previews::preview(c.params, c.client),
+    }
+    ActivityOperationPreview {
+        name: "activity.operation.preview",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Task),
+        body: body::ActivityOperationPreview,
+        audit: &[("id", FieldRule::Token), ("app_id", FieldRule::Token), ("operation", FieldRule::Token), ("args", FieldRule::Size)],
+        run: |c| operation_previews::for_activity(c.params, c.client),
     }
     // -----------------------------------------------------------------
     // Agent tasks

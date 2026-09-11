@@ -179,3 +179,98 @@ fn object_descriptions_do_not_accept_arbitrary_json_arguments_or_access_claims()
         json!({"label": "File", "reference": "notes.txt"})
     );
 }
+
+fn operation_preview_value() -> serde_json::Value {
+    json!({
+        "schema": 1, "app_id": "fs", "app_name": "Files", "app_version": "1",
+        "package_digest": "sha256:fixture", "operation": "write", "operation_label": "Write",
+        "effects_declared": true,
+        "effects": [{
+            "kind": "update", "label": "Requested write", "recovery": "unknown",
+            "target_arg": "path", "target_kind": "path",
+            "requested_targets": ["../requested;path"], "target_state": "requested"
+        }],
+        "unresolved_arguments": ["credential"],
+        "authorization_checked": false, "executed": false, "effects_confirmed": false,
+        "notes": ["Manifest metadata only"]
+    })
+}
+
+#[test]
+fn operation_preview_requests_keep_opaque_argv_without_owner_or_execution_controls() {
+    let invocation = AppObjectInvocation {
+        app_id: "fs".into(),
+        operation: "write".into(),
+        args: vec![
+            "../requested;path".into(),
+            "--content".into(),
+            "private $() text".into(),
+        ],
+    };
+    let request = ActivityOperationPreviewRequest::from(&invocation);
+    assert_eq!(request.args, invocation.args);
+    let value = serde_json::to_value(&request).unwrap();
+    assert_eq!(
+        serde_json::from_value::<ActivityOperationPreviewRequest>(value.clone()).unwrap(),
+        request
+    );
+    for field in ["owner_uid", "id", "execute", "approve", "grant"] {
+        let mut value = value.clone();
+        value[field] = json!(true);
+        assert!(serde_json::from_value::<ActivityOperationPreviewRequest>(value).is_err());
+    }
+    assert!(
+        serde_json::from_value::<ActivityOperationPreviewRequest>(json!({
+            "app_id": "fs", "operation": "write", "args": [{"not": "argv"}]
+        }))
+        .is_err()
+    );
+}
+
+#[test]
+fn operation_preview_contract_retains_closed_metadata_and_explicit_false_flags() {
+    let mut value = operation_preview_value();
+    value["args"] = json!(["private value"]);
+    value["credential"] = json!("private value");
+    let preview: ActivityOperationPreview = serde_json::from_value(value).unwrap();
+    assert!(preview.is_metadata_only());
+    let encoded = serde_json::to_value(&preview).unwrap();
+    assert!(encoded.get("args").is_none());
+    assert!(encoded.get("credential").is_none());
+    assert_eq!(
+        serde_json::from_value::<ActivityOperationPreview>(encoded).unwrap(),
+        preview
+    );
+    for field in [
+        "authorization_checked",
+        "executed",
+        "effects_confirmed",
+        "effects_declared",
+        "effects",
+    ] {
+        let mut value = operation_preview_value();
+        value.as_object_mut().unwrap().remove(field);
+        assert!(serde_json::from_value::<ActivityOperationPreview>(value).is_err());
+    }
+}
+
+#[test]
+fn operation_preview_enums_accept_only_declared_contract_values() {
+    for kind in ["read", "create", "update", "delete", "external", "execute"] {
+        assert!(serde_json::from_value::<AppEffectKind>(json!(kind)).is_ok());
+    }
+    for recovery in [
+        "not_applicable",
+        "reversible",
+        "compensatable",
+        "irreversible",
+        "unknown",
+    ] {
+        assert!(serde_json::from_value::<AppEffectRecovery>(json!(recovery)).is_ok());
+    }
+    for state in ["requested", "unspecified", "unresolved"] {
+        assert!(serde_json::from_value::<AppEffectTargetState>(json!(state)).is_ok());
+    }
+    assert!(serde_json::from_value::<AppEffectRecovery>(json!("guaranteed")).is_err());
+    assert!(serde_json::from_value::<AppEffectTargetState>(json!("canonical")).is_err());
+}

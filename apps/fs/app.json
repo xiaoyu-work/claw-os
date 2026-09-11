@@ -100,6 +100,9 @@
       ]
     },
     "write": {
+      "effects": [
+        {"kind": "update", "label": {"en": "Write the requested file contents"}, "target_arg": "path", "recovery": "unknown"}
+      ],
       "label": {
         "en": "Write to a file",
         "zh-CN": "写入文件"
@@ -132,6 +135,9 @@
       ]
     },
     "rm": {
+      "effects": [
+        {"kind": "delete", "label": {"en": "Remove the requested filesystem object"}, "target_arg": "path", "recovery": "unknown"}
+      ],
       "label": {
         "en": "Delete a file",
         "zh-CN": "删除文件"
@@ -182,6 +188,9 @@
       ]
     },
     "stat": {
+      "effects": [
+        {"kind": "read", "label": {"en": "Inspect metadata for the requested filesystem object"}, "target_arg": "path", "recovery": "not_applicable"}
+      ],
       "label": {
         "en": "Show file info",
         "zh-CN": "显示文件信息"

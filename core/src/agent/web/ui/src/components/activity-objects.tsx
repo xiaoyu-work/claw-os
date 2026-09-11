@@ -4,6 +4,7 @@ import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { OperationEffects } from "@/components/operation-effects";
 import type { useActivityObjects } from "@/hooks/use-activities";
 import type { ActivityObjectAttachment, ObjectDescription } from "@/lib/activities";
 
@@ -23,6 +24,7 @@ export function ActivityObjectsPanel({
   const [revision, setRevision] = useState("");
   const canAttach = editable && !editing && !disabled;
   const complete = !!label.trim() && !!appId.trim() && !!objectType.trim() && objectId.length > 0;
+  const data = view.data;
 
   return (
     <Card role="region" aria-label="App object references" className="min-w-0 gap-4 p-4">
@@ -41,12 +43,12 @@ export function ActivityObjectsPanel({
         <p role="alert" className="text-sm text-destructive">
           {view.error} Object descriptions are hidden until a successful refresh.
         </p>
-      ) : view.data ? (
+      ) : data ? (
         <div className="grid min-w-0 gap-3">
-          {view.data.objects.length === 0 && (
+          {data.objects.length === 0 && (
             <p className="text-sm text-muted-foreground">No App object references. Plain resources remain unchanged.</p>
           )}
-          {view.data.objects.map((entry, index) => (
+          {data.objects.map((entry, index) => (
             <section key={`${entry.reference}-${index}`} aria-label={`Object reference: ${entry.label}`}
               className="grid min-w-0 gap-2 rounded-md border p-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -58,7 +60,7 @@ export function ActivityObjectsPanel({
               </div>
               <code className="whitespace-pre-wrap break-all text-xs text-muted-foreground">{entry.reference}</code>
               {entry.status === "declared" ? (
-                <Declaration description={entry.description} />
+                <Declaration activityId={data.activity_id} description={entry.description} />
               ) : (
                 <p className="whitespace-pre-wrap break-words text-sm text-destructive">{entry.error}</p>
               )}
@@ -125,7 +127,7 @@ export function ActivityObjectsPanel({
   );
 }
 
-function Declaration({ description }: { description: ObjectDescription }) {
+function Declaration({ activityId, description }: { activityId: string; description: ObjectDescription }) {
   const { object, invocation } = description;
   return (
     <div className="grid min-w-0 gap-2 text-sm">
@@ -148,6 +150,8 @@ function Declaration({ description }: { description: ObjectDescription }) {
           {JSON.stringify({ app_id: invocation.app_id, operation: invocation.operation, args: invocation.args }, null, 2)}
         </pre>
       </details>
+      <OperationEffects activityId={activityId} objectReference={description.reference}
+        appVersion={description.app_version} invocation={invocation} />
     </div>
   );
 }

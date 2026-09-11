@@ -7,6 +7,7 @@ import json
 import subprocess
 import unittest
 from decimal import Decimal
+from pathlib import Path
 from unittest import mock
 
 from claw_os_sdk import ai, tools
@@ -17,8 +18,11 @@ from claw_os_sdk.generated import (
     WIRE_REQUIRED,
     WIRE_TYPE,
     WIRE_UNKNOWN_FIELD,
+    Operation,
+    Operationeffect,
     WireDecodeError,
     WireDecimal,
+    _validate_wire_schema,
     decode_wire_json,
     encode_wire_json,
     validate_ai,
@@ -338,6 +342,102 @@ class WireValidationTests(unittest.TestCase):
             ai._raise_for_error({"error": "opaque", "code": "budget_exceeded"})
         with self.assertRaises(ai.AiSafetyViolation):
             ai._raise_for_error({"error": "opaque", "code": "SaFeTy_ViOlAtIoN"})
+
+
+class OperationEffectSchemaTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        path = Path(__file__).resolve().parents[3] / "wire" / "v1" / "manifest.schema.json"
+        cls.schema = json.loads(path.read_text(encoding="utf-8"))
+        cls.operation = cls.schema["$defs"]["operation"]
+        cls.effect = cls.schema["$defs"]["operationEffect"]
+
+    def validate_effect(self, value: object) -> None:
+        _validate_wire_schema(self.effect, self.schema, value, "OperationEffect", "$")
+
+    def test_operation_effect_schema_declares_optional_bounded_guidance(self) -> None:
+        self.assertNotIn("effects", self.operation["required"])
+        effects = self.operation["properties"]["effects"]
+        self.assertEqual(effects["type"], "array")
+        self.assertEqual(effects["maxItems"], 16)
+        self.assertEqual(effects["items"], {"$ref": "#/$defs/operationEffect"})
+        self.assertNotIn("default", effects)
+        self.assertEqual(self.effect["required"], ["kind", "label"])
+        self.assertFalse(self.effect["additionalProperties"])
+        properties = self.effect["properties"]
+        self.assertEqual(set(properties), {"kind", "label", "target_arg", "recovery"})
+        self.assertEqual(
+            properties["kind"]["enum"],
+            ["read", "create", "update", "delete", "external", "execute"],
+        )
+        self.assertEqual(
+            properties["recovery"]["enum"],
+            ["not_applicable", "reversible", "compensatable", "irreversible", "unknown"],
+        )
+        self.assertEqual(properties["recovery"]["default"], "unknown")
+        self.assertEqual(properties["label"]["$ref"], "#/$defs/localizedText")
+        self.assertIn("512 UTF-8 bytes", properties["label"]["description"])
+        self.assertEqual(properties["target_arg"]["type"], "string")
+
+    def test_operation_effect_structural_rules_accept_declared_kinds_and_recovery(self) -> None:
+        for kind in self.effect["properties"]["kind"]["enum"]:
+            self.validate_effect({"kind": kind, "label": {"en": "Declared effect"}})
+            for recovery in self.effect["properties"]["recovery"]["enum"]:
+                self.validate_effect(
+                    {
+                        "kind": kind,
+                        "label": {"en": "Declared effect", "fr": "Effet declare"},
+                        "target_arg": "paths",
+                        "recovery": recovery,
+                    }
+                )
+        for effects in ([], [{"kind": "read", "label": {"en": "Read"}}] * 16):
+            _validate_wire_schema(
+                self.operation["properties"]["effects"],
+                self.schema,
+                effects,
+                "OperationEffects",
+                "$",
+            )
+
+    def test_operation_effect_structural_rules_reject_invalid_or_authoritative_fields(self) -> None:
+        label = {"en": "Declared effect"}
+        cases = [
+            ({}, WIRE_REQUIRED, "$.kind"),
+            ({"kind": "read"}, WIRE_REQUIRED, "$.label"),
+            ({"kind": "write", "label": label}, WIRE_ENUM, "$.kind"),
+            ({"kind": False, "label": label}, WIRE_TYPE, "$.kind"),
+            ({"kind": "read", "label": "Read"}, WIRE_TYPE, "$.label"),
+            ({"kind": "read", "label": {"fr": "Lire"}}, WIRE_REQUIRED, "$.label.en"),
+            ({"kind": "read", "label": {"en": "Read", "fr": 1}}, WIRE_TYPE, "$.label.fr"),
+            ({"kind": "read", "label": label, "target_arg": []}, WIRE_TYPE, "$.target_arg"),
+            ({"kind": "read", "label": label, "recovery": None}, WIRE_TYPE, "$.recovery"),
+            ({"kind": "read", "label": label, "recovery": "automatic"}, WIRE_ENUM, "$.recovery"),
+        ]
+        for field in ("authority", "grant", "receipt", "file_diff", "inverse"):
+            cases.append(
+                ({"kind": "read", "label": label, field: True}, WIRE_UNKNOWN_FIELD, f"$.{field}")
+            )
+        for value, code, path in cases:
+            with self.subTest(value=value), self.assertRaises(WireDecodeError) as raised:
+                self.validate_effect(value)
+            self.assertEqual(raised.exception.code, code)
+            self.assertEqual(raised.exception.path, path)
+
+    def test_operation_effect_codegen_preserves_omission_and_explicit_declarations(self) -> None:
+        self.assertIn("effects", Operation.__optional_keys__)
+        self.assertEqual(Operationeffect.__required_keys__, {"kind", "label"})
+        self.assertEqual(Operationeffect.__optional_keys__, {"target_arg", "recovery"})
+        minimal: Operation = {"label": {"en": "Inspect"}}
+        self.assertNotIn("effects", json.loads(encode_wire_json(minimal)))
+        effect: Operationeffect = {"kind": "read", "label": {"en": "Read requested paths"}}
+        for effects in ([], [effect]):
+            operation: Operation = {"label": {"en": "Inspect"}, "effects": effects}
+            decoded = json.loads(encode_wire_json(operation))
+            self.assertEqual(decoded, operation)
+            if effects:
+                self.assertNotIn("recovery", decoded["effects"][0])
+                self.assertNotIn("target_arg", decoded["effects"][0])
 
 
 if __name__ == "__main__":

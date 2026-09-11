@@ -114,6 +114,7 @@ progression, effect previews, and cross-device continuation remain later steps.
 | `activity.run` | An ordinary submitted Agent job associated with the Activity |
 | `activity.objects` | Authenticated declaration metadata or explicit diagnostics for App references |
 | `activity.object.attach` | Atomically attached reference; no App execution or new authority |
+| `activity.operation.preview` | App-declared expected effects; no execution, authorization, or confirmed changes |
 
 No request accepts an owner UID, capability set, or grant. Root does not receive
 an implicit cross-owner Activity view. Mutation routes use the existing
@@ -125,3 +126,7 @@ The database lives beside the daemon's other state as `activities.db`; it is
 not part of a desktop package. Its schema version and lifecycle are owned by
 the shared core service. Existing installed-state preservation applies during
 package upgrades.
+
+Activity object views can inspect [operation previews](operation-previews.md)
+through that same backend. These previews are metadata, not execution receipts
+or actual before/after file diffs.

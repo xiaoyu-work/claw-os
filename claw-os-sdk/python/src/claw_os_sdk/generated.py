@@ -185,12 +185,27 @@ class _OperationRequired(TypedDict):
 class Operation(_OperationRequired, total=False):
     """operation.
 
-    A one-shot operation: its inputs and the capabilities it needs.
+    A one-shot operation: its inputs, capability needs, and optional App-
+    declared effect guidance.
     """
     summary: "Localizedtext"
     stdin: bool
     args: List["Arg"]
     needs: List["Need"]
+    effects: List["Operationeffect"]
+
+class _OperationeffectRequired(TypedDict):
+    kind: str
+    label: "Localizedtext"
+
+class Operationeffect(_OperationeffectRequired, total=False):
+    """operationEffect.
+
+    App-declared guidance for a metadata-only preview, not authority, an OS-
+    confirmed effect, or proof that an inverse exists.
+    """
+    target_arg: str
+    recovery: str
 
 class _ArgRequired(TypedDict):
     name: str

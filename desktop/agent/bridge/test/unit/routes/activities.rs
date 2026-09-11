@@ -32,6 +32,7 @@ async fn every_activity_surface_requires_authentication_and_version() {
         (Method::GET, "/activities/a"),
         (Method::GET, "/activities/a/objects"),
         (Method::POST, "/activities/a/objects"),
+        (Method::POST, "/activities/a/operation-preview"),
         (Method::PATCH, "/activities/a"),
         (Method::POST, "/activities/a/transition"),
         (Method::POST, "/activities/a/run"),
@@ -85,6 +86,21 @@ async fn owner_injection_and_malformed_requests_return_typed_errors() {
             r#"{"state":"active","owner_uid":0}"#,
         ),
         (Method::POST, "/activities/a/run", r#"{"owner_uid":0}"#),
+        (
+            Method::POST,
+            "/activities/a/operation-preview",
+            r#"{"app_id":"kv","operation":"get","args":["entry"],"owner_uid":0}"#,
+        ),
+        (
+            Method::POST,
+            "/activities/a/operation-preview",
+            r#"{"app_id":"kv","operation":"get","args":["entry"],"execute":true}"#,
+        ),
+        (
+            Method::POST,
+            "/activities/a/operation-preview",
+            r#"{"app_id":"kv","operation":"get","args":"entry"}"#,
+        ),
         (
             Method::POST,
             "/activities/a/objects",
@@ -152,6 +168,22 @@ fn object_params_forward_opaque_identity_without_constructing_a_uri() {
     assert_eq!(
         with_id("activity", json!({})).ok().unwrap(),
         json!({"id": "activity"})
+    );
+}
+
+#[test]
+fn operation_preview_params_are_owner_free_and_preserve_opaque_argv() {
+    let request = ActivityOperationPreviewRequest {
+        app_id: "kv".into(),
+        operation: "get".into(),
+        args: vec!["entry with ; $() metacharacters".into()],
+    };
+    assert_eq!(
+        with_id("activity", request).ok().unwrap(),
+        json!({
+            "id": "activity", "app_id": "kv", "operation": "get",
+            "args": ["entry with ; $() metacharacters"]
+        })
     );
 }
 

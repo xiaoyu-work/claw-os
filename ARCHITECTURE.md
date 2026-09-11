@@ -49,6 +49,7 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | Memory and sessions | SQLite/FTS memory, semantic recall, session/message persistence, curation, and checkpoints | `core/src/agent/memory/`, `core/src/session/`, `core/src/checkpoint.rs` |
 | Activities | Desktop-independent persistent user goals, explicit completion, planning metadata, and owner-scoped task/session projections | `core/src/activities/`, `core/src/clawd/activities.rs`, `core/src/activity.rs` |
 | App object catalogue | Authenticated App-owned object declarations, portable SDK references, and explicit resolution through ordinary App operations | `core/src/objects/`, `core/src/caps/manifest/objects.rs`, `core/src/clawd/activity_objects.rs` |
+| Operation previews | Non-executing, authenticated App effect declarations and requested target projections; never execution permission or confirmed effects | `core/src/operations/`, `core/src/clawd/operation_previews.rs` |
 | Session event journal | Root-owned, MAC-chained record of session lifecycle and privileged mutation brackets; the ordering and recovery authority the other session/audit views project from | `core/src/session/journal/`, `core/src/clawd/journal.rs` |
 | Audit | Hash-chained JSONL events and agent audit/query commands | `core/src/audit.rs`, `core/src/agent/audit_cli.rs` |
 | Notification service | Durable owner-scoped user-attention records, delivery policy, DND, deduplication, retries, and channel leases | `core/src/notifications/`, `core/src/clawd/notifications.rs` |
@@ -302,6 +303,23 @@ resource list, preserving schema version 1 and ordinary resource compatibility.
 Missing or revoked declarations remain visible as diagnostics; `declared`
 proves authenticated metadata, not existence, freshness or successful access.
 See [`docs/app-objects.md`](docs/app-objects.md).
+
+### Operation effect previews
+
+Optional App effect declarations are validated with the manifest and displayed
+only from authenticated package bytes. `core/src/operations/` binds the declared
+argument grammar and literal defaults without a filesystem path context or
+trusted runtime selector evaluation. It does not execute App code, read object
+data, select credentials, start tasks, or approve permissions.
+
+`operation.preview` and owner-scoped `activity.operation.preview` serve the
+same result to terminal, Web and native desktop clients. Targets are requested
+values, not final canonical resources; runtime-selected arguments and missing
+targets remain explicit. Recovery is App-declared guidance, and absent effects
+mean unknown, never implicitly read-only. Every preview says that authorization,
+execution and effect confirmation have not occurred. Normal App execution and
+its existing audit/journal boundaries remain separate. See
+[`docs/operation-previews.md`](docs/operation-previews.md).
 
 ### Agent ask/chat turn
 

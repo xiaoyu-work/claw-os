@@ -38,6 +38,7 @@ pub mod model;
 pub mod netfilter;
 pub mod notifications;
 pub mod objects;
+pub mod operations;
 pub mod paths;
 pub mod perms;
 pub mod policy;

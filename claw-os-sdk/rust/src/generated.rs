@@ -184,7 +184,8 @@ pub struct Localizedtext {
 }
 
 /// operation
-/// A one-shot operation: its inputs and the capabilities it needs.
+/// A one-shot operation: its inputs, capability needs, and optional App-declared
+/// effect guidance.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Operation {
     pub label: Localizedtext,
@@ -196,6 +197,21 @@ pub struct Operation {
     pub args: Option<Vec<Arg>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub needs: Option<Vec<Need>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effects: Option<Vec<Operationeffect>>,
+}
+
+/// operationEffect
+/// App-declared guidance for a metadata-only preview, not authority, an OS-
+/// confirmed effect, or proof that an inverse exists.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Operationeffect {
+    pub kind: String,
+    pub label: Localizedtext,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_arg: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<String>,
 }
 
 /// arg

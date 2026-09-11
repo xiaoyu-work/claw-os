@@ -1497,6 +1497,7 @@ fn dispatch_with_stdin_impl(
     match name.as_str() {
         "activity" => dispatch_builtin(args, "activity", crate::activity::run),
         "object" => dispatch_builtin(args, "object", object_commands::run),
+        "operation" => dispatch_builtin(args, "operation", crate::operations::cli::run),
         "sys" => dispatch_builtin(args, "sys", sysinfo::run),
         "service" => dispatch_builtin(args, "service", service::run),
         "checkpoint" => dispatch_builtin(args, "checkpoint", checkpoint::run),

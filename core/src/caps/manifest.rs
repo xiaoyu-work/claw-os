@@ -86,6 +86,8 @@ use super::verb::Verb;
 
 mod objects;
 pub use objects::{ObjectResolver, ObjectType};
+mod effects;
+pub use effects::{EffectKind, EffectRecovery, OperationEffect};
 
 // ---------------------------------------------------------------------------
 // Top-level manifest
@@ -340,6 +342,10 @@ pub struct Operation {
     /// the audit log but does not prompt for permission.
     #[serde(default)]
     pub needs: Vec<Need>,
+    /// App-declared expected effects, not authorization or observed changes.
+    /// Empty means effects have not been described.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<OperationEffect>,
 }
 
 #[derive(Clone, Debug)]
@@ -1012,6 +1018,8 @@ pub enum ManifestError {
     InvalidOperationKey(String),
     #[error("object type `{object_type}`: {detail}")]
     ObjectInvalid { object_type: String, detail: String },
+    #[error("operation `{operation}` effect declaration: {detail}")]
+    EffectInvalid { operation: String, detail: String },
     #[error("operation `{op}`: arg `{arg}` declared twice")]
     DuplicateArg { op: String, arg: String },
     #[error("operation `{op}`: arg `{arg}` default is invalid: {detail}")]
@@ -1913,6 +1921,7 @@ impl Manifest {
             }
         }
         objects::validate(self)?;
+        effects::validate(self)?;
         Ok(())
     }
     /// Resolve effective argument values and aligned capabilities together.

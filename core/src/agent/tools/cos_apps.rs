@@ -540,6 +540,13 @@ fn render_app_detail(app: &crate::apps::App) -> String {
     out.push_str("\nOperations:\n");
     for (verb, op) in &m.operations {
         out.push_str(&format!("  {} — {}\n", verb, op.label.current()));
+        if !op.effects.is_empty() {
+            let effects = op.effects.iter().map(|effect| {
+                format!("{} ({:?}, recovery {:?}, App-declared only)",
+                    effect.label.current(), effect.kind, effect.recovery)
+            }).collect::<Vec<_>>();
+            out.push_str(&format!("      expected effects: {}\n", effects.join("; ")));
+        }
         let op_summary = op.summary.current();
         if !op_summary.is_empty() {
             out.push_str(&format!("      {}\n", op_summary));

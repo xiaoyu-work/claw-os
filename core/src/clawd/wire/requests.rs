@@ -161,6 +161,25 @@ pub struct ActivityObjectAttach {
     pub object: BoundedObjectRef,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OperationPreview {
+    pub app_id: Name<128>,
+    pub operation: Token<128>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<TextList<64, 8192>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityOperationPreview {
+    pub id: Token,
+    pub app_id: Name<128>,
+    pub operation: Token<128>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<TextList<64, 8192>>,
+}
+
 // ---------------------------------------------------------------------------
 // Agent tasks
 // ---------------------------------------------------------------------------

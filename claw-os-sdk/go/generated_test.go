@@ -180,3 +180,40 @@ func TestRootTypeAndBudgetShowContract(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestOperationEffectBindingsPreserveOmissionAndExplicitDeclarations(t *testing.T) {
+	var legacy Operation
+	if err := json.Unmarshal([]byte(`{"label":{"en":"Inspect"}}`), &legacy); err != nil {
+		t.Fatal(err)
+	}
+	if legacy.Effects != nil {
+		t.Fatal("missing effects must not become an empty declaration")
+	}
+	var minimal Operationeffect
+	if err := json.Unmarshal(
+		[]byte(`{"kind":"read","label":{"en":"Read requested paths"}}`), &minimal,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if minimal.TargetArg != nil || minimal.Recovery != nil {
+		t.Fatal("omitted metadata must not materialize target or recovery claims")
+	}
+	for _, body := range []string{
+		`{"label":{"en":"Inspect"}}`,
+		`{"label":{"en":"Inspect"},"effects":[]}`,
+		`{"label":{"en":"Inspect"},"effects":[{"kind":"read","label":{"en":"Read requested paths"}}]}`,
+		`{"label":{"en":"Update"},"effects":[{"kind":"update","label":{"en":"Update requested paths"},"target_arg":"paths","recovery":"compensatable"}]}`,
+	} {
+		var operation Operation
+		if err := json.Unmarshal([]byte(body), &operation); err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := json.Marshal(operation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(decodeWireValue(t, string(encoded)), decodeWireValue(t, body)) {
+			t.Fatalf("effect declaration changed: %s -> %s", body, encoded)
+		}
+	}
+}

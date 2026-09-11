@@ -140,6 +140,7 @@ async fn activity_http_routes_require_authentication() {
         ("POST", "/api/activities/activity-1/run"),
         ("GET", "/api/activities/activity-1/objects"),
         ("POST", "/api/activities/activity-1/objects"),
+        ("POST", "/api/activities/activity-1/operation-preview"),
     ] {
         let response = crate::agent::web::server::build_app(state.clone())
             .oneshot(
@@ -158,6 +159,33 @@ async fn activity_http_routes_require_authentication() {
             "{method} {path}"
         );
     }
+}
+
+#[test]
+fn activity_operation_preview_preserves_argv_and_rejects_identity_or_effect_claims() {
+    let body = json!({
+        "app_id": "archive", "operation": "get",
+        "args": ["--message=$(printf inert); <script>", "--", "../requested/draft.txt"],
+    });
+    let request = with_id::<ActivityOperationPreview>("activity-1".into(), body.clone()).unwrap();
+    let mut expected = body.clone();
+    expected["id"] = json!("activity-1");
+    assert_eq!(serde_json::to_value(request).unwrap(), expected);
+    for (field, value) in [
+        ("id", json!("another")),
+        ("owner_uid", json!(0)),
+        ("executed", json!(true)),
+        ("effects", json!([])),
+        ("args", json!("joined shell command")),
+        ("args", json!(vec!["x"; 65])),
+        ("args", json!(["x".repeat(8193)])),
+        ("args", json!([42])),
+    ] {
+        let mut invalid = body.clone();
+        invalid[field] = value;
+        assert!(with_id::<ActivityOperationPreview>("activity-1".into(), invalid).is_err());
+    }
+    assert!(with_id::<ActivityOperationPreview>("../other".into(), body).is_err());
 }
 
 #[tokio::test]
@@ -197,12 +225,23 @@ async fn activity_run_and_read_errors_use_the_shared_broker_without_fallback() {
         "resources": [{ "label": "Release status", "reference": "app://archive/entry?id=release.status" }],
     });
     let attachment_result = attached_activity.clone();
+    let preview = json!({
+        "schema": 1, "app_id": "archive", "app_name": "Archive", "app_version": "1.0",
+        "package_digest": "fixture", "operation": "get", "operation_label": "Get entry",
+        "effects_declared": false, "effects": [], "unresolved_arguments": ["provider"],
+        "authorization_checked": false, "executed": false, "effects_confirmed": false,
+        "notes": ["Effects are unknown, not implicitly read-only."],
+    });
+    let preview_result = preview.clone();
     let broker = tokio::spawn(async move {
+        let mut preview_count = 0;
         for command in [
             Command::ActivityRun,
             Command::ActivityGet,
             Command::ActivityObjects,
             Command::ActivityObjectAttach,
+            Command::ActivityOperationPreview,
+            Command::ActivityOperationPreview,
         ] {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut header = [0; HEADER_BYTES];
@@ -237,6 +276,21 @@ async fn activity_run_and_read_errors_use_the_shared_broker_without_fallback() {
                         })
                     );
                     Response::ok(request.id, attachment_result.clone())
+                }
+                Command::ActivityOperationPreview => {
+                    assert_eq!(
+                        request.params,
+                        json!({
+                            "id": "activity-1", "app_id": "archive", "operation": "get",
+                            "args": ["--message=$(printf inert); <script>"],
+                        })
+                    );
+                    preview_count += 1;
+                    if preview_count == 1 {
+                        Response::ok(request.id, preview_result.clone())
+                    } else {
+                        Response::error(request.id, "unavailable", "App signature unavailable")
+                    }
                 }
                 _ => unreachable!(),
             };
@@ -297,6 +351,27 @@ async fn activity_run_and_read_errors_use_the_shared_broker_without_fallback() {
     .unwrap()
     .unwrap();
     assert_eq!(attached.0, attached_activity);
+    for attempt in 0..2 {
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            operation_preview(
+                Path("activity-1".into()),
+                Ok(Json(json!({
+                    "app_id": "archive", "operation": "get",
+                    "args": ["--message=$(printf inert); <script>"],
+                }))),
+            ),
+        )
+        .await
+        .unwrap();
+        if attempt == 0 {
+            assert_eq!(result.unwrap().0, preview);
+        } else {
+            let (status, Json(body)) = result.unwrap_err();
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert_eq!(body["error"], "App signature unavailable");
+        }
+    }
     broker.await.unwrap();
     let unavailable = list(Ok(Query(ActivityList {
         state: None,
@@ -321,6 +396,10 @@ async fn activity_decode_failures_are_readable_json_errors_before_broker_access(
             "/activities/{id}/objects",
             http_get(objects).post(attach_object),
         )
+        .route(
+            "/activities/{id}/operation-preview",
+            post(operation_preview),
+        )
         .route("/activities/{id}/update", post(update));
     for (method, path, body) in [
         (
@@ -331,6 +410,16 @@ async fn activity_decode_failures_are_readable_json_errors_before_broker_access(
         ("GET", "/activities?owner_uid=0", ""),
         ("GET", "/activities?state=running", ""),
         ("GET", "/activities/activity-1/objects?owner_uid=0", ""),
+        (
+            "POST",
+            "/activities/activity-1/operation-preview",
+            r#"{"app_id":"archive","operation":"get","args":[],"owner_uid":0}"#,
+        ),
+        (
+            "POST",
+            "/activities/activity-1/operation-preview",
+            r#"{"id":"another","app_id":"archive","operation":"get","args":[]}"#,
+        ),
         (
             "POST",
             "/activities/activity-1/objects",

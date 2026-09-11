@@ -53,6 +53,97 @@ pub struct AppObjectInvocation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityOperationPreviewRequest {
+    pub app_id: String,
+    pub operation: String,
+    pub args: Vec<String>,
+}
+
+impl From<&AppObjectInvocation> for ActivityOperationPreviewRequest {
+    fn from(invocation: &AppObjectInvocation) -> Self {
+        Self {
+            app_id: invocation.app_id.clone(),
+            operation: invocation.operation.clone(),
+            args: invocation.args.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppEffectKind {
+    Read,
+    Create,
+    Update,
+    Delete,
+    External,
+    Execute,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppEffectRecovery {
+    NotApplicable,
+    Reversible,
+    Compensatable,
+    Irreversible,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppEffectTargetKind {
+    Path,
+    Host,
+    Name,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppEffectTargetState {
+    Requested,
+    Unspecified,
+    Unresolved,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppDeclaredEffect {
+    pub kind: AppEffectKind,
+    pub label: String,
+    pub recovery: AppEffectRecovery,
+    pub target_arg: Option<String>,
+    pub target_kind: Option<AppEffectTargetKind>,
+    pub requested_targets: Vec<String>,
+    pub target_state: AppEffectTargetState,
+}
+
+/// Manifest metadata only, never execution evidence or an authorization grant.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActivityOperationPreview {
+    pub schema: u32,
+    pub app_id: String,
+    pub app_name: String,
+    pub app_version: String,
+    pub package_digest: String,
+    pub operation: String,
+    pub operation_label: String,
+    pub effects_declared: bool,
+    pub effects: Vec<AppDeclaredEffect>,
+    pub unresolved_arguments: Vec<String>,
+    pub authorization_checked: bool,
+    pub executed: bool,
+    pub effects_confirmed: bool,
+    pub notes: Vec<String>,
+}
+
+impl ActivityOperationPreview {
+    pub fn is_metadata_only(&self) -> bool {
+        self.schema == 1 && !self.authorization_checked && !self.executed && !self.effects_confirmed
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppObjectDescription {
     pub object: AppObjectReference,
     pub reference: String,

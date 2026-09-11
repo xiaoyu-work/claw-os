@@ -1,4 +1,6 @@
 import { api } from "@/lib/api";
+import { nullableString, record, strings } from "@/lib/api-shapes";
+import { readOperationPreview, type OperationInvocation } from "@/lib/operation-preview";
 
 export const ACTIVITY_STATES = ["active", "paused", "completed", "cancelled"] as const;
 export type ActivityState = (typeof ACTIVITY_STATES)[number];
@@ -56,7 +58,7 @@ export type ObjectDescription = {
   app_version: string;
   object_label: string;
   object_summary: string;
-  invocation: { app_id: string; operation: string; args: string[] };
+  invocation: OperationInvocation;
 };
 export type ActivityObject = { label: string; reference: string } & (
   | { status: "declared"; description: ObjectDescription; error: null }
@@ -93,18 +95,6 @@ export function hasLiveActivityJobs(jobs: ActivityJob[]): boolean {
   return jobs.some(({ status }) =>
     status === "pending" || status === "running" || status === "waiting_approval",
   );
-}
-
-function record(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function nullableString(value: unknown): value is string | null {
-  return value === null || typeof value === "string";
-}
-
-function strings(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 
 export function isActivityState(value: unknown): value is ActivityState {
@@ -252,4 +242,10 @@ export const activityApi = {
     if (activity.id !== id) throw new Error("Invalid attached Activity from the server. Refresh before retrying.");
     return activity;
   },
+  previewOperation: async (id: string, invocation: OperationInvocation, signal?: AbortSignal) =>
+    readOperationPreview(await api.post<unknown>(`${activityPath(id)}/operation-preview`, {
+      app_id: invocation.app_id,
+      operation: invocation.operation,
+      args: invocation.args,
+    }, { signal }), invocation),
 };

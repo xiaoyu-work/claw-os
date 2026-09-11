@@ -12,6 +12,7 @@ use anyhow::{Context, Result, anyhow};
 pub use cos_agent_protocol::{
     ActivityCreateRequest, ActivityDetailResponse, ActivityListQuery, ActivityListResponse,
     ActivityObjectAttachRequest, ActivityObjectsResponse,
+    ActivityOperationPreview, ActivityOperationPreviewRequest,
     ActivityRunRequest, ActivityState, ActivityTransitionRequest, ActivityUpdateRequest,
     ActivityView, ActivityWorkResponse, BridgeEndpoint, CancelResponse, ChatRequest, ErrorEnvelope,
     HistoryMessage, ModelsResponse, SessionSummary, StreamEvent, ToolCallView, ToolResultView,
@@ -442,6 +443,19 @@ pub async fn attach_activity_object(
         &endpoint,
         reqwest::Method::POST,
         &["activities", id, "objects"],
+    )?;
+    activity_response(request.json(&body), selected).await
+}
+
+pub async fn preview_activity_operation(
+    endpoint: BridgeEndpoint,
+    id: &str,
+    body: ActivityOperationPreviewRequest,
+) -> Result<ActivityOperationPreview> {
+    let (request, selected) = activity_request(
+        &endpoint,
+        reqwest::Method::POST,
+        &["activities", id, "operation-preview"],
     )?;
     activity_response(request.json(&body), selected).await
 }

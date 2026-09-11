@@ -217,3 +217,69 @@ fn object_translation_preserves_noncanonical_resources_and_broker_canonical_desc
         "app://kv/entry?id=release.status",
     );
 }
+
+fn operation_preview_value() -> Value {
+    json!({
+        "schema": 1, "app_id": "fs", "app_name": "Files", "app_version": "1",
+        "package_digest": "sha256:fixture", "operation": "write", "operation_label": "Write",
+        "effects_declared": true,
+        "effects": [{
+            "kind": "update", "label": "App-declared write", "recovery": "reversible",
+            "target_arg": "path", "target_kind": "path",
+            "requested_targets": ["~/requested/../path;$(data)"], "target_state": "requested"
+        }],
+        "unresolved_arguments": ["credential"],
+        "authorization_checked": false, "executed": false, "effects_confirmed": false,
+        "notes": ["Recovery is not guaranteed"]
+    })
+}
+
+#[test]
+fn operation_preview_projection_preserves_requested_metadata_not_argument_values() {
+    let mut value = operation_preview_value();
+    value["args"] = json!(["--content", "private non-resource value"]);
+    value["owner_uid"] = json!(0);
+    value["credentials"] = json!({"token": "private non-resource value"});
+    value["effects"][0]["confirmed_target"] = json!("/canonical/not-claimed");
+    let preview = operation_preview(value).unwrap();
+    assert_eq!(
+        preview.effects[0].requested_targets,
+        ["~/requested/../path;$(data)"]
+    );
+    assert_eq!(preview.unresolved_arguments, ["credential"]);
+    assert_eq!(preview.notes, ["Recovery is not guaranteed"]);
+    let encoded = serde_json::to_value(preview).unwrap();
+    for key in ["args", "owner_uid", "credentials"] {
+        assert!(encoded.get(key).is_none());
+    }
+    assert!(encoded["effects"][0].get("confirmed_target").is_none());
+    assert!(!encoded.to_string().contains("private non-resource value"));
+}
+
+#[test]
+fn operation_preview_projection_rejects_execution_authorization_and_schema_claims() {
+    for field in ["authorization_checked", "executed", "effects_confirmed"] {
+        let mut value = operation_preview_value();
+        value[field] = json!(true);
+        assert!(operation_preview(value).is_err());
+    }
+    let mut value = operation_preview_value();
+    value["schema"] = json!(2);
+    assert!(operation_preview(value).is_err());
+    let mut value = operation_preview_value();
+    value["effects"][0]["target_state"] = json!("canonical");
+    assert!(operation_preview(value).is_err());
+}
+
+#[test]
+fn operation_preview_missing_effects_remain_unknown_without_read_only_inference() {
+    let mut value = operation_preview_value();
+    value["effects_declared"] = json!(false);
+    value["effects"] = json!([]);
+    value["operation"] = json!("delete");
+    let preview = operation_preview(value).unwrap();
+    assert!(!preview.effects_declared);
+    assert!(preview.effects.is_empty());
+    assert_eq!(preview.operation, "delete");
+    assert!(preview.is_metadata_only());
+}

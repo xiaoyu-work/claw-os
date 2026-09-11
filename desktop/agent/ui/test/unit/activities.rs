@@ -814,6 +814,367 @@ fn object_invocation_arguments_round_trip_as_opaque_json_argv() {
     }
 }
 
+fn operation_preview_result() -> ActivityOperationPreview {
+    ActivityOperationPreview {
+        schema: 1,
+        app_id: "kv".into(),
+        app_name: "Key/value".into(),
+        app_version: "2".into(),
+        package_digest: "sha256:preview-package".into(),
+        operation: "get".into(),
+        operation_label: "Get entry".into(),
+        effects_declared: true,
+        effects: vec![AppDeclaredEffect {
+            kind: AppEffectKind::Read,
+            label: "App-declared read".into(),
+            recovery: AppEffectRecovery::NotApplicable,
+            target_arg: Some("key".into()),
+            target_kind: Some(AppEffectTargetKind::Name),
+            requested_targets: vec!["release.status".into()],
+            target_state: AppEffectTargetState::Requested,
+        }],
+        unresolved_arguments: vec!["runtime_credential".into()],
+        authorization_checked: false,
+        executed: false,
+        effects_confirmed: false,
+        notes: vec!["No App data or credentials read".into()],
+    }
+}
+
+fn ready_preview(state: ActivityState) -> Activities {
+    let mut state = ready(state);
+    state.objects = Some(object_response("activity-1"));
+    state
+}
+
+fn request_preview(state: &mut Activities) -> Request {
+    state
+        .update(
+            Message::PreviewObjectOperation("app://kv/entry?id=release.status".into()),
+            true,
+        )
+        .unwrap()
+}
+
+#[test]
+fn operation_preview_uses_a_declared_invocation_without_starting_work_or_confirming_effects() {
+    for activity_state in [
+        ActivityState::Active,
+        ActivityState::Paused,
+        ActivityState::Completed,
+        ActivityState::Cancelled,
+    ] {
+        let mut state = ready_preview(activity_state);
+        let before = state.detail.clone().unwrap();
+        let request = request_preview(&mut state);
+        let Action::OperationPreview {
+            activity_id,
+            reference,
+            request: body,
+        } = &request.action
+        else {
+            panic!("preview must only call the metadata route");
+        };
+        assert_eq!(activity_id, "activity-1");
+        assert_eq!(reference, "app://kv/entry?id=release.status");
+        assert_eq!(body.app_id, "kv");
+        assert_eq!(body.operation, "get");
+        assert_eq!(body.args, ["--key", "release.status"]);
+        assert!(
+            finish(
+                &mut state,
+                request,
+                Ok(Response::OperationPreview(Box::new(
+                    operation_preview_result()
+                )))
+            )
+            .is_none()
+        );
+        assert!(state.operation_preview.is_some());
+        assert_eq!(state.detail.as_ref().unwrap(), &before);
+        assert!(state.notice.is_none());
+        assert!(state.pending.is_none());
+    }
+}
+
+#[test]
+fn operation_preview_has_no_generic_command_or_unverified_object_entry_point() {
+    let mut state = ready_preview(ActivityState::Active);
+    assert!(
+        state
+            .update(
+                Message::PreviewObjectOperation("unknown reference".into()),
+                true
+            )
+            .is_none()
+    );
+    for status in [
+        ActivityObjectStatus::Unavailable,
+        ActivityObjectStatus::Invalid,
+    ] {
+        state.objects.as_mut().unwrap().objects[0].status = status;
+        assert!(
+            state
+                .update(
+                    Message::PreviewObjectOperation("app://kv/entry?id=release.status".into()),
+                    true,
+                )
+                .is_none()
+        );
+    }
+    state.objects.as_mut().unwrap().objects[0].status = ActivityObjectStatus::Declared;
+    state.objects.as_mut().unwrap().activity_id = "different-activity".into();
+    assert!(
+        state
+            .update(
+                Message::PreviewObjectOperation("app://kv/entry?id=release.status".into()),
+                true,
+            )
+            .is_none()
+    );
+    assert!(state.pending.is_none());
+}
+
+#[test]
+fn operation_preview_latest_object_selection_rejects_old_results_and_errors() {
+    let mut state = ready_preview(ActivityState::Active);
+    let mut second = state.objects.as_ref().unwrap().objects[0].clone();
+    second.reference = "app://kv/entry?id=second".into();
+    second.description.as_mut().unwrap().invocation.args = vec!["--key".into(), "second".into()];
+    state.objects.as_mut().unwrap().objects.push(second);
+    let first = request_preview(&mut state);
+    let second = state
+        .update(
+            Message::PreviewObjectOperation("app://kv/entry?id=second".into()),
+            true,
+        )
+        .unwrap();
+    assert_ne!(first.generation, second.generation);
+    finish(&mut state, first.clone(), Err("stale preview error".into()));
+    assert!(state.error.is_none());
+    let mut preview = operation_preview_result();
+    preview.effects[0].requested_targets = vec!["second".into()];
+    finish(
+        &mut state,
+        second,
+        Ok(Response::OperationPreview(Box::new(preview))),
+    );
+    finish(
+        &mut state,
+        first,
+        Ok(Response::OperationPreview(Box::new(
+            operation_preview_result(),
+        ))),
+    );
+    let displayed = state.operation_preview.as_ref().unwrap();
+    assert_eq!(displayed.reference, "app://kv/entry?id=second");
+    assert_eq!(displayed.preview.effects[0].requested_targets, ["second"]);
+}
+
+#[test]
+fn operation_preview_navigation_and_drafts_reject_late_responses() {
+    let mut state = ready_preview(ActivityState::Active);
+    let request = request_preview(&mut state);
+    state.hide();
+    finish(&mut state, request, Err("stale hidden preview".into()));
+    assert!(state.error.is_none());
+    assert!(state.operation_preview.is_none());
+
+    for object_draft in [false, true] {
+        let mut state = ready_preview(ActivityState::Active);
+        let request = request_preview(&mut state);
+        if object_draft {
+            state.object_form = Some(ActivityObjectAttachRequest::default());
+        } else {
+            state.form = Some(ActivityCreateRequest::default());
+        }
+        finish(&mut state, request.clone(), Err("stale draft error".into()));
+        finish(
+            &mut state,
+            request,
+            Ok(Response::OperationPreview(Box::new(
+                operation_preview_result(),
+            ))),
+        );
+        assert!(state.error.is_none());
+        assert!(state.operation_preview.is_none());
+        assert!(
+            state
+                .update(
+                    Message::PreviewObjectOperation("app://kv/entry?id=release.status".into()),
+                    true,
+                )
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn operation_preview_revalidates_invocation_snapshot_before_accepting_a_reply() {
+    let mut state = ready_preview(ActivityState::Active);
+    let request = request_preview(&mut state);
+    state.objects.as_mut().unwrap().objects[0]
+        .description
+        .as_mut()
+        .unwrap()
+        .invocation
+        .args = vec!["changed draft".into()];
+    finish(
+        &mut state,
+        request,
+        Ok(Response::OperationPreview(Box::new(
+            operation_preview_result(),
+        ))),
+    );
+    assert!(state.operation_preview.is_none());
+    assert!(state.error.is_none());
+}
+
+#[test]
+fn operation_preview_refusals_and_non_metadata_replies_are_visible_not_grants() {
+    for field in 0..6 {
+        let mut state = ready_preview(ActivityState::Active);
+        let request = request_preview(&mut state);
+        let mut preview = operation_preview_result();
+        match field {
+            0 => preview.authorization_checked = true,
+            1 => preview.executed = true,
+            2 => preview.effects_confirmed = true,
+            3 => preview.schema = 2,
+            4 => preview.app_id = "other".into(),
+            _ => preview.operation = "write".into(),
+        }
+        finish(
+            &mut state,
+            request,
+            Ok(Response::OperationPreview(Box::new(preview))),
+        );
+        assert!(state.operation_preview.is_none());
+        assert!(state.error.is_some());
+        assert_eq!(
+            state.detail.as_ref().unwrap().activity.state,
+            ActivityState::Active
+        );
+    }
+    let mut state = ready_preview(ActivityState::Active);
+    let request = request_preview(&mut state);
+    finish(&mut state, request, Err("App manifest unavailable".into()));
+    assert_eq!(state.error.as_deref(), Some("App manifest unavailable"));
+    assert!(state.operation_preview.is_none());
+}
+
+#[test]
+fn operation_preview_refresh_and_editing_discard_old_metadata() {
+    for message in [
+        Message::DescribeObjects,
+        Message::Edit,
+        Message::NewObject,
+        Message::Back,
+    ] {
+        let mut state = ready_preview(ActivityState::Active);
+        let request = request_preview(&mut state);
+        finish(
+            &mut state,
+            request,
+            Ok(Response::OperationPreview(Box::new(
+                operation_preview_result(),
+            ))),
+        );
+        assert!(state.operation_preview.is_some());
+        state.update(message, true);
+        assert!(state.operation_preview.is_none());
+    }
+}
+
+#[test]
+fn operation_preview_missing_effects_are_unknown_and_all_metadata_variants_render() {
+    crate::localize::localize();
+    let mut preview = operation_preview_result();
+    preview.effects_declared = false;
+    preview.effects.clear();
+    preview.operation = "delete".into();
+    assert_eq!(
+        missing_effect_notice(&preview),
+        Some(fl!("activity-preview-unknown"))
+    );
+    let _ = operation_preview_view(&preview);
+    let mut preview = operation_preview_result();
+    for (kind, recovery, target_state, target_kind) in [
+        (
+            AppEffectKind::Read,
+            AppEffectRecovery::NotApplicable,
+            AppEffectTargetState::Requested,
+            Some(AppEffectTargetKind::Path),
+        ),
+        (
+            AppEffectKind::Create,
+            AppEffectRecovery::Reversible,
+            AppEffectTargetState::Unspecified,
+            Some(AppEffectTargetKind::Host),
+        ),
+        (
+            AppEffectKind::Update,
+            AppEffectRecovery::Compensatable,
+            AppEffectTargetState::Unresolved,
+            Some(AppEffectTargetKind::Name),
+        ),
+        (
+            AppEffectKind::Delete,
+            AppEffectRecovery::Irreversible,
+            AppEffectTargetState::Requested,
+            None,
+        ),
+        (
+            AppEffectKind::External,
+            AppEffectRecovery::Unknown,
+            AppEffectTargetState::Unspecified,
+            None,
+        ),
+        (
+            AppEffectKind::Execute,
+            AppEffectRecovery::Unknown,
+            AppEffectTargetState::Unresolved,
+            None,
+        ),
+    ] {
+        preview.effects[0].kind = kind;
+        preview.effects[0].recovery = recovery;
+        preview.effects[0].target_state = target_state;
+        preview.effects[0].target_kind = target_kind;
+        preview.effects[0].requested_targets = vec!["../inert;$(value)".into()];
+        let _ = operation_preview_view(&preview);
+        assert_eq!(preview.effects[0].requested_targets, ["../inert;$(value)"]);
+        assert!(preview.is_metadata_only());
+    }
+}
+
+#[test]
+fn operation_preview_draft_changes_invalidate_pending_and_displayed_results() {
+    let mut state = ready_preview(ActivityState::Active);
+    let request = request_preview(&mut state);
+    state.update(Message::Field(Field::Prompt, "New work draft".into()), true);
+    assert!(state.pending.is_none());
+    finish(&mut state, request, Err("stale preview failure".into()));
+    assert!(state.error.is_none());
+    assert!(state.operation_preview.is_none());
+    let request = request_preview(&mut state);
+    finish(
+        &mut state,
+        request,
+        Ok(Response::OperationPreview(Box::new(
+            operation_preview_result(),
+        ))),
+    );
+    assert!(state.operation_preview.is_some());
+    state.update(
+        Message::Field(Field::CompletionNote, "New confirmation draft".into()),
+        true,
+    );
+    assert!(state.operation_preview.is_none());
+    assert_eq!(state.prompt, "New work draft");
+    assert_eq!(state.completion_note, "New confirmation draft");
+}
+
 #[test]
 fn native_views_build_for_list_forms_and_all_backend_states() {
     for activity_state in [

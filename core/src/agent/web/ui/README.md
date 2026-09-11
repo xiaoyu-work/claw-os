@@ -64,6 +64,7 @@ ownership, and work submission. The authenticated adapters are:
 | `POST /api/activities/{id}/run` | `activity.run` |
 | `GET /api/activities/{id}/objects` | `activity.objects` |
 | `POST /api/activities/{id}/objects` | `activity.object.attach` |
+| `POST /api/activities/{id}/operation-preview` | `activity.operation.preview` |
 
 Creation saves a goal without starting work. The detail view shows goal,
 completion criteria, planning boundaries, inert resource references, job
@@ -117,6 +118,36 @@ They refetch after attachment and other metadata changes; read failures or
 malformed/untrusted descriptions are visible and hide stale descriptions until
 a successful refresh, without disabling unrelated Activity work.
 
+### App-declared effect previews
+
+Each declared object offers **Preview effects** for its existing invocation.
+The request uses `{app_id, operation, args}` with argv preserved as an array;
+the Activity ID belongs only in the URL. No preview is requested automatically.
+There is no execution, approval, undo action, URI navigation, or local effect
+planner behind this button.
+Previewing remains available for paused and completed Activities; it does not
+require editability, resume work, or change the Activity's state.
+
+The result displays the backend's package digest and operation identity,
+App-declared effects and recovery labels, requested resource targets,
+unresolved runtime arguments, and notes. It is metadata, not a receipt, file
+diff, proof of safe execution, or authorization. Missing declarations mean
+**unknown effects**, never an implicit read-only operation. Requested targets
+are not final canonical paths. Recovery categories are App claims, not an
+undo guarantee, and compensation need not erase an external effect.
+
+The preview never displays raw argv as effect content or guesses targets from
+arguments. All labels, targets, and notes remain inert text. Responses must
+explicitly say `authorization_checked: false`, `executed: false`, and
+`effects_confirmed: false`; malformed or mismatched responses show an error,
+not a cached success. Retrying is another explicit preview request.
+
+Preview state uses the existing abortable read guards in manual mode and is
+scoped to the Activity, object reference, App version, and exact invocation.
+Changing that scope aborts old reads; simultaneous object previews stay
+independent. Previews do not modify Activity resources or task state. See the
+[shared preview contract](../../../../../docs/operation-previews.md).
+
 ### Refresh behavior
 
 Views refetch after mutations, on focus/notification changes, every three
@@ -132,7 +163,7 @@ Chromium-based browser:
 
 ```bash
 bun run typecheck
-bun test test/activities.test.ts test/activity-views.test.tsx
+bun test test/activities.test.ts test/activity-views.test.tsx test/operation-preview.test.ts
 bun run build --outDir .activity-validation/dist
 bun run test:browser
 ```
@@ -148,6 +179,10 @@ stale read/mutation/creation races. Object coverage includes typed attachment
 with and without a revision, canonical backend resources, concurrent plain
 resources, declaration status/errors, malformed or untrusted descriptions,
 inert metadata/invocations, and stale object-read/attachment races.
+Effect-preview coverage verifies explicit requests, opaque argv, every effect
+kind and recovery category, requested-only targets, unresolved/unknown states,
+rejected execution/authorization claims, inert output, and late previews
+across objects and Activities.
 Console errors and unexpected outbound
 requests fail the test. It neither contacts a model nor uses real credentials.
 Browser profiles stay under `.activity-validation/` and are removed after the

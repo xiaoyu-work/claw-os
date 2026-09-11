@@ -2,6 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  type Operation,
+  type Operationeffect,
   WIRE_ENUM,
   WIRE_MAXIMUM,
   WIRE_MINIMUM,
@@ -192,5 +194,29 @@ test("serializer rejects non-finite and unsafe native numbers recursively", () =
       (error: unknown) =>
         error instanceof WireJsonSerializationError && error.code === code,
     );
+  }
+});
+
+test("operation effect bindings preserve omission and explicit declarations", () => {
+  const minimal: Operationeffect = {
+    kind: "read",
+    label: { en: "Read requested paths" },
+  };
+  const declared: Operationeffect = {
+    kind: "update",
+    label: { en: "Update requested paths" },
+    target_arg: "paths",
+    recovery: "compensatable",
+  };
+  const legacy: Operation = { label: { en: "Inspect" } };
+  assert.equal(Object.hasOwnProperty.call(legacy, "effects"), false);
+  assert.equal(Object.hasOwnProperty.call(minimal, "recovery"), false);
+  for (const operation of [
+    legacy,
+    { label: { en: "Inspect" }, effects: [] },
+    { label: { en: "Inspect" }, effects: [minimal] },
+    { label: { en: "Update" }, effects: [declared] },
+  ] satisfies Operation[]) {
+    assert.deepEqual(JSON.parse(JSON.stringify(operation)), operation);
   }
 });

@@ -3,8 +3,10 @@ import { JSDOM } from "jsdom";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
+import { OperationEffects } from "../src/components/operation-effects";
 import { useActivity, useActivities, useActivityObjects } from "../src/hooks/use-activities";
 import { activityApi, type ActivityDetail, type ActivityObjects, type ActivityState } from "../src/lib/activities";
+import type { OperationPreview } from "../src/lib/operation-preview";
 
 function detail(id: string): ActivityDetail {
   return {
@@ -123,3 +125,86 @@ test("read failures are visible and a successful explicit refresh clears them", 
   await act(async () => dom.window.dispatchEvent(new dom.window.Event("focus")));
   expect(container.textContent).toBe("first");
 });
+
+const previewProps = {
+  activityId: "activity-1", objectReference: "app://archive/entry?id=first", appVersion: "1.0",
+  invocation: { app_id: "archive", operation: "get", args: ["--message=ARGUMENT_ONLY_PAYLOAD; $(printf inert)"] },
+};
+function effects(label = "Declared removal"): OperationPreview {
+  return {
+    schema: 1, app_id: "archive", app_name: "Archive", app_version: "1.0",
+    package_digest: "fixture-digest", operation: "get", operation_label: "Inspect entry",
+    effects_declared: true,
+    effects: [{
+      kind: "delete", label, recovery: "irreversible", target_arg: "path", target_kind: "path",
+      requested_targets: ["../requested/draft.txt"], target_state: "requested",
+    }],
+    unresolved_arguments: ["provider"],
+    authorization_checked: false, executed: false, effects_confirmed: false,
+    notes: ["Metadata only"],
+  };
+}
+
+async function clickPreview() {
+  const button = container.querySelector("button");
+  expect(button).not.toBeNull();
+  await act(async () => button!.click());
+}
+
+test("effect previews are explicit, inert metadata rather than argument content or authority", async () => {
+  const preview = spyOn(activityApi, "previewOperation").mockResolvedValue(effects('<img src="https://invalid.example">'));
+  await act(async () => root.render(<OperationEffects {...previewProps} />));
+  await act(async () => dom.window.dispatchEvent(new dom.window.Event("focus")));
+  expect(preview).not.toHaveBeenCalled();
+  await clickPreview();
+  expect(preview).toHaveBeenCalledTimes(1);
+  expect(container.textContent).toContain("App-declared delete");
+  expect(container.textContent).toContain("Irreversible (App-declared)");
+  expect(container.textContent).toContain("Authorization not checked");
+  expect(container.textContent).toContain("not final canonical paths");
+  expect(container.textContent).toContain("Unresolved runtime arguments");
+  expect(container.textContent).not.toContain("ARGUMENT_ONLY_PAYLOAD");
+  expect(container.querySelectorAll("img,script,a")).toHaveLength(0);
+  expect(container.querySelectorAll("button")).toHaveLength(1);
+});
+
+test("preview errors hide earlier effects and missing declarations stay explicitly unknown", async () => {
+  const preview = spyOn(activityApi, "previewOperation").mockResolvedValue(effects());
+  await act(async () => root.render(<OperationEffects {...previewProps} />));
+  await clickPreview();
+  expect(container.textContent).toContain("Declared removal");
+  preview.mockRejectedValue(new Error("App not trusted"));
+  await clickPreview();
+  expect(container.querySelector('[role="alert"]')?.textContent).toBe("App not trusted");
+  expect(container.textContent).not.toContain("Declared removal");
+  preview.mockResolvedValue({ ...effects(), effects_declared: false, effects: [] });
+  await clickPreview();
+  expect(container.textContent).toContain("Effects unknown");
+  expect(container.textContent).toContain("not a read-only guarantee");
+});
+
+for (const { name, next } of [
+  { name: "Activity", next: { ...previewProps, activityId: "activity-2" } },
+  { name: "object", next: { ...previewProps, objectReference: "app://archive/entry?id=second" } },
+  { name: "App version", next: { ...previewProps, appVersion: "2.0" } },
+  { name: "invocation", next: { ...previewProps, invocation: { ...previewProps.invocation, args: ["different"] } } },
+]) {
+  test(`a late preview cannot overwrite a changed ${name}`, async () => {
+    const first = deferred<OperationPreview>();
+    let oldSignal: AbortSignal | undefined;
+    const preview = spyOn(activityApi, "previewOperation").mockImplementationOnce((_id, _input, signal) => {
+      oldSignal = signal;
+      return first.promise;
+    }).mockResolvedValue(effects("Current effect"));
+    await act(async () => root.render(<OperationEffects {...previewProps} />));
+    await clickPreview();
+    await act(async () => root.render(<OperationEffects {...next} />));
+    expect(oldSignal?.aborted).toBe(true);
+    expect(preview).toHaveBeenCalledTimes(1);
+    await clickPreview();
+    expect(container.textContent).toContain("Current effect");
+    await act(async () => first.resolve(effects("Obsolete effect")));
+    expect(container.textContent).not.toContain("Obsolete effect");
+    expect(container.textContent).toContain("Current effect");
+  });
+}

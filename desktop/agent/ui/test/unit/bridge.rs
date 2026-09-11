@@ -139,3 +139,27 @@ fn activity_object_transport_uses_the_versioned_endpoint_and_typed_components() 
         serde_json::from_slice(request.body().unwrap().as_bytes().unwrap()).unwrap();
     assert_eq!(sent, body);
 }
+
+#[test]
+fn activity_operation_preview_transport_is_authenticated_versioned_and_typed() {
+    let endpoint = endpoint(1, 1);
+    let body = ActivityOperationPreviewRequest {
+        app_id: "kv".into(), operation: "get".into(),
+        args: vec!["entry; $(not executed)".into()],
+    };
+    let (request, selected) = activity_request(
+        &endpoint, reqwest::Method::POST, &["activities", "activity-1", "operation-preview"],
+    ).unwrap();
+    let request = request.json(&body).build().unwrap();
+    assert_eq!(selected, ProtocolVersion(1));
+    assert_eq!(request.headers()[PROTOCOL_VERSION_HEADER], "1");
+    assert!(request.headers().contains_key(reqwest::header::AUTHORIZATION));
+    assert_eq!(request.url().path(), "/api/activities/activity-1/operation-preview");
+    assert_eq!(request.method(), reqwest::Method::POST);
+    assert_eq!(
+        serde_json::from_slice::<ActivityOperationPreviewRequest>(
+            request.body().unwrap().as_bytes().unwrap()
+        ).unwrap(),
+        body,
+    );
+}

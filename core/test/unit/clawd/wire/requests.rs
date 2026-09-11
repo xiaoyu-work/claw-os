@@ -2,6 +2,23 @@ use super::*;
 use serde_json::json;
 
 #[test]
+fn operation_preview_requests_are_bounded_and_cannot_supply_authority() {
+    let good = json!({"app_id":"fs","operation":"write","args":["/home/user/file","--content","draft"]});
+    assert!(serde_json::from_value::<OperationPreview>(good.clone()).is_ok());
+    for field in ["owner_uid", "grant", "authorized", "execute"] {
+        let mut bad = good.clone();
+        bad[field] = json!(true);
+        assert!(serde_json::from_value::<OperationPreview>(bad).is_err());
+    }
+    let mut flood = good.clone();
+    flood["args"] = json!(vec!["x";65]);
+    assert!(serde_json::from_value::<OperationPreview>(flood).is_err());
+    let mut long = good;
+    long["args"] = json!(["x".repeat(8193)]);
+    assert!(serde_json::from_value::<OperationPreview>(long).is_err());
+}
+
+#[test]
 fn activity_object_requests_are_bounded_closed_references_not_authority() {
     let valid = json!({
         "id":"00000000-0000-4000-8000-000000000001",

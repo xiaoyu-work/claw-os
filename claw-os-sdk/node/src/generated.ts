@@ -154,7 +154,8 @@ export interface Localizedtext {
 
 /**
  * operation.
- * A one-shot operation: its inputs and the capabilities it needs.
+ * A one-shot operation: its inputs, capability needs, and optional App-
+ * declared effect guidance.
  */
 export interface Operation {
   label: Localizedtext;
@@ -162,6 +163,19 @@ export interface Operation {
   stdin?: boolean;
   args?: Arg[];
   needs?: Need[];
+  effects?: Operationeffect[];
+}
+
+/**
+ * operationEffect.
+ * App-declared guidance for a metadata-only preview, not authority, an OS-
+ * confirmed effect, or proof that an inverse exists.
+ */
+export interface Operationeffect {
+  kind: "read" | "create" | "update" | "delete" | "external" | "execute";
+  label: Localizedtext;
+  target_arg?: string;
+  recovery?: "not_applicable" | "reversible" | "compensatable" | "irreversible" | "unknown";
 }
 
 /**

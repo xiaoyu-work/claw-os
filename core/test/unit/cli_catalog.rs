@@ -7,6 +7,7 @@ fn catalogue_contains_every_public_router_namespace() {
         vec![
             "activity",
             "object",
+            "operation",
             "sys",
             "service",
             "checkpoint",

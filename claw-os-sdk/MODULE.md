@@ -12,6 +12,8 @@ Rust, Python, Node, and Go bindings.
 - Keep language bindings behaviorally compatible.
 - Define pure, canonical App object references without discovery, authority,
   or a presentation-specific store.
+- Define optional App effect metadata without treating declarations or
+  metadata-only previews as authority or confirmed execution outcomes.
 - Own decoder validation and JSON-RPC error codes in `wire/v1/contract.json`
   plus the versioned schemas.
 - Release every language binding at the same SDK SemVer through GitHub.
@@ -25,6 +27,7 @@ Rust, Python, Node, and Go bindings.
 | `wire/v1/contract.json` | Generated decoder set, stable validation errors, and JSON-RPC codes |
 | `wire/v1/object_ref.schema.json`, `wire/v1/object-references.md` | Object reference shape and normative identity/URI semantics |
 | `wire/v1/object_ref.vectors.json` | Shared four-language object-reference conformance vectors |
+| `wire/v1/manifest.schema.json`, `wire/v1/operation-effects.md` | Optional effect declarations and truthful metadata-only preview semantics |
 | `wire/v1/ask-claw-launcher.md` | Versioned secure desktop overlay launcher handshake |
 | `rust/` | Rust public SDK |
 | `python/` | Python public SDK |

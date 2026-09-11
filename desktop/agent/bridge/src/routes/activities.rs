@@ -9,9 +9,9 @@ use axum::{
 use clawd_client::{Command, Error as BrokerError, ErrorCode as BrokerErrorCode};
 use cos_agent_protocol::{
     ActivityCreateRequest, ActivityDetailResponse, ActivityListQuery, ActivityListResponse,
-    ActivityObjectAttachRequest, ActivityObjectsResponse, ActivityRunRequest,
-    ActivityTransitionRequest, ActivityUpdateRequest, ActivityView, ActivityWorkResponse,
-    ErrorCode,
+    ActivityObjectAttachRequest, ActivityObjectsResponse, ActivityOperationPreview,
+    ActivityOperationPreviewRequest, ActivityRunRequest, ActivityTransitionRequest,
+    ActivityUpdateRequest, ActivityView, ActivityWorkResponse, ErrorCode,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -105,6 +105,26 @@ pub async fn attach_object(
     request: Result<Json<ActivityObjectAttachRequest>, JsonRejection>,
 ) -> Result<Json<ActivityView>, ApiError> {
     mutate(&state, &id, Command::ActivityObjectAttach, body(request)?).await
+}
+
+pub async fn operation_preview(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    request: Result<Json<ActivityOperationPreviewRequest>, JsonRejection>,
+) -> Result<Json<ActivityOperationPreview>, ApiError> {
+    let request = body(request)?;
+    let value = state
+        .clawd
+        .call(Command::ActivityOperationPreview, with_id(&id, &request)?)
+        .await
+        .map_err(upstream_error)?;
+    let preview = translation::operation_preview(value).map_err(ApiError::bad_gateway)?;
+    if preview.app_id != request.app_id || preview.operation != request.operation {
+        return Err(ApiError::bad_gateway(
+            "Activity preview operation did not match the request",
+        ));
+    }
+    Ok(Json(preview))
 }
 
 pub async fn update(

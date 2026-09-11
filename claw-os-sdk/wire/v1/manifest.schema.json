@@ -62,7 +62,7 @@
     },
     "operation": {
       "type": "object",
-      "description": "A one-shot operation: its inputs and the capabilities it needs.",
+      "description": "A one-shot operation: its inputs, capability needs, and optional App-declared effect guidance.",
       "required": ["label"],
       "additionalProperties": true,
       "properties": {
@@ -90,7 +90,36 @@
             ]
           }
         },
-        "needs": { "type": "array", "items": { "$ref": "#/$defs/need" }, "description": "Capability requirements checked before dispatch." }
+        "needs": { "type": "array", "items": { "$ref": "#/$defs/need" }, "description": "Capability requirements checked before dispatch." },
+        "effects": {
+          "type": "array",
+          "x-go-type": "*[]Operationeffect",
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/operationEffect" },
+          "description": "Optional App-declared effect metadata, not authority or confirmed outcomes. Missing effects means unknown effects, never purity or read-only behavior."
+        }
+      }
+    },
+    "operationEffect": {
+      "type": "object",
+      "description": "App-declared guidance for a metadata-only preview, not authority, an OS-confirmed effect, or proof that an inverse exists.",
+      "required": ["kind", "label"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "type": "string", "enum": ["read", "create", "update", "delete", "external", "execute"] },
+        "label": { "$ref": "#/$defs/localizedText", "description": "English (en) is required. Core manifest validation limits every locale's label to 512 UTF-8 bytes." },
+        "target_arg": {
+          "type": "string",
+          "x-go-type": "*string",
+          "description": "A declared path/host/name argument; repeatable arguments are allowed. Core validates the binding and conditions. Preview values are requested values, not canonicalized or authorized final targets; runtime-selected values remain unresolved."
+        },
+        "recovery": {
+          "type": "string",
+          "x-go-type": "*string",
+          "enum": ["not_applicable", "reversible", "compensatable", "irreversible", "unknown"],
+          "default": "unknown",
+          "description": "App-declared recovery guidance only. Omission means unknown; no value proves that an inverse or compensation is available."
+        }
       }
     },
     "arg": {

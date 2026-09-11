@@ -149,13 +149,25 @@ type Localizedtext struct {
 }
 
 // Operation — operation.
-// A one-shot operation: its inputs and the capabilities it needs.
+// A one-shot operation: its inputs, capability needs, and optional App-declared
+// effect guidance.
 type Operation struct {
 	Label Localizedtext `json:"label"`
 	Summary *Localizedtext `json:"summary,omitempty"`
 	Stdin bool `json:"stdin,omitempty"`
 	Args []Arg `json:"args,omitempty"`
 	Needs []Need `json:"needs,omitempty"`
+	Effects *[]Operationeffect `json:"effects,omitempty"`
+}
+
+// Operationeffect — operationEffect.
+// App-declared guidance for a metadata-only preview, not authority, an OS-
+// confirmed effect, or proof that an inverse exists.
+type Operationeffect struct {
+	Kind string `json:"kind"`
+	Label Localizedtext `json:"label"`
+	TargetArg *string `json:"target_arg,omitempty"`
+	Recovery *string `json:"recovery,omitempty"`
 }
 
 // Arg — arg.

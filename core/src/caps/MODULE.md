@@ -20,6 +20,7 @@ separate description from system authority.
 | `scope.rs` | Scope kinds, normalization, containment |
 | `manifest.rs` | `app.json` schema and validation |
 | `manifest/objects.rs` | Optional App object types and self-contained resolver argument contracts |
+| `manifest/effects.rs` | Optional App-declared effects; never authorization or observed outcomes |
 | `../../test/unit/caps/manifest.rs` | Manifest parsing, need binding, AI/session/desktop tests |
 | `enforcement.rs` | Permission decision path |
 | `mod.rs` | Shared capability types and exports |

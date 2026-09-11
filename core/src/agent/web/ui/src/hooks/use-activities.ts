@@ -11,12 +11,12 @@ export function activityError(cause: unknown): string {
   return cause instanceof Error ? cause.message : "The Activity request failed.";
 }
 
-function useActivityView<T>(
+export function useActivityView<T>(
   read: (signal: AbortSignal) => Promise<T>,
-  interval: (value: T | null) => number,
+  interval?: (value: T | null) => number,
 ) {
   const [data, setData] = useState<T | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!!interval);
   const [error, setError] = useState<string | null>(null);
   const sequence = useRef(0);
   const controller = useRef<AbortController | null>(null);
@@ -43,7 +43,7 @@ function useActivityView<T>(
     } finally {
       if (current()) {
         setLoading(false);
-        timer.current = window.setTimeout(() => void refresh(), interval(value));
+        if (interval) timer.current = window.setTimeout(() => void refresh(), interval(value));
       }
     }
   }, [read, interval]);
@@ -51,10 +51,13 @@ function useActivityView<T>(
   useEffect(() => {
     setData(null);
     setError(null);
-    void refresh();
+    setLoading(!!interval);
     const onChange = () => void refresh();
-    window.addEventListener("focus", onChange);
-    window.addEventListener("cos:notifications-changed", onChange);
+    if (interval) {
+      void refresh();
+      window.addEventListener("focus", onChange);
+      window.addEventListener("cos:notifications-changed", onChange);
+    }
     return () => {
       ++sequence.current;
       controller.current?.abort();
@@ -62,7 +65,7 @@ function useActivityView<T>(
       window.removeEventListener("focus", onChange);
       window.removeEventListener("cos:notifications-changed", onChange);
     };
-  }, [refresh]);
+  }, [refresh, interval]);
 
   return { data, loading, error, refresh };
 }

@@ -44,6 +44,11 @@ pub fn builtin_namespaces() -> Vec<NamespaceEntry> {
             ],
         ),
         (
+            "operation",
+            "App-declared effect previews, without execution or authority",
+            vec![("preview", "Preview declared effects and requested targets; actual effects remain unconfirmed")],
+        ),
+        (
             "sys",
             "System information - hardware, OS, environment, resources, and live Linux telemetry",
             vec![

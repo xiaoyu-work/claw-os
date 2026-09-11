@@ -34,6 +34,10 @@ pub fn api() -> Router<AppState> {
             "/activities/:id/objects",
             get(activities::objects).post(activities::attach_object),
         )
+        .route(
+            "/activities/:id/operation-preview",
+            post(activities::operation_preview),
+        )
         .route("/activities/:id/transition", post(activities::transition))
         .route("/activities/:id/run", post(activities::run))
         .route("/tasks/:task_id/retry", post(activities::retry_job))

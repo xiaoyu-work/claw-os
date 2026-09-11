@@ -124,6 +124,18 @@ See [the normative object-reference contract](wire/v1/object-references.md)
 for byte limits, strict URI spelling, generated validation, shared golden
 vectors, and the optional manifest `objects` declaration.
 
+## App effect declarations
+
+An operation may declare up to 16 effects in its manifest for a metadata-only
+preview. These declarations do not grant authority, execute App code, inspect
+object data or credentials, or promise file diffs. Missing effects mean
+unknown effects, not purity; recovery is App-declared guidance, not proof that
+an inverse exists.
+
+See [the effect declaration and preview contract](wire/v1/operation-effects.md)
+for fields, label limits, target bindings, unresolved runtime arguments, and
+generated binding compatibility. No new SDK execution API is introduced.
+
 ## AI support
 
 Across Rust, Python, Node, and Go, the stable hand-written AI surface is

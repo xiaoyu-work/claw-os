@@ -60,6 +60,11 @@ pub(crate) fn activity_task(endpoint: BridgeEndpoint, request: ActivityRequest) 
                 ActivityAction::Objects(id) => bridge::fetch_activity_objects(endpoint, &id)
                     .await
                     .map(ActivityResponse::Objects),
+                ActivityAction::OperationPreview { activity_id, request, .. } => {
+                    bridge::preview_activity_operation(endpoint, &activity_id, request)
+                        .await
+                        .map(|preview| ActivityResponse::OperationPreview(Box::new(preview)))
+                }
                 ActivityAction::AttachObject(id, body) => {
                     bridge::attach_activity_object(endpoint, &id, body)
                         .await

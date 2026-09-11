@@ -150,3 +150,40 @@ fn root_types_and_budget_show_have_stable_contracts() {
     assert_eq!(chat_budget.code, WIRE_REQUIRED);
     assert_eq!(chat_budget.path, "$.app");
 }
+
+#[test]
+fn operation_effect_bindings_preserve_omission_and_explicit_declarations() {
+    use crate::generated::{Operation, Operationeffect};
+
+    let legacy: Operation =
+        serde_json::from_value(serde_json::json!({"label": {"en": "Inspect"}})).unwrap();
+    assert!(legacy.effects.is_none());
+    let minimal: Operationeffect = serde_json::from_value(serde_json::json!({
+        "kind": "read",
+        "label": {"en": "Read requested paths"}
+    }))
+    .unwrap();
+    assert!(minimal.target_arg.is_none());
+    assert!(minimal.recovery.is_none());
+
+    for value in [
+        serde_json::json!({"label": {"en": "Inspect"}}),
+        serde_json::json!({"label": {"en": "Inspect"}, "effects": []}),
+        serde_json::json!({
+            "label": {"en": "Inspect"},
+            "effects": [{"kind": "read", "label": {"en": "Read requested paths"}}]
+        }),
+        serde_json::json!({
+            "label": {"en": "Update"},
+            "effects": [{
+                "kind": "update",
+                "label": {"en": "Update requested paths"},
+                "target_arg": "paths",
+                "recovery": "compensatable"
+            }]
+        }),
+    ] {
+        let typed: Operation = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(typed).unwrap(), value);
+    }
+}

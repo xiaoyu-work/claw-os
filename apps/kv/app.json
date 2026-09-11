@@ -18,6 +18,9 @@
   },
   "operations": {
     "get": {
+      "effects": [
+        {"kind": "read", "label": {"en": "Read the value of the requested key"}, "target_arg": "key", "recovery": "not_applicable"}
+      ],
       "label": {
         "en": "Get a value by key"
       },
@@ -42,6 +45,9 @@
       ]
     },
     "set": {
+      "effects": [
+        {"kind": "update", "label": {"en": "Store the value under the requested key"}, "target_arg": "key", "recovery": "unknown"}
+      ],
       "label": {
         "en": "Set a key-value pair"
       },
@@ -72,6 +78,9 @@
       ]
     },
     "del": {
+      "effects": [
+        {"kind": "delete", "label": {"en": "Delete the requested key"}, "target_arg": "key", "recovery": "unknown"}
+      ],
       "label": {
         "en": "Delete a key"
       },

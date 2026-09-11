@@ -82,6 +82,11 @@ third-party SDK calls are capability-checked by the `cos` kernel.
 
 App manifests (`app.json`) are validated against `manifest.schema.json`.
 
+Optional operation `effects` declarations support
+[truthful metadata-only previews](operation-effects.md). These are App claims,
+not authority or confirmed outcomes. Missing declarations mean unknown
+effects, and recovery guidance is not proof that an inverse exists.
+
 ## App object data contract
 
 [`object_ref.schema.json`](object_ref.schema.json) describes a portable

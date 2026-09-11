@@ -183,6 +183,21 @@ pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandS
             object_schemas(),
         ),
         (
+            "operation",
+            "Non-executing App effect previews",
+            vec![CommandSchema {
+                command: "preview",
+                description: "Preview App declarations, never authorize or execute them",
+                params: vec![
+                    Param::positional("app", "string", true, "Installed App ID"),
+                    Param::positional("operation", "string", true, "Declared operation"),
+                    Param::flag("--activity", "uuid", false, "Owner-scoped Activity context"),
+                    Param::positional("args", "array<string>", false, "App arguments after --; not executed"),
+                ],
+                example: "cos operation preview fs write -- /home/user/draft.md --content Draft",
+            }],
+        ),
+        (
             "checkpoint",
             "OverlayFS snapshot system",
             vec![

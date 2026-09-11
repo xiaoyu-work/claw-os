@@ -187,6 +187,27 @@ explicit, with metadata and descriptions refetched after attachment or changes
 to already-inspected resources. Generation checks reject stale responses, and
 failed attachments preserve the form without inventing a local resource.
 
+### App-declared effect previews
+
+**Preview App-declared effects**, beside a declared object's JSON argv, sends
+that existing invocation to the shared `activity.operation.preview` service.
+There is no generic execution form. The response is metadata from the signed
+App manifest: App/version/package digest, declared effects, requested targets,
+unresolved arguments and notes. Missing effect declarations explicitly mean
+**unknown**, not read-only or safe to run.
+
+The preview does not execute App code, read object data or credentials, check
+execution permissions, confirm effects, or approve work. Targets are inert
+requested values, including paths that are not final canonical resources.
+Recovery categories are App-declared guidance, never a guarantee. The bridge
+rejects replies that claim authorization, execution or confirmed effects and
+excludes raw non-resource argv and unrelated broker fields from preview responses.
+
+Previews are fetched only on request, including for terminal Activities.
+Selection generations and an invocation snapshot reject stale replies;
+navigation, object refresh and metadata/object editing discard displayed
+previews. No preview enters the separate work-submission or approval path.
+
 ## Endpoint discovery
 
 The bridge binds an ephemeral port when `COS_AGENT_BRIDGE_PORT` is
@@ -237,6 +258,7 @@ the prior non-disruptive `start` behavior.
 | `GET /api/activities/:id` | `ActivityDetailResponse`; `activity.get` plus associated `permission.pending` projections |
 | `GET /api/activities/:id/objects` | `ActivityObjectsResponse`; declaration-only `activity.objects` |
 | `POST /api/activities/:id/objects` | `ActivityObjectAttachRequest` → unchanged `ActivityView`; `activity.object.attach` |
+| `POST /api/activities/:id/operation-preview` | `ActivityOperationPreviewRequest` → schema-1 metadata-only `ActivityOperationPreview`; `activity.operation.preview` |
 | `PATCH /api/activities/:id` | `ActivityUpdateRequest` → `ActivityView`; `activity.update` |
 | `POST /api/activities/:id/transition` | `ActivityTransitionRequest` → `ActivityView`; `activity.transition` |
 | `POST /api/activities/:id/run` | `ActivityRunRequest` → `ActivityWorkResponse`; durable `activity.run` |

@@ -26,7 +26,7 @@ const objectDescription = {
   app_version: "1.0.0",
   object_label: "Archived entry",
   object_summary: '<img src="https://objects.invalid/private" onerror="window.objectMetadataExecuted=true">',
-  invocation: { app_id: "archive", operation: "get", args: ["--revision=rev 2", "--", " release.status /?#& "] },
+  invocation: { app_id: "archive", operation: "get", args: ["--revision=rev 2", "--message=ARGUMENT_ONLY_PAYLOAD; $(printf inert)", "--", " release.status /?#& "] },
   provenance: { publisher: "fixture-only", ignored_metadata: "Not a UI permission grant" },
 };
 const declaredMetadata = { status: "declared", description: objectDescription, error: null };
@@ -34,12 +34,35 @@ const unpinnedDescription = {
   ...objectDescription,
   object: { app_id: "archive", object_type: "entry", object_id: " release.status /?#& " },
   reference: "app://archive/entry?id=%20release.status%20%2F%3F%23%26%20",
-  invocation: { app_id: "archive", operation: "get", args: ["--", " release.status /?#& "] },
+  invocation: { app_id: "archive", operation: "get", args: ["--message=ARGUMENT_ONLY_PAYLOAD; $(printf inert)", "--", " release.status /?#& "] },
 };
 const objectMetadata = new Map([
   [objectDescription.reference, declaredMetadata],
   [unpinnedDescription.reference, { status: "declared", description: unpinnedDescription, error: null }],
 ]);
+const effectPreview = {
+  schema: 1, app_id: "archive", app_name: "Archive", app_version: "1.0.0",
+  package_digest: "fixture-package-digest", operation: "get", operation_label: "Inspect entry",
+  effects_declared: true,
+  effects: [
+    { kind: "read", label: 'Read <img src="https://effects.invalid/read">', recovery: "not_applicable",
+      target_arg: "key", target_kind: "name", requested_targets: ["release.status"], target_state: "requested" },
+    { kind: "create", label: "Declared creation", recovery: "reversible",
+      target_arg: "path", target_kind: "path", requested_targets: ["../requested/draft.txt"], target_state: "requested" },
+    { kind: "update", label: "Runtime-selected update", recovery: "unknown",
+      target_arg: "destination", target_kind: "path", requested_targets: [], target_state: "unresolved" },
+    { kind: "delete", label: "Declared removal", recovery: "irreversible",
+      target_arg: "path", target_kind: "path", requested_targets: ["../requested/old.txt"], target_state: "requested" },
+    { kind: "external", label: "Declared external request", recovery: "compensatable",
+      target_arg: "host", target_kind: "host", requested_targets: ["https://effects.invalid/status"], target_state: "requested" },
+    { kind: "execute", label: "Unspecified hook", recovery: "unknown",
+      target_arg: null, target_kind: null, requested_targets: [], target_state: "unspecified" },
+  ],
+  unresolved_arguments: ["provider", "destination"],
+  authorization_checked: false, executed: false, effects_confirmed: false,
+  notes: ["App declarations only. No object data or credentials were read."],
+};
+const previewReplies = [];
 let activityNumber = 0;
 let jobNumber = 0;
 let invalidDetailOnce = null;
@@ -170,11 +193,22 @@ async function fixture(req, res) {
     activities.set(item.id, item);
     return reply(req, res, item);
   }
-  const match = /^\/api\/activities\/([^/]+)(?:\/(update|transition|run|objects))?$/.exec(url.pathname);
+  const match = /^\/api\/activities\/([^/]+)(?:\/(update|transition|run|objects|operation-preview))?$/.exec(url.pathname);
   if (match) {
     const item = activities.get(decodeURIComponent(match[1]));
     assert.ok(item, "the requested Activity exists");
     const action = match[2];
+    if (action === "operation-preview") {
+      assert.equal(req.method, "POST");
+      assert.deepEqual(Object.keys(body).sort(), ["app_id", "args", "operation"], "previews carry no owner, effects or authority");
+      const description = [...objectMetadata.values()]
+        .filter((entry) => entry.status === "declared")
+        .map((entry) => entry.description)
+        .find((entry) => entry.invocation.app_id === body.app_id && entry.invocation.operation === body.operation
+          && JSON.stringify(entry.invocation.args) === JSON.stringify(body.args));
+      assert.ok(description, "preview uses an existing declared invocation with opaque argv");
+      return reply(req, res, previewReplies.length ? previewReplies.shift() : effectPreview);
+    }
     if (action === "objects") {
       if (req.method === "GET") {
         if (invalidObjectsOnce?.id === item.id) {
@@ -401,6 +435,17 @@ try {
   const expectDetail = (text) => wait(`(${detailText}).includes(${JSON.stringify(text)})`, text);
   const objectPanel = `document.querySelector('[aria-label="App object references"]')`;
   const expectObjects = (text) => wait(`(${objectPanel}?.innerText || '').includes(${JSON.stringify(text)})`, text);
+  const previewRegion = `${objectPanel}.querySelector('[aria-label="Operation effect preview"]')`;
+  const expectPreview = (text) => wait(`(${previewRegion}?.innerText || '').includes(${JSON.stringify(text)})`, text);
+  const previewInState = async (state) => {
+    assert.equal(activities.get("activity-1").state, state);
+    const savedActivity = clone(activities.get("activity-1"));
+    const savedJobs = clone([...jobs.values()]);
+    await clickText("Preview effects");
+    await expectPreview("Not executed. Authorization not checked. Effects not confirmed.");
+    assert.deepEqual(activities.get("activity-1"), savedActivity, `${state} preview preserves Activity state`);
+    assert.deepEqual([...jobs.values()], savedJobs, `${state} preview neither starts nor resumes work`);
+  };
   const fillObject = async (label) => {
     await fill("Reference label", label);
     await fill("App ID", objectDescription.object.app_id);
@@ -468,6 +513,46 @@ try {
   assert.equal(await evaluate("window.objectMetadataExecuted"), undefined);
   await click(`${objectPanel}.querySelector('code')`);
   assert.equal(await evaluate("location.hash"), "#/activities/activity-1");
+  const beforePreview = clone(activities.get("activity-1"));
+  assert.equal(requests.filter((request) => request.path.endsWith("/operation-preview")).length, 0, "no automatic previews");
+  await clickText("Preview effects");
+  await expectPreview("fixture-package-digest");
+  for (const kind of ["read", "create", "update", "delete", "external", "execute"]) await expectPreview(`App-declared ${kind}`);
+  for (const recovery of ["Not applicable", "Reversible", "Compensatable", "Irreversible"]) await expectPreview(`${recovery} (App-declared)`);
+  await expectPreview("Recovery: Unknown");
+  await expectPreview("Target unresolved");
+  await expectPreview("Target unspecified by this declaration");
+  await expectPreview("../requested/draft.txt");
+  await expectPreview("not final canonical paths");
+  await expectPreview("not an undo guarantee");
+  await expectPreview("Authorization not checked");
+  await expectPreview("Effects not confirmed");
+  await expectPreview("Unresolved runtime arguments");
+  assert.equal(await evaluate(`(${previewRegion}.innerText).includes('ARGUMENT_ONLY_PAYLOAD')`), false);
+  assert.equal(await evaluate(`${previewRegion}.querySelectorAll('a,img,script').length`), 0);
+  assert.equal(await evaluate(`${previewRegion}.querySelectorAll('button').length`), 1);
+  assert.deepEqual(requests.filter((request) => request.path.endsWith("/operation-preview")).at(-1).body, objectDescription.invocation);
+  await click(`Array.from(${previewRegion}.querySelectorAll('code')).find(el => el.textContent === 'https://effects.invalid/status')`);
+  assert.equal(await evaluate("location.hash"), "#/activities/activity-1");
+  for (const invalid of [
+    { ...effectPreview, executed: true },
+    { ...effectPreview, effects_confirmed: true },
+    { ...effectPreview, effects: [{ ...effectPreview.effects[0], target_kind: "text", requested_targets: ["ARGUMENT_ONLY_PAYLOAD"] }] },
+  ]) {
+    previewReplies.push(invalid);
+    await clickText("Preview effects");
+    await expectPreview("Invalid operation preview from the server.");
+    assert.equal(await evaluate(`(${previewRegion}.innerText).includes('App-declared delete')`), false);
+    assert.equal(await evaluate(`(${previewRegion}.innerText).includes('ARGUMENT_ONLY_PAYLOAD')`), false);
+  }
+  previewReplies.push({ ...effectPreview, effects_declared: false, effects: [] });
+  await clickText("Preview effects");
+  await expectPreview("Effects unknown");
+  await expectPreview("not a read-only guarantee");
+  assert.equal(await evaluate(`(${previewRegion}.innerText).includes('App-declared read')`), false);
+  assert.deepEqual(activities.get("activity-1"), beforePreview, "previews never modify Activity metadata");
+  assert.equal(jobs.size, 0, "previews never submit jobs");
+  console.log("PASS explicit effect/recovery previews, requested-only targets, unknowns and rejected authority claims");
   objectMetadata.set(objectDescription.reference, {
     status: "unavailable", description: null, error: "App package is quarantined; review its publisher trust.",
   });
@@ -475,6 +560,7 @@ try {
   await expectObjects("Unavailable");
   await expectObjects("App package is quarantined; review its publisher trust.");
   assert.equal(await evaluate(`(${objectPanel}.innerText).includes('Archived entry')`), false);
+  assert.equal(await evaluate(`${objectPanel}.querySelectorAll('[aria-label="Operation effect preview"]').length`), 0);
   assert.ok(activities.get("activity-1").resources.some((entry) => entry.reference === objectDescription.reference));
   objectMetadata.set("app:invalid", { status: "invalid", description: null, error: "Stored reference is not canonical." });
   activities.get("activity-1").resources.push({ label: "Invalid stored reference", reference: "app:invalid" });
@@ -552,6 +638,7 @@ try {
   await reload();
   await expectDetail("Resume activity");
   assert.equal(await evaluate(`(${buttonExpression("Submit work")}).matches(':disabled')`), true);
+  await previewInState("paused");
   await clickText("Resume activity");
   await expectDetail("Activity resumed.");
   await clickText("Mark completed");
@@ -564,6 +651,8 @@ try {
   await reload();
   await expectDetail("I reviewed the signed draft against the criteria.");
   assert.equal(await evaluate(`(${fieldExpression("Reference label")}).matches(':disabled')`), true);
+  await previewInState("completed");
+  console.log("PASS previews remain available and read-only for paused and completed Activities");
   await clickText("Reopen activity");
   await expectDetail("Activity explicitly reopened.");
   await clickText("Cancel activity");
@@ -623,6 +712,35 @@ try {
   assert.equal(activities.get("activity-2").resources.length, 0);
   assert.ok(activities.get("activity-1").resources.some((entry) => entry.reference === unpinnedDescription.reference));
   console.log("PASS late object descriptions and attachments cannot overwrite a newer selection or draft");
+
+  await open("Release preparation");
+  await expectObjects("Attached while looking elsewhere");
+  const pinnedObject = `${objectPanel}.querySelector('[aria-label="Object reference: Release status"]')`;
+  const unpinnedObject = `${objectPanel}.querySelector('[aria-label="Object reference: Attached while looking elsewhere"]')`;
+  const pinnedPreview = `${pinnedObject}.querySelector('[aria-label="Operation effect preview"]')`;
+  const unpinnedPreview = `${unpinnedObject}.querySelector('[aria-label="Operation effect preview"]')`;
+  const delayedPreview = holdRequest("POST", "/api/activities/activity-1/operation-preview");
+  previewReplies.push({ ...effectPreview, effects: [{ ...effectPreview.effects[0], label: "Late pinned declaration" }] });
+  await click(`${pinnedPreview}.querySelector('button')`);
+  await delayedPreview.seen;
+  previewReplies.push({ ...effectPreview, effects: [{ ...effectPreview.effects[0], label: "Current unpinned declaration" }] });
+  await click(`${unpinnedPreview}.querySelector('button')`);
+  await wait(`(${unpinnedPreview}?.innerText || '').includes('Current unpinned declaration')`, "second object's preview completes independently");
+  delayedPreview.release();
+  await wait(`(${pinnedPreview}?.innerText || '').includes('Late pinned declaration')`, "first preview remains in its own object");
+  assert.equal(await evaluate(`(${unpinnedPreview}.innerText).includes('Late pinned declaration')`), false);
+  const oldActivityPreview = holdRequest("POST", "/api/activities/activity-1/operation-preview");
+  previewReplies.push({ ...effectPreview, effects: [{ ...effectPreview.effects[0], label: "Obsolete Activity preview" }] });
+  await click(`${pinnedPreview}.querySelector('button')`);
+  await oldActivityPreview.seen;
+  await open("Second goal");
+  await expectObjects("No App object references.");
+  oldActivityPreview.release();
+  await delay(300);
+  assert.equal(await evaluate("location.hash"), "#/activities/activity-2");
+  assert.equal(await evaluate(`(${detailText}).includes('Obsolete Activity preview')`), false);
+  assert.equal(await evaluate(`${objectPanel}.querySelectorAll('[aria-label="Operation effect preview"]').length`), 0);
+  console.log("PASS late previews stay bound to their object and Activity");
 
   await open("Release preparation");
   await clickText("Edit activity");

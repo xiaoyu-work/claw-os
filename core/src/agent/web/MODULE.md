@@ -13,6 +13,9 @@ web UI.
   changes, and associated job/session views without a Web-owned store or lifecycle.
 - Attach typed App object references and display the broker's authenticated
   declaration metadata and diagnostics, without URI parsing or App execution.
+- Preview App-declared effects on explicit request, keeping requested targets,
+  recovery guidance, unresolved arguments, and authorization caveats distinct
+  from execution results.
 - Stream text, tools, reasoning presentation, usage, and terminal state.
 - Subscribe to owner-scoped notifications and expose live unread,
   acknowledgement, dismissal, and delivery-preference UI.
@@ -31,6 +34,8 @@ web UI.
 | `ui/src/pages/activities.tsx`, `ui/src/components/activity-*.tsx` | Fixed Activity list, planning forms, detail cards, and existing task/approval/session navigation |
 | `ui/src/lib/activities.ts`, `ui/src/hooks/use-activities.ts` | Validated fetched views and abortable, selection-safe refreshes |
 | `ui/src/components/activity-objects.tsx` | Typed object attachment, declaration-only status, inert references, and structured invocation metadata |
+| `ui/src/components/operation-effects.tsx`, `ui/src/lib/operation-preview.ts` | Per-object metadata-only effect previews and strict response validation |
+| `ui/src/lib/api-shapes.ts` | Shared response-shape guards used by Activity and preview adapters |
 | `mod.rs`, `server.rs` | Serve command and authenticated router assembly |
 
 ## Dependencies
@@ -48,6 +53,14 @@ verification; `declared` does not prove data existence, freshness, or permission
 Invalid/unavailable references retain their diagnostics. Malformed responses
 hide stale descriptions instead of becoming local object truth. See
 [`docs/app-objects.md`](../../../../docs/app-objects.md).
+`activity.operation.preview` uses the same broker service as terminal/native
+clients. It receives structured argv, never a runnable shell string. Preview
+state is transient and scoped to the Activity, object, package version, and
+invocation; metadata refreshes do not automatically request an effect preview.
+Neither effect kinds nor targets are inferred locally. Responses claiming
+execution, checked authorization, or confirmed effects are rejected. The
+meaning of declarations and recovery labels is defined in
+[`docs/operation-previews.md`](../../../../docs/operation-previews.md).
 
 ## Tests
 
@@ -64,4 +77,5 @@ explicit confirmation forwarding, typed object attachment, broker transport,
 and visible failures.
 [`ui/README.md`](ui/README.md) documents focused UI tests and a real Chromium
 workflow over a mocked authenticated API, including stale selection responses,
-canonical object attachments, declaration failures, and non-execution.
+canonical object attachments, declaration failures, non-execution, unknown
+effects, requested-only targets, and isolated late previews.

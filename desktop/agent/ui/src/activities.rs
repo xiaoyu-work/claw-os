@@ -2,7 +2,8 @@
 //! owns Activity lifecycle and durable work; leaving this view cancels nothing.
 
 use cos_agent_protocol::{
-    ActivityJobView, ActivityObjectStatus, ActivityResource, AppObjectDescription,
+    ActivityJobView, ActivityObjectStatus, ActivityResource, AppDeclaredEffect, AppEffectKind,
+    AppEffectRecovery, AppEffectTargetKind, AppEffectTargetState, AppObjectDescription,
 };
 use cosmic::iced::{Alignment, Length};
 use cosmic::widget::{Column, Row, button, container, scrollable, text};
@@ -10,9 +11,9 @@ use cosmic::{Element, theme, widget};
 
 use crate::bridge::{
     ActivityCreateRequest, ActivityDetailResponse, ActivityListResponse,
-    ActivityObjectAttachRequest, ActivityObjectsResponse, ActivityRunRequest, ActivityState,
-    ActivityTransitionRequest, ActivityUpdateRequest, ActivityView, ActivityWorkResponse,
-    CancelResponse,
+    ActivityObjectAttachRequest, ActivityObjectsResponse, ActivityOperationPreview,
+    ActivityOperationPreviewRequest, ActivityRunRequest, ActivityState, ActivityTransitionRequest,
+    ActivityUpdateRequest, ActivityView, ActivityWorkResponse, CancelResponse,
 };
 use crate::{Message as AppMessage, fl, styles};
 
@@ -52,6 +53,7 @@ pub enum Message {
     ResourceReference(usize, String),
     RemoveResource(usize),
     DescribeObjects,
+    PreviewObjectOperation(String),
     NewObject,
     ObjectField(ObjectField, String),
     AttachObject,
@@ -73,6 +75,11 @@ pub(crate) enum Action {
     List(Option<ActivityState>),
     Get(String),
     Objects(String),
+    OperationPreview {
+        activity_id: String,
+        reference: String,
+        request: ActivityOperationPreviewRequest,
+    },
     AttachObject(String, ActivityObjectAttachRequest),
     Create(ActivityCreateRequest),
     Update(String, ActivityUpdateRequest),
@@ -93,6 +100,7 @@ pub enum Response {
     List(ActivityListResponse),
     Detail(Box<ActivityDetailResponse>),
     Objects(ActivityObjectsResponse),
+    OperationPreview(Box<ActivityOperationPreview>),
     Saved(Box<ActivityView>),
     Work(ActivityWorkResponse),
     JobCancellation(CancelResponse),
@@ -110,12 +118,20 @@ pub(crate) struct Activities {
     form: Option<ActivityCreateRequest>,
     object_form: Option<ActivityObjectAttachRequest>,
     objects: Option<ActivityObjectsResponse>,
+    operation_preview: Option<OperationPreviewView>,
     refresh_objects_after_detail: bool,
     completion_note: String,
     prompt: String,
     continue_session: Option<String>,
     error: Option<String>,
     notice: Option<String>,
+}
+
+#[derive(Debug)]
+struct OperationPreviewView {
+    reference: String,
+    request: ActivityOperationPreviewRequest,
+    preview: ActivityOperationPreview,
 }
 
 impl Activities {
@@ -135,6 +151,7 @@ impl Activities {
 
     pub(crate) fn hide(&mut self) {
         self.visible = false;
+        self.operation_preview = None;
         if !self.can_edit_forms() {
             self.form = None;
             self.object_form = None;
@@ -146,7 +163,10 @@ impl Activities {
         self.pending.as_ref().is_none_or(|action| {
             matches!(
                 action,
-                Action::List(_) | Action::Get(_) | Action::Objects(_)
+                Action::List(_)
+                    | Action::Get(_)
+                    | Action::Objects(_)
+                    | Action::OperationPreview { .. }
             )
         })
     }
@@ -165,8 +185,16 @@ impl Activities {
     }
 
     pub(crate) fn object_operation_text(&self, reference: &str) -> Option<String> {
-        self.objects
-            .as_ref()?
+        self.declared_object_description(reference)
+            .map(object_operation_text)
+    }
+
+    fn declared_object_description(&self, reference: &str) -> Option<&AppObjectDescription> {
+        let objects = self.objects.as_ref()?;
+        if self.selected.as_deref() != Some(objects.activity_id.as_str()) {
+            return None;
+        }
+        objects
             .objects
             .iter()
             .find(|object| {
@@ -174,12 +202,60 @@ impl Activities {
             })?
             .description
             .as_ref()
-            .map(object_operation_text)
+    }
+
+    fn preview_context_matches(
+        &self,
+        activity_id: &str,
+        reference: &str,
+        request: &ActivityOperationPreviewRequest,
+    ) -> bool {
+        self.visible
+            && self.selected.as_deref() == Some(activity_id)
+            && self.form.is_none()
+            && self.object_form.is_none()
+            && self
+                .declared_object_description(reference)
+                .is_some_and(|description| {
+                    ActivityOperationPreviewRequest::from(&description.invocation) == *request
+                })
+    }
+
+    fn begin_operation_preview(&mut self, reference: String, connected: bool) -> Option<Request> {
+        if !self.visible
+            || self.form.is_some()
+            || self.object_form.is_some()
+            || self
+                .pending
+                .as_ref()
+                .is_some_and(|action| !matches!(action, Action::OperationPreview { .. }))
+        {
+            return None;
+        }
+        let description = self.declared_object_description(&reference)?;
+        let request = ActivityOperationPreviewRequest::from(&description.invocation);
+        let activity_id = self.selected.clone()?;
+        self.operation_preview = None;
+        self.begin(
+            Action::OperationPreview {
+                activity_id,
+                reference,
+                request,
+            },
+            connected,
+        )
     }
 
     fn invalidate(&mut self) {
         self.generation = self.generation.wrapping_add(1);
         self.pending = None;
+    }
+
+    fn invalidate_operation_preview(&mut self) {
+        self.operation_preview = None;
+        if matches!(self.pending, Some(Action::OperationPreview { .. })) {
+            self.invalidate();
+        }
     }
 
     fn begin(&mut self, action: Action, connected: bool) -> Option<Request> {
@@ -215,6 +291,7 @@ impl Activities {
         self.form = None;
         self.object_form = None;
         self.objects = None;
+        self.operation_preview = None;
         self.refresh_objects_after_detail = false;
         self.completion_note.clear();
         self.prompt.clear();
@@ -251,9 +328,15 @@ impl Activities {
                 }
             }
             Message::Refresh => return self.refresh(connected),
+            Message::PreviewObjectOperation(reference) => {
+                return self.begin_operation_preview(reference, connected);
+            }
             Message::Field(field, value) => {
                 if !self.can_edit_forms() {
                     return None;
+                }
+                if matches!(field, Field::CompletionNote | Field::Prompt) || self.form.is_some() {
+                    self.invalidate_operation_preview();
                 }
                 match field {
                     Field::CompletionNote => self.completion_note = value,
@@ -275,6 +358,9 @@ impl Activities {
                 if !self.can_edit_forms() {
                     return None;
                 }
+                if self.object_form.is_some() {
+                    self.invalidate_operation_preview();
+                }
                 if let Some(form) = &mut self.object_form {
                     match field {
                         ObjectField::Label => form.label = value,
@@ -293,6 +379,7 @@ impl Activities {
             Message::DescribeObjects => {
                 let id = self.selected.clone()?;
                 self.objects = None;
+                self.operation_preview = None;
                 self.refresh_objects_after_detail = true;
                 return self.begin(Action::Objects(id), connected);
             }
@@ -305,6 +392,7 @@ impl Activities {
                     .as_ref()
                     .is_some_and(|detail| editable(detail.activity.state))
                 {
+                    self.operation_preview = None;
                     self.object_form = Some(ActivityObjectAttachRequest::default());
                     self.error = None;
                 } else {
@@ -343,6 +431,7 @@ impl Activities {
                 if let Some(detail) = &self.detail
                     && editable(detail.activity.state)
                 {
+                    self.operation_preview = None;
                     let activity = &detail.activity;
                     self.form = Some(ActivityCreateRequest {
                         title: activity.title.clone(),
@@ -480,6 +569,15 @@ impl Activities {
             return None;
         }
         let pending = self.pending.take()?;
+        if let Action::OperationPreview {
+            activity_id,
+            reference,
+            request,
+        } = &pending
+            && !self.preview_context_matches(activity_id, reference, request)
+        {
+            return None;
+        }
         let response = match result {
             Ok(response) => response,
             Err(error) => {
@@ -496,6 +594,7 @@ impl Activities {
                     })
                 {
                     self.objects = None;
+                    self.operation_preview = None;
                     self.refresh_objects_after_detail = true;
                 }
                 self.detail = Some(*detail);
@@ -504,15 +603,36 @@ impl Activities {
                 }
             }
             (Action::Objects(id), Response::Objects(objects)) if objects.activity_id == id => {
+                self.operation_preview = None;
                 self.objects = Some(objects);
                 self.refresh_objects_after_detail = false;
             }
             (Action::AttachObject(id, _), Response::Saved(activity)) if activity.id == id => {
                 self.object_form = None;
                 self.objects = None;
+                self.operation_preview = None;
                 self.detail = None;
                 self.refresh_objects_after_detail = true;
                 return self.refresh(connected);
+            }
+            (
+                Action::OperationPreview {
+                    reference, request, ..
+                },
+                Response::OperationPreview(preview),
+            ) => {
+                if preview.is_metadata_only()
+                    && preview.app_id == request.app_id
+                    && preview.operation == request.operation
+                {
+                    self.operation_preview = Some(OperationPreviewView {
+                        reference,
+                        request,
+                        preview: *preview,
+                    });
+                } else {
+                    self.error = Some(fl!("activity-preview-invalid"));
+                }
             }
             (Action::Create(_), Response::Saved(activity)) => {
                 return self.saved(*activity, connected);
@@ -554,6 +674,7 @@ impl Activities {
     }
 
     fn saved(&mut self, activity: ActivityView, connected: bool) -> Option<Request> {
+        self.operation_preview = None;
         if self.objects.is_some()
             && self
                 .detail
@@ -1039,10 +1160,28 @@ impl Activities {
                     .push(text(fl!("activity-object-operation-hint")).size(12.0))
                     .push(text(object_operation_text(description)).size(12.0))
                     .push(
-                        button::text(fl!("activity-object-copy-operation")).on_press(
-                            AppMessage::CopyActivityObjectOperation(object.reference.clone()),
-                        ),
+                        Row::new()
+                            .spacing(8)
+                            .push(
+                                button::text(fl!("activity-object-copy-operation")).on_press(
+                                    AppMessage::CopyActivityObjectOperation(
+                                        object.reference.clone(),
+                                    ),
+                                ),
+                            )
+                            .push(control(
+                                fl!("activity-preview-button"),
+                                Message::PreviewObjectOperation(object.reference.clone()),
+                                available,
+                            )),
                     );
+                if let Some(preview) = &self.operation_preview
+                    && preview.reference == object.reference
+                    && preview.request
+                        == ActivityOperationPreviewRequest::from(&description.invocation)
+                {
+                    card = card.push(operation_preview_view(&preview.preview));
+                }
             }
             content = content.push(
                 container(card)
@@ -1053,6 +1192,105 @@ impl Activities {
         }
         content.into()
     }
+}
+
+fn operation_preview_view(preview: &ActivityOperationPreview) -> Element<'_, AppMessage> {
+    let mut content = Column::new()
+        .spacing(8)
+        .push(text(fl!("activity-preview-title")).size(16.0))
+        .push(text(fl!("activity-preview-caveat")).size(12.0))
+        .push(text(fl!("activity-preview-checks")).size(12.0))
+        .push(
+            text(format!(
+                "{} · {} · {}",
+                preview.app_name, preview.app_id, preview.app_version
+            ))
+            .size(13.0),
+        )
+        .push(section(
+            fl!("activity-preview-digest"),
+            &preview.package_digest,
+        ))
+        .push(
+            text(format!(
+                "{} ({})",
+                preview.operation_label, preview.operation
+            ))
+            .size(14.0),
+        );
+    if let Some(notice) = missing_effect_notice(preview) {
+        content = content.push(text(notice).size(13.0));
+    }
+    for effect in &preview.effects {
+        content = content.push(declared_effect_view(effect));
+    }
+    if !preview.unresolved_arguments.is_empty() {
+        content = content.push(text(fl!("activity-preview-unresolved-arguments")).size(14.0));
+        for argument in &preview.unresolved_arguments {
+            content = content.push(text(argument).size(12.0));
+        }
+    }
+    for note in &preview.notes {
+        content = content.push(text(note).size(12.0));
+    }
+    container(content)
+        .padding(12)
+        .class(theme::Container::custom(styles::tool_card))
+        .into()
+}
+
+fn missing_effect_notice(preview: &ActivityOperationPreview) -> Option<String> {
+    (!preview.effects_declared || preview.effects.is_empty())
+        .then(|| fl!("activity-preview-unknown"))
+}
+
+fn declared_effect_view(effect: &AppDeclaredEffect) -> Element<'_, AppMessage> {
+    let kind = match effect.kind {
+        AppEffectKind::Read => fl!("activity-effect-read"),
+        AppEffectKind::Create => fl!("activity-effect-create"),
+        AppEffectKind::Update => fl!("activity-effect-update"),
+        AppEffectKind::Delete => fl!("activity-effect-delete"),
+        AppEffectKind::External => fl!("activity-effect-external"),
+        AppEffectKind::Execute => fl!("activity-effect-execute"),
+    };
+    let recovery = match effect.recovery {
+        AppEffectRecovery::NotApplicable => fl!("activity-recovery-not-applicable"),
+        AppEffectRecovery::Reversible => fl!("activity-recovery-reversible"),
+        AppEffectRecovery::Compensatable => fl!("activity-recovery-compensatable"),
+        AppEffectRecovery::Irreversible => fl!("activity-recovery-irreversible"),
+        AppEffectRecovery::Unknown => fl!("activity-recovery-unknown"),
+    };
+    let target_state = match effect.target_state {
+        AppEffectTargetState::Requested => fl!("activity-target-requested"),
+        AppEffectTargetState::Unspecified => fl!("activity-target-unspecified"),
+        AppEffectTargetState::Unresolved => fl!("activity-target-unresolved"),
+    };
+    let target_kind = match effect.target_kind {
+        Some(AppEffectTargetKind::Path) => fl!("activity-target-path"),
+        Some(AppEffectTargetKind::Host) => fl!("activity-target-host"),
+        Some(AppEffectTargetKind::Name) => fl!("activity-target-name"),
+        None => fl!("activity-target-kind-unspecified"),
+    };
+    let mut content = Column::new()
+        .spacing(4)
+        .push(text(format!("{kind}: {}", effect.label)).size(14.0))
+        .push(text(fl!("activity-preview-recovery", recovery = recovery)).size(12.0))
+        .push(
+            text(fl!(
+                "activity-preview-target-state",
+                state = target_state,
+                kind = target_kind
+            ))
+            .size(12.0),
+        );
+    if let Some(argument) = &effect.target_arg {
+        content = content.push(section(fl!("activity-preview-target-argument"), argument));
+    }
+    content = content.push(text(fl!("activity-preview-target-caveat")).size(12.0));
+    for target in &effect.requested_targets {
+        content = content.push(text(target).size(12.0));
+    }
+    content.into()
 }
 
 fn object_operation_text(description: &AppObjectDescription) -> String {

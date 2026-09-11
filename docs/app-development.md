@@ -236,6 +236,14 @@ See [App-owned objects](app-objects.md) for the manifest contract, canonical
 URI format, examples, and the distinction between a verified declaration and
 an existing, readable object.
 
+### Expected operation effects
+
+An operation may optionally declare bounded `effects` metadata. The shared OS
+preview service displays authenticated declarations and requested targets
+without executing the App, reading object data, or granting permissions.
+Missing metadata remains unknown. See [operation previews](operation-previews.md)
+for the declaration vocabulary and its limits.
+
 ## 4. The dev loop — no rebuild, no restart
 
 Every one-shot `cos app <id> <op>` invocation launches the app entry point

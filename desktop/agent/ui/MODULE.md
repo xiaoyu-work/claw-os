@@ -49,6 +49,18 @@ readability. Normal operation details can be copied as labeled fields with
 JSON argv, but never executed or resolved by the UI. Ordinary resources and
 terminal Activity edit restrictions remain unchanged.
 
+Effect previews use a declared object's existing invocation, not a new command
+form. The shared broker owns manifest interpretation and argument binding.
+Only returned metadata is displayed: App-declared effects, non-guaranteed
+recovery, requested (not canonical) targets, unresolved arguments and notes.
+Absent declarations mean unknown effects. Authorization, execution and effect
+confirmation must remain explicitly false.
+
+The preview is fetched only on a button press. Its Activity, object reference,
+invocation snapshot and generation must still match when the reply arrives.
+Metadata/object drafts and navigation invalidate it; no result starts a job
+or becomes an approval. Preview response DTOs contain no raw non-resource argv.
+
 ## Dependencies
 
 The UI consumes DTOs from `../protocol/` through `src/bridge.rs`. Views may
@@ -86,4 +98,6 @@ DTO defaults, owner-input rejection, schema translation, pending-approval
 scoping, authenticated routes and explicit broker errors. Object regressions
 also cover opaque components, retained diagnostics, no local attachment or
 completion inference, stale lookup/attachment responses, terminal restrictions,
-and inert operation details.
+and inert operation details. Preview coverage includes metadata-only flags,
+requested-target preservation, non-resource argument redaction, missing effect
+declarations, selection/draft guards and unchanged Activity/job state.
