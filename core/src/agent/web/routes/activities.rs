@@ -13,6 +13,9 @@ use crate::clawd::wire::requests::{
     ActivityObjectStateRecord, ActivityObjects, ActivityOperationPreview, ActivityReceipts,
     ActivityRun, ActivityTransition, ActivityUpdate, NoBody,
 };
+use crate::clawd::wire::requests::{
+    ActivityExecutionLimitsEnabled, ActivityExecutionLimitsGet, ActivityExecutionLimitsSet,
+};
 
 use super::clawd::ApiError;
 
@@ -157,6 +160,40 @@ pub async fn record_object_state(
     request(
         Command::ActivityObjectStateRecord,
         with_id::<ActivityObjectStateRecord>(id, json_body(body)?)?,
+    )
+    .await
+}
+
+pub async fn execution_limits(
+    Path(id): Path<String>,
+    query: Result<Query<NoBody>, QueryRejection>,
+) -> Result<Json<Value>, ApiError> {
+    query.map_err(|error| bad_request(error.body_text()))?;
+    request(
+        Command::ActivityExecutionLimitsGet,
+        with_id::<ActivityExecutionLimitsGet>(id, json!({}))?,
+    )
+    .await
+}
+
+pub async fn set_execution_limits(
+    Path(id): Path<String>,
+    body: Result<Json<Value>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    request(
+        Command::ActivityExecutionLimitsSet,
+        with_id::<ActivityExecutionLimitsSet>(id, json_body(body)?)?,
+    )
+    .await
+}
+
+pub async fn enable_execution_limits(
+    Path(id): Path<String>,
+    body: Result<Json<Value>, JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    request(
+        Command::ActivityExecutionLimitsEnabled,
+        with_id::<ActivityExecutionLimitsEnabled>(id, json_body(body)?)?,
     )
     .await
 }

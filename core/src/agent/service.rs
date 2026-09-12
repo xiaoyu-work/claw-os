@@ -51,6 +51,7 @@ use crate::activities::{Activity, ActivityService, ActivityState};
 use crate::paths::agent_jobs_dir;
 
 mod activity_context;
+pub(crate) mod execution_limits;
 use activity_context::build as activity_execution_context;
 
 /// Maximum number of times a job may be recovered from `running/` after
@@ -115,6 +116,8 @@ pub struct Job {
     pub session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activity_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_reservation: Option<crate::activities::ExecutionReservation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_turns: Option<u32>,
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
@@ -208,6 +211,7 @@ impl Job {
             branch_context,
             session_id,
             activity_id: None,
+            execution_reservation: None,
             max_turns,
             use_memory,
             status: JobStatus::Pending,
@@ -240,6 +244,14 @@ impl Job {
         } else {
             let cut: String = s.chars().take(max).collect();
             format!("{cut}…")
+        }
+    }
+
+    pub(crate) fn effective_max_turns(&self) -> Option<u32> {
+        match (&self.execution_reservation, self.max_turns) {
+            (Some(reservation), Some(requested)) => Some(reservation.max_turns.min(requested)),
+            (Some(reservation), None) => Some(reservation.max_turns),
+            (None, requested) => requested,
         }
     }
 }
@@ -763,6 +775,54 @@ impl Store {
                 }
                 None => None,
             };
+            if let Some(activity) = &activity {
+                let attempt_id = uuid::Uuid::new_v4().to_string();
+                let reserved = crate::activities::open_default().and_then(|service| {
+                    service.reserve_execution(
+                        activity.owner_uid,
+                        &activity.id,
+                        &attempt_id,
+                        &job.id,
+                        job.max_turns,
+                    )
+                });
+                match reserved {
+                    Ok(reservation) => job.execution_reservation = reservation,
+                    Err(crate::activities::ActivityError::ExecutionBlocked(
+                        crate::activities::ExecutionBlockedReason::Inactive,
+                    )) => continue,
+                    Err(error @ crate::activities::ActivityError::ExecutionBlocked(_)) => {
+                        self.fail_waiting_job(
+                            &src,
+                            &id,
+                            job,
+                            error.to_string(),
+                            "clawd.task.execution-blocked",
+                        )?;
+                        continue;
+                    }
+                    Err(error) => {
+                        return Err(io::Error::other(format!(
+                            "reserve Activity execution: {error}"
+                        )))
+                    }
+                }
+                if let Some(reservation) = &job.execution_reservation {
+                    self.append_stream_progress(
+                        &job.id,
+                        json!({
+                            "kind":"activity_execution_reserved",
+                            "activity_id":activity.id,
+                            "reservation_id":reservation.id,
+                            "policy_revision":reservation.policy_revision,
+                            "max_turns":reservation.max_turns,
+                            "expires_at":reservation.expires_at,
+                        }),
+                    )?;
+                }
+            } else {
+                job.execution_reservation = None;
+            }
             let execution_context = activity
                 .as_ref()
                 .map(|activity| {
@@ -2869,6 +2929,10 @@ async fn run_one_job_inner(job: &Job) -> FinishOutcome {
 }
 
 async fn run_one_job_scoped(job: &Job) -> FinishOutcome {
+    let mut execution_limits = match execution_limits::ExecutionLimitsGuard::new(job) {
+        Ok(guard) => guard,
+        Err(error) => return FinishOutcome::Error(error),
+    };
     let hooks = standalone_runtime_hooks();
     let stream_sink: Arc<dyn crate::agent::llm::accumulate::StreamSink> = Arc::new(JobStreamSink {
         job_id: job.id.clone(),
@@ -2877,21 +2941,37 @@ async fn run_one_job_scoped(job: &Job) -> FinishOutcome {
         Arc::new(JobProgressSink {
             job_id: job.id.clone(),
         });
-    execute_job_with_hooks(
+    let run = execute_job_with_hooks(
         JobExecution {
             id: job.id.clone(),
             prompt: job.prompt.clone(),
             context: job.context.clone(),
             branch_context: job.branch_context.clone(),
             session_id: job.session_id.clone(),
-            max_turns: job.max_turns,
+            max_turns: job.effective_max_turns(),
             use_memory: job.use_memory,
         },
         stream_sink,
         progress_sink,
         hooks,
-    )
-    .await
+    );
+    tokio::pin!(run);
+    let mut tick = tokio::time::interval(Duration::from_millis(250));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            outcome = &mut run => {
+                return match execution_limits.check_now(job) {
+                    Ok(None) => outcome,
+                    Ok(Some(reason)) | Err(reason) => FinishOutcome::Error(reason),
+                };
+            }
+            _ = tick.tick() => match execution_limits.check(job) {
+                Ok(None) => {}
+                Ok(Some(reason)) | Err(reason) => return FinishOutcome::Error(reason),
+            },
+        }
+    }
 }
 
 fn standalone_runtime_hooks() -> crate::agent::runtime::hooks::HookRegistry {

@@ -129,3 +129,9 @@ Run the same process command with
 to cover two real file replacements in one persistent App, changing exact
 call scopes, idle denial, isolated filesystem/network, shared receipts and
 recording-only retry.
+
+The sibling process regression
+`agentd::supervisor::tests::app_host_process::controlled_host_enforces_execution_limits_despite_heartbeats`
+uses that same isolated-root command/fixture to cover reserved turn assignment,
+expiry, disable and revision changes while the real worker channel continues
+heartbeating. A stopped attempt remains charged and does not complete its goal.

@@ -181,6 +181,9 @@ pub(super) fn service_error(error: ActivityError) -> BrokerError {
             BrokerError::execution(message).classified("activity_conflict")
         }
         ActivityError::LimitReached => BrokerError::execution(message).classified("activity_limit"),
+        ActivityError::ExecutionBlocked(_) => {
+            BrokerError::execution(message).classified("activity_execution_blocked")
+        }
         _ => BrokerError::unavailable(message).classified("activity_unavailable"),
     }
 }

@@ -27,6 +27,12 @@ pub enum Command {
     ActivityTransition,
     #[serde(rename = "activity.run")]
     ActivityRun,
+    #[serde(rename = "activity.execution_limits.get")]
+    ActivityExecutionLimitsGet,
+    #[serde(rename = "activity.execution_limits.set")]
+    ActivityExecutionLimitsSet,
+    #[serde(rename = "activity.execution_limits.enabled")]
+    ActivityExecutionLimitsEnabled,
     #[serde(rename = "activity.objects")]
     ActivityObjects,
     #[serde(rename = "activity.object.attach")]
@@ -64,13 +70,16 @@ pub enum Command {
 }
 
 impl Command {
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 26] = [
         Self::ActivityCreate,
         Self::ActivityList,
         Self::ActivityGet,
         Self::ActivityUpdate,
         Self::ActivityTransition,
         Self::ActivityRun,
+        Self::ActivityExecutionLimitsGet,
+        Self::ActivityExecutionLimitsSet,
+        Self::ActivityExecutionLimitsEnabled,
         Self::ActivityObjects,
         Self::ActivityObjectAttach,
         Self::ActivityObjectStateList,
@@ -98,6 +107,9 @@ impl Command {
             Self::ActivityUpdate => "activity.update",
             Self::ActivityTransition => "activity.transition",
             Self::ActivityRun => "activity.run",
+            Self::ActivityExecutionLimitsGet => "activity.execution_limits.get",
+            Self::ActivityExecutionLimitsSet => "activity.execution_limits.set",
+            Self::ActivityExecutionLimitsEnabled => "activity.execution_limits.enabled",
             Self::ActivityObjects => "activity.objects",
             Self::ActivityObjectAttach => "activity.object.attach",
             Self::ActivityObjectStateList => "activity.object_state.list",

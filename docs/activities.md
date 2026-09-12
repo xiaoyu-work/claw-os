@@ -98,6 +98,10 @@ be new user messages. **Free-text boundaries are not a new policy language or
 an authorization grant.** Existing capabilities, approvals, budgets, and
 worker isolation continue to govern every execution.
 
+Explicit [execution limits](activity-execution-limits.md) add finite
+attempt/turn/expiry controls through that same backend. They constrain work
+without granting capabilities; free-text boundaries remain planning guidance.
+
 App-owned object references can now be attached and described through the same
 backend; see [App-owned objects](app-objects.md). Declaration inspection does
 not fetch object data. Executable delegation policies, automatic event-driven
@@ -119,6 +123,9 @@ receive a bounded, recorded, untrusted snapshot when claimed.
 | `activity.update` | Updated metadata; only supplied fields change |
 | `activity.transition` | Updated explicit lifecycle state |
 | `activity.run` | An ordinary submitted Agent job associated with the Activity |
+| `activity.execution_limits.get` | Owner-scoped finite execution policy and usage |
+| `activity.execution_limits.set` | Version-checked limits update without resetting usage or granting authority |
+| `activity.execution_limits.enabled` | Explicit enable/disable, not policy deletion or unlimited execution |
 | `activity.objects` | Authenticated declaration metadata or explicit diagnostics for App references |
 | `activity.object.attach` | Atomically attached reference; no App execution or new authority |
 | `activity.operation.preview` | App-declared expected effects; no execution, authorization, or confirmed changes |

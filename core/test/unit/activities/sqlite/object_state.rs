@@ -1408,7 +1408,7 @@ fn table_exists(conn: &Connection, name: &str) -> bool {
 #[test]
 fn schema_one_and_two_migrate_sequentially_to_three_without_rewriting_any_legacy_fields() {
     assert_eq!(SCHEMA_VERSION, 1);
-    assert_eq!(DATABASE_SCHEMA_VERSION, 3);
+    assert_eq!(DATABASE_SCHEMA_VERSION, 4);
     for version in [1, 2] {
         let directory = TestDirectory::new();
         let path = directory.database();
@@ -1430,7 +1430,7 @@ fn schema_one_and_two_migrate_sequentially_to_three_without_rewriting_any_legacy
             assert_eq!(
                 conn.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
                     .unwrap(),
-                3
+                DATABASE_SCHEMA_VERSION
             );
             assert_eq!(table_rows(&conn, "activities"), activity_rows);
             if let Some(receipt_rows) = receipt_rows {
@@ -1661,7 +1661,7 @@ fn missing_history_indexes_are_reported_not_recreated_when_opening_schema_three(
     assert_eq!(
         conn.pragma_query_value(None, "user_version", |row| row.get::<_, u32>(0))
             .unwrap(),
-        3
+        DATABASE_SCHEMA_VERSION
     );
     assert!(!table_exists(&conn, "activity_object_state_supersession"));
     assert_eq!(load_activity(&conn, 7, &expected.id).unwrap(), expected);

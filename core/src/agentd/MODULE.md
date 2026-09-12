@@ -31,6 +31,13 @@ supervises, but does not execute it.
 | `supervisor.rs` | Broker-side claim → spawn → lease → pump → finish, permission mediation, reconciliation |
 | `worker.rs` | Worker-side handshake, dedicated channel thread, sinks, audit forwarding, approval gateway, cancellation |
 
+Activity execution reservations bound the actual assigned model turns and a
+monotonic expiry independent of heartbeat renewal. The shared service guard
+also rechecks live policy state/revision. A limit stop uses existing App-host
+admission closure and exact-child cancellation, reports its own reason, and
+does not promise to undo an already-admitted privileged mutation. See
+[execution limits](../../../docs/activity-execution-limits.md).
+
 ## Threat Boundary
 
 The worker starts as root only long enough to `exec`. In one `pre_exec`

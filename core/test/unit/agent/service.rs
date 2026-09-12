@@ -2,6 +2,13 @@ use super::*;
 use crate::agent::llm::accumulate::StreamSink;
 use crate::agent::llm::{ChatResponse, ContentBlock, FinishReason, StreamEvent, ToolCall, Usage};
 
+mod execution_limit_queue {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/agent/service/execution_limit_queue.rs"
+    ));
+}
+
 fn fresh_root() -> tempfile::TempDir {
     tempfile::tempdir().unwrap()
 }

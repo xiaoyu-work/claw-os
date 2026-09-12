@@ -18,6 +18,8 @@ and the owner-scoped broker contract; only their presentations differ.
   or App-declared effects into OS-confirmed changes or authority.
 - Keep bounded object observations, receipt links, planning relations and
   correction/retraction history in the same owner-scoped Activity database.
+- Store finite execution constraints and conservative attempt reservations,
+  without creating capabilities, approvals, execution authority or goal completion.
 - Reject unreadable, invalid, unsupported-schema, and poisoned-lock storage
   explicitly rather than resetting the database or returning empty defaults.
 
@@ -30,6 +32,8 @@ and the owner-scoped broker contract; only their presentations differ.
 | `receipts.rs` | Receipt types, strict report validation, and declaration bounds |
 | `object_state.rs` | Object-state domain, canonical references/windows, and strict draft validation |
 | `sqlite/object_state.rs` | Immutable object-state ledger, reference/receipt binding, schema-3 migration and integrity checks |
+| `execution_limits.rs` | Bounded execution policies, reservation DTOs, validation and typed blocking reasons |
+| `sqlite/execution_limits.rs` | Policy CAS, durable attempt accounting, revocation/retry checks and schema-4 migration |
 | `../clawd/activities.rs` | Owner-scoped broker consumer and execution projections |
 | `../activity.rs` | Terminal presentation |
 | `../../test/unit/activities/` | Domain and provider unit tests |
@@ -42,9 +46,9 @@ worker, or model-provider dependency, and Activity metadata grants no new
 capabilities or approvals.
 
 `ActivityDraft::validate`, `ActivityPatch::validate`,
-`ObjectStateDraft::validate`, and `validate_id` validate inputs without opening
-storage. UUID lookups return a canonical `Activity.id`; job/session associations
-should store that returned value.
+`ObjectStateDraft::validate`, `ExecutionLimitsDraft::validate`, and `validate_id`
+validate inputs without opening storage. UUID lookups return a canonical
+`Activity.id`; job/session associations should store that returned value.
 
 On Unix, new private directories use `0700`; an existing non-listable,
 non-writable shared daemon root may retain its traversal bits (`0711`) so
@@ -54,12 +58,15 @@ parent directories are rejected.
 
 Disk connections require WAL journaling, `synchronous=FULL`, and a five-second
 busy timeout. Creation, partial updates, transitions, receipt appends and
-object-state appends use immediate transactions. A new empty database receives
-schema version 3 through explicit sequential migrations. Schema 1 first adds
+object-state appends, execution policy changes and reservations use immediate
+transactions. A new empty database receives schema version 4 through explicit
+sequential migrations. Schema 1 first adds
 the schema-2 `activity_receipts` ledger; schema 2 then adds
 `activity_object_state` and the receipt composite index needed for
-owner/Activity-bound links. Neither migration rewrites Activity rows,
-resources, lifecycle state, timestamps, completion confirmations or receipts.
+owner/Activity-bound links. Schema 3 adds `activity_execution_limits` and
+`activity_execution_reservations`, with composite owner/Activity foreign keys.
+These migrations do not rewrite Activity rows, resources, lifecycle state,
+timestamps, completion confirmations, receipts or object-state history.
 The version advances only after schema/index/foreign-key definitions, SQLite
 integrity, foreign-key relationships and persisted legacy metadata validate.
 A failure rolls back both schema additions and the version. An existing
@@ -69,7 +76,7 @@ than initializing a replacement database over them. Reads validate stored
 metadata rather than silently repairing it. The in-memory provider is for
 tests and uses SQLite's in-memory journal instead of WAL.
 
-`DATABASE_SCHEMA_VERSION = 3` controls SQLite `user_version` and migration.
+`DATABASE_SCHEMA_VERSION = 4` controls SQLite `user_version` and migration.
 The broker independently owns `clawd::activities::WIRE_SCHEMA_VERSION = 1`
 for `activity.list` and `activity.get`; it does not emit the database version.
 The existing public `activities::SCHEMA_VERSION = 1` is retained for wire
@@ -243,6 +250,91 @@ column consistency, fixed source, receipt binding and correction edges.
 Corruption fails explicitly, never disappearing through a filter or being
 repaired by retry.
 
+## Execution Constraints and Attempt Accounting
+
+`ActivityService::execution_limits` reads an optional
+`ActivityExecutionLimits`. No configured policy returns `None` for backward
+compatibility; that absence is not permission to execute. The caller must
+still enforce Activity lifecycle, capabilities, approvals and normal job
+admission. These policies constrain root-owned attempts and do not implement
+token/cost budgets, a scheduler or a grant engine.
+
+`ExecutionLimitsDraft` requires all three fields: `max_attempts` in 1..=1000,
+`max_turns_per_attempt` in 1..=100 and an RFC3339 `expires_at`. It rejects
+unknown fields, including owner, revision, enabled state, usage, approvals and
+capability overrides. The provider normalizes expiry to nanosecond UTC and
+requires a strictly future expiry inside configuration transactions.
+Historical expired policies remain readable.
+
+`set_execution_limits` with `expected_revision: None` creates only when absent,
+starting at revision 1, enabled, with zero used attempts. A supplied revision
+must exactly match the existing policy. Updates advance the revision and
+preserve `enabled`, `used_attempts` and `created_at`; lowering the attempt limit
+below usage is allowed and blocks new reservations. Policy configuration
+requires an active or paused Activity. Policy revisions use the public `u64`
+type within SQLite's positive `i64` range; unrepresentable inputs and revision
+exhaustion are explicit errors, never wraparound or reset.
+
+`set_execution_limits_enabled` uses the same revision CAS and advances the
+revision on every explicit call, including a repeated enabled value.
+Disabling remains possible for expired policies and terminal Activities.
+Enabling requires active/paused lifecycle and an unexpired policy; editing a
+disabled policy never re-enables it. These operations do not change the
+Activity's goal, lifecycle, completion note or timestamps.
+
+`reserve_execution` receives the root caller's UUID attempt ID, an inert job
+token and an optional positive turn request. Job tokens follow the existing
+job-store grammar: 1..=128 ASCII letters, digits, hyphens or underscores, never
+paths or traversal. The provider never opens a job file, launches work,
+consumes an approval or grants capabilities. Effective turns are the minimum
+of a supplied positive request and the policy limit, or the policy default
+when absent. Requests up to `u32::MAX` can be clamped without SQL integer
+overflow.
+
+With a policy, reservation requires an active Activity, enabled/unexpired
+limits and an available attempt. One immediate transaction appends an
+immutable `ExecutionReservation` and increments the policy's usage, without
+changing its revision. The reservation records the policy revision, effective
+turn limit, canonical expiry and server reservation time. The ledger privately
+retains the exact optional turn request and policy turn-limit snapshot to
+validate historical clamping after policy edits. The reservation is durable
+accounting, not authority or evidence that execution happened.
+
+Attempt IDs are canonical UUIDs unique per owner. An exact owner/Activity/job/
+request retry returns the original reservation without a second charge, even
+at the attempt quota. `None` and an explicit request equal to the default are
+different requests. Changed identity or request conflicts. Every retry
+rechecks current lifecycle, enabled state, expiry and policy revision:
+disabling, re-enabling or editing a policy cannot be bypassed with an old
+reservation. Other owners may independently use the same attempt ID; UID 0
+has no cross-owner exemption.
+
+There are at most 1000 lifetime reservations per Activity, with no delete,
+reset, refund or replay API. The ledger count is authoritative and must match
+`used_attempts` in the same transaction snapshot. Reads validate bounded
+counts, integer ranges, canonical UUIDs/timestamps, ownership, job tokens,
+revision relationships and turn-limit snapshots. Corruption is an error,
+never an empty/default policy or implicit repair. A reservation can be charged
+before a later filesystem job transition fails; that conservative charge is
+intentional and remains recorded.
+
+Admission/configuration refusals are typed as
+`ActivityError::ExecutionBlocked(ExecutionBlockedReason)`:
+
+| Reason | Meaning |
+| --- | --- |
+| `Inactive` | Lifecycle forbids the requested configuration or reservation |
+| `Disabled` | Reservations are disabled |
+| `Expired` | Expiry is at or before the transaction's UTC clock |
+| `StaleRevision` | Policy CAS failed or a retry names an older policy revision |
+| `AttemptLimit` | A new attempt would exceed the configured or lifetime limit |
+
+The reason enum serializes in snake case. Identity/request conflicts and
+revision exhaustion use `ActivityError::Conflict`; malformed inputs use
+`Invalid`. The parent execution path enforces the returned turn/deadline
+constraints and observes live policy changes through existing job
+cancellation and lease mechanisms.
+
 See [the Activity contract](../../../docs/activities.md) for presentations and
 [object-state annotations](../../../docs/object-state.md) for the cross-client
 contract, and [the system architecture](../../../ARCHITECTURE.md) for authority
@@ -263,3 +355,8 @@ Object-state coverage adds strict wire/canonicalization and clock boundaries,
 attachment/receipt binding, concurrent corrections and retries, retractions,
 detached history, immutable appends, schema-1/2 preservation and failed or
 interrupted schema-3 migration rollback.
+Execution-limit coverage includes strict bounds and UTC normalization,
+owner/root isolation, policy CAS and revocation, preserved usage, clamped
+turns, concurrent reservations, current-policy checks on retries, lifecycle
+independence, corrupt counters/rows/foreign keys, revision overflow and
+schema-3 preservation/failed schema-4 migration rollback.

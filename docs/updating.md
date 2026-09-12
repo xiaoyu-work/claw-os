@@ -135,6 +135,14 @@ Older schema-2 cores refuse schema-3 state. Restore a compatible package or a
 consistent pre-upgrade backup; do not delete the ledger to force a downgrade.
 See [object state](object-state.md) for its source and validity semantics.
 
+Database schema 4 adds finite Activity execution policies and attempt
+reservations without rewriting goals, receipts or object-state history.
+Activities without a policy retain their existing behavior. Once configured,
+disabled or expired policies do not fall back to unlimited work. Old cores
+must not open schema-4 state; preserve the database and restore a compatible
+package or a consistent pre-upgrade backup. See
+[execution limits](activity-execution-limits.md).
+
 Session receipts use the new `session:<tool>` identifier vocabulary in the
 existing receipt string field. Older cores may reject these identifiers while
 validating stored schema-2 receipts. Keep `cos`, `clawd` and `claw-agentd`

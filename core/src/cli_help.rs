@@ -689,6 +689,36 @@ fn activity_schemas() -> Vec<CommandSchema> {
     ));
     let mut schemas = vec![
         CommandSchema {
+            command: "execution-limits",
+            description: "Read Activity attempt/turn/expiry controls; no capabilities are granted",
+            params: vec![id()],
+            example: "cos activity execution-limits 00000000-0000-4000-8000-000000000001",
+        },
+        CommandSchema {
+            command: "set-execution-limits",
+            description: "Create or revise finite Activity limits without resetting usage or enabling a disabled policy",
+            params: vec![
+                id(),
+                Param::flag("--revision", "integer", false, "Current revision when updating; omit only for initial creation"),
+                Param::flag("--max-attempts", "integer", true, "Lifetime attempt ceiling, 1-1000"),
+                Param::flag("--max-turns", "integer", true, "Maximum model turns per attempt, 1-100"),
+                Param::flag("--expires-at", "RFC3339 timestamp", true, "Future expiry of this limit policy"),
+            ],
+            example: "cos activity set-execution-limits 00000000-0000-4000-8000-000000000001 --max-attempts 10 --max-turns 5 --expires-at 2026-09-18T00:00:00Z",
+        },
+        CommandSchema {
+            command: "enable-execution-limits",
+            description: "Explicitly enable an unexpired policy at the expected revision",
+            params: vec![id(), Param::flag("--revision", "integer", true, "Current policy revision")],
+            example: "cos activity enable-execution-limits 00000000-0000-4000-8000-000000000001 --revision 2",
+        },
+        CommandSchema {
+            command: "disable-execution-limits",
+            description: "Disable bounded work without deleting its policy, clearing usage or granting unlimited work",
+            params: vec![id(), Param::flag("--revision", "integer", true, "Current policy revision")],
+            example: "cos activity disable-execution-limits 00000000-0000-4000-8000-000000000001 --revision 2",
+        },
+        CommandSchema {
             command: "object-state",
             description: "Read caller-reported object state, time windows, relations and correction history",
             params: vec![

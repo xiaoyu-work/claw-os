@@ -244,3 +244,71 @@ fn activity_object_state_record_transport_reuses_uuid_and_serializes_only_the_dr
         assert!(sent["entry"].get(field).is_none());
     }
 }
+
+#[test]
+fn activity_execution_limits_transport_is_authenticated_versioned_and_keeps_activity_only_in_path() {
+    use cos_agent_protocol::ExecutionLimitsDraft;
+    let endpoint = endpoint(1, 1);
+    let id = "activity/id?not-a-query";
+    let (get, selected) = execution_limits_get_request(&endpoint, id).unwrap();
+    let get = get.build().unwrap();
+    assert_eq!(selected, ProtocolVersion(1));
+    assert_eq!(get.method(), reqwest::Method::GET);
+    assert_eq!(get.url().path_segments().unwrap().count(), 4);
+    assert!(get.url().path().ends_with("/execution-limits"));
+    assert!(get.url().query().is_none());
+    assert!(get.body().is_none());
+    assert!(get.headers().contains_key(reqwest::header::AUTHORIZATION));
+    assert_eq!(get.headers()[PROTOCOL_VERSION_HEADER], "1");
+
+    let body = ActivityExecutionLimitsSetRequest {
+        expected_revision: None,
+        limits: ExecutionLimitsDraft {
+            max_attempts: 5,
+            max_turns_per_attempt: 20,
+            expires_at: "2099-01-01T05:00:00-07:00".into(),
+        },
+    };
+    let (set, _) = execution_limits_set_request(&endpoint, id, &body).unwrap();
+    let set = set.build().unwrap();
+    assert_eq!(set.method(), reqwest::Method::POST);
+    assert_eq!(set.url(), get.url());
+    assert_eq!(set.headers()[PROTOCOL_VERSION_HEADER], "1");
+    assert!(set.headers().contains_key(reqwest::header::AUTHORIZATION));
+    let value: serde_json::Value =
+        serde_json::from_slice(set.body().unwrap().as_bytes().unwrap()).unwrap();
+    assert_eq!(value, serde_json::json!({
+        "expected_revision": null,
+        "limits": {"max_attempts": 5, "max_turns_per_attempt": 20, "expires_at": "2099-01-01T05:00:00-07:00"}
+    }));
+    assert!(value.get("id").is_none());
+    assert!(value.get("owner_uid").is_none());
+    assert!(value.get("used_attempts").is_none());
+}
+
+#[test]
+fn activity_execution_limits_toggle_transport_preserves_large_cas_and_has_no_reset_fields() {
+    let endpoint = endpoint(1, 1);
+    let body = ActivityExecutionLimitsEnabledRequest {
+        expected_revision: u64::MAX - 1,
+        enabled: false,
+    };
+    let (request, selected) =
+        execution_limits_enabled_request(&endpoint, "activity", &body).unwrap();
+    let request = request.build().unwrap();
+    assert_eq!(selected, ProtocolVersion(1));
+    assert_eq!(request.method(), reqwest::Method::POST);
+    assert_eq!(request.url().path(), "/api/activities/activity/execution-limits/enabled");
+    assert!(request.url().query().is_none());
+    assert_eq!(request.headers()[PROTOCOL_VERSION_HEADER], "1");
+    assert!(request.headers().contains_key(reqwest::header::AUTHORIZATION));
+    let encoded = request.body().unwrap().as_bytes().unwrap();
+    assert_eq!(
+        serde_json::from_slice::<ActivityExecutionLimitsEnabledRequest>(encoded).unwrap(),
+        body,
+    );
+    let value: serde_json::Value = serde_json::from_slice(encoded).unwrap();
+    assert_eq!(value.as_object().unwrap().len(), 2);
+    assert_eq!(value["expected_revision"].as_u64(), Some(u64::MAX - 1));
+    assert_eq!(value["enabled"], false);
+}

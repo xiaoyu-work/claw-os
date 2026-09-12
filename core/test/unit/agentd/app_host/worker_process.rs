@@ -78,6 +78,32 @@ fn controlled_host_child() {
     assert!(assignment.job.record_activity_receipts);
     assert!(assignment.session.is_some());
     let task_id = assignment.job.id.clone();
+    if context.execution_limits.is_some() {
+        assert_eq!(assignment.job.max_turns, Some(3));
+        std::fs::write(
+            context.home().join("execution-ready.json"),
+            json!({"max_turns":assignment.job.max_turns,"worker_pid":identity.pid}).to_string(),
+        )
+        .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(25);
+        while !io.state.cancelled.load(Ordering::SeqCst) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "root execution limits never cancelled the worker"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        io.state
+            .tx
+            .send(WorkerFrame::Result {
+                task_id,
+                outcome: Box::new(WorkerOutcome::Cancelled),
+            })
+            .unwrap();
+        io.finish();
+        std::thread::sleep(Duration::from_millis(500));
+        return;
+    }
     crate::caps::approval_gateway::install(Arc::new(ChannelApprovalGateway {
         task_id: task_id.clone(),
         state: io.state.clone(),

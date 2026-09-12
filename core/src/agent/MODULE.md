@@ -53,6 +53,7 @@ surfaces.
 | `runtime/turn.rs` | One provider turn, hooks, tool ordering, results |
 | `service.rs`, `../../test/unit/agent/service.rs` | Task queue, approval-wait state, ownership/lease records, and `execute_job` — the runtime entry the `agentd` worker calls |
 | `service/activity_context.rs` | Bounded untrusted Activity planning/object-state snapshots, recorded at task claim and refreshed on retry |
+| `service/execution_limits.rs` | Shared live Activity-policy and monotonic-expiry guard for supervised and standalone job execution |
 | `llm/types.rs` | Provider-neutral request, response, content, and stream types |
 | `llm/registry.rs` | Provider construction |
 | `llm/providers/` | Provider-specific authentication and wire adapters |

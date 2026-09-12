@@ -60,6 +60,21 @@ pub(crate) fn activity_task(endpoint: BridgeEndpoint, request: ActivityRequest) 
                 ActivityAction::Receipts(id) => bridge::fetch_activity_receipts(endpoint, &id)
                     .await
                     .map(ActivityResponse::Receipts),
+                ActivityAction::GetExecutionLimits(id) => {
+                    bridge::fetch_activity_execution_limits(endpoint, &id)
+                        .await
+                        .map(ActivityResponse::ExecutionLimits)
+                }
+                ActivityAction::SetExecutionLimits { activity_id, request, .. } => {
+                    bridge::set_activity_execution_limits(endpoint, &activity_id, request)
+                        .await
+                        .map(|limits| ActivityResponse::ExecutionLimitsSaved(Box::new(limits)))
+                }
+                ActivityAction::EnableExecutionLimits { activity_id, request, .. } => {
+                    bridge::enable_activity_execution_limits(endpoint, &activity_id, request)
+                        .await
+                        .map(|limits| ActivityResponse::ExecutionLimitsSaved(Box::new(limits)))
+                }
                 ActivityAction::ObjectStateList { activity_id, query } => {
                     bridge::fetch_activity_object_state(endpoint, &activity_id, query)
                         .await

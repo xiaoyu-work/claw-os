@@ -17,6 +17,7 @@ const activities = new Map();
 const jobs = new Map();
 const receiptRecords = new Map();
 const objectStateRecords = new Map();
+const executionLimitRecords = new Map();
 const requests = [];
 const fixtureErrors = [];
 const browserErrors = [];
@@ -216,6 +217,37 @@ async function fixture(req, res) {
     };
     activities.set(item.id, item);
     return reply(req, res, item);
+  }
+  const limitRoute = /^\/api\/activities\/([^/]+)\/execution-limits(?:\/(enabled))?$/.exec(url.pathname);
+  if (limitRoute) {
+    const item = activities.get(decodeURIComponent(limitRoute[1]));
+    assert.ok(item);
+    const current = executionLimitRecords.get(item.id);
+    if (req.method === "GET") {
+      assert.equal(limitRoute[2], undefined);
+      return reply(req, res, { schema: 1, activity_id: item.id, execution_limits: current || null });
+    }
+    assert.equal(req.method, "POST");
+    if (limitRoute[2] === "enabled") {
+      assert.ok(current);
+      assert.deepEqual(Object.keys(body).sort(), ["enabled", "expected_revision"]);
+      assert.equal(body.expected_revision, current.revision);
+      current.enabled = body.enabled;
+      current.revision++;
+      current.updated_at = timestamp();
+      return reply(req, res, current);
+    }
+    assert.deepEqual(Object.keys(body).sort(), ["expected_revision", "limits"]);
+    assert.equal(body.expected_revision, current?.revision ?? null);
+    assert.deepEqual(Object.keys(body.limits).sort(), ["expires_at", "max_attempts", "max_turns_per_attempt"]);
+    const policy = {
+      activity_id: item.id, owner_uid: item.owner_uid,
+      revision: (current?.revision || 0) + 1, enabled: current?.enabled ?? true,
+      limits: clone(body.limits), used_attempts: current?.used_attempts || 0,
+      created_at: current?.created_at || timestamp(), updated_at: timestamp(),
+    };
+    executionLimitRecords.set(item.id, policy);
+    return reply(req, res, policy);
   }
   const match = /^\/api\/activities\/([^/]+)(?:\/(update|transition|run|objects|operation-preview|receipts|object-state))?$/.exec(url.pathname);
   if (match) {
@@ -1054,6 +1086,38 @@ try {
   assert.equal(await evaluate(`(${objectStatePanel}.innerText).includes('Entry recorded.')`), false);
   assert.equal((objectStateRecords.get("activity-2") || []).length, 0);
   console.log("PASS late object-state reads and writes cannot replace another Activity or draft");
+  await open("Release preparation");
+  await expectDetail("No Activity execution-limit policy is configured.");
+  const unchangedGoal = clone(activities.get("activity-1"));
+  const unchangedJobs = clone([...jobs.values()]);
+  await clickText("Configure execution limits");
+  await fill("Maximum Activity attempts", "10");
+  await fill("Maximum turns per attempt", "4");
+  await fill("Execution policy expiry (RFC3339)", "2099-01-01T00:00:00Z");
+  await clickText("Save execution limits");
+  await expectDetail("Activity execution limits saved without resetting usage.");
+  await wait(`document.querySelector('[aria-label="Activity execution limits"]').innerText.includes('Revision: 1')`, "created limit policy");
+  const policy = executionLimitRecords.get("activity-1");
+  assert.equal(policy.limits.max_attempts, 10);
+  assert.equal(policy.limits.max_turns_per_attempt, 4);
+  policy.used_attempts = 2;
+  await clickLabel("Refresh execution limits");
+  await clickText("Disable bounded work");
+  await wait(`document.querySelector('[aria-label="Activity execution limits"]').innerText.includes('Policy: Disabled')`, "disabled bounded work");
+  assert.equal(policy.used_attempts, 2);
+  await clickText("Edit execution limits");
+  await fill("Maximum Activity attempts", "1");
+  await clickText("Save execution limits");
+  await expectDetail("Attempt ceiling reached.");
+  assert.equal(executionLimitRecords.get("activity-1").enabled, false, "editing does not re-enable");
+  assert.equal(executionLimitRecords.get("activity-1").used_attempts, 2, "editing never resets usage");
+  await clickText("Enable bounded work");
+  await wait(`document.querySelector('[aria-label="Activity execution limits"]').innerText.includes('Policy: Enabled')`, "explicit policy enable");
+  await reload();
+  await expectDetail("Attempt ceiling reached.");
+  assert.deepEqual(activities.get("activity-1"), unchangedGoal);
+  assert.deepEqual([...jobs.values()], unchangedJobs);
+  console.log("PASS explicit execution-limit configuration, revision updates, disable/enable and preserved usage");
   assert.deepEqual(await evaluate("Object.keys(localStorage).filter(key => /activit/i.test(key))"), []);
   assert.deepEqual(fixtureErrors, []);
   assert.deepEqual(browserErrors, []);

@@ -32,6 +32,14 @@ pub fn api() -> Router<AppState> {
         .route("/activities/:id", get(activities::get).patch(activities::update))
         .route("/activities/:id/receipts", get(activities::receipts))
         .route(
+            "/activities/:id/execution-limits",
+            get(activities::execution_limits::get).post(activities::execution_limits::set),
+        )
+        .route(
+            "/activities/:id/execution-limits/enabled",
+            post(activities::execution_limits::enabled),
+        )
+        .route(
             "/activities/:id/object-state",
             get(activities::object_state_list).post(activities::object_state_record),
         )

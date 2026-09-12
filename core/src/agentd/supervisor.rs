@@ -465,7 +465,8 @@ async fn supervise(
     };
 
     let outcome = pump(
-        &store, &signer, &config, &shutdown, broker_pid, &job, session, lease, channel, &mut child, services,
+        &store, &signer, &config, &shutdown, broker_pid, &job, session, lease, channel, &mut child,
+        services,
     )
     .await;
 
@@ -533,6 +534,11 @@ async fn pump(
     child: &mut tokio::process::Child,
     services: BrokerServices,
 ) -> TaskOutcome {
+    let mut execution_limits =
+        match crate::agent::service::execution_limits::ExecutionLimitsGuard::new(job) {
+            Ok(guard) => guard,
+            Err(error) => return TaskOutcome::Failed(error),
+        };
     // Authority on this channel comes from the grant, not from the
     // socket: `socketpair` is created before the fork, so `SO_PEERCRED`
     // is stamped with *clawd's* own uid and pid and says nothing about
@@ -566,7 +572,7 @@ async fn pump(
             context: job.context.clone(),
             branch_context: job.branch_context.clone(),
             session_id: job.session_id.clone(),
-            max_turns: job.max_turns,
+            max_turns: job.effective_max_turns(),
             use_memory: job.use_memory,
             owner_uid: lease.owner_uid,
             owner_home: job.owner_home.clone().unwrap_or_default(),
@@ -581,6 +587,7 @@ async fn pump(
 
     let mut hello_seen = false;
     let mut cancel_sent = false;
+    let mut execution_stop_reason: Option<String> = None;
     let mut cancelled_at: Option<Instant> = None;
     let mut approvals_used: u32 = 0;
     let mut receipts_used: u32 = 0;
@@ -712,11 +719,30 @@ async fn pump(
                             }
                         }
                         WorkerFrame::Result { outcome, .. } => {
+                            if let Some(reason) = execution_stop_reason {
+                                return TaskOutcome::Failed(reason);
+                            }
+                            match execution_limits.check_now(job) {
+                                Ok(None) => {}
+                                Ok(Some(reason)) | Err(reason) => return TaskOutcome::Failed(reason),
+                            }
+                            if let (Some(reservation), WorkerOutcome::Ok(run)) =
+                                (&job.execution_reservation, outcome.as_ref())
+                            {
+                                if run.turns_used > reservation.max_turns {
+                                    return TaskOutcome::Failed(
+                                        "worker reported more turns than its Activity reservation permits".to_string(),
+                                    );
+                                }
+                            }
                             return TaskOutcome::Reported(outcome);
                         }
                     }
                 }
                 Ok(None) => {
+                    if let Some(reason) = execution_stop_reason {
+                        return TaskOutcome::Failed(reason);
+                    }
                     return if cancel_sent {
                         TaskOutcome::Cancelled
                     } else {
@@ -734,6 +760,9 @@ async fn pump(
                     Ok(status) => format!("agent worker exited early ({status})"),
                     Err(error) => format!("agent worker could not be reaped: {error}"),
                 };
+                if let Some(reason) = execution_stop_reason {
+                    return TaskOutcome::Failed(reason);
+                }
                 return if cancel_sent {
                     TaskOutcome::Cancelled
                 } else {
@@ -754,9 +783,26 @@ async fn pump(
                 }
             },
             _ = ticker.tick() => {
+                if !cancel_sent {
+                    let stop = match execution_limits.check(job) {
+                        Ok(reason) => reason,
+                        Err(error) => Some(error),
+                    };
+                    if let Some(reason) = stop {
+                        if let Err(error) = store.append_stream_progress(&job.id, serde_json::json!({
+                            "kind":"activity_execution_stopped",
+                            "activity_id":job.activity_id,
+                            "reason":reason,
+                        })) {
+                            tracing::error!(task = %job.id, %error, "failed to record Activity execution stop");
+                        }
+                        execution_stop_reason = Some(reason);
+                    }
+                }
                 if !cancel_sent
                     && (shutdown.load(Ordering::SeqCst)
-                        || store.cancellation_requested(&job.id).unwrap_or(false))
+                        || store.cancellation_requested(&job.id).unwrap_or(false)
+                        || execution_stop_reason.is_some())
                 {
                     cancel_sent = true;
                     let _ = host.close();

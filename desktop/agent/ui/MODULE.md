@@ -12,6 +12,7 @@ versioned desktop Agent protocol without importing clawd or core models.
 | `src/main.rs` | Application assembly, top-level message routing, subscriptions, and startup |
 | `src/activities.rs` | Activity list/detail widgets, unsaved metadata/work/object forms, and generation-aware reduction of fetched responses; no lifecycle authority or persistence |
 | `src/activities/object_state.rs` | Fixed Object state section, bounded caller-report drafts, resource selection, receipt links and immutable history presentation inside the Activity reducer |
+| `src/activities/execution_limits.rs` | Fixed execution-constraints card, explicit refresh, lifetime-counter/status presentation, and revision-bound configuration/toggle handling; no authority or execution |
 | `src/session.rs` | Local sessions, history reconciliation, retry branches, and transcript models |
 | `src/stream_state.rs` | Generation-aware stream reduction, terminal states, cancellation, and stale-event rejection |
 | `src/bridge_state.rs` | Bridge connection, model availability, failure, and reconnect state |
@@ -100,6 +101,33 @@ instants. The protocol uses UUID/Chrono parsers for that comparison without
 rewriting the retry payload. RFC3339 inputs remain text; admission, canonical
 URI semantics and lifecycle authority remain broker-owned.
 
+Execution limits are a separate fixed card and separate typed get/set/enabled
+routes, not a new permission system. Reads are explicit, and missing/invalid
+data never becomes an unconfigured-policy success. The card shows bounded
+attempt/turn constraints, lifetime usage, remaining attempts, local-clock
+expiry status and revision, while the broker alone admits and stops attempts.
+First configuration is enabled at revision 1; edits preserve enabled state and
+lifetime usage. Disabling prevents delegated work instead of restoring
+unlimited execution. There is no reset/delete control.
+
+The configuration form captures the fetched revision; neither refresh, errors,
+nor edits rebase it. Set/toggle acknowledgements require exact revision
+progression, matching Activity/owner, unchanged lifetime identity and
+nondecreasing usage, while permitting normalized UTC expiry. The authenticated
+bridge validates owner UID using its existing process-identity inspection;
+the UI additionally compares existing snapshots. Initial creation accepts no
+owner/counter/result selectors. Successful replies trigger a fresh get rather
+than locally changing a counter, policy state or goal. Generation checks and
+form exclusion preserve the existing Activity/receipt/object-state flows.
+
+Only active/paused Activities can be configured or enabled. Disabling and
+inspection remain available for terminal Activities. User-facing caveats
+explain pre-worker durable charging, startup/crash consumption, fresh retry/
+recovery attempts, actual model-turn enforcement, normal cancellation/lease
+cleanup on expiry/disable/revision change and no promise to undo already-admitted
+privileged mutations. These constraints never grant capabilities or approvals,
+execute an App/model or transition a goal.
+
 ## Dependencies
 
 The UI consumes DTOs from `../protocol/` through `src/bridge.rs`. Views may
@@ -128,6 +156,7 @@ Private-access unit tests mirror production modules under `test/unit/`.
 
 ```bash
 cargo test --manifest-path desktop/agent/Cargo.toml -p cos-agent-ui activit -- --test-threads=1
+cargo test --manifest-path desktop/agent/Cargo.toml -p cos-agent-protocol -p cos-agent-bridge -p cos-agent-ui execution_limits -- --test-threads=1
 cargo test --manifest-path desktop/agent/Cargo.toml -p cos-agent-ui
 cargo clippy --manifest-path desktop/agent/Cargo.toml -p cos-agent-ui -- -D warnings
 ```
@@ -148,3 +177,10 @@ UTF-8 bounds, fixed resource selection, retry identities, detached/terminal
 reads and stale read/write rejection. Protocol, bridge translation, route and
 UI transport tests cover the matching list/record contract and owner/source
 input rejection.
+Execution-limit coverage under `test/unit/activities/execution_limits.rs` adds
+unloaded/unconfigured/failed reads, enabled/expired/exhausted status, initial
+null CAS, normalized expiry, lifetime usage and disabled-state preservation,
+stale conflicts without rebasing, terminal-state rules, owner/revision
+acknowledgements and stale selection. Matching protocol/translation/route/
+transport tests cover required-nullable fields, selector rejection, bounded
+inputs, authenticated owner scope and the absence of reset/delete endpoints.

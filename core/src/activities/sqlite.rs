@@ -1,3 +1,4 @@
+mod execution_limits;
 mod object_state;
 
 use std::fs::{self, OpenOptions};
@@ -11,8 +12,9 @@ use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBeha
 
 use super::{
     normalize_completion_note, normalize_resource, parse_id, validate_planning, validate_resources,
-    Activity, ActivityDraft, ActivityError, ActivityPatch, ActivityReceipt, ActivityResource,
-    ActivityService, ActivityState, ObjectStateDraft, ObjectStateEntry, ReceiptDeclaration,
+    Activity, ActivityDraft, ActivityError, ActivityExecutionLimits, ActivityPatch, ActivityReceipt,
+    ActivityResource, ActivityService, ActivityState, ExecutionLimitsDraft, ExecutionReservation,
+    ObjectStateDraft, ObjectStateEntry, ReceiptDeclaration,
     ReceiptReport, ReceiptSource,
     DATABASE_SCHEMA_VERSION, DEFAULT_LIST_LIMIT, MAX_ACTIVITIES_PER_OWNER, MAX_LIST_LIMIT,
 };
@@ -138,6 +140,10 @@ impl SqliteActivityService {
             tx.execute_batch(object_state::MIGRATE_TO_V3)?;
         }
         object_state::validate_schema(&tx)?;
+        if version < 4 {
+            tx.execute_batch(execution_limits::MIGRATE_TO_V4)?;
+        }
+        execution_limits::validate_schema(&tx)?;
         let integrity: String = tx.query_row("PRAGMA quick_check(1)", [], |row| row.get(0))?;
         if integrity != "ok" {
             return Err(ActivityError::Corrupt(format!(
@@ -479,6 +485,52 @@ impl ActivityService for SqliteActivityService {
     ) -> Result<Vec<ObjectStateEntry>, ActivityError> {
         object_state::list(self, owner_uid, activity_id, reference, limit)
     }
+
+    fn execution_limits(
+        &self,
+        owner_uid: u32,
+        activity_id: &str,
+    ) -> Result<Option<ActivityExecutionLimits>, ActivityError> {
+        execution_limits::get(self, owner_uid, activity_id)
+    }
+
+    fn set_execution_limits(
+        &self,
+        owner_uid: u32,
+        activity_id: &str,
+        expected_revision: Option<u64>,
+        draft: ExecutionLimitsDraft,
+    ) -> Result<ActivityExecutionLimits, ActivityError> {
+        execution_limits::set(self, owner_uid, activity_id, expected_revision, draft)
+    }
+
+    fn set_execution_limits_enabled(
+        &self,
+        owner_uid: u32,
+        activity_id: &str,
+        expected_revision: u64,
+        enabled: bool,
+    ) -> Result<ActivityExecutionLimits, ActivityError> {
+        execution_limits::set_enabled(self, owner_uid, activity_id, expected_revision, enabled)
+    }
+
+    fn reserve_execution(
+        &self,
+        owner_uid: u32,
+        activity_id: &str,
+        attempt_id: &str,
+        job_id: &str,
+        requested_max_turns: Option<u32>,
+    ) -> Result<Option<ExecutionReservation>, ActivityError> {
+        execution_limits::reserve(
+            self,
+            owner_uid,
+            activity_id,
+            attempt_id,
+            job_id,
+            requested_max_turns,
+        )
+    }
 }
 
 fn list_limit(limit: usize) -> Result<i64, ActivityError> {
@@ -507,7 +559,7 @@ fn check_version(conn: &Connection) -> Result<i64, ActivityError> {
                 ));
             }
         }
-        1 | 2 => {}
+        1..=3 => {}
         version if version == i64::from(DATABASE_SCHEMA_VERSION) => {}
         found => {
             return Err(ActivityError::SchemaVersion {

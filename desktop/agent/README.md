@@ -84,7 +84,7 @@ The UI and bridge both compile against `protocol/` (`cos-agent-protocol`).
 That crate exclusively owns the desktop presentation contract: endpoint DTOs,
 named SSE payloads, stable error envelopes, discovery metadata, and protocol
 version constants. Its only other dependencies beyond Serde/`serde_json` are
-UUID and clock-disabled Chrono parsing, used to compare normalized object-state
+UUID and clock-disabled Chrono parsing, used to compare normalized Activity
 acknowledgements without importing broker/domain code. The bridge
 remains the anti-corruption layer: `bridge/src/translation.rs` decodes generic
 clawd results, removes worker/task storage details and raw memory content, and
@@ -278,6 +278,47 @@ rewriting the retry payload. Shared history is then refetched.
 Nothing here invokes an App/model, changes lifecycle or confirms goal completion.
 See the shared [object-state contract](../../docs/object-state.md).
 
+### Explicit execution limits
+
+The fixed **Execution limits** card uses the same owner-scoped
+`activity.execution_limits.get/set/enabled` service as terminal and Web clients.
+These settings are **constraints only, not capabilities or approval grants**.
+The card never starts an App, model or job, changes goal state, or provides a
+new permission-policy surface.
+
+Refresh explicitly before configuring or toggling limits. An unloaded/failed
+read is not interpreted as an unconfigured policy; only an explicit
+`execution_limits: null` preserves existing standalone behavior. The card
+displays enabled/expired status, lifetime used/maximum/remaining attempts,
+maximum actual model turns per attempt, expiry, revision and creation/update
+timestamps. Counters come from the last refresh; local-clock expiry display
+never substitutes for broker admission.
+
+Configuration has exactly three fields: attempts (1-1000), turns per attempt
+(1-100), and RFC3339 expiry. The backend checks future expiry at transaction
+time. Initial configuration sends `expected_revision: null`, starts at revision
+1 and is enabled. Edits retain the fetched CAS revision even across failures;
+stale conflicts never trigger automatic overwrites or rebasing. Replies are
+checked against Activity identity, bridge owner identity and exact revision
+progression while allowing UTC timestamp normalization.
+
+Updates preserve enabled state and lifetime usage; concurrent reservations may
+advance the count, never reduce it. A lower ceiling than the used count is
+allowed and displays zero remaining attempts. Raising the ceiling is explicit,
+not a reset. Turning limits off **disables delegated work**, rather than
+removing the policy or restoring unlimited execution. No delete/reset endpoint
+is exposed. Configuration/enabling require an active or paused Activity;
+inspection and disabling remain available in completed/cancelled states.
+
+Attempts are durably charged **before** worker startup. Startup/crash failures
+can consume an attempt, and retries/recoveries are fresh attempts rather than
+automatic refunds. Expiry, disabling or revision changes stop affected running
+attempts through normal cancellation/lease cleanup. Already-admitted privileged
+mutations are not promised to be undone. The backend owns those effects and
+persistence; the desktop retains only fetched DTOs and unsaved revision-bound
+forms. Successful mutations refetch current constraints without changing
+Activity, receipt or object-state data locally.
+
 ## Endpoint discovery
 
 The bridge binds an ephemeral port when `COS_AGENT_BRIDGE_PORT` is
@@ -327,6 +368,9 @@ the prior non-disruptive `start` behavior.
 | `POST /api/activities` | `ActivityCreateRequest` → `ActivityView`; `activity.create` |
 | `GET /api/activities/:id` | `ActivityDetailResponse`; `activity.get` plus associated `permission.pending` projections |
 | `GET /api/activities/:id/receipts?limit=…` | `ActivityReceiptsQuery` → schema-1 `ActivityReceiptsResponse`; read-only `activity.receipts` |
+| `GET /api/activities/:id/execution-limits` | Required-nullable schema-1 `ActivityExecutionLimitsResponse`; `activity.execution_limits.get` |
+| `POST /api/activities/:id/execution-limits` | `ActivityExecutionLimitsSetRequest` → `ActivityExecutionLimits`; CAS `activity.execution_limits.set` |
+| `POST /api/activities/:id/execution-limits/enabled` | `ActivityExecutionLimitsEnabledRequest` → `ActivityExecutionLimits`; explicit `activity.execution_limits.enabled` |
 | `GET /api/activities/:id/object-state?reference=…&limit=…` | `ActivityObjectStateQuery` → schema-1 `ActivityObjectStateResponse`; `activity.object_state.list` |
 | `POST /api/activities/:id/object-state` | `ActivityObjectStateRecordRequest` (`entry: ObjectStateDraft`) → `ObjectStateEntry`; append-only `activity.object_state.record` |
 | `GET /api/activities/:id/objects` | `ActivityObjectsResponse`; declaration-only `activity.objects` |
@@ -356,7 +400,8 @@ fields: clawd derives ownership from the bridge's kernel identity. The
 translation module validates the broker's Activity schema and removes private
 job fields before emitting presentation DTOs. Object-state entries retain the
 contract's typed server-supplied `owner_uid`; it is never a caller selector.
-Other Activity views omit owner internals. Additive
+Execution-limit replies also retain it and are checked against the same
+process-identity helper used for private bridge discovery. Other Activity views omit owner internals. Additive
 job/session/approval fields have defaults within presentation protocol v1.
 
 ## License

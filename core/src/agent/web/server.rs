@@ -59,6 +59,15 @@ pub fn build_app(state: AppState) -> Router {
             "/api/activities/{id}/object-state",
             get(routes::activities::object_state).post(routes::activities::record_object_state),
         )
+        .route(
+            "/api/activities/{id}/execution-limits",
+            get(routes::activities::execution_limits)
+                .post(routes::activities::set_execution_limits),
+        )
+        .route(
+            "/api/activities/{id}/execution-limits/enabled",
+            post(routes::activities::enable_execution_limits),
+        )
         .route("/api/sessions", get(routes::sessions::list))
         .route("/api/sessions/{id}", get(routes::sessions::detail))
         .route("/api/sessions/{id}/history", get(routes::sessions::history))

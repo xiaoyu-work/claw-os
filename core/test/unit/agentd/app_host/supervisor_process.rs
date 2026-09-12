@@ -114,6 +114,7 @@ impl ProcessFixture {
                 .to_string(),
             stateful: false,
             expected: Vec::new(),
+            execution_limits: None,
         };
         let mut fixture = Self {
             context,
@@ -497,16 +498,28 @@ async fn inspect_live_app(
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires root/private /run, COS_APP_HOST_COS_BIN, an owner UID, and working bubblewrap"]
 async fn controlled_host_runs_one_real_app_and_records_one_receipt() {
-    exercise_controlled_host(false).await;
+    exercise_controlled_host(false, None).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires root/private /run, COS_APP_HOST_COS_BIN, an owner UID, and working bubblewrap"]
 async fn controlled_host_keeps_one_stateful_app_with_per_call_authority_and_receipts() {
-    exercise_controlled_host(true).await;
+    exercise_controlled_host(true, None).await;
 }
 
-async fn exercise_controlled_host(stateful: bool) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires root/private /run, COS_APP_HOST_COS_BIN and an owner UID"]
+async fn controlled_host_enforces_execution_limits_despite_heartbeats() {
+    for case in [
+        support::ExecutionLimitCase::Expiry,
+        support::ExecutionLimitCase::Disable,
+        support::ExecutionLimitCase::Revision,
+    ] {
+        exercise_controlled_host(false, Some(case)).await;
+    }
+}
+
+async fn exercise_controlled_host(stateful: bool, limit_case: Option<support::ExecutionLimitCase>) {
     let _env = crate::test_env::lock_env();
     assert_private_run();
     let binary = PathBuf::from(std::env::var_os("COS_APP_HOST_COS_BIN").expect("fresh cos binary"))
@@ -520,6 +533,7 @@ async fn exercise_controlled_host(stateful: bool) {
     let mut identity = spawn::resolve_identity(uid).unwrap();
     let mut fixture = ProcessFixture::new(uid, identity.gid);
     fixture.context.stateful = stateful;
+    fixture.context.execution_limits = limit_case;
     fixture.install(&binary);
     let context = fixture.context.clone();
     // Isolate HOME without changing the real passwd-derived uid/gid.
@@ -573,6 +587,25 @@ async fn exercise_controlled_host(stateful: bool) {
             .unwrap(),
         )
         .unwrap();
+    if let Some(case) = limit_case {
+        let duration = if matches!(case, support::ExecutionLimitCase::Expiry) {
+            chrono::Duration::seconds(8)
+        } else {
+            chrono::Duration::hours(1)
+        };
+        service
+            .set_execution_limits(
+                uid,
+                &activity.id,
+                None,
+                crate::activities::ExecutionLimitsDraft {
+                    max_attempts: 1,
+                    max_turns_per_attempt: 3,
+                    expires_at: (chrono::Utc::now() + duration).to_rfc3339(),
+                },
+            )
+            .unwrap();
+    }
     let store = Store::with_root(context.root.join("jobs")).unwrap();
     let submitted = store
         .submit_with_activity(
@@ -580,7 +613,7 @@ async fn exercise_controlled_host(stateful: bool) {
             None,
             None,
             Some(session.to_string()),
-            Some(1),
+            Some(if limit_case.is_some() { 20 } else { 1 }),
             false,
             Some(uid),
             Some(context.home().to_str().unwrap().into()),
@@ -661,25 +694,70 @@ async fn exercise_controlled_host(stateful: bool) {
             services,
         );
         tokio::pin!(run);
-        let observe = async {
-            if stateful {
-                stateful::inspect(&context, session.as_str(), &package, pid).await
-            } else {
-                inspect_live_app(&context, session.as_str(), &package, pid).await
+        if let Some(case) = limit_case {
+            let ready = async {
+                let file = context.home().join("execution-ready.json");
+                tokio::time::timeout(Duration::from_secs(10), async {
+                    while !file.is_file() {
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                })
+                .await
+                .expect("limited worker never became ready");
+                let ready: Value = serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap();
+                assert_eq!(ready["max_turns"], 3);
+                assert_eq!(ready["worker_pid"], pid);
+                ready
+            };
+            let ready = tokio::select! {
+                ready = ready => ready,
+                outcome = &mut run => panic!("limited worker ended before readiness: {}", describe_outcome(&outcome)),
+            };
+            let policy = service
+                .execution_limits(uid, &activity.id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(policy.used_attempts, 1);
+            match case {
+                support::ExecutionLimitCase::Expiry => {}
+                support::ExecutionLimitCase::Disable => {
+                    service
+                        .set_execution_limits_enabled(uid, &activity.id, policy.revision, false)
+                        .unwrap();
+                }
+                support::ExecutionLimitCase::Revision => {
+                    let mut limits = policy.limits;
+                    limits.max_attempts = 2;
+                    service
+                        .set_execution_limits(uid, &activity.id, Some(policy.revision), limits)
+                        .unwrap();
+                }
             }
-        };
-        let (app_session, app_identity, app_facts) = tokio::select! {
-            observed = observe => observed,
-            outcome = &mut run => panic!("worker ended before live App inspection: {}", describe_outcome(&outcome)),
-        };
-        cleanup.app = Some(app_identity.clone());
-        if !stateful {
-            write_public(&context.app_data().join("release"), b"continue");
+            let outcome = tokio::time::timeout(Duration::from_secs(20), &mut run)
+                .await
+                .expect("heartbeats prolonged Activity execution beyond its policy");
+            (outcome, None, None, ready)
+        } else {
+            let observe = async {
+                if stateful {
+                    stateful::inspect(&context, session.as_str(), &package, pid).await
+                } else {
+                    inspect_live_app(&context, session.as_str(), &package, pid).await
+                }
+            };
+            let (app_session, app_identity, app_facts) = tokio::select! {
+                observed = observe => observed,
+                outcome = &mut run => panic!("worker ended before live App inspection: {}", describe_outcome(&outcome)),
+            };
+            cleanup.app = Some(app_identity.clone());
+            if !stateful {
+                write_public(&context.app_data().join("release"), b"continue");
+            }
+            let outcome = tokio::time::timeout(Duration::from_secs(60), &mut run)
+                .await
+                .expect("controlled host did not return a result");
+            (outcome, Some(app_session), Some(app_identity), app_facts)
         }
-        let outcome = tokio::time::timeout(Duration::from_secs(60), &mut run)
-            .await
-            .expect("controlled host did not return a result");
-        (outcome, app_session, app_identity, app_facts)
     };
     let status = tokio::time::timeout(Duration::from_secs(10), child.wait())
         .await
@@ -692,6 +770,51 @@ async fn exercise_controlled_host(stateful: bool) {
         String::from_utf8_lossy(&stdout),
         String::from_utf8_lossy(&stderr)
     );
+    if let Some(case) = limit_case {
+        let TaskOutcome::Failed(message) = outcome else {
+            panic!(
+                "limits must stop work with their own failure reason: {}",
+                describe_outcome(&outcome)
+            );
+        };
+        let expected = match case {
+            support::ExecutionLimitCase::Expiry => "expired",
+            support::ExecutionLimitCase::Disable => "disabled",
+            support::ExecutionLimitCase::Revision => "changed",
+        };
+        assert!(message.contains(expected), "{case:?}: {message}");
+        let finished = store
+            .finish(job, crate::agent::service::FinishOutcome::Error(message))
+            .unwrap();
+        assert_eq!(finished.status, crate::agent::service::JobStatus::Error);
+        assert!(!finished
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("cancelled by user"));
+        assert_eq!(
+            service
+                .execution_limits(uid, &activity.id)
+                .unwrap()
+                .unwrap()
+                .used_attempts,
+            1
+        );
+        assert_eq!(
+            service.get(uid, &activity.id).unwrap().state,
+            ActivityState::Active
+        );
+        assert!(service.receipts(uid, &activity.id, 100).unwrap().is_empty());
+        assert!(!context.app_data().join("counter").exists());
+        let (_, events) = store.read_stream_events(&finished.id, 0).unwrap();
+        assert!(events
+            .iter()
+            .any(|event| event["progress"]["kind"] == "activity_execution_stopped"));
+        assert!(!cleanup.worker.still_matches());
+        return;
+    }
+    let app_session = app_session.unwrap();
+    let app_identity = app_identity.unwrap();
     let outcome = match outcome {
         TaskOutcome::Reported(outcome) => outcome,
         outcome => panic!("controlled host failed: {}", describe_outcome(&outcome)),

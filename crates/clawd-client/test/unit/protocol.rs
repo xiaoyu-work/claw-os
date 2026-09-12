@@ -11,11 +11,32 @@ fn activity_commands_have_stable_names_and_round_trip() {
         (Command::ActivityUpdate, "activity.update"),
         (Command::ActivityTransition, "activity.transition"),
         (Command::ActivityRun, "activity.run"),
+        (
+            Command::ActivityExecutionLimitsGet,
+            "activity.execution_limits.get",
+        ),
+        (
+            Command::ActivityExecutionLimitsSet,
+            "activity.execution_limits.set",
+        ),
+        (
+            Command::ActivityExecutionLimitsEnabled,
+            "activity.execution_limits.enabled",
+        ),
         (Command::ActivityObjects, "activity.objects"),
         (Command::ActivityObjectAttach, "activity.object.attach"),
-        (Command::ActivityObjectStateList, "activity.object_state.list"),
-        (Command::ActivityObjectStateRecord, "activity.object_state.record"),
-        (Command::ActivityOperationPreview, "activity.operation.preview"),
+        (
+            Command::ActivityObjectStateList,
+            "activity.object_state.list",
+        ),
+        (
+            Command::ActivityObjectStateRecord,
+            "activity.object_state.record",
+        ),
+        (
+            Command::ActivityOperationPreview,
+            "activity.operation.preview",
+        ),
         (Command::ActivityReceipts, "activity.receipts"),
         (Command::TaskGet, "task.get"),
         (Command::TaskRetry, "task.retry"),

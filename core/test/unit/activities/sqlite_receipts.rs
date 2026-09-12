@@ -47,7 +47,7 @@ pub(super) fn unverified_receipt(
 #[test]
 fn receipt_storage_version_is_independent_of_the_activity_wire_contract() {
     assert_eq!(super::super::SCHEMA_VERSION, 1);
-    assert_eq!(DATABASE_SCHEMA_VERSION, 3);
+    assert_eq!(DATABASE_SCHEMA_VERSION, 4);
     let service = SqliteActivityService::open_in_memory().unwrap();
     let version: u32 = service
         .lock()
@@ -655,7 +655,7 @@ fn receipt_schema_rejects_unsupported_old_versions_without_resetting_data() {
         SqliteActivityService::open(&path),
         Err(ActivityError::SchemaVersion {
             found: -1,
-            supported: 3
+            supported: 4
         })
     ));
     let conn = Connection::open(&path).unwrap();

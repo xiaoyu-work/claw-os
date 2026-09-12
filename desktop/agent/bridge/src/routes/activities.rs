@@ -1,6 +1,8 @@
 //! Stateless adapters to the same owner-scoped Activity service used by `cos`.
 //! Unlike chat SSE, a work submission has no cancel-on-disconnect guard.
 
+pub(super) mod execution_limits;
+
 use axum::{
     Json,
     extract::{Path, Query, State, rejection::JsonRejection, rejection::QueryRejection},

@@ -144,6 +144,12 @@ async fn activity_http_routes_require_authentication() {
         ("GET", "/api/activities/activity-1/receipts"),
         ("GET", "/api/activities/activity-1/object-state"),
         ("POST", "/api/activities/activity-1/object-state"),
+        ("GET", "/api/activities/activity-1/execution-limits"),
+        ("POST", "/api/activities/activity-1/execution-limits"),
+        (
+            "POST",
+            "/api/activities/activity-1/execution-limits/enabled",
+        ),
     ] {
         let response = crate::agent::web::server::build_app(state.clone())
             .oneshot(

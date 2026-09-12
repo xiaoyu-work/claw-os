@@ -68,6 +68,9 @@ ownership, and work submission. The authenticated adapters are:
 | `GET /api/activities/{id}/receipts?limit=100` | `activity.receipts` |
 | `GET /api/activities/{id}/object-state?limit=100` | `activity.object_state.list` |
 | `POST /api/activities/{id}/object-state` | `activity.object_state.record` |
+| `GET /api/activities/{id}/execution-limits` | `activity.execution_limits.get` |
+| `POST /api/activities/{id}/execution-limits` | `activity.execution_limits.set` |
+| `POST /api/activities/{id}/execution-limits/enabled` | `activity.execution_limits.enabled` |
 
 Creation saves a goal without starting work. The detail view shows goal,
 completion criteria, planning boundaries, inert resource references, job
@@ -208,6 +211,20 @@ local store. Terminal Activity states do not hide historical annotations.
 See [object-state semantics](../../../../../docs/object-state.md). This card
 neither authors execution receipts nor changes goal completion or permissions.
 
+### Finite execution limits
+
+The **Execution limits** card reads backend-owned attempt usage, turn ceilings,
+expiry, enabled state and revision. Its edit form captures a revision so
+background refreshes cannot silently rebase an unsaved change. CAS conflicts
+remain visible. Updates preserve usage and enabled state; enabling is an
+explicit action. A lowered ceiling may be below existing usage.
+
+Policies constrain work, never grant permissions. Reservations are charged
+before execution and are not automatically refunded after startup failures.
+Disabled policies mean no bounded work, not unlimited work. Backend expiry
+and cancellation remain authoritative; the UI does not locally schedule or
+complete a goal. See [execution limits](../../../../../docs/activity-execution-limits.md).
+
 ### Refresh behavior
 
 Views refetch after mutations and on focus/notification changes. Activity
@@ -225,7 +242,7 @@ Chromium-based browser:
 
 ```bash
 bun run typecheck
-bun test test/activities.test.ts test/activity-views.test.tsx test/operation-preview.test.ts test/activity-receipts.test.ts test/object-state.test.ts
+bun test test/activities.test.ts test/activity-views.test.tsx test/operation-preview.test.ts test/activity-receipts.test.ts test/object-state.test.ts test/execution-limits.test.ts
 bun run build --outDir .activity-validation/dist
 bun run test:browser
 ```

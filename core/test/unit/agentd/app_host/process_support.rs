@@ -19,6 +19,15 @@ pub(super) struct ProcessContext {
     pub mount_namespace: String,
     pub stateful: bool,
     pub expected: Vec<serde_json::Value>,
+    pub execution_limits: Option<ExecutionLimitCase>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum ExecutionLimitCase {
+    Expiry,
+    Disable,
+    Revision,
 }
 
 impl ProcessContext {

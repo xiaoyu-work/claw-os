@@ -38,6 +38,7 @@ editing additional surfaces.
 | --- | --- | --- |
 | `cos` CLI command or primitive | `core/src/main.rs`, `core/src/router.rs` | The primitive module, `core/src/clawd/`, inline Rust tests |
 | Activity goal/lifecycle or presentation | `core/src/activities/`, `core/src/clawd/activities.rs`, `docs/activities.md` | `core/src/activity.rs`, task/session associations, Agent Web, `desktop/agent/`; one shared backend for headless and desktop |
+| Activity execution limits or attempt accounting | `core/src/activities/execution_limits.rs`, `core/src/agent/service/execution_limits.rs`, `docs/activity-execution-limits.md` | Root claim reservations, actual turn ceiling, supervisor/standalone expiry and revocation, CLI/Web/native; constraints never grant capabilities |
 | App object contract or Activity object reference | `core/src/objects/`, `core/src/caps/manifest/objects.rs`, `docs/app-objects.md` | SDK wire/types/helpers, `clawd/activity_objects.rs`, ordinary App dispatch, Web/native presentations |
 | Activity object observations, relations or corrections | `core/src/activities/object_state.rs`, `core/src/clawd/activity_object_state.rs`, `docs/object-state.md` | Shared SQLite history, owner/receipt/reference binding, CLI/Web/native presentations and recorded untrusted task context; no App data copy or inferred authority |
 | App effect declaration or operation preview | `core/src/operations/`, `core/src/caps/manifest/effects.rs`, `docs/operation-previews.md` | Shared broker preview routes, SDK manifest schema, Activity Web/native views; no execution or authority |

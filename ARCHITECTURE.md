@@ -289,6 +289,27 @@ audit projection and journal bracketing. Related job results are projections
 from the existing task store, not a second copy of its state. See
 [`docs/activities.md`](docs/activities.md) for commands and the initial scope.
 
+### Activity execution limits
+
+Finite Activity policies constrain attempts, turns per attempt and expiry
+without granting capabilities. The same Activity database owns revision-checked
+settings and immutable attempt reservations. Claiming a job charges a bounded
+attempt before the filesystem running transition; a later failure may consume
+that charge. Updates preserve usage and enabled state, and disabling a policy
+does not restore unlimited work.
+
+The supervisor assigns the reserved turn ceiling to the actual worker and
+uses the shared service guard for live revision/enabled/expiry checks plus a
+monotonic deadline independent of heartbeat renewal. The standalone executor
+uses the same guard. Stops reuse normal cancellation and App-host admission
+closure without promising to undo admitted mutations; budget failures remain
+distinct from user cancellation and goal completion.
+
+Terminal, Web and native controls use the same owner-scoped broker contract.
+Policy or reservation JSON is accounting/constraint data, never restored
+authority. Schema 4 preserves existing Activity, receipt and object-state
+data. See [`docs/activity-execution-limits.md`](docs/activity-execution-limits.md).
+
 ### App-owned object references
 
 Public SDK wire definitions and pure URI helpers identify an object by App,

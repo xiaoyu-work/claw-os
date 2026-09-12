@@ -39,6 +39,7 @@ web UI.
 | `ui/src/components/operation-effects.tsx`, `ui/src/lib/operation-preview.ts` | Per-object metadata-only effect previews and strict response validation |
 | `ui/src/components/activity-receipts.tsx`, `ui/src/lib/activity-receipts.ts` | Read-only caller-reported receipts, source/identity checks, inert summaries, and declaration diagnostics |
 | `ui/src/components/activity-object-state.tsx`, `ui/src/lib/object-state.ts` | Shared object-state forms/history, source/validity caveats and selection-safe correction/retraction |
+| `ui/src/components/activity-execution-limits.tsx`, `ui/src/lib/execution-limits.ts` | Revision-checked finite execution controls with backend-owned counters; no permission or goal-state authority |
 | `ui/src/lib/api-shapes.ts` | Shared response-shape guards used by Activity and preview adapters |
 | `mod.rs`, `server.rs` | Serve command and authenticated router assembly |
 

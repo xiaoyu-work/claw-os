@@ -153,6 +153,43 @@ pub struct ActivityObjects {
     pub id: Token,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(transparent)]
+pub struct BoundedExecutionLimits(pub crate::activities::ExecutionLimitsDraft);
+
+impl<'de> Deserialize<'de> for BoundedExecutionLimits {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let limits = crate::activities::ExecutionLimitsDraft::deserialize(deserializer)?;
+        limits
+            .validate()
+            .map_err(|_| serde::de::Error::custom("invalid Activity execution limits"))?;
+        Ok(Self(limits))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityExecutionLimitsGet {
+    pub id: Token,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityExecutionLimitsSet {
+    pub id: Token,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_revision: Option<u64>,
+    pub limits: BoundedExecutionLimits,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityExecutionLimitsEnabled {
+    pub id: Token,
+    pub expected_revision: u64,
+    pub enabled: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ActivityObjectAttach {

@@ -27,6 +27,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::{json, Value};
 
+use super::activity_execution_limits;
 use crate::audit_policy::FieldRule;
 
 use super::authority::{self, Approval, Audience, RouteAuthority, SubjectSource, TransientCaps};
@@ -539,6 +540,36 @@ routes! {
             ("prompt", FieldRule::Size),
         ],
         run: |c| activities::run(c.params, c.client).await,
+    }
+    ActivityExecutionLimitsGet {
+        name: "activity.execution_limits.get",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Task),
+        body: body::ActivityExecutionLimitsGet,
+        audit: &[("id", FieldRule::Token)],
+        run: |c| activity_execution_limits::get(c.params, c.client),
+    }
+    ActivityExecutionLimitsSet {
+        name: "activity.execution_limits.set",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Task),
+        body: body::ActivityExecutionLimitsSet,
+        audit: &[("id", FieldRule::Token), ("expected_revision", FieldRule::Count), ("limits", FieldRule::Size)],
+        run: |c| activity_execution_limits::set(c.params, c.client),
+    }
+    ActivityExecutionLimitsEnabled {
+        name: "activity.execution_limits.enabled",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Task),
+        body: body::ActivityExecutionLimitsEnabled,
+        audit: &[("id", FieldRule::Token), ("expected_revision", FieldRule::Count), ("enabled", FieldRule::Flag)],
+        run: |c| activity_execution_limits::enabled(c.params, c.client),
     }
     ActivityObjects {
         name: "activity.objects",

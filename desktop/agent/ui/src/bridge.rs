@@ -11,6 +11,8 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow};
 pub use cos_agent_protocol::{
     ActivityCreateRequest, ActivityDetailResponse, ActivityListQuery, ActivityListResponse,
+    ActivityExecutionLimits, ActivityExecutionLimitsEnabledRequest,
+    ActivityExecutionLimitsResponse, ActivityExecutionLimitsSetRequest,
     ActivityObjectAttachRequest, ActivityObjectsResponse,
     ActivityObjectStateQuery, ActivityObjectStateRecordRequest, ActivityObjectStateResponse,
     ActivityOperationPreview, ActivityOperationPreviewRequest,
@@ -513,6 +515,60 @@ pub async fn record_activity_object_state(
     body: ActivityObjectStateRecordRequest,
 ) -> Result<ObjectStateEntry> {
     let (request, selected) = object_state_record_request(&endpoint, id, &body)?;
+    activity_response(request, selected).await
+}
+
+fn execution_limits_get_request(
+    endpoint: &BridgeEndpoint,
+    id: &str,
+) -> Result<(reqwest::RequestBuilder, ProtocolVersion)> {
+    activity_request(endpoint, reqwest::Method::GET, &["activities", id, "execution-limits"])
+}
+
+pub async fn fetch_activity_execution_limits(
+    endpoint: BridgeEndpoint,
+    id: &str,
+) -> Result<ActivityExecutionLimitsResponse> {
+    let (request, selected) = execution_limits_get_request(&endpoint, id)?;
+    activity_response(request, selected).await
+}
+
+fn execution_limits_set_request(
+    endpoint: &BridgeEndpoint,
+    id: &str,
+    body: &ActivityExecutionLimitsSetRequest,
+) -> Result<(reqwest::RequestBuilder, ProtocolVersion)> {
+    let (request, selected) =
+        activity_request(endpoint, reqwest::Method::POST, &["activities", id, "execution-limits"])?;
+    Ok((request.json(body), selected))
+}
+
+pub async fn set_activity_execution_limits(
+    endpoint: BridgeEndpoint,
+    id: &str,
+    body: ActivityExecutionLimitsSetRequest,
+) -> Result<ActivityExecutionLimits> {
+    let (request, selected) = execution_limits_set_request(&endpoint, id, &body)?;
+    activity_response(request, selected).await
+}
+
+fn execution_limits_enabled_request(
+    endpoint: &BridgeEndpoint,
+    id: &str,
+    body: &ActivityExecutionLimitsEnabledRequest,
+) -> Result<(reqwest::RequestBuilder, ProtocolVersion)> {
+    let (request, selected) = activity_request(
+        endpoint, reqwest::Method::POST, &["activities", id, "execution-limits", "enabled"],
+    )?;
+    Ok((request.json(body), selected))
+}
+
+pub async fn enable_activity_execution_limits(
+    endpoint: BridgeEndpoint,
+    id: &str,
+    body: ActivityExecutionLimitsEnabledRequest,
+) -> Result<ActivityExecutionLimits> {
+    let (request, selected) = execution_limits_enabled_request(&endpoint, id, &body)?;
     activity_response(request, selected).await
 }
 

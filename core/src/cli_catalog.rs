@@ -38,6 +38,10 @@ pub fn builtin_namespaces() -> Vec<NamespaceEntry> {
                 ("relate", "Record a planning relationship between attached App references"),
                 ("retract-object-state", "Retract an object-state entry without deleting its history"),
                 ("record-object-state", "Submit a bounded object-state entry from stdin"),
+                ("execution-limits", "Read finite Activity attempt, turn and expiry limits"),
+                ("set-execution-limits", "Set or revise Activity limits without granting capabilities"),
+                ("enable-execution-limits", "Explicitly enable an unexpired Activity limit policy"),
+                ("disable-execution-limits", "Disable bounded Activity work without deleting its policy or usage"),
             ],
         ),
         (

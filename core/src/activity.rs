@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 use crate::activities::{ActivityDraft, ActivityPatch};
 use crate::clawd::{client, config, protocol::Request, routes::Command};
 
+mod execution_limits;
 mod object_state;
 
 pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
@@ -40,6 +41,15 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
 }
 
 fn parse(command: &str, args: &[String]) -> Result<(Command, Value), String> {
+    if matches!(
+        command,
+        "execution-limits"
+            | "set-execution-limits"
+            | "enable-execution-limits"
+            | "disable-execution-limits"
+    ) {
+        return execution_limits::parse(command, args);
+    }
     if command == "attach-object" {
         return parse_object_attachment(args);
     }

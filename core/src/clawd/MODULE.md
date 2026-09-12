@@ -35,6 +35,7 @@ and agent tasks.
 | `agent_client.rs` | Client RPC for agent task submit/result/cancel/status |
 | `tasks.rs` | Task queue, summary/list, cancel, retry, and session continuity |
 | `activities.rs` | Shared Activity CRUD/lifecycle, related-job views, and submission through the existing task path |
+| `activity_execution_limits.rs` | Owner-scoped revision-checked attempt/turn/expiry controls; constraints only, never capability grants |
 | `activity_objects.rs` | Owner-scoped reference attachment and authenticated object descriptions; never fetches App data |
 | `activity_object_state.rs` | Shared owner-scoped observation/relationship history and immutable correction/retraction submission |
 | `operation_previews.rs` | Shared App effect previews and owner-scoped Activity adaptation; never executes Apps |

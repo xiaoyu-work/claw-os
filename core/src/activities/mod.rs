@@ -4,12 +4,16 @@
 //! [`ActivityService`]. Activities grant no authority and never infer goal
 //! completion from an execution result.
 
+mod execution_limits;
 mod object_state;
 mod receipts;
 mod sqlite;
 
 use serde::{Deserialize, Serialize};
 
+pub use execution_limits::{
+    ActivityExecutionLimits, ExecutionBlockedReason, ExecutionLimitsDraft, ExecutionReservation,
+};
 pub use object_state::{
     ObjectRelationKind, ObjectStateContent, ObjectStateDraft, ObjectStateEntry, ObjectStateSource,
     ObjectStateValidity,
@@ -23,7 +27,7 @@ pub use sqlite::SqliteActivityService;
 /// Public Activity wire-compatibility version; the broker versions responses independently.
 pub const SCHEMA_VERSION: u32 = 1;
 /// SQLite user_version; never emitted as an Activity response schema.
-pub const DATABASE_SCHEMA_VERSION: u32 = 3;
+pub const DATABASE_SCHEMA_VERSION: u32 = 4;
 pub const DEFAULT_LIST_LIMIT: usize = 50;
 pub const MAX_LIST_LIMIT: usize = 100;
 
@@ -46,6 +50,8 @@ pub enum ActivityError {
     Conflict(String),
     #[error("activity, receipt, or object-state limit reached")]
     LimitReached,
+    #[error("activity execution blocked: {0}")]
+    ExecutionBlocked(ExecutionBlockedReason),
     #[error("activity database is unavailable: {0}")]
     Database(#[from] rusqlite::Error),
     #[error("activity storage failed: {0}")]
@@ -310,6 +316,45 @@ pub trait ActivityService: Send + Sync {
         reference: Option<&str>,
         limit: usize,
     ) -> Result<Vec<ObjectStateEntry>, ActivityError>;
+
+    /// Read optional execution constraints and durable attempt accounting.
+    /// Absence preserves legacy behavior; limits never grant authority.
+    fn execution_limits(
+        &self,
+        owner_uid: u32,
+        activity_id: &str,
+    ) -> Result<Option<ActivityExecutionLimits>, ActivityError>;
+
+    /// Create only when absent, or update the exact expected policy revision.
+    /// Updates preserve the attempt count and enabled state.
+    fn set_execution_limits(
+        &self,
+        owner_uid: u32,
+        activity_id: &str,
+        expected_revision: Option<u64>,
+        draft: ExecutionLimitsDraft,
+    ) -> Result<ActivityExecutionLimits, ActivityError>;
+
+    /// Explicitly enable or revoke constraints, advancing the policy revision.
+    /// Disabling remains available in terminal Activities.
+    fn set_execution_limits_enabled(
+        &self,
+        owner_uid: u32,
+        activity_id: &str,
+        expected_revision: u64,
+        enabled: bool,
+    ) -> Result<ActivityExecutionLimits, ActivityError>;
+
+    /// Durably charge a root-owned attempt before execution admission.
+    /// A reservation is accounting, never authority or proof of execution.
+    fn reserve_execution(
+        &self,
+        owner_uid: u32,
+        activity_id: &str,
+        attempt_id: &str,
+        job_id: &str,
+        requested_max_turns: Option<u32>,
+    ) -> Result<Option<ExecutionReservation>, ActivityError>;
 }
 
 /// Daemon composition only. Direct clients use owner-scoped broker routes.

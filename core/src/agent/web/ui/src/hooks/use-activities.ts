@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { executionLimitsApi } from "@/lib/execution-limits";
 
 import {
   activityApi,
@@ -96,5 +97,10 @@ export function useActivityReceipts(id: string) {
 
 export function useActivityObjectState(id: string) {
   const read = useCallback((signal: AbortSignal) => activityApi.objectState(id, signal), [id]);
+  return useActivityView(read, listInterval);
+}
+
+export function useActivityExecutionLimits(id: string) {
+  const read = useCallback((signal: AbortSignal) => executionLimitsApi.get(id, signal), [id]);
   return useActivityView(read, listInterval);
 }
