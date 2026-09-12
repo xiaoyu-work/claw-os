@@ -101,6 +101,9 @@ impl ExtensionIdentityPool {
             .in_use
             .lock()
             .map_err(|_| "extension identity pool is poisoned".to_string())?;
+        if purpose == super::protocol::HostPurpose::AppService {
+            self.require_service_cleanup(owner_uid)?;
+        }
         for (index, identity) in self.identities.iter().enumerate() {
             if !identity_supports_purpose(index, purpose) {
                 continue;
@@ -144,6 +147,27 @@ impl ExtensionIdentityPool {
                 super::protocol::HostPurpose::AppService => "App service",
             }
         ))
+    }
+
+    fn require_service_cleanup(&self, owner_uid: u32) -> Result<(), String> {
+        let retained = self.retained_locks.lock()
+            .map_err(|_| "extension quarantine locks are poisoned".to_string())?
+            .keys().copied().collect::<Vec<_>>();
+        for uid in retained {
+            if !(FIRST_UID + TASK_IDENTITY_COUNT..FIRST_UID + IDENTITY_COUNT).contains(&uid) {
+                continue;
+            }
+            let record = match self.quarantine_dir.as_deref() {
+                Some(directory) => read_cleanup_record(directory, uid)?,
+                None => None,
+            };
+            if service_cleanup_blocks_owner(record.as_ref(), owner_uid) {
+                return Err(format!(
+                    "App service cleanup is unconfirmed for owner {owner_uid} (execution uid {uid}); refusing a new persistent-data writer"
+                ));
+            }
+        }
+        Ok(())
     }
 
     pub fn len(&self) -> usize {
@@ -332,6 +356,10 @@ struct CleanupRecord {
     uid: u32,
     owner_uid: u32,
     task_name: Option<String>,
+}
+
+fn service_cleanup_blocks_owner(record: Option<&CleanupRecord>, owner_uid: u32) -> bool {
+    record.is_none_or(|record| record.owner_uid == owner_uid)
 }
 
 fn validate_task_name(task_name: &str) -> Result<(), String> {

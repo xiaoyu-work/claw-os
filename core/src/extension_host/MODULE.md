@@ -80,6 +80,7 @@ extensions.
 | `agent_extension.rs` | Verified package materialization, child lifecycle, deadlines, and descendant reaping |
 | `identity.rs` | Exact package-created account/manifest/subid validation, disjoint task/service leasing, and safe reuse |
 | `spawn.rs` | Privilege drop, fd/env/resource isolation, mandatory cgroup-v2 containment, optional namespaces, verified descendant cleanup |
+| `spawn/app_data.rs` | Exact owner/App persistent directory binding, private UID/GID-mapped service view, source freshness and checked unmount |
 | `child_isolation.rs` | Per-App/MCP bubblewrap PID/proc/empty-root isolation and verified snapshots |
 | `client.rs` | Purpose-bound controller client used by task workers and `clawd` |
 | `host.rs` | Host process, purpose-specific control admission, App/MCP lifecycle and cancellation |
@@ -159,6 +160,31 @@ removes the cgroup, unmounts private filesystems, recursively removes the
 descriptor-pinned task tree without crossing mounts, and then revokes ACLs.
 Any failure is terminal and audited as `cleanup-failed`.
 
+App-service Hosts additionally receive only their bound App's existing
+`<owner-data-root>/apps/<app-id>` partition. Root reuses the normal partition
+and legacy-state migration under the authenticated owner's filesystem identity,
+protects the owner's App-directory parent, and pins the selected directory.
+A detached idmapped mount presents that owner's UID/GID as the leased
+execution identity without copying files or changing their on-disk ownership.
+Its root-owned runtime mountpoint is outside the Host-writable control tree.
+Both Host data resolvers select this private view; HOME, cache and logs remain
+Host-local. Final App workers still mount only their own partition.
+
+Data-directory identity and topology are rechecked on service reuse, warm-up
+and sweep. Symlink/foreign roots, nested mounts and unsupported idmapped
+filesystems fail explicitly. Cleanup unmounts the data view before deleting
+runtime paths; it never traverses or removes the persistent backing directory.
+If later temporary-mount cleanup is blocked, retries accept the already
+unmounted data view but still require the remaining resources to retire.
+An unconfirmed service cleanup fences new service starts for that owner using
+the existing durable UID-quarantine record. Switching to another leased UID
+cannot reopen persistent data while an earlier service may still retain it;
+unknown quarantine ownership also blocks admission. Other owners and task-only
+quarantines keep their existing behavior.
+Task Host `RunApp`, configured external MCP and Agent-extension scratch state
+retain their existing private paths in this slice. This does not complete
+legacy task-path binding or cross-App Calendar resource access.
+
 The uid pool is the fixed package-created account set `cos-ext-00..63`
 (`61000..61063`), outside systemd DynamicUser. Identities `00..55` are reserved
 for task Hosts and `56..63` for App service Hosts, so persistent services
@@ -176,6 +202,8 @@ The empty child root exposes `/usr` as verified read-only runtime content,
 copies explicitly authorized non-system code into a read-only snapshot, binds
 only the exact broker/session endpoints, and supplies private home/data/cache/
 log/tmp paths. Pre-pivot descriptors and cwd do not survive.
+App-service children use the persistent partition described above rather than
+the service Host's disposable data directory; no owner-wide root is exposed.
 
 For a call-scoped App, that final sandbox starts with only the trusted
 `claw-app-runner` blocked on a private stdin gate. Package code cannot execute
@@ -200,3 +228,11 @@ cargo test -p cos --test extension_host_boundary -- --test-threads=1
 cargo test -p cos --test agentd_process_boundary -- --test-threads=1
 bash packaging/deb/tests/test-agentd-packaging.sh
 ```
+
+The ignored `extension_host::spawn::app_data::tests` private cases require Root
+in a fresh mount namespace. `persistent_service_data_survives_uid_and_host_replacement`
+also takes an explicitly built `COS_APP_DATA_TEST_COS` binary. It runs real
+sandboxed MCP/SQLite writes through two distinct execution UIDs and mount
+lifetimes, then reads the same files from the owner view. The companion case
+refuses aliases, foreign owners, nested mounts and replaced bindings. These
+are storage/isolation checks, not a release or complete installed-App acceptance.

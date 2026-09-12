@@ -259,6 +259,17 @@ jobs:
                exec "$1" --exact "$2" --ignored --nocapture --test-threads=1
              ' private-egress-dns "$test_binary" "worker::net_broker::tests::dns::$dns_case"
           done
+          for data_case in \
+            persistent_service_data_survives_uid_and_host_replacement \
+            service_data_refuses_aliases_foreign_owners_submounts_and_replaced_bindings; do
+            sudo timeout 90 unshare --mount --net --fork \
+              env COS_APP_DATA_TEST_COS="$CARGO_TARGET_DIR/debug/cos" \
+              bash --noprofile --norc -c '
+                set -euo pipefail
+                mount --make-rprivate /
+                exec "$1" --exact "$2" --ignored --nocapture --test-threads=1
+              ' private-app-data "$test_binary" "extension_host::spawn::app_data::tests::$data_case"
+          done
 
       # Downgrade protection is exercised against real .deb archives,
       # real maintainer scripts, real dpkg/apt transactions and real

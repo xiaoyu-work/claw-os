@@ -470,6 +470,26 @@ owner's data root. `COS_DATA_DIR` is its own directory,
 `<data-root>/apps/<app-id>`, created `0700`, and no other App's directory or
 owner-private store is inside its sandbox.
 
+New App-service Hosts bind this existing owner/App partition instead of using
+a disposable Host-local data store. Root uses a private idmapped mount so a
+leased service UID can access the same files while their on-disk UID/GID remain
+the owner's. Existing private-directory and legacy-state migration logic is
+reused; data is neither copied nor recursively chowned. Only the runtime view
+is unmounted at retirement.
+
+If service cleanup cannot be confirmed, its existing UID-quarantine record
+blocks new App-service starts for the same owner rather than switching UIDs
+and reopening the persistent store. A record with unknown ownership also
+blocks admission. Existing quarantine recovery must finish before retrying.
+
+The backing filesystem must support idmapped mounts and the private App
+partition must contain no nested mounts. Unavailable mappings, aliases, foreign
+owners or replaced directory identities are explicit failures, not permission
+to use an empty temporary store. Older Host-private scratch data is not
+automatically imported or merged; a restart is not recovery of that transient
+state. Legacy task-host `RunApp` binding and Calendar's cross-App read path
+remain separate work. No App/SDK release or production pin is changed here.
+
 The source-only relocation of `net` to `clawos-app/capabilities/http/apps/net`
 preserves `/usr/lib/cos/apps/net` in the signed Agent package. Its two MCP/CLI
 contracts, exact endpoint/output needs, size limits and download behavior are

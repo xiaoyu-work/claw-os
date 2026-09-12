@@ -217,6 +217,21 @@ fn child_process_exited(
 }
 
 impl ServiceRuntime {
+    fn data_current(&self) -> bool {
+        match self.host.require_current_app_data() {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::warn!(
+                    owner = self.host.binding.owner_uid,
+                    app = ?self.host.binding.app_id,
+                    %error,
+                    "App persistent data binding changed; retiring its service"
+                );
+                false
+            }
+        }
+    }
+
     fn host_exited(&mut self) -> bool {
         child_process_exited(
             &mut self.host.child,
@@ -312,13 +327,15 @@ impl AppServiceManager {
             slot.runtime.as_mut().map_or((false, false), |runtime| {
                 let package_changed = runtime.package != prepared.package;
                 let policy_changed = runtime.permission_policy != permission_policy;
+                let data_changed = !runtime.data_current();
                 let lease_expiring = runtime.expires_at_ms
                     <= crate::agentd::grant::now_ms()
                         .saturating_add(crate::extension_host::protocol::MAX_REQUEST_TIMEOUT_MS);
                 let host_exited =
-                    !package_changed && !policy_changed && !lease_expiring && runtime.host_exited();
+                    !package_changed && !policy_changed && !data_changed && !lease_expiring
+                        && runtime.host_exited();
                 (
-                    package_changed || policy_changed || lease_expiring || host_exited,
+                    package_changed || policy_changed || data_changed || lease_expiring || host_exited,
                     host_exited,
                 )
             });
@@ -887,10 +904,12 @@ impl AppServiceManager {
             slot.lifecycle = McpLifecycle::AlwaysOn;
             let (reusable, host_exited) = slot.runtime.as_mut().map_or((false, false), |runtime| {
                 let package_changed = runtime.package != spec.package;
+                let data_changed = !runtime.data_current();
                 let lease_expired = runtime.expires_at_ms <= crate::agentd::grant::now_ms();
-                let host_exited = !package_changed && !lease_expired && runtime.host_exited();
+                let host_exited = !package_changed && !data_changed && !lease_expired
+                    && runtime.host_exited();
                 (
-                    !package_changed && !lease_expired && !host_exited,
+                    !package_changed && !data_changed && !lease_expired && !host_exited,
                     host_exited,
                 )
             });
@@ -1034,8 +1053,9 @@ impl AppServiceManager {
                         current_contract.as_ref() != Some(&(runtime.package.clone(), lifecycle));
                     let policy_changed =
                         current_policy.as_ref().ok() != Some(&runtime.permission_policy);
+                    let data_changed = !runtime.data_current();
                     let expected_retirement =
-                        lease_expired || contract_changed || policy_changed || idle || app_stopped;
+                        lease_expired || contract_changed || policy_changed || data_changed || idle || app_stopped;
                     let host_exited = !expected_retirement && runtime.host_exited();
                     (expected_retirement || host_exited, host_exited)
                 }

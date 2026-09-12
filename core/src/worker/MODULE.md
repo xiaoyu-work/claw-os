@@ -183,7 +183,17 @@ and the path inside the sandbox are one string.
 An operation also gets a writable **App data partition**: `COS_DATA_DIR`
 is `<owner-data-root>/apps/<app-id>`, created `0700` and bound at that
 same path. The owner's data root itself — credentials, sessions, the
-journal, every other App's partition — is never mounted. App-owned common
+journal, every other App's partition — is never mounted.
+
+For an isolated App-service Host, Root binds that same owner/App partition
+through a private idmapped view. The normal derivation still selects only
+`apps/<app-id>`; the visible runtime path is not a new store or a whole-owner
+mount. Files retain the owner's on-disk identity across Host/UID replacement.
+The [service lifetime](../extension_host/MODULE.md) owns this binding and
+unmounts it before runtime cleanup. Legacy task-host operation binding remains
+separate; no temporary-store fallback is selected for an App service.
+
+App-owned common
 support and OS SDK/runtime use the existing read-only `/usr/lib/cos/python`
 runtime root, with an explicit staged equivalent in integration fixtures.
 The optional sibling `_shared` mounts in `derive.rs` remain legacy installed

@@ -1231,6 +1231,19 @@ fn ensure_dir(path: &Path, what: &str) -> Result<PathBuf, String> {
     canonical_dir(path, what)
 }
 
+pub(crate) fn validate_app_id(app_id: &str) -> Result<(), String> {
+    if app_id.is_empty()
+        || app_id.len() > 64
+        || !app_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        || app_id.starts_with('.')
+    {
+        return Err(format!("App id `{app_id}` is not a safe path component"));
+    }
+    Ok(())
+}
+
 /// One App's private slice of the owner's data root.
 ///
 /// `<data-root>/apps/<app-id>`, created `0700` so a same-uid process
@@ -1243,16 +1256,8 @@ fn ensure_dir(path: &Path, what: &str) -> Result<PathBuf, String> {
 /// directory owned by this account with no group or world bits fails
 /// the launch. Silently continuing would hand the worker a directory
 /// somebody else can read.
-fn app_partition(data_root: &Path, app_id: &str) -> Result<PathBuf, String> {
-    if app_id.is_empty()
-        || app_id.len() > 64
-        || !app_id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-        || app_id.starts_with('.')
-    {
-        return Err(format!("App id `{app_id}` is not a safe path component"));
-    }
+pub(crate) fn app_partition(data_root: &Path, app_id: &str) -> Result<PathBuf, String> {
+    validate_app_id(app_id)?;
     #[cfg(target_os = "linux")]
     let routed_owner = crate::paths::current_owner_uid_override()
         .filter(|_| unsafe { libc::geteuid() } == 0);

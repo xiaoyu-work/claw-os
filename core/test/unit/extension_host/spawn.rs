@@ -11,6 +11,8 @@ fn host_environment_is_an_allowlist_without_broker_or_credentials() {
     }
     assert!(!INHERITED_ENV_KEYS.contains(&"HOME"));
     assert!(!INHERITED_ENV_KEYS.contains(&"PATH"));
+    assert!(!INHERITED_ENV_KEYS.contains(&"COS_DATA_DIR"));
+    assert!(!INHERITED_ENV_KEYS.contains(&"COS_USER_DATA_DIR"));
 }
 
 #[test]

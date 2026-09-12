@@ -18,6 +18,8 @@ use crate::provenance::runtime::PackageRef;
 
 use super::protocol::{self, ApprovedPath, ExtensionBinding, HostBootstrap};
 
+mod app_data;
+
 pub const HOST_BINARY_ENV: &str = "COS_EXTENSION_HOST_BIN";
 pub const TASK_DIAGNOSTIC_ENV: &str = "COS_EXTENSION_TASK_ID";
 pub const CONTROL_SOCKET_DIAGNOSTIC_ENV: &str = "COS_EXTENSION_CONTROL_SOCKET";
@@ -565,6 +567,7 @@ pub struct SpawnedExtensionHost {
     pub paths: HostPaths,
     pub cgroup: ResourceGroup,
     private_mounts: PrivateMountNamespace,
+    app_data: Option<app_data::Binding>,
 }
 
 pub fn host_binary_path() -> PathBuf {
@@ -730,6 +733,13 @@ pub fn spawn_host(
         }
     }
     let enforce_groups = crate::agentd::spawn::broker_is_root();
+    let app_data = match app_data::prepare(owner, extension, launch, &paths) {
+        Ok(data) => data.map(Arc::new),
+        Err(error) => {
+            let cleanup = cgroup.cleanup_blocking();
+            return Err(combine_cleanup_error(error, cleanup, paths.cleanup()));
+        }
+    };
     let bootstrap = HostBootstrap {
         protocol: protocol::PROTOCOL_VERSION,
         purpose: launch.purpose,
@@ -785,6 +795,9 @@ pub fn spawn_host(
             .unwrap_or_else(|| PathBuf::from("/run/cos/caps").join(owner.uid.to_string())),
     );
     command.env("COS_DATA_DIR", paths.control_dir.join("data"));
+    if let Some(data) = &app_data {
+        data.configure_environment(&mut command);
+    }
     command.env("COS_CACHE_DIR", paths.control_dir.join("cache"));
     command.env("COS_LOG_DIR", paths.control_dir.join("log"));
     // Diagnostics only. Host authority comes exclusively from the private
@@ -810,6 +823,7 @@ pub fn spawn_host(
     let bootstrap_raw_fd = bootstrap_fd.as_raw_fd();
     let writable_task_path = CString::new(paths.dir.as_os_str().as_bytes())
         .map_err(|_| "extension task path contains NUL".to_string())?;
+    let child_data = app_data.clone();
     let try_namespaces = std::env::var("CLAWD_EXTENSION_HOST_NAMESPACES")
         .map(|value| !matches!(value.trim(), "0" | "off" | "false" | "no"))
         .unwrap_or(true);
@@ -820,6 +834,9 @@ pub fn spawn_host(
             place_bootstrap_fd(bootstrap_raw_fd)?;
             crate::agentd::spawn::mark_inherited_descriptors_cloexec_except(3, bootstrap_raw_fd);
             setup_private_mount_namespace(&writable_task_path)?;
+            if let Some(data) = &child_data {
+                data.install()?;
+            }
             if try_namespaces {
                 // IPC and UTS isolation do not change filesystem or network
                 // reachability. They are opportunistic because some kernels
@@ -869,7 +886,10 @@ pub fn spawn_host(
             paths.cleanup(),
         ));
     }
-    let mut private_mounts = match PrivateMountNamespace::capture(pid, &paths.dir) {
+    let data_target = app_data.as_ref().map(|data| data.destination.clone());
+    let data_binding = app_data.as_ref().map(|data| data.binding.clone());
+    drop(app_data);
+    let mut private_mounts = match PrivateMountNamespace::capture(pid, &paths.dir, data_target) {
         Ok(namespace) => namespace,
         Err(error) => {
             let _ = child.start_kill();
@@ -933,10 +953,21 @@ pub fn spawn_host(
         paths,
         cgroup,
         private_mounts,
+        app_data: data_binding,
     })
 }
 
 impl SpawnedExtensionHost {
+    pub(crate) fn require_current_app_data(&self) -> Result<(), String> {
+        match &self.app_data {
+            Some(data) => data.require_current(),
+            None if self.binding.purpose == protocol::HostPurpose::AppService => {
+                Err("App service has no authenticated persistent data binding".to_string())
+            }
+            None => Ok(()),
+        }
+    }
+
     #[doc(hidden)]
     pub fn cleanup_private_mounts(&mut self) -> Result<(), String> {
         self.private_mounts.cleanup()
@@ -1077,11 +1108,16 @@ fn set_mount_read_only(path: &CStr, read_only: bool) -> std::io::Result<()> {
 struct PrivateMountNamespace {
     fd: OwnedFd,
     task_path: CString,
+    app_data_target: Option<CString>,
     active: bool,
 }
 
 impl PrivateMountNamespace {
-    fn capture(pid: u32, task_path: &Path) -> Result<Self, String> {
+    fn capture(
+        pid: u32,
+        task_path: &Path,
+        app_data_target: Option<CString>,
+    ) -> Result<Self, String> {
         let path = CString::new(format!("/proc/{pid}/ns/mnt"))
             .map_err(|_| "extension mount namespace path contains NUL".to_string())?;
         let fd = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
@@ -1102,6 +1138,7 @@ impl PrivateMountNamespace {
         Ok(Self {
             fd,
             task_path,
+            app_data_target,
             active: true,
         })
     }
@@ -1120,6 +1157,13 @@ impl PrivateMountNamespace {
         if pid == 0 {
             if unsafe { libc::setns(self.fd.as_raw_fd(), libc::CLONE_NEWNS) } != 0 {
                 unsafe { libc::_exit(100) };
+            }
+            if let Some(target) = &self.app_data_target {
+                if unsafe { libc::umount2(target.as_ptr(), 0) } != 0
+                    && std::io::Error::last_os_error().raw_os_error() != Some(libc::EINVAL)
+                {
+                    unsafe { libc::_exit(109) };
+                }
             }
             for (index, path) in PRIVATE_TMP_PATHS.iter().rev().enumerate() {
                 if unsafe { libc::umount2(path.as_ptr(), 0) } != 0
@@ -1156,7 +1200,7 @@ impl PrivateMountNamespace {
         Ok(())
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(any(test, debug_assertions))]
     fn run_test_helper(&self, mount_child: bool) -> Result<(), String> {
         let pid = unsafe { libc::fork() };
         if pid < 0 {

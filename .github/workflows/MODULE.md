@@ -26,6 +26,9 @@ dispatched and reusable test/publication pipelines.
 - Run egress retirement cases against private listener queues and stalled DNS,
   with synthetic NSS configuration confined to a private mount/network namespace.
   Real lookup children must be reaped before the retirement acknowledgement.
+- Exercise App-service data views with real sandboxed MCP/SQLite writes across
+  distinct execution UIDs and mount lifetimes, retaining owner file identity
+  and refusing foreign roots, aliases, submounts and replaced bindings.
 - Build shared Docker/WSL images per architecture.
 - Build and sign independent multi-architecture APT packages/repository.
 - Build the React/Vite web desktop as an independent Pages input.

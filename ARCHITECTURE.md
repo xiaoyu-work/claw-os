@@ -137,6 +137,14 @@ descriptors and descendants before success; denial remains durable on failure.
 Standalone App installation, replacement, rollback and provenance mutations
 still need authenticated Root coordination and admission fencing.
 
+App-service Host storage reuses the existing owner/App partition through the
+[Root data binding](core/src/extension_host/MODULE.md), not a second directory
+scheme. An exact-App private idmapped mount translates the leased execution
+UID/GID without changing on-disk ownership. Host cleanup removes its mount and
+runtime state, never the persistent backing data. Source identity/topology
+changes retire the service. Legacy task-host operations and cross-App Calendar
+reads still need their own completed bindings.
+
 Replacing the authority or compositor ends its display epoch and requires
 coordinated logout/re-login, not a hot owner-socket handoff. See
 [installed update requirements](docs/updating.md#root-managed-desktop-session-lifetime).
