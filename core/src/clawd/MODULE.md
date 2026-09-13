@@ -55,6 +55,7 @@ and agent tasks.
 | `filesystem.rs` | Exact-scope bounded text reads and atomic writes/replacements for App workers; pinned paths, task-owned inverse snapshots, no App dispatch |
 | `capture.rs` | App-bound non-interactive screenshot service; fixed native portal client, owner session, screen plus exact output grants, bounded PNG, pinned non-overwriting persistence |
 | `media_player.rs`, `media_player/mpris.rs` | Capability-gated media clients without a fixed caller identity; exact observation/control grants, fixed native target, authenticated owner bus/executable/unique-name binding, fresh dispatch authorization and deadlines |
+| `calendar.rs`, `calendar/files.rs` | Owner-scoped Calendar read service; exact named grant, pinned live database view and bounded unprivileged reader, with no App data mount delivered to callers |
 | `desktop.rs` | Owner desktop service; Files reveals only its fixed target; Terminal, Store and Settings open only their fixed binaries with an optional directory/package/page under their original independent process-spawn grants |
 | `desktop/settings.rs` | Fixed Settings user-service activation; authenticated owner manager, closed GUI environment, independent lifetime and startup acknowledgement without weakening daemon/worker NoNewPrivileges |
 | `client_identity.rs` | Peer/owner identity and synchronous thread-local filesystem credentials; trusted owner primary/supplementary groups, distinct from extension execution GID, with restoration on every exit |
@@ -93,6 +94,25 @@ requires root solely for owner-UID dropping; it exercises the installed
 harmless processes, never real Settings, polkit or user grants.
 
 ## Wire Protocol
+
+`system.calendar.day` accepts only a session and Gregorian year/month/day.
+It derives the authenticated owner's existing `apps/calendar/calendar/events.db`,
+requires `data.db.read:Name(calendar)` and never accepts a caller path, owner,
+SQL statement or executable. Any independently authorized client may read;
+neither `calendar` nor a panel identity grants permission. The five-second
+reader uses the existing query semantics in a separate GPL OS executable,
+not product code or a core-linked desktop library.
+
+Database and WAL/SHM/journal entries must be owner-owned single-link regular
+files reached without symlinks. A detached descriptor-backed directory view
+enters only the private reader namespace as read-only/noexec/nodev/nosuid with
+kernel-enforced NOSYMFOLLOW. Live sidecar entries preserve SQLite's own
+transaction, checkpoint and locking behavior; separately pinned sidecar
+generations would not be a consistent SQLite snapshot. No data copy or
+retained descriptor reaches the Applet. Results are bounded to one MiB; errors,
+timeouts and missing readers are explicit. Missing databases retain empty-event
+semantics after authorization. A finite read grant is spent once, not again
+by a local preflight.
 
 Task Host ordinary-operation registrations additionally return
 `task_app_data_dir`, the private view of the authenticated owner/App partition.

@@ -145,8 +145,9 @@ runtime state, never the persistent backing data. Source identity/topology
 changes retire the service. Task-host ordinary operations acquire the same
 backing partition through a Root-owned per-App view after normal registration
 authorization. The registration reply binds the operation's data root; there
-is no task-scratch fallback or caller-selected owner directory. Cross-App
-Calendar reads still need their own provider binding.
+is no task-scratch fallback or caller-selected owner directory. Calendar
+observation uses the owner-scoped broker service below, never another App's
+private directory mounted into the consumer.
 
 Replacing the authority or compositor ends its display epoch and requires
 coordinated logout/re-login, not a hot owner-socket handoff. See
@@ -299,6 +300,17 @@ development export. This source interface does not release a new SDK, replace
 the current App pin, complete authenticated GUI/resource admission, or authorize
 CopyQ/Wayland access. The existing linked shell paths above remain until their
 separate coordinated cutover.
+
+Calendar day reads now cross `system.calendar.day` under the exact
+`data.db.read:calendar` grant. `clawd` selects the authenticated owner's existing
+Calendar store and gives an unprivileged OS reader a private, descriptor-pinned,
+kernel-read-only/NOSYMFOLLOW directory view. Live sidecars retain SQLite's
+transaction and checkpoint semantics. The query/filter implementation stays
+in the existing GPL library; the Agent-owned `claw-calendar-reader` executable
+keeps core free of a UI/GPL library dependency. Applet clients receive only
+bounded records through their unchanged public SDK protocol. Headless and
+desktop consumers use the same broker service; no App call, source checkout
+at runtime or second Calendar data store is introduced.
 The complete standalone native Launcher is also owned by
 `clawos-app/products/launcher` and built from `build/native-apps/cosmic-launcher`.
 Its executable/resources and `cosmic-launcher` descriptor stay in the desktop

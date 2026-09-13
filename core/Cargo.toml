@@ -150,4 +150,5 @@ wayland-client = "0.31.11"
 wayland-protocols = { version = "0.32.9", features = ["client", "staging"] }
 
 [dev-dependencies]
+claw-os-sdk = { path = "../claw-os-sdk/rust" }
 zbus = { version = "=5.5.0", default-features = false, features = ["p2p"] }

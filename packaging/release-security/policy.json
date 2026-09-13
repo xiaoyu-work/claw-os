@@ -39,6 +39,12 @@
     },
     {
       "critical": true,
+      "name": "claw-calendar-reader",
+      "package": "claw-os-agent",
+      "path": "/usr/lib/cos/bin/claw-calendar-reader"
+    },
+    {
+      "critical": true,
       "name": "cos",
       "package": "claw-os-agent",
       "path": "/usr/local/bin/cos"

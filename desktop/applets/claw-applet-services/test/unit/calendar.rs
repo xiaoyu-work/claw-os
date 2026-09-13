@@ -1,5 +1,68 @@
 use super::*;
 
+#[test]
+fn internal_reader_requires_its_root_broker_and_a_valid_date() {
+    use std::os::fd::AsRawFd;
+    let (socket, _peer) = std::os::unix::net::UnixStream::pair().unwrap();
+    assert!(reader::run(&[]).is_err());
+    for (year, month, day) in [("2026", "9", "9"), ("2026", "2", "30"), ("10000", "1", "1")] {
+        let args = [
+            "--query-v1",
+            year,
+            month,
+            day,
+            &socket.as_raw_fd().to_string(),
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        assert!(reader::run(&args).is_err());
+    }
+}
+
+#[cfg(feature = "provider")]
+#[test]
+fn calendar_wire_errors_and_shapes_remain_explicit() {
+    use std::os::unix::process::ExitStatusExt;
+    let output = |body: &str| std::process::Output {
+        status: std::process::ExitStatus::from_raw(0),
+        stdout: body.as_bytes().to_vec(),
+        stderr: Vec::new(),
+    };
+    let denied = decode_query(output(
+        r#"{"wire_version":1,"ok":false,"code":"PERMISSION_DENIED","error":"denied"}"#,
+    ))
+    .unwrap_err();
+    assert_eq!(denied.kind, FailureKind::Denied);
+    for invalid in [
+        r#"{"wire_version":1,"ok":true,"data":{"wrong":[]}}"#,
+        r#"{"wire_version":2,"ok":true,"data":{"events":[]}}"#,
+        r#"{"wire_version":1,"ok":true,"data":{"events":null}}"#,
+    ] {
+        assert!(decode_query(output(invalid)).is_err());
+    }
+    assert!(
+        decode_query(output(
+            r#"{"wire_version":1,"ok":true,"data":{"events":[]}}"#
+        ))
+        .unwrap()
+        .is_empty()
+    );
+}
+
+#[cfg(not(feature = "provider"))]
+#[test]
+fn default_library_keeps_plain_kernel_output_without_changing_json_features() {
+    use std::os::unix::process::ExitStatusExt;
+    let result = decode_query(std::process::Output {
+        status: std::process::ExitStatus::from_raw(0),
+        stdout: br#"{"events":[]}"#.to_vec(),
+        stderr: Vec::new(),
+    })
+    .unwrap();
+    assert!(result.is_empty());
+}
+
 fn filtered(events: Vec<CalendarEvent>, day: Date, time_zone: TimeZone) -> Vec<CalendarEvent> {
     filter_events_for_day(
         events.into_iter().map(Ok),

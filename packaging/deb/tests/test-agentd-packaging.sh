@@ -114,6 +114,20 @@ assert_contains "$POSTINST" 'systemd-sysusers /usr/lib/sysusers.d/claw-os-agent.
     "postinst must create the extension execution group before starting clawd"
 assert_contains "$BUILD_DEBS" 'claw-os-agent/preinst' \
     "claw-os-agent must ship an identity-provisioning preinst"
+assert_contains "$BUILD_DEBS" 'ensure_calendar_reader' \
+    "Agent must build the independent Calendar reader"
+assert_contains "$BUILD_DEBS" '--manifest-path desktop/applets/claw-applet-services/Cargo.toml' \
+    "Calendar query code must remain in its existing standalone workspace"
+assert_contains "$BUILD_DEBS" 'usr/lib/cos/bin/claw-calendar-reader' \
+    "Agent must own the Calendar reader executable"
+assert_contains "$BUILD_DEBS" 'calendar-reader.LICENSE' \
+    "Agent must carry the Calendar reader GPL license"
+assert_contains "$PROJECT_DIR/packaging/deb/claw-os-agent/control" 'claw-os-calendar-read-v1' \
+    "Agent must provide the Calendar read service"
+assert_contains "$PROJECT_DIR/packaging/deb/claw-os-desktop/control" 'claw-os-calendar-read-v1' \
+    "Desktop must depend on the Calendar read service"
+assert_contains "$TEST_WORKFLOW" 'calendar_mcp_to_broker_reader_and_public_sdk' \
+    "CI must cover actual Calendar data reaching the public SDK"
 assert_contains "$BUILD_DEBS" 'extension-identities.sh' \
     "maintainer scripts must embed the shared identity policy"
 assert_contains "$POSTINST" 'identity_provision upgrade "$2"' \

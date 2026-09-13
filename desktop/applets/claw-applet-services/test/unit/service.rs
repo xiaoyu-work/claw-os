@@ -59,12 +59,15 @@ async fn every_operation_checks_only_its_original_grant_before_access() {
     }
     assert_eq!(
         fixture.calls(),
-        "__policy check data.db.read --name calendar\n\
-         __policy check data.db.read --name calendar\n\
+        format!("--wire=1 __calendar day 2026 9 9\n\
+         --wire=1 __calendar day {} {} {}\n\
          __policy check agent.observe --name tasks\n\
          __policy check sys.observe --wild\n\
          __policy check clipboard.read --name history\n\
-         __policy check clipboard.write --name history\n"
+         __policy check clipboard.write --name history\n",
+            Timestamp::now().to_zoned(TimeZone::system()).date().year(),
+            Timestamp::now().to_zoned(TimeZone::system()).date().month(),
+            Timestamp::now().to_zoned(TimeZone::system()).date().day())
     );
 }
 
@@ -211,7 +214,7 @@ async fn presents_the_original_calendar_task_and_system_records() {
     }
     assert_eq!(
         fixture.calls(),
-        "__policy check data.db.read --name calendar\n\
+        "--wire=1 __calendar day 2026 9 9\n\
          __policy check agent.observe --name tasks\nagent ls\n\
          __policy check sys.observe --wild\nsys resources\n\
          __policy check sys.observe --wild\nsys resources\n"

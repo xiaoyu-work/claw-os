@@ -494,8 +494,28 @@ partition must contain no nested mounts. Unavailable mappings, aliases, foreign
 owners or replaced directory identities are explicit failures, not permission
 to use an empty temporary store. Older Host-private scratch data is not
 automatically imported or merged; a restart is not recovery of that transient
-state. Calendar's cross-App read path remains separate work. No App/SDK release
-or production pin is changed here.
+state. No App/SDK release or production pin is changed here.
+
+Root-coordinated legacy migration now checks the routed owner's UID rather
+than the Root launcher's UID. Existing data is moved by the original bounded
+rename contract, not copied or chowned. Invalid, linked, foreign-owned or
+oversized migration markers fail explicitly; temporary marker publication no
+longer follows a predictable `.new` path.
+
+Calendar Applets now read the existing owner Calendar store through
+`system.calendar.day`, not their own private `COS_DATA_DIR`. Agent supplies
+`claw-calendar-reader` and `claw-os-calendar-read-v1`; Desktop depends on that
+service while retaining the public Applet helper. The reader is a separately
+licensed GPL executable, tracked by the existing update-security component
+manifest and measured before launch. No epoch, protocol or package version is
+changed by this source unit.
+
+The reader receives a pinned view of only the Calendar database directory in
+a private read-only/NOSYMFOLLOW mount namespace. Sidecar entries remain live so
+SQLite handles its own transactions and checkpoints. Missing or unsafe services/files are errors; a genuinely
+missing Calendar database remains an empty event list. No old transient data
+is imported, and no App directory or raw file descriptor reaches the consumer.
+The public SDK wire format and existing named read grant are unchanged.
 
 The source-only relocation of `net` to `clawos-app/capabilities/http/apps/net`
 preserves `/usr/lib/cos/apps/net` in the signed Agent package. Its two MCP/CLI

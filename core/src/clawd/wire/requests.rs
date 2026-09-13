@@ -824,6 +824,15 @@ pub struct MediaPlayerControl {
     pub deadline_unix_ms: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CalendarDay {
+    pub session: Token,
+    pub year: i16,
+    pub month: u8,
+    pub day: u8,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MediaPlayerAction {

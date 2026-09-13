@@ -161,6 +161,9 @@ Calendar's complete panel UI, translations, desktop entry and icon also live
 in the [Calendar product](https://github.com/xiaoyu-work/clawos-app/tree/main/products/calendar).
 `cosmic-applets` remains the shell host and injects the shared OS agenda
 provider; neither Calendar nor Widget Rail calls another App.
+Calendar records now come through the owner-scoped `system.calendar.day`
+service. Agent's independent read-only helper uses the existing Calendar data
+partition; the Applet's own data directory is not a second Calendar store.
 Clipboard's complete popup, CopyQ history adapter, translations and desktop
 entry live in the [Clipboard product](https://github.com/xiaoyu-work/clawos-app/tree/main/products/clipboard).
 The shell injects its history-only policy callback through the shared policy

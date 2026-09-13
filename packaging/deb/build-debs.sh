@@ -249,6 +249,20 @@ ensure_bin() {
     find_bin "$bin"
 }
 
+ensure_calendar_reader() {
+    local path
+    if path="$(find_bin claw-calendar-reader)"; then
+        echo "$path"
+        return 0
+    fi
+    ensure_cargo
+    ( cd "$PROJECT_DIR" && cargo build --release --locked --target "$RUST_TARGET" \
+        --target-dir "$PROJECT_DIR/target" \
+        --manifest-path desktop/applets/claw-applet-services/Cargo.toml \
+        --bin claw-calendar-reader ) >&2
+    find_bin claw-calendar-reader
+}
+
 ###############################################################################
 # Helper: render control file with __VERSION__ and __ARCH__ substituted.
 ###############################################################################
@@ -429,6 +443,8 @@ AGENTD_BIN="$(ensure_bin claw-agentd cos)" || {
     echo "error: claw-agentd binary not built" >&2; exit 1; }
 EXTENSION_HOST_BIN="$(ensure_bin claw-extension-host cos)" || {
     echo "error: claw-extension-host binary not built" >&2; exit 1; }
+CALENDAR_READER_BIN="$(ensure_calendar_reader)" || {
+    echo "error: claw-calendar-reader binary not built" >&2; exit 1; }
 APPROVAL_HELPER_BIN="$(ensure_bin claw-approval-helper cos)" || {
     echo "error: claw-approval-helper binary not built" >&2; exit 1; }
 APP_RUNNER_BIN="$(ensure_bin claw-app-runner cos)" || {
@@ -465,6 +481,9 @@ install -m 755 "$COS_BIN" "$AGENT_STAGE/usr/local/bin/cos"
 install -m 755 "$CLAWD_BIN" "$AGENT_STAGE/usr/local/bin/clawd"
 install -m 755 "$AGENTD_BIN" "$AGENT_STAGE/usr/local/bin/claw-agentd"
 install -m 755 "$EXTENSION_HOST_BIN" "$AGENT_STAGE/usr/local/bin/claw-extension-host"
+install -Dm0755 "$CALENDAR_READER_BIN" "$AGENT_STAGE/usr/lib/cos/bin/claw-calendar-reader"
+install -Dm0644 "$PROJECT_DIR/desktop/applets/LICENSE" \
+    "$AGENT_STAGE/usr/share/doc/claw-os-agent/calendar-reader.LICENSE"
 install -m 755 "$APPROVAL_HELPER_BIN" "$AGENT_STAGE/usr/local/bin/claw-approval-helper"
 install -m 755 "$APP_RUNNER_BIN" "$AGENT_STAGE/usr/local/bin/claw-app-runner"
 install -m 755 "$GUI_RUNNER_BIN" "$AGENT_STAGE/usr/local/bin/claw-gui-runner"

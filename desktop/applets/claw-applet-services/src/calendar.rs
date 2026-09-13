@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
-use crate::policy::{self, Scope};
+use crate::policy::{Failure, FailureKind};
 use jiff::{
     Timestamp,
     civil::{Date, DateTime},
@@ -9,10 +9,10 @@ use jiff::{
 use rusqlite::{Connection, OpenFlags, OptionalExtension, limits::Limit};
 use serde::{Deserialize, Serialize};
 use std::{
-    path::{Path, PathBuf},
+    path::Path,
     time::{Duration, Instant},
 };
-use tokio::task::spawn_blocking;
+pub mod reader;
 
 const DB_BUSY_TIMEOUT: Duration = Duration::from_millis(250);
 const QUERY_TIMEOUT: Duration = Duration::from_secs(3);
@@ -45,20 +45,89 @@ pub async fn load_today() -> Result<Vec<CalendarEvent>, String> {
 }
 
 pub async fn load_day(day: Date) -> Result<Vec<CalendarEvent>, String> {
-    policy::require("data.db.read", Scope::Name("calendar")).await?;
-    load_day_authorized(day).await
+    query_day(day).await.map_err(|error| error.message)
 }
 
-pub(crate) async fn load_day_authorized(day: Date) -> Result<Vec<CalendarEvent>, String> {
-    let data_dir = std::env::var_os("COS_DATA_DIR")
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| "Calendar data directory is unavailable.".to_string())?;
-    let path = PathBuf::from(data_dir).join("calendar/events.db");
-    let time_zone = TimeZone::system();
+pub(crate) async fn query_day(day: Date) -> Result<Vec<CalendarEvent>, Failure> {
+    let mut command = tokio::process::Command::new(crate::command::cos_binary());
+    #[cfg(feature = "provider")]
+    command.arg("--wire=1");
+    command.args([
+        "__calendar",
+        "day",
+        &day.year().to_string(),
+        &day.month().to_string(),
+        &day.day().to_string(),
+    ]);
+    let output = crate::command::output(
+        &mut command,
+        crate::command::OUTPUT_BYTES,
+        Duration::from_secs(8),
+    )
+    .await
+    .map_err(|error| Failure {
+        kind: if matches!(
+            error.kind(),
+            std::io::ErrorKind::NotFound | std::io::ErrorKind::TimedOut
+        ) {
+            FailureKind::Unavailable
+        } else {
+            FailureKind::Execution
+        },
+        message: format!("Calendar OS service is unavailable: {error}"),
+    })?;
+    decode_query(output)
+}
 
-    spawn_blocking(move || load_day_from_db(&path, day, time_zone))
-        .await
-        .map_err(|error| format!("Calendar database task failed: {error}"))?
+fn decode_query(output: std::process::Output) -> Result<Vec<CalendarEvent>, Failure> {
+    let failed = |message| Failure {
+        kind: FailureKind::Execution,
+        message,
+    };
+    #[cfg(not(feature = "provider"))]
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(failed(if detail.is_empty() {
+            format!("Calendar service exited with {}", output.status)
+        } else {
+            detail
+        }));
+    }
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|error| failed(format!("Invalid Calendar response: {error}")))?;
+    #[cfg(feature = "provider")]
+    let value = {
+        let envelope = claw_os_sdk::envelope::Envelope::decode(value).map_err(failed)?;
+        if !envelope.ok {
+            return Err(Failure {
+                kind: match envelope.code.as_deref() {
+                    Some("PERMISSION_DENIED") => FailureKind::Denied,
+                    Some("KERNEL_UNAVAILABLE") => FailureKind::Unavailable,
+                    _ => FailureKind::Execution,
+                },
+                message: envelope
+                    .error
+                    .ok_or_else(|| failed("Calendar error has no diagnostic".into()))?,
+            });
+        }
+        if !output.status.success() {
+            return Err(failed(format!(
+                "Calendar service exited with {}",
+                output.status
+            )));
+        }
+        envelope
+            .data
+            .ok_or_else(|| failed("Calendar response has no data".into()))?
+    };
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Reply {
+        events: Vec<CalendarEvent>,
+    }
+    let reply: Reply = serde_json::from_value(value)
+        .map_err(|error| failed(format!("Invalid Calendar records: {error}")))?;
+    Ok(reply.events)
 }
 
 fn load_day_from_db(
@@ -77,13 +146,16 @@ fn load_day_from_db(
         }
     }
 
-    let connection =
-        Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|error| {
-            format!(
-                "Could not open calendar database {}: {error}",
-                path.display()
-            )
-        })?;
+    let connection = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .map_err(|error| {
+        format!(
+            "Could not open calendar database {}: {error}",
+            path.display()
+        )
+    })?;
     connection
         .busy_timeout(DB_BUSY_TIMEOUT)
         .map_err(|error| format!("Could not configure calendar database: {error}"))?;

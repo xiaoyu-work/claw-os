@@ -227,6 +227,12 @@ or a prefix wide enough to reach one; it runs in the tests and again
 before the first rename, so a future table edit fails the launch rather
 than the review.
 
+Root-owned launchers compare migration files with the authenticated routed
+owner, not Root's execution UID. Marker reads reject aliases, hard links,
+foreign ownership and invalid/oversized versions. Marker publication uses a
+private newly created file and mandatory directory sync; an old predictable
+`.cos-state-version.new` path is never opened or followed.
+
 Two owner-private stores stay outside on purpose and are reached through
 the broker instead of a bind:
 

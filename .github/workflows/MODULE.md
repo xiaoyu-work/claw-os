@@ -32,6 +32,9 @@ dispatched and reusable test/publication pipelines.
 - Exercise task-host ordinary App registration and persistent SQLite writes
   through authenticated private broker messages, across Host namespace/UID
   replacement, without exposing caller-selected data roots.
+- Exercise real staged Calendar MCP writes and public SDK reads through the
+  owner-scoped broker and standalone reader, including live WAL visibility,
+  wrong scopes, single-use grants and physical read-only mounts.
 - Build shared Docker/WSL images per architecture.
 - Build and sign independent multi-architecture APT packages/repository.
 - Build the React/Vite web desktop as an independent Pages input.

@@ -111,6 +111,8 @@ pub enum FieldRule {
     Flag,
     /// Non-negative integer.
     Count,
+    /// Bounded signed integer, such as a Gregorian year.
+    Integer,
     /// Container or string recorded as its element count or byte
     /// length only. Use for fields whose contents are never safe but
     /// whose size is useful.
@@ -133,6 +135,10 @@ impl FieldRule {
             },
             FieldRule::Count => match value.as_u64() {
                 Some(count) => json!(count),
+                None => shape(value),
+            },
+            FieldRule::Integer => match value.as_i64() {
+                Some(integer) => json!(integer),
                 None => shape(value),
             },
             FieldRule::Size => shape(value),

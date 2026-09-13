@@ -45,6 +45,13 @@ provides `claw-os-applet-services-v1 (= 1)`. Assembly refuses a missing,
 non-regular, non-executable, truncated or wrong-architecture helper before
 declaring that ABI. The [public client contract](../claw-os-sdk/wire/v1/applet-services.md)
 enters a later SDK release; provider implementation stays in the OS package.
+
+Calendar reads use Agent's `claw-os-calendar-read-v1` service and the separately
+built `/usr/lib/cos/bin/claw-calendar-reader`. Its query code is GPL-3.0-only,
+with `calendar-reader.LICENSE` installed in Agent's documentation directory.
+The binary is part of the signed component inventory and is measured before
+launch. Desktop retains the public Applet helper and requires this service;
+neither package availability nor a consumer name grants Calendar access.
 This source wiring does not cut over existing App payloads, change grants or
 clear GUI/Clipboard resource-admission gates; see [updating](../docs/updating.md).
 

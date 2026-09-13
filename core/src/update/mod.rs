@@ -174,6 +174,12 @@ pub const COMPONENTS: &[Component] = &[
         critical: true,
     },
     Component {
+        name: "claw-calendar-reader",
+        path: "/usr/lib/cos/bin/claw-calendar-reader",
+        package: "claw-os-agent",
+        critical: true,
+    },
+    Component {
         name: "claw-security-floor",
         path: "/usr/lib/cos/bin/claw-security-floor",
         package: "claw-os-agent",

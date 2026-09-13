@@ -111,6 +111,31 @@ jobs:
           COS_WORKER_SANDBOX_REQUIRED: "1"
         run: cd core && cargo test -- --test-threads=1
 
+      - name: Test owner-scoped Calendar reads
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y --no-install-recommends python3-idna
+          cargo build -p cos --bin cos --locked --target-dir "$GITHUB_WORKSPACE/target"
+          cargo build --manifest-path desktop/applets/claw-applet-services/Cargo.toml \
+            --features provider --bins --locked --target-dir "$RUNNER_TEMP/calendar-target"
+          cargo test -p cos --lib --locked --no-run --message-format=json \
+            --target-dir "$GITHUB_WORKSPACE/target" > "$RUNNER_TEMP/calendar-tests.jsonl"
+          test_binary="$(python3 -c 'import json,sys; print(next(x["executable"] for x in map(json.loads,sys.stdin) if x.get("executable") and x.get("profile",{}).get("test") and x.get("target",{}).get("name") == "cos"))' < "$RUNNER_TEMP/calendar-tests.jsonl")"
+          sudo timeout 120 unshare --mount --net --fork \
+            env COS_CALENDAR_COS="$GITHUB_WORKSPACE/target/debug/cos" \
+              COS_CALENDAR_READER="$RUNNER_TEMP/calendar-target/debug/claw-calendar-reader" \
+              COS_CALENDAR_PROVIDER="$RUNNER_TEMP/calendar-target/debug/claw-os-applet-provider" \
+            bash --noprofile --norc -c '
+              set -euo pipefail
+              mount --make-rprivate /
+              exec "$1" --exact clawd::calendar::tests::process::calendar_mcp_to_broker_reader_and_public_sdk \
+                --ignored --nocapture --test-threads=1
+            ' private-calendar "$test_binary"
+          sudo timeout 30 "$test_binary" \
+            --exact worker::migrate::tests::root_calendar_migration_uses_the_authenticated_owner_not_root_euid \
+            --ignored --nocapture --test-threads=1
+
       - name: Run privileged extension boundaries
         shell: bash
         run: |

@@ -141,6 +141,22 @@ fn media_player_relay_requires_a_media_verb_not_other_desktop_authority() {
 }
 
 #[test]
+fn calendar_relay_requires_database_read_without_exposing_other_routes() {
+    let granted = relaying_authority(vec![Cap::new(Verb::DATA_DB_READ, Scope::name("calendar"))]);
+    admit(Command::SystemCalendarDay, &granted).unwrap();
+    for command in [
+        Command::SystemFilesystemRead, Command::SystemFilesystemWrite,
+        Command::AppSessionRegister, Command::SystemReviewDecide,
+    ] {
+        assert!(admit(command, &granted).is_err(), "{command:?}");
+    }
+    for verb in [Verb::DATA_DB_WRITE, Verb::FS_READ, Verb::AGENT_OBSERVE] {
+        let denied = relaying_authority(vec![Cap::new(verb, Scope::name("calendar"))]);
+        assert!(admit(Command::SystemCalendarDay, &denied).is_err());
+    }
+}
+
+#[test]
 fn screenshot_admission_requires_capture_not_file_or_clipboard_authority() {
     let capture = relaying_authority(vec![Cap::new(Verb::DESKTOP_CAPTURE, Scope::name("screen"))]);
     admit(Command::SystemScreenshotCapture, &capture).unwrap();

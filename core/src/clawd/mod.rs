@@ -11,6 +11,7 @@ pub mod authority;
 pub mod backup;
 pub mod bluetooth;
 pub mod browser;
+pub mod calendar;
 pub mod camera;
 pub mod capture;
 pub mod client;

@@ -1510,6 +1510,19 @@ routes! {
             super::app_notifications::control(c.params, c.client, authority)
         },
     }
+    SystemCalendarDay {
+        name: "system.calendar.day",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget { max_in_flight: 4, deadline: Deadline::Interruptible(Duration::from_secs(10)) },
+        authority: session(Audience::SystemService),
+        body: body::CalendarDay,
+        audit: &[("session", FieldRule::Token), ("year", FieldRule::Integer), ("month", FieldRule::Count), ("day", FieldRule::Count)],
+        run: |c| {
+            let authority = c.authority()?;
+            super::calendar::day(c.params, c.client, authority).await
+        },
+    }
     SystemMediaPlayerControl {
         name: "system.media-player.control",
         access: Access::User,
