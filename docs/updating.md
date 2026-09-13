@@ -465,6 +465,13 @@ consolidation or independent distribution. Declared source exports, bundled
 
 ### App data moves into per-App directories
 
+Ordinary Python and polyglot operations now wait in `claw-app-runner` until
+their launcher binds the exact child session. Keep the runner and core from
+the same source/package cohort; a missing runner is an error, not an ungated
+fallback. The existing runner gate protocol is unchanged, and its private
+token is never App input or part of the App's byte allowance. No App data,
+manifest, SDK version or production pin changes with this startup fix.
+
 From the release that isolates App workers, an App no longer receives the
 owner's data root. `COS_DATA_DIR` is its own directory,
 `<data-root>/apps/<app-id>`, created `0700`, and no other App's directory or

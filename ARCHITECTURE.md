@@ -137,6 +137,12 @@ descriptors and descendants before success; denial remains durable on failure.
 Standalone App installation, replacement, rollback and provenance mutations
 still need authenticated Root coordination and admission fencing.
 
+Ordinary captured App operations now share the runner's private launch gate:
+the target entry cannot execute before its launcher completes exact process
+binding. Stdin bytes, limits and EOF are preserved. This closes the
+spawn-before-bind window; it is not a package-mutation fence or proof that
+ordinary App descendants have retired.
+
 The App-service manager now retains non-reusable runtime, identity and capacity
 custody across incomplete or cancelled retirement. Cleanup errors propagate to
 dispatch/eviction/shutdown; a retry must confirm accepted broker connections,

@@ -111,6 +111,16 @@ jobs:
           COS_WORKER_SANDBOX_REQUIRED: "1"
         run: cd core && cargo test -- --test-threads=1
 
+      - name: Test ordinary App bind gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build -p cos --bin claw-app-runner --locked
+          COS_CAPTURED_TEST_RUNNER="$GITHUB_WORKSPACE/target/debug/claw-app-runner" \
+            cargo test -p cos --lib --locked \
+              bridge::captured::tests::process::real_runner_waits_for_binding_and_preserves_app_input \
+              -- --exact --ignored --nocapture --test-threads=1
+
       - name: Test owner-scoped Calendar reads
         shell: bash
         run: |
@@ -310,6 +320,7 @@ jobs:
           done
           sudo timeout 100 unshare --mount --net --fork \
             env COS_APP_DATA_TEST_COS="$CARGO_TARGET_DIR/debug/cos" \
+              COS_APP_DATA_TEST_RUNNER="$CARGO_TARGET_DIR/debug/claw-app-runner" \
             bash --noprofile --norc -c '
               set -euo pipefail
               mount --make-rprivate /

@@ -285,6 +285,7 @@ fn prepare_stdio_worker(
         operation,
         runner,
         gated_argv,
+        Path::new(program),
         data_dir,
         apps_dir,
         extra_env,

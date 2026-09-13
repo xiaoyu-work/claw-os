@@ -43,6 +43,38 @@ fn ambient_gui_policy_is_refused_before_creating_app_state() {
     assert!(!data.exists());
 }
 
+#[test]
+fn wrapped_operation_keeps_the_authenticated_entry_mount() {
+    let root = tempfile::tempdir().unwrap();
+    let data = root.path().join("data");
+    let entry = root.path().join("entry");
+    std::fs::write(&entry, b"fixture").unwrap();
+    let granted = CapSet::new();
+    let input = AppOperationInput {
+        app_id: "wrapped-fixture",
+        app_dir: root.path(),
+        operation: "run",
+        program: PathBuf::from("/usr/bin/true"),
+        argv: Vec::new(),
+        caps: &granted,
+        session_id: "wrapped-fixture-session",
+        data_dir: data.to_str().unwrap(),
+        apps_dir: "/nonexistent-wrapped-fixture-apps",
+        extra_env: BTreeMap::new(),
+        stdio: StdioPlan::Captured,
+        desktop: false,
+        package_identity: None,
+        pinned_entries: vec![(entry.clone(), (11, 22))],
+        developer: false,
+    };
+    let policy = wrapped_app_operation(input, &entry).unwrap();
+    let mounts = policy.mounts.iter().filter(|mount| mount.target == entry).collect::<Vec<_>>();
+    assert_eq!(mounts.len(), 1);
+    assert_eq!(mounts[0].expect_identity, Some((11, 22)));
+    assert_eq!(mounts[0].class, MountClass::Package);
+    assert_eq!(mounts[0].mode, MountMode::ReadOnly);
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn gui_policy_projects_only_its_explicit_instance_transport() {

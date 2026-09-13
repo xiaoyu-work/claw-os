@@ -257,7 +257,7 @@ fn run_python_app_handles_stdout_larger_than_pipe_buffer() {
     let runner = state.path().join("claw-app-runner");
     std::fs::write(
         &runner,
-        "#!/bin/sh\n[ \"$1\" = \"--\" ] && shift\nexec \"$@\"\n",
+        "#!/usr/bin/python3\nimport os,sys\na=sys.argv[1:]\nassert a[0]=='--launch-gate' and a[2]=='--'\nassert os.read(0,32)==a[1].encode()\nos.execv(a[3],a[3:])\n",
     )
     .unwrap();
     use std::os::unix::fs::PermissionsExt;
@@ -921,7 +921,7 @@ fn explicit_stdin_bytes_reach_python_and_polyglot_children() {
     let runner = state.path().join("claw-app-runner");
     std::fs::write(
         &runner,
-        "#!/bin/sh\n[ \"$1\" = \"--\" ] && shift\nexec \"$@\"\n",
+        "#!/usr/bin/python3\nimport os,sys\na=sys.argv[1:]\nassert a[0]=='--launch-gate' and a[2]=='--'\nassert os.read(0,32)==a[1].encode()\nos.execv(a[3],a[3:])\n",
     )
     .unwrap();
     use std::os::unix::fs::PermissionsExt;

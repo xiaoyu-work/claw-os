@@ -45,6 +45,7 @@ persistence, and structured primitive dispatch.
 | `src/worker/` | Shared hostile-worker sandbox: launch policy, Linux provider, per-launch brokers |
 | `src/apps.rs` | `app.json` discovery and side-effect-free schema generation |
 | `src/bridge/local.rs` | Protected in-process Root App registration; held package review and owner/App deny checks before session creation |
+| `src/bridge/captured.rs` | Private launch-gate commands for ordinary Python/polyglot operations; App code waits for exact process binding |
 | `src/bridge/stdio.rs` | Generic declared-stdin operation hosting: held App binding, raw streams, cancellation and bounded EOF teardown |
 | `src/bridge/consent.rs` | Stdio launcher's read-only review/capability wait; retries unchanged registration without deciding or consuming consent |
 | `src/apps/permission_review.rs` | OS-catalog permission disclosure and comparison contract; not authorization |

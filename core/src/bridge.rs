@@ -11,6 +11,7 @@ use crate::clawd::routes::Command as ClawdCommand;
 use crate::proc::{deregister_session, register_session, SessionInfo};
 
 mod consent;
+mod captured;
 pub(crate) mod gui_args;
 #[cfg(target_os = "linux")]
 pub(crate) mod gui;
@@ -967,6 +968,7 @@ fn prepare_app_worker(
     operation: &str,
     program: std::path::PathBuf,
     argv: Vec<String>,
+    inner_program: &Path,
     data_dir: &str,
     apps_dir: &str,
     extra_env: BTreeMap<String, String>,
@@ -980,7 +982,7 @@ fn prepare_app_worker(
     } else {
         crate::worker::TrustTier::AppOperation
     };
-    let policy = crate::worker::derive::app_operation(crate::worker::derive::AppOperationInput {
+    let policy = crate::worker::derive::wrapped_app_operation(crate::worker::derive::AppOperationInput {
         app_id,
         app_dir,
         operation,
@@ -996,7 +998,7 @@ fn prepare_app_worker(
         package_identity: binding.dir_identity(),
         pinned_entries: binding.entries(),
         developer: binding.is_developer(),
-    })
+    }, inner_program)
     .inspect_err(|error| {
         crate::worker::audit::refused(&label, tier.as_str(), error);
     })?;
@@ -2141,14 +2143,19 @@ fn run_python_operation(
     let data_dir = app_session.operation_data_root(data_dir)?;
     let wrapper = python_wrapper(&main_py, command, &effective_args, data_dir, apps_dir)?;
     let stdin_data = validated_operation_stdin(launch, command, stdin_data)?;
+    let gated = captured::GatedCommand::new(
+        interpreter_path(python)?,
+        vec!["-c".to_string(), wrapper],
+    )?;
 
     let prepared = prepare_app_worker(
         &app_session,
         &app_id,
         app_dir,
         command,
-        interpreter_path(python)?,
-        vec!["-c".to_string(), wrapper],
+        gated.runner,
+        gated.argv,
+        &gated.program,
         data_dir,
         apps_dir,
         BTreeMap::new(),
@@ -2161,7 +2168,7 @@ fn run_python_operation(
         .unwrap_or_default()
         .to_string();
     let limits = crate::worker::Limits::operation();
-    let output = crate::worker::run_captured(prepared, stdin_data, limits, |pid| {
+    let output = crate::worker::exec::run_captured_gated(prepared, stdin_data, limits, &gated.token, |pid| {
         // Record which verified artifact this session is running before
         // the child gets any authority, so a revocation later can find
         // and stop it.
@@ -2371,13 +2378,15 @@ fn run_operation(
         ("COS_COMMAND".to_string(), command.to_string()),
         ("COS_ARGS_JSON".to_string(), args_json),
     ]);
+    let gated = captured::GatedCommand::new(program, launch_argv)?;
     let prepared = prepare_app_worker(
         &app_session,
         &app_id,
         app_dir,
         command,
-        program,
-        launch_argv,
+        gated.runner,
+        gated.argv,
+        &gated.program,
         data_dir,
         apps_dir,
         extra_env,
@@ -2390,7 +2399,7 @@ fn run_operation(
         .unwrap_or_default()
         .to_string();
     let limits = crate::worker::Limits::operation();
-    let output = crate::worker::run_captured(prepared, stdin_data, limits, |pid| {
+    let output = crate::worker::exec::run_captured_gated(prepared, stdin_data, limits, &gated.token, |pid| {
         // Record which verified artifact this session is running before
         // the child gets any authority, so a revocation later can find
         // and stop it.

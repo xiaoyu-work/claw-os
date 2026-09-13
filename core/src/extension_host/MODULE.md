@@ -268,7 +268,10 @@ refuses aliases, foreign owners, nested mounts and replaced bindings. These
 are storage/isolation checks, not a release or complete installed-App acceptance.
 
 `spawn::task_data::tests::task_app_registration_binds_persistent_data_after_authorization`
-uses the same private Root requirements and CLI input. It exercises signed
+uses the same private Root requirements, CLI input, and an explicitly built
+`COS_APP_DATA_TEST_RUNNER`. It exercises signed
 ordinary App operations through real broker registration, process binding and
 the worker sandbox across two Task Host namespaces/UIDs. Unknown/denied
 operations and forged owner/task/path inputs must create no data view.
+An injected first-bind refusal must leave the SQLite counter unchanged; later
+real bindings run through the same private launch gate before writing data.

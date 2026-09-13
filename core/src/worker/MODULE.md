@@ -64,7 +64,7 @@ and a root-owned executed artifact.
 | `broker.rs` | Per-launch narrow broker endpoint |
 | `net_broker.rs` | Per-launch HTTP `CONNECT` egress broker |
 | `net_broker/resolver.rs` | Fixed system NSS lookup process, bounded output/deadline, endpoint cancellation and checked child reaping |
-| `exec.rs` | Bounded run, deadline, descendant cleanup |
+| `exec.rs` | Bounded run, bind-gated App startup, input/output limits and descendant cleanup |
 | `runtime.rs` | Private per-launch runtime directory |
 | `audit.rs` | Typed, path-free and secret-free launch records |
 
@@ -99,6 +99,26 @@ code and never uses real user state or the installed broker. Use a distinct
 `CARGO_TARGET_DIR` for each source snapshot.
 
 ## Declared App stdio
+
+Captured Python and polyglot ordinary operations also use the trusted
+`claw-app-runner` launch gate. The parent releases its private 32-byte token
+only after the exact child session is bound; a denied or delayed bind cannot
+run App code first. The gate is consumed before exec and is not charged to
+the App input limit. Original stdin bytes and EOF behavior remain unchanged.
+Wrapped runtimes outside the system image keep their individual read-only
+mount, without replacing an authenticated entry's inode binding.
+Generic `run_captured` remains available for non-App workers; its spawn callback
+alone is not an execution barrier. Root package-mutation coordination and
+ordinary-process retirement remain separate requirements.
+
+The explicit real-runner check is:
+
+```bash
+cargo build -p cos --bin claw-app-runner --locked
+COS_CAPTURED_TEST_RUNNER="$PWD/target/debug/claw-app-runner" \
+  cargo test -p cos --lib bridge::captured::tests::process::real_runner_waits_for_binding_and_preserves_app_input \
+  -- --exact --ignored --nocapture --test-threads=1
+```
 
 `cos app stdio <id> <operation> [args...]` uses `bridge::run_app_stdio`,
 not `run_native_app_host`. The existing Mail compatibility executable remains

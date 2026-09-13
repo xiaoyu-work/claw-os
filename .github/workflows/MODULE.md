@@ -35,6 +35,8 @@ dispatched and reusable test/publication pipelines.
 - Exercise checked App-service retirement with a real Host/cgroup, retained
   mount failures, cancellation and owner/identity/capacity fencing; cleanup
   failure must not become a successful stop or replacement.
+- Exercise ordinary App bind-gated startup with the real runner and sandbox,
+  including refused/delayed binding, exact stdin limits, raw bytes and EOF.
 - Exercise real staged Calendar MCP writes and public SDK reads through the
   owner-scoped broker and standalone reader, including live WAL visibility,
   wrong scopes, single-use grants and physical read-only mounts.

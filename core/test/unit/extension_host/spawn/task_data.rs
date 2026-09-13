@@ -63,6 +63,9 @@ fn ordinary_task_app_actor() {
         .unwrap()
         .parse()
         .unwrap();
+    let refused = crate::bridge::run_task_app(&launch, "bump", &[], apps.to_str().unwrap())
+        .unwrap_err();
+    assert!(refused.contains("fixture binding refused"), "{refused}");
     for expected in [start, start + 1] {
         let output = crate::bridge::run_task_app(&launch, "bump", &[], apps.to_str().unwrap())
             .unwrap()
@@ -160,7 +163,7 @@ fn session(id: &str, pid: u32, caps: crate::caps::CapSet) -> crate::proc::Sessio
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires Root in private mount/network namespaces and COS_APP_DATA_TEST_COS"]
+#[ignore = "requires Root in private mount/network namespaces and COS_APP_DATA_TEST_COS/RUNNER"]
 async fn task_app_registration_binds_persistent_data_after_authorization() {
     use crate::caps::{Cap, CapSet, Scope, Verb};
     use crate::clawd::transport::{frame::PeerStream, peer, ReadOutcome};
@@ -206,6 +209,10 @@ async fn task_app_registration_binds_persistent_data_after_authorization() {
     copy_executable(
         Path::new(&std::env::var("COS_APP_DATA_TEST_COS").unwrap()),
         Path::new("/usr/local/bin/cos"),
+    );
+    copy_executable(
+        Path::new(&std::env::var("COS_APP_DATA_TEST_RUNNER").unwrap()),
+        Path::new("/usr/local/bin/claw-app-runner"),
     );
     copy_executable(
         &std::env::current_exe().unwrap(),
@@ -392,6 +399,7 @@ async fn task_app_registration_binds_persistent_data_after_authorization() {
         );
         let (stop, mut stopped) = tokio::sync::oneshot::channel();
         let broker = tokio::spawn(async move {
+            let mut refuse_bind = true;
             loop {
                 let accepted = tokio::select! { _ = &mut stopped => break, accepted = listener.accept() => accepted };
                 let mut stream = PeerStream::new(accepted.unwrap().0).unwrap();
@@ -407,15 +415,28 @@ async fn task_app_registration_binds_persistent_data_after_authorization() {
                 assert_eq!(process.uid, client.execution_uid.unwrap());
                 assert_eq!(process.start_time_ticks, client.start_time_ticks.unwrap());
                 let request: Request = serde_json::from_slice(&frame.body).unwrap();
-                let response = crate::clawd::server::dispatch_verified_request(
-                    request, &client, &state, &admission,
-                )
-                .await;
+                let response = if refuse_bind
+                    && request.command == crate::clawd::routes::Command::AppSessionBind
+                {
+                    refuse_bind = false;
+                    tokio::time::sleep(Duration::from_millis(150)).await;
+                    crate::clawd::protocol::Response::error(
+                        request.id,
+                        crate::clawd::protocol::BrokerErrorKind::Unauthorized.code(),
+                        "fixture binding refused",
+                    )
+                } else {
+                    crate::clawd::server::dispatch_verified_request(
+                        request, &client, &state, &admission,
+                    )
+                    .await
+                };
                 stream
                     .write_response(&crate::clawd::protocol::encode_response(&response).unwrap())
                     .await
                     .unwrap();
             }
+            assert!(!refuse_bind, "the actor never reached process binding");
         });
         child.stdin.take().unwrap().write_all(b"1").unwrap();
         let deadline = Instant::now() + Duration::from_secs(30);
