@@ -1,14 +1,12 @@
 //! App developer and management commands for the `cos app` namespace.
 
 use std::env;
-use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
 use super::{apps_dir, launch_app_gui, run_app_command, run_app_mcp_command};
-use crate::apps;
+use crate::apps::{self, installation};
 use crate::cli_help::{show_app_command_schema, show_app_help, show_app_schema, show_apps};
 
 /// Directory where freedesktop `.desktop` launchers are written at
@@ -273,7 +271,7 @@ fn lint_apps(
     };
 
     for app in apps_to_check {
-        let violations = app_lint_violations(app);
+        let violations = apps::lint::app_lint_violations(app);
         if !violations.is_empty() {
             any_violation = true;
         }
@@ -298,67 +296,6 @@ fn lint_apps(
         })
         .to_string(),
     ))
-}
-
-fn app_lint_violations(app: &apps::App) -> Vec<Value> {
-    let mut violations = scan_app_for_ai_imports(&app.dir);
-    violations.extend(scan_mcp_block(app));
-    violations
-}
-
-/// On-disk lint checks for an app's `mcp` block. The manifest parser
-/// already enforces structural validity (duplicate tool names,
-/// undeclared scope args, missing English text, etc.) and
-/// `apps::discover` would have skipped the app otherwise. What we
-/// still need to verify here is that the artefacts referenced by the
-/// manifest exist on disk — most importantly the `mcp.entry` program,
-/// since a missing entry breaks the agent at first call rather than at
-/// install time.
-fn scan_mcp_block(app: &apps::App) -> Vec<Value> {
-    let Some(service) = app.manifest.mcp.as_ref() else {
-        return Vec::new();
-    };
-    let entry_rel = service
-        .entry
-        .clone()
-        .unwrap_or_else(|| app.manifest.runtime.default_mcp_entry().to_string());
-    let mut hits = Vec::new();
-    if entry_rel.starts_with('/') {
-        // An absolute entry is a claim on a system program, and only
-        // the kernel's fixed native-desktop table may make it. Saying
-        // so at lint time is the same answer the launcher gives, just
-        // earlier.
-        if crate::worker::trusted_desktop::allowlisted_system_program(&app.manifest.id)
-            != Some(entry_rel.as_str())
-        {
-            hits.push(json!({
-                "kind": "mcp.entry-not-allowlisted",
-                "file": entry_rel,
-                "hint": format!(
-                    "Manifest names `{entry_rel}` outside its package. Only the kernel's \
-                     fixed native-desktop table may name a system program, and it does not \
-                     name this one for `{}`.",
-                    app.manifest.id,
-                ),
-            }));
-        }
-        return hits;
-    }
-    let entry_abs = app.dir.join(&entry_rel);
-    if !entry_abs.is_file() {
-        hits.push(json!({
-            "kind": "mcp.entry-missing",
-            "file": entry_abs.display().to_string(),
-            "hint": format!(
-                "Manifest declares an `mcp` block with {} tool(s) but the entry script \
-                 `{}` is not present on disk. The kernel agent will fail to bring up the MCP \
-                 server on the first call.",
-                service.tools.len(),
-                entry_rel,
-            ),
-        }));
-    }
-    hits
 }
 
 /// `cos app tool <sub>` — discovery surface for App-defined MCP
@@ -430,73 +367,6 @@ fn tool_cmd(
         other => Err(format!(
             "unknown subcommand: cos app tool {other}. try: cos app tool list [<app>]"
         )),
-    }
-}
-
-/// Walk an app directory looking for `*.py` files that import one of
-/// the forbidden provider SDKs. Returns a list of `{file, line, text}`
-/// hits.
-fn scan_app_for_ai_imports(app_dir: &Path) -> Vec<Value> {
-    const FORBIDDEN: &[&str] = &[
-        "openai",
-        "anthropic",
-        "google.generativeai",
-        "vertexai",
-        "cohere",
-        "mistralai",
-        "replicate",
-        "boto3.client(\"bedrock",
-        "boto3.client('bedrock",
-    ];
-    let mut hits = Vec::new();
-    walk_py(app_dir, &mut |path, contents| {
-        for (idx, line) in contents.lines().enumerate() {
-            let trimmed = line.trim_start();
-            if !(trimmed.starts_with("import ") || trimmed.starts_with("from ")) {
-                // Allow grepping for the boto3-bedrock shape too.
-                if !FORBIDDEN.iter().any(|f| trimmed.contains(f)) {
-                    continue;
-                }
-            }
-            for needle in FORBIDDEN {
-                if trimmed.contains(needle)
-                    && (trimmed.starts_with("import ")
-                        || trimmed.starts_with("from ")
-                        || trimmed.contains(".client"))
-                {
-                    hits.push(json!({
-                        "file": path.display().to_string(),
-                        "line": idx + 1,
-                        "text": line.to_string(),
-                        "matched": needle.to_string(),
-                    }));
-                    break;
-                }
-            }
-        }
-    });
-    hits
-}
-
-fn walk_py(dir: &Path, f: &mut dyn FnMut(&Path, &str)) {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
-    for entry in entries.flatten() {
-        let p = entry.path();
-        if p.is_dir() {
-            // Skip vendored / build / hidden directories.
-            let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
-            if name.starts_with('.') || name == "node_modules" || name == "__pycache__" {
-                continue;
-            }
-            walk_py(&p, f);
-        } else if p.extension().and_then(|e| e.to_str()) == Some("py") {
-            if let Ok(contents) = std::fs::read_to_string(&p) {
-                f(&p, &contents);
-            }
-        }
     }
 }
 
@@ -577,44 +447,12 @@ fn install_cmd_with_confirmation(
     let dev_trust = args.iter().any(|a| a == "--dev-trust");
 
     let source = PathBuf::from(&source_arg);
-    if !source.is_dir() {
-        return Err(format!(
-            "install source `{}` is not a directory",
-            source.display()
-        ));
-    }
-    let manifest_path = source.join("app.json");
-    if !manifest_path.is_file() {
-        return Err(format!(
-            "install source `{}` has no app.json",
-            source.display()
-        ));
-    }
-    let body = std::fs::read_to_string(&manifest_path)
-        .map_err(|e| format!("read {}: {e}", manifest_path.display()))?;
-    let mut manifest = apps::AppManifest::from_json(&body)
-        .map_err(|e| format!("parse {}: {e}", manifest_path.display()))?;
-    let catalog = crate::ai::tools::list_names();
-    manifest
-        .validate_tools_against_catalog(&catalog)
-        .map_err(|e| format!("manifest catalog check: {e}"))?;
-
-    let dest = apps_dir().join(&manifest.id);
-    let copied: bool;
-    let same_path = source
-        .canonicalize()
-        .ok()
-        .zip(dest.canonicalize().ok())
-        .map(|(a, b)| a == b)
-        .unwrap_or(false);
+    let install = installation::DirectoryInstall::prepare(&source, &apps_dir())?;
+    let dest = install.destination();
+    let same_path = install.is_in_place();
 
     if review_only {
-        let trust = if same_path {
-            TreeTrust::Installed
-        } else {
-            TreeTrust::SignatureOnly
-        };
-        let app = validate_install_tree(&source, &manifest.id, "reviewed app", trust, false)?;
+        let app = install.preview()?;
         let review = apps::permission_review::PermissionReview::from_manifest(&app.manifest)?;
         return Ok(Some(
             json!({
@@ -636,52 +474,15 @@ fn install_cmd_with_confirmation(
         system_review_id = id;
         Ok(())
     };
-    if same_path {
-        let app = validate_install_tree(
-            &source,
-            &manifest.id,
-            "in-place app",
-            TreeTrust::Installed,
-            dev_trust,
-        )?;
-        review_permissions(&app)?;
-        let current = validate_install_tree(
-            &source,
-            &manifest.id,
-            "reviewed in-place app",
-            TreeTrust::Installed,
-            dev_trust,
-        )?;
-        require_unchanged_review(&app, &current)?;
-        manifest = app.manifest;
-        copied = false;
-    } else {
-        if path_entry_exists(&dest)
-            .map_err(|e| format!("inspect destination {}: {e}", dest.display()))?
-            && !force
-        {
-            return Err(format!(
-                "destination `{}` already exists. Re-run with --force to overwrite.",
-                dest.display()
-            ));
-        }
-        manifest = stage_app_install(
-            &source,
-            &dest,
-            force,
-            &manifest.id,
-            dev_trust,
-            &mut review_permissions,
-        )?;
-        copied = true;
-    }
+    let manifest = install.publish(force, dev_trust, &mut review_permissions)?;
+    let copied = !same_path;
 
     // Registration only happens after provenance succeeded, or after
     // the operator's explicit developer decision has been persisted.
     let provenance = if dev_trust {
-        record_dev_trust(&dest, &manifest.id)?
+        record_dev_trust(dest, &manifest.id)?
     } else {
-        let verified = verify_app_tree(&dest, &manifest.id, TreeTrust::Installed)?;
+        let verified = installation::verify_installed_app(dest, &manifest.id)?;
         crate::provenance::audit("provenance.app_installed", verified.audit_facts());
         verified.audit_facts()
     };
@@ -773,14 +574,6 @@ fn install_cmd_with_confirmation(
     Ok(Some(envelope.to_string()))
 }
 
-#[cfg(test)]
-pub(super) fn install_cmd_with_test_confirmation(args: &[String]) -> Result<Option<String>, String> {
-    install_cmd_with_confirmation(args, &mut |app, _source, _auto_yes, _dev_trust| {
-        apps::permission_review::PermissionReview::from_manifest(&app.manifest)
-            .map(|review| (review, None))
-    })
-}
-
 fn review_install_permissions(
     app: &apps::App,
     auto_yes: bool,
@@ -836,22 +629,6 @@ fn review_install_permissions(
         );
     }
     Ok(review)
-}
-
-fn require_unchanged_review(reviewed: &apps::App, current: &apps::App) -> Result<(), String> {
-    let reviewed_manifest = serde_json::to_value(&reviewed.manifest)
-        .map_err(|error| format!("serialize reviewed App manifest: {error}"))?;
-    let current_manifest = serde_json::to_value(&current.manifest)
-        .map_err(|error| format!("serialize current App manifest: {error}"))?;
-    if reviewed_manifest != current_manifest
-        || reviewed.provenance_facts() != current.provenance_facts()
-    {
-        return Err(
-            "App package changed during permission review; review the new package before installing"
-                .into(),
-        );
-    }
-    Ok(())
 }
 
 /// `cos app create <id> [--kind cli|desktop|both] [--dir <parent>]
@@ -1125,42 +902,6 @@ fn write_desktop_entry(manifest: &apps::AppManifest) -> Result<Option<String>, S
     Ok(Some(file.display().to_string()))
 }
 
-fn verify_app_tree(
-    dir: &Path,
-    expected_id: &str,
-    mode: TreeTrust,
-) -> Result<std::sync::Arc<crate::provenance::VerifiedPackage>, String> {
-    use crate::provenance::{PackageKind, VerifyOptions};
-    let trust = crate::provenance::trust_store();
-    let options = match mode {
-        // A staging directory is private scratch space: neither the
-        // vendor package root nor a developer grant applies there, so
-        // only a publisher signature can authenticate it.
-        TreeTrust::SignatureOnly => VerifyOptions::new(PackageKind::App)
-            .expect_id(expected_id)
-            .signature_only(),
-        TreeTrust::Installed => VerifyOptions::new(PackageKind::App).expect_id(expected_id),
-    };
-    crate::provenance::verify::verify_package(dir, &options, &trust)
-        .map(std::sync::Arc::new)
-        .map_err(|e| {
-            crate::errors::error(
-                e.code(),
-                &crate::provenance::quarantine_reason(PackageKind::App, expected_id, &e),
-            )
-            .to_string()
-        })
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TreeTrust {
-    /// Verify a private staging copy: signature required.
-    SignatureOnly,
-    /// Verify a tree in its installed location: vendor and developer
-    /// trust may apply.
-    Installed,
-}
-
 /// Persist an explicit developer trust decision for an unsigned App and
 /// re-verify the installed tree through it.
 ///
@@ -1184,7 +925,7 @@ fn record_dev_trust(dest: &Path, id: &str) -> Result<Value, String> {
     // Routed through the same command an operator would run by hand, so
     // there is exactly one implementation of the consent gate.
     let grant = crate::provenance::cli::run("dev-trust", &args)?;
-    let verified = verify_app_tree(&dir, id, TreeTrust::Installed)?;
+    let verified = installation::verify_installed_app(&dir, id)?;
     crate::provenance::audit("provenance.app_installed", verified.audit_facts());
     let mut facts = verified.audit_facts();
     if let Some(map) = facts.as_object_mut() {
@@ -1198,526 +939,6 @@ fn record_dev_trust(dest: &Path, id: &str) -> Result<Value, String> {
         );
     }
     Ok(facts)
-}
-
-fn validate_install_tree(
-    dir: &Path,
-    expected_id: &str,
-    description: &str,
-    trust_mode: TreeTrust,
-    allow_unsigned: bool,
-) -> Result<apps::App, String> {
-    // Structural bounds run before anything is trusted: an untrusted
-    // bundle must not be able to smuggle symlinks, hardlinks, special
-    // files, traversal or case-colliding names into a live install.
-    crate::provenance::install::assert_safe_tree(
-        dir,
-        &crate::provenance::install::Limits::default(),
-    )
-    .map_err(|e| format!("{description} bundle rejected: {e}"))?;
-
-    let provenance = match verify_app_tree(dir, expected_id, trust_mode) {
-        Ok(pkg) => Ok(pkg),
-        Err(reason) if allow_unsigned => Err(reason),
-        Err(reason) => return Err(reason),
-    };
-
-    // Capability-bearing manifest bytes come from the verified
-    // snapshot whenever one exists.
-    let body = match &provenance {
-        Ok(pkg) => pkg
-            .manifest_text()
-            .map_err(|e| format!("read {description} manifest from verified snapshot: {e}"))?,
-        Err(_) => {
-            let manifest_path = dir.join("app.json");
-            fs::read_to_string(&manifest_path).map_err(|e| {
-                format!(
-                    "read {description} manifest {}: {e}",
-                    manifest_path.display()
-                )
-            })?
-        }
-    };
-    let manifest = apps::AppManifest::from_json(&body)
-        .map_err(|e| format!("parse {description} manifest in {}: {e}", dir.display()))?;
-    if manifest.id != expected_id {
-        return Err(format!(
-            "{description} manifest id changed during install: expected `{expected_id}`, got `{}`",
-            manifest.id
-        ));
-    }
-    manifest
-        .validate_tools_against_catalog(&crate::ai::tools::list_names())
-        .map_err(|e| format!("{description} manifest catalog check: {e}"))?;
-
-    let app = apps::App {
-        manifest: manifest.clone(),
-        dir: dir.to_path_buf(),
-        provenance,
-    };
-    let violations = app_lint_violations(&app);
-    if !violations.is_empty() {
-        let details = serde_json::to_string(&violations)
-            .unwrap_or_else(|_| "lint violations could not be rendered".to_string());
-        return Err(format!(
-            "{description} lint failed for `{expected_id}`: {details}"
-        ));
-    }
-    Ok(app)
-}
-
-/// Copy, validate, and durably publish an App tree.
-///
-/// `staging` and any forced-install backup are siblings of `dest`, so
-/// every rename stays on one filesystem. Linux uses `RENAME_EXCHANGE`
-/// when the filesystem supports it; the portable fallback recovers any
-/// orphaned backup before starting a later install.
-fn stage_app_install(
-    source: &Path,
-    dest: &Path,
-    force: bool,
-    expected_id: &str,
-    allow_unsigned: bool,
-    review: &mut dyn FnMut(&apps::App) -> Result<(), String>,
-) -> Result<apps::AppManifest, String> {
-    stage_app_install_with_ops(
-        source,
-        dest,
-        force,
-        expected_id,
-        allow_unsigned,
-        review,
-        (
-            |from: &Path, to: &Path| fs::rename(from, to),
-            atomic_exchange,
-        ),
-    )
-}
-
-#[cfg(test)]
-pub(super) fn stage_app_install_with_review(
-    source: &Path,
-    dest: &Path,
-    force: bool,
-    expected_id: &str,
-    review: &mut dyn FnMut(&apps::App) -> Result<(), String>,
-) -> Result<apps::AppManifest, String> {
-    stage_app_install(source, dest, force, expected_id, false, review)
-}
-
-/// The rename-only path keeps rollback failures deterministic in unit
-/// tests and exercises the fallback used where exchange is unavailable.
-#[cfg(test)]
-pub(super) fn stage_app_install_with_rename<R>(
-    source: &Path,
-    dest: &Path,
-    force: bool,
-    expected_id: &str,
-    rename: R,
-) -> Result<apps::AppManifest, String>
-where
-    R: FnMut(&Path, &Path) -> io::Result<()>,
-{
-    stage_app_install_with_ops(
-        source,
-        dest,
-        force,
-        expected_id,
-        true,
-        &mut |_| Ok(()),
-        (rename, |_staging: &Path, _dest: &Path| Ok(false)),
-    )
-}
-
-fn stage_app_install_with_ops<R, E>(
-    source: &Path,
-    dest: &Path,
-    force: bool,
-    expected_id: &str,
-    allow_unsigned: bool,
-    review: &mut dyn FnMut(&apps::App) -> Result<(), String>,
-    operations: (R, E),
-) -> Result<apps::AppManifest, String>
-where
-    R: FnMut(&Path, &Path) -> io::Result<()>,
-    E: FnMut(&Path, &Path) -> io::Result<bool>,
-{
-    let (mut rename, mut exchange) = operations;
-    let parent = dest
-        .parent()
-        .ok_or_else(|| format!("install destination `{}` has no parent", dest.display()))?;
-    fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
-    recover_interrupted_app_install(parent, dest, expected_id, &mut rename)?;
-
-    let token = uuid::Uuid::new_v4();
-    let staging = parent.join(format!(".{expected_id}.install-staging-{token}"));
-    let mut builder = fs::DirBuilder::new();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    builder
-        .create(&staging)
-        .map_err(|e| format!("create staging {}: {e}", staging.display()))?;
-    let _staging_guard = InstallStagingGuard(staging.clone());
-
-    copy_dir_recursive(source, &staging)
-        .map_err(|e| format!("copy {} -> {}: {e}", source.display(), staging.display()))?;
-    let app = validate_install_tree(
-        &staging,
-        expected_id,
-        "staged app",
-        TreeTrust::SignatureOnly,
-        allow_unsigned,
-    )?;
-    sync_install_tree(&staging)
-        .map_err(|e| format!("fsync staged app {}: {e}", staging.display()))?;
-    review(&app)?;
-    let current = validate_install_tree(
-        &staging,
-        expected_id,
-        "reviewed staged app",
-        TreeTrust::SignatureOnly,
-        allow_unsigned,
-    )?;
-    require_unchanged_review(&app, &current)?;
-    let manifest = app.manifest;
-
-    let destination_exists = path_entry_exists(dest)
-        .map_err(|e| format!("inspect destination {}: {e}", dest.display()))?;
-    if destination_exists && !force {
-        return Err(format!(
-            "destination `{}` already exists. Re-run with --force to overwrite.",
-            dest.display()
-        ));
-    }
-
-    if destination_exists {
-        match exchange(&staging, dest) {
-            Ok(true) => {
-                sync_directory_best_effort(parent);
-                if let Err(error) = remove_path(&staging) {
-                    tracing::warn!(
-                        path = %staging.display(),
-                        %error,
-                        "app install committed but exchanged old tree cleanup failed"
-                    );
-                }
-                sync_directory_best_effort(parent);
-                return Ok(manifest);
-            }
-            Ok(false) => {}
-            Err(error) => {
-                return Err(format!(
-                    "atomically exchange staged app {} with {}: {error}",
-                    staging.display(),
-                    dest.display()
-                ));
-            }
-        }
-    }
-
-    let backup = if destination_exists {
-        let backup = parent.join(format!(".{expected_id}.install-backup-{token}"));
-        rename(dest, &backup).map_err(|e| {
-            format!(
-                "move existing {} -> {}: {e}",
-                dest.display(),
-                backup.display()
-            )
-        })?;
-        Some(backup)
-    } else {
-        None
-    };
-
-    if let Err(publish_error) = rename(&staging, dest) {
-        let publish_message = format!(
-            "publish staged app {} -> {}: {publish_error}",
-            staging.display(),
-            dest.display()
-        );
-        if let Some(backup) = backup.as_ref() {
-            match rename(backup, dest) {
-                Ok(()) => {
-                    sync_directory_best_effort(parent);
-                    return Err(format!("{publish_message}; previous install restored"));
-                }
-                Err(rollback_error) => {
-                    sync_directory_best_effort(parent);
-                    return Err(format!(
-                        "{publish_message}; rollback {} -> {} failed: {rollback_error}; \
-                         previous install retained at {}",
-                        backup.display(),
-                        dest.display(),
-                        backup.display()
-                    ));
-                }
-            }
-        }
-        return Err(publish_message);
-    }
-
-    sync_directory_best_effort(parent);
-    if let Some(backup) = backup {
-        if let Err(error) = remove_path(&backup) {
-            tracing::warn!(
-                path = %backup.display(),
-                %error,
-                "app install committed but old backup cleanup failed"
-            );
-        }
-        sync_directory_best_effort(parent);
-    }
-    Ok(manifest)
-}
-
-fn recover_interrupted_app_install<R>(
-    parent: &Path,
-    dest: &Path,
-    expected_id: &str,
-    rename: &mut R,
-) -> Result<(), String>
-where
-    R: FnMut(&Path, &Path) -> io::Result<()>,
-{
-    let mut backups = install_scratch_paths(parent, expected_id, "backup")
-        .map_err(|e| format!("scan interrupted App install backups: {e}"))?;
-    let staging = install_scratch_paths(parent, expected_id, "staging")
-        .map_err(|e| format!("scan interrupted App install staging: {e}"))?;
-    let destination_exists = path_entry_exists(dest)
-        .map_err(|e| format!("inspect destination {}: {e}", dest.display()))?;
-
-    if !destination_exists && backups.len() > 1 {
-        let paths = backups
-            .iter()
-            .map(|path| path.display().to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-        return Err(format!(
-            "multiple interrupted App install backups found for `{expected_id}`; \
-             refusing ambiguous recovery: {paths}"
-        ));
-    }
-
-    if !destination_exists {
-        if let Some(backup) = backups.pop() {
-            validate_recovery_candidate(&backup, expected_id)?;
-            rename(&backup, dest).map_err(|e| {
-                format!(
-                    "recover interrupted App install {} -> {}: {e}",
-                    backup.display(),
-                    dest.display()
-                )
-            })?;
-            sync_directory_best_effort(parent);
-        }
-    }
-
-    for path in backups.into_iter().chain(staging) {
-        remove_path(&path)
-            .map_err(|e| format!("clean interrupted App install {}: {e}", path.display()))?;
-    }
-    sync_directory_best_effort(parent);
-    Ok(())
-}
-
-fn install_scratch_paths(parent: &Path, expected_id: &str, kind: &str) -> io::Result<Vec<PathBuf>> {
-    let prefix = format!(".{expected_id}.install-{kind}-");
-    let mut paths = Vec::new();
-    for entry in fs::read_dir(parent)? {
-        let entry = entry?;
-        if entry
-            .file_name()
-            .to_str()
-            .is_some_and(|name| name.starts_with(&prefix))
-        {
-            paths.push(entry.path());
-        }
-    }
-    paths.sort();
-    Ok(paths)
-}
-
-fn validate_recovery_candidate(path: &Path, expected_id: &str) -> Result<(), String> {
-    let metadata = fs::symlink_metadata(path)
-        .map_err(|e| format!("inspect interrupted App backup {}: {e}", path.display()))?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink() {
-        return Err(format!(
-            "interrupted App backup `{}` is not a directory",
-            path.display()
-        ));
-    }
-    let manifest_path = path.join("app.json");
-    let body = fs::read_to_string(&manifest_path).map_err(|e| {
-        format!(
-            "read interrupted App backup {}: {e}",
-            manifest_path.display()
-        )
-    })?;
-    let manifest = apps::AppManifest::from_json(&body).map_err(|e| {
-        format!(
-            "parse interrupted App backup {}: {e}",
-            manifest_path.display()
-        )
-    })?;
-    if manifest.id != expected_id {
-        return Err(format!(
-            "interrupted App backup `{}` declares id `{}`, expected `{expected_id}`",
-            path.display(),
-            manifest.id
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-fn atomic_exchange(staging: &Path, dest: &Path) -> io::Result<bool> {
-    use std::ffi::CString;
-    use std::os::unix::ffi::OsStrExt;
-
-    let staging = CString::new(staging.as_os_str().as_bytes()).map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "App install staging path contains a NUL byte",
-        )
-    })?;
-    let dest = CString::new(dest.as_os_str().as_bytes()).map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "App install destination path contains a NUL byte",
-        )
-    })?;
-    // Both pointers remain valid NUL-terminated strings for the syscall.
-    let result = unsafe {
-        libc::syscall(
-            libc::SYS_renameat2,
-            libc::AT_FDCWD,
-            staging.as_ptr(),
-            libc::AT_FDCWD,
-            dest.as_ptr(),
-            libc::RENAME_EXCHANGE,
-        )
-    };
-    if result == 0 {
-        return Ok(true);
-    }
-
-    let error = io::Error::last_os_error();
-    match error.raw_os_error() {
-        Some(libc::ENOSYS | libc::EINVAL | libc::EOPNOTSUPP | libc::EPERM) => Ok(false),
-        _ => Err(error),
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-fn atomic_exchange(_staging: &Path, _dest: &Path) -> io::Result<bool> {
-    Ok(false)
-}
-
-struct InstallStagingGuard(PathBuf);
-
-impl Drop for InstallStagingGuard {
-    fn drop(&mut self) {
-        let _ = remove_path(&self.0);
-    }
-}
-
-fn path_entry_exists(path: &Path) -> io::Result<bool> {
-    match fs::symlink_metadata(path) {
-        Ok(_) => Ok(true),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error),
-    }
-}
-
-fn remove_path(path: &Path) -> io::Result<()> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
-            fs::remove_dir_all(path)
-        }
-        Ok(_) => fs::remove_file(path),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error),
-    }
-}
-
-fn sync_install_tree(path: &Path) -> io::Result<()> {
-    let metadata = fs::symlink_metadata(path)?;
-    let file_type = metadata.file_type();
-    if file_type.is_symlink() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("refusing to fsync symlink at `{}`", path.display()),
-        ));
-    }
-    if metadata.is_file() {
-        return fs::File::open(path)?.sync_all();
-    }
-    if !metadata.is_dir() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("unsupported app install entry at `{}`", path.display()),
-        ));
-    }
-
-    for entry in fs::read_dir(path)? {
-        sync_install_tree(&entry?.path())?;
-    }
-    sync_directory(path)
-}
-
-#[cfg(unix)]
-fn sync_directory(path: &Path) -> io::Result<()> {
-    fs::File::open(path)?.sync_all()
-}
-
-#[cfg(not(unix))]
-fn sync_directory(_path: &Path) -> io::Result<()> {
-    Ok(())
-}
-
-fn sync_directory_best_effort(path: &Path) {
-    let _ = sync_directory(path);
-}
-
-/// Plain recursive directory copy. **Symlinks are rejected** with an
-/// error rather than followed.
-///
-/// `fs::copy` and `Path::is_dir` traverse symlinks, so a malicious
-/// install source containing a link such as `passwd -> /etc/passwd`
-/// (or `data -> /var/lib/cos/credentials`) used to either escape the
-/// source tree or materialise privileged content as part of the
-/// installed App. For Apps we want a verbatim copy of a developer tree:
-/// rejecting symlinks is both safer and matches what every shipped
-/// App actually needs (none use symlinks). Use `symlink_metadata` to
-/// inspect entries without traversal, the same pattern checkpoint.rs
-/// uses in `copy_dir_recursive`.
-fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let from = entry.path();
-        let to = dst.join(entry.file_name());
-        let metadata = std::fs::symlink_metadata(&from)?;
-        let ft = metadata.file_type();
-        if ft.is_symlink() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!(
-                    "refusing to copy symlink at `{}` during app install: \
-                     install sources must not contain symlinks",
-                    from.display()
-                ),
-            ));
-        } else if ft.is_dir() {
-            copy_dir_recursive(&from, &to)?;
-        } else {
-            std::fs::copy(&from, &to)?;
-        }
-    }
-    Ok(())
 }
 
 /// `cos app consent <sub> [...]` — review / grant / revoke the user's
@@ -1899,4 +1120,12 @@ pub(super) fn consent_cmd(
             "unknown consent subcommand: {other}. try: list | show | path | grant | revoke"
         )),
     }
+}
+
+#[cfg(test)]
+mod tests {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/router/app_commands.rs"
+    ));
 }

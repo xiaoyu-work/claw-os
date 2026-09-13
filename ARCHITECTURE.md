@@ -63,7 +63,7 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | Notification presentation definition | Renderer-independent private presentation contract with bounded text/pixels; no grants, product configuration or durable notification state | `claw-os-sdk/rust/notification-presentation/`, `claw-os-sdk/wire/v1/notification-presentation.md` |
 | App client sources | Product UI/business/MCP implementations, manifests and declared entrypoints | External `clawos-app/products/` and `clawos-app/capabilities/` |
 | App/adapter integration | Provenance-gated manifest binding, authenticated App Host/bridge and protocol adapter integration | `adapters/`, `core/src/apps.rs`, `core/src/bridge.rs`, `core/src/worker/` |
-| App permission disclosure | OS-catalog review of authenticated manifest needs and execution surfaces, with a permission-contract digest; directory installs review before publication and never grant capabilities | `core/src/apps/permission_review.rs`, `core/src/router/app_commands.rs` |
+| App permission disclosure and directory installation | OS-catalog review of authenticated manifest needs and execution surfaces, with a permission-contract digest; reusable directory installs review before publication and never grant capabilities | `core/src/apps/permission_review.rs`, `core/src/apps/installation.rs`, `core/src/router/app_commands.rs` |
 | Extension provenance | Publisher signing, trust roots, package verification, and the shared bounded installer for Apps, Skills, MCP/adapter packages, and Agent extensions | `core/src/provenance/` |
 | Update freshness | Signed release-security manifest, monotonic local security floor, one-use recovery authorizations, and the install/activation/runtime gates that refuse a superseded release | `core/src/update/`, `packaging/release-security/`, `packaging/deb/common/` |
 | SDK/runtime | One public multi-language App SDK, including MCP service APIs, plus internal bundled-App policy helpers | `claw-os-sdk/`, `cos-runtime/` |
@@ -100,6 +100,15 @@ privileged OS helper, and the installer consumes confirmation against the
 verified package before publication. `--yes` cannot replace first review or
 grant AI consent. Clients verify the broker's root Unix peer; a returned JSON
 flag or comparison digest is not approval authority.
+
+Directory-install validation, private staging, replacement and recovery live
+in `apps::installation`, below CLI or future Root orchestration. Installation
+and CLI lint consume the same static `apps::lint` implementation. These App
+providers consume provenance; provenance does not depend on Apps, Agent or
+`clawd`. The backend accepts a pre-publication review callback and re-verifies
+the reviewed package before publication, without supplying permission or
+running an App entrypoint. CLI flags, trusted terminal review, developer trust,
+AI consent and post-publication presentation remain in the router.
 
 Brokered App registrations and prepared MCP calls require owner review, while
 unreviewed background services remain inactive. The OS terminal and native

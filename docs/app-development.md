@@ -750,6 +750,15 @@ previous version untouched. Manifest disclosure is defined in
 [`apps/permission_review.rs`](../core/src/apps/permission_review.rs);
 the terminal and desktop share the typed
 [`SystemReview` contract](../crates/clawd-client/MODULE.md).
+
+The reusable [directory-install backend](../core/src/apps/installation.rs)
+owns source validation, private staging, in-place revalidation and filesystem
+replacement/recovery. It and `cos app lint` use the same
+[static lint implementation](../core/src/apps/lint.rs), without executing App
+entrypoints. CLI flags, OS review presentation, developer trust and AI consent
+remain in the router. This backend extraction does not provide authenticated
+Root installation/rollback coordination or admission fencing.
+
 Brokered operation/GUI/native registration and prepared MCP calls also require
 owner review before activation, including preinstalled Apps. Unreviewed
 background services are not warmed automatically. Existing App permission

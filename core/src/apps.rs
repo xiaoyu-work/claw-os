@@ -8,6 +8,8 @@ use serde_json::{json, Value};
 use crate::caps::manifest::{Arg, ArgKind, Manifest, McpTool, Operation};
 use crate::provenance::{self, PackageKind, VerifiedPackage, VerifyOptions};
 
+pub(crate) mod installation;
+pub(crate) mod lint;
 pub mod permission_review;
 
 /// An app manifest loaded from `app.json`. There is one manifest format
