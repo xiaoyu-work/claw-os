@@ -137,6 +137,13 @@ descriptors and descendants before success; denial remains durable on failure.
 Standalone App installation, replacement, rollback and provenance mutations
 still need authenticated Root coordination and admission fencing.
 
+The App-service manager now retains non-reusable runtime, identity and capacity
+custody across incomplete or cancelled retirement. Cleanup errors propagate to
+dispatch/eviction/shutdown; a retry must confirm accepted broker connections,
+processes, mounts, ACLs and identity release before admitting a replacement.
+This service-lifetime boundary does not substitute for the installer
+transaction above.
+
 App-service Host storage reuses the existing owner/App partition through the
 [Root data binding](core/src/extension_host/MODULE.md), not a second directory
 scheme. An exact-App private idmapped mount translates the leased execution

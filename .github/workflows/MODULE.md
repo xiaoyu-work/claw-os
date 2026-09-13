@@ -32,6 +32,9 @@ dispatched and reusable test/publication pipelines.
 - Exercise task-host ordinary App registration and persistent SQLite writes
   through authenticated private broker messages, across Host namespace/UID
   replacement, without exposing caller-selected data roots.
+- Exercise checked App-service retirement with a real Host/cgroup, retained
+  mount failures, cancellation and owner/identity/capacity fencing; cleanup
+  failure must not become a successful stop or replacement.
 - Exercise real staged Calendar MCP writes and public SDK reads through the
   owner-scoped broker and standalone reader, including live WAL visibility,
   wrong scopes, single-use grants and physical read-only mounts.

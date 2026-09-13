@@ -45,7 +45,7 @@ and agent tasks.
 | `gui/`, `app_sessions/gui.rs` | Root-supervised GUI instances; operation-only needs, live parent/grant/policy checks, independent selection rights and checked retirement |
 | `../display_session/` | Root PAM/login activation and compositor control; owner sockets or Wayland labels cannot register authority |
 | `system_review.rs`, `system_review/presentation.rs` | Shared App/capability review projection, owner-scoped display revisions, root-only choices, fresh package verification and one-use App confirmation |
-| `app_services.rs` | Persistent owner/App service manager, lifecycle policy, permission/data-binding snapshot retirement, capacity/restart control, and single-use call authorization |
+| `app_services.rs`, `app_services/retirement.rs` | Persistent owner/App service manager, retained cleanup custody, lifecycle policy, capacity/restart control, and single-use call authorization |
 | `../extension_host/broker.rs` | Purpose-bound private proxy: verifies SCM credentials, Host/child ancestry, route class, and nearest child session before normal dispatch |
 | `scheduler.rs` | Proactive-scheduler authority: validates `cos cron` / `cos triggers` requests and derives what a job may carry |
 | `notifications.rs` | Notification RPC handlers, due-nudge fanout, and external delivery dispatcher |
@@ -520,6 +520,21 @@ local execution. This CLI path is selected only for MCP-only Apps (empty
 `operations` plus an `mcp` service); Apps that still declare operations keep the
 legacy `run(command, args)` dispatch until they migrate.
 
+Service retirement closes admission before waiting and retains the runtime,
+UID lease and capacity until accepted broker connections, cgroup/process,
+private-mount/path, ACL and identity cleanup are confirmed. Failed or cancelled
+waits leave a non-reusable slot; later calls and sweeps retry it without counting the same
+retirement as another Host crash. Failed controller startup also leaves its
+spawned Host in that slot. Eviction and shutdown report incomplete cleanup
+rather than claiming reclaimed capacity. The identity pool fences the owner
+across task/service purposes while a retiring lease is still held.
+The acceptor drains its bounded connection tasks instead of abandoning them.
+A five-second drain wait may return incomplete while retaining custody; it
+does not cancel admitted effects. Unexpected acceptor-task failure requires
+broker recovery, since dropping that failed task cannot prove request drainage.
+This is a checked service-lifetime primitive, not the still-required Root
+install/update/rollback transaction or an installer retirement RPC.
+
 The manifest-defined `launcher` App-service sandbox receives no Wayland socket
 or session bus and must not spawn desktop binaries. Provenance-classified
 native desktop services remain the sole explicit transport-bearing exception.
@@ -663,7 +678,16 @@ bounded by the same home-scoped ceiling its executor applies.
 cargo test -p cos clawd:: -- --test-threads=1
 cargo test -p cos clawd::authority -- --test-threads=1
 cargo test -p cos --test clawd_broker_socket -- --test-threads=1
+cargo test -p cos --lib -- clawd::app_services extension_host::identity --test-threads=1
 ```
+
+The ignored
+`clawd::app_services::retirement::tests::process::service_retirement_keeps_custody_until_cleanup_succeeds`
+fixture uses a real extension Host and cgroup in a private mount namespace.
+It covers accepted-connection drainage, blocked mount cleanup, cancellation,
+capacity retention, owner fencing, broker failure and interrupted startup.
+It never executes App business code or claims installed-App replacement acceptance; its explicit
+Host-binary input and Root invocation are maintained in `test.yml`.
 
 For a service change, include malformed input, exact scope, broker error, and
 successful provider-path coverage.

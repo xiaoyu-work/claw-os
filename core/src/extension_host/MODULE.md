@@ -159,7 +159,19 @@ reconstructs ancestry from `/proc`: it revokes the proxy, writes
 `cgroup.kill`, waits for recursive `populated 0` plus an empty `cgroup.procs`,
 removes the cgroup, unmounts private filesystems, recursively removes the
 descriptor-pinned task tree without crossing mounts, and then revokes ACLs.
-Any failure is terminal and audited as `cleanup-failed`.
+Cleanup failure is explicit and is never a successful retirement.
+
+The App-service manager retains a retiring Host and its capacity until this
+cleanup succeeds. A cancelled wait does not drop containment or reopen the
+service. The private broker tracks its bounded connection tasks and drains
+accepted connections after closing its listener; stopping the accept loop alone
+does not prove those requests have finished. This does not undo admitted effects.
+Its held identity lease blocks new task/service allocation for that
+owner before the first retirement wait; checked release is retryable and does
+not surrender the UID lock on failure. Existing durable cleanup records still
+govern recovery after broker restart, with no new quarantine-file format.
+Other known owners remain independent. See
+[`app_services/retirement.rs`](../clawd/app_services/retirement.rs).
 
 App-service Hosts additionally receive only their bound App's existing
 `<owner-data-root>/apps/<app-id>` partition. Root reuses the normal partition

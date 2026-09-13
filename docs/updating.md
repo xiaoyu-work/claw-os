@@ -489,6 +489,17 @@ blocks new task and App-service starts for the same owner rather than switching 
 and reopening the persistent store. A record with unknown ownership also
 blocks admission. Existing quarantine recovery must finish before retrying.
 
+App-service retirement now retains its runtime and capacity in the broker when
+cleanup fails or a caller stops waiting. Subsequent calls or supervision retry
+the same cleanup without restarting the old service; a held retiring identity
+also fences new same-owner task/service allocation. Capacity and the UID lock
+are released only after accepted broker connections, resource cleanup and
+durable marker removal are confirmed. A drain timeout retains custody for retry;
+an unexpectedly failed broker task requires broker recovery rather than
+assuming its in-flight requests were drained.
+This does not add the separate Root-coordinated App install/update/rollback
+transaction, and no SDK or App package is published by this source change.
+
 The backing filesystem must support idmapped mounts and the private App
 partition must contain no nested mounts. Unavailable mappings, aliases, foreign
 owners or replaced directory identities are explicit failures, not permission

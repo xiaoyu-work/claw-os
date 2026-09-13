@@ -340,16 +340,35 @@ pub async fn serve(
     admission: Arc<Admission>,
 ) {
     let slots = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+    let mut connections = tokio::task::JoinSet::new();
     loop {
         if lease.closed.load(Ordering::SeqCst) {
-            return;
+            break;
         }
         let accepted = tokio::select! {
             accepted = listener.accept() => accepted,
             _ = tokio::time::sleep(Duration::from_millis(100)) => continue,
+            finished = connections.join_next(), if !connections.is_empty() => {
+                if let Some(Err(error)) = finished {
+                    tracing::error!(
+                        owner = lease.owner_uid,
+                        %error,
+                        "extension broker connection failed"
+                    );
+                }
+                continue;
+            }
         };
-        let Ok((stream, _)) = accepted else {
-            return;
+        let (stream, _) = match accepted {
+            Ok(accepted) => accepted,
+            Err(error) => {
+                tracing::error!(
+                    owner = lease.owner_uid,
+                    %error,
+                    "extension broker acceptor failed"
+                );
+                break;
+            }
         };
         let Ok(permit) = slots.clone().try_acquire_owned() else {
             continue;
@@ -357,10 +376,20 @@ pub async fn serve(
         let lease = lease.clone();
         let state = state.clone();
         let admission = admission.clone();
-        tokio::spawn(async move {
+        connections.spawn(async move {
             let _permit = permit;
             serve_connection(stream, lease, state, admission).await;
         });
+    }
+    drop(listener);
+    while let Some(finished) = connections.join_next().await {
+        if let Err(error) = finished {
+            tracing::error!(
+                owner = lease.owner_uid,
+                %error,
+                "extension broker connection failed during retirement"
+            );
+        }
     }
 }
 
