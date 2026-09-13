@@ -47,7 +47,17 @@ if [ -f "$root/hang-policy" ]; then
     printf '%s\n' "$$" > "$root/blocked-policy-pid"
     exec /bin/sleep 30
 fi
-if [ "$1" = __policy ]; then
+if [ "$1 $2" = "--wire=1 __calendar" ]; then
+    if [ -f "$root/policy-reply" ]; then
+        cat "$root/policy-reply"
+    elif [ ! -f "$root/allow" ]; then
+        printf '%s\n' '{"ok":false,"wire_version":1,"error":"fixture denied","code":"PERMISSION_DENIED"}'
+    elif [ -f "$root/calendar-reply" ]; then
+        cat "$root/calendar-reply"
+    else
+        printf '%s\n' '{"ok":true,"wire_version":1,"data":{"events":[]}}'
+    fi
+elif [ "$1" = __policy ]; then
     if [ -f "$root/policy-reply" ]; then
         cat "$root/policy-reply"
     elif [ -f "$root/allow" ]; then
@@ -125,6 +135,9 @@ fi
     }
 
     pub fn calendar(&self) {
+        fs::write(self.root.join("calendar-reply"),
+            r#"{"ok":true,"wire_version":1,"data":{"events":[{"id":"event-1","title":"Review","start":"2026-09-09","end":"2026-09-10","location":"Office"}]}}"#,
+        ).unwrap();
         let connection =
             rusqlite::Connection::open(self.root.join("data/calendar/events.db")).unwrap();
         connection.execute_batch(

@@ -71,6 +71,13 @@ Agent explicitly depends on `libc-bin` for its fixed `/usr/bin/getent` egress
 resolver. Lookup uses the installed NSS configuration in a bounded, owned child;
 package installation does not replace hosts, resolver configuration or DNS policy.
 
+Agent also builds/installs the independent `claw-calendar-reader` from the
+OS-owned GPL Applet service library, with its original license. Its
+`claw-os-calendar-read-v1` interface is a Desktop dependency, not an App grant.
+The reader is included in the existing signed update-component inventory;
+the public Applet helper remains Desktop-owned. No rootfs feature or target
+duplicates the reader payload.
+
 Migrated products live in `xiaoyu-work/clawos-app`, not a second local App
 implementation. `apps.lock.json` tracks their `main` branch. Builds resolve one commit and
 record it in their package's `usr/share/doc/<package>/app-sources.json`;

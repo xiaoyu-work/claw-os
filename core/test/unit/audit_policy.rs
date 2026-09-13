@@ -1,5 +1,16 @@
 use super::*;
 
+#[test]
+fn signed_calendar_years_are_reconstructable_without_recording_unbounded_values() {
+    let facts = request_facts("system.calendar.day", &json!({
+        "session": "fixture", "year": -123, "month": 2, "day": 3,
+    }));
+    assert_eq!(facts.params["year"], json!(-123));
+    assert_ne!(FieldRule::Count.project(&json!(-123)), json!(-123));
+    assert_ne!(FieldRule::Integer.project(&json!("123")), json!("123"));
+    assert_ne!(FieldRule::Integer.project(&json!(u64::MAX)), json!(u64::MAX));
+}
+
 /// Values that must never reach a durable record, whatever route or
 /// tool carried them.
 const FORBIDDEN: &[&str] = &[

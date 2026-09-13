@@ -55,7 +55,7 @@ and agent tasks.
 | `gui/`, `app_sessions/gui.rs` | Root-supervised GUI instances; operation-only needs, live parent/grant/policy checks, independent selection rights and checked retirement |
 | `../display_session/` | Root PAM/login activation and compositor control; owner sockets or Wayland labels cannot register authority |
 | `system_review.rs`, `system_review/presentation.rs` | Shared App/capability review projection, owner-scoped display revisions, root-only choices, fresh package verification and one-use App confirmation |
-| `app_services.rs` | Persistent owner/App service manager, lifecycle policy, permission/data-binding snapshot retirement, capacity/restart control, and single-use call authorization |
+| `app_services.rs`, `app_services/retirement.rs` | Persistent owner/App service manager, retained cleanup custody, lifecycle policy, capacity/restart control, and single-use call authorization |
 | `../extension_host/broker.rs` | Purpose-bound private proxy: verifies SCM credentials, Host/child ancestry, route class, and nearest child session before normal dispatch |
 | `scheduler.rs` | Proactive-scheduler authority: validates `cos cron` / `cos triggers` requests and derives what a job may carry |
 | `notifications.rs` | Notification RPC handlers, due-nudge fanout, and external delivery dispatcher |
@@ -65,6 +65,7 @@ and agent tasks.
 | `filesystem.rs` | Exact-scope bounded text reads and atomic writes/replacements for App workers; pinned paths, task-owned inverse snapshots, no App dispatch |
 | `capture.rs` | App-bound non-interactive screenshot service; fixed native portal client, owner session, screen plus exact output grants, bounded PNG, pinned non-overwriting persistence |
 | `media_player.rs`, `media_player/mpris.rs` | Capability-gated media clients without a fixed caller identity; exact observation/control grants, fixed native target, authenticated owner bus/executable/unique-name binding, fresh dispatch authorization and deadlines |
+| `calendar.rs`, `calendar/files.rs` | Owner-scoped Calendar read service; exact named grant, pinned live database view and bounded unprivileged reader, with no App data mount delivered to callers |
 | `desktop.rs` | Owner desktop service; Files reveals only its fixed target; Terminal, Store and Settings open only their fixed binaries with an optional directory/package/page under their original independent process-spawn grants |
 | `desktop/settings.rs` | Fixed Settings user-service activation; authenticated owner manager, closed GUI environment, independent lifetime and startup acknowledgement without weakening daemon/worker NoNewPrivileges |
 | `client_identity.rs` | Peer/owner identity and synchronous thread-local filesystem credentials; trusted owner primary/supplementary groups, distinct from extension execution GID, with restoration on every exit |
@@ -103,6 +104,34 @@ requires root solely for owner-UID dropping; it exercises the installed
 harmless processes, never real Settings, polkit or user grants.
 
 ## Wire Protocol
+
+`system.calendar.day` accepts only a session and Gregorian year/month/day.
+It derives the authenticated owner's existing `apps/calendar/calendar/events.db`,
+requires `data.db.read:Name(calendar)` and never accepts a caller path, owner,
+SQL statement or executable. Any independently authorized client may read;
+neither `calendar` nor a panel identity grants permission. The five-second
+reader uses the existing query semantics in a separate GPL OS executable,
+not product code or a core-linked desktop library.
+
+Database and WAL/SHM/journal entries must be owner-owned single-link regular
+files reached without symlinks. A detached descriptor-backed directory view
+enters only the private reader namespace as read-only/noexec/nodev/nosuid with
+kernel-enforced NOSYMFOLLOW. Live sidecar entries preserve SQLite's own
+transaction, checkpoint and locking behavior; separately pinned sidecar
+generations would not be a consistent SQLite snapshot. No data copy or
+retained descriptor reaches the Applet. Results are bounded to one MiB; errors,
+timeouts and missing readers are explicit. Missing databases retain empty-event
+semantics after authorization. A finite read grant is spent once, not again
+by a local preflight.
+
+Task Host ordinary-operation registrations additionally return
+`task_app_data_dir`, the private view of the authenticated owner/App partition.
+The request cannot choose a data path, owner or mount namespace. Preparation
+follows verified manifest/operation review and capability settlement, before
+the child session is published. The Root-held Host custody reference is
+in-process only; public peers and App children cannot supply it. The task bridge
+requires this response field rather than silently using Host scratch data.
+Other registration clients retain their existing optional response behavior.
 
 `system.package.install` and `system.package.control` accept any authenticated
 client with the existing Critical `sys.package` grant for the exact requested
@@ -516,6 +545,21 @@ local execution. This CLI path is selected only for MCP-only Apps (empty
 `operations` plus an `mcp` service); Apps that still declare operations keep the
 legacy `run(command, args)` dispatch until they migrate.
 
+Service retirement closes admission before waiting and retains the runtime,
+UID lease and capacity until accepted broker connections, cgroup/process,
+private-mount/path, ACL and identity cleanup are confirmed. Failed or cancelled
+waits leave a non-reusable slot; later calls and sweeps retry it without counting the same
+retirement as another Host crash. Failed controller startup also leaves its
+spawned Host in that slot. Eviction and shutdown report incomplete cleanup
+rather than claiming reclaimed capacity. The identity pool fences the owner
+across task/service purposes while a retiring lease is still held.
+The acceptor drains its bounded connection tasks instead of abandoning them.
+A five-second drain wait may return incomplete while retaining custody; it
+does not cancel admitted effects. Unexpected acceptor-task failure requires
+broker recovery, since dropping that failed task cannot prove request drainage.
+This is a checked service-lifetime primitive, not the still-required Root
+install/update/rollback transaction or an installer retirement RPC.
+
 The manifest-defined `launcher` App-service sandbox receives no Wayland socket
 or session bus and must not spawn desktop binaries. Provenance-classified
 native desktop services remain the sole explicit transport-bearing exception.
@@ -659,7 +703,16 @@ bounded by the same home-scoped ceiling its executor applies.
 cargo test -p cos clawd:: -- --test-threads=1
 cargo test -p cos clawd::authority -- --test-threads=1
 cargo test -p cos --test clawd_broker_socket -- --test-threads=1
+cargo test -p cos --lib -- clawd::app_services extension_host::identity --test-threads=1
 ```
+
+The ignored
+`clawd::app_services::retirement::tests::process::service_retirement_keeps_custody_until_cleanup_succeeds`
+fixture uses a real extension Host and cgroup in a private mount namespace.
+It covers accepted-connection drainage, blocked mount cleanup, cancellation,
+capacity retention, owner fencing, broker failure and interrupted startup.
+It never executes App business code or claims installed-App replacement acceptance; its explicit
+Host-binary input and Root invocation are maintained in `test.yml`.
 
 For a service change, include malformed input, exact scope, broker error, and
 successful provider-path coverage.

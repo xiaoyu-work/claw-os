@@ -64,7 +64,7 @@ and a root-owned executed artifact.
 | `broker.rs` | Per-launch narrow broker endpoint |
 | `net_broker.rs` | Per-launch HTTP `CONNECT` egress broker |
 | `net_broker/resolver.rs` | Fixed system NSS lookup process, bounded output/deadline, endpoint cancellation and checked child reaping |
-| `exec.rs` | Bounded run, deadline, descendant cleanup |
+| `exec.rs` | Bounded run, bind-gated App startup, input/output limits and descendant cleanup |
 | `runtime.rs` | Private per-launch runtime directory |
 | `audit.rs` | Typed, path-free and secret-free launch records |
 
@@ -99,6 +99,26 @@ code and never uses real user state or the installed broker. Use a distinct
 `CARGO_TARGET_DIR` for each source snapshot.
 
 ## Declared App stdio
+
+Captured Python and polyglot ordinary operations also use the trusted
+`claw-app-runner` launch gate. The parent releases its private 32-byte token
+only after the exact child session is bound; a denied or delayed bind cannot
+run App code first. The gate is consumed before exec and is not charged to
+the App input limit. Original stdin bytes and EOF behavior remain unchanged.
+Wrapped runtimes outside the system image keep their individual read-only
+mount, without replacing an authenticated entry's inode binding.
+Generic `run_captured` remains available for non-App workers; its spawn callback
+alone is not an execution barrier. Root package-mutation coordination and
+ordinary-process retirement remain separate requirements.
+
+The explicit real-runner check is:
+
+```bash
+cargo build -p cos --bin claw-app-runner --locked
+COS_CAPTURED_TEST_RUNNER="$PWD/target/debug/claw-app-runner" \
+  cargo test -p cos --lib bridge::captured::tests::process::real_runner_waits_for_binding_and_preserves_app_input \
+  -- --exact --ignored --nocapture --test-threads=1
+```
 
 `cos app stdio <id> <operation> [args...]` uses `bridge::run_app_stdio`,
 not `run_native_app_host`. The existing Mail compatibility executable remains
@@ -221,8 +241,10 @@ through a private idmapped view. The normal derivation still selects only
 `apps/<app-id>`; the visible runtime path is not a new store or a whole-owner
 mount. Files retain the owner's on-disk identity across Host/UID replacement.
 The [service lifetime](../extension_host/MODULE.md) owns this binding and
-unmounts it before runtime cleanup. Legacy task-host operation binding remains
-separate; no temporary-store fallback is selected for an App service.
+unmounts it before runtime cleanup. Task-host ordinary operations acquire
+the same exact-App view only after Root registration authorization. The bridge
+requires that returned data binding before deriving either Python or other
+ordinary workers; no Host-private temporary-store fallback is selected.
 
 App-owned common
 support and OS SDK/runtime use the existing read-only `/usr/lib/cos/python`
@@ -255,6 +277,12 @@ file such as `proc/registry.json` with its lock and staging siblings,
 or a prefix wide enough to reach one; it runs in the tests and again
 before the first rename, so a future table edit fails the launch rather
 than the review.
+
+Root-owned launchers compare migration files with the authenticated routed
+owner, not Root's execution UID. Marker reads reject aliases, hard links,
+foreign ownership and invalid/oversized versions. Marker publication uses a
+private newly created file and mandatory directory sync; an old predictable
+`.cos-state-version.new` path is never opened or followed.
 
 Two owner-private stores stay outside on purpose and are reached through
 the broker instead of a bind:

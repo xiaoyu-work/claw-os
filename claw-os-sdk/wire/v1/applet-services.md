@@ -59,8 +59,11 @@ is not selection permission. CopyQ behavior and user history stay in Clipboard.
 or a transferable authorization token.
 The installed helper selects `/usr/local/bin/cos` directly, ignoring `COS_BIN`
 and `PATH` overrides. A successful policy response must affirm exactly the
-requested verb and scope. This check does not attest a caller-selected data
-directory: the OS Host must supply and confine the correct owner resource view.
+requested verb and scope. Calendar uses the owner-scoped OS read service,
+which independently checks the existing named read grant. The caller's data
+directory never selects Calendar storage. Only bounded records return; the
+private database view and query process remain OS-owned. Other policy probes
+do not attest a caller-selected resource directory.
 
 ## Responses
 
@@ -99,6 +102,12 @@ Calendar opens SQLite read-only, retains its 250 ms busy timeout, bounds native
 records and selected serialized events to one MiB, and interrupts queries after
 three seconds. Rows are filtered while streaming rather than collecting the
 entire database first. Bounds/deadlines fail explicitly without partial results.
+Calendar's internal reader has a five-second execution ceiling and a private
+read-only/NOSYMFOLLOW database-directory view with live WAL/SHM/journal entries.
+SQLite retains its normal transaction and checkpoint locking. The Applet's
+kernel call has an eight-second ceiling; the public twelve-second SDK request
+deadline is unchanged. These are implementation/lifetime changes, not new
+public fields, grants or an App-to-App protocol.
 Kernel subprocess stdout is bounded to one MiB (16 KiB for policy/`df`) and
 stderr to 16 KiB. Existing system telemetry fallback remains explicit through
 `fallback`; task and Calendar errors never become empty success.

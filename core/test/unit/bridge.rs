@@ -5,6 +5,27 @@ mod app_sources {
 }
 
 #[test]
+fn task_app_data_requires_the_root_registration_binding_without_a_private_home_fallback() {
+    let bound = Path::new("/run/host/app-data");
+    assert_eq!(registered_operation_data_root(Some(bound), Some("/private/scratch")).unwrap(), "/run/host/app-data");
+    assert_eq!(registered_operation_data_root(Some(bound), None).unwrap(), "/run/host/app-data");
+    assert_eq!(registered_operation_data_root(None, Some("/owner/data")).unwrap(), "/owner/data");
+    assert!(registered_operation_data_root(None, None).unwrap_err().contains("Root-owned"));
+    assert_eq!(decode_task_app_data_dir(None).unwrap(), None);
+    assert_eq!(
+        decode_task_app_data_dir(Some(&serde_json::json!("/run/host/app-data"))).unwrap(),
+        Some(bound.to_path_buf())
+    );
+    for invalid in [
+        serde_json::Value::Null, serde_json::json!(false),
+        serde_json::json!("relative/data"), serde_json::json!(""),
+        serde_json::json!("/run/host/../other"),
+    ] {
+        assert!(decode_task_app_data_dir(Some(&invalid)).is_err(), "{invalid}");
+    }
+}
+
+#[test]
 fn default_entries_are_runtime_aware() {
     assert_eq!(Runtime::Python.default_entry(), "main.py");
     assert_eq!(Runtime::Node.default_entry(), "main.js");
@@ -236,7 +257,7 @@ fn run_python_app_handles_stdout_larger_than_pipe_buffer() {
     let runner = state.path().join("claw-app-runner");
     std::fs::write(
         &runner,
-        "#!/bin/sh\n[ \"$1\" = \"--\" ] && shift\nexec \"$@\"\n",
+        "#!/usr/bin/python3\nimport os,sys\na=sys.argv[1:]\nassert a[0]=='--launch-gate' and a[2]=='--'\nassert os.read(0,32)==a[1].encode()\nos.execv(a[3],a[3:])\n",
     )
     .unwrap();
     use std::os::unix::fs::PermissionsExt;
@@ -900,7 +921,7 @@ fn explicit_stdin_bytes_reach_python_and_polyglot_children() {
     let runner = state.path().join("claw-app-runner");
     std::fs::write(
         &runner,
-        "#!/bin/sh\n[ \"$1\" = \"--\" ] && shift\nexec \"$@\"\n",
+        "#!/usr/bin/python3\nimport os,sys\na=sys.argv[1:]\nassert a[0]=='--launch-gate' and a[2]=='--'\nassert os.read(0,32)==a[1].encode()\nos.execv(a[3],a[3:])\n",
     )
     .unwrap();
     use std::os::unix::fs::PermissionsExt;

@@ -304,6 +304,16 @@ pub fn app_operation(input: AppOperationInput<'_>) -> Result<LaunchPolicy, Strin
     })
 }
 
+pub(crate) fn wrapped_app_operation(
+    input: AppOperationInput<'_>,
+    inner_program: &Path,
+) -> Result<LaunchPolicy, String> {
+    let mut policy = app_operation(input)?;
+    policy.mounts.extend(program_mount(inner_program));
+    dedupe_mounts(&mut policy.mounts);
+    Ok(policy)
+}
+
 /// Extend the common App policy with one Root-created Wayland transport.
 #[cfg(target_os = "linux")]
 pub(crate) fn gui_operation(

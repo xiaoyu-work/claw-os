@@ -10,6 +10,7 @@ use crate::caps::{Cap, CapSet, Scope, Verb};
 use crate::clawd::routes::Command as ClawdCommand;
 use crate::proc::{deregister_session, register_session, SessionInfo};
 
+mod captured;
 mod consent;
 #[cfg(target_os = "linux")]
 pub(crate) mod gui;
@@ -281,6 +282,7 @@ pub(crate) struct AppIdentitySession {
     /// egress and its broker authority from, so the isolation shape and
     /// the capability grant cannot describe different worlds.
     granted_caps: CapSet,
+    task_app_data_dir: Option<std::path::PathBuf>,
     gui_data_dir: Option<std::path::PathBuf>,
     gui_retired: bool,
 }
@@ -526,6 +528,7 @@ impl AppIdentitySession {
             parent_caps: None,
             package,
             granted_caps: CapSet::new(),
+            task_app_data_dir: None,
             gui_data_dir: None,
             gui_retired: false,
             relay: crate::worker::relay_slot(),
@@ -779,6 +782,7 @@ impl AppIdentitySession {
                 .map_err(|error| format!("invalid Root GUI data-directory binding: {error}"))?,
             None => None,
         };
+        let task_app_data_dir = decode_task_app_data_dir(result.get("task_app_data_dir"))?;
         Ok(Self {
             session_id,
             backend: AppSessionBackend::Clawd {
@@ -788,6 +792,7 @@ impl AppIdentitySession {
             parent_caps,
             package: package.clone(),
             granted_caps,
+            task_app_data_dir,
             gui_data_dir,
             gui_retired: false,
             relay: crate::worker::relay_slot(),
@@ -849,6 +854,7 @@ impl AppIdentitySession {
             parent_caps: Some(parent_caps),
             package: launch.package_ref(),
             granted_caps: caps,
+            task_app_data_dir: None,
             gui_data_dir: None,
             gui_retired: false,
             relay: crate::worker::relay_slot(),
@@ -910,6 +916,10 @@ impl AppIdentitySession {
         }
     }
 
+    fn operation_data_root<'a>(&'a self, local: Option<&'a str>) -> Result<&'a str, String> {
+        registered_operation_data_root(self.task_app_data_dir.as_deref(), local)
+    }
+
     /// Authority the launch's private broker endpoint answers with.
     pub fn broker_authority(&self, app_id: &str) -> crate::worker::BrokerAuthority {
         crate::worker::BrokerAuthority::new(
@@ -951,6 +961,7 @@ fn prepare_app_worker(
     operation: &str,
     program: std::path::PathBuf,
     argv: Vec<String>,
+    inner_program: &Path,
     data_dir: &str,
     apps_dir: &str,
     extra_env: BTreeMap<String, String>,
@@ -964,23 +975,26 @@ fn prepare_app_worker(
     } else {
         crate::worker::TrustTier::AppOperation
     };
-    let policy = crate::worker::derive::app_operation(crate::worker::derive::AppOperationInput {
-        app_id,
-        app_dir,
-        operation,
-        program,
-        argv,
-        caps: session.granted_caps(),
-        session_id: session.id(),
-        data_dir,
-        apps_dir,
-        extra_env,
-        stdio,
-        desktop,
-        package_identity: binding.dir_identity(),
-        pinned_entries: binding.entries(),
-        developer: binding.is_developer(),
-    })
+    let policy = crate::worker::derive::wrapped_app_operation(
+        crate::worker::derive::AppOperationInput {
+            app_id,
+            app_dir,
+            operation,
+            program,
+            argv,
+            caps: session.granted_caps(),
+            session_id: session.id(),
+            data_dir,
+            apps_dir,
+            extra_env,
+            stdio,
+            desktop,
+            package_identity: binding.dir_identity(),
+            pinned_entries: binding.entries(),
+            developer: binding.is_developer(),
+        },
+        inner_program,
+    )
     .inspect_err(|error| {
         crate::worker::audit::refused(&label, tier.as_str(), error);
     })?;
@@ -997,6 +1011,41 @@ fn prepare_app_worker(
     })?;
     crate::worker::audit::launched(&prepared.facts, Some(session.id()));
     Ok(prepared)
+}
+
+fn decode_task_app_data_dir(
+    value: Option<&serde_json::Value>,
+) -> Result<Option<std::path::PathBuf>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let path = serde_json::from_value::<std::path::PathBuf>(value.clone())
+        .map_err(|error| format!("invalid Root Task App data binding: {error}"))?;
+    if !path.is_absolute()
+        || path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir | std::path::Component::CurDir
+            )
+        })
+    {
+        return Err("Root Task App data binding is not an absolute normalized path".into());
+    }
+    Ok(Some(path))
+}
+
+fn registered_operation_data_root<'a>(
+    bound: Option<&'a Path>,
+    local: Option<&'a str>,
+) -> Result<&'a str, String> {
+    match bound {
+        Some(path) => path
+            .to_str()
+            .ok_or_else(|| "Task App data path is not UTF-8".into()),
+        None => {
+            local.ok_or_else(|| "Task App registration omitted its Root-owned data binding".into())
+        }
+    }
 }
 
 /// Runtime selection for an App's session server.
@@ -2081,6 +2130,17 @@ pub fn run_python_app_with_stdin(
     apps_dir: &str,
     stdin_data: Option<Vec<u8>>,
 ) -> Result<Option<String>, String> {
+    run_python_operation(launch, command, args, Some(data_dir), apps_dir, stdin_data)
+}
+
+fn run_python_operation(
+    launch: &AppLaunch,
+    command: &str,
+    args: &[String],
+    data_dir: Option<&str>,
+    apps_dir: &str,
+    stdin_data: Option<Vec<u8>>,
+) -> Result<Option<String>, String> {
     // Dynamic App execution is model-reachable, so it belongs in the
     // unprivileged worker, never in the root broker's address space.
     crate::agentd::guard::ensure_agent_runtime_allowed("Python App execution")?;
@@ -2098,16 +2158,20 @@ pub fn run_python_app_with_stdin(
     let binding = launch.bind(&["main.py".to_string()])?;
     let (mut app_session, effective_args) =
         AppIdentitySession::for_operation(launch, &app_id, command, args)?;
+    let data_dir = app_session.operation_data_root(data_dir)?;
     let wrapper = python_wrapper(&main_py, command, &effective_args, data_dir, apps_dir)?;
     let stdin_data = validated_operation_stdin(launch, command, stdin_data)?;
+    let gated =
+        captured::GatedCommand::new(interpreter_path(python)?, vec!["-c".to_string(), wrapper])?;
 
     let prepared = prepare_app_worker(
         &app_session,
         &app_id,
         app_dir,
         command,
-        interpreter_path(python)?,
-        vec!["-c".to_string(), wrapper],
+        gated.runner,
+        gated.argv,
+        &gated.program,
         data_dir,
         apps_dir,
         BTreeMap::new(),
@@ -2120,17 +2184,23 @@ pub fn run_python_app_with_stdin(
         .unwrap_or_default()
         .to_string();
     let limits = crate::worker::Limits::operation();
-    let output = crate::worker::run_captured(prepared, stdin_data, limits, |pid| {
-        // Record which verified artifact this session is running before
-        // the child gets any authority, so a revocation later can find
-        // and stop it.
-        let owner = crate::provenance::runtime::current_owner();
-        crate::provenance::runtime::register(owner, app_session.id(), launch.package());
-        // Bind the exact process, so a revocation can signal *this*
-        // group and nothing that later inherits the number.
-        crate::provenance::runtime::bind_process(owner, app_session.id(), pid);
-        app_session.bind_process(pid)
-    })?;
+    let output = crate::worker::exec::run_captured_gated(
+        prepared,
+        stdin_data,
+        limits,
+        &gated.token,
+        |pid| {
+            // Record which verified artifact this session is running before
+            // the child gets any authority, so a revocation later can find
+            // and stop it.
+            let owner = crate::provenance::runtime::current_owner();
+            crate::provenance::runtime::register(owner, app_session.id(), launch.package());
+            // Bind the exact process, so a revocation can signal *this*
+            // group and nothing that later inherits the number.
+            crate::provenance::runtime::bind_process(owner, app_session.id(), pid);
+            app_session.bind_process(pid)
+        },
+    )?;
     crate::provenance::runtime::deregister(
         crate::provenance::runtime::current_owner(),
         app_session.id(),
@@ -2242,6 +2312,27 @@ pub fn run_app_with_stdin(
     apps_dir: &str,
     stdin_data: Option<Vec<u8>>,
 ) -> Result<Option<String>, String> {
+    run_operation(launch, command, args, Some(data_dir), apps_dir, stdin_data)
+}
+
+pub(crate) fn run_task_app(
+    launch: &AppLaunch,
+    command: &str,
+    args: &[String],
+    apps_dir: &str,
+) -> Result<Option<String>, String> {
+    run_operation(launch, command, args, None, apps_dir, None)
+}
+
+fn run_operation(
+    launch: &AppLaunch,
+    command: &str,
+    args: &[String],
+    data_dir: Option<&str>,
+    apps_dir: &str,
+    stdin_data: Option<Vec<u8>>,
+) -> Result<Option<String>, String> {
+    crate::agentd::guard::ensure_agent_runtime_allowed("App operation execution")?;
     // Runtime and entry come from the verified snapshot's manifest,
     // parsed once. There is no path re-read here and no unsigned
     // fallback: a package that did not verify never reaches this
@@ -2269,7 +2360,7 @@ pub fn run_app_with_stdin(
                  file an issue if you need a per-app entry override"
             ));
         }
-        return run_python_app_with_stdin(launch, command, args, data_dir, apps_dir, stdin_data);
+        return run_python_operation(launch, command, args, data_dir, apps_dir, stdin_data);
     }
 
     let entry_path = app_dir.join(&entry);
@@ -2303,19 +2394,22 @@ pub fn run_app_with_stdin(
         AppIdentitySession::for_operation(launch, &app_id, command, args)?;
     let args_json = serde_json::to_string(&effective_args)
         .map_err(|e| format!("failed to serialize args: {e}"))?;
+    let data_dir = app_session.operation_data_root(data_dir)?;
     let stdin_data = validated_operation_stdin(launch, command, stdin_data)?;
 
     let extra_env = BTreeMap::from([
         ("COS_COMMAND".to_string(), command.to_string()),
         ("COS_ARGS_JSON".to_string(), args_json),
     ]);
+    let gated = captured::GatedCommand::new(program, launch_argv)?;
     let prepared = prepare_app_worker(
         &app_session,
         &app_id,
         app_dir,
         command,
-        program,
-        launch_argv,
+        gated.runner,
+        gated.argv,
+        &gated.program,
         data_dir,
         apps_dir,
         extra_env,
@@ -2328,17 +2422,23 @@ pub fn run_app_with_stdin(
         .unwrap_or_default()
         .to_string();
     let limits = crate::worker::Limits::operation();
-    let output = crate::worker::run_captured(prepared, stdin_data, limits, |pid| {
-        // Record which verified artifact this session is running before
-        // the child gets any authority, so a revocation later can find
-        // and stop it.
-        let owner = crate::provenance::runtime::current_owner();
-        crate::provenance::runtime::register(owner, app_session.id(), launch.package());
-        // Bind the exact process, so a revocation can signal *this*
-        // group and nothing that later inherits the number.
-        crate::provenance::runtime::bind_process(owner, app_session.id(), pid);
-        app_session.bind_process(pid)
-    })?;
+    let output = crate::worker::exec::run_captured_gated(
+        prepared,
+        stdin_data,
+        limits,
+        &gated.token,
+        |pid| {
+            // Record which verified artifact this session is running before
+            // the child gets any authority, so a revocation later can find
+            // and stop it.
+            let owner = crate::provenance::runtime::current_owner();
+            crate::provenance::runtime::register(owner, app_session.id(), launch.package());
+            // Bind the exact process, so a revocation can signal *this*
+            // group and nothing that later inherits the number.
+            crate::provenance::runtime::bind_process(owner, app_session.id(), pid);
+            app_session.bind_process(pid)
+        },
+    )?;
     crate::provenance::runtime::deregister(
         crate::provenance::runtime::current_owner(),
         app_session.id(),

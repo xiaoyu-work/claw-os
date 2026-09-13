@@ -41,7 +41,7 @@ async fn real_provider_and_public_sdk_preserve_data_denials_and_process_lifetime
     ));
     assert_eq!(
         fixture.calls(),
-        "__policy check data.db.read --name calendar\n__policy check clipboard.read --name history\n"
+        "--wire=1 __calendar day 2026 9 9\n__policy check clipboard.read --name history\n"
     );
     fixture.allow();
     let before = fs::read(fixture.root.join("data/calendar/events.db")).unwrap();
@@ -141,7 +141,7 @@ async fn interface_preserves_context_without_identity_or_gui_privileges() {
     }
     assert_eq!(
         fixture.calls(),
-        "__policy check data.db.read --name calendar\n".repeat(9),
+        "--wire=1 __calendar day 2026 9 9\n".repeat(9),
     );
     assert_eq!(
         fs::read_to_string(fixture.root.join("contexts")).unwrap(),
@@ -354,14 +354,11 @@ async fn malformed_task_data_and_oversized_calendar_records_are_not_empty_succes
         ));
     }
     let database = fixture.root.join("data/calendar/events.db");
-    let connection = rusqlite::Connection::open(&database).unwrap();
-    connection
-        .execute(
-            "UPDATE events SET title = ?1 WHERE id = 'event-1'",
-            ["x".repeat(1024 * 1024 + 1)],
-        )
-        .unwrap();
-    drop(connection);
+    fs::write(fixture.root.join("calendar-reply"), serde_json::json!({
+        "ok": true, "wire_version": 1,
+        "data": {"events": [{"id":"event-1", "title": "x".repeat(1024 * 1024 + 1),
+            "start":"2026-09-09", "end":null, "location":""}]}
+    }).to_string()).unwrap();
     let before = fs::read(&database).unwrap();
     assert!(matches!(
         client
@@ -529,19 +526,13 @@ async fn blocked_reply_pipe_has_a_real_write_deadline_and_does_not_block_process
     let fixture = Fixture::new();
     fixture.allow();
     fixture.calendar();
-    let mut connection =
-        rusqlite::Connection::open(fixture.root.join("data/calendar/events.db")).unwrap();
-    let transaction = connection.transaction().unwrap();
-    for index in 0..2000 {
-        transaction
-            .execute(
-                "INSERT INTO events VALUES (?1, ?2, '2026-09-09', NULL, '')",
-                rusqlite::params![format!("bulk-{index}"), "x".repeat(128)],
-            )
-            .unwrap();
-    }
-    transaction.commit().unwrap();
-    drop(connection);
+    let events = (0..2000).map(|index| serde_json::json!({
+        "id": format!("bulk-{index}"), "title": "x".repeat(128),
+        "start": "2026-09-09", "end": null, "location": "",
+    })).collect::<Vec<_>>();
+    fs::write(fixture.root.join("calendar-reply"), serde_json::json!({
+        "ok": true, "wire_version": 1, "data": {"events": events},
+    }).to_string()).unwrap();
     let mut child = tokio::process::Command::new(
         fixture.provider(env!("CARGO_BIN_EXE_claw-os-applet-provider")),
     )
@@ -565,6 +556,6 @@ async fn blocked_reply_pipe_has_a_real_write_deadline_and_does_not_block_process
     assert!(started.elapsed() >= Duration::from_secs(3));
     assert_eq!(
         fixture.calls(),
-        "__policy check data.db.read --name calendar\n"
+        "--wire=1 __calendar day 2026 9 9\n"
     );
 }

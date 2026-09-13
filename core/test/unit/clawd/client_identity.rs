@@ -25,6 +25,7 @@ fn delegated_identity_keeps_principal_and_kernel_uids_distinct() {
             capability_generation: "a".repeat(16),
             host_pid: 42,
             host_start_time_ticks: Some(7),
+            task_app_data: None,
         },
     );
     assert_eq!(identity.uid, Some(1000));
@@ -99,6 +100,7 @@ fn filesystem_owner_groups_are_account_derived_and_unknown_owners_fail_closed() 
             capability_generation: "test".into(),
             host_pid: std::process::id(),
             host_start_time_ticks: None,
+            task_app_data: None,
         },
     );
     let before = thread_credentials();

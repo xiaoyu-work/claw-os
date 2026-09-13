@@ -102,8 +102,8 @@ fn every_manifest_selected_app_runtime_is_refused_inside_the_broker() {
         std::fs::write(
             dir.path().join("app.json"),
             serde_json::json!({
-                "id":"guarded","version":"1","name":"Guarded","runtime":runtime,
-                "entry":entry,"operations":{"run":{"label":"Run"}}
+                "id":"guarded","version":"1","name":{"en":"Guarded"},"runtime":runtime,
+                "entry":entry,"operations":{"run":{"label":{"en":"Run"}}}
             })
             .to_string(),
         )

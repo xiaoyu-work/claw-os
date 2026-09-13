@@ -238,7 +238,9 @@ fn file_replace_wire_enforces_hash_integer_path_and_content_bounds() {
 }
 
 #[test]
-fn file_replace_full_size_payload_passes_relay_without_loosening_other_structured_bodies() {
+fn file_replace_relay_payload_retains_inner_route_validation_and_structured_bounds() {
+    use crate::clawd::routes::Command;
+
     let mut body = file_replace_body();
     body["content_base64"] = json!("A".repeat(87384));
     assert!(Structured::parse(body.clone()).is_err());
@@ -247,10 +249,19 @@ fn file_replace_full_size_payload_passes_relay_without_loosening_other_structure
     assert_eq!(serde_json::to_value(decoded).unwrap(), relay);
     let mut forged = relay.clone();
     forged["params"]["unexpected"] = json!("extra");
-    assert!(serde_json::from_value::<AppSessionRelay>(forged).is_err());
+    let forged: AppSessionRelay = serde_json::from_value(forged).unwrap();
+    assert!((Command::SystemFileReplace.route().decode)(
+        serde_json::to_value(forged.params.unwrap()).unwrap()
+    )
+    .is_err());
     let mut unrelated = relay;
     unrelated["params"] = json!({"large_text":"x".repeat(65537)});
-    assert!(serde_json::from_value::<AppSessionRelay>(unrelated).is_err());
+    assert!(Structured::parse(unrelated["params"].clone()).is_err());
+    let unrelated: AppSessionRelay = serde_json::from_value(unrelated).unwrap();
+    assert!((Command::SystemFileReplace.route().decode)(
+        serde_json::to_value(unrelated.params.unwrap()).unwrap()
+    )
+    .is_err());
 }
 
 #[test]

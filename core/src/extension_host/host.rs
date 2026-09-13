@@ -677,10 +677,9 @@ async fn dispatch(
             let apps_root = apps_root();
             let app = crate::apps::find_verified(&apps_root, &app_id)?;
             let launch = crate::bridge::AppLaunch::new(app.require_verified()?.clone())?;
-            let data = crate::paths::user_data_dir().to_string_lossy().into_owned();
             let apps = apps_root.to_string_lossy().into_owned();
             let output = tokio::task::spawn_blocking(move || {
-                crate::bridge::run_app(&launch, &command, &args, &data, &apps)
+                crate::bridge::run_task_app(&launch, &command, &args, &apps)
             })
             .await
             .map_err(|error| format!("App host task failed: {error}"))??;

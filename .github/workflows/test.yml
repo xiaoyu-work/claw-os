@@ -111,6 +111,41 @@ jobs:
           COS_WORKER_SANDBOX_REQUIRED: "1"
         run: cd core && cargo test -- --test-threads=1
 
+      - name: Test ordinary App bind gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build -p cos --bin claw-app-runner --locked
+          COS_CAPTURED_TEST_RUNNER="$GITHUB_WORKSPACE/target/debug/claw-app-runner" \
+            cargo test -p cos --lib --locked \
+              bridge::captured::tests::process::real_runner_waits_for_binding_and_preserves_app_input \
+              -- --exact --ignored --nocapture --test-threads=1
+
+      - name: Test owner-scoped Calendar reads
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y --no-install-recommends python3-idna
+          cargo build -p cos --bin cos --locked --target-dir "$GITHUB_WORKSPACE/target"
+          cargo build --manifest-path desktop/applets/claw-applet-services/Cargo.toml \
+            --features provider --bins --locked --target-dir "$RUNNER_TEMP/calendar-target"
+          cargo test -p cos --lib --locked --no-run --message-format=json \
+            --target-dir "$GITHUB_WORKSPACE/target" > "$RUNNER_TEMP/calendar-tests.jsonl"
+          test_binary="$(python3 -c 'import json,sys; print(next(x["executable"] for x in map(json.loads,sys.stdin) if x.get("executable") and x.get("profile",{}).get("test") and x.get("target",{}).get("name") == "cos"))' < "$RUNNER_TEMP/calendar-tests.jsonl")"
+          sudo timeout 120 unshare --mount --net --fork \
+            env COS_CALENDAR_COS="$GITHUB_WORKSPACE/target/debug/cos" \
+              COS_CALENDAR_READER="$RUNNER_TEMP/calendar-target/debug/claw-calendar-reader" \
+              COS_CALENDAR_PROVIDER="$RUNNER_TEMP/calendar-target/debug/claw-os-applet-provider" \
+            bash --noprofile --norc -c '
+              set -euo pipefail
+              mount --make-rprivate /
+              exec "$1" --exact clawd::calendar::tests::process::calendar_mcp_to_broker_reader_and_public_sdk \
+                --ignored --nocapture --test-threads=1
+            ' private-calendar "$test_binary"
+          sudo timeout 30 "$test_binary" \
+            --exact worker::migrate::tests::root_calendar_migration_uses_the_authenticated_owner_not_root_euid \
+            --ignored --nocapture --test-threads=1
+
       - name: Run privileged extension boundaries
         shell: bash
         run: |
@@ -121,7 +156,20 @@ jobs:
             --test agentd_process_boundary \
             --test extension_host_boundary \
             --no-run
-          cargo test -p cos --lib --no-run
+          cargo test -p cos --lib --locked --no-run --message-format=json \
+            > "$RUNNER_TEMP/service-retirement-tests.jsonl"
+          service_test_binary="$(python3 -c 'import json,sys; print(next(x["executable"] for x in map(json.loads,sys.stdin) if x.get("executable") and x.get("profile",{}).get("test") and x.get("target",{}).get("name") == "cos"))' < "$RUNNER_TEMP/service-retirement-tests.jsonl")"
+          sudo timeout 120 unshare --mount --net --fork \
+            env COS_SERVICE_RETIREMENT_HOST="$GITHUB_WORKSPACE/target/debug/claw-extension-host" \
+            bash --noprofile --norc -c '
+              set -euo pipefail
+              mount --make-rprivate /
+              exec "$1" --exact clawd::app_services::retirement::tests::process::service_retirement_keeps_custody_until_cleanup_succeeds \
+                --ignored --nocapture --test-threads=1
+            ' private-service-retirement "$service_test_binary"
+          sudo timeout 30 "$service_test_binary" \
+            --exact extension_host::identity::tests::checked_release_retries_authenticated_marker_cleanup \
+            --ignored --nocapture --test-threads=1
 
           readonly root=/opt/cos-boundary-tests
           sudo install -d -o root -g root -m 0755 "$root"
@@ -270,6 +318,15 @@ jobs:
                 exec "$1" --exact "$2" --ignored --nocapture --test-threads=1
               ' private-app-data "$test_binary" "extension_host::spawn::app_data::tests::$data_case"
           done
+          sudo timeout 100 unshare --mount --net --fork \
+            env COS_APP_DATA_TEST_COS="$CARGO_TARGET_DIR/debug/cos" \
+              COS_APP_DATA_TEST_RUNNER="$CARGO_TARGET_DIR/debug/claw-app-runner" \
+            bash --noprofile --norc -c '
+              set -euo pipefail
+              mount --make-rprivate /
+              exec "$1" --exact extension_host::spawn::task_data::tests::task_app_registration_binds_persistent_data_after_authorization \
+                --ignored --nocapture --test-threads=1
+            ' private-task-app-data "$test_binary"
 
       # Downgrade protection is exercised against real .deb archives,
       # real maintainer scripts, real dpkg/apt transactions and real

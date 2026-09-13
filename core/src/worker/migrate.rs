@@ -264,7 +264,7 @@ pub(crate) fn migrate_legacy_state(
         else {
             return Ok(());
         };
-        if marker_version(partition) >= CURRENT_VERSION {
+        if marker_version(partition)? >= CURRENT_VERSION {
             return Ok(());
         }
         for entry in entries {
@@ -280,34 +280,61 @@ pub(crate) fn migrate_legacy_state(
     }
 }
 
-fn marker_version(partition: &Path) -> u32 {
-    std::fs::read_to_string(partition.join(MARKER))
-        .ok()
-        .and_then(|text| text.trim().parse::<u32>().ok())
-        .unwrap_or(0)
+#[cfg(unix)]
+fn migration_owner() -> u32 {
+    #[cfg(target_os = "linux")]
+    { unsafe { libc::setfsuid(u32::MAX) as u32 } }
+    #[cfg(not(target_os = "linux"))]
+    { unsafe { libc::geteuid() } }
+}
+
+fn marker_version(partition: &Path) -> Result<u32, String> {
+    use std::io::Read;
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let file = match options.open(partition.join(MARKER)) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(format!("read App state version: {error}")),
+    };
+    let metadata = file.metadata().map_err(|error| format!("inspect App state version: {error}"))?;
+    if !metadata.is_file() || metadata.len() > 32 {
+        return Err("App state version is not a bounded regular file".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if metadata.uid() != migration_owner() || metadata.nlink() != 1 {
+            return Err("App state version has a foreign owner or extra hard links".into());
+        }
+    }
+    let mut value = String::new();
+    file.take(33).read_to_string(&mut value).map_err(|error| format!("read App state version: {error}"))?;
+    if value.len() > 32 {
+        return Err("App state version exceeds its size limit".into());
+    }
+    value.trim().parse().map_err(|_| "App state version is invalid".into())
 }
 
 /// Record the version durably: a marker that survived only in the page
 /// cache would re-run the migration after a crash, and the second run
 /// must not be the one that decides a destination is a collision.
 fn write_marker(partition: &Path) -> Result<(), String> {
-    let temp = partition.join(format!("{MARKER}.new"));
+    use std::io::Write;
+    let mut temp = tempfile::Builder::new().prefix(".cos-state-version.")
+        .tempfile_in(partition).map_err(|error| format!("create App state version: {error}"))?;
     let final_path = partition.join(MARKER);
-    {
-        use std::io::Write;
-        let mut file = std::fs::File::create(&temp)
-            .map_err(|error| format!("record App state version: {error}"))?;
-        file.write_all(CURRENT_VERSION.to_string().as_bytes())
-            .map_err(|error| format!("record App state version: {error}"))?;
-        file.sync_all()
-            .map_err(|error| format!("record App state version: {error}"))?;
-    }
-    std::fs::rename(&temp, &final_path)
+    temp.write_all(CURRENT_VERSION.to_string().as_bytes())
         .map_err(|error| format!("record App state version: {error}"))?;
-    if let Ok(dir) = std::fs::File::open(partition) {
-        let _ = dir.sync_all();
-    }
-    Ok(())
+    temp.as_file().sync_all().map_err(|error| format!("sync App state version: {error}"))?;
+    temp.persist(final_path).map_err(|error| format!("publish App state version: {error}"))?;
+    std::fs::File::open(partition).and_then(|directory| directory.sync_all())
+        .map_err(|error| format!("sync App state version directory: {error}"))
 }
 
 #[cfg(unix)]
@@ -493,7 +520,7 @@ mod unix {
                 std::io::Error::last_os_error()
             ));
         }
-        let effective = unsafe { libc::geteuid() };
+        let effective = super::migration_owner();
         if stat.st_uid != effective {
             return Err(format!(
                 "App data root `{}` belongs to uid {} rather than {effective}",

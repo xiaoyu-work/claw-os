@@ -49,13 +49,32 @@ impl WorkerOutput {
 /// Run a prepared launch to completion with captured output.
 ///
 /// `on_spawn` runs the moment the sandbox exists and before any output
-/// is read, which is where the launcher binds the session to the child
-/// it just created. A failure there kills the worker rather than
-/// letting an unbound process run.
+/// is read. It is not an execution gate: App launchers use
+/// `run_captured_gated` so their entrypoint cannot run before binding.
 pub fn run_captured(
     prepared: PreparedLaunch,
     stdin_data: Option<Vec<u8>>,
     limits: super::policy::Limits,
+    on_spawn: impl FnOnce(u32) -> Result<(), String>,
+) -> Result<WorkerOutput, String> {
+    run_captured_inner(prepared, stdin_data, limits, None, on_spawn)
+}
+
+pub(crate) fn run_captured_gated(
+    prepared: PreparedLaunch,
+    stdin_data: Option<Vec<u8>>,
+    limits: super::policy::Limits,
+    gate: &[u8; 32],
+    on_spawn: impl FnOnce(u32) -> Result<(), String>,
+) -> Result<WorkerOutput, String> {
+    run_captured_inner(prepared, stdin_data, limits, Some(gate), on_spawn)
+}
+
+fn run_captured_inner(
+    prepared: PreparedLaunch,
+    stdin_data: Option<Vec<u8>>,
+    limits: super::policy::Limits,
+    gate: Option<&[u8; 32]>,
     on_spawn: impl FnOnce(u32) -> Result<(), String>,
 ) -> Result<WorkerOutput, String> {
     let PreparedLaunch {
@@ -69,7 +88,7 @@ pub fn run_captured(
         }
     }
     command
-        .stdin(if stdin_data.is_some() {
+        .stdin(if stdin_data.is_some() || gate.is_some() {
             Stdio::piped()
         } else {
             Stdio::null()
@@ -87,6 +106,23 @@ pub fn run_captured(
         let _ = child.wait();
         return Err(error);
     }
+    if let Some(gate) = gate {
+        let released = child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| "sandboxed worker launch gate is unavailable".to_string())
+            .and_then(|stdin| {
+                stdin
+                    .write_all(gate)
+                    .map_err(|error| format!("release sandboxed worker launch gate: {error}"))
+            });
+        if let Err(error) = released {
+            resources.kill_all(Some(pid));
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
+    }
 
     let writer = match stdin_data {
         Some(data) => {
@@ -99,7 +135,10 @@ pub fn run_captured(
                 let _ = stdin.write_all(&data);
             }))
         }
-        None => None,
+        None => {
+            drop(child.stdin.take());
+            None
+        }
     };
 
     let stdout = child

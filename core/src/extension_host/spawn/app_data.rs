@@ -106,6 +106,16 @@ pub(super) fn prepare(
     let Some(app) = service_app(launch)? else {
         return Ok(None);
     };
+    prepare_app(owner, extension, app, paths).map(Some)
+}
+
+pub(super) fn prepare_app(
+    owner: &WorkerIdentity,
+    extension: &ExtensionIdentity,
+    app: &str,
+    paths: &HostPaths,
+) -> Result<Prepared, String> {
+    crate::worker::derive::validate_app_id(app)?;
     if unsafe { libc::geteuid() } != 0 || owner.uid == 0 || owner.gid == 0 {
         return Err("App persistent data binding requires Root and a non-root owner".to_string());
     }
@@ -193,7 +203,7 @@ pub(super) fn prepare(
     let view_root = paths.dir.join("app-data");
     let destination = CString::new(view_root.join("apps").join(app).as_os_str().as_bytes())
         .map_err(|_| "App data view contains NUL")?;
-    Ok(Some(Prepared {
+    Ok(Prepared {
         view_root,
         destination,
         binding: Binding {
@@ -205,7 +215,7 @@ pub(super) fn prepare(
         mount,
         target_device: target_metadata.st_dev,
         target_inode: target_metadata.st_ino,
-    }))
+    })
 }
 
 fn service_app(launch: &HostLaunchSpec) -> Result<Option<&str>, String> {
@@ -420,7 +430,7 @@ impl Drop for NamespaceHelper {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/test/unit/extension_host/spawn/app_data.rs"

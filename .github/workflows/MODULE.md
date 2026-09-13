@@ -29,6 +29,17 @@ dispatched and reusable test/publication pipelines.
 - Exercise App-service data views with real sandboxed MCP/SQLite writes across
   distinct execution UIDs and mount lifetimes, retaining owner file identity
   and refusing foreign roots, aliases, submounts and replaced bindings.
+- Exercise task-host ordinary App registration and persistent SQLite writes
+  through authenticated private broker messages, across Host namespace/UID
+  replacement, without exposing caller-selected data roots.
+- Exercise checked App-service retirement with a real Host/cgroup, retained
+  mount failures, cancellation and owner/identity/capacity fencing; cleanup
+  failure must not become a successful stop or replacement.
+- Exercise ordinary App bind-gated startup with the real runner and sandbox,
+  including refused/delayed binding, exact stdin limits, raw bytes and EOF.
+- Exercise real staged Calendar MCP writes and public SDK reads through the
+  owner-scoped broker and standalone reader, including live WAL visibility,
+  wrong scopes, single-use grants and physical read-only mounts.
 - Build shared Docker/WSL images per architecture.
 - Build and sign independent multi-architecture APT packages/repository.
 - Build the React/Vite web desktop as an independent Pages input.

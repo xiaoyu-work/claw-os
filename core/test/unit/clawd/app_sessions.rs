@@ -3840,6 +3840,7 @@ async fn cli_app_service_dispatch_rejects_an_extension_host_identity() {
         capability_generation: "a".repeat(16),
         host_pid: client.pid.unwrap_or(1),
         host_start_time_ticks: client.start_time_ticks,
+        task_app_data: None,
     });
     let error = prepare_cli_app_service_call(
         json!({ "app_id": "fs", "tool": "fs.read", "arguments": {} }),

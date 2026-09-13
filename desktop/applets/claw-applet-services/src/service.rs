@@ -53,24 +53,17 @@ impl Service {
             }
             _ => None,
         };
+        if let Some(day) = day {
+            let events = calendar::query_day(day).await.map_err(policy_failure)?;
+            return Ok(Data::Calendar {
+                events: events.into_iter().map(calendar_event).collect(),
+            });
+        }
         let (verb, scope) = permission(&operation);
-        policy::check(verb, scope).await.map_err(|error| {
-            let code = match error.kind {
-                policy::FailureKind::Denied => ErrorCode::PermissionDenied,
-                policy::FailureKind::Unavailable => ErrorCode::ProviderUnavailable,
-                policy::FailureKind::Execution => ErrorCode::ProviderFailure,
-            };
-            Failure::new(code, error.message)
-        })?;
+        policy::check(verb, scope).await.map_err(policy_failure)?;
         match operation {
             Operation::CalendarDay { .. } | Operation::CalendarToday {} => {
-                let events =
-                    calendar::load_day_authorized(day.expect("validated calendar operation"))
-                        .await
-                        .map_err(provider_failure)?;
-                Ok(Data::Calendar {
-                    events: events.into_iter().map(calendar_event).collect(),
-                })
+                unreachable!("Calendar dispatched above")
             }
             Operation::Tasks {} => {
                 let tasks = tasks::load_tasks_async()
@@ -112,6 +105,15 @@ fn permission(operation: &Operation) -> (&'static str, Scope<'static>) {
 
 fn provider_failure(message: String) -> Failure {
     Failure::new(ErrorCode::ProviderFailure, message)
+}
+
+fn policy_failure(error: policy::Failure) -> Failure {
+    let code = match error.kind {
+        policy::FailureKind::Denied => ErrorCode::PermissionDenied,
+        policy::FailureKind::Unavailable => ErrorCode::ProviderUnavailable,
+        policy::FailureKind::Execution => ErrorCode::ProviderFailure,
+    };
+    Failure::new(code, error.message)
 }
 
 fn calendar_event(event: calendar::CalendarEvent) -> CalendarEvent {

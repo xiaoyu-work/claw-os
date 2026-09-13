@@ -99,6 +99,10 @@ jobs:
       - name: Build Agent binaries
         run: |
           cargo build --release -p cos --target ${{ matrix.musl_target }}
+          cargo build --release --locked \
+            --manifest-path desktop/applets/claw-applet-services/Cargo.toml \
+            --bin claw-calendar-reader --target ${{ matrix.musl_target }} \
+            --target-dir "$GITHUB_WORKSPACE/target"
           cargo build --release -p claw-display-login --target ${{ matrix.gnu_target }}
           cargo build --release -p cos-browser --target ${{ matrix.gnu_target }}
           cargo build --release -p claw-semantic --target ${{ matrix.gnu_target }}
@@ -118,6 +122,9 @@ jobs:
           grep -q './usr/local/bin/clawd$' "$RUNNER_TEMP/claw-os-agent.files"
           grep -q './usr/local/bin/claw-agentd$' "$RUNNER_TEMP/claw-os-agent.files"
           grep -q './usr/local/bin/claw-extension-host$' "$RUNNER_TEMP/claw-os-agent.files"
+          grep -q './usr/lib/cos/bin/claw-calendar-reader$' "$RUNNER_TEMP/claw-os-agent.files"
+          grep -q './usr/share/doc/claw-os-agent/calendar-reader.LICENSE$' "$RUNNER_TEMP/claw-os-agent.files"
+          dpkg-deb -f "$agent_deb" Provides | grep -qw claw-os-calendar-read-v1
           grep -q './usr/local/bin/claw-gui-runner$' "$RUNNER_TEMP/claw-os-agent.files"
           grep -q './usr/local/bin/claw-display-session$' "$RUNNER_TEMP/claw-os-agent.files"
           grep -q './usr/lib/cos/bin/claw-display-host$' "$RUNNER_TEMP/claw-os-agent.files"

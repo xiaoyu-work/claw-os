@@ -19,6 +19,9 @@ use crate::provenance::runtime::PackageRef;
 use super::protocol::{self, ApprovedPath, ExtensionBinding, HostBootstrap};
 
 mod app_data;
+mod task_data;
+
+pub(crate) use task_data::TaskAppData;
 
 pub const HOST_BINARY_ENV: &str = "COS_EXTENSION_HOST_BIN";
 pub const TASK_DIAGNOSTIC_ENV: &str = "COS_EXTENSION_TASK_ID";
@@ -945,6 +948,15 @@ pub fn spawn_host(
         }
         return Err(error);
     }
+    if launch.purpose == protocol::HostPurpose::Task {
+        private_mounts.task_app_data = Some(Arc::new(TaskAppData::new(
+            owner.clone(),
+            extension.clone(),
+            binding.clone(),
+            paths.clone(),
+            private_mounts.fd.clone(),
+        )));
+    }
     Ok(SpawnedExtensionHost {
         child,
         pid,
@@ -958,6 +970,16 @@ pub fn spawn_host(
 }
 
 impl SpawnedExtensionHost {
+    pub(crate) fn task_app_data(&self) -> Option<Arc<TaskAppData>> {
+        self.private_mounts.task_app_data.clone()
+    }
+
+    pub(crate) fn close_app_data(&self) {
+        if let Some(data) = &self.private_mounts.task_app_data {
+            data.close();
+        }
+    }
+
     pub(crate) fn require_current_app_data(&self) -> Result<(), String> {
         match &self.app_data {
             Some(data) => data.require_current(),
@@ -1106,9 +1128,10 @@ fn set_mount_read_only(path: &CStr, read_only: bool) -> std::io::Result<()> {
 
 #[derive(Debug)]
 struct PrivateMountNamespace {
-    fd: OwnedFd,
+    fd: Arc<OwnedFd>,
     task_path: CString,
     app_data_target: Option<CString>,
+    task_app_data: Option<Arc<TaskAppData>>,
     active: bool,
 }
 
@@ -1136,9 +1159,10 @@ impl PrivateMountNamespace {
         let task_path = CString::new(task_path.as_os_str().as_bytes())
             .map_err(|_| "extension task mount path contains NUL".to_string())?;
         Ok(Self {
-            fd,
+            fd: Arc::new(fd),
             task_path,
             app_data_target,
+            task_app_data: None,
             active: true,
         })
     }
@@ -1146,6 +1170,9 @@ impl PrivateMountNamespace {
     fn cleanup(&mut self) -> Result<(), String> {
         if !self.active {
             return Ok(());
+        }
+        if let Some(data) = &self.task_app_data {
+            data.cleanup()?;
         }
         let pid = unsafe { libc::fork() };
         if pid < 0 {

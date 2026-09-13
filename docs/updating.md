@@ -541,6 +541,13 @@ rolling back to a core that predates session receipts.
 
 ### App data moves into per-App directories
 
+Ordinary Python and polyglot operations now wait in `claw-app-runner` until
+their launcher binds the exact child session. Keep the runner and core from
+the same source/package cohort; a missing runner is an error, not an ungated
+fallback. The existing runner gate protocol is unchanged, and its private
+token is never App input or part of the App's byte allowance. No App data,
+manifest, SDK version or production pin changes with this startup fix.
+
 From the release that isolates App workers, an App no longer receives the
 owner's data root. `COS_DATA_DIR` is its own directory,
 `<data-root>/apps/<app-id>`, created `0700`, and no other App's directory or
@@ -553,18 +560,56 @@ the owner's. Existing private-directory and legacy-state migration logic is
 reused; data is neither copied nor recursively chowned. Only the runtime view
 is unmounted at retirement.
 
-If service cleanup cannot be confirmed, its existing UID-quarantine record
-blocks new App-service starts for the same owner rather than switching UIDs
+Task Host ordinary operations now acquire the same owner/App data partition
+after their normal Root registration checks. No App data is mounted when the
+task Host starts. Each authorized operation uses the returned binding instead
+of the Host's temporary HOME/data, and task retirement unmounts all its views.
+Keep the broker and Host from the same source/package cohort; existing tasks
+must finish or be cancelled before replacing their running Host binaries.
+
+If Host cleanup cannot be confirmed, its existing UID-quarantine record
+blocks new task and App-service starts for the same owner rather than switching UIDs
 and reopening the persistent store. A record with unknown ownership also
 blocks admission. Existing quarantine recovery must finish before retrying.
+
+App-service retirement now retains its runtime and capacity in the broker when
+cleanup fails or a caller stops waiting. Subsequent calls or supervision retry
+the same cleanup without restarting the old service; a held retiring identity
+also fences new same-owner task/service allocation. Capacity and the UID lock
+are released only after accepted broker connections, resource cleanup and
+durable marker removal are confirmed. A drain timeout retains custody for retry;
+an unexpectedly failed broker task requires broker recovery rather than
+assuming its in-flight requests were drained.
+This does not add the separate Root-coordinated App install/update/rollback
+transaction, and no SDK or App package is published by this source change.
 
 The backing filesystem must support idmapped mounts and the private App
 partition must contain no nested mounts. Unavailable mappings, aliases, foreign
 owners or replaced directory identities are explicit failures, not permission
 to use an empty temporary store. Older Host-private scratch data is not
 automatically imported or merged; a restart is not recovery of that transient
-state. Legacy task-host `RunApp` binding and Calendar's cross-App read path
-remain separate work. No App/SDK release or production pin is changed here.
+state. No App/SDK release or production pin is changed here.
+
+Root-coordinated legacy migration now checks the routed owner's UID rather
+than the Root launcher's UID. Existing data is moved by the original bounded
+rename contract, not copied or chowned. Invalid, linked, foreign-owned or
+oversized migration markers fail explicitly; temporary marker publication no
+longer follows a predictable `.new` path.
+
+Calendar Applets now read the existing owner Calendar store through
+`system.calendar.day`, not their own private `COS_DATA_DIR`. Agent supplies
+`claw-calendar-reader` and `claw-os-calendar-read-v1`; Desktop depends on that
+service while retaining the public Applet helper. The reader is a separately
+licensed GPL executable, tracked by the existing update-security component
+manifest and measured before launch. No epoch, protocol or package version is
+changed by this source unit.
+
+The reader receives a pinned view of only the Calendar database directory in
+a private read-only/NOSYMFOLLOW mount namespace. Sidecar entries remain live so
+SQLite handles its own transactions and checkpoints. Missing or unsafe services/files are errors; a genuinely
+missing Calendar database remains an empty event list. No old transient data
+is imported, and no App directory or raw file descriptor reaches the consumer.
+The public SDK wire format and existing named read grant are unchanged.
 
 The source-only relocation of `net` to `clawos-app/capabilities/http/apps/net`
 preserves `/usr/lib/cos/apps/net` in the signed Agent package. Its two MCP/CLI

@@ -52,6 +52,7 @@ const CHILD_PROVIDER_ROUTES: &[Command] = &[
     Command::SystemFileReplace,
     Command::SystemScreenshotCapture,
     Command::SystemMediaPlayerControl,
+    Command::SystemCalendarDay,
     Command::SystemNotificationControl,
     Command::SystemDisplayControl,
     Command::SystemEventsControl,
@@ -92,6 +93,7 @@ pub struct ExtensionLease {
     deadline_ms: AtomicU64,
     closed: AtomicBool,
     activity: Option<Arc<crate::caps::activity_boundary::ActivityBoundary>>,
+    task_app_data: Option<Arc<super::spawn::TaskAppData>>,
 }
 
 impl ExtensionLease {
@@ -127,6 +129,7 @@ impl ExtensionLease {
             deadline_ms: AtomicU64::new(deadline_ms),
             closed: AtomicBool::new(false),
             activity: None,
+            task_app_data: None,
         }
     }
 
@@ -144,6 +147,11 @@ impl ExtensionLease {
         self.activity.clone()
     }
 
+    pub fn with_task_app_data(mut self, host: &super::spawn::SpawnedExtensionHost) -> Self {
+        self.task_app_data = host.task_app_data();
+        self
+    }
+
     pub fn renew(&self, lease: Duration) -> u64 {
         let deadline = crate::agentd::grant::now_ms().saturating_add(lease.as_millis() as u64);
         self.deadline_ms.store(deadline, Ordering::SeqCst);
@@ -152,6 +160,9 @@ impl ExtensionLease {
 
     pub fn close(&self) {
         self.closed.store(true, Ordering::SeqCst);
+        if let Some(data) = &self.task_app_data {
+            data.close();
+        }
     }
 
     fn verify_live(&self) -> Result<(), String> {
@@ -350,16 +361,35 @@ pub async fn serve(
     admission: Arc<Admission>,
 ) {
     let slots = Arc::new(Semaphore::new(MAX_CONNECTIONS));
+    let mut connections = tokio::task::JoinSet::new();
     loop {
         if lease.closed.load(Ordering::SeqCst) {
-            return;
+            break;
         }
         let accepted = tokio::select! {
             accepted = listener.accept() => accepted,
             _ = tokio::time::sleep(Duration::from_millis(100)) => continue,
+            finished = connections.join_next(), if !connections.is_empty() => {
+                if let Some(Err(error)) = finished {
+                    tracing::error!(
+                        owner = lease.owner_uid,
+                        %error,
+                        "extension broker connection failed"
+                    );
+                }
+                continue;
+            }
         };
-        let Ok((stream, _)) = accepted else {
-            return;
+        let (stream, _) = match accepted {
+            Ok(accepted) => accepted,
+            Err(error) => {
+                tracing::error!(
+                    owner = lease.owner_uid,
+                    %error,
+                    "extension broker acceptor failed"
+                );
+                break;
+            }
         };
         let Ok(permit) = slots.clone().try_acquire_owned() else {
             continue;
@@ -367,10 +397,20 @@ pub async fn serve(
         let lease = lease.clone();
         let state = state.clone();
         let admission = admission.clone();
-        tokio::spawn(async move {
+        connections.spawn(async move {
             let _permit = permit;
             serve_connection(stream, lease, state, admission).await;
         });
+    }
+    drop(listener);
+    while let Some(finished) = connections.join_next().await {
+        if let Err(error) = finished {
+            tracing::error!(
+                owner = lease.owner_uid,
+                %error,
+                "extension broker connection failed during retirement"
+            );
+        }
     }
 }
 
@@ -440,6 +480,7 @@ async fn serve_connection(
             capability_generation: lease.capability_generation.clone(),
             host_pid: lease.host_pid,
             host_start_time_ticks: lease.host_start_time_ticks,
+            task_app_data: lease.task_app_data.clone(),
         },
     );
 

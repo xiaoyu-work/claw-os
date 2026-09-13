@@ -471,7 +471,10 @@ async fn daemon_authorized_calls_cannot_execute_in_the_model_workers_task_host()
     )
     .await
     .unwrap_err();
-    assert!(error.contains("App service"), "{error}");
+    assert!(
+        error.contains("task extension host cannot execute authorized App call"),
+        "{error}"
+    );
 }
 
 #[tokio::test]

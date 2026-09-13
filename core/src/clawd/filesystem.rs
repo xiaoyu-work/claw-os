@@ -334,7 +334,7 @@ impl Target {
     }
 }
 
-fn open_at(
+pub(super) fn open_at(
     directory: &File,
     name: &std::ffi::OsStr,
     flags: i32,

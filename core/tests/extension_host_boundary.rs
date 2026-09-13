@@ -273,6 +273,7 @@ struct TestEnvironment {
     _runtime: tempfile::TempDir,
     _sync: tempfile::TempDir,
     _data: tempfile::TempDir,
+    _owner_data: tempfile::TempDir,
     _apps: tempfile::TempDir,
     extensions: PathBuf,
     mcp_server: PathBuf,
@@ -313,6 +314,13 @@ impl TestEnvironment {
             .prefix("cd-")
             .tempdir_in("/run")
             .ok()?;
+        let owner_data = tempfile::Builder::new()
+            .prefix("co-")
+            .tempdir_in("/run")
+            .ok()?;
+        let owner = cos::agentd::spawn::resolve_identity(owner_uid).ok()?;
+        make_owner_writable(owner_data.path(), owner_uid, owner.gid).ok()?;
+        std::fs::set_permissions(owner_data.path(), std::fs::Permissions::from_mode(0o700)).ok()?;
         std::fs::create_dir_all("/usr/lib/cos").ok()?;
         let apps = tempfile::Builder::new()
             .prefix("ca-")
@@ -337,7 +345,7 @@ impl TestEnvironment {
         std::env::set_var("COS_EXTENSION_HOST_BIN", &host_bin);
         std::env::set_var("COS_RUNTIME_DIR", runtime.path());
         std::env::set_var("COS_DATA_DIR", data.path());
-        std::env::set_var("COS_USER_DATA_DIR", data.path());
+        std::env::set_var("COS_USER_DATA_DIR", owner_data.path());
         std::env::set_var("COS_APPS_DIR", apps.path());
         std::env::set_var(LEAK_MARKER, "broker-only-value");
         let extensions = PathBuf::from(format!(
@@ -393,6 +401,7 @@ impl TestEnvironment {
             _runtime: runtime,
             _sync: sync,
             _data: data,
+            _owner_data: owner_data,
             _apps: apps,
             extensions,
             mcp_server,
@@ -644,7 +653,7 @@ async fn worker_child() {
     match spoof {
         Ok(response) => assert!(!response.ok, "worker must not gain a broker route"),
         Err(error) => assert!(
-            error.contains("Permission denied"),
+            error.to_string().contains("Permission denied"),
             "unexpected private broker refusal: {error}"
         ),
     }
@@ -1148,7 +1157,7 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
         host.pid,
         host.start_time_ticks,
         expires,
-    ));
+    ).with_task_app_data(&host));
     let broker_task = tokio::spawn(broker::serve(
         listener,
         lease.clone(),

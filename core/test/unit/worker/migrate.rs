@@ -1,6 +1,65 @@
 use super::*;
 
 #[cfg(unix)]
+#[test]
+fn migration_markers_never_follow_links_or_reset_invalid_versions() {
+    use std::os::unix::fs::symlink;
+    let root = tempfile::tempdir().unwrap();
+    let partition = root.path().join("app");
+    std::fs::create_dir(&partition).unwrap();
+    let outside = root.path().join("outside");
+    std::fs::write(&outside, b"1").unwrap();
+    let marker = partition.join(MARKER);
+    symlink(&outside, &marker).unwrap();
+    assert!(marker_version(&partition).is_err());
+    std::fs::remove_file(&marker).unwrap();
+    std::fs::hard_link(&outside, &marker).unwrap();
+    assert!(marker_version(&partition).is_err());
+    std::fs::remove_file(&marker).unwrap();
+    for value in ["bad", "", "999999999999999999999999999999999"] {
+        std::fs::write(&marker, value).unwrap();
+        assert!(marker_version(&partition).is_err());
+    }
+    std::fs::remove_file(&marker).unwrap();
+    std::fs::write(&outside, b"external canary").unwrap();
+    symlink(&outside, partition.join(format!("{MARKER}.new"))).unwrap();
+    write_marker(&partition).unwrap();
+    assert_eq!(marker_version(&partition).unwrap(), CURRENT_VERSION);
+    assert_eq!(std::fs::read(&outside).unwrap(), b"external canary");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires Root and a private temporary owner data root"]
+fn root_calendar_migration_uses_the_authenticated_owner_not_root_euid() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    assert_eq!(unsafe { libc::geteuid() }, 0);
+    let uid = std::fs::metadata(env!("CARGO_MANIFEST_DIR")).unwrap().uid();
+    let owner = crate::agentd::spawn::resolve_identity(uid).unwrap();
+    let root = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
+    std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let data = root.path().join("data");
+    std::fs::create_dir(&data).unwrap();
+    let path = std::ffi::CString::new(data.as_os_str().as_encoded_bytes()).unwrap();
+    assert_eq!(unsafe { libc::chown(path.as_ptr(), uid, owner.gid) }, 0);
+    let before = {
+        let _identity = crate::clawd::client_identity::FsIdentityGuard::enter(uid).unwrap();
+        std::fs::create_dir(data.join("calendar")).unwrap();
+        std::fs::write(data.join("calendar/events.db"), b"preserved rows").unwrap();
+        std::fs::metadata(data.join("calendar/events.db")).unwrap()
+    };
+    let context = crate::paths::RoutedPathContext::for_owner(uid, owner.home);
+    let partition = context.clone().scope_sync(|| crate::worker::derive::app_partition(&data, "calendar")).unwrap();
+    let after = std::fs::metadata(partition.join("calendar/events.db")).unwrap();
+    assert_eq!((before.ino(), before.uid(), before.gid()), (after.ino(), after.uid(), after.gid()));
+    assert!(!data.join("calendar").exists());
+    assert_eq!(std::fs::read(partition.join("calendar/events.db")).unwrap(), b"preserved rows");
+    assert_eq!(std::fs::metadata(partition.join(MARKER)).unwrap().uid(), uid);
+    context.scope_sync(|| crate::worker::derive::app_partition(&data, "calendar")).unwrap();
+    assert!(migrate_legacy_state(&data, &partition, "calendar").is_err(), "Root without the owner binding must not claim the store");
+}
+
+#[cfg(unix)]
 mod fixtures {
     use std::path::{Path, PathBuf};
 
@@ -190,7 +249,7 @@ fn a_directory_and_a_file_move_into_the_partition() {
         "rows"
     );
     assert!(!root.path().join("calendar").exists());
-    assert_eq!(marker_version(&partition), CURRENT_VERSION);
+    assert_eq!(marker_version(&partition).unwrap(), CURRENT_VERSION);
 
     // Second launch is a no-op, not a second decision.
     migrate_legacy_state(root.path(), &partition, "calendar").expect("re-run");
@@ -206,7 +265,7 @@ fn a_missing_source_is_simply_nothing_to_do() {
     let root = fixtures::Root::new("missing");
     let partition = root.partition("kv");
     migrate_legacy_state(root.path(), &partition, "kv").expect("migrate");
-    assert_eq!(marker_version(&partition), CURRENT_VERSION);
+    assert_eq!(marker_version(&partition).unwrap(), CURRENT_VERSION);
     assert!(!partition.join("kv.json").exists());
 }
 
@@ -217,7 +276,7 @@ fn an_app_without_legacy_state_is_left_alone() {
     let partition = root.partition("search");
     migrate_legacy_state(root.path(), &partition, "search").expect("migrate");
     // No marker either: there was never anything to bring forward.
-    assert_eq!(marker_version(&partition), 0);
+    assert_eq!(marker_version(&partition).unwrap(), 0);
 }
 
 #[cfg(unix)]
@@ -302,7 +361,7 @@ fn the_kernel_session_registry_stays_exactly_where_it_is() {
         .contains("app-7"));
 
     // And the second launch, marker in place, does not revisit it.
-    assert_eq!(marker_version(&partition), CURRENT_VERSION);
+    assert_eq!(marker_version(&partition).unwrap(), CURRENT_VERSION);
     migrate_legacy_state(root.path(), &partition, "exec").expect("re-run");
     assert_eq!(std::fs::read(&registry).unwrap(), before);
     assert!(!partition.join("proc/registry.json").exists());
@@ -352,7 +411,7 @@ fn a_symlinked_source_is_refused_and_left_in_place() {
     assert!(!partition.join("calendar").exists());
     // A refused migration leaves no marker, so it is retried rather
     // than silently forgotten.
-    assert_eq!(marker_version(&partition), 0);
+    assert_eq!(marker_version(&partition).unwrap(), 0);
 }
 
 #[cfg(unix)]
@@ -402,7 +461,7 @@ fn a_populated_destination_collision_fails_without_merging() {
         std::fs::read_to_string(partition.join("calendar/events.db")).unwrap(),
         "new rows"
     );
-    assert_eq!(marker_version(&partition), 0);
+    assert_eq!(marker_version(&partition).unwrap(), 0);
 }
 
 #[cfg(unix)]
@@ -436,7 +495,7 @@ fn an_interrupted_migration_is_finished_by_the_next_launch() {
         partition.join("proc/stdout.7"),
     )
     .unwrap();
-    assert_eq!(marker_version(&partition), 0);
+    assert_eq!(marker_version(&partition).unwrap(), 0);
 
     migrate_legacy_state(root.path(), &partition, "exec").expect("retry");
     assert_eq!(
@@ -447,7 +506,7 @@ fn an_interrupted_migration_is_finished_by_the_next_launch() {
         std::fs::read_to_string(partition.join("proc/stderr.7")).unwrap(),
         "diagnostics"
     );
-    assert_eq!(marker_version(&partition), CURRENT_VERSION);
+    assert_eq!(marker_version(&partition).unwrap(), CURRENT_VERSION);
 }
 
 #[cfg(unix)]

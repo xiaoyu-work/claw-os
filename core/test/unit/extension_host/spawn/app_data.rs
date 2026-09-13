@@ -60,7 +60,7 @@ fn submount_detection_preserves_component_and_kernel_escape_boundaries() {
     assert!(check_mountinfo(Path::new("/data/app"), b"bad record\n").is_err());
 }
 
-fn mount_tmpfs(target: &CStr) {
+pub(in crate::extension_host::spawn) fn mount_tmpfs(target: &CStr) {
     assert_eq!(
         unsafe {
             libc::mount(
@@ -77,12 +77,12 @@ fn mount_tmpfs(target: &CStr) {
     );
 }
 
-fn chown(path: &Path, uid: u32, gid: u32) {
+pub(in crate::extension_host::spawn) fn chown(path: &Path, uid: u32, gid: u32) {
     let path = CString::new(path.as_os_str().as_bytes()).unwrap();
     assert_eq!(unsafe { libc::chown(path.as_ptr(), uid, gid) }, 0);
 }
 
-fn copy_executable(source: &Path, target: &Path) {
+pub(in crate::extension_host::spawn) fn copy_executable(source: &Path, target: &Path) {
     std::fs::copy(source, target).unwrap();
     std::fs::set_permissions(target, std::fs::Permissions::from_mode(0o755)).unwrap();
     chown(target, 0, 0);

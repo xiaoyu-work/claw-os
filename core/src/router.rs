@@ -995,6 +995,23 @@ fn dispatch_with_stdin_impl(
         return Ok(Some(value.to_string()));
     }
 
+    if name == "__calendar" {
+        if args.len() != 5 || args[1] != "day" {
+            return Err("internal Calendar bridge requires `day <year> <month> <day>`".into());
+        }
+        let year = args[2].parse::<i16>().map_err(|_| "invalid Calendar year")?;
+        let month = args[3].parse::<u8>().map_err(|_| "invalid Calendar month")?;
+        let day = args[4].parse::<u8>().map_err(|_| "invalid Calendar day")?;
+        crate::clawd::calendar::validate_day(year, month, day)?;
+        let session = env::var("COS_SESSION")
+            .map_err(|_| "internal Calendar command requires COS_SESSION")?;
+        let value = request_wire_clawd(
+            Command::SystemCalendarDay,
+            json!({"session": session, "year": year, "month": month, "day": day}),
+        )?;
+        return Ok(Some(value.to_string()));
+    }
+
     if name == "__media-player" {
         if args.len() != 4 || args[2] != "--deadline" {
             return Err(

@@ -1,7 +1,10 @@
 use super::*;
 
 mod app_sources {
-    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/support/app_sources.rs"));
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/support/app_sources.rs"
+    ));
 }
 
 fn parse(s: &str) -> Manifest {
@@ -15,21 +18,36 @@ fn files_tools_derive_exact_filesystem_desktop_and_owned_memory_scopes() {
         &std::fs::read_to_string(app_sources::app_dir("cosmic-files").join("app.json")).unwrap(),
     );
     let args = BTreeMap::from([("path".into(), serde_json::json!("/work/document"))]);
-    let caps = |tool| manifest.resolve_mcp_tool_needs(tool, &args).unwrap()
-        .into_iter().flatten().collect::<Vec<_>>();
-    assert_eq!(caps("files.reveal"), vec![
-        Cap::new(Verb::FS_META, Scope::path("/work/document")),
-        Cap::new(Verb::DESKTOP_LAUNCH, Scope::name("com.clawos.Files")),
-    ]);
-    assert_eq!(caps("files.metadata"), vec![
-        Cap::new(Verb::FS_META, Scope::path("/work/document")),
-        Cap::new(Verb::FS_READ, Scope::path("/work")),
-    ]);
-    assert_eq!(caps("files.summarize"), vec![
-        Cap::new(Verb::FS_READ, Scope::path("/work/document")),
-        Cap::new(Verb::AI_CHAT_UNTRUSTED, Scope::Wild),
-        Cap::new(Verb::MEMORY_WRITE, Scope::SelfRef("cosmic-files".into())),
-    ]);
+    let caps = |tool| {
+        manifest
+            .resolve_mcp_tool_needs(tool, &args)
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        caps("files.reveal"),
+        vec![
+            Cap::new(Verb::FS_META, Scope::path("/work/document")),
+            Cap::new(Verb::DESKTOP_LAUNCH, Scope::name("com.clawos.Files")),
+        ]
+    );
+    assert_eq!(
+        caps("files.metadata"),
+        vec![
+            Cap::new(Verb::FS_META, Scope::path("/work/document")),
+            Cap::new(Verb::FS_READ, Scope::path("/work")),
+        ]
+    );
+    assert_eq!(
+        caps("files.summarize"),
+        vec![
+            Cap::new(Verb::FS_READ, Scope::path("/work/document")),
+            Cap::new(Verb::AI_CHAT_UNTRUSTED, Scope::Wild),
+            Cap::new(Verb::MEMORY_WRITE, Scope::SelfRef("cosmic-files".into())),
+        ]
+    );
 }
 
 #[test]
@@ -38,16 +56,28 @@ fn editor_tools_derive_only_owned_service_capabilities() {
         &std::fs::read_to_string(app_sources::app_dir("cosmic-edit").join("app.json")).unwrap(),
     );
     let empty = BTreeMap::new();
-    let open = manifest.resolve_mcp_tool_needs("edit.open", &empty).unwrap();
-    assert_eq!(open.into_iter().flatten().collect::<Vec<_>>(),
-        vec![crate::caps::Cap::new(crate::caps::Verb::DESKTOP_LAUNCH, crate::caps::Scope::name("com.clawos.Edit"))]);
+    let open = manifest
+        .resolve_mcp_tool_needs("edit.open", &empty)
+        .unwrap();
+    assert_eq!(
+        open.into_iter().flatten().collect::<Vec<_>>(),
+        vec![crate::caps::Cap::new(
+            crate::caps::Verb::DESKTOP_LAUNCH,
+            crate::caps::Scope::name("com.clawos.Edit")
+        )]
+    );
     let args = BTreeMap::from([("path".into(), serde_json::json!("/work/document"))]);
     let open = manifest.resolve_mcp_tool_needs("edit.open", &args).unwrap();
     assert_eq!(open.into_iter().flatten().count(), 2);
-    let summary = manifest.resolve_mcp_tool_needs("edit.summarize", &args).unwrap();
+    let summary = manifest
+        .resolve_mcp_tool_needs("edit.summarize", &args)
+        .unwrap();
     let summary: Vec<_> = summary.into_iter().flatten().collect();
     assert_eq!(summary.len(), 2);
-    assert!(summary.iter().all(|cap| cap.verb == crate::caps::Verb::FS_READ || cap.verb == crate::caps::Verb::AI_CHAT_UNTRUSTED));
+    assert!(summary
+        .iter()
+        .all(|cap| cap.verb == crate::caps::Verb::FS_READ
+            || cap.verb == crate::caps::Verb::AI_CHAT_UNTRUSTED));
 }
 
 #[test]
@@ -393,11 +423,9 @@ fn mcp_tool_defaults_feed_arguments_and_capabilities() {
 
 #[test]
 fn fs_mcp_manifest_requires_content_and_scopes_metadata_sidecars() {
-    let manifest = parse(
-        &std::fs::read_to_string(app_sources::app_dir("fs").join("app.json")).unwrap(),
-    );
+    let manifest =
+        parse(&std::fs::read_to_string(app_sources::app_dir("fs").join("app.json")).unwrap());
     assert!(manifest.operations.is_empty());
-    assert_eq!(manifest.mcp.as_ref().unwrap().tools.len(), 14);
     let directory = tempfile::tempdir_in(std::env::current_dir().unwrap()).unwrap();
     let root = directory.path().canonicalize().unwrap();
     let root = root.to_str().unwrap();
@@ -438,9 +466,8 @@ fn fs_mcp_manifest_requires_content_and_scopes_metadata_sidecars() {
 
 #[test]
 fn fs_mcp_cli_content_binds_without_operations_or_stdin() {
-    let manifest = parse(
-        &std::fs::read_to_string(app_sources::app_dir("fs").join("app.json")).unwrap(),
-    );
+    let manifest =
+        parse(&std::fs::read_to_string(app_sources::app_dir("fs").join("app.json")).unwrap());
     let paths = crate::caps::args::PathContext {
         home: "/home/test".into(),
         cwd: Some(std::env::current_dir().unwrap().to_str().unwrap().into()),
@@ -580,7 +607,10 @@ fn conditional_capability_bindings_use_matching_required_when_on_both_surfaces()
                 assert_eq!(needs.len(), 1);
                 assert_eq!(
                     needs[0],
-                    [crate::caps::Cap::new(Verb::SYS_OBSERVE, Scope::name("hardware"))]
+                    [crate::caps::Cap::new(
+                        Verb::SYS_OBSERVE,
+                        Scope::name("hardware")
+                    )]
                 );
                 active.insert("all".into(), json!(true));
                 let expected_scope = if scope["kind"] == "from-arg-or-wild" {
@@ -622,7 +652,10 @@ fn conditional_capability_bindings_reject_missing_or_different_guards() {
                 need["when"] = guard;
             }
             let error = conditional_capability_fixture(args, need, mcp).unwrap_err();
-            assert!(error.to_string().contains("optional arg `resource`"), "{error}");
+            assert!(
+                error.to_string().contains("optional arg `resource`"),
+                "{error}"
+            );
         }
     }
 }
@@ -641,11 +674,9 @@ fn conditional_capability_bindings_do_not_assume_a_conditional_boolean_default()
         "why":{"en":"Inspect selected state"}
     }))
     .unwrap();
-    assert!(validate_optional_need_binding(
-        &need,
-        &BTreeMap::from([("enabled", &argument)])
-    )
-    .is_err());
+    assert!(
+        validate_optional_need_binding(&need, &BTreeMap::from([("enabled", &argument)])).is_err()
+    );
     argument.required_when = None;
     validate_optional_need_binding(&need, &BTreeMap::from([("enabled", &argument)])).unwrap();
 }

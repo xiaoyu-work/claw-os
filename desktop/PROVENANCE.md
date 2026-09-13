@@ -10,6 +10,9 @@ Its immutable source revision is recorded in `packaging/apps.lock.json`;
 the `cosmic-applets` host still links this product library. Shared Calendar
 read-only data access and policy helpers remain here in
 `applets/claw-applet-services`, extracted without changing their GPL terms.
+That same query code now also builds the Agent-owned `claw-calendar-reader`
+executable. Its GPL license ships with Agent; core invokes the bounded reader
+out of process rather than linking product UI or relicensing the query library.
 
 Clipboard's complete panel UI, CopyQ adapter, localization and desktop entry
 also moved with the original GPL license/SPDX notices to the

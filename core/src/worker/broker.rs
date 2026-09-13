@@ -420,6 +420,7 @@ fn required_verbs(command: Command) -> &'static [Verb] {
         "system.media-player.control" => {
             &[Verb::DESKTOP_MEDIA_OBSERVE, Verb::DESKTOP_MEDIA_CONTROL]
         }
+        "system.calendar.day" => &[Verb::DATA_DB_READ],
         "system.notification.control" => &[Verb::UI_NOTIFY, Verb::DATA_INBOX_READ],
         "system.browser.control" => &[
             Verb::BROWSER_TABS_READ,

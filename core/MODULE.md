@@ -48,7 +48,10 @@ persistence, and structured primitive dispatch.
 | `src/crypto.rs` | SHA-256/HMAC helpers with linear streaming updates and bounded partial-block buffering |
 | `src/worker/` | Shared hostile-worker sandbox: launch policy, Linux provider, per-launch brokers |
 | `src/apps.rs` | `app.json` discovery and side-effect-free schema generation |
+| `src/apps/installation.rs` | Reusable directory-install source preparation, verified preview, review-before-publication, in-place validation and atomic replacement/recovery |
+| `src/apps/lint.rs` | Shared static provider-import and MCP-entry checks for installation and CLI lint; never executes App code |
 | `src/bridge/local.rs` | Protected in-process Root App registration; held package review and owner/App deny checks before session creation |
+| `src/bridge/captured.rs` | Private launch-gate commands for ordinary Python/polyglot operations; App code waits for exact process binding |
 | `src/bridge/stdio.rs` | Generic declared-stdin operation hosting: held App binding, raw streams, cancellation and bounded EOF teardown |
 | `src/bridge/consent.rs` | Stdio launcher's read-only review/capability wait; retries unchanged registration without deciding or consuming consent |
 | `src/apps/permission_review.rs` | OS-catalog permission disclosure and comparison contract; not authorization |
@@ -57,7 +60,7 @@ persistence, and structured primitive dispatch.
 | `src/clawd/system_review.rs` | Root-broker review preparation, pending/show, privileged decisions and confirmation consumption |
 | `src/clawd/system_review/presentation.rs` | Authenticated App/capability projection into the shared terminal and native desktop DTO |
 | `src/router/system_review.rs` | Terminal review presentation and trusted-helper decisions; no local approval state |
-| `src/router/app_commands.rs` | Authenticated install preview, pre-publication permission review and atomic App replacement |
+| `src/router/app_commands.rs` | App CLI flags/output, trusted OS review, separate developer/AI consent and post-publication audit/desktop registration |
 | `src/audit.rs` | Hash-chained audit persistence |
 | `src/audit_policy.rs` | Per-command/per-tool allowlist every durable audit projection applies |
 | `src/session/` | Session storage and lifecycle |
@@ -76,6 +79,15 @@ desktop component. A displayed revision is comparison state only. Root
 controllers validate every decision and then delegate to the existing App
 confirmation or capability authority; installation never implies Allow All.
 
+The App directory-install backend consumes provenance verification and the
+shared App lint provider, never router or broker orchestration. Its review
+callback runs before publication, followed by fresh verification and comparison
+with the reviewed package. The CLI owns presentation and consent; the backend
+supplies neither permission nor App execution. This is a reusable prerequisite
+for future Root installation/rollback coordination, not that coordination or
+an admission fence. See
+[installation review](../docs/app-development.md#installation-permission-review).
+
 `cos app stdio <id> <operation> [args...]` is a human/host transport, not a
 model-callable command or executable selector. It runs a signed package-local
 primary entry for an ordinary `stdin: true` operation with only that operation's
@@ -91,6 +103,12 @@ native MCP planner and its nine fixed rows until App-owned native payloads are
 available. It never consults those rows or acquires a native exemption.
 The legacy native-host API, authority routes and Mail compatibility executable
 remain unchanged until their paired App/package cutover is consumable.
+
+`bridge::run_task_app` preserves ordinary App execution but requires the
+Root registration's persistent data binding. It shares the existing Python
+and polyglot operation implementation, not a second runtime or App kind.
+The [extension Host](src/extension_host/MODULE.md) owns per-task view admission
+and retirement; ordinary local data-root handling remains unchanged.
 
 Read [`src/agent/MODULE.md`](src/agent/MODULE.md) before changing agent code.
 Project-wide rules are in [`../ARCHITECTURE.md`](../ARCHITECTURE.md).
@@ -140,6 +158,9 @@ cargo test -p cos <test-filter> -- --test-threads=1
 
 # Shared App/capability review projection, controllers, terminal and bounded helper
 cargo test -p cos --lib --bin claw-approval-helper system_review -- --test-threads=1
+
+# App directory-install backend, shared lint and CLI presentation contracts
+cargo test -p cos --lib -- apps::installation:: apps::lint:: router::app_commands::tests:: --test-threads=1
 
 # Immutable product/capability fixture resolution.
 cargo test -p cos --test app_source_fixtures -- --test-threads=1

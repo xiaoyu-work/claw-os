@@ -16,6 +16,8 @@ use crate::clawd::state::DaemonState;
 use crate::extension_host::protocol::HostPurpose;
 use crate::provenance::runtime::PackageRef;
 
+mod retirement;
+
 const SERVICE_LEASE: Duration = Duration::from_secs(10 * 60 * 60);
 const LAZY_IDLE: Duration = Duration::from_secs(5 * 60);
 const SWEEP_INTERVAL: Duration = Duration::from_secs(30);
@@ -190,16 +192,18 @@ impl Drop for CapacityLease {
 
 struct ServiceRuntime {
     host: crate::extension_host::spawn::SpawnedExtensionHost,
-    identity: Option<crate::extension_host::identity::ExtensionIdentityLease>,
+    identity: crate::extension_host::identity::ExtensionIdentityLease,
     extension_uid: u32,
     lease: Arc<crate::extension_host::broker::ExtensionLease>,
-    broker_task: tokio::task::JoinHandle<()>,
+    broker_task: Option<tokio::task::JoinHandle<()>>,
+    broker_failure: Option<String>,
     client: Option<Arc<crate::extension_host::client::ExtensionHostClient>>,
     host_session_id: String,
     package: PackageRef,
     permission_policy: Vec<crate::approvals::app_policy::Block>,
     expires_at_ms: u64,
     always_on_ready: bool,
+    retiring: bool,
     _capacity: CapacityLease,
 }
 
@@ -276,7 +280,9 @@ impl AppServiceManager {
                 manager.sweep().await;
                 tokio::time::sleep(SWEEP_INTERVAL).await;
             }
-            manager.stop_all().await;
+            if let Err(error) = manager.stop_all().await {
+                tracing::error!(%error, "App service shutdown cleanup remains incomplete");
+            }
         })
     }
 
@@ -330,6 +336,9 @@ impl AppServiceManager {
                 }))
             };
         let mut slot = slot.lock().await;
+        if slot.runtime.as_ref().is_some_and(|runtime| runtime.retiring) {
+            slot.retire().await.map_err(BrokerError::unavailable)?;
+        }
         slot.lifecycle = prepared.lifecycle;
         let permission_policy =
             crate::approvals::app_policy::blocks(prepared.owner_uid, &prepared.app_id)
@@ -360,9 +369,7 @@ impl AppServiceManager {
             if host_exited {
                 slot.record_host_exit();
             }
-            if let Some(runtime) = slot.runtime.take() {
-                stop_runtime(runtime).await;
-            }
+            slot.retire().await.map_err(BrokerError::unavailable)?;
         }
         if slot.runtime.is_none() {
             if !slot.may_restart() {
@@ -376,12 +383,17 @@ impl AppServiceManager {
                 package: prepared.package.clone(),
                 lifecycle: prepared.lifecycle,
             };
-            self.evict_for_capacity(spec.owner_uid).await;
-            match self.start_runtime(&spec).await {
-                Ok(runtime) => slot.runtime = Some(runtime),
+            self.evict_for_capacity(spec.owner_uid)
+                .await
+                .map_err(BrokerError::unavailable)?;
+            match self.start_runtime(&spec, &mut slot).await {
+                Ok(()) => {}
                 Err(error) => {
                     slot.record_start_failure(&error);
-                    return Err(BrokerError::unavailable(error.to_string()));
+                    return Err(BrokerError::unavailable(join_cleanup_error(
+                        error.to_string(),
+                        slot.retire().await,
+                    )));
                 }
             }
         }
@@ -421,11 +433,9 @@ impl AppServiceManager {
                 }
                 Err(error) if host_fault_requires_retirement(error.category()) => {
                     slot.record_failure();
-                    if let Some(runtime) = slot.runtime.take() {
-                        stop_runtime(runtime).await;
-                    }
-                    return Err(BrokerError::unavailable(format!(
-                        "App service warm-up failed: {error}"
+                    return Err(BrokerError::unavailable(join_cleanup_error(
+                        format!("App service warm-up failed: {error}"),
+                        slot.retire().await,
                     )));
                 }
                 Err(error) => {
@@ -510,11 +520,9 @@ impl AppServiceManager {
             Ok(result) => Ok(result),
             Err(error) if host_fault_requires_retirement(error.category()) => {
                 slot.record_failure();
-                if let Some(runtime) = slot.runtime.take() {
-                    stop_runtime(runtime).await;
-                }
-                Err(BrokerError::indeterminate(format!(
-                    "App service call outcome is uncertain: {error}"
+                Err(BrokerError::indeterminate(join_cleanup_error(
+                    format!("App service call outcome is uncertain: {error}"),
+                    slot.retire().await,
                 )))
             }
             Err(error) => {
@@ -545,7 +553,13 @@ impl AppServiceManager {
     async fn start_runtime(
         self: &Arc<Self>,
         spec: &RuntimeSpec,
-    ) -> Result<ServiceRuntime, RuntimeStartError> {
+        slot: &mut ServiceSlot,
+    ) -> Result<(), RuntimeStartError> {
+        if slot.runtime.is_some() {
+            return Err(RuntimeStartError::admission(
+                "App service still holds its previous runtime",
+            ));
+        }
         let permission_policy = crate::approvals::app_policy::blocks(spec.owner_uid, &spec.app_id)
             .map_err(RuntimeStartError::admission)?;
         let app = current_app(&spec.app_id).map_err(RuntimeStartError::admission)?;
@@ -746,23 +760,6 @@ impl AppServiceManager {
                 true,
             ),
         };
-        if let Err(error) = crate::proc::register_session_for_owner(info, owner.uid) {
-            let containment = crate::agentd::supervisor::reap_extension_host(&mut host).await;
-            let cleanup = if containment.is_ok() {
-                cleanup_service_allocation(identity, owner.uid, extension.uid, &cleanup_paths, true)
-            } else {
-                drop(identity);
-                Err("identity retained because App service containment cleanup failed".to_string())
-            };
-            return Err(join_cleanup_error(
-                join_cleanup_error(
-                    format!("register App service host session: {error}"),
-                    containment,
-                ),
-                cleanup,
-            )
-            .into());
-        }
         let lease = Arc::new(crate::extension_host::broker::ExtensionLease::new(
             HostPurpose::AppService,
             service_id,
@@ -778,51 +775,39 @@ impl AppServiceManager {
             host.start_time_ticks,
             expires_at_ms,
         ));
-        let broker_task = tokio::spawn(crate::extension_host::broker::serve(
-            listener,
-            lease.clone(),
-            self.broker.state.clone(),
-            self.broker.admission.clone(),
-        ));
-        let client = match crate::extension_host::client::ExtensionHostClient::connect_controller(
-            host.binding.clone(),
-        )
-        .await
-        {
-            Ok(client) => client,
-            Err(error) => {
-                let runtime = ServiceRuntime {
-                    host,
-                    identity: Some(identity),
-                    extension_uid: extension.uid,
-                    lease,
-                    broker_task,
-                    client: None,
-                    host_session_id,
-                    package,
-                    permission_policy,
-                    expires_at_ms,
-                    always_on_ready: false,
-                    _capacity: capacity,
-                };
-                stop_runtime(runtime).await;
-                return Err(error.into());
-            }
-        };
-        Ok(ServiceRuntime {
+        slot.runtime = Some(ServiceRuntime {
             host,
-            identity: Some(identity),
+            identity,
             extension_uid: extension.uid,
-            lease,
-            broker_task,
-            client: Some(client),
+            lease: lease.clone(),
+            broker_task: None,
+            broker_failure: None,
+            client: None,
             host_session_id,
             package,
             permission_policy,
             expires_at_ms,
             always_on_ready: false,
+            retiring: true,
             _capacity: capacity,
-        })
+        });
+        crate::proc::register_session_for_owner(info, owner.uid)
+            .map_err(|error| format!("register App service host session: {error}"))?;
+        let runtime = slot.runtime.as_mut().ok_or_else(|| {
+            RuntimeStartError::host("App service lost its startup custody")
+        })?;
+        runtime.broker_task = Some(tokio::spawn(crate::extension_host::broker::serve(
+            listener,
+            lease,
+            self.broker.state.clone(),
+            self.broker.admission.clone(),
+        )));
+        let binding = runtime.host.binding.clone();
+        let startup = retirement::StartupGuard::new(runtime);
+        let client =
+            crate::extension_host::client::ExtensionHostClient::connect_controller(binding).await?;
+        startup.ready(client);
+        Ok(())
     }
 
     fn acquire_capacity(self: &Arc<Self>, owner_uid: u32) -> Result<CapacityLease, String> {
@@ -847,16 +832,17 @@ impl AppServiceManager {
         })
     }
 
-    async fn evict_for_capacity(self: &Arc<Self>, owner_uid: u32) {
+    async fn evict_for_capacity(self: &Arc<Self>, owner_uid: u32) -> Result<(), String> {
         let owner_full = self
             .owner_counts
             .lock()
-            .ok()
-            .and_then(|counts| counts.get(&owner_uid).copied())
+            .map_err(|_| "App service owner capacity is unavailable".to_string())?
+            .get(&owner_uid)
+            .copied()
             .unwrap_or_default()
             >= OWNER_SERVICE_LIMIT;
         if !owner_full && self.capacity.available_permits() > 0 {
-            return;
+            return Ok(());
         }
         let entries = self
             .slots
@@ -884,22 +870,34 @@ impl AppServiceManager {
             }
         }
         let Some((_, key, slot)) = candidate else {
-            return;
+            return Ok(());
         };
         let Ok(mut slot) = slot.try_lock() else {
-            return;
+            return Ok(());
         };
         if slot.lifecycle != McpLifecycle::Lazy {
-            return;
+            return Ok(());
         }
-        if let Some(runtime) = slot.runtime.take() {
+        if slot.runtime.is_some() {
             tracing::info!(
                 owner = key.owner_uid,
                 app = %key.app_id,
                 "evicting idle App service under capacity pressure"
             );
-            stop_runtime(runtime).await;
+            if let Err(error) = slot.retire().await {
+                tracing::error!(
+                    owner = key.owner_uid,
+                    app = %key.app_id,
+                    %error,
+                    "App service capacity reclamation remains incomplete"
+                );
+                return Err(
+                    "App service capacity could not be reclaimed because retirement remains incomplete"
+                        .to_string(),
+                );
+            }
         }
+        Ok(())
     }
 
     async fn warm_always_on_for_owner(self: &Arc<Self>, owner_uid: u32) {
@@ -946,6 +944,9 @@ impl AppServiceManager {
             let Ok(mut slot) = slot.try_lock() else {
                 continue;
             };
+            if slot.runtime.as_ref().is_some_and(|runtime| runtime.retiring) {
+                continue;
+            }
             slot.lifecycle = McpLifecycle::AlwaysOn;
             let (reusable, host_exited) = slot.runtime.as_mut().map_or((false, false), |runtime| {
                 let package_changed = runtime.package != spec.package;
@@ -962,20 +963,34 @@ impl AppServiceManager {
                 if host_exited {
                     slot.record_host_exit();
                 }
-                if let Some(runtime) = slot.runtime.take() {
-                    stop_runtime(runtime).await;
+                if let Err(error) = slot.retire().await {
+                    tracing::error!(
+                        owner = key.owner_uid,
+                        app = %key.app_id,
+                        %error,
+                        "always-on App service retirement remains incomplete"
+                    );
+                    continue;
                 }
                 if !slot.may_restart() {
                     continue;
                 }
-                self.evict_for_capacity(owner_uid).await;
-                match self.start_runtime(&spec).await {
-                    Ok(runtime) => {
-                        slot.runtime = Some(runtime);
+                if let Err(error) = self.evict_for_capacity(owner_uid).await {
+                    tracing::error!(
+                        owner = key.owner_uid,
+                        app = %key.app_id,
+                        %error,
+                        "cannot reclaim capacity for always-on App service"
+                    );
+                    continue;
+                }
+                match self.start_runtime(&spec, &mut slot).await {
+                    Ok(()) => {
                         slot.last_used = Instant::now();
                     }
                     Err(error) => {
                         slot.record_start_failure(&error);
+                        let error = join_cleanup_error(error.to_string(), slot.retire().await);
                         tracing::error!(
                             owner = key.owner_uid,
                             app = %key.app_id,
@@ -1014,9 +1029,7 @@ impl AppServiceManager {
                 }
                 Err(error) if host_fault_requires_retirement(error.category()) => {
                     slot.record_failure();
-                    if let Some(runtime) = slot.runtime.take() {
-                        stop_runtime(runtime).await;
-                    }
+                    let error = join_cleanup_error(error.to_string(), slot.retire().await);
                     tracing::error!(
                         owner = key.owner_uid,
                         app = %key.app_id,
@@ -1055,6 +1068,17 @@ impl AppServiceManager {
             let Ok(mut slot) = slot.try_lock() else {
                 continue;
             };
+            if slot.runtime.as_ref().is_some_and(|runtime| runtime.retiring) {
+                if let Err(error) = slot.retire().await {
+                    tracing::error!(
+                        owner = key.owner_uid,
+                        app = %key.app_id,
+                        %error,
+                        "App service retirement retry remains incomplete"
+                    );
+                }
+                continue;
+            }
             let lifecycle = slot.lifecycle;
             let idle = lifecycle == McpLifecycle::Lazy && slot.last_used.elapsed() >= LAZY_IDLE;
             let app_stopped = lifecycle == McpLifecycle::WhileAppRunning
@@ -1118,8 +1142,13 @@ impl AppServiceManager {
                         "App service host exited unexpectedly"
                     );
                 }
-                if let Some(runtime) = slot.runtime.take() {
-                    stop_runtime(runtime).await;
+                if let Err(error) = slot.retire().await {
+                    tracing::error!(
+                        owner = key.owner_uid,
+                        app = %key.app_id,
+                        %error,
+                        "App service retirement remains incomplete"
+                    );
                 }
             }
         }
@@ -1128,7 +1157,7 @@ impl AppServiceManager {
         }
     }
 
-    async fn stop_all(&self) {
+    async fn stop_all(&self) -> Result<(), String> {
         let slots = self
             .slots
             .lock()
@@ -1136,11 +1165,17 @@ impl AppServiceManager {
             .values()
             .cloned()
             .collect::<Vec<_>>();
+        let mut errors = Vec::new();
         for slot in slots {
             let mut slot = slot.lock().await;
-            if let Some(runtime) = slot.runtime.take() {
-                stop_runtime(runtime).await;
+            if let Err(error) = slot.retire().await {
+                errors.push(error);
             }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.join("; "))
         }
     }
 }
@@ -1153,62 +1188,6 @@ struct AuthorizationGuard {
 impl Drop for AuthorizationGuard {
     fn drop(&mut self) {
         self.state.revoke_app_authorization(&self.token);
-    }
-}
-
-async fn stop_runtime(mut runtime: ServiceRuntime) {
-    runtime.lease.close();
-    runtime.broker_task.abort();
-    for child in crate::proc::deregister_child_sessions_for_owner(
-        &runtime.host_session_id,
-        runtime.lease.owner_uid,
-    ) {
-        crate::clawd::authority::revoke_session_for_owner(&child, runtime.lease.owner_uid);
-        crate::provenance::runtime::deregister(runtime.lease.owner_uid, &child);
-    }
-    crate::proc::deregister_session_for_owner(&runtime.host_session_id, runtime.lease.owner_uid);
-    crate::clawd::authority::revoke_session_for_owner(
-        &runtime.host_session_id,
-        runtime.lease.owner_uid,
-    );
-    let cleanup = crate::agentd::supervisor::reap_extension_host(&mut runtime.host).await;
-    if cleanup.is_ok() {
-        let acl = crate::storage::remove_routed_extension_reader(
-            runtime.lease.owner_uid,
-            runtime.extension_uid,
-        );
-        let acl = join_cleanup_result(
-            acl,
-            crate::storage::purge_routed_extension_reader(runtime.extension_uid),
-        );
-        match acl {
-            Ok(()) => {
-                if let Some(identity) = runtime.identity.take() {
-                    if let Err(error) = identity.release() {
-                        tracing::error!(
-                            owner_uid = runtime.lease.owner_uid,
-                            app = ?runtime.host.binding.app_id,
-                            %error,
-                            "App service identity remains quarantined after cleanup"
-                        );
-                    }
-                }
-            }
-            Err(error) => {
-                tracing::error!(
-                    owner_uid = runtime.lease.owner_uid,
-                    app = ?runtime.host.binding.app_id,
-                    %error,
-                    "App service identity remains quarantined because ACL cleanup failed"
-                );
-            }
-        }
-    } else {
-        tracing::error!(
-            owner_uid = runtime.lease.owner_uid,
-            app = ?runtime.host.binding.app_id,
-            "App service containment cleanup failed"
-        );
     }
 }
 

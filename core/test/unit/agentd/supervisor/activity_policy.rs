@@ -216,12 +216,18 @@ fn policy_and_limit_stops_preserve_charged_attempts_and_respect_commit_phase() {
                 )
                 .unwrap();
             let store = Store::with_root(fixture._dir.path().join("jobs")).unwrap();
+            let session = crate::session::create("bounded Activity attempt").unwrap();
+            crate::session::update_meta(&session, |meta| {
+                meta.owner_uid = Some(1000);
+                meta.activity_id = Some(activity.id.clone());
+            })
+            .unwrap();
             let submitted = store
                 .submit_with_activity(
                     "bounded attempt".into(),
                     None,
                     None,
-                    Some("session-a".into()),
+                    Some(session.to_string()),
                     Some(20),
                     false,
                     Some(1000),

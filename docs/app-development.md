@@ -23,6 +23,22 @@ services, and shared libraries. `mcp.access` accepts only `system_agent` and
 cannot access App services or mint system Agent tasks. The broker enforces
 this using authenticated process/session ancestry, not environment flags.
 
+`COS_DATA_DIR` names only the App's own data. Normal owner launches, service
+Hosts and task-host ordinary operations use the same existing owner/App
+backing partition. Isolated Hosts see a private mapped path, so Apps must use
+the supplied data root rather than reconstruct another App's directory or
+derive it from Host HOME. Task registration must supply its Root-owned binding;
+missing bindings are errors, not empty temporary stores. See
+[persistent data and update behavior](updating.md#app-data-moves-into-per-app-directories).
+
+The public App data client's Calendar day/today operations read the
+authenticated owner's Calendar store through the OS service, not through the
+caller's local data directory. They require the existing named
+`data.db.read:calendar` capability, independently of caller identity or language.
+Write authority does not substitute for read authority, and the response grants
+no filesystem access. Calendar's provider, overlap, timezone and sorting
+semantics are unchanged; the public SDK request/response format is unchanged.
+
 Bundled source ownership is independent of the installed App identity.
 Migrated business products live under external `products/`; shared-capability
 clients `doc`, `db`, `kv`, `net` and `summarize` live under external `capabilities/`,
@@ -757,6 +773,15 @@ previous version untouched. Manifest disclosure is defined in
 [`apps/permission_review.rs`](../core/src/apps/permission_review.rs);
 the terminal and desktop share the typed
 [`SystemReview` contract](../crates/clawd-client/MODULE.md).
+
+The reusable [directory-install backend](../core/src/apps/installation.rs)
+owns source validation, private staging, in-place revalidation and filesystem
+replacement/recovery. It and `cos app lint` use the same
+[static lint implementation](../core/src/apps/lint.rs), without executing App
+entrypoints. CLI flags, OS review presentation, developer trust and AI consent
+remain in the router. This backend extraction does not provide authenticated
+Root installation/rollback coordination or admission fencing.
+
 Brokered operation/GUI/native registration and prepared MCP calls also require
 owner review before activation, including preinstalled Apps. Unreviewed
 background services are not warmed automatically. Existing App permission

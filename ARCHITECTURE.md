@@ -69,7 +69,7 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | Notification presentation definition | Renderer-independent private presentation contract with bounded text/pixels; no grants, product configuration or durable notification state | `claw-os-sdk/rust/notification-presentation/`, `claw-os-sdk/wire/v1/notification-presentation.md` |
 | App client sources | Product UI/business/MCP implementations, manifests and declared entrypoints | External `clawos-app/products/` and `clawos-app/capabilities/` |
 | App/adapter integration | Provenance-gated manifest binding, authenticated App Host/bridge and protocol adapter integration | `adapters/`, `core/src/apps.rs`, `core/src/bridge.rs`, `core/src/worker/` |
-| App permission disclosure | OS-catalog review of authenticated manifest needs and execution surfaces, with a permission-contract digest; directory installs review before publication and never grant capabilities | `core/src/apps/permission_review.rs`, `core/src/router/app_commands.rs` |
+| App permission disclosure and directory installation | OS-catalog review of authenticated manifest needs and execution surfaces, with a permission-contract digest; reusable directory installs review before publication and never grant capabilities | `core/src/apps/permission_review.rs`, `core/src/apps/installation.rs`, `core/src/router/app_commands.rs` |
 | Extension provenance | Publisher signing, trust roots, package verification, and the shared bounded installer for Apps, Skills, MCP/adapter packages, and Agent extensions | `core/src/provenance/` |
 | Update freshness | Signed release-security manifest, monotonic local security floor, one-use recovery authorizations, and the install/activation/runtime gates that refuse a superseded release | `core/src/update/`, `packaging/release-security/`, `packaging/deb/common/` |
 | SDK/runtime | One public multi-language App SDK, including MCP service APIs, plus internal bundled-App policy helpers | `claw-os-sdk/`, `cos-runtime/` |
@@ -107,6 +107,15 @@ verified package before publication. `--yes` cannot replace first review or
 grant AI consent. Clients verify the broker's root Unix peer; a returned JSON
 flag or comparison digest is not approval authority.
 
+Directory-install validation, private staging, replacement and recovery live
+in `apps::installation`, below CLI or future Root orchestration. Installation
+and CLI lint consume the same static `apps::lint` implementation. These App
+providers consume provenance; provenance does not depend on Apps, Agent or
+`clawd`. The backend accepts a pre-publication review callback and re-verifies
+the reviewed package before publication, without supplying permission or
+running an App entrypoint. CLI flags, trusted terminal review, developer trust,
+AI consent and post-publication presentation remain in the router.
+
 Brokered App registrations and prepared MCP calls require owner review, while
 unreviewed background services remain inactive. The OS terminal and native
 approval gate share the renderer-independent `clawd-client::system_review`
@@ -143,13 +152,30 @@ descriptors and descendants before success; denial remains durable on failure.
 Standalone App installation, replacement, rollback and provenance mutations
 still need authenticated Root coordination and admission fencing.
 
+Ordinary captured App operations now share the runner's private launch gate:
+the target entry cannot execute before its launcher completes exact process
+binding. Stdin bytes, limits and EOF are preserved. This closes the
+spawn-before-bind window; it is not a package-mutation fence or proof that
+ordinary App descendants have retired.
+
+The App-service manager now retains non-reusable runtime, identity and capacity
+custody across incomplete or cancelled retirement. Cleanup errors propagate to
+dispatch/eviction/shutdown; a retry must confirm accepted broker connections,
+processes, mounts, ACLs and identity release before admitting a replacement.
+This service-lifetime boundary does not substitute for the installer
+transaction above.
+
 App-service Host storage reuses the existing owner/App partition through the
 [Root data binding](core/src/extension_host/MODULE.md), not a second directory
 scheme. An exact-App private idmapped mount translates the leased execution
 UID/GID without changing on-disk ownership. Host cleanup removes its mount and
 runtime state, never the persistent backing data. Source identity/topology
-changes retire the service. Legacy task-host operations and cross-App Calendar
-reads still need their own completed bindings.
+changes retire the service. Task-host ordinary operations acquire the same
+backing partition through a Root-owned per-App view after normal registration
+authorization. The registration reply binds the operation's data root; there
+is no task-scratch fallback or caller-selected owner directory. Calendar
+observation uses the owner-scoped broker service below, never another App's
+private directory mounted into the consumer.
 
 Replacing the authority or compositor ends its display epoch and requires
 coordinated logout/re-login, not a hot owner-socket handoff. See
@@ -302,6 +328,17 @@ development export. This source interface does not release a new SDK, replace
 the current App pin, complete authenticated GUI/resource admission, or authorize
 CopyQ/Wayland access. The existing linked shell paths above remain until their
 separate coordinated cutover.
+
+Calendar day reads now cross `system.calendar.day` under the exact
+`data.db.read:calendar` grant. `clawd` selects the authenticated owner's existing
+Calendar store and gives an unprivileged OS reader a private, descriptor-pinned,
+kernel-read-only/NOSYMFOLLOW directory view. Live sidecars retain SQLite's
+transaction and checkpoint semantics. The query/filter implementation stays
+in the existing GPL library; the Agent-owned `claw-calendar-reader` executable
+keeps core free of a UI/GPL library dependency. Applet clients receive only
+bounded records through their unchanged public SDK protocol. Headless and
+desktop consumers use the same broker service; no App call, source checkout
+at runtime or second Calendar data store is introduced.
 The complete standalone native Launcher is also owned by
 `clawos-app/products/launcher` and built from `build/native-apps/cosmic-launcher`.
 Its executable/resources and `cosmic-launcher` descriptor stay in the desktop

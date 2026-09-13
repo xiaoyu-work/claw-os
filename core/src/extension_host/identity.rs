@@ -32,6 +32,8 @@ pub struct ExtensionIdentity {
 pub struct ExtensionIdentityPool {
     identities: Vec<ExtensionIdentity>,
     in_use: Mutex<HashSet<u32>>,
+    // Execution uid -> authenticated owner, including leases still held during retirement.
+    retiring_owners: Mutex<HashMap<u32, u32>>,
     retained_locks: Mutex<HashMap<u32, std::fs::File>>,
     validate_on_acquire: bool,
     execution_gid: u32,
@@ -82,6 +84,7 @@ impl ExtensionIdentityPool {
         Arc::new(Self {
             identities,
             in_use: Mutex::new(HashSet::new()),
+            retiring_owners: Mutex::new(HashMap::new()),
             retained_locks: Mutex::new(HashMap::new()),
             validate_on_acquire,
             execution_gid,
@@ -101,9 +104,7 @@ impl ExtensionIdentityPool {
             .in_use
             .lock()
             .map_err(|_| "extension identity pool is poisoned".to_string())?;
-        if purpose == super::protocol::HostPurpose::AppService {
-            self.require_service_cleanup(owner_uid)?;
-        }
+        self.require_owner_cleanup(owner_uid)?;
         for (index, identity) in self.identities.iter().enumerate() {
             if !identity_supports_purpose(index, purpose) {
                 continue;
@@ -127,6 +128,7 @@ impl ExtensionIdentityPool {
                     );
                     in_use.insert(identity.uid);
                     self.retain_lock(identity.uid, lock);
+                    self.require_owner_cleanup(owner_uid)?;
                     continue;
                 }
             }
@@ -149,21 +151,32 @@ impl ExtensionIdentityPool {
         ))
     }
 
-    fn require_service_cleanup(&self, owner_uid: u32) -> Result<(), String> {
+    fn require_owner_cleanup(&self, owner_uid: u32) -> Result<(), String> {
+        let retiring = self
+            .retiring_owners
+            .lock()
+            .map_err(|_| "extension retiring owners are poisoned".to_string())?;
+        for (&uid, &retiring_owner) in retiring.iter() {
+            if retiring_owner == owner_uid {
+                return Err(format!(
+                    "extension cleanup is unconfirmed for owner {owner_uid} (execution uid {uid}); refusing a new persistent-data writer"
+                ));
+            }
+        }
         let retained = self.retained_locks.lock()
             .map_err(|_| "extension quarantine locks are poisoned".to_string())?
             .keys().copied().collect::<Vec<_>>();
         for uid in retained {
-            if !(FIRST_UID + TASK_IDENTITY_COUNT..FIRST_UID + IDENTITY_COUNT).contains(&uid) {
+            if retiring.contains_key(&uid) {
                 continue;
             }
             let record = match self.quarantine_dir.as_deref() {
                 Some(directory) => read_cleanup_record(directory, uid)?,
                 None => None,
             };
-            if service_cleanup_blocks_owner(record.as_ref(), owner_uid) {
+            if cleanup_blocks_owner(record.as_ref(), owner_uid) {
                 return Err(format!(
-                    "App service cleanup is unconfirmed for owner {owner_uid} (execution uid {uid}); refusing a new persistent-data writer"
+                    "extension cleanup is unconfirmed for owner {owner_uid} (execution uid {uid}); refusing a new persistent-data writer"
                 ));
             }
         }
@@ -270,6 +283,9 @@ impl ExtensionIdentityLease {
     }
 
     pub fn begin_task(&mut self, owner_uid: u32) -> Result<(), String> {
+        if self.lock.is_none() {
+            return Err("extension identity lease has already been released".to_string());
+        }
         if self.cleanup_record.is_some() {
             return Err("extension identity already has an active cleanup record".to_string());
         }
@@ -303,35 +319,85 @@ impl ExtensionIdentityLease {
         Ok(())
     }
 
+    pub(crate) fn begin_retirement(&mut self) -> Result<(), String> {
+        if self.lock.is_none() {
+            return Err("extension identity lease has already been released".to_string());
+        }
+        let record = self
+            .cleanup_record
+            .as_ref()
+            .ok_or_else(|| "extension identity cleanup record was not started".to_string())?;
+        if record.uid != self.identity.uid {
+            return Err("extension identity cleanup uid changed".to_string());
+        }
+        // Serialize the owner fence with acquisition's in-use check and owner admission.
+        let in_use = self
+            .pool
+            .in_use
+            .lock()
+            .map_err(|_| "extension identity pool is poisoned".to_string())?;
+        if !in_use.contains(&self.identity.uid) {
+            return Err("extension identity lease is not in use".to_string());
+        }
+        let mut retiring = self
+            .pool
+            .retiring_owners
+            .lock()
+            .map_err(|_| "extension retiring owners are poisoned".to_string())?;
+        if retiring
+            .get(&self.identity.uid)
+            .is_some_and(|owner| *owner != record.owner_uid)
+        {
+            return Err("extension identity retirement owner changed".to_string());
+        }
+        retiring.insert(self.identity.uid, record.owner_uid);
+        self.release_on_drop = false;
+        Ok(())
+    }
+
     pub fn release(mut self) -> Result<(), String> {
+        self.release_checked()
+    }
+
+    pub(crate) fn release_checked(&mut self) -> Result<(), String> {
+        if self.lock.is_none() {
+            return Ok(());
+        }
+        self.release_on_drop = false;
+        if self.cleanup_record.is_some() {
+            self.begin_retirement()?;
+        }
         if uid_has_process(self.identity.uid) {
-            self.release_on_drop = false;
             return Err(format!(
                 "extension uid {} still owns a process after cleanup",
                 self.identity.uid
             ));
         }
         if uid_runtime_exists(self.identity.uid) {
-            self.release_on_drop = false;
             return Err(format!(
                 "/run/user/{} still exists after extension cleanup",
                 self.identity.uid
             ));
         }
+        let mut in_use = self
+            .pool
+            .in_use
+            .lock()
+            .map_err(|_| "extension identity pool is poisoned".to_string())?;
+        let mut retiring = self
+            .pool
+            .retiring_owners
+            .lock()
+            .map_err(|_| "extension retiring owners are poisoned".to_string())?;
         if self.cleanup_record.is_some() {
             if let Some(directory) = self.pool.quarantine_dir.as_deref() {
-                if let Err(error) = remove_cleanup_record(directory, self.identity.uid) {
-                    if let Some(lock) = self.lock.take() {
-                        self.pool.retain_lock(self.identity.uid, lock);
-                    }
-                    return Err(error);
-                }
+                remove_cleanup_record(directory, self.identity.uid)?;
             }
             self.cleanup_record = None;
         }
-        self.pool.release(self.identity.uid);
+        retiring.remove(&self.identity.uid);
+        in_use.remove(&self.identity.uid);
         self.lock.take();
-        self.release_on_drop = false;
         Ok(())
     }
 }
@@ -358,7 +424,7 @@ struct CleanupRecord {
     task_name: Option<String>,
 }
 
-fn service_cleanup_blocks_owner(record: Option<&CleanupRecord>, owner_uid: u32) -> bool {
+fn cleanup_blocks_owner(record: Option<&CleanupRecord>, owner_uid: u32) -> bool {
     record.is_none_or(|record| record.owner_uid == owner_uid)
 }
 
@@ -488,11 +554,11 @@ fn read_cleanup_record(directory: &Path, uid: u32) -> Result<Option<CleanupRecor
 
 fn remove_cleanup_record(directory: &Path, uid: u32) -> Result<(), String> {
     let path = marker_path(directory, uid);
-    if read_root_policy_file(&path, Some(0o600), true)?.is_none() {
-        return Ok(());
+    if read_root_policy_file(&path, Some(0o600), true)?.is_some() {
+        std::fs::remove_file(&path)
+            .map_err(|error| format!("remove extension cleanup record: {error}"))?;
     }
-    std::fs::remove_file(&path)
-        .map_err(|error| format!("remove extension cleanup record: {error}"))?;
+    // A previous unlink may have succeeded before the parent sync failed.
     sync_directory(directory)
 }
 

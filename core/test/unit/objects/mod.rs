@@ -152,12 +152,12 @@ fn mcp_only_objects_are_described_from_the_verified_manifest_without_execution()
     let app = root.path().join("demo");
     std::fs::create_dir(&app).unwrap();
     std::fs::write(app.join("app.json"), json!({
-        "schema_version":2,"id":"demo","version":"1","name":"Demo",
-        "objects":{"entry":{"label":"Entry","resolve":{"operation":"get","id_arg":"key"}}},
+        "schema_version":2,"id":"demo","version":"1","name":{"en":"Demo"},
+        "objects":{"entry":{"label":{"en":"Entry"},"resolve":{"operation":"get","id_arg":"key"}}},
         "mcp":{"entry":"server.py","tools":[{
-            "name":"demo.get","summary":"Read exactly one key",
+            "name":"demo.get","summary":{"en":"Read exactly one key"},
             "args":[{"name":"key","kind":"name","required":true}],
-            "needs":[{"verb":"data.kv.read","scope":{"kind":"from-arg","arg":"key"},"why":"Read key"}]
+            "needs":[{"verb":"data.kv.read","scope":{"kind":"from-arg","arg":"key"},"why":{"en":"Read key"}}]
         }]}
     }).to_string()).unwrap();
     std::fs::write(
