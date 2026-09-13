@@ -190,8 +190,10 @@ through a private idmapped view. The normal derivation still selects only
 `apps/<app-id>`; the visible runtime path is not a new store or a whole-owner
 mount. Files retain the owner's on-disk identity across Host/UID replacement.
 The [service lifetime](../extension_host/MODULE.md) owns this binding and
-unmounts it before runtime cleanup. Legacy task-host operation binding remains
-separate; no temporary-store fallback is selected for an App service.
+unmounts it before runtime cleanup. Task-host ordinary operations acquire
+the same exact-App view only after Root registration authorization. The bridge
+requires that returned data binding before deriving either Python or other
+ordinary workers; no Host-private temporary-store fallback is selected.
 
 App-owned common
 support and OS SDK/runtime use the existing read-only `/usr/lib/cos/python`

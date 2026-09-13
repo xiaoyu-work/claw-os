@@ -29,6 +29,9 @@ dispatched and reusable test/publication pipelines.
 - Exercise App-service data views with real sandboxed MCP/SQLite writes across
   distinct execution UIDs and mount lifetimes, retaining owner file identity
   and refusing foreign roots, aliases, submounts and replaced bindings.
+- Exercise task-host ordinary App registration and persistent SQLite writes
+  through authenticated private broker messages, across Host namespace/UID
+  replacement, without exposing caller-selected data roots.
 - Build shared Docker/WSL images per architecture.
 - Build and sign independent multi-architecture APT packages/repository.
 - Build the React/Vite web desktop as an independent Pages input.

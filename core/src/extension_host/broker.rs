@@ -90,6 +90,7 @@ pub struct ExtensionLease {
     pub host_start_time_ticks: Option<u64>,
     deadline_ms: AtomicU64,
     closed: AtomicBool,
+    task_app_data: Option<Arc<super::spawn::TaskAppData>>,
 }
 
 impl ExtensionLease {
@@ -124,7 +125,13 @@ impl ExtensionLease {
             host_start_time_ticks,
             deadline_ms: AtomicU64::new(deadline_ms),
             closed: AtomicBool::new(false),
+            task_app_data: None,
         }
+    }
+
+    pub fn with_task_app_data(mut self, host: &super::spawn::SpawnedExtensionHost) -> Self {
+        self.task_app_data = host.task_app_data();
+        self
     }
 
     pub fn renew(&self, lease: Duration) -> u64 {
@@ -135,6 +142,9 @@ impl ExtensionLease {
 
     pub fn close(&self) {
         self.closed.store(true, Ordering::SeqCst);
+        if let Some(data) = &self.task_app_data {
+            data.close();
+        }
     }
 
     fn verify_live(&self) -> Result<(), String> {
@@ -414,6 +424,7 @@ async fn serve_connection(
             capability_generation: lease.capability_generation.clone(),
             host_pid: lease.host_pid,
             host_start_time_ticks: lease.host_start_time_ticks,
+            task_app_data: lease.task_app_data.clone(),
         },
     );
 

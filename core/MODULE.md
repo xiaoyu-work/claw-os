@@ -88,6 +88,12 @@ available. It never consults those rows or acquires a native exemption.
 The legacy native-host API, authority routes and Mail compatibility executable
 remain unchanged until their paired App/package cutover is consumable.
 
+`bridge::run_task_app` preserves ordinary App execution but requires the
+Root registration's persistent data binding. It shares the existing Python
+and polyglot operation implementation, not a second runtime or App kind.
+The [extension Host](src/extension_host/MODULE.md) owns per-task view admission
+and retirement; ordinary local data-root handling remains unchanged.
+
 Read [`src/agent/MODULE.md`](src/agent/MODULE.md) before changing agent code.
 Project-wide rules are in [`../ARCHITECTURE.md`](../ARCHITECTURE.md).
 

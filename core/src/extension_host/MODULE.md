@@ -81,6 +81,7 @@ extensions.
 | `identity.rs` | Exact package-created account/manifest/subid validation, disjoint task/service leasing, and safe reuse |
 | `spawn.rs` | Privilege drop, fd/env/resource isolation, mandatory cgroup-v2 containment, optional namespaces, verified descendant cleanup |
 | `spawn/app_data.rs` | Exact owner/App persistent directory binding, private UID/GID-mapped service view, source freshness and checked unmount |
+| `spawn/task_data.rs` | Per-registration Task App data views; exact Host/owner binding, bounded mount admission and task-owned cleanup |
 | `child_isolation.rs` | Per-App/MCP bubblewrap PID/proc/empty-root isolation and verified snapshots |
 | `client.rs` | Purpose-bound controller client used by task workers and `clawd` |
 | `host.rs` | Host process, purpose-specific control admission, App/MCP lifecycle and cancellation |
@@ -176,14 +177,31 @@ filesystems fail explicitly. Cleanup unmounts the data view before deleting
 runtime paths; it never traverses or removes the persistent backing directory.
 If later temporary-mount cleanup is blocked, retries accept the already
 unmounted data view but still require the remaining resources to retire.
-An unconfirmed service cleanup fences new service starts for that owner using
-the existing durable UID-quarantine record. Switching to another leased UID
-cannot reopen persistent data while an earlier service may still retain it;
-unknown quarantine ownership also blocks admission. Other owners and task-only
-quarantines keep their existing behavior.
-Task Host `RunApp`, configured external MCP and Agent-extension scratch state
-retain their existing private paths in this slice. This does not complete
-legacy task-path binding or cross-App Calendar resource access.
+An unconfirmed Host cleanup fences new task and service starts for that owner
+using the existing durable UID-quarantine record. Switching purpose or leased
+UID cannot reopen persistent data while an earlier Host may still retain it;
+unknown quarantine ownership also blocks admission. Known other owners remain
+independent.
+
+Task Host `RunApp` uses the same backing partition and idmapping implementation.
+It starts with no App data views. After normal verified-manifest, operation,
+review and capability authorization, `app_session.register` attaches only the
+requested App to the Root-held task namespace and returns `task_app_data_dir`.
+The private broker's in-process custody reference, not request JSON, identifies
+that namespace. Registration is restricted to the exact live Host process;
+children, other tasks and App-owned agents cannot select it. MCP App calls
+continue through the separate exact-App service Host.
+
+The bridge requires the returned binding for task operations and never
+substitutes Host HOME or an environment-supplied data root. Python and other
+ordinary runtimes share this selection before sandbox derivation. At most 64
+distinct App views are held for one task; a reused view rechecks its source
+identity/topology. Failed or uncertain mount setup stops further admission
+and retains the target for cleanup. Lease closure and supervisor reaping stop
+new bindings before all task views are unmounted ahead of runtime deletion.
+Configured external MCP and Agent-extension scratch state remain private and
+temporary. Cross-App Calendar resource reads still require their own provider
+binding; this does not expose one App's private files to another.
 
 The uid pool is the fixed package-created account set `cos-ext-00..63`
 (`61000..61063`), outside systemd DynamicUser. Identities `00..55` are reserved
@@ -236,3 +254,9 @@ sandboxed MCP/SQLite writes through two distinct execution UIDs and mount
 lifetimes, then reads the same files from the owner view. The companion case
 refuses aliases, foreign owners, nested mounts and replaced bindings. These
 are storage/isolation checks, not a release or complete installed-App acceptance.
+
+`spawn::task_data::tests::task_app_registration_binds_persistent_data_after_authorization`
+uses the same private Root requirements and CLI input. It exercises signed
+ordinary App operations through real broker registration, process binding and
+the worker sandbox across two Task Host namespaces/UIDs. Unknown/denied
+operations and forged owner/task/path inputs must create no data view.

@@ -281,6 +281,7 @@ pub(crate) struct AppIdentitySession {
     /// egress and its broker authority from, so the isolation shape and
     /// the capability grant cannot describe different worlds.
     granted_caps: CapSet,
+    task_app_data_dir: Option<std::path::PathBuf>,
     gui_data_dir: Option<std::path::PathBuf>,
     gui_retired: bool,
 }
@@ -526,6 +527,7 @@ impl AppIdentitySession {
             parent_caps: None,
             package,
             granted_caps: CapSet::new(),
+            task_app_data_dir: None,
             gui_data_dir: None,
             gui_retired: false,
             relay: crate::worker::relay_slot(),
@@ -786,6 +788,7 @@ impl AppIdentitySession {
                 .map_err(|error| format!("invalid Root GUI data-directory binding: {error}"))?,
             None => None,
         };
+        let task_app_data_dir = decode_task_app_data_dir(result.get("task_app_data_dir"))?;
         Ok(Self {
             session_id,
             backend: AppSessionBackend::Clawd {
@@ -795,6 +798,7 @@ impl AppIdentitySession {
             parent_caps,
             package: package.clone(),
             granted_caps,
+            task_app_data_dir,
             gui_data_dir,
             gui_retired: false,
             relay: crate::worker::relay_slot(),
@@ -856,6 +860,7 @@ impl AppIdentitySession {
             parent_caps: Some(parent_caps),
             package: launch.package_ref(),
             granted_caps: caps,
+            task_app_data_dir: None,
             gui_data_dir: None,
             gui_retired: false,
             relay: crate::worker::relay_slot(),
@@ -915,6 +920,10 @@ impl AppIdentitySession {
             AppSessionBackend::Local { proc_data_dir }
             | AppSessionBackend::Clawd { proc_data_dir, .. } => proc_data_dir,
         }
+    }
+
+    fn operation_data_root<'a>(&'a self, local: Option<&'a str>) -> Result<&'a str, String> {
+        registered_operation_data_root(self.task_app_data_dir.as_deref(), local)
     }
 
     /// Authority the launch's private broker endpoint answers with.
@@ -1004,6 +1013,25 @@ fn prepare_app_worker(
     })?;
     crate::worker::audit::launched(&prepared.facts, Some(session.id()));
     Ok(prepared)
+}
+
+fn decode_task_app_data_dir(value: Option<&serde_json::Value>) -> Result<Option<std::path::PathBuf>, String> {
+    let Some(value) = value else { return Ok(None); };
+    let path = serde_json::from_value::<std::path::PathBuf>(value.clone())
+        .map_err(|error| format!("invalid Root Task App data binding: {error}"))?;
+    if !path.is_absolute() || path.components().any(|component| {
+        matches!(component, std::path::Component::ParentDir | std::path::Component::CurDir)
+    }) {
+        return Err("Root Task App data binding is not an absolute normalized path".into());
+    }
+    Ok(Some(path))
+}
+
+fn registered_operation_data_root<'a>(bound: Option<&'a Path>, local: Option<&'a str>) -> Result<&'a str, String> {
+    match bound {
+        Some(path) => path.to_str().ok_or_else(|| "Task App data path is not UTF-8".into()),
+        None => local.ok_or_else(|| "Task App registration omitted its Root-owned data binding".into()),
+    }
 }
 
 /// Runtime selection for an App's session server.
@@ -2082,6 +2110,17 @@ pub fn run_python_app_with_stdin(
     apps_dir: &str,
     stdin_data: Option<Vec<u8>>,
 ) -> Result<Option<String>, String> {
+    run_python_operation(launch, command, args, Some(data_dir), apps_dir, stdin_data)
+}
+
+fn run_python_operation(
+    launch: &AppLaunch,
+    command: &str,
+    args: &[String],
+    data_dir: Option<&str>,
+    apps_dir: &str,
+    stdin_data: Option<Vec<u8>>,
+) -> Result<Option<String>, String> {
     // Dynamic App execution is model-reachable, so it belongs in the
     // unprivileged worker, never in the root broker's address space.
     crate::agentd::guard::ensure_agent_runtime_allowed("Python App execution")?;
@@ -2099,6 +2138,7 @@ pub fn run_python_app_with_stdin(
     let binding = launch.bind(&["main.py".to_string()])?;
     let (mut app_session, effective_args) =
         AppIdentitySession::for_operation(launch, &app_id, command, args)?;
+    let data_dir = app_session.operation_data_root(data_dir)?;
     let wrapper = python_wrapper(&main_py, command, &effective_args, data_dir, apps_dir)?;
     let stdin_data = validated_operation_stdin(launch, command, stdin_data)?;
 
@@ -2243,6 +2283,26 @@ pub fn run_app_with_stdin(
     apps_dir: &str,
     stdin_data: Option<Vec<u8>>,
 ) -> Result<Option<String>, String> {
+    run_operation(launch, command, args, Some(data_dir), apps_dir, stdin_data)
+}
+
+pub(crate) fn run_task_app(
+    launch: &AppLaunch,
+    command: &str,
+    args: &[String],
+    apps_dir: &str,
+) -> Result<Option<String>, String> {
+    run_operation(launch, command, args, None, apps_dir, None)
+}
+
+fn run_operation(
+    launch: &AppLaunch,
+    command: &str,
+    args: &[String],
+    data_dir: Option<&str>,
+    apps_dir: &str,
+    stdin_data: Option<Vec<u8>>,
+) -> Result<Option<String>, String> {
     // Runtime and entry come from the verified snapshot's manifest,
     // parsed once. There is no path re-read here and no unsigned
     // fallback: a package that did not verify never reaches this
@@ -2270,7 +2330,7 @@ pub fn run_app_with_stdin(
                  file an issue if you need a per-app entry override"
             ));
         }
-        return run_python_app_with_stdin(launch, command, args, data_dir, apps_dir, stdin_data);
+        return run_python_operation(launch, command, args, data_dir, apps_dir, stdin_data);
     }
 
     let entry_path = app_dir.join(&entry);
@@ -2304,6 +2364,7 @@ pub fn run_app_with_stdin(
         AppIdentitySession::for_operation(launch, &app_id, command, args)?;
     let args_json = serde_json::to_string(&effective_args)
         .map_err(|e| format!("failed to serialize args: {e}"))?;
+    let data_dir = app_session.operation_data_root(data_dir)?;
     let stdin_data = validated_operation_stdin(launch, command, stdin_data)?;
 
     let extra_env = BTreeMap::from([

@@ -1028,7 +1028,7 @@ async fn start_extension_host(
         host.pid,
         host.start_time_ticks,
         expires_at_ms,
-    ));
+    ).with_task_app_data(&host));
     let broker_task = tokio::spawn(crate::extension_host::broker::serve(
         listener,
         lease.clone(),
@@ -2221,6 +2221,7 @@ async fn reap(child: &mut tokio::process::Child, pid: u32) {
 pub(crate) async fn reap_extension_host(
     host: &mut crate::extension_host::spawn::SpawnedExtensionHost,
 ) -> Result<(), String> {
+    host.close_app_data();
     let _ = host.child.start_kill();
     let containment = host.cgroup.cleanup().await;
     let reaped = match tokio::time::timeout(SHUTDOWN_GRACE, host.child.wait()).await {

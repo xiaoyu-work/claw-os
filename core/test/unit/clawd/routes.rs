@@ -279,6 +279,7 @@ fn cli_and_private_app_service_routes_are_separate() {
         capability_generation: "a".repeat(16),
         host_pid: 42,
         host_start_time_ticks: Some(1),
+        task_app_data: None,
     });
     assert_eq!(private.authorize(&task_host), Ok(()));
 }
@@ -330,6 +331,7 @@ fn root_only_commands_are_not_reachable_by_a_user_peer() {
         capability_generation: "a".repeat(16),
         host_pid: 42,
         host_start_time_ticks: Some(1),
+        task_app_data: None,
     });
     assert_eq!(private.authorize(&task_host), Ok(()));
     task_host.extension_host.as_mut().unwrap().purpose =

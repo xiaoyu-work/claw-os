@@ -94,6 +94,15 @@ harmless processes, never real Settings, polkit or user grants.
 
 ## Wire Protocol
 
+Task Host ordinary-operation registrations additionally return
+`task_app_data_dir`, the private view of the authenticated owner/App partition.
+The request cannot choose a data path, owner or mount namespace. Preparation
+follows verified manifest/operation review and capability settlement, before
+the child session is published. The Root-held Host custody reference is
+in-process only; public peers and App children cannot supply it. The task bridge
+requires this response field rather than silently using Host scratch data.
+Other registration clients retain their existing optional response behavior.
+
 `system.package.install` and `system.package.control` accept any authenticated
 client with the existing Critical `sys.package` grant for the exact requested
 package. Global actions still require explicit wildcard authority. The `pkg`

@@ -284,6 +284,13 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
     let app_id = required_string(&params, "app_id")?;
     let expected_package = required_package_ref(&params)?;
     let kind = launch_kind(&params)?;
+    if client.extension_host.as_ref().is_some_and(|host| {
+        host.purpose == crate::extension_host::protocol::HostPurpose::Task
+    }) && kind != LaunchKind::Operation {
+        return Err(BrokerError::authorization(
+            "Task Hosts register ordinary App operations; MCP calls use the App service Host",
+        ));
+    }
     let launcher = authenticate_launcher(client, uid, home.clone()).await?;
     let delegation = Delegation::new(&launcher, uid, &home, &params)?;
     let app = installed_app(&app_id)?;
@@ -356,6 +363,23 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
     super::system_review::require_app_review(uid, &app, &delegation.requester)?;
     let grant_caps = authorize_plan(&delegation, plan, &ceiling, &app_id)?;
     let caps = target_session_caps(grant_caps.clone(), &caller_invoke);
+    #[cfg(unix)]
+    let task_data_root = match client.extension_host.as_ref() {
+        Some(host) if host.purpose == crate::extension_host::protocol::HostPurpose::Task => {
+            let data = host.task_app_data.clone().ok_or_else(|| BrokerError::unavailable(
+                "Task Host has no Root-owned App data binding",
+            ))?;
+            let data_client = client.clone();
+            let data_package = package.clone();
+            Some(tokio::task::spawn_blocking(move || data.bind(&data_client, &data_package))
+                .await
+                .map_err(|error| BrokerError::unavailable(format!("Task App data preparation: {error}")))?
+                .map_err(BrokerError::unavailable)?)
+        }
+        _ => None,
+    };
+    #[cfg(not(unix))]
+    let task_data_root: Option<std::path::PathBuf> = None;
 
     let session_id = format!("app-{}", uuid::Uuid::new_v4().simple());
     let info = SessionInfo {
@@ -438,6 +462,10 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
             .scope_sync(crate::paths::user_data_dir);
         response["gui_data_dir"] = serde_json::to_value(data_dir)
             .map_err(|error| BrokerError::execution(format!("encode GUI data location: {error}")))?;
+    }
+    if let Some(data_root) = task_data_root {
+        response["task_app_data_dir"] = serde_json::to_value(data_root)
+            .map_err(|error| BrokerError::execution(format!("encode Task App data location: {error}")))?;
     }
     Ok(response)
 }

@@ -270,6 +270,14 @@ jobs:
                 exec "$1" --exact "$2" --ignored --nocapture --test-threads=1
               ' private-app-data "$test_binary" "extension_host::spawn::app_data::tests::$data_case"
           done
+          sudo timeout 100 unshare --mount --net --fork \
+            env COS_APP_DATA_TEST_COS="$CARGO_TARGET_DIR/debug/cos" \
+            bash --noprofile --norc -c '
+              set -euo pipefail
+              mount --make-rprivate /
+              exec "$1" --exact extension_host::spawn::task_data::tests::task_app_registration_binds_persistent_data_after_authorization \
+                --ignored --nocapture --test-threads=1
+            ' private-task-app-data "$test_binary"
 
       # Downgrade protection is exercised against real .deb archives,
       # real maintainer scripts, real dpkg/apt transactions and real

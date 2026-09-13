@@ -477,8 +477,15 @@ the owner's. Existing private-directory and legacy-state migration logic is
 reused; data is neither copied nor recursively chowned. Only the runtime view
 is unmounted at retirement.
 
-If service cleanup cannot be confirmed, its existing UID-quarantine record
-blocks new App-service starts for the same owner rather than switching UIDs
+Task Host ordinary operations now acquire the same owner/App data partition
+after their normal Root registration checks. No App data is mounted when the
+task Host starts. Each authorized operation uses the returned binding instead
+of the Host's temporary HOME/data, and task retirement unmounts all its views.
+Keep the broker and Host from the same source/package cohort; existing tasks
+must finish or be cancelled before replacing their running Host binaries.
+
+If Host cleanup cannot be confirmed, its existing UID-quarantine record
+blocks new task and App-service starts for the same owner rather than switching UIDs
 and reopening the persistent store. A record with unknown ownership also
 blocks admission. Existing quarantine recovery must finish before retrying.
 
@@ -487,8 +494,8 @@ partition must contain no nested mounts. Unavailable mappings, aliases, foreign
 owners or replaced directory identities are explicit failures, not permission
 to use an empty temporary store. Older Host-private scratch data is not
 automatically imported or merged; a restart is not recovery of that transient
-state. Legacy task-host `RunApp` binding and Calendar's cross-App read path
-remain separate work. No App/SDK release or production pin is changed here.
+state. Calendar's cross-App read path remains separate work. No App/SDK release
+or production pin is changed here.
 
 The source-only relocation of `net` to `clawos-app/capabilities/http/apps/net`
 preserves `/usr/lib/cos/apps/net` in the signed Agent package. Its two MCP/CLI

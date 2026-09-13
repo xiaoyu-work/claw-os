@@ -152,19 +152,19 @@ fn cleanup_records_bind_uid_owner_and_task() {
 }
 
 #[test]
-fn service_quarantine_fences_its_owner_and_unknown_records() {
+fn host_quarantine_fences_its_owner_and_unknown_records() {
     let record = CleanupRecord {
         uid: FIRST_UID + TASK_IDENTITY_COUNT,
         owner_uid: 1000,
         task_name: Some("a".repeat(32)),
     };
-    assert!(service_cleanup_blocks_owner(Some(&record), 1000));
-    assert!(!service_cleanup_blocks_owner(Some(&record), 1001));
-    assert!(service_cleanup_blocks_owner(None, 1000));
+    assert!(cleanup_blocks_owner(Some(&record), 1000));
+    assert!(!cleanup_blocks_owner(Some(&record), 1001));
+    assert!(cleanup_blocks_owner(None, 1000));
 }
 
 #[test]
-fn a_failed_service_cannot_switch_uid_to_reopen_persistent_data() {
+fn a_failed_host_cannot_switch_purpose_or_uid_to_reopen_persistent_data() {
     let root = tempfile::tempdir().unwrap();
     let lock = std::fs::File::create(root.path().join("retained")).unwrap();
     let pool = Arc::new(ExtensionIdentityPool {
@@ -178,10 +178,12 @@ fn a_failed_service_cannot_switch_uid_to_reopen_persistent_data() {
     let service = super::super::protocol::HostPurpose::AppService;
     assert!(pool.acquire(1000, service).unwrap_err().contains("cleanup is unconfirmed"));
     assert!(pool.acquire(1000, super::super::protocol::HostPurpose::Task)
-        .unwrap_err().contains("no isolated task"));
+        .unwrap_err().contains("cleanup is unconfirmed"));
     let mut retained = pool.retained_locks.lock().unwrap();
     let lock = retained.remove(&(FIRST_UID + TASK_IDENTITY_COUNT)).unwrap();
     retained.insert(FIRST_UID, lock);
     drop(retained);
-    assert!(pool.acquire(1000, service).unwrap_err().contains("no isolated App service"));
+    for purpose in [service, super::super::protocol::HostPurpose::Task] {
+        assert!(pool.acquire(1000, purpose).unwrap_err().contains("cleanup is unconfirmed"));
+    }
 }

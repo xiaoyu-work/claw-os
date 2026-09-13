@@ -23,6 +23,14 @@ services, and shared libraries. `mcp.access` accepts only `system_agent` and
 cannot access App services or mint system Agent tasks. The broker enforces
 this using authenticated process/session ancestry, not environment flags.
 
+`COS_DATA_DIR` names only the App's own data. Normal owner launches, service
+Hosts and task-host ordinary operations use the same existing owner/App
+backing partition. Isolated Hosts see a private mapped path, so Apps must use
+the supplied data root rather than reconstruct another App's directory or
+derive it from Host HOME. Task registration must supply its Root-owned binding;
+missing bindings are errors, not empty temporary stores. See
+[persistent data and update behavior](updating.md#app-data-moves-into-per-app-directories).
+
 Bundled source ownership is independent of the installed App identity.
 Migrated business products live under external `products/`; shared-capability
 clients `doc`, `db`, `kv`, `net` and `summarize` live under external `capabilities/`,

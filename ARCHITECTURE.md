@@ -142,8 +142,11 @@ App-service Host storage reuses the existing owner/App partition through the
 scheme. An exact-App private idmapped mount translates the leased execution
 UID/GID without changing on-disk ownership. Host cleanup removes its mount and
 runtime state, never the persistent backing data. Source identity/topology
-changes retire the service. Legacy task-host operations and cross-App Calendar
-reads still need their own completed bindings.
+changes retire the service. Task-host ordinary operations acquire the same
+backing partition through a Root-owned per-App view after normal registration
+authorization. The registration reply binds the operation's data root; there
+is no task-scratch fallback or caller-selected owner directory. Cross-App
+Calendar reads still need their own provider binding.
 
 Replacing the authority or compositor ends its display epoch and requires
 coordinated logout/re-login, not a hot owner-socket handoff. See
