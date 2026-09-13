@@ -39,6 +39,10 @@ persistence, and structured primitive dispatch.
 | `src/extension_host/` | Isolated App/MCP process host, task-bound control channel, route-filtered broker proxy, cleanup |
 | `src/agent_extensions/` | Verified manifest registry, event fanout, capability references, and proposed-action mediation |
 | `src/provenance/` | Compiled-root signature verification and immutable package snapshots |
+| `src/activities/`, `src/clawd/activities.rs`, `src/activity.rs` | Shared Activity service/provider, owner-scoped broker, and terminal presentation; also consumed by Web/native desktop |
+| `src/caps/activity_boundary.rs`, `src/clawd/activity_capability_policy.rs` | Live Activity capability constraints, root-held policy bindings and owner-scoped controls |
+| `src/objects/`, `src/router/object_commands.rs` | Verified App object catalogue and explicit resolution through ordinary App dispatch |
+| `src/operations/`, `src/clawd/operation_previews.rs` | Shared, non-executing previews of App-declared effects and requested targets |
 | `src/agent/` | Agent CLI, runtime, tools, LLM providers, memory, and web UI |
 | `src/caps/` | Capability catalog, scopes, manifests, and enforcement |
 | `src/crypto.rs` | SHA-256/HMAC helpers with linear streaming updates and bounded partial-block buffering |
@@ -112,7 +116,9 @@ checks the prepared cache's exact Git revision/cleanliness without downloads,
 and stages App-owned common support through public `--shared`, separately
 from App payloads and OS SDK/runtime. Both occupy the canonical
 `usr/lib/cos/python` import root; no OS Apps source or sibling helper copy is
-available to the fixture. The shared URL corpus is read from the pinned
+available to the fixture. Source paths use canonical declared roots, so a
+cache-directory symlink retains the same source-kind and pin checks.
+The shared URL corpus is read from the pinned
 App-owned `tests/shared/vectors` directory, never from runtime payloads.
 The source-only check forbidding App-owned operation schema implementations
 belongs to App `tests/test_manifest_contracts.py`; core retains manifest/API

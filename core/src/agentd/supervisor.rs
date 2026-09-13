@@ -449,6 +449,7 @@ struct Lease {
     approval_nonce: String,
     consent_context: ConsentContext,
     resumed_after_approval: Vec<String>,
+    receipts_authorized: bool,
 }
 
 impl Lease {
@@ -462,6 +463,7 @@ impl Lease {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn supervise(
     store: Store,
     signer: Arc<GrantSigner>,
@@ -654,6 +656,7 @@ async fn supervise(
         approval_nonce: uuid::Uuid::new_v4().to_string(),
         consent_context,
         resumed_after_approval: job.resumed_after_approval.clone(),
+        receipts_authorized: false,
     };
     let approval_identity = lease.approval_identity();
 
@@ -839,6 +842,10 @@ async fn start_extension_host(
     capability_generation: &str,
     broker: BrokerContext,
 ) -> Result<ExtensionRuntime, String> {
+    let activity = crate::caps::activity_boundary::ActivityBoundary::for_job(job)?;
+    if let Some(boundary) = &activity {
+        boundary.require_identity(identity.uid, job.session_id.as_deref())?;
+    }
     let mut execution_identity = broker.extension_identity_pool()?.acquire(
         identity.uid,
         crate::extension_host::protocol::HostPurpose::Task,
@@ -1014,21 +1021,24 @@ async fn start_extension_host(
         }
     }
 
-    let lease = Arc::new(crate::extension_host::broker::ExtensionLease::new(
-        crate::extension_host::protocol::HostPurpose::Task,
-        job.id.clone(),
-        job.session_id.clone(),
-        host_session_id.clone(),
-        identity.uid,
-        extension.uid,
-        isolation.execution_gid(),
-        capability_generation.to_string(),
-        worker_pid,
-        worker_start_time_ticks,
-        host.pid,
-        host.start_time_ticks,
-        expires_at_ms,
-    ));
+    let lease = Arc::new(
+        crate::extension_host::broker::ExtensionLease::new(
+            crate::extension_host::protocol::HostPurpose::Task,
+            job.id.clone(),
+            job.session_id.clone(),
+            host_session_id.clone(),
+            identity.uid,
+            extension.uid,
+            isolation.execution_gid(),
+            capability_generation.to_string(),
+            worker_pid,
+            worker_start_time_ticks,
+            host.pid,
+            host.start_time_ticks,
+            expires_at_ms,
+        )
+        .with_activity(activity),
+    );
     let broker_task = tokio::spawn(crate::extension_host::broker::serve(
         listener,
         lease.clone(),
@@ -1120,6 +1130,28 @@ async fn pump(
     extension_cgroup: &crate::extension_host::spawn::ResourceGroup,
     extension_lease: Arc<crate::extension_host::broker::ExtensionLease>,
 ) -> TaskOutcome {
+    let activity_boundary = extension_lease.activity_boundary();
+    match (job.activity_id.as_deref(), activity_boundary.as_ref()) {
+        (None, None) => {}
+        (Some(id), Some(boundary)) if boundary.binding().activity_id == id => {
+            if let Err(error) = boundary
+                .require_identity(lease.owner_uid, lease.session_id.as_deref())
+                .and_then(|_| boundary.check())
+            {
+                return TaskOutcome::Failed(error);
+            }
+        }
+        _ => {
+            return TaskOutcome::Failed(
+                "Activity policy does not match the root-owned extension lease".to_string(),
+            )
+        }
+    }
+    let mut execution_limits =
+        match crate::agent::service::execution_limits::ExecutionLimitsGuard::new(job) {
+            Ok(guard) => guard,
+            Err(error) => return TaskOutcome::Failed(error),
+        };
     // Authority on this channel comes from the grant, not from the
     // socket: `socketpair` is created before the fork, so `SO_PEERCRED`
     // is stamped with *clawd's* own uid and pid and says nothing about
@@ -1128,7 +1160,24 @@ async fn pump(
     // start-time the kernel gave this child.
     let (reader, mut writer) = channel.into_split();
     let mut frames = FrameReader::new(BufReader::new(reader));
-
+    if let Some(boundary) = &activity_boundary {
+        let policy = match boundary.policy() {
+            Ok(policy) => policy,
+            Err(error) => return TaskOutcome::Failed(error),
+        };
+        if let Err(error) = store.append_stream_progress(
+            &job.id,
+            serde_json::json!({
+                "kind":"activity_capability_policy",
+                "activity_id":job.activity_id,
+                "policy":policy,
+            }),
+        ) {
+            return TaskOutcome::Failed(format!(
+                "could not record the Activity capability-policy snapshot: {error}"
+            ));
+        }
+    }
     let assignment = Assignment {
         protocol: protocol::PROTOCOL_VERSION,
         grant: signer.issue(claims_for(broker_pid, &lease, config.lease)),
@@ -1138,10 +1187,12 @@ async fn pump(
             context: job.context.clone(),
             branch_context: job.branch_context.clone(),
             session_id: job.session_id.clone(),
-            max_turns: job.max_turns,
+            max_turns: job.effective_max_turns(),
             use_memory: job.use_memory,
             owner_uid: lease.owner_uid,
             owner_home: job.owner_home.clone().unwrap_or_default(),
+            record_activity_receipts: job.activity_id.is_some(),
+            activity_capability_checks: job.activity_id.is_some(),
         },
         consent_context: lease.consent_context,
         session,
@@ -1207,6 +1258,15 @@ async fn pump(
     if assignment_failpoint("after_prepared") {
         return TaskOutcome::Retry("assignment stopped after durable prepare".to_string());
     }
+    if let Some(boundary) = &activity_boundary {
+        if let Err(error) = boundary.check() {
+            return TaskOutcome::Failed(error);
+        }
+    }
+    match execution_limits.check_now(job) {
+        Ok(None) => {}
+        Ok(Some(reason)) | Err(reason) => return TaskOutcome::Failed(reason),
+    }
     if let Err(error) = store.commit_execution(
         &job.id,
         lease.worker_pid,
@@ -1254,8 +1314,12 @@ async fn pump(
 
     let mut hello_seen = false;
     let mut cancel_sent = false;
+    let mut execution_stop_reason: Option<String> = None;
     let mut cancelled_at: Option<Instant> = None;
     let mut approvals_used: u32 = 0;
+    let mut boundaries_used: u32 = 0;
+    let mut next_boundary_check = Instant::now();
+    let mut receipts_used: u32 = 0;
     let mut last_progress = Instant::now();
     let mut ticker = tokio::time::interval(PUMP_TICK);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -1312,8 +1376,15 @@ async fn pump(
                             exchange,
                             ..
                         } => {
-                            let mut reply =
-                                mediate_approval(&mut approvals_used, &lease, &exchange.ask);
+                            let used = if matches!(exchange.ask, ApprovalAsk::Boundary { .. }) {
+                                &mut boundaries_used
+                            } else {
+                                &mut approvals_used
+                            };
+                            let mut reply = crate::caps::activity_boundary::scope(
+                                activity_boundary.clone(),
+                                async { mediate_approval(used, &lease, &exchange.ask) },
+                            ).await;
                             if let ApprovalReply::Pending {
                                 request_id: Some(request_id),
                             } = &reply
@@ -1367,12 +1438,59 @@ async fn pump(
                                 );
                             }
                         }
+                        WorkerFrame::Receipt(request) => {
+                            let reply = super::receipts::record(
+                                &mut receipts_used,
+                                store,
+                                lease.owner_uid,
+                                &lease.task_id,
+                                job,
+                                *request.report,
+                            );
+                            if let Err(error) = send(
+                                &mut writer,
+                                &BrokerFrame::ReceiptReply {
+                                    correlation_id: request.correlation_id,
+                                    reply,
+                                },
+                            ).await {
+                                return TaskOutcome::Indeterminate(format!(
+                                    "could not acknowledge the Activity receipt; do not repeat the App operation: {error}"
+                                ));
+                            }
+                        }
                         WorkerFrame::Result { outcome, .. } => {
+                            if let Some(reason) = execution_stop_reason {
+                                return TaskOutcome::Failed(reason);
+                            }
+                            match execution_limits.check_now(job) {
+                                Ok(None) => {}
+                                Ok(Some(reason)) | Err(reason) => return TaskOutcome::Failed(reason),
+                            }
+                            if let Some(boundary) = &activity_boundary {
+                                if let Err(error) = boundary.check() {
+                                    return TaskOutcome::Failed(error);
+                                }
+                            }
+                            if let (Some(reservation), WorkerOutcome::Ok(run)) =
+                                (&job.execution_reservation, outcome.as_ref())
+                            {
+                                if run.turns_used > reservation.max_turns {
+                                    return TaskOutcome::Failed(
+                                        "worker reported more turns than its Activity reservation permits".to_string(),
+                                    );
+                                }
+                            }
                             return TaskOutcome::Reported(outcome);
                         }
                     }
                 }
                 Ok(None) => {
+                    if let Some(reason) = execution_stop_reason {
+                        return TaskOutcome::Indeterminate(format!(
+                            "{reason}; worker closed before reporting its final outcome"
+                        ));
+                    }
                     return post_assignment_interruption(
                         "agent worker closed its channel without reporting a result".to_string(),
                         cancel_sent,
@@ -1387,6 +1505,9 @@ async fn pump(
                     Ok(status) => format!("agent worker exited early ({status})"),
                     Err(error) => format!("agent worker could not be reaped: {error}"),
                 };
+                if let Some(reason) = execution_stop_reason {
+                    return TaskOutcome::Indeterminate(format!("{reason}; {detail}"));
+                }
                 return post_assignment_interruption(detail, cancel_sent);
             },
             status = extension_child.wait() => {
@@ -1406,11 +1527,35 @@ async fn pump(
                 return post_assignment_interruption(detail, cancel_sent);
             },
             _ = ticker.tick() => {
+                if !cancel_sent {
+                    let mut stop = match execution_limits.check(job) {
+                        Ok(reason) => reason,
+                        Err(error) => Some(error),
+                    };
+                    if stop.is_none() && Instant::now() >= next_boundary_check {
+                        next_boundary_check = Instant::now() + Duration::from_secs(1);
+                        if let Some(boundary) = &activity_boundary {
+                            stop = boundary.check().err();
+                        }
+                    }
+                    if let Some(reason) = stop {
+                        if let Err(error) = store.append_stream_progress(&job.id, serde_json::json!({
+                            "kind":"activity_execution_stopped",
+                            "activity_id":job.activity_id,
+                            "reason":reason,
+                        })) {
+                            tracing::error!(task = %job.id, %error, "failed to record Activity execution stop");
+                        }
+                        execution_stop_reason = Some(reason);
+                    }
+                }
                 if !cancel_sent
                     && (shutdown.load(Ordering::SeqCst)
-                        || store.cancellation_requested(&job.id).unwrap_or(false))
+                        || store.cancellation_requested(&job.id).unwrap_or(false)
+                        || execution_stop_reason.is_some())
                 {
                     cancel_sent = true;
+                    extension_lease.close();
                     cancelled_at = Some(Instant::now());
                     crate::clawd::audit::record_extension_host_event(
                         &lease.task_id,
@@ -1603,11 +1748,17 @@ fn accept(
             return Err("approval exchange nonce is invalid".to_string());
         }
     }
+    if matches!(frame, WorkerFrame::Receipt(_)) && !lease.receipts_authorized {
+        return Err("worker grant does not allow receipt reporting".to_string());
+    }
     if Instant::now() > lease.deadline {
         return Err("worker lease has expired".to_string());
     }
     if !crate::proc::is_pid_alive(lease.worker_pid) {
         return Err("worker process is gone".to_string());
+    }
+    if let WorkerFrame::Hello(hello) = frame {
+        lease.receipts_authorized = hello.grant.claims.allows_route(protocol::ROUTE_RECEIPT);
     }
     Ok(())
 }
@@ -1624,7 +1775,12 @@ fn accept(
 /// approved grant existed and has now been spent".
 fn mediate_approval(used: &mut u32, lease: &Lease, ask: &ApprovalAsk) -> ApprovalReply {
     *used = used.saturating_add(1);
-    if *used > protocol::MAX_APPROVAL_ASKS {
+    let limit = if matches!(ask, ApprovalAsk::Boundary { .. }) {
+        protocol::MAX_BOUNDARY_CHECKS
+    } else {
+        protocol::MAX_APPROVAL_ASKS
+    };
+    if *used > limit {
         return refuse(
             lease,
             ask,
@@ -1647,8 +1803,41 @@ fn mediate_approval(used: &mut u32, lease: &Lease, ask: &ApprovalAsk) -> Approva
     };
     let scope = &cap.scope;
     let execution = lease.approval_identity();
+    use crate::activities::CapabilityBoundaryDecision as Boundary;
+    let boundary = match crate::caps::activity_boundary::current() {
+        Some(boundary) => {
+            if let Err(error) = boundary.require_identity(lease.owner_uid, Some(session_id)) {
+                return refuse(lease, ask, &error);
+            }
+            match boundary.decision(&cap) {
+                Ok(decision) => decision,
+                Err(error) => return refuse(lease, ask, &error),
+            }
+        }
+        None => Boundary::Normal,
+    };
+    crate::clawd::audit::record_worker_boundary(
+        &lease.task_id,
+        lease.owner_uid,
+        session_id,
+        verb.as_str(),
+        scope,
+        boundary,
+    );
+    if matches!(ask, ApprovalAsk::Boundary { .. }) {
+        return ApprovalReply::Boundary { decision: boundary };
+    }
+    if boundary == Boundary::Deny {
+        return refuse(
+            lease,
+            ask,
+            "Activity capability policy denies this request; an approval cannot override it",
+        );
+    }
+    let retire_all = boundary == Boundary::RequireApproval;
 
     match ask {
+        ApprovalAsk::Boundary { .. } => unreachable!("boundary checks do not spend consent"),
         ApprovalAsk::Consume { .. } => {
             match crate::approvals::redeem_resumed_worker_grant_for_owner_operation(
                 session_id,
@@ -1658,6 +1847,7 @@ fn mediate_approval(used: &mut u32, lease: &Lease, ask: &ApprovalAsk) -> Approva
                 &execution,
                 ask.operation_digest(),
                 &lease.resumed_after_approval,
+                retire_all,
             ) {
                 Ok(Some(grant)) => {
                     let lease_remaining = lease.deadline.saturating_duration_since(Instant::now());

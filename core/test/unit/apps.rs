@@ -1,7 +1,40 @@
 use super::*;
 
 mod app_sources {
-    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/support/app_sources.rs"));
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/support/app_sources.rs"
+    ));
+}
+
+#[test]
+fn object_schema_requires_provenance_and_does_not_pollute_operation_schema() {
+    let _lock = crate::test_env::lock_env();
+    let root = tempfile::tempdir().unwrap();
+    let dir = root.path().join("demo");
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::write(dir.join("app.json"), json!({
+        "id":"demo","version":"1","name":{"en":"Demo"},
+        "objects":{"entry":{"label":{"en":"Entry"},"resolve":{"operation":"get","id_arg":"key"}}},
+        "operations":{"get":{"label":{"en":"Get"},"args":[{"name":"key","kind":"name","required":true}]}}
+    }).to_string()).unwrap();
+    std::fs::write(
+        dir.join("main.py"),
+        "raise AssertionError('schema must not execute')\n",
+    )
+    .unwrap();
+    let unverified = find(root.path(), "demo").unwrap();
+    assert!(verified_object_schema(&unverified).is_err());
+    crate::test_env::sign_test_package(&dir, crate::provenance::PackageKind::App, "demo");
+    let app = find_verified(root.path(), "demo").unwrap();
+    let schema = verified_object_schema(&app).unwrap();
+    assert_eq!(schema["entry"]["resolve"]["operation"], "get");
+    assert!(manifest_schema(&app.manifest).get("objects").is_none());
+    let help = crate::cli_help::show_app_schema("demo", &app)
+        .unwrap()
+        .unwrap();
+    let help: Value = serde_json::from_str(&help).unwrap();
+    assert_eq!(help["objects"], schema);
 }
 
 #[test]
@@ -137,7 +170,11 @@ fn slack_schema_preserves_outbound_only_operations() {
     )
     .unwrap();
     assert_eq!(
-        slack.operations.keys().map(String::as_str).collect::<Vec<_>>(),
+        slack
+            .operations
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
         ["send", "status"]
     );
 }
@@ -237,12 +274,37 @@ fn network_manager_mcp_capabilities_are_exact() {
         ("wifi-list", None, Verb::SYS_OBSERVE, "network"),
         ("connection-list", None, Verb::SYS_OBSERVE, "network"),
         ("vpn-list", None, Verb::SYS_OBSERVE, "network"),
-        ("wifi-toggle", Some(("state", "off")), Verb::NET_MANAGE, "wifi"),
-        ("airplane", Some(("state", "on")), Verb::NET_MANAGE, "airplane"),
-        ("wifi-disconnect", Some(("device", "wlan0")), Verb::NET_MANAGE, "wifi"),
-        ("wifi-forget", Some(("connection", "Cafe")), Verb::NET_MANAGE, "wifi"),
+        (
+            "wifi-toggle",
+            Some(("state", "off")),
+            Verb::NET_MANAGE,
+            "wifi",
+        ),
+        (
+            "airplane",
+            Some(("state", "on")),
+            Verb::NET_MANAGE,
+            "airplane",
+        ),
+        (
+            "wifi-disconnect",
+            Some(("device", "wlan0")),
+            Verb::NET_MANAGE,
+            "wifi",
+        ),
+        (
+            "wifi-forget",
+            Some(("connection", "Cafe")),
+            Verb::NET_MANAGE,
+            "wifi",
+        ),
         ("vpn-up", Some(("profile", "work")), Verb::NET_MANAGE, "vpn"),
-        ("vpn-down", Some(("profile", "work")), Verb::NET_MANAGE, "vpn"),
+        (
+            "vpn-down",
+            Some(("profile", "work")),
+            Verb::NET_MANAGE,
+            "vpn",
+        ),
     ] {
         let args = arg
             .into_iter()
@@ -302,7 +364,11 @@ fn search_mcp_provider_capabilities_are_exact() {
                     .collect::<Vec<_>>()
             };
             assert_eq!(scopes(Verb::SECRET_READ), secrets, "{tool}: {provider}");
-            assert_eq!(scopes(Verb::NET_DIAL), [Scope::host(host)], "{tool}: {provider}");
+            assert_eq!(
+                scopes(Verb::NET_DIAL),
+                [Scope::host(host)],
+                "{tool}: {provider}"
+            );
             assert!(caps.iter().all(|cap| cap.scope != Scope::Wild));
         }
     }
@@ -374,7 +440,10 @@ fn usb_authorize_schema_preserves_conditional_confirmation() {
     );
     assert_eq!(authorize["parameters"][2]["binding"], "flag");
     assert_eq!(authorize["parameters"][2]["required"], false);
-    assert_eq!(authorize["parameters"][2]["enum"], serde_json::json!([true]));
+    assert_eq!(
+        authorize["parameters"][2]["enum"],
+        serde_json::json!([true])
+    );
     assert_eq!(authorize["stdin"], false);
 }
 
@@ -437,11 +506,9 @@ fn notify_product_cli_aliases_input_bindings_and_distinct_grants_are_preserved()
     assert_eq!(list.name, "notify.list");
     assert!(mcp_tool_for_command(&manifest, "post").is_err());
     assert!(mcp_tool_for_command(&manifest, "close").is_err());
-    let values = crate::caps::args::bind_cli_args(
-        &send.args,
-        &["Plain message".into(), "--urgent".into()],
-    )
-    .unwrap();
+    let values =
+        crate::caps::args::bind_cli_args(&send.args, &["Plain message".into(), "--urgent".into()])
+            .unwrap();
     assert_eq!(values["message"], "Plain message");
     assert_eq!(values["urgent"], true);
     assert_eq!(

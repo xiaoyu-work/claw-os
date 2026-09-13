@@ -8,15 +8,17 @@ and is generated or hand-written to satisfy that contract.
 Public modules
 --------------
 - :mod:`claw_os_sdk.ai`       — text chat through ``cos ai chat``.
-- :mod:`claw_os_sdk.tools`    — call other apps' verbs from inside an
-  app (``tools.call``, ``tools.catalog``, ``tools.for_chat``).
+- :mod:`claw_os_sdk.tools`    — call fixed kernel catalog tools
+  (``tools.call``, ``tools.catalog``, ``tools.for_chat``), not other Apps.
 - :mod:`claw_os_sdk.gui`      — desktop GUI bootstrap: the kernel context
   handed to an app launched via ``cos app <id> --gui`` (toolkit-agnostic).
 - :mod:`claw_os_sdk.mcp`      — manifest-bound MCP App service runtime.
 - :mod:`claw_os_sdk.kernel`   — cancellable installed-CLI primitive transport.
+- :mod:`claw_os_sdk.objects`  — pure App object identifiers, without discovery,
+  filesystem access, or dispatch.
 - :mod:`claw_os_sdk.claw_os_session` — reference implementation for
   third-party agents that want to attach to a live ``claw-os`` session.
-- :mod:`claw_os_sdk.generated` — typed dataclasses emitted from the
+- :mod:`claw_os_sdk.generated` — typed wire bindings emitted from the
   wire-v1 JSON Schemas. Do not hand-edit; re-run
   ``python3 claw-os-sdk/wire/codegen.py`` instead.
 
@@ -34,7 +36,7 @@ implementation details of the claw-os bundled apps, not part of the
 public SDK surface.
 """
 
-from . import ai, gui, kernel, mcp, tools
+from . import ai, gui, kernel, mcp, objects, tools
 
-__all__ = ["ai", "gui", "kernel", "mcp", "tools"]
+__all__ = ["ai", "gui", "kernel", "mcp", "objects", "tools"]
 __version__ = "0.1.0"

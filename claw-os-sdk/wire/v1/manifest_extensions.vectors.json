@@ -1,0 +1,109 @@
+{
+  "cases": [
+    {
+      "name": "mcp-only-object-resolver",
+      "manifest": {
+        "id": "notes",
+        "version": "1.0.0",
+        "schema_version": 2,
+        "name": {"en": "Notes"},
+        "mcp": {
+          "transport": "stdio",
+          "tools": [
+            {
+              "name": "notes.get",
+              "summary": {"en": "Read a note"},
+              "args": [
+                {"name": "note_id", "kind": "name", "binding": "flag", "required": true}
+              ]
+            }
+          ]
+        },
+        "objects": {
+          "note": {
+            "label": {"en": "Note"},
+            "resolve": {"operation": "get", "id_arg": "note_id"}
+          }
+        }
+      }
+    },
+    {
+      "name": "mcp-objects-and-operation-effects",
+      "manifest": {
+        "id": "notes",
+        "version": "1.0.0",
+        "schema_version": 2,
+        "name": {"en": "Notes"},
+        "mcp": {
+          "transport": "stdio",
+          "access": {"system_agent": true, "external_agents": true},
+          "tools": [
+            {
+              "name": "notes.get",
+              "summary": {"en": "Read a note"},
+              "effects": [],
+              "args": [
+                {"name": "note_id", "kind": "name", "binding": "flag", "required": true}
+              ]
+            }
+          ]
+        },
+        "objects": {
+          "note": {
+            "label": {"en": "Note"},
+            "resolve": {"operation": "get", "id_arg": "note_id"}
+          }
+        },
+        "operations": {
+          "inspect": {
+            "label": {"en": "Inspect a requested path"},
+            "args": [{"name": "path", "kind": "path", "required": true}],
+            "effects": [
+              {
+                "kind": "read",
+                "label": {"en": "Read the requested path"},
+                "target_arg": "path",
+                "recovery": "not_applicable"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "mcp-only-object-and-declared-effects",
+      "manifest": {
+        "id": "notes",
+        "version": "1.0.0",
+        "schema_version": 2,
+        "name": {"en": "Notes"},
+        "mcp": {
+          "transport": "stdio",
+          "tools": [
+            {
+              "name": "notes.get",
+              "summary": {"en": "Read a note"},
+              "args": [
+                {"name": "note_id", "kind": "name", "binding": "flag", "required": true}
+              ],
+              "effects": [
+                {
+                  "kind": "read",
+                  "label": {"en": "Read the requested note"},
+                  "target_arg": "note_id",
+                  "recovery": "not_applicable"
+                }
+              ]
+            }
+          ]
+        },
+        "objects": {
+          "note": {
+            "label": {"en": "Note"},
+            "resolve": {"operation": "get", "id_arg": "note_id"}
+          }
+        }
+      }
+    }
+  ]
+}

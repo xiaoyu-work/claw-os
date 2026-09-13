@@ -13,7 +13,7 @@
 # Inputs:
 #   target/<RUST_TARGET>/release/cos          (built by cargo for $ARCH)
 #   target/<RUST_TARGET:gnu>/release/cos-browser  (glibc — V8 needs it)
-#   packaging/apps.lock.json                  (pinned App source/support)
+#   packaging/apps.lock.json                  (App main selection and owned payloads)
 #   skills/                                               (source tree)
 #   rootfs/overlay/etc/cos/*, rootfs/overlay/usr/...      (source tree)
 #   rootfs/features/systemd/overlay/usr/lib/systemd/...   (source tree)
@@ -520,6 +520,9 @@ sed -i "s/COS_VERSION=\".*\"/COS_VERSION=\"$VERSION\"/" \
 
 # All non-graphical apps belong to the reusable agent. The manifests in
 # apps.list are COSMIC/panel integrations owned by claw-os-desktop.
+APP_SOURCE_LOCK="$AGENT_STAGE/usr/share/doc/claw-os-agent/app-sources.json"
+python3 "$PROJECT_DIR/scripts/app_sources.py" --write-lock "$APP_SOURCE_LOCK" >/dev/null
+export CLAW_APP_SOURCE_LOCK="$APP_SOURCE_LOCK"
 DESKTOP_APPS_FILE="$SCRIPT_DIR/claw-os-desktop/apps.list"
 while IFS= read -r app_id; do
     [ -n "$app_id" ] || continue

@@ -38,8 +38,10 @@
 //! sites lands. This crate ships the data layer first so the rest of
 //! the system can begin moving over without a big-bang switch.
 
-pub mod args;
+pub(crate) mod activity_boundary;
 pub mod approval_gateway;
+pub mod args;
+pub mod bootstrap;
 pub mod cap;
 pub mod catalog;
 pub mod consent;
@@ -50,7 +52,6 @@ pub mod risk;
 pub mod role;
 pub mod scope;
 pub mod verb;
-pub mod bootstrap;
 
 #[cfg(test)]
 pub(crate) mod test_env_lock {
@@ -60,8 +61,9 @@ pub(crate) mod test_env_lock {
     ));
 }
 
-pub use cap::{Cap, CapSet};
 pub use approval_gateway::{ApprovalGateway, PendingApproval};
+pub use bootstrap::{bootstrap_user_cli_session, SessionGuard};
+pub use cap::{Cap, CapSet};
 pub use catalog::{lookup as lookup_meta, CapMeta, CATALOG};
 pub use consent::ConsentContext;
 pub use denial::{ApprovalInfo, ApprovalStatus, Denial, DenialReason};
@@ -71,7 +73,6 @@ pub use risk::Risk;
 pub use role::{user_selectable, Role, ALL_ROLES};
 pub use scope::{Scope, ScopeKind};
 pub use verb::{Verb, ALL_VERBS};
-pub use bootstrap::{bootstrap_user_cli_session, SessionGuard};
 
 /// Run all static self-checks on the cap subsystem. Intended to be
 /// called once at boot (after [`crate::i18n::init_locale_from_env`])
@@ -88,8 +89,5 @@ pub fn self_check() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/test/unit/caps.rs"
-    ));
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/caps.rs"));
 }

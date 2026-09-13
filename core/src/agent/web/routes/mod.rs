@@ -1,3 +1,4 @@
+pub mod activities;
 pub mod approvals;
 pub mod auth;
 pub mod chat;

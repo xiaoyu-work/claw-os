@@ -79,9 +79,10 @@ curates memory, or chooses terminal states.
 
 ```text
 Prepare
-  -> record user + injected context
+  -> record original user input
   -> restore/freeze system prompt
   -> register interrupt + hooks
+  -> compose/record pinned profile, explicit context and source discovery
 TurnReady
   -> cancellation check -> pre-turn hook -> scrub/compress
   -> check policy + prelude + original input + exposed tool input budget
@@ -92,7 +93,7 @@ TurnReady
   -> observe evidence -> persist appended messages
   -> ContinueWithTools -------------------------------> TurnReady
   -> Final -> verify evidence -> title -> curate -> Success
-  -> provider/hook/progress error --------------------> Error
+  -> context/provider/hook/progress error ------------> Error
   -> cancellation at any cancellation-aware boundary -> Interrupted
   -> final-turn provider failure/empty answer -> persisted fallback -> Success
 ```

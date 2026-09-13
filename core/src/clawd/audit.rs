@@ -512,6 +512,47 @@ pub fn record_worker_approval(
 }
 
 #[derive(Debug, Serialize)]
+struct WorkerBoundaryAudit {
+    ts: chrono::DateTime<Utc>,
+    event: &'static str,
+    job_id: String,
+    owner_uid: u32,
+    session_id: String,
+    verb: String,
+    scope: String,
+    action: &'static str,
+}
+
+pub(crate) fn record_worker_boundary(
+    task_id: &str,
+    owner_uid: u32,
+    session_id: &str,
+    verb: &str,
+    scope: &crate::caps::Scope,
+    decision: crate::activities::CapabilityBoundaryDecision,
+) {
+    use crate::activities::CapabilityBoundaryDecision as Boundary;
+    let action = match decision {
+        Boundary::Normal => "normal",
+        Boundary::RequireApproval => "require_approval",
+        Boundary::Deny => "deny",
+    };
+    let record = WorkerBoundaryAudit {
+        ts: Utc::now(),
+        event: "clawd.agent.capability_boundary",
+        job_id: audit_policy::safe_identity(task_id),
+        owner_uid,
+        session_id: audit_policy::safe_identity(session_id),
+        verb: audit_policy::safe_identity(verb),
+        scope: audit_policy::safe_reference(&scope.to_string()),
+        action,
+    };
+    if let Err(err) = append_jsonl(&record) {
+        tracing::error!(error = %err, "failed to write agentd capability gate audit record");
+    }
+}
+
+#[derive(Debug, Serialize)]
 struct ApprovalRevocationAudit {
     ts: chrono::DateTime<Utc>,
     event: &'static str,

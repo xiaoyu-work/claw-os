@@ -22,6 +22,13 @@
     },
     "ai": { "$ref": "#/$defs/aiPolicy", "description": "AI policy. Required iff any operation or MCP tool declares an ai.* need." },
     "mcp": { "$ref": "#/$defs/mcpService", "description": "The App's authenticated MCP service and sole Agent/App tool interface." },
+    "objects": {
+      "type": "object",
+      "description": "Optional App-owned object types. These declarations identify data and select ordinary App commands for operation/MCP resolution; they do not grant authority or promise that a resolver is pure.",
+      "maxProperties": 64,
+      "propertyNames": { "type": "string", "pattern": "^[a-z][a-z0-9_-]*$(?![\\s\\S])", "maxLength": 64 },
+      "additionalProperties": { "$ref": "#/$defs/objectType" }
+    },
     "desktop": { "$ref": "#/$defs/desktop", "description": "Optional desktop GUI surface. Declaring it makes the app a launchable GUI; the installer generates a .desktop entry whose Exec routes through `cos app <id> --gui` so the GUI process is kernel-spawned and shares the app's identity, caps, consent, and audit." },
     "dependencies": { "type": "object", "additionalProperties": true, "description": "Free-form dependency declarations (e.g. {\"binaries\": [...]}) consumed by the bridge's resolver." }
   },
@@ -37,6 +44,27 @@
     }
   ],
   "$defs": {
+    "objectType": {
+      "type": "object",
+      "required": ["label", "resolve"],
+      "additionalProperties": false,
+      "properties": {
+        "label": { "$ref": "#/$defs/localizedText" },
+        "summary": { "$ref": "#/$defs/localizedText" },
+        "resolve": { "$ref": "#/$defs/objectResolver" }
+      }
+    },
+    "objectResolver": {
+      "type": "object",
+      "description": "The kernel verifies the ordinary App command and argument bindings. The operation field retains its name for compatibility; resolution uses normal App operation/MCP dispatch, capabilities, approvals, and audit, never an SDK or App-local fallback.",
+      "required": ["operation", "id_arg"],
+      "additionalProperties": false,
+      "properties": {
+        "operation": { "type": "string" },
+        "id_arg": { "type": "string" },
+        "revision_arg": { "type": "string" }
+      }
+    },
     "localizedText": {
       "type": "object",
       "description": "Localized string map. The `en` key is required; other locales (zh-CN, ...) are optional fallbacks.",
@@ -46,7 +74,7 @@
     },
     "operation": {
       "type": "object",
-      "description": "A one-shot operation: its inputs and the capabilities it needs.",
+      "description": "A one-shot operation: its inputs, capability needs, and optional App-declared effect guidance.",
       "required": ["label"],
       "additionalProperties": false,
       "properties": {
@@ -64,7 +92,36 @@
             ]
           }
         },
-        "needs": { "type": "array", "items": { "$ref": "#/$defs/need" }, "description": "Capability requirements checked before dispatch." }
+        "needs": { "type": "array", "items": { "$ref": "#/$defs/need" }, "description": "Capability requirements checked before dispatch." },
+        "effects": {
+          "type": "array",
+          "x-go-type": "*[]Operationeffect",
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/operationEffect" },
+          "description": "Optional App-declared effect metadata, not authority or confirmed outcomes. Missing effects means unknown effects, never purity or read-only behavior."
+        }
+      }
+    },
+    "operationEffect": {
+      "type": "object",
+      "description": "App-declared guidance for a metadata-only preview, not authority, an OS-confirmed effect, or proof that an inverse exists.",
+      "required": ["kind", "label"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "type": "string", "enum": ["read", "create", "update", "delete", "external", "execute"] },
+        "label": { "$ref": "#/$defs/localizedText", "description": "English (en) is required. Core manifest validation limits every locale's label to 512 UTF-8 bytes." },
+        "target_arg": {
+          "type": "string",
+          "x-go-type": "*string",
+          "description": "A declared path/host/name argument; repeatable arguments are allowed. Core validates the binding and conditions. Preview values are requested values, not canonicalized or authorized final targets; runtime-selected values remain unresolved."
+        },
+        "recovery": {
+          "type": "string",
+          "x-go-type": "*string",
+          "enum": ["not_applicable", "reversible", "compensatable", "irreversible", "unknown"],
+          "default": "unknown",
+          "description": "App-declared recovery guidance only. Omission means unknown; no value proves that an inverse or compensation is available."
+        }
       }
     },
     "arg": {
@@ -343,7 +400,7 @@
     },
     "mcpTool": {
       "type": "object",
-      "description": "One MCP-callable tool. Mirrors operation: args + needs drive the model's view and the kernel's enforcement.",
+      "description": "One MCP-callable tool. Args and needs drive the model's view and kernel enforcement; optional effects are App-declared preview metadata, never authority or confirmed outcomes.",
       "required": ["name", "summary"],
       "additionalProperties": false,
       "properties": {
@@ -354,7 +411,14 @@
           "items": { "$ref": "#/$defs/arg" },
           "description": "Declared input parameters. Same shape as an operation arg. An optional `binding` (positional/flag) is one-shot CLI metadata only: it keeps `cos app <id> <command>` syntax stable when the App has no operations and is never surfaced in the model-facing MCP inputSchema."
         },
-        "needs": { "type": "array", "items": { "$ref": "#/$defs/need" } }
+        "needs": { "type": "array", "items": { "$ref": "#/$defs/need" } },
+        "effects": {
+          "type": "array",
+          "x-go-type": "*[]Operationeffect",
+          "maxItems": 16,
+          "items": { "$ref": "#/$defs/operationEffect" },
+          "description": "Optional App-declared effect metadata, not authority or confirmed outcomes. Missing effects means unknown effects, never purity or read-only behavior."
+        }
       }
     },
     "desktop": {

@@ -61,6 +61,19 @@ where
     CAPABILITY_CEILING.scope(ceiling, future).await
 }
 
+/// Enforce an extension reference without consuming consent. The caller must
+/// still cross its ordinary authorization boundary before executing anything.
+pub(crate) fn require_capability_reference(verb: Verb, scope: &Scope) -> Result<(), Denial> {
+    let Some(ceiling) = CAPABILITY_CEILING.try_with(Clone::clone).ok() else {
+        return Ok(());
+    };
+    if ceiling.covers(&Cap::new(verb, scope.clone())) {
+        return Ok(());
+    }
+    Err(Denial::scope_out_of_range(verb, scope.clone(), &ceiling)
+        .with_hint("extension-originated action exceeded its declared capability reference"))
+}
+
 // ---------------------------------------------------------------------------
 // Mode
 // ---------------------------------------------------------------------------
@@ -401,10 +414,13 @@ fn attach_approval_request(
     {
         return;
     }
-    if mode != Mode::Strict
+    let exact = matches!(denial.reason, DenialReason::ActivityApprovalRequired);
+    if (mode != Mode::Strict && !exact)
         || matches!(
             denial.reason,
-            DenialReason::NoSession | DenialReason::PidAncestryMismatch { .. }
+            DenialReason::NoSession
+                | DenialReason::PidAncestryMismatch { .. }
+                | DenialReason::ActivityPolicy
         )
     {
         return;
@@ -652,12 +668,31 @@ fn authorize_session_caps(
     consent_context: ConsentContext,
     operation_digest: Option<&str>,
 ) -> Result<(), Denial> {
-    let owner = crate::provenance::runtime::current_owner();
-    let trust = crate::provenance::trust_store();
-    let liveness = if is_app {
-        crate::provenance::runtime::assert_live_instance(owner, session_id, &trust)
+    let trusted_task = !is_app
+        && crate::paths::is_routed_job()
+        && crate::paths::current_owner_uid_override()
+            .is_some_and(|owner| Some(owner) == current_euid())
+        && crate::proc::current_trusted_session_for_caps().is_some_and(|session| {
+            session.session_id == session_id
+                && session.pid == std::process::id()
+                && session.app_id.is_none()
+                && !matches!(session.group.as_deref(), Some("app" | "mcp"))
+                && !session.pending_bind
+                && session.ended_at.is_none()
+                && session.exit_code.is_none()
+        });
+    // Root's authenticated task is not an extension and cannot open the
+    // extension registry's root-owned writable lock from its unprivileged UID.
+    let liveness = if trusted_task {
+        Ok(())
     } else {
-        crate::provenance::runtime::assert_live(owner, session_id, &trust)
+        let owner = crate::provenance::runtime::current_owner();
+        let trust = crate::provenance::trust_store();
+        if is_app {
+            crate::provenance::runtime::assert_live_instance(owner, session_id, &trust)
+        } else {
+            crate::provenance::runtime::assert_live(owner, session_id, &trust)
+        }
     };
     if let Err(reason) = liveness {
         return Err(Denial::verb_not_granted(verb, scope).with_hint(format!(
@@ -667,19 +702,39 @@ fn authorize_session_caps(
 
     let requested = Cap::new(verb, scope.clone());
     let ceiling = CAPABILITY_CEILING.try_with(Clone::clone).ok();
-    if ceiling
-        .as_ref()
-        .is_some_and(|ceiling| !ceiling.covers(&requested))
-    {
-        return Err(Denial::scope_out_of_range(
-            verb,
-            scope,
-            ceiling.as_ref().expect("checked capability ceiling"),
-        )
-        .with_hint("extension-originated action exceeded its declared capability reference"));
+    require_capability_reference(verb, &scope)?;
+    use crate::activities::CapabilityBoundaryDecision as Boundary;
+    let boundary = match super::approval_gateway::installed() {
+        Some(gateway) => gateway.boundary(verb, &scope),
+        None => super::activity_boundary::current().map_or(Ok(Boundary::Normal), |boundary| {
+            boundary.decision(&requested)
+        }),
+    };
+    let policy_denial = |hint| Denial {
+        verb,
+        requested_scope: scope.clone(),
+        granted_scopes: Vec::new(),
+        reason: DenialReason::ActivityPolicy,
+        hint: Some(hint),
+        approval: None,
+    };
+    let boundary = boundary.map_err(policy_denial)?;
+    if boundary == Boundary::Deny {
+        return Err(policy_denial(
+            "Activity capability policy denies this request; an approval cannot override it"
+                .to_string(),
+        ));
+    }
+    let exact_approval = boundary == Boundary::RequireApproval;
+    if exact_approval && is_app {
+        return Err(policy_denial(
+            "Activity confirmation must be settled by the App invocation or session call"
+                .to_string(),
+        ));
     }
     let mut caps = match caps {
         Some(c) => c.clone(),
+        None if exact_approval && mode == Mode::Permissive => CapSet::new(),
         None => {
             return match mode {
                 Mode::Permissive => Ok(()),
@@ -697,11 +752,27 @@ fn authorize_session_caps(
         caps = caps.intersect(&ceiling);
     }
 
-    if caps.covers(&requested)
+    if (!exact_approval && caps.covers(&requested))
         || (!is_app
-            && approved_grant_covers(session_id, verb, &scope, consent_context, operation_digest))
+            && approved_grant_covers(
+                session_id,
+                verb,
+                &scope,
+                consent_context,
+                operation_digest,
+                exact_approval,
+            ))
     {
         Ok(())
+    } else if exact_approval {
+        Err(Denial {
+            verb,
+            requested_scope: scope,
+            granted_scopes: Vec::new(),
+            reason: DenialReason::ActivityApprovalRequired,
+            hint: Some("Activity requires an exact one-time confirmation".to_string()),
+            approval: None,
+        })
     } else if caps.verbs().contains(&verb) {
         // Verb is held but at a scope that doesn't cover this request.
         Err(Denial::scope_out_of_range(verb, scope, &caps))
@@ -716,6 +787,7 @@ fn approved_grant_covers(
     scope: &Scope,
     context: ConsentContext,
     operation_digest: Option<&str>,
+    retire_all: bool,
 ) -> bool {
     // Same one-shot semantics either way: the grant is spent at the
     // gate, never written back into a session's capability set. A
@@ -743,6 +815,7 @@ fn approved_grant_covers(
         crate::paths::current_owner_uid_override().or_else(current_euid),
         Some(context),
         operation_digest,
+        retire_all,
     ) {
         Ok(Some(_grant)) => true,
         Ok(None) => false,

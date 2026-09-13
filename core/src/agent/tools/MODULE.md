@@ -54,7 +54,8 @@ which tool calls are exposed and executed.
 | `cos_proxy/oauth_login.rs` | Agent-initiated trusted OAuth browser flow |
 | `cos_apps_session.rs` | Authenticated MCP App tool registration, task-Host relay, reusable/single-call placement, and calls through the daemon service Host |
 | `mcp/` | MCP attachment and proxy tools |
-| `memory.rs`, `recall.rs` | Agent memory tools |
+| `cos_proxy/memory.rs`, `cos_proxy/recall.rs` | Model-selected note/history search and versioned source reads |
+| `cos_proxy/recall_semantic.rs`, `cos_proxy/app_memory.rs` | Semantic/App evidence, bounded coverage and original-source handles |
 
 The broker and Host share `classify_app_call`: editor filesystem operations
 use controlled providers in a resource-free reusable worker, not file mounts.
@@ -95,6 +96,33 @@ Agent-extension action preparation is a separate registry path. It binds the
 authenticated manifest policy, canonical input, exact capability, tool,
 catalog generation, event, and operation digest before any reference is
 consumed or approval is requested.
+
+Memory tools return source identity, revision, partial-page and candidate
+coverage information. Follow-up pages require the source revision. Instructions
+tell the main model to keep retrieving/refining when evidence is insufficient
+or unreliable, to verify current facts at their App/OS source, and to report
+remaining uncertainty if permissions or execution budgets prevent resolution.
+No pre-model keyword router or mandatory extra planning call selects memories.
+
+## Activity capability constraints
+
+For brokered Apps, the invoke preflight and session-tool wrapper do not spend
+consent locally. Root registration/call planning settles ordinary missing
+permissions and Activity-required confirmations as one complete set. Local
+App execution retains its existing preflight. Denied calls never fall back
+to a local or unverified launcher; all execution still crosses the ordinary
+App boundary.
+
+## Activity receipts
+
+The MCP App Mesh is the sole model-visible App invocation path. Root captures
+Activity-associated task results in the App-service manager before this
+module trust-fences them. Schema inspection creates no receipt. Recording
+failures preserve the original result and provide only a recording retry;
+they never repeat App execution or acquire authority. `session:<tool>` names
+select MCP declarations, never a same-named ordinary operation. MCP error
+flags remain reported errors, and transport uncertainty remains indeterminate.
+Explicit CLI operation capture stays outside the model's App tool projection.
 
 ## Tests
 

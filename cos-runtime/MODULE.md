@@ -14,6 +14,8 @@ with Claw OS.
 - Carry bounded bundled-App requests to daemon-owned browser and network
   providers without exposing privileged host sockets.
 - Bind bundled Python App business handlers to manifest-authoritative MCP tools.
+- Transport bounded file replacement requests on stdin through the broker,
+  without direct-write fallbacks or parent-directory mount grants.
 - Own the typed, bounded Ask Claw context and desktop overlay launch contract.
 - Carry bundled attached-browser requests over stdin to the typed daemon
   provider without exposing the browser socket to App sandboxes.
@@ -29,6 +31,7 @@ with Claw OS.
 | `python/src/cos_runtime/network_diagnostics.py` | Typed client for daemon-owned host-network diagnostics |
 | `python/src/cos_runtime/mcp.py` | Strict bundled-App MCP operation binding |
 | `python/src/cos_runtime/browser_bridge.py` | Private bounded stdin bridge to `system.browser.control`; sensitive values never enter argv |
+| `python/src/cos_runtime/file_changes.py` | Literal-path validation, stdin-only guarded replacement with per-call session selection, and conservative failure reporting |
 | `rust/` | Rust internal runtime crate |
 | `rust/src/fs.rs` | Typed filesystem CLI client; writes send bounded JSON business arguments via `--args-stdin`; binary reads reject truncation |
 | `rust/src/filesystem.rs` | App-safe controlled text-file provider client; complete reads and atomic unique replacements, no App intercall |

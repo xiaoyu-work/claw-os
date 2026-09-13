@@ -10,8 +10,19 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 pub use cos_agent_protocol::{
-    BridgeEndpoint, ChatRequest, ErrorEnvelope, HistoryMessage, ModelsResponse, SessionSummary,
-    StreamEvent, ToolCallView, ToolResultView,
+    ActivityCapabilityPolicy, ActivityCapabilityPolicyEnabledRequest,
+    ActivityCapabilityPolicyResponse, ActivityCapabilityPolicySetRequest,
+    ActivityCreateRequest, ActivityDetailResponse, ActivityListQuery, ActivityListResponse,
+    ActivityExecutionLimits, ActivityExecutionLimitsEnabledRequest,
+    ActivityExecutionLimitsResponse, ActivityExecutionLimitsSetRequest,
+    ActivityObjectAttachRequest, ActivityObjectsResponse,
+    ActivityObjectStateQuery, ActivityObjectStateRecordRequest, ActivityObjectStateResponse,
+    ActivityOperationPreview, ActivityOperationPreviewRequest,
+    ActivityReceiptsQuery, ActivityReceiptsResponse,
+    ActivityRunRequest, ActivityState, ActivityTransitionRequest, ActivityUpdateRequest,
+    ActivityView, ActivityWorkResponse, BridgeEndpoint, CancelResponse, ChatRequest, ErrorEnvelope,
+    HistoryMessage, ModelsResponse, ObjectStateEntry, SessionSummary, StreamEvent, ToolCallView,
+    ToolResultView,
 };
 use cos_agent_protocol::{PROTOCOL_VERSION_HEADER, ProtocolMetadata, ProtocolVersion};
 use reqwest::header::HeaderMap;
@@ -363,6 +374,315 @@ pub async fn cancel_task(endpoint: BridgeEndpoint, task_id: &str) -> Result<()> 
     Ok(())
 }
 
+fn activity_request(
+    endpoint: &BridgeEndpoint,
+    method: reqwest::Method,
+    segments: &[&str],
+) -> Result<(reqwest::RequestBuilder, ProtocolVersion)> {
+    let mut url = url::Url::parse(&bridge_url(endpoint, "/api/"))?;
+    url.path_segments_mut()
+        .map_err(|_| anyhow!("invalid bridge URL"))?
+        .pop_if_empty()
+        .extend(segments);
+    let request = reqwest::Client::builder()
+        .timeout(Duration::from_secs(40))
+        .build()
+        .context("building Activities client")?
+        .request(method, url)
+        .bearer_auth(&endpoint.token);
+    versioned_request(request, endpoint)
+}
+
+async fn activity_response<T: serde::de::DeserializeOwned>(
+    request: reqwest::RequestBuilder,
+    selected: ProtocolVersion,
+) -> Result<T> {
+    let response = request.send().await.context("requesting Activities")?;
+    validate_response_protocol(&response, selected)?;
+    if !response.status().is_success() {
+        let url = response.url().to_string();
+        return Err(response_error(response, &url).await);
+    }
+    response
+        .json()
+        .await
+        .context("decoding Activities presentation response")
+}
+
+pub async fn fetch_activities(
+    endpoint: BridgeEndpoint,
+    state: Option<ActivityState>,
+) -> Result<ActivityListResponse> {
+    let (request, selected) = activity_request(&endpoint, reqwest::Method::GET, &["activities"])?;
+    activity_response(
+        request.query(&ActivityListQuery {
+            state,
+            limit: Some(100),
+        }),
+        selected,
+    )
+    .await
+}
+
+pub async fn fetch_activity(endpoint: BridgeEndpoint, id: &str) -> Result<ActivityDetailResponse> {
+    let (request, selected) = activity_request(&endpoint, reqwest::Method::GET, &["activities", id])?;
+    activity_response(request, selected).await
+}
+
+pub async fn fetch_activity_objects(
+    endpoint: BridgeEndpoint,
+    id: &str,
+) -> Result<ActivityObjectsResponse> {
+    let (request, selected) = activity_request(
+        &endpoint,
+        reqwest::Method::GET,
+        &["activities", id, "objects"],
+    )?;
+    activity_response(request, selected).await
+}
+
+pub async fn attach_activity_object(
+    endpoint: BridgeEndpoint,
+    id: &str,
+    body: ActivityObjectAttachRequest,
+) -> Result<ActivityView> {
+    let (request, selected) = activity_request(
+        &endpoint,
+        reqwest::Method::POST,
+        &["activities", id, "objects"],
+    )?;
+    activity_response(request.json(&body), selected).await
+}
+
+pub async fn preview_activity_operation(
+    endpoint: BridgeEndpoint,
+    id: &str,
+    body: ActivityOperationPreviewRequest,
+) -> Result<ActivityOperationPreview> {
+    let (request, selected) = activity_request(
+        &endpoint,
+        reqwest::Method::POST,
+        &["activities", id, "operation-preview"],
+    )?;
+    activity_response(request.json(&body), selected).await
+}
+
+pub async fn fetch_activity_receipts(
+    endpoint: BridgeEndpoint,
+    id: &str,
+) -> Result<ActivityReceiptsResponse> {
+    let (request, selected) = activity_request(
+        &endpoint,
+        reqwest::Method::GET,
+        &["activities", id, "receipts"],
+    )?;
+    activity_response(
+        request.query(&ActivityReceiptsQuery { limit: Some(100) }),
+        selected,
+    ).await
+}
+
+fn object_state_list_request(
+    endpoint: &BridgeEndpoint,
+    id: &str,
+    query: &ActivityObjectStateQuery,
+) -> Result<(reqwest::RequestBuilder, ProtocolVersion)> {
+    let (request, selected) =
+        activity_request(endpoint, reqwest::Method::GET, &["activities", id, "object-state"])?;
+    Ok((request.query(query), selected))
+}
+
+pub async fn fetch_activity_object_state(
+    endpoint: BridgeEndpoint,
+    id: &str,
+    query: ActivityObjectStateQuery,
+) -> Result<ActivityObjectStateResponse> {
+    let (request, selected) = object_state_list_request(&endpoint, id, &query)?;
+    activity_response(request, selected).await
+}
+
+fn object_state_record_request(
+    endpoint: &BridgeEndpoint,
+    id: &str,
+    body: &ActivityObjectStateRecordRequest,
+) -> Result<(reqwest::RequestBuilder, ProtocolVersion)> {
+    let (request, selected) =
+        activity_request(endpoint, reqwest::Method::POST, &["activities", id, "object-state"])?;
+    Ok((request.json(body), selected))
+}
+
+pub async fn record_activity_object_state(
+    endpoint: BridgeEndpoint,
+    id: &str,
+    body: ActivityObjectStateRecordRequest,
+) -> Result<ObjectStateEntry> {
+    let (request, selected) = object_state_record_request(&endpoint, id, &body)?;
+    activity_response(request, selected).await
+}
+
+fn execution_limits_get_request(
+    endpoint: &BridgeEndpoint,
+    id: &str,
+) -> Result<(reqwest::RequestBuilder, ProtocolVersion)> {
+    activity_request(endpoint, reqwest::Method::GET, &["activities", id, "execution-limits"])
+}
+
+pub async fn fetch_activity_execution_limits(
+    endpoint: BridgeEndpoint,
+    id: &str,
+) -> Result<ActivityExecutionLimitsResponse> {
+    let (request, selected) = execution_limits_get_request(&endpoint, id)?;
+    activity_response(request, selected).await
+}
+
+fn execution_limits_set_request(
+    endpoint: &BridgeEndpoint,
+    id: &str,
+    body: &ActivityExecutionLimitsSetRequest,
+) -> Result<(reqwest::RequestBuilder, ProtocolVersion)> {
+    let (request, selected) =
+        activity_request(endpoint, reqwest::Method::POST, &["activities", id, "execution-limits"])?;
+    Ok((request.json(body), selected))
+}
+
+pub async fn set_activity_execution_limits(
+    endpoint: BridgeEndpoint,
+    id: &str,
+    body: ActivityExecutionLimitsSetRequest,
+) -> Result<ActivityExecutionLimits> {
+    let (request, selected) = execution_limits_set_request(&endpoint, id, &body)?;
+    activity_response(request, selected).await
+}
+
+fn execution_limits_enabled_request(
+    endpoint: &BridgeEndpoint,
+    id: &str,
+    body: &ActivityExecutionLimitsEnabledRequest,
+) -> Result<(reqwest::RequestBuilder, ProtocolVersion)> {
+    let (request, selected) = activity_request(
+        endpoint, reqwest::Method::POST, &["activities", id, "execution-limits", "enabled"],
+    )?;
+    Ok((request.json(body), selected))
+}
+
+pub async fn enable_activity_execution_limits(
+    endpoint: BridgeEndpoint,
+    id: &str,
+    body: ActivityExecutionLimitsEnabledRequest,
+) -> Result<ActivityExecutionLimits> {
+    let (request, selected) = execution_limits_enabled_request(&endpoint, id, &body)?;
+    activity_response(request, selected).await
+}
+
+fn capability_policy_get_request(
+    endpoint: &BridgeEndpoint,
+    id: &str,
+) -> Result<(reqwest::RequestBuilder, ProtocolVersion)> {
+    activity_request(endpoint, reqwest::Method::GET, &["activities", id, "capability-policy"])
+}
+
+pub async fn fetch_activity_capability_policy(
+    endpoint: BridgeEndpoint,
+    id: &str,
+) -> Result<ActivityCapabilityPolicyResponse> {
+    let (request, selected) = capability_policy_get_request(&endpoint, id)?;
+    activity_response(request, selected).await
+}
+
+fn capability_policy_set_request(
+    endpoint: &BridgeEndpoint,
+    id: &str,
+    body: &ActivityCapabilityPolicySetRequest,
+) -> Result<(reqwest::RequestBuilder, ProtocolVersion)> {
+    let (request, selected) =
+        activity_request(endpoint, reqwest::Method::POST, &["activities", id, "capability-policy"])?;
+    Ok((request.json(body), selected))
+}
+
+pub async fn set_activity_capability_policy(
+    endpoint: BridgeEndpoint,
+    id: &str,
+    body: ActivityCapabilityPolicySetRequest,
+) -> Result<ActivityCapabilityPolicy> {
+    let (request, selected) = capability_policy_set_request(&endpoint, id, &body)?;
+    activity_response(request, selected).await
+}
+
+fn capability_policy_enabled_request(
+    endpoint: &BridgeEndpoint,
+    id: &str,
+    body: &ActivityCapabilityPolicyEnabledRequest,
+) -> Result<(reqwest::RequestBuilder, ProtocolVersion)> {
+    let (request, selected) = activity_request(
+        endpoint, reqwest::Method::POST, &["activities", id, "capability-policy", "enabled"],
+    )?;
+    Ok((request.json(body), selected))
+}
+
+pub async fn enable_activity_capability_policy(
+    endpoint: BridgeEndpoint,
+    id: &str,
+    body: ActivityCapabilityPolicyEnabledRequest,
+) -> Result<ActivityCapabilityPolicy> {
+    let (request, selected) = capability_policy_enabled_request(&endpoint, id, &body)?;
+    activity_response(request, selected).await
+}
+
+pub async fn create_activity(
+    endpoint: BridgeEndpoint,
+    body: ActivityCreateRequest,
+) -> Result<ActivityView> {
+    let (request, selected) = activity_request(&endpoint, reqwest::Method::POST, &["activities"])?;
+    activity_response(request.json(&body), selected).await
+}
+
+pub async fn update_activity(
+    endpoint: BridgeEndpoint,
+    id: &str,
+    body: ActivityUpdateRequest,
+) -> Result<ActivityView> {
+    let (request, selected) = activity_request(&endpoint, reqwest::Method::PATCH, &["activities", id])?;
+    activity_response(request.json(&body), selected).await
+}
+
+pub async fn transition_activity(
+    endpoint: BridgeEndpoint,
+    id: &str,
+    body: ActivityTransitionRequest,
+) -> Result<ActivityView> {
+    let (request, selected) = activity_request(
+        &endpoint,
+        reqwest::Method::POST,
+        &["activities", id, "transition"],
+    )?;
+    activity_response(request.json(&body), selected).await
+}
+
+pub async fn run_activity(
+    endpoint: BridgeEndpoint,
+    id: &str,
+    body: ActivityRunRequest,
+) -> Result<ActivityWorkResponse> {
+    let (request, selected) = activity_request(
+        &endpoint,
+        reqwest::Method::POST,
+        &["activities", id, "run"],
+    )?;
+    activity_response(request.json(&body), selected).await
+}
+
+pub async fn cancel_activity_job(endpoint: BridgeEndpoint, id: &str) -> Result<CancelResponse> {
+    let (request, selected) =
+        activity_request(&endpoint, reqwest::Method::POST, &["chat", id, "cancel"])?;
+    activity_response(request, selected).await
+}
+
+pub async fn retry_activity_job(endpoint: BridgeEndpoint, id: &str) -> Result<ActivityWorkResponse> {
+    let (request, selected) =
+        activity_request(&endpoint, reqwest::Method::POST, &["tasks", id, "retry"])?;
+    activity_response(request, selected).await
+}
+
 pub fn versioned_request(
     request: reqwest::RequestBuilder,
     endpoint: &BridgeEndpoint,
@@ -439,4 +759,11 @@ pub async fn response_error(response: reqwest::Response, url: &str) -> anyhow::E
 #[cfg(test)]
 mod tests {
     include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/bridge.rs"));
+
+    mod capability_policy {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/test/unit/bridge/capability_policy.rs"
+        ));
+    }
 }

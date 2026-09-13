@@ -27,6 +27,9 @@ claw-os-sdk/
 │   │   ├── tool.schema.json        catalog tool invocation
 │   │   ├── tool_catalog.schema.json catalog tool list
 │   │   ├── mcp_call_context.schema.json authenticated App-call identity
+│   │   ├── object_ref.schema.json portable App object identifier
+│   │   ├── object-references.md    canonical URI and manifest semantics
+│   │   ├── file_change_plan.schema.json bounded App-reported proposal
 │   │   ├── contract.json           validators + stable error codes
 │   │   ├── app.schema.json         cos app <id> <verb>
 │   │   └── manifest.schema.json    app.json schema
@@ -44,6 +47,7 @@ claw-os-sdk/
 │       ├── ai.rs                gated chat API
 │       ├── mcp/                 native App MCP server runtime
 │       ├── tools.rs             tools::call / tools::catalog
+│       ├── objects.rs           pure App object reference helpers
 │       └── generated.rs         codegen output (envelope types)
 │
 ├── python/              Python SDK (pip package `claw-os-sdk`)
@@ -51,7 +55,7 @@ claw-os-sdk/
 │   ├── README.md
 │   └── src/claw_os_sdk/
 │       ├── __init__.py
-│       ├── ai.py, tools.py, mcp.py, kernel.py, claw_os_session.py
+│       ├── ai.py, tools.py, mcp.py, kernel.py, objects.py, claw_os_session.py
 │       └── generated.py
 │
 ├── node/                Node SDK (npm package `@claw-os/sdk`)
@@ -60,14 +64,14 @@ claw-os-sdk/
 │   └── src/
 │       ├── index.ts             top-level re-exports
 │       ├── transport.ts         subprocess transport
-│       ├── ai.ts, tools.ts
+│       ├── ai.ts, tools.ts, objects.ts
 │       └── generated.ts         codegen output
 │
 ├── go/                  Go SDK (module github.com/xiaoyu-work/claw-os/claw-os-sdk/go)
 │   ├── go.mod
 │   ├── README.md
 │   ├── transport.go
-│   ├── ai.go, tools.go
+│   ├── ai.go, tools.go, objects.go
 │   └── generated.go
 │
 └── README.md
@@ -112,6 +116,49 @@ session context are inherited from process ancestry** (kernel-spawned
 parent → app process → cos child). A pure-library binding can't claim
 "App X is making this call" without that lineage.
 
+## App object references
+
+Every binding exports the generated `ObjectRef` data contract and pure
+format/parse helpers for canonical references such as
+`app://notes/note?id=draft%2F1&revision=7`. References contain only an App ID,
+object type, opaque object ID, and optional revision. They carry no owner,
+grant, URI field, or data payload.
+
+These helpers do not invoke `cos`, discover Apps, read data, or assert
+existence, freshness, or permission. Terminal and desktop presentations share
+the same identity semantics and backend. Actual resolution belongs to normal,
+verified App operation/MCP command dispatch, with the existing capability and
+audit gates. References introduce no legacy operation or App-local fallback.
+
+See [the normative object-reference contract](wire/v1/object-references.md)
+for byte limits, strict URI spelling, generated validation, shared golden
+vectors, and the optional manifest `objects` declaration.
+
+## App-reported file change plans
+
+The generated `FileChangePlan` value and validators describe a bounded,
+App-owned staged proposal, including its public diff and lifecycle state.
+The App owns private before/proposed contents and the plan's lifecycle;
+the SDK introduces no plan store, apply transport, or authority.
+
+Review fingerprints bind proposal data, not permission. Normal authorization
+and current-file checks still apply, and uncooperative writers may race after
+the final check: this is not atomic compare-and-swap or universal rollback.
+See [the file change plan contract](wire/v1/file-change-plans.md) for exact
+fields, nullable values, reference semantics, and validation limits.
+
+## App effect declarations
+
+An ordinary operation or MCP tool may declare up to 16 effects in its manifest for a metadata-only
+preview. These declarations do not grant authority, execute App code, inspect
+object data or credentials, or promise file diffs. Missing effects mean
+unknown effects, not purity; recovery is App-declared guidance, not proof that
+an inverse exists.
+
+See [the effect declaration and preview contract](wire/v1/operation-effects.md)
+for fields, label limits, target bindings, unresolved runtime arguments, and
+generated binding compatibility. No new SDK execution API is introduced.
+
 ## AI support
 
 Across Rust, Python, Node, and Go, the hand-written AI surface is `chat` /
@@ -131,6 +178,7 @@ Codegen handles the **boring** part:
 | Request / reply struct types | The transport (how to spawn `cos`) |
 | Error code enum   | The high-level wrappers (`ai.chat("…")`)    |
 | Manifest schema bindings | Examples, docs, language-idiomatic helpers |
+| `ObjectRef` and structural validators | Pure canonical URI helpers and semantic bounds |
 
 Run codegen with:
 
@@ -139,6 +187,10 @@ cd claw-os-sdk
 python3 wire/codegen.py            # writes generated.* into each language tree
 python3 wire/codegen.py --check    # verifies all generated outputs are current
 ```
+
+Use `--sdk-only` with either command when regenerating a standalone SDK or
+when another integrator owns the core MCP constants. It still generates all
+four language bindings and the Rust SDK's MCP constants.
 
 ## Versioning
 

@@ -1,10 +1,20 @@
 use super::*;
 
 mod app_sources {
-    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/support/app_sources.rs"));
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/support/app_sources.rs"
+    ));
 }
 
 use crate::caps::Verb;
+
+mod activity_policy {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/clawd/app_sessions/activity_policy.rs"
+    ));
+}
 
 const FS_MANIFEST: &str = r#"{
   "id": "fs",
@@ -136,6 +146,7 @@ fn delegation(ceiling: CapSet) -> Delegation {
             home: home(),
             cwd: Some(home()),
         },
+        activity: None,
     }
 }
 
@@ -353,8 +364,7 @@ fn publisher_ceiling() -> Ceiling {
 #[test]
 fn owner_app_revocation_is_enforced_before_launch_grants_are_derived() {
     let _lock = crate::test_env::lock_env();
-    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../build");
-    let dir = tempfile::tempdir_in(root).unwrap();
+    let dir = tempfile::tempdir().unwrap();
     let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", dir.path());
     let _caps = crate::test_env::TestEnvVarGuard::set("COS_CAPS_DATA_DIR", dir.path());
     let delegation = launcher_delegation(std::process::id(), 1);
@@ -365,19 +375,34 @@ fn owner_app_revocation_is_enforced_before_launch_grants_are_derived() {
         plan
     };
     authorize_plan(&delegation, plan(), &publisher_ceiling(), "audio-manager").unwrap();
-    let block = crate::approvals::app_policy::revoke(delegation.uid, "audio-manager", cap.clone()).unwrap();
+    let block =
+        crate::approvals::app_policy::revoke(delegation.uid, "audio-manager", cap.clone()).unwrap();
     assert!(authorize_plan(&delegation, plan(), &publisher_ceiling(), "audio-manager").is_err());
     authorize_plan(&delegation, plan(), &publisher_ceiling(), "other-app").unwrap();
-    let id = crate::approvals::submit_owned(cap.verb, cap.scope.clone(),
-        block.session(delegation.uid, "audio-manager"), "restore", None, Some(delegation.uid)).unwrap();
+    let id = crate::approvals::submit_owned(
+        cap.verb,
+        cap.scope.clone(),
+        block.session(delegation.uid, "audio-manager"),
+        "restore",
+        None,
+        Some(delegation.uid),
+    )
+    .unwrap();
     crate::approvals::approve_for_owner(
-        &id, crate::approvals::GrantDuration::Forever, None, None, Some(delegation.uid),
-    ).unwrap();
+        &id,
+        crate::approvals::GrantDuration::Forever,
+        None,
+        None,
+        Some(delegation.uid),
+    )
+    .unwrap();
     authorize_plan(&delegation, plan(), &publisher_ceiling(), "audio-manager").unwrap();
     let mut missing = LaunchPlan::default();
     missing.missing.push(cap.clone());
-    assert!(authorize_plan(&delegation, missing, &publisher_ceiling(), "audio-manager").is_err(),
-        "restoring policy cannot satisfy an ordinary launch approval");
+    assert!(
+        authorize_plan(&delegation, missing, &publisher_ceiling(), "audio-manager").is_err(),
+        "restoring policy cannot satisfy an ordinary launch approval"
+    );
     crate::approvals::app_policy::revoke(delegation.uid, "audio-manager", cap.clone()).unwrap();
     assert!(authorize_plan(&delegation, plan(), &publisher_ceiling(), "audio-manager").is_err());
 }
@@ -397,6 +422,7 @@ fn authority_for(
         scope: None,
         priority: None,
         role: None,
+        activity: None,
     }
 }
 
@@ -1374,6 +1400,7 @@ fn test_authority() -> LauncherAuthority {
         scope: None,
         priority: None,
         role: None,
+        activity: None,
     }
 }
 
@@ -1856,6 +1883,7 @@ fn e2e_install_grants_with_ceiling(
         scope: None,
         priority: None,
         role: None,
+        activity: None,
     };
     let handle = issue_launch_grant(
         session_id,
@@ -3430,7 +3458,8 @@ fn e2e_installed_package(app_id: &str) -> crate::provenance::runtime::PackageRef
         crate::approvals::system_review::ReviewKind::AppActivation,
         package,
         "isolated App authority fixture".into(),
-    ).expect("fixture review");
+    )
+    .expect("fixture review");
     if review.state == crate::approvals::system_review::ReviewState::Pending {
         crate::approvals::system_review::decide(E2E_UID, &review.id, true, Some(package))
             .expect("fixture user decision");

@@ -83,6 +83,11 @@ use crate::i18n::LocalizedText;
 use super::scope::Scope;
 use super::verb::Verb;
 
+mod objects;
+pub use objects::{ObjectResolver, ObjectType};
+mod effects;
+pub use effects::{EffectKind, EffectRecovery, OperationEffect};
+
 // ---------------------------------------------------------------------------
 // Top-level manifest
 // ---------------------------------------------------------------------------
@@ -116,6 +121,11 @@ pub struct Manifest {
     /// capability needs.
     #[serde(default)]
     pub operations: BTreeMap<String, Operation>,
+
+    /// Optional App-owned object types. References identify data; resolution
+    /// still invokes a declared operation through the normal App gate.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub objects: BTreeMap<String, ObjectType>,
 
     /// AI policy. Required iff any operation declares an `ai.*` need.
     /// Absent means the app cannot exercise any AI verb at all — even
@@ -345,6 +355,10 @@ pub struct Operation {
     /// the audit log but does not prompt for permission.
     #[serde(default)]
     pub needs: Vec<Need>,
+    /// App-declared expected effects, not authorization or observed changes.
+    /// Empty means effects have not been described.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<OperationEffect>,
 }
 
 #[derive(Clone, Debug)]
@@ -665,6 +679,9 @@ pub struct McpTool {
     /// local (kernel still emits an audit row).
     #[serde(default)]
     pub needs: Vec<Need>,
+    /// App-declared expectations; never execution or recovery authority.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<OperationEffect>,
 }
 
 // ---------------------------------------------------------------------------
@@ -944,6 +961,10 @@ pub enum ManifestError {
     InvalidId(String),
     #[error("invalid operation key `{0}`: must match [a-z][a-z0-9_.]*")]
     InvalidOperationKey(String),
+    #[error("object type `{object_type}`: {detail}")]
+    ObjectInvalid { object_type: String, detail: String },
+    #[error("operation `{operation}` effect declaration: {detail}")]
+    EffectInvalid { operation: String, detail: String },
     #[error("operation `{op}`: arg `{arg}` declared twice")]
     DuplicateArg { op: String, arg: String },
     #[error("operation `{op}`: arg `{arg}` default is invalid: {detail}")]
@@ -1169,6 +1190,25 @@ fn validate_arg_defaults(args: &[Arg], enforce_cli_layout: bool) -> Result<(), (
 }
 
 impl Manifest {
+    /// Resolve an MCP-only public command without executing or reading App code.
+    pub fn mcp_tool_for_command(&self, command: &str) -> Result<&McpTool, String> {
+        let service = self
+            .mcp
+            .as_ref()
+            .ok_or_else(|| format!("App `{}` exposes no MCP service", self.id))?;
+        let expected = format!("{}.{command}", self.id);
+        let mut matches = service.tools.iter().filter(|tool| tool.name == expected);
+        let tool = matches
+            .next()
+            .ok_or_else(|| format!("unknown command: no MCP tool `{expected}`"))?;
+        if matches.next().is_some() {
+            return Err(format!(
+                "ambiguous command: multiple MCP tools named `{expected}`"
+            ));
+        }
+        Ok(tool)
+    }
+
     /// Parse a manifest from JSON text.
     pub fn from_json(s: &str) -> Result<Self, ManifestError> {
         let value: serde_json::Value = serde_json::from_str(s)?;
@@ -1627,6 +1667,8 @@ impl Manifest {
                 }
             }
         }
+        objects::validate(self)?;
+        effects::validate(self)?;
         Ok(())
     }
     /// Resolve effective argument values and aligned capabilities together.

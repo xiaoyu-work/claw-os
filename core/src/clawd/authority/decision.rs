@@ -222,6 +222,16 @@ impl Decision {
             super::audit::record_empty_requirement(self);
             return Err("a capability check must name at least one capability".to_string());
         }
+        if let Some(binding) = &self.subject.activity {
+            if let Err(error) = binding.check_delegated(required) {
+                super::audit::record_denied(
+                    self,
+                    required,
+                    &super::store::AuthorityError::ActivityPolicy,
+                );
+                return Err(error);
+            }
+        }
         let spent = match self.relay.as_ref() {
             Some(proof) => {
                 authority().consume_relayed(self.grant_id, required, &self.presentation, proof)

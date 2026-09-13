@@ -2,9 +2,10 @@
 
 Official **Go** SDK for [Claw OS](https://github.com/xiaoyu-work/claw-os).
 
-This module is the AI-facing surface a Go app uses to reach the kernel's
-stable chat features, call other apps' tools, and bootstrap a desktop
-GUI. Like the Python, Rust, and Node SDKs, it is a **thin client over
+This module is the public surface a Go App uses to expose MCP tools, reach the
+kernel's stable chat and fixed tool catalog, and bootstrap a desktop GUI.
+It does not allow App-to-App invocation. Like the Python, Rust, and Node SDKs,
+its outbound transport is a **thin client over
 wire protocol v1**: supported operations shell out to the `cos` binary,
 which enforces capabilities, prompt-origin allowlists, monthly budget,
 the safety pipeline, and audit before any model or computer operation
@@ -28,6 +29,7 @@ import clawossdk "github.com/xiaoyu-work/claw-os/claw-os-sdk/go"
 | Tools         | `CallTool`, `Catalog`, `ForChat`                                   | `cos ai tool <name> --app <id>`   |
 | MCP service   | `LoadMCPApp`, `(*MCPApp).Bind`, `Serve`, `ServeStdio`               | App Host private stdio transport  |
 | GUI           | `IsGUILaunch`, `Context`, `(*GuiContext).OpenAgentOverlay`         | launched via `cos app <id> --gui` |
+| Objects       | `FormatReference`, `ParseReference`                               | Pure identifiers; no transport |
 | Transport     | `CosBinary`, error types (advanced)                                | —                                 |
 | (generated)   | Typed structs from `wire/v1/*.schema.json` (`generated.go`)        | —                                 |
 
@@ -128,6 +130,32 @@ Handlers may return ordinary values or explicit results:
 newline-delimited MCP JSON-RPC 2.0, serializes writes, supports progress,
 cancellation, and authenticated deadlines, and returns fatal transport errors.
 
+## App object references
+
+```go
+func objectReferenceExample() error {
+	ref := clawossdk.ObjectRef{
+		AppId: "notes", ObjectType: "note", ObjectId: "draft/1",
+	}
+	uri, err := clawossdk.FormatReference(ref)
+	if err != nil {
+		return err
+	}
+	_, err = clawossdk.ParseReference(uri) // app://notes/note?id=draft%2F1
+	return err
+}
+```
+
+`ObjectRef` is generated; `Revision` is `*string` so absence differs from a
+present empty revision. Invalid references return `*ObjectRefError`.
+Formatting and parsing preserve opaque IDs, reject invalid UTF-8 and
+noncanonical URIs, and perform no discovery, filesystem access, or dispatch.
+A reference does not assert existence, freshness, or permission.
+
+Use generated `ValidateObjectRef` on decoded JSON before materializing the
+struct. See [the shared contract](../wire/v1/object-references.md) for bounds
+and the optional App manifest `objects` resolver declaration.
+
 ## AI support
 
 `Chat` is the public model API. Setting `Origin: "external-content"`
@@ -155,6 +183,7 @@ Each domain returns typed errors you can switch on:
 - `*AiUnavailableError` / `*ToolUnavailableError` — transport failure
   (binary missing, timeout, non-JSON output).
 - `*ToolDeniedError` — capability / unknown-tool / arg-shape refusal.
+- `*ObjectRefError` — pure object-reference validation; no operation was invoked.
 
 ## Binary resolution
 
@@ -165,7 +194,7 @@ tests and dev setups.
 
 ```sh
 go vet ./...
-go test ./...     # runs against a fake `cos` (no kernel required)
+go test -count=1 ./...  # fake cos; also reloads shared wire vectors outside this module
 ```
 
 Generated types in `generated.go` are produced by

@@ -83,7 +83,12 @@ fn route_audiences_match_their_families() {
     for route in ROUTES {
         let expected = match route.name {
             name if name.starts_with("daemon.") || name.starts_with("journal.") => Audience::Daemon,
-            name if name.starts_with("task.") => Audience::Task,
+            name if name.starts_with("task.")
+                || name.starts_with("activity.")
+                || name == "operation.preview" =>
+            {
+                Audience::Task
+            }
             name if name.starts_with("memory.")
                 || name.starts_with("context.")
                 || name == "agent.usage"
@@ -92,10 +97,13 @@ fn route_audiences_match_their_families() {
                 Audience::Context
             }
             name if name.starts_with("notification.") => Audience::Notification,
-            name if name.starts_with("permission.") => Audience::Permission,
+            name if name.starts_with("permission.") || name.starts_with("system.review.") => {
+                Audience::Permission
+            }
             name if name.starts_with("transaction.") => Audience::Transaction,
             name if name == "app_service.call"
                 || name == "app_service.cli_call"
+                || name.starts_with("app.gui.")
                 || name.starts_with("app_session.")
                 || name.starts_with("mcp_session.") =>
             {
@@ -111,7 +119,7 @@ fn route_audiences_match_their_families() {
             }
             name if name.starts_with("scheduler.") => Audience::Scheduler,
             name if name.starts_with("credential.") => Audience::Credential,
-            name if name.starts_with("system.") => Audience::SystemService,
+            name if name.starts_with("system.") || name == "ai.chat" => Audience::SystemService,
             other => panic!("route {other} belongs to no declared audience family"),
         };
         assert_eq!(
@@ -130,7 +138,10 @@ fn privileged_provider_routes_resolve_a_session_grant() {
     // rollback client holds no standing grant; everything else runs
     // under the App session grant issued at bind.
     for route in ROUTES {
-        if !route.name.starts_with("system.") || route.name == "system.operations" {
+        if !route.name.starts_with("system.")
+            || route.name == "system.operations"
+            || route.name.starts_with("system.review.")
+        {
             continue;
         }
         let expected = if route.name.ends_with(".restore") {
@@ -175,6 +186,7 @@ fn the_root_only_access_class_is_unchanged() {
     // direction. `journal.mutation.resolve` is the second: it states
     // what happened to a privileged mutation the machine could not
     // resolve, and that statement is what lifts the replay refusal.
+    // Protected review decisions also remain Root-only.
     let root: Vec<&str> = ROUTES
         .iter()
         .filter(|route| route.access == Access::Root)
@@ -185,6 +197,7 @@ fn the_root_only_access_class_is_unchanged() {
         vec![
             "context.update",
             "journal.mutation.resolve",
+            "system.review.decide",
             "permission.revoke"
         ]
     );

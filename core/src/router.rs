@@ -1,4 +1,6 @@
 mod app_commands;
+mod object_commands;
+mod operation_commands;
 mod system_review;
 
 use std::env;
@@ -379,6 +381,98 @@ fn system_wire_failure(code: &str, message: &str) -> String {
     .to_string()
 }
 
+const FILE_REPLACE_STDIN_BYTES: usize = 128 * 1024;
+
+fn file_replace_params(input: &[u8], session: &str) -> Result<Value, String> {
+    if input.len() > FILE_REPLACE_STDIN_BYTES {
+        return Err("internal file replacement stdin exceeds 128 KiB".to_string());
+    }
+    if session.is_empty() {
+        return Err("internal file replacement requires COS_SESSION".to_string());
+    }
+    let mut params: Value = serde_json::from_slice(input)
+        .map_err(|_| "internal file replacement requires a JSON object on stdin".to_string())?;
+    let object = params
+        .as_object_mut()
+        .ok_or_else(|| "internal file replacement requires a JSON object".to_string())?;
+    if object.len() != 3
+        || !["path", "expected", "content_base64"]
+            .iter()
+            .all(|key| object.contains_key(*key))
+    {
+        return Err(
+            "internal file replacement requires exactly path, expected and content_base64"
+                .to_string(),
+        );
+    }
+    object.insert("session".to_string(), Value::String(session.to_string()));
+    (Command::SystemFileReplace.route().decode)(params)
+        .map_err(|_| "invalid internal file replacement parameters".to_string())
+}
+
+fn file_replace_bridge(
+    args: &[String],
+    stdin_data: Option<Vec<u8>>,
+) -> Result<Option<String>, String> {
+    use std::io::{IsTerminal, Read};
+
+    if args.len() != 2 || args[1] != "replace" {
+        return Err(
+            "internal file bridge accepts only: cos __file replace < request.json".to_string(),
+        );
+    }
+    let session = env::var("COS_SESSION")
+        .map_err(|_| "internal file replacement requires COS_SESSION".to_string())?;
+    let input = match stdin_data {
+        Some(input) => input,
+        None => {
+            let stdin = std::io::stdin();
+            if stdin.is_terminal() {
+                return Err(
+                    "internal file replacement requires explicit noninteractive stdin".to_string(),
+                );
+            }
+            let mut input = Vec::new();
+            stdin
+                .lock()
+                .take((FILE_REPLACE_STDIN_BYTES + 1) as u64)
+                .read_to_end(&mut input)
+                .map_err(|error| format!("read internal file replacement stdin: {error}"))?;
+            input
+        }
+    };
+    let params = file_replace_params(&input, &session)?;
+    let response = crate::clawd::client::request_blocking(
+        crate::paths::clawd_socket_path(),
+        crate::clawd::protocol::Request::build(Command::SystemFileReplace, params),
+    )
+    .map_err(|error| json!({"error": error.to_string(), "indeterminate": true}).to_string())?;
+    let value = file_replace_response(response)?;
+    Ok(Some(value.to_string()))
+}
+
+fn file_replace_response(response: crate::clawd::protocol::Response) -> Result<Value, String> {
+    if response.ok {
+        response.result.ok_or_else(|| {
+            json!({"error": "file replacement returned no result", "indeterminate": true})
+                .to_string()
+        })
+    } else {
+        // The worker relay may have flattened the provider's classification.
+        // Preserve an explicit code, but never claim a non-indeterminate code
+        // proves that no replacement happened.
+        Err(match response.error {
+            Some(error) => json!({
+                "error": error.message, "code": error.code, "indeterminate": true,
+            }),
+            None => {
+                json!({"error": "file replacement failed without details", "indeterminate": true})
+            }
+        }
+        .to_string())
+    }
+}
+
 fn should_proxy_scheduler_command() -> bool {
     #[cfg(unix)]
     {
@@ -661,6 +755,10 @@ fn dispatch_with_stdin_impl(
         return Ok(Some(value.to_string()));
     }
 
+    if name == "__file" {
+        return file_replace_bridge(args, stdin_data);
+    }
+
     if name == "__package" {
         let action = args
             .get(1)
@@ -877,13 +975,17 @@ fn dispatch_with_stdin_impl(
     }
 
     if name == "__notifications" {
-        if args.len() != 5 || args[1] != "request"
-            || args[2] != "--request-stdin" || args[3] != "--deadline"
+        if args.len() != 5
+            || args[1] != "request"
+            || args[2] != "--request-stdin"
+            || args[3] != "--deadline"
         {
             return Err("internal notification bridge requires `request --request-stdin --deadline <unix-ms>`".into());
         }
         let request = parse_internal_request_object(stdin_data.as_deref(), 20_000, "notification")?;
-        let deadline = args[4].parse::<u64>().map_err(|_| "invalid notification deadline")?;
+        let deadline = args[4]
+            .parse::<u64>()
+            .map_err(|_| "invalid notification deadline")?;
         let session = env::var("COS_SESSION")
             .map_err(|_| "internal notification command requires COS_SESSION")?;
         let value = request_wire_clawd(
@@ -895,12 +997,15 @@ fn dispatch_with_stdin_impl(
 
     if name == "__media-player" {
         if args.len() != 4 || args[2] != "--deadline" {
-            return Err("internal Media Player bridge requires `<action> --deadline <unix-ms>`".into());
+            return Err(
+                "internal Media Player bridge requires `<action> --deadline <unix-ms>`".into(),
+            );
         }
         let action: crate::clawd::wire::requests::MediaPlayerAction =
-            serde_json::from_value(json!(args[1]))
-                .map_err(|_| "invalid Media Player action")?;
-        let deadline = args[3].parse::<u64>().map_err(|_| "invalid Media Player deadline")?;
+            serde_json::from_value(json!(args[1])).map_err(|_| "invalid Media Player action")?;
+        let deadline = args[3]
+            .parse::<u64>()
+            .map_err(|_| "invalid Media Player deadline")?;
         let session = env::var("COS_SESSION")
             .map_err(|_| "internal Media Player command requires COS_SESSION")?;
         let value = request_wire_clawd(
@@ -915,8 +1020,8 @@ fn dispatch_with_stdin_impl(
             return Err("internal capture bridge requires `screenshot --request-stdin`".into());
         }
         let request = parse_internal_request_object(stdin_data.as_deref(), 8192, "capture")?;
-        let session = env::var("COS_SESSION")
-            .map_err(|_| "internal capture command requires COS_SESSION")?;
+        let session =
+            env::var("COS_SESSION").map_err(|_| "internal capture command requires COS_SESSION")?;
         let value = request_wire_clawd(
             Command::SystemScreenshotCapture,
             json!({"session": session, "request": request}),
@@ -925,14 +1030,24 @@ fn dispatch_with_stdin_impl(
     }
 
     if name == "__filesystem" {
-        if args.len() != 3 || !matches!(args[1].as_str(), "read" | "write") || args[2] != "--request-stdin" {
+        if args.len() != 3
+            || !matches!(args[1].as_str(), "read" | "write")
+            || args[2] != "--request-stdin"
+        {
             return Err("internal filesystem bridge requires `read|write --request-stdin`".into());
         }
-        let request = parse_internal_bridge_request(stdin_data.as_deref(),
-            crate::clawd::wire::bounded::APP_ARGS_STDIN_MAX_BYTES, "filesystem")?;
+        let request = parse_internal_bridge_request(
+            stdin_data.as_deref(),
+            crate::clawd::wire::bounded::APP_ARGS_STDIN_MAX_BYTES,
+            "filesystem",
+        )?;
         let session = env::var("COS_SESSION")
             .map_err(|_| "internal filesystem command requires COS_SESSION")?;
-        let command = if args[1] == "read" { Command::SystemFilesystemRead } else { Command::SystemFilesystemWrite };
+        let command = if args[1] == "read" {
+            Command::SystemFilesystemRead
+        } else {
+            Command::SystemFilesystemWrite
+        };
         let value = request_wire_clawd(command, json!({"session":session,"request":request}))?;
         return Ok(Some(value.to_string()));
     }
@@ -969,7 +1084,9 @@ fn dispatch_with_stdin_impl(
         let mut params: serde_json::Value = serde_json::from_str(&args[0])
             .map_err(|error| format!("invalid App permission request: {error}"))?;
         if !params.is_object() || params.get("session").is_some() {
-            return Err("App permission request must be an object without caller-supplied session".into());
+            return Err(
+                "App permission request must be an object without caller-supplied session".into(),
+            );
         }
         let command = if let Ok(session) = env::var("COS_SESSION") {
             params["session"] = json!(session);
@@ -1783,6 +1900,9 @@ fn dispatch_with_stdin_impl(
 
     // Built-in OS primitives
     match name.as_str() {
+        "activity" => dispatch_builtin(args, "activity", crate::activity::run),
+        "object" => dispatch_builtin(args, "object", object_commands::run),
+        "operation" => dispatch_builtin(args, "operation", operation_commands::run),
         "sys" => dispatch_builtin(args, "sys", sysinfo::run),
         "service" => dispatch_builtin(args, "service", service::run),
         "checkpoint" => dispatch_builtin(args, "checkpoint", checkpoint::run),
@@ -1935,13 +2055,13 @@ fn run_app_mcp_command(
     let arguments = bind_mcp_command_arguments(&app.manifest, command, args, stdin_data.as_deref())
         .map_err(|error| format!("cos app {app_name} {command}: {error}"))?;
 
-    // Capability gate: the caller must hold exact `agent.invoke:<app>/<tool>`
-    // authority. The daemon independently re-derives and enforces this; the
-    // local check keeps a denied call from ever reaching the socket.
+    // Root settles invoke and target consent together. Local extension
+    // attenuation still applies, but must not spend the same consent first.
     if command != "__schema__" {
-        if let Err(denial) =
-            caps::require(caps::Verb::AGENT_INVOKE, caps::Scope::name(&invoke_target))
-        {
+        if let Err(denial) = caps::enforcement::require_capability_reference(
+            caps::Verb::AGENT_INVOKE,
+            &caps::Scope::name(&invoke_target),
+        ) {
             return Err(denial.summary());
         }
     }
@@ -2285,8 +2405,8 @@ fn dispatch_builtin(
     let command = &args[1];
     let cmd_args: Vec<String> = args[2..].to_vec();
 
-    // If --schema is in args, return schema instead of executing
-    if cmd_args.contains(&"--schema".to_string()) {
+    // Operands after -- are data, including an object ID named --schema.
+    if app_commands::schema_requested(&cmd_args) {
         return cli_help::show_command_schema(app_name, command);
     }
 

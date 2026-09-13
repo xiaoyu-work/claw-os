@@ -4,6 +4,9 @@ use cosmic::app::Task;
 use futures::future::{AbortRegistration, Abortable};
 
 use crate::Message;
+use crate::activities::{
+    Action as ActivityAction, Request as ActivityRequest, Response as ActivityResponse,
+};
 use crate::bridge::{
     BridgeEndpoint, ChatRequest, cancel_task, ensure_bridge_endpoint, fetch_history, fetch_models,
     fetch_sessions, session_exists,
@@ -39,6 +42,106 @@ pub(crate) fn fetch_sessions_task(endpoint: BridgeEndpoint) -> Task<Message> {
                 .map_err(|error| format!("{error:#}"))
         },
         |result| cosmic::Action::App(Message::SessionsFetched(result)),
+    )
+}
+
+pub(crate) fn activity_task(endpoint: BridgeEndpoint, request: ActivityRequest) -> Task<Message> {
+    let generation = request.generation;
+    Task::perform(
+        async move {
+            use crate::bridge;
+            let result = match request.action {
+                ActivityAction::List(state) => {
+                    bridge::fetch_activities(endpoint, state).await.map(ActivityResponse::List)
+                }
+                ActivityAction::Get(id) => bridge::fetch_activity(endpoint, &id)
+                    .await
+                    .map(|detail| ActivityResponse::Detail(Box::new(detail))),
+                ActivityAction::Receipts(id) => bridge::fetch_activity_receipts(endpoint, &id)
+                    .await
+                    .map(ActivityResponse::Receipts),
+                ActivityAction::GetCapabilityPolicy(id) => {
+                    bridge::fetch_activity_capability_policy(endpoint, &id)
+                        .await
+                        .map(ActivityResponse::CapabilityPolicy)
+                }
+                ActivityAction::SetCapabilityPolicy { activity_id, request, .. } => {
+                    bridge::set_activity_capability_policy(endpoint, &activity_id, request)
+                        .await
+                        .map(|policy| ActivityResponse::CapabilityPolicySaved(Box::new(policy)))
+                }
+                ActivityAction::EnableCapabilityPolicy { activity_id, request, .. } => {
+                    bridge::enable_activity_capability_policy(endpoint, &activity_id, request)
+                        .await
+                        .map(|policy| ActivityResponse::CapabilityPolicySaved(Box::new(policy)))
+                }
+                ActivityAction::GetExecutionLimits(id) => {
+                    bridge::fetch_activity_execution_limits(endpoint, &id)
+                        .await
+                        .map(ActivityResponse::ExecutionLimits)
+                }
+                ActivityAction::SetExecutionLimits { activity_id, request, .. } => {
+                    bridge::set_activity_execution_limits(endpoint, &activity_id, request)
+                        .await
+                        .map(|limits| ActivityResponse::ExecutionLimitsSaved(Box::new(limits)))
+                }
+                ActivityAction::EnableExecutionLimits { activity_id, request, .. } => {
+                    bridge::enable_activity_execution_limits(endpoint, &activity_id, request)
+                        .await
+                        .map(|limits| ActivityResponse::ExecutionLimitsSaved(Box::new(limits)))
+                }
+                ActivityAction::ObjectStateList { activity_id, query } => {
+                    bridge::fetch_activity_object_state(endpoint, &activity_id, query)
+                        .await
+                        .map(ActivityResponse::ObjectState)
+                }
+                ActivityAction::RecordObjectState { activity_id, request } => {
+                    bridge::record_activity_object_state(endpoint, &activity_id, request)
+                        .await
+                        .map(|entry| ActivityResponse::ObjectStateRecorded(Box::new(entry)))
+                }
+                ActivityAction::Objects(id) => bridge::fetch_activity_objects(endpoint, &id)
+                    .await
+                    .map(ActivityResponse::Objects),
+                ActivityAction::OperationPreview { activity_id, request, .. } => {
+                    bridge::preview_activity_operation(endpoint, &activity_id, request)
+                        .await
+                        .map(|preview| ActivityResponse::OperationPreview(Box::new(preview)))
+                }
+                ActivityAction::AttachObject(id, body) => {
+                    bridge::attach_activity_object(endpoint, &id, body)
+                        .await
+                        .map(|activity| ActivityResponse::Saved(Box::new(activity)))
+                }
+                ActivityAction::Create(body) => bridge::create_activity(endpoint, body)
+                    .await
+                    .map(|activity| ActivityResponse::Saved(Box::new(activity))),
+                ActivityAction::Update(id, body) => bridge::update_activity(endpoint, &id, body)
+                    .await
+                    .map(|activity| ActivityResponse::Saved(Box::new(activity))),
+                ActivityAction::Transition(id, body) => {
+                    bridge::transition_activity(endpoint, &id, body)
+                        .await
+                        .map(|activity| ActivityResponse::Saved(Box::new(activity)))
+                }
+                ActivityAction::Run(id, body) => bridge::run_activity(endpoint, &id, body)
+                    .await
+                    .map(ActivityResponse::Work),
+                ActivityAction::CancelJob(id) => bridge::cancel_activity_job(endpoint, &id)
+                    .await
+                    .map(ActivityResponse::JobCancellation),
+                ActivityAction::RetryJob(id) => bridge::retry_activity_job(endpoint, &id)
+                    .await
+                    .map(ActivityResponse::Work),
+            };
+            result.map_err(|error| format!("{error:#}"))
+        },
+        move |result| {
+            cosmic::Action::App(Message::Activities(crate::activities::Message::Loaded {
+                generation,
+                result,
+            }))
+        },
     )
 }
 

@@ -13,6 +13,7 @@ use axum::{
 
 use crate::state::AppState;
 
+mod activities;
 mod chat;
 mod models;
 mod sessions;
@@ -27,6 +28,40 @@ pub fn api() -> Router<AppState> {
         .route("/health", get(|| async { "ok" }))
         .route("/chat", post(chat::stream_chat))
         .route("/chat/:task_id/cancel", post(chat::cancel_chat))
+        .route("/activities", get(activities::list).post(activities::create))
+        .route("/activities/:id", get(activities::get).patch(activities::update))
+        .route("/activities/:id/receipts", get(activities::receipts))
+        .route(
+            "/activities/:id/capability-policy",
+            get(activities::capability_policy::get).post(activities::capability_policy::set),
+        )
+        .route(
+            "/activities/:id/capability-policy/enabled",
+            post(activities::capability_policy::enabled),
+        )
+        .route(
+            "/activities/:id/execution-limits",
+            get(activities::execution_limits::get).post(activities::execution_limits::set),
+        )
+        .route(
+            "/activities/:id/execution-limits/enabled",
+            post(activities::execution_limits::enabled),
+        )
+        .route(
+            "/activities/:id/object-state",
+            get(activities::object_state_list).post(activities::object_state_record),
+        )
+        .route(
+            "/activities/:id/objects",
+            get(activities::objects).post(activities::attach_object),
+        )
+        .route(
+            "/activities/:id/operation-preview",
+            post(activities::operation_preview),
+        )
+        .route("/activities/:id/transition", post(activities::transition))
+        .route("/activities/:id/run", post(activities::run))
+        .route("/tasks/:task_id/retry", post(activities::retry_job))
         .route("/sessions", get(sessions::list))
         .route(
             "/sessions/:id",

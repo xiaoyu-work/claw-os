@@ -494,6 +494,13 @@ impl MutationBracket {
         })
     }
 
+    /// The provider cannot establish whether its effect durably completed.
+    /// This flags the bracket without retiring it, even if the flag cannot
+    /// be written; replay refusal remains live and recovery sees the start.
+    pub fn indeterminate(self) -> UnresolvedMutation {
+        self.leave_unresolved("the provider could not establish a durable outcome")
+    }
+
     fn close(self, event: JournalEvent) -> Result<Appended, UnresolvedMutation> {
         match record_classified(
             &self.partition,
@@ -506,45 +513,43 @@ impl MutationBracket {
                 forget_unresolved(&self.partition, self.route, &self.idempotency);
                 Ok(appended)
             }
-            Err(error) => {
-                // The effect already ran. Leave an explicit "unknown"
-                // behind, keep refusing replays of this identity, and
-                // tell the caller — which must not answer with an
-                // ordinary success.
-                remember_unresolved(&self.partition, self.route, &self.idempotency);
-                let marker = record_classified(
-                    &self.partition,
-                    self.owner_uid,
-                    EventSource::Kernel,
-                    JournalEvent::MutationIndeterminate {
-                        operation: self.operation.clone(),
-                        reason: Indeterminate::CompletionUnrecorded,
-                    },
-                    self.context_ingest,
-                );
-                let detail = match marker {
-                    Ok(_) => format!(
-                        "the completion of operation {} was not recorded ({error}); the journal \
-                         marked it indeterminate and recovery is required",
-                        self.operation
-                    ),
-                    Err(second) => format!(
-                        "the completion of operation {} was not recorded ({error}) and the \
-                         indeterminate marker also failed ({second}); recovery is required",
-                        self.operation
-                    ),
-                };
-                alarm::raise(
-                    alarm::Class::MutationIndeterminate,
-                    &self.partition.key(),
-                    &detail,
-                );
-                Err(UnresolvedMutation {
-                    partition: self.partition.key(),
-                    operation: self.operation.as_str().to_string(),
-                    detail,
-                })
-            }
+            Err(error) => Err(self.leave_unresolved(&error.to_string())),
+        }
+    }
+
+    fn leave_unresolved(self, reason: &str) -> UnresolvedMutation {
+        remember_unresolved(&self.partition, self.route, &self.idempotency);
+        let marker = record_classified(
+            &self.partition,
+            self.owner_uid,
+            EventSource::Kernel,
+            JournalEvent::MutationIndeterminate {
+                operation: self.operation.clone(),
+                reason: Indeterminate::CompletionUnrecorded,
+            },
+            self.context_ingest,
+        );
+        let detail = match marker {
+            Ok(_) => format!(
+                "the completion of operation {} was not recorded ({reason}); the journal \
+                 marked it indeterminate and recovery is required",
+                self.operation
+            ),
+            Err(second) => format!(
+                "the completion of operation {} was not recorded ({reason}) and the \
+                 indeterminate marker also failed ({second}); recovery is required",
+                self.operation
+            ),
+        };
+        alarm::raise(
+            alarm::Class::MutationIndeterminate,
+            &self.partition.key(),
+            &detail,
+        );
+        UnresolvedMutation {
+            partition: self.partition.key(),
+            operation: self.operation.as_str().to_string(),
+            detail,
         }
     }
 }
@@ -678,7 +683,9 @@ pub fn register_unresolved(report: &recovery::Report) {
 /// across a restart. The refusal lasts until an operator records a
 /// [`Resolution`]; an orphan record does not lift it.
 pub fn replays_unresolved(partition: &Partition, route: &str, request_key: &str) -> bool {
-    let Ok(identity) = operation_identity(owner_of(partition), route, request_key) else {
+    let Ok(identity) = owner_of(partition)
+        .and_then(|uid| operation_identity(uid, route, request_key))
+    else {
         // Failing to derive the identity means the keyring is
         // unavailable, and a mutation will fail closed at its start
         // anyway. Do not claim the request is new.
@@ -695,10 +702,12 @@ pub fn replays_unresolved(partition: &Partition, route: &str, request_key: &str)
         .unwrap_or(false)
 }
 
-fn owner_of(partition: &Partition) -> u32 {
+fn owner_of(partition: &Partition) -> Result<u32, JournalError> {
     match partition {
-        Partition::Owner(uid) => *uid,
-        Partition::Session(_) => 0,
+        Partition::Owner(uid) => Ok(*uid),
+        // The signed anchor, not a UID-zero hint, owns an existing
+        // session's operation identities. A fresh partition has no replay.
+        Partition::Session(_) => Ok(lease()?.load_anchor(partition, 0)?.owner_uid),
     }
 }
 

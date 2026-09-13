@@ -12,12 +12,10 @@ fn pinned_source(source: &Path) -> PathBuf {
         assert!(output.status.success(), "{output:?}");
         String::from_utf8(output.stdout).unwrap().trim().to_string()
     };
-    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    let lock: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(repository.join("packaging/apps.lock.json")).unwrap(),
-    )
-    .unwrap();
-    assert_eq!(git(&["rev-parse", "HEAD"]), lock["revision"].as_str().unwrap());
+    assert_eq!(
+        git(&["rev-parse", "HEAD"]),
+        super::app_sources::source_revision()
+    );
     let dirty = git(&["status", "--porcelain", "--untracked-files=all"]);
     assert!(
         dirty.is_empty(),
@@ -27,7 +25,10 @@ fn pinned_source(source: &Path) -> PathBuf {
 }
 
 pub fn app(source: &Path, kind: &str, group: &str, app_id: &str, root: &Path) -> PathBuf {
-    let pinned = pinned_source(source);
+    let source = source.canonicalize().expect("canonical App fixture path");
+    let pinned = pinned_source(&source)
+        .canonicalize()
+        .expect("canonical pinned App repository");
     let source_kind = match kind {
         "product" => "products",
         "capability" => "capabilities",

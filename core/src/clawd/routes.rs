@@ -27,6 +27,8 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::{json, Value};
 
+use super::activity_capability_policy;
+use super::activity_execution_limits;
 use crate::audit_policy::FieldRule;
 
 use super::authority::{self, Approval, Audience, RouteAuthority, SubjectSource, TransientCaps};
@@ -37,11 +39,13 @@ use super::wire::bounded::MAX_WAIT_MS;
 use super::wire::requests as body;
 use super::wire::{Fault, RequestId};
 use super::{
-    accessibility, app_services, app_sessions, audio, backup, bluetooth, browser, camera,
-    clipboard, config_editor, containers, context, context_events, crash, credentials, desktop,
-    display, event_center, firewall, hardware, journal as journal_ops, location, memory, network,
-    network_diagnostics, notifications, packages, permissions, power, printer, scheduler, security,
-    snapshots, storage, system_journal, systemd, tasks, transactions, usage, usb_guard, users,
+    accessibility, activities, activity_object_state, activity_objects, activity_receipts,
+    app_services, app_sessions, audio, backup, bluetooth, browser, camera, clipboard,
+    config_editor, containers, context, context_events, crash, credentials, desktop, display,
+    event_center, file_changes, firewall, hardware, journal as journal_ops, location, memory,
+    network, network_diagnostics, notifications, operation_previews, packages, permissions, power,
+    printer, scheduler, security, snapshots, storage, system_journal, systemd, tasks, transactions,
+    usage, usb_guard, users,
 };
 
 /// Who may reach a route at all.
@@ -482,6 +486,214 @@ routes! {
     }
 
     // -----------------------------------------------------------------
+    // Activities: owner-scoped work records, not authority.
+    // -----------------------------------------------------------------
+    ActivityCreate {
+        name: "activity.create",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Task),
+        body: body::ActivityCreate,
+        audit: &[("title", FieldRule::Size), ("goal", FieldRule::Size)],
+        run: |c| activities::create(c.params, c.client),
+    }
+    ActivityList {
+        name: "activity.list",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Task),
+        body: body::ActivityList,
+        audit: &[("state", FieldRule::Token), ("limit", FieldRule::Count)],
+        run: |c| activities::list(c.params, c.client),
+    }
+    ActivityGet {
+        name: "activity.get",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Task),
+        body: body::ActivityGet,
+        audit: &[("id", FieldRule::Token), ("limit", FieldRule::Count)],
+        run: |c| activities::get(c.params, c.client),
+    }
+    ActivityUpdate {
+        name: "activity.update",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Task),
+        body: body::ActivityUpdate,
+        audit: &[("id", FieldRule::Token)],
+        run: |c| activities::update(c.params, c.client),
+    }
+    ActivityTransition {
+        name: "activity.transition",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Task),
+        body: body::ActivityTransition,
+        audit: &[("id", FieldRule::Token), ("state", FieldRule::Token)],
+        run: |c| activities::transition(c.params, c.client),
+    }
+    ActivityRun {
+        name: "activity.run",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Task),
+        body: body::ActivityRun,
+        audit: &[
+            ("id", FieldRule::Token),
+            ("session_id", FieldRule::Token),
+            ("max_turns", FieldRule::Count),
+            ("prompt", FieldRule::Size),
+        ],
+        run: |c| activities::run(c.params, c.client).await,
+    }
+    ActivityExecutionLimitsGet {
+        name: "activity.execution_limits.get",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Task),
+        body: body::ActivityExecutionLimitsGet,
+        audit: &[("id", FieldRule::Token)],
+        run: |c| activity_execution_limits::get(c.params, c.client),
+    }
+    ActivityExecutionLimitsSet {
+        name: "activity.execution_limits.set",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Task),
+        body: body::ActivityExecutionLimitsSet,
+        audit: &[("id", FieldRule::Token), ("expected_revision", FieldRule::Count), ("limits", FieldRule::Size)],
+        run: |c| activity_execution_limits::set(c.params, c.client),
+    }
+    ActivityExecutionLimitsEnabled {
+        name: "activity.execution_limits.enabled",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Task),
+        body: body::ActivityExecutionLimitsEnabled,
+        audit: &[("id", FieldRule::Token), ("expected_revision", FieldRule::Count), ("enabled", FieldRule::Flag)],
+        run: |c| activity_execution_limits::enabled(c.params, c.client),
+    }
+    ActivityCapabilityPolicyGet {
+        name: "activity.capability_policy.get",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Task),
+        body: body::ActivityCapabilityPolicyGet,
+        audit: &[("id", FieldRule::Token)],
+        run: |c| activity_capability_policy::get(c.params, c.client),
+    }
+    ActivityCapabilityPolicySet {
+        name: "activity.capability_policy.set",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Task),
+        body: body::ActivityCapabilityPolicySet,
+        audit: &[("id", FieldRule::Token), ("expected_revision", FieldRule::Count), ("policy", FieldRule::Size)],
+        run: |c| activity_capability_policy::set(c.params, c.client),
+    }
+    ActivityCapabilityPolicyEnabled {
+        name: "activity.capability_policy.enabled",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Task),
+        body: body::ActivityCapabilityPolicyEnabled,
+        audit: &[("id", FieldRule::Token), ("expected_revision", FieldRule::Count), ("enabled", FieldRule::Flag)],
+        run: |c| activity_capability_policy::enabled(c.params, c.client),
+    }
+    ActivityObjects {
+        name: "activity.objects",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Task),
+        body: body::ActivityObjects,
+        audit: &[("id", FieldRule::Token)],
+        run: |c| activity_objects::list(c.params, c.client),
+    }
+    ActivityObjectAttach {
+        name: "activity.object.attach",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Task),
+        body: body::ActivityObjectAttach,
+        audit: &[("id", FieldRule::Token), ("label", FieldRule::Size)],
+        run: |c| activity_objects::attach(c.params, c.client),
+    }
+    ActivityObjectStateList {
+        name: "activity.object_state.list",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Task),
+        body: body::ActivityObjectState,
+        audit: &[("id", FieldRule::Token), ("limit", FieldRule::Count)],
+        run: |c| activity_object_state::list(c.params, c.client),
+    }
+    ActivityObjectStateRecord {
+        name: "activity.object_state.record",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Task),
+        body: body::ActivityObjectStateRecord,
+        audit: &[("id", FieldRule::Token), ("entry", FieldRule::Size)],
+        run: |c| activity_object_state::record(c.params, c.client),
+    }
+    OperationPreview {
+        name: "operation.preview",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Task),
+        body: body::OperationPreview,
+        audit: &[("app_id", FieldRule::Token), ("operation", FieldRule::Token), ("args", FieldRule::Size)],
+        run: |c| operation_previews::preview(c.params, c.client),
+    }
+    ActivityOperationPreview {
+        name: "activity.operation.preview",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Task),
+        body: body::ActivityOperationPreview,
+        audit: &[("id", FieldRule::Token), ("app_id", FieldRule::Token), ("operation", FieldRule::Token), ("args", FieldRule::Size)],
+        run: |c| operation_previews::for_activity(c.params, c.client),
+    }
+    ActivityReceipts {
+        name: "activity.receipts",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Task),
+        body: body::ActivityReceipts,
+        audit: &[("id", FieldRule::Token), ("limit", FieldRule::Count)],
+        run: |c| activity_receipts::list(c.params, c.client),
+    }
+    ActivityReceiptRecord {
+        name: "activity.receipt.record",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Task),
+        body: body::ActivityReceiptRecord,
+        audit: &[("id", FieldRule::Token), ("report", FieldRule::Size)],
+        run: |c| activity_receipts::record(c.params, c.client),
+    }
+    // -----------------------------------------------------------------
     // Agent tasks
     // -----------------------------------------------------------------
     TaskSubmit {
@@ -493,6 +705,7 @@ routes! {
         body: body::TaskSubmit,
         audit: &[
             ("session_id", FieldRule::Token),
+            ("activity_id", FieldRule::Token),
             ("max_turns", FieldRule::Count),
             ("prompt", FieldRule::Size),
         ],
@@ -505,7 +718,7 @@ routes! {
         budget: Budget::query(),
         authority: peer(Audience::Task),
         body: body::TaskList,
-        audit: &[("status", FieldRule::Token)],
+        audit: &[("status", FieldRule::Token), ("activity_id", FieldRule::Token)],
         run: |c| tasks::list(c.params, c.client).map_err(BrokerError::from),
     }
     TaskGet {
@@ -1603,6 +1816,19 @@ routes! {
         event_center::control(c.params, authority)
             .await
             .map_err(BrokerError::from)
+        },
+    }
+    SystemFileReplace {
+        name: "system.file.replace",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: session(Audience::SystemService),
+        body: body::FileReplace,
+        audit: &[("session", FieldRule::Token)],
+        run: |c| {
+            let authority = c.authority()?;
+            file_changes::replace(c.params, authority).await
         },
     }
     SystemFirewallControl {

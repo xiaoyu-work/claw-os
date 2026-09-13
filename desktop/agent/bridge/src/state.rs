@@ -19,6 +19,15 @@ use cos_agent_protocol::{BridgeEndpoint, MIN_SUPPORTED_PROTOCOL_VERSION, Protoco
 
 const DISCOVERY_FILE: &str = "endpoint.json";
 
+#[cfg(unix)]
+pub(crate) fn current_uid() -> anyhow::Result<u32> {
+    use std::os::unix::fs::MetadataExt;
+
+    Ok(std::fs::metadata("/proc/self")
+        .context("inspecting bridge process identity")?
+        .uid())
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub port: u16,
@@ -97,9 +106,7 @@ fn validate_private_directory(dir: &Path) -> anyhow::Result<()> {
         }
         #[cfg(target_os = "linux")]
         {
-            let current_uid = std::fs::metadata("/proc/self")
-                .context("inspecting bridge process identity")?
-                .uid();
+            let current_uid = current_uid()?;
             if metadata.uid() != current_uid {
                 anyhow::bail!(
                     "bridge runtime directory {} belongs to uid {}, expected {}",

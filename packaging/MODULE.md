@@ -22,8 +22,8 @@ Debian packages and a signed multi-architecture APT repository.
 | Path | Role |
 | --- | --- |
 | `deb/build-debs.sh` | Package staging and `.deb` assembly |
-| `apps.lock.json` | Immutable clawos-app revision, distinct product/capability groups and exact App payload |
-| `../scripts/app_sources.py` | Fetch pinned, explicitly kinded sources and stage their package-owned payload |
+| `apps.lock.json` | App main branch selection, distinct product/capability groups and exact App payload |
+| `../scripts/app_sources.py` | Resolve main once per build, retain its immutable source lock and stage explicitly kinded payloads |
 | `../scripts/app_sources.py --stage-shared <root>` | Invoke App-owned common support staging once into `usr/lib/cos/python`, separately from SDK/runtime and product payloads |
 | External Files `python/claw_files/` | Shared document parsing/conversion staged in the Agent package; native Files embeds the same source, and both executables stay desktop-owned |
 | `../tools/install-browser-agent.sh` | Manual Browser extension/Native Host deployment from the same product pin |
@@ -72,7 +72,10 @@ resolver. Lookup uses the installed NSS configuration in a bounded, owned child;
 package installation does not replace hosts, resolver configuration or DNS policy.
 
 Migrated products live in `xiaoyu-work/clawos-app`, not a second local App
-implementation. `apps.lock.json` pins their published commit. Product-owned
+implementation. `apps.lock.json` tracks their `main` branch. Builds resolve one commit and
+record it in their package's `usr/share/doc/<package>/app-sources.json`;
+subsequent staging reuses that snapshot rather than moving with the branch.
+Product-owned
 staging builds the Mail XPI and Python payload; OS packaging retains the native
 authority launcher and distributes these together in `claw-os-agent`.
 External desktop Apps are excluded from Agent staging. `panel-calendar`, `panel-clipboard` and `widget-rail` are

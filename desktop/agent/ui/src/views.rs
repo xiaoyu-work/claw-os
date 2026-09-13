@@ -22,20 +22,24 @@ const SIDEBAR_WIDTH: f32 = 220.0;
 impl App {
     pub(super) fn view_standalone(&self) -> Element<'_, Message> {
         let spacing = theme::active().cosmic().spacing;
-        let chat_body = self.active_chat_body(false);
-        let main = Column::new()
-            .push(
-                container(chat_body)
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .padding([spacing.space_m, spacing.space_l]),
-            )
-            .push(container(self.input_card(false)).padding([
-                0u16,
-                spacing.space_l,
-                spacing.space_l,
-                spacing.space_l,
-            ]));
+        let main: Element<'_, Message> = if self.activities.is_visible() {
+            self.activities.view(self.bridge.endpoint().is_some())
+        } else {
+            Column::new()
+                .push(
+                    container(self.active_chat_body(false))
+                        .width(Length::Fill)
+                        .height(Length::Fill)
+                        .padding([spacing.space_m, spacing.space_l]),
+                )
+                .push(container(self.input_card(false)).padding([
+                    0u16,
+                    spacing.space_l,
+                    spacing.space_l,
+                    spacing.space_l,
+                ]))
+                .into()
+        };
         let body = Row::new()
             .push(
                 container(self.sidebar_view())
@@ -721,11 +725,13 @@ impl App {
             .push(Self::brand_symbol(16.0))
             .push(text(fl!("app-name")).size(13.0))
             .push(text("/").size(13.0))
-            .push(text(
+            .push(text(if self.activities.is_visible() {
+                fl!("activities")
+            } else {
                 self.active_session()
                     .map(LocalSession::display_title)
-                    .unwrap_or_else(|| fl!("new-session")),
-            ))
+                    .unwrap_or_else(|| fl!("new-session"))
+            }))
             .push(Self::status_dot(self.stream.is_active()))
             .spacing(spacing.space_xxs)
             .align_y(Alignment::Center)
@@ -734,6 +740,23 @@ impl App {
 
     fn sidebar_view(&self) -> Element<'_, Message> {
         let spacing = theme::active().cosmic().spacing;
+        let mut activities = button::custom(
+            Row::new()
+                .push(widget::icon::from_name("view-list-symbolic").size(18))
+                .push(text(fl!("activities")).size(14.0))
+                .spacing(spacing.space_xs)
+                .align_y(Alignment::Center),
+        )
+        .width(Length::Fill)
+        .padding([spacing.space_xs, spacing.space_s])
+        .class(if self.activities.is_visible() {
+            theme::Button::Standard
+        } else {
+            theme::Button::MenuItem
+        });
+        if !self.stream.is_active() && !self.voice.is_active() {
+            activities = activities.on_press(Message::Activities(crate::activities::Message::Show));
+        }
         let header = Row::new()
             .push(text(fl!("sessions").to_uppercase()).size(11.0))
             .push(widget::space::horizontal())
@@ -748,7 +771,7 @@ impl App {
         for (index, session) in self.sessions.iter().enumerate() {
             list = list.push(Self::session_row(
                 session,
-                index == self.sessions.active_index(),
+                !self.activities.is_visible() && index == self.sessions.active_index(),
                 index,
                 self.stream.is_active() && self.stream.session_index() == Some(index),
             ));
@@ -757,6 +780,7 @@ impl App {
             list = list.push(text(error).size(11.0));
         }
         Column::new()
+            .push(activities)
             .push(container(header).padding([
                 0u16,
                 spacing.space_xs,

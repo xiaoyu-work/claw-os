@@ -150,8 +150,12 @@ pub async fn run(options: ServerOptions) -> Result<(), DaemonError> {
     let admission = Admission::new(Limits::default());
     #[cfg(target_os = "linux")]
     if unsafe { libc::geteuid() } == 0 {
-        super::gui::Manager::start(state.clone(), admission.clone()).map_err(|message| DaemonError::Startup {
-            operation: "gui.initialize", message, source: None,
+        super::gui::Manager::start(state.clone(), admission.clone()).map_err(|message| {
+            DaemonError::Startup {
+                operation: "gui.initialize",
+                message,
+                source: None,
+            }
         })?;
         if let Err(error) = crate::display_session::registry::Registry::start() {
             tracing::error!(%error, "Root display activation unavailable; GUI requests are refused");
@@ -550,22 +554,22 @@ pub(crate) async fn dispatch_verified_request(
 const DRAIN_DEADLINE: std::time::Duration = std::time::Duration::from_millis(200);
 
 /// A request that cleared every check before dispatch.
-struct Admitted {
-    route: &'static Route,
-    id: RequestId,
-    params: Value,
+pub(crate) struct Admitted {
+    pub(crate) route: &'static Route,
+    pub(crate) id: RequestId,
+    pub(crate) params: Value,
     /// The authority decision the middleware took. `None` only for
     /// peer-scoped routes, which resolve no grant.
-    decision: Option<super::authority::Decision>,
+    pub(crate) decision: Option<super::authority::Decision>,
     /// Held for the lifetime of the request; dropping them returns the
     /// global, per-principal and per-route slots.
     _request_permit: super::transport::limits::RequestPermit,
     _route_permit: super::transport::limits::RoutePermit,
 }
 
-struct Refusal {
-    fault: Fault,
-    id: RequestId,
+pub(crate) struct Refusal {
+    pub(crate) fault: Fault,
+    pub(crate) id: RequestId,
     /// The registry's own name for the route, when one was resolved.
     /// Never the caller's string.
     command: Option<&'static str>,
@@ -583,7 +587,7 @@ impl std::fmt::Debug for Refusal {
     }
 }
 
-async fn admit(
+pub(crate) async fn admit(
     body: &[u8],
     client: &ClientIdentity,
     admission: &Arc<Admission>,
@@ -666,7 +670,7 @@ async fn admit(
     })
 }
 
-async fn dispatch(
+pub(crate) async fn dispatch(
     route: &'static Route,
     id: RequestId,
     params: Value,

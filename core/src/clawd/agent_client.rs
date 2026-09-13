@@ -92,8 +92,8 @@ fn service_help() -> Value {
     json!({
         "backend": "clawd",
         "subcommands": [
-            "submit  \"<prompt>\" [--session ID] [--max-turns N]",
-            "list    [--status pending|running|ok|error|cancelled] [--limit N]",
+            "submit  \"<prompt>\" [--session ID] [--activity ID] [--max-turns N]",
+            "list    [--status pending|running|ok|error|cancelled] [--activity ID] [--limit N]",
             "status  [<task_id>]",
             "result  <task_id> [--wait-secs N]",
             "cancel  <task_id>",
@@ -105,8 +105,19 @@ fn service_help() -> Value {
 }
 
 fn service_submit(args: &[String]) -> Result<Value, String> {
+    let job = send(Command::TaskSubmit, service_submit_params(args)?)?;
+    Ok(json!({
+        "status": "submitted",
+        "backend": "clawd",
+        "job_id": required_field(&job, "id")?,
+        "job": job,
+    }))
+}
+
+fn service_submit_params(args: &[String]) -> Result<Value, String> {
     let mut prompt: Option<String> = None;
     let mut session_id: Option<String> = None;
+    let mut activity_id: Option<String> = None;
     let mut max_turns: Option<u32> = None;
     let mut i = 0usize;
     while i < args.len() {
@@ -114,6 +125,15 @@ fn service_submit(args: &[String]) -> Result<Value, String> {
             "--session" => {
                 let v = args.get(i + 1).ok_or("--session needs a value")?.clone();
                 session_id = Some(v);
+                i += 2;
+            }
+            "--activity" => {
+                activity_id = Some(
+                    args.get(i + 1)
+                        .filter(|value| !value.trim().is_empty())
+                        .ok_or("--activity needs a non-empty value")?
+                        .clone(),
+                );
                 i += 2;
             }
             "--max-turns" => {
@@ -135,25 +155,28 @@ fn service_submit(args: &[String]) -> Result<Value, String> {
 
     let prompt = prompt
         .filter(|s| !s.trim().is_empty())
-        .ok_or("usage: cos agent service submit \"<prompt>\" [--session ID] [--max-turns N]")?;
+        .ok_or("usage: cos agent service submit \"<prompt>\" [--session ID] [--activity ID] [--max-turns N]")?;
     let mut params = json!({ "prompt": prompt });
     if let Some(session_id) = session_id {
         params["session_id"] = json!(session_id);
+    }
+    if let Some(activity_id) = activity_id {
+        params["activity_id"] = json!(activity_id);
     }
     if let Some(max_turns) = max_turns {
         params["max_turns"] = json!(max_turns);
     }
 
-    let job = send(Command::TaskSubmit, params)?;
-    Ok(json!({
-        "status": "submitted",
-        "backend": "clawd",
-        "job_id": required_field(&job, "id")?,
-        "job": job,
-    }))
+    Ok(params)
 }
 
 fn service_list(args: &[String]) -> Result<Value, String> {
+    let mut result = send(Command::TaskList, service_list_params(args)?)?;
+    result["backend"] = json!("clawd");
+    Ok(result)
+}
+
+fn service_list_params(args: &[String]) -> Result<Value, String> {
     let mut params = json!({});
     let mut i = 0usize;
     while i < args.len() {
@@ -161,6 +184,14 @@ fn service_list(args: &[String]) -> Result<Value, String> {
             "--status" => {
                 let v = args.get(i + 1).ok_or("--status needs a value")?;
                 params["status"] = json!(v);
+                i += 2;
+            }
+            "--activity" => {
+                let value = args
+                    .get(i + 1)
+                    .filter(|value| !value.trim().is_empty())
+                    .ok_or("--activity needs a non-empty value")?;
+                params["activity_id"] = json!(value);
                 i += 2;
             }
             "--limit" => {
@@ -175,9 +206,7 @@ fn service_list(args: &[String]) -> Result<Value, String> {
             s => return Err(format!("unknown flag: {s}")),
         }
     }
-    let mut result = send(Command::TaskList, params)?;
-    result["backend"] = json!("clawd");
-    Ok(result)
+    Ok(params)
 }
 
 fn service_result(args: &[String]) -> Result<Value, String> {
@@ -300,6 +329,7 @@ fn task_result_to_ask_response(job: Value) -> Result<Value, String> {
             "provider": job.get("provider").cloned().unwrap_or(Value::Null),
             "model": job.get("model").cloned().unwrap_or(Value::Null),
             "session_id": job.get("session_id").cloned().unwrap_or(Value::Null),
+            "activity_id": job.get("activity_id").cloned().unwrap_or(Value::Null),
             "task_id": job.get("id").cloned().unwrap_or(Value::Null),
             "backend": "clawd",
         })),

@@ -1939,6 +1939,11 @@ def main() -> int:
         action="store_true",
         help="fail when generated outputs differ without writing them",
     )
+    parser.add_argument(
+        "--sdk-only",
+        action="store_true",
+        help="only check or write SDK outputs; leave the core MCP constants to the OS integrator",
+    )
     args = parser.parse_args()
     schemas = load_schemas()
     if not schemas:
@@ -1961,6 +1966,11 @@ def main() -> int:
         CORE_MCP_OUT: emit_mcp_rust(contract),
         RUST_MCP_OUT: emit_mcp_rust(contract),
     }
+    if args.sdk_only:
+        outputs = {
+            path: content for path, content in outputs.items()
+            if path.is_relative_to(ROOT)
+        }
     if args.check:
         stale = [
             path
@@ -1974,6 +1984,8 @@ def main() -> int:
         print("generated wire bindings are up to date")
         return 0
     for path, content in outputs.items():
+        if path.exists() and path.read_text(encoding="utf-8") == content:
+            continue
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
         print(f"wrote {path.relative_to(ROOT.parent)}")

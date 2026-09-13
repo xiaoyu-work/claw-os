@@ -1,7 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 import {
+  type Operation,
+  type Operationeffect,
+  type Mcptool,
+  type FileChangePlan,
   WIRE_ENUM,
   WIRE_MAX_LENGTH,
   WIRE_MAXIMUM,
@@ -19,6 +25,7 @@ import {
   validateAi,
   validateBudgetShow,
   validateEnvelope,
+  validateFileChangePlan,
   validateMcpCallContext,
   validateTool,
   validateToolCatalog,
@@ -265,5 +272,112 @@ test("serializer rejects non-finite and unsafe native numbers recursively", () =
       (error: unknown) =>
         error instanceof WireJsonSerializationError && error.code === code,
     );
+  }
+});
+
+interface FilePlanVectors {
+  base: Record<string, unknown>;
+  cases: Array<{
+    name: string;
+    root?: unknown;
+    set?: Record<string, unknown>;
+    code: string | null;
+    path: string | null;
+  }>;
+}
+
+function filePlanVectors(): FilePlanVectors {
+  return JSON.parse(
+    readFileSync(resolve(__dirname, "../../wire/v1/file_change_plan.vectors.json"), "utf8"),
+  );
+}
+
+test("file change plan shared vectors and required fields", () => {
+  const vectors = filePlanVectors();
+  for (const entry of vectors.cases) {
+    const value = Object.hasOwnProperty.call(entry, "root")
+      ? entry.root
+      : { ...vectors.base, ...entry.set };
+    if (entry.code === null) {
+      assert.doesNotThrow(() => validateFileChangePlan(value), entry.name);
+    } else {
+      assert.throws(
+        () => validateFileChangePlan(value),
+        (error: unknown) =>
+          error instanceof WireDecodeError && error.code === entry.code && error.path === entry.path,
+        entry.name,
+      );
+    }
+  }
+  for (const field of Object.keys(vectors.base)) {
+    const value = { ...vectors.base };
+    delete value[field];
+    assert.throws(
+      () => validateFileChangePlan(value),
+      (error: unknown) =>
+        error instanceof WireDecodeError && error.code === WIRE_REQUIRED && error.path === `$.${field}`,
+    );
+  }
+});
+
+test("file change plan generated type supports required and optional nullability", () => {
+  const base = filePlanVectors().base;
+  validateFileChangePlan(base);
+  const nullable: FileChangePlan = {
+    ...base, before_sha256: null, snapshot: null, applied_at: null, changed: null, diagnostic: null,
+  };
+  assert.doesNotThrow(() => validateFileChangePlan(nullable));
+  assert.deepEqual(JSON.parse(JSON.stringify(nullable)), nullable);
+  const applied: FileChangePlan = {
+    ...base,
+    state: "applied",
+    before_exists: true,
+    before_sha256: `sha256:${"c".repeat(64)}`,
+    snapshot: "snapshot-1",
+    applied_at: "2026-09-10T12:05:00Z",
+    changed: false,
+    diagnostic: "App-reported result",
+  };
+  assert.doesNotThrow(() => validateFileChangePlan(applied));
+  assert.equal(JSON.parse(JSON.stringify(applied)).changed, false);
+});
+
+test("MCP effect bindings preserve omission and explicit declarations", () => {
+  const legacy: Mcptool = { name: "notes.get", summary: { en: "Get note" } };
+  const minimal: Operationeffect = { kind: "read", label: { en: "Read note" } };
+  assert.equal(Object.hasOwnProperty.call(legacy, "effects"), false);
+  for (const tool of [
+    legacy,
+    { ...legacy, effects: [] },
+    { ...legacy, effects: [minimal] },
+    { ...legacy, effects: [{ ...minimal, target_arg: "note_id", recovery: "not_applicable" }] },
+  ] satisfies Mcptool[]) {
+    assert.deepEqual(JSON.parse(JSON.stringify(tool)), tool);
+  }
+  assert.equal(Object.hasOwnProperty.call(minimal, "recovery"), false);
+  assert.equal(Object.hasOwnProperty.call(minimal, "target_arg"), false);
+});
+
+test("operation effect bindings preserve omission and explicit declarations", () => {
+  const minimal: Operationeffect = {
+    kind: "read",
+    label: { en: "Read requested paths" },
+  };
+  const declared: Operationeffect = {
+    kind: "update",
+    label: { en: "Update requested paths" },
+    target_arg: "paths",
+    recovery: "compensatable",
+  };
+  const legacy: Operation = { label: { en: "Inspect" } };
+  assert.equal(Object.hasOwnProperty.call(legacy, "effects"), false);
+  assert.equal(Object.hasOwnProperty.call(minimal, "recovery"), false);
+  for (const operation of [
+    legacy,
+    { label: { en: "Inspect" }, effects: [] },
+    { label: { en: "Inspect" }, effects: [minimal] },
+    { label: { en: "Update" }, effects: [declared] },
+  ] satisfies Operation[]) {
+    assert.deepEqual(JSON.parse(JSON.stringify(operation)), operation);
   }
 });

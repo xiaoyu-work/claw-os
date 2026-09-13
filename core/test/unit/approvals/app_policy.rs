@@ -9,9 +9,7 @@ struct Fixture {
 }
 
 fn fixture() -> Fixture {
-    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../build");
-    std::fs::create_dir_all(&root).unwrap();
-    let dir = tempfile::tempdir_in(root).unwrap();
+    let dir = tempfile::tempdir().unwrap();
     Fixture {
         _data: TestEnvVarGuard::set("COS_DATA_DIR", dir.path()),
         _caps: TestEnvVarGuard::set("COS_CAPS_DATA_DIR", dir.path()),
@@ -104,9 +102,13 @@ fn restoration_survives_process_restart_beyond_execution_ttl_including_existing_
             Some(1000),
         )
         .unwrap());
-        assert!(approvals_store::spend_grant(&path, receipt)
-            .unwrap()
-            .is_none());
+        for retire_all in [false, true] {
+            assert!(
+                approvals_store::spend_grant(&path, receipt.clone(), retire_all)
+                    .unwrap()
+                    .is_none()
+            );
+        }
         assert_eq!(
             std::fs::read(&path).unwrap(),
             before,
@@ -400,8 +402,7 @@ fn revocation_survives_process_restart() {
         return;
     }
     let _lock = crate::test_env::lock_env();
-    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../build");
-    let dir = tempfile::tempdir_in(root).unwrap();
+    let dir = tempfile::tempdir().unwrap();
     let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", dir.path());
     let _caps = crate::test_env::TestEnvVarGuard::set("COS_CAPS_DATA_DIR", dir.path());
     revoke(1000, "audio-manager", cap).unwrap();

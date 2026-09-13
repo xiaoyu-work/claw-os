@@ -39,7 +39,9 @@ fn child_proxy_is_an_explicit_session_route_allowlist() {
     }
     assert_eq!(CHILD_PROVIDER_ROUTES.len(), 39);
     assert!(child_route(Command::SystemRegionalSettingsControl.route()));
-    assert!(!host_lifecycle_route(Command::SystemRegionalSettingsControl));
+    assert!(!host_lifecycle_route(
+        Command::SystemRegionalSettingsControl
+    ));
     assert!(child_route(Command::SystemNotificationControl.route()));
     assert!(!host_lifecycle_route(Command::SystemNotificationControl));
     assert!(!child_route(Command::NotificationList.route()));
@@ -146,6 +148,152 @@ fn the_private_broker_lease_binds_both_process_identities() {
     assert!(lease.verify_live().is_ok());
     lease.close();
     assert!(lease.verify_live().unwrap_err().contains("closed"));
+}
+
+#[test]
+fn activity_boundary_is_root_pinned_and_heartbeat_cannot_adopt_a_new_policy() {
+    use crate::activities::ActivityService;
+    use crate::test_env::TestEnvVarGuard;
+    let _lock = crate::test_env::lock_env();
+    let data = tempfile::tempdir().unwrap();
+    let _data = TestEnvVarGuard::set("COS_DATA_DIR", data.path());
+    for introduce in [false, true] {
+        let service = crate::activities::open_default().unwrap();
+        let activity = service
+            .create(
+                1000,
+                serde_json::from_value(serde_json::json!({
+                    "title":"Pinned policy", "goal":"Never replace a running task's boundary"
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        let policy = || {
+            serde_json::from_value(serde_json::json!({
+            "rules":[{"verb":"fs.read","mode":"normal","scopes":[{"kind":"path","value":"/workspace/**"}]}]
+        })).unwrap()
+        };
+        if !introduce {
+            service
+                .set_capability_policy(1000, &activity.id, None, policy())
+                .unwrap();
+        }
+        let job: crate::agent::service::Job = serde_json::from_value(serde_json::json!({
+            "schema_version":2,"execution_phase":"preparing",
+            "id":"task-a","prompt":"probe","status":"running","created_at":"2026-01-01T00:00:00Z",
+            "owner_uid":1000,"session_id":"session-a","activity_id":activity.id
+        }))
+        .unwrap();
+        let boundary = crate::caps::activity_boundary::ActivityBoundary::for_job(&job)
+            .unwrap()
+            .unwrap();
+        let mut current = lease(super::super::protocol::HostPurpose::Task);
+        current.owner_uid = 1000;
+        let current = current.with_activity(Some(boundary.clone()));
+        assert!(Arc::ptr_eq(
+            &current.activity_boundary().unwrap(),
+            &boundary
+        ));
+        current.verify_live().unwrap();
+        service
+            .set_capability_policy(1000, &activity.id, (!introduce).then_some(1), policy())
+            .unwrap();
+        current.renew(std::time::Duration::from_secs(60));
+        let error = current.verify_live().unwrap_err();
+        assert!(error.contains("changed"), "{error}");
+        assert!(Arc::ptr_eq(
+            &current.activity_boundary().unwrap(),
+            &boundary
+        ));
+        assert_eq!(boundary.binding().revision, (!introduce).then_some(1));
+    }
+}
+
+#[test]
+fn disabled_and_foreign_activity_boundaries_refuse_extension_admission() {
+    use crate::activities::ActivityService;
+    use crate::test_env::TestEnvVarGuard;
+    let _lock = crate::test_env::lock_env();
+    let data = tempfile::tempdir().unwrap();
+    let _data = TestEnvVarGuard::set("COS_DATA_DIR", data.path());
+    let service = crate::activities::open_default().unwrap();
+    let activity = service
+        .create(
+            1000,
+            serde_json::from_value(serde_json::json!({
+                "title":"Bound lease", "goal":"Keep the exact owner and session"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    service
+        .set_capability_policy(
+            1000,
+            &activity.id,
+            None,
+            serde_json::from_value(serde_json::json!({"rules":[]})).unwrap(),
+        )
+        .unwrap();
+    let job: crate::agent::service::Job = serde_json::from_value(serde_json::json!({
+        "schema_version":2,"execution_phase":"preparing",
+        "id":"task-a","prompt":"probe","status":"running","created_at":"2026-01-01T00:00:00Z",
+        "owner_uid":1000,"session_id":"session-a","activity_id":activity.id
+    }))
+    .unwrap();
+    let boundary = crate::caps::activity_boundary::ActivityBoundary::for_job(&job)
+        .unwrap()
+        .unwrap();
+    for wrong_session in [false, true] {
+        let mut foreign = lease(super::super::protocol::HostPurpose::Task);
+        foreign.owner_uid = if wrong_session { 1000 } else { 2000 };
+        if wrong_session {
+            foreign.task_session_id = Some("other-session".into());
+        }
+        assert!(foreign
+            .with_activity(Some(boundary.clone()))
+            .verify_live()
+            .is_err());
+    }
+    let mut current = lease(super::super::protocol::HostPurpose::Task);
+    current.owner_uid = 1000;
+    let current = current.with_activity(Some(boundary));
+    service
+        .set_capability_policy_enabled(1000, &activity.id, 1, false)
+        .unwrap();
+    current.renew(std::time::Duration::from_secs(60));
+    assert!(current.verify_live().unwrap_err().contains("disabled"));
+}
+
+#[test]
+fn extension_identity_preserves_owner_and_execution_uid_as_distinct_principals() {
+    let pid = std::process::id();
+    let start = crate::proc::read_start_time_ticks_pub(pid).unwrap();
+    let identity = ClientIdentity::from_verified_delegation(
+        pid,
+        1000,
+        61_000,
+        65_534,
+        start,
+        crate::clawd::client_identity::AuthenticatedExtensionHost {
+            purpose: super::super::protocol::HostPurpose::Task,
+            lease_id: "task-a".into(),
+            authority_session_id: Some("session-a".into()),
+            host_session_id: Some("extension-a".into()),
+            owner_uid: 1000,
+            extension_uid: 61_000,
+            capability_generation: "a".repeat(16),
+            host_pid: pid,
+            host_start_time_ticks: Some(start),
+        },
+    );
+    assert_eq!(identity.require_uid().unwrap(), 1000);
+    assert_eq!(identity.process_uid(), Some(61_000));
+    assert_eq!(identity.execution_uid, Some(61_000));
+    let wire = serde_json::to_value(identity).unwrap();
+    assert_eq!(wire["uid"], 1000);
+    assert_eq!(wire["execution_uid"], 61_000);
+    assert!(wire.get("extension_host").is_none());
+    assert!(wire.get("start_time_ticks").is_none());
 }
 
 #[test]

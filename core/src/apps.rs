@@ -297,6 +297,34 @@ pub fn manifest_schema(manifest: &Manifest) -> Value {
     Value::Object(commands)
 }
 
+/// Object declarations are metadata, but only authenticated package metadata
+/// may describe a resolver or enter model-visible discovery.
+pub fn verified_object_schema(app: &App) -> Result<Value, String> {
+    let verified = app.require_verified()?;
+    verified
+        .assert_current(&provenance::trust_store())
+        .map_err(|error| error.to_string())?;
+    verified
+        .manifest_text()
+        .map_err(|error| error.to_string())?;
+    let objects: serde_json::Map<_, _> = app
+        .manifest
+        .objects
+        .iter()
+        .map(|(name, object)| {
+            (
+                name.clone(),
+                json!({
+                    "label": object.label.current(),
+                    "summary": object.summary.current(),
+                    "resolve": object.resolve,
+                }),
+            )
+        })
+        .collect();
+    Ok(Value::Object(objects))
+}
+
 pub fn operation_schema(operation: &Operation) -> Value {
     let parameters = operation.args.iter().map(arg_schema).collect::<Vec<_>>();
     json!({
@@ -328,22 +356,7 @@ pub fn mcp_tool_for_command<'a>(
     manifest: &'a Manifest,
     command: &str,
 ) -> Result<&'a McpTool, String> {
-    let service = manifest
-        .mcp
-        .as_ref()
-        .ok_or_else(|| format!("App `{}` exposes no MCP service", manifest.id))?;
-    let expected = format!("{}.{command}", manifest.id);
-    let mut matches = service
-        .tools
-        .iter()
-        .filter(|tool| tool.name == expected);
-    let tool = matches
-        .next()
-        .ok_or_else(|| format!("unknown command: no MCP tool `{expected}`"))?;
-    if matches.next().is_some() {
-        return Err(format!("ambiguous command: multiple MCP tools named `{expected}`"));
-    }
-    Ok(tool)
+    manifest.mcp_tool_for_command(command)
 }
 
 /// Build the stable CLI schema for one MCP tool, mirroring

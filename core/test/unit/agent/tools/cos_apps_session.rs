@@ -1,11 +1,17 @@
 use super::*;
 
 mod app_sources {
-    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/support/app_sources.rs"));
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/support/app_sources.rs"
+    ));
 }
 
 mod app_stage {
-    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/support/app_stage.rs"));
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/support/app_stage.rs"
+    ));
 }
 
 fn env_lock() -> std::sync::MutexGuard<'static, ()> {
@@ -169,6 +175,14 @@ fn registry_name_replaces_dots_with_underscores() {
 }
 
 #[test]
+fn session_call_arguments_must_be_an_object() {
+    for input in [Value::Null, json!([]), json!("text"), json!(1), json!(true)] {
+        assert!(json_to_arg_map(&input).unwrap_err().contains("JSON object"));
+    }
+    assert!(json_to_arg_map(&json!({})).unwrap().is_empty());
+}
+
+#[test]
 fn build_schema_marks_required_args() {
     use crate::caps::manifest::{Arg, ArgBinding, ArgKind};
     use crate::i18n::LocalizedText;
@@ -295,6 +309,8 @@ async fn pilot_kv_e2e_call_chain() {
 
     let opened = open_session("kv", "kv.set").await.expect("open kv");
     assert_eq!(opened.1, 5);
+    let key = session_key("kv", &apps_dir).unwrap();
+    let identity = manager().lock().await[&key].identity.id().to_string();
 
     // 1) set, get — verify in-memory state survives.
     let r = opened
@@ -327,6 +343,11 @@ async fn pilot_kv_e2e_call_chain() {
         .expect("list");
     let text = first_text(&r);
     assert!(text.contains("\"x\""), "kv.list returned: {text}");
+    assert_eq!(manager().lock().await[&key].identity.id(), identity);
+    assert!(crate::proc::session_info_by_id(&identity)
+        .unwrap()
+        .transient_caps
+        .is_none());
 
     let closed = close_session("kv").await;
     assert!(closed);
@@ -1303,9 +1324,18 @@ fn the_call_classifier_separates_brokered_from_resource_bearing_calls() {
         Cap::new(Verb::FS_READ, Scope::path("/work/document")),
         Cap::new(Verb::FS_WRITE, Scope::path("/work/document")),
     ];
-    assert_eq!(classify_app_call("cosmic-edit", &editor_files), CallPlacement::Reusable);
-    assert_eq!(classify_app_call("fs", &editor_files), CallPlacement::Ephemeral);
-    assert!(matches!(classify_app_call("cosmic-edit", &[Cap::new(Verb::FS_WRITE, Scope::Wild)]), CallPlacement::Unsupported(_)));
+    assert_eq!(
+        classify_app_call("cosmic-edit", &editor_files),
+        CallPlacement::Reusable
+    );
+    assert_eq!(
+        classify_app_call("fs", &editor_files),
+        CallPlacement::Ephemeral
+    );
+    assert!(matches!(
+        classify_app_call("cosmic-edit", &[Cap::new(Verb::FS_WRITE, Scope::Wild)]),
+        CallPlacement::Unsupported(_)
+    ));
     use crate::caps::{Cap, Scope, Verb};
 
     // Nothing to mount: the reusable server answers it through the
@@ -1645,7 +1675,10 @@ fn every_shipped_mcp_app_resolves_its_entry_and_its_calls() {
         home: std::path::PathBuf::from("/home/tester"),
         cwd: None,
     };
-    for &id in SHIPPED_PYTHON_MCP_APPS.iter().chain(SHIPPED_NATIVE_MCP_APPS) {
+    for &id in SHIPPED_PYTHON_MCP_APPS
+        .iter()
+        .chain(SHIPPED_NATIVE_MCP_APPS)
+    {
         let manifest = shipped_manifest(id);
         let service = manifest
             .mcp

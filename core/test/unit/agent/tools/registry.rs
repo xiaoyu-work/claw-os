@@ -483,12 +483,17 @@ async fn injected_notes_root_is_shared_by_memory_profile_and_curator() {
         scope: None,
         priority: None,
         caps: Some(crate::caps::CapSet::from_caps(
-            [crate::caps::Verb::MEMORY_READ, crate::caps::Verb::MEMORY_WRITE]
-                .into_iter()
-                .map(|verb| crate::caps::Cap::new(
+            [
+                crate::caps::Verb::MEMORY_READ,
+                crate::caps::Verb::MEMORY_WRITE,
+            ]
+            .into_iter()
+            .map(|verb| {
+                crate::caps::Cap::new(
                     verb,
                     crate::caps::Scope::self_ref(crate::agent::tools::SYSTEM_AGENT_MEMORY_SCOPE),
-                )),
+                )
+            }),
         )),
         transient_caps: None,
         role: None,
@@ -508,11 +513,16 @@ async fn injected_notes_root_is_shared_by_memory_profile_and_curator() {
     assert!(registry.get_for(&exposure, "cos_memory").is_some());
     let result = crate::proc::with_trusted_session_override(
         session,
-        registry.execute(&exposure, "cos_memory", serde_json::json!({
-            "command": "write",
-            "name": "USER.md",
-            "content": "INJECTED_NOTE_ROOT"
-        }), "test"),
+        registry.execute(
+            &exposure,
+            "cos_memory",
+            serde_json::json!({
+                "command": "write",
+                "name": "USER.md",
+                "content": "INJECTED_NOTE_ROOT"
+            }),
+            "test",
+        ),
     )
     .await;
     assert!(!result.is_error, "memory write failed: {}", result.content);
@@ -532,13 +542,19 @@ async fn injected_notes_root_is_shared_by_memory_profile_and_curator() {
     crate::agent::runtime::context::add_notes(&mut builder, deps.runtime.notes(), None).unwrap();
     let packet = builder.finish().unwrap();
     let segments = packet.segments();
-    let profile = segments.iter()
+    let profile = segments
+        .iter()
         .find(|segment| segment.content().contains("INJECTED_NOTE_ROOT"))
         .expect("profile reads from the same injected notes root");
-    assert_eq!(profile.kind(), crate::agent::trust::SourceKind::UserProfileNotes);
-    assert_eq!(profile.class(), crate::agent::trust::TrustClass::UserControlledContext);
-    let fenced_profile =
-        profile.render_fenced(crate::agent::trust::envelope::process_seal());
+    assert_eq!(
+        profile.kind(),
+        crate::agent::trust::SourceKind::UserProfileNotes
+    );
+    assert_eq!(
+        profile.class(),
+        crate::agent::trust::TrustClass::UserControlledContext
+    );
+    let fenced_profile = profile.render_fenced(crate::agent::trust::envelope::process_seal());
     assert!(packet.render().contains(&fenced_profile));
     let parsed = crate::agent::trust::envelope::parse(&fenced_profile)
         .expect("the profile is trust-fenced, not a concatenated raw user message");
@@ -561,25 +577,35 @@ async fn injected_notes_root_is_shared_by_memory_profile_and_curator() {
     };
     let db = crate::agent::memory::sqlite_fts::MemoryDb::open_in_memory().unwrap();
     crate::agent::runtime::context::record(&packet, Some((&db, "notes-profile-session"))).unwrap();
-    let recorded = db.recent("notes-profile-session", packet.segments().len() + 1).unwrap();
-    let recorded_profile = recorded.iter()
+    let recorded = db
+        .recent("notes-profile-session", packet.segments().len() + 1)
+        .unwrap();
+    let recorded_profile = recorded
+        .iter()
         .find(|row| row.content.contains("INJECTED_NOTE_ROOT"))
         .expect("the exact profile is retained as an injected audit row");
-    assert_eq!(recorded_profile.role, crate::agent::memory::sqlite_fts::INJECTED_ROLE);
+    assert_eq!(
+        recorded_profile.role,
+        crate::agent::memory::sqlite_fts::INJECTED_ROLE
+    );
     assert_eq!(
         recorded_profile.trust_source(),
         crate::agent::trust::SourceKind::UserProfileNotes,
     );
     assert_eq!(recorded_profile.content, fenced_profile);
-    assert!(db.recent_replayable("notes-profile-session", 1).unwrap().is_empty());
-    let curator = crate::agent::runtime::auto_curator::AutoCurator::from_snapshot_with_runtime_paths(
-        Arc::new(config),
-        &db,
-        deps.runtime.notes().clone(),
-        crate::paths::RoutedPathContext::capture(),
-        deps.paths.curation_log_path.clone(),
-    )
-    .expect("curator");
+    assert!(db
+        .recent_replayable("notes-profile-session", 1)
+        .unwrap()
+        .is_empty());
+    let curator =
+        crate::agent::runtime::auto_curator::AutoCurator::from_snapshot_with_runtime_paths(
+            Arc::new(config),
+            &db,
+            deps.runtime.notes().clone(),
+            crate::paths::RoutedPathContext::capture(),
+            deps.paths.curation_log_path.clone(),
+        )
+        .expect("curator");
     assert_eq!(curator.notes_dir(), deps.runtime.notes().dir());
 }
 #[test]

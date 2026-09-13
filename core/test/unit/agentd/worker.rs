@@ -84,6 +84,8 @@ async fn an_old_assignment_without_receipts_gets_an_explicit_protocol_rejection(
             use_memory: false,
             owner_uid: 1000,
             owner_home: "/home/test".to_string(),
+            record_activity_receipts: false,
+            activity_capability_checks: false,
         },
         consent_context: ConsentContext::Unattended,
         session: None,
@@ -265,15 +267,19 @@ fn gateway() -> (ChannelApprovalGateway, mpsc::UnboundedReceiver<WorkerFrame>) {
         tx,
         cancelled: Arc::new(AtomicBool::new(false)),
         waiters: Mutex::new(HashMap::new()),
+        receipt_waiters: Mutex::new(HashMap::new()),
         pending_approvals: Mutex::new(Vec::new()),
         next_correlation: AtomicU64::new(1),
         asks_used: AtomicU32::new(0),
+        boundaries_used: AtomicU32::new(0),
+        receipts_used: AtomicU32::new(0),
     });
     (
         ChannelApprovalGateway {
             task_id: "task-a".to_string(),
             consent_context: crate::caps::ConsentContext::Attended,
             state,
+            activity_checks: false,
         },
         rx,
     )
@@ -281,6 +287,226 @@ fn gateway() -> (ChannelApprovalGateway, mpsc::UnboundedReceiver<WorkerFrame>) {
 
 fn scope() -> Scope {
     Scope::path("/home/user/notes.txt")
+}
+
+fn next_approval(rx: &mut mpsc::UnboundedReceiver<WorkerFrame>) -> (u64, ApprovalExchange) {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let frame = runtime.block_on(async {
+        tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .unwrap()
+            .unwrap()
+    });
+    let WorkerFrame::Approval {
+        correlation_id,
+        exchange,
+        ..
+    } = frame
+    else {
+        panic!("expected a typed approval exchange");
+    };
+    (correlation_id, exchange)
+}
+
+#[test]
+fn activity_denial_precedes_consent_and_standing_caps_do_not_bypass_exact_confirmation() {
+    use crate::activities::CapabilityBoundaryDecision as Boundary;
+    let _lock = crate::test_env::lock_env();
+    let data = tempfile::tempdir().unwrap();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", data.path());
+    let _mode = crate::test_env::TestEnvVarGuard::set("COS_PERMS_MODE", "strict");
+    struct ResetGateway;
+    impl Drop for ResetGateway {
+        fn drop(&mut self) {
+            crate::caps::approval_gateway::clear_for_test();
+        }
+    }
+    let _reset = ResetGateway;
+    for decision in [Boundary::Deny, Boundary::RequireApproval] {
+        let (mut gateway, mut rx) = gateway();
+        gateway.activity_checks = true;
+        let state = gateway.state.clone();
+        crate::caps::approval_gateway::install(Arc::new(gateway));
+        let digest = crate::crypto::sha256_hex(b"held-cap exact operation");
+        let expected_digest = digest.clone();
+        let home = data.path().to_path_buf();
+        let caller = std::thread::spawn(move || {
+            let mut session: crate::proc::SessionInfo = serde_json::from_value(serde_json::json!({
+                "session_id":"task-session","pid":1,"command":["task"],"started_at":"now",
+                "stdout_path":"","stderr_path":"","role":"worker"
+            }))
+            .unwrap();
+            session.caps = Some(crate::caps::CapSet::from_caps([crate::caps::Cap::new(
+                Verb::FS_READ,
+                scope(),
+            )]));
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(crate::paths::with_routed_job(
+                crate::paths::with_user_override(
+                    unsafe { libc::geteuid() },
+                    home,
+                    with_session(Some(session), async {
+                        crate::caps::enforcement::require_for_operation(
+                            Verb::FS_READ,
+                            scope(),
+                            &digest,
+                        )
+                    }),
+                ),
+            ))
+        });
+        let (correlation_id, exchange) = next_approval(&mut rx);
+        assert!(matches!(exchange.ask, ApprovalAsk::Boundary { .. }));
+        state.deliver(
+            correlation_id,
+            &exchange,
+            ApprovalReply::Boundary { decision },
+        );
+        if decision == Boundary::RequireApproval {
+            let (id, exchange) = next_approval(&mut rx);
+            assert!(matches!(exchange.ask, ApprovalAsk::Consume { .. }));
+            assert_eq!(
+                exchange.ask.operation_digest(),
+                Some(expected_digest.as_str())
+            );
+            state.deliver(id, &exchange, ApprovalReply::Pending { request_id: None });
+            let (id, exchange) = next_approval(&mut rx);
+            assert!(matches!(exchange.ask, ApprovalAsk::Request { .. }));
+            assert_eq!(exchange.ask.scope(), &scope());
+            assert_eq!(
+                exchange.ask.operation_digest(),
+                Some(expected_digest.as_str())
+            );
+            state.deliver(
+                id,
+                &exchange,
+                ApprovalReply::Pending {
+                    request_id: Some("exact-confirmation".into()),
+                },
+            );
+        }
+        assert!(
+            caller.join().unwrap().is_err(),
+            "held caps alone must never open this gate"
+        );
+        assert_eq!(state.boundaries_used.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            state.asks_used.load(Ordering::SeqCst),
+            if decision == Boundary::Deny { 0 } else { 2 }
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "denial must not escalate or replay consent"
+        );
+        crate::caps::approval_gateway::clear_for_test();
+    }
+}
+
+#[test]
+fn boundary_budget_is_4096_and_does_not_spend_the_128_consent_budget() {
+    let (mut gateway, mut rx) = gateway();
+    gateway.activity_checks = true;
+    gateway
+        .state
+        .boundaries_used
+        .store(protocol::MAX_BOUNDARY_CHECKS, Ordering::SeqCst);
+    assert!(gateway
+        .boundary(Verb::FS_READ, &scope())
+        .unwrap_err()
+        .contains("budget"));
+    assert_eq!(gateway.state.asks_used.load(Ordering::SeqCst), 0);
+    assert!(rx.try_recv().is_err());
+    assert_eq!(protocol::MAX_BOUNDARY_CHECKS, 4096);
+    assert_eq!(protocol::MAX_APPROVAL_ASKS, 128);
+}
+
+#[tokio::test]
+async fn boundary_and_consent_replies_cannot_satisfy_each_others_waiters() {
+    use crate::activities::CapabilityBoundaryDecision as Boundary;
+    for (operation, reply) in [
+        ("boundary", ApprovalReply::Granted),
+        (
+            "consume",
+            ApprovalReply::Boundary {
+                decision: Boundary::Normal,
+            },
+        ),
+        (
+            "request",
+            ApprovalReply::Boundary {
+                decision: Boundary::Normal,
+            },
+        ),
+    ] {
+        let (mut gateway, mut rx) = gateway();
+        gateway.activity_checks = true;
+        let state = gateway.state.clone();
+        let caller = std::thread::spawn(move || match operation {
+            "boundary" => gateway.boundary(Verb::FS_READ, &scope()).map(|_| ()),
+            "consume" => gateway.consume(Verb::FS_READ, &scope(), None).map(|_| ()),
+            _ => gateway.request(Verb::FS_READ, &scope(), None).map(|_| ()),
+        });
+        let frame = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let WorkerFrame::Approval {
+            correlation_id,
+            exchange,
+            ..
+        } = frame
+        else {
+            panic!("wrong frame");
+        };
+        state.deliver(correlation_id, &exchange, reply);
+        assert!(caller.join().unwrap().is_err());
+        assert!(state.pending_approvals().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn live_boundary_checks_use_their_own_counter_and_never_record_an_approval_wait() {
+    use crate::activities::CapabilityBoundaryDecision as Boundary;
+    let (mut gateway, mut rx) = gateway();
+    gateway.activity_checks = true;
+    let state = gateway.state.clone();
+    state
+        .asks_used
+        .store(protocol::MAX_APPROVAL_ASKS, Ordering::SeqCst);
+    let caller = std::thread::spawn(move || gateway.boundary(Verb::FS_READ, &scope()));
+    let frame = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let WorkerFrame::Approval {
+        correlation_id,
+        exchange,
+        ..
+    } = frame
+    else {
+        panic!("wrong frame");
+    };
+    assert!(matches!(exchange.ask, ApprovalAsk::Boundary { .. }));
+    state.deliver(
+        correlation_id,
+        &exchange,
+        ApprovalReply::Boundary {
+            decision: Boundary::RequireApproval,
+        },
+    );
+    assert_eq!(caller.join().unwrap().unwrap(), Boundary::RequireApproval);
+    assert_eq!(state.boundaries_used.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        state.asks_used.load(Ordering::SeqCst),
+        protocol::MAX_APPROVAL_ASKS
+    );
+    assert!(state.pending_approvals().is_empty());
 }
 
 #[test]
@@ -493,6 +719,16 @@ fn a_reply_is_delivered_only_to_its_own_waiter() {
     };
     state.deliver(7, &wrong_digest, ApprovalReply::Granted);
     assert!(waiter.recv_timeout(Duration::from_millis(50)).is_err());
+    let wrong_kind = ApprovalExchange {
+        nonce: expected.nonce.clone(),
+        ask: ApprovalAsk::Request {
+            verb: Verb::FS_READ.as_str().into(),
+            scope: scope(),
+            operation_digest: expected.ask.operation_digest().map(str::to_owned),
+        },
+    };
+    state.deliver(7, &wrong_kind, ApprovalReply::Granted);
+    assert!(waiter.recv_timeout(Duration::from_millis(50)).is_err());
     state.deliver(7, &expected, ApprovalReply::Granted);
     assert_eq!(
         waiter.recv_timeout(Duration::from_millis(50)),
@@ -501,6 +737,232 @@ fn a_reply_is_delivered_only_to_its_own_waiter() {
     // Replaying the same correlation id finds no waiter at all.
     state.deliver(7, &expected, ApprovalReply::Granted);
     assert!(waiter.recv_timeout(Duration::from_millis(50)).is_err());
+}
+
+fn receipt() -> crate::activities::ReceiptReport {
+    crate::operations::receipts::capture(
+        uuid::Uuid::new_v4().to_string(),
+        "demo".into(),
+        "read".into(),
+        format!("sha256:{}", "a".repeat(64)),
+        Ok(Some("reported result".into())),
+    )
+}
+
+fn receipt_recorder() -> (ChannelReceiptRecorder, mpsc::UnboundedReceiver<WorkerFrame>) {
+    let (gateway, rx) = gateway();
+    (
+        ChannelReceiptRecorder {
+            task_id: gateway.task_id,
+            state: gateway.state,
+        },
+        rx,
+    )
+}
+
+fn next_receipt(rx: &mut mpsc::UnboundedReceiver<WorkerFrame>) -> ReceiptRequest {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let frame = runtime.block_on(async {
+        tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .unwrap()
+            .unwrap()
+    });
+    let WorkerFrame::Receipt(request) = frame else {
+        panic!("expected a receipt report")
+    };
+    *request
+}
+
+#[test]
+fn a_receipt_crosses_the_control_socket_and_matches_only_its_own_acknowledgement() {
+    use std::io::Write;
+
+    let (recorder, mut rx) = receipt_recorder();
+    let state = recorder.state.clone();
+    let report = receipt();
+    let expected_id = report.id.clone();
+    let waiter = std::thread::spawn(move || recorder.record(report));
+    let request = next_receipt(&mut rx);
+    assert_eq!(request.task_id, "task-a");
+    assert_eq!(request.report.id, expected_id);
+    state.deliver_receipt(
+        request.correlation_id + 1,
+        ReceiptReply::Recorded {
+            receipt_id: expected_id.clone(),
+        },
+    );
+    assert!(state
+        .receipt_waiters
+        .lock()
+        .unwrap()
+        .contains_key(&request.correlation_id));
+    let reply = protocol::encode(&BrokerFrame::ReceiptReply {
+        correlation_id: request.correlation_id,
+        reply: ReceiptReply::Recorded {
+            receipt_id: expected_id.clone(),
+        },
+    })
+    .unwrap();
+    let (mut sender, receiver) = std::os::unix::net::UnixStream::pair().unwrap();
+    receiver.set_nonblocking(true).unwrap();
+    sender.write_all(reply.as_bytes()).unwrap();
+    drop(sender);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let socket = tokio::net::UnixStream::from_std(receiver).unwrap();
+        watch_control(
+            FrameReader::new(BufReader::new(socket)),
+            "task-a".into(),
+            state.clone(),
+        )
+        .await;
+    });
+    assert_eq!(waiter.join().unwrap(), Ok(expected_id));
+    assert!(state.receipt_waiters.lock().unwrap().is_empty());
+}
+
+#[test]
+fn receipt_refusals_wrong_ids_and_permission_replies_never_acknowledge_storage() {
+    for reply in [
+        ReceiptReply::Recorded {
+            receipt_id: uuid::Uuid::new_v4().to_string(),
+        },
+        ReceiptReply::Refused {
+            message: "store unavailable".into(),
+        },
+    ] {
+        let (recorder, mut rx) = receipt_recorder();
+        let state = recorder.state.clone();
+        let waiter = std::thread::spawn(move || recorder.record(receipt()));
+        let request = next_receipt(&mut rx);
+        let exchange = ApprovalExchange::new(ApprovalAsk::Consume {
+            verb: Verb::FS_READ.as_str().into(),
+            scope: scope(),
+            operation_digest: None,
+        });
+        state.deliver(request.correlation_id, &exchange, ApprovalReply::Granted);
+        assert!(state
+            .receipt_waiters
+            .lock()
+            .unwrap()
+            .contains_key(&request.correlation_id));
+        state.deliver_receipt(request.correlation_id, reply);
+        assert!(waiter.join().unwrap().is_err());
+        assert!(state.receipt_waiters.lock().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn receipt_reporting_is_bounded_and_disconnects_release_waiters() {
+    let (recorder, mut rx) = receipt_recorder();
+    recorder
+        .state
+        .receipts_used
+        .store(protocol::MAX_RECEIPT_REPORTS, Ordering::SeqCst);
+    assert!(recorder.record(receipt()).unwrap_err().contains("budget"));
+    assert!(rx.try_recv().is_err());
+    let (recorder, mut rx) = receipt_recorder();
+    let state = recorder.state.clone();
+    let waiter = std::thread::spawn(move || recorder.record(receipt()));
+    let _request = next_receipt(&mut rx);
+    state.refuse_all("channel closed after the invocation");
+    assert!(waiter
+        .join()
+        .unwrap()
+        .unwrap_err()
+        .contains("channel closed"));
+    assert!(state.receipt_waiters.lock().unwrap().is_empty());
+}
+
+#[test]
+fn cancellation_does_not_discard_a_late_report_or_create_an_approval() {
+    let (recorder, mut rx) = receipt_recorder();
+    let state = recorder.state.clone();
+    state.cancelled.store(true, Ordering::SeqCst);
+    let waiter = std::thread::spawn(move || recorder.record(receipt()));
+    let request = next_receipt(&mut rx);
+    state.deliver_receipt(
+        request.correlation_id,
+        ReceiptReply::Recorded {
+            receipt_id: request.report.id.clone(),
+        },
+    );
+    assert_eq!(waiter.join().unwrap(), Ok(request.report.id));
+    assert!(state.pending_approvals().is_empty());
+    assert_eq!(state.asks_used.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn receipt_and_nonce_bound_consent_waiters_are_separate_even_for_the_same_counter() {
+    let (gateway, _rx) = gateway();
+    let state = gateway.state;
+    let exchange = ApprovalExchange::new(ApprovalAsk::Consume {
+        verb: Verb::FS_READ.as_str().into(),
+        scope: scope(),
+        operation_digest: Some(crate::crypto::sha256_hex(b"exact invocation")),
+    });
+    let consent = state.register(7, exchange.clone());
+    let receipt = state.register_receipt(7).unwrap();
+    state.deliver_receipt(
+        7,
+        ReceiptReply::Recorded {
+            receipt_id: "receipt-a".into(),
+        },
+    );
+    assert_eq!(
+        receipt.recv_timeout(Duration::from_millis(50)),
+        Ok(ReceiptReply::Recorded {
+            receipt_id: "receipt-a".into()
+        })
+    );
+    assert!(consent.try_recv().is_err());
+    assert!(state.waiters.lock().unwrap().contains_key(&7));
+    state.deliver(7, &exchange, ApprovalReply::Granted);
+    assert_eq!(
+        consent.recv_timeout(Duration::from_millis(50)),
+        Ok(ApprovalReply::Granted)
+    );
+
+    let consent = state.register(8, exchange);
+    let receipt = state.register_receipt(8).unwrap();
+    state.refuse_all("closed current worker channel");
+    assert!(matches!(consent.recv_timeout(Duration::from_millis(50)),
+        Ok(ApprovalReply::Refused { message }) if message.contains("closed")));
+    assert!(matches!(receipt.recv_timeout(Duration::from_millis(50)),
+        Ok(ReceiptReply::Refused { message }) if message.contains("closed")));
+    assert!(state.waiters.lock().unwrap().is_empty());
+    assert!(state.receipt_waiters.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn trusted_task_scope_is_rebound_to_the_authenticated_worker_process() {
+    let session: crate::proc::SessionInfo = serde_json::from_value(serde_json::json!({
+        "session_id":"task-session","pid":1,"command":["task"],"started_at":"now",
+        "stdout_path":"","stderr_path":"","caps":[],"role":"worker"
+    }))
+    .unwrap();
+    with_session(Some(session), async {
+        let current = crate::proc::current_session_info_for_caps().unwrap();
+        assert_eq!(current.session_id, "task-session");
+        assert_eq!(current.pid, std::process::id());
+        assert_eq!(
+            current.start_time_ticks,
+            crate::proc::read_start_time_ticks_pub(std::process::id())
+        );
+        crate::caps::enforcement::require_current_session_identity(
+            &current.session_id,
+            current.pid,
+        )
+        .unwrap();
+    })
+    .await;
 }
 
 #[test]
@@ -521,4 +983,12 @@ fn a_hand_started_worker_has_no_channel() {
         Some(value) => std::env::set_var(protocol::CHANNEL_FD_ENV, value),
         None => std::env::remove_var(protocol::CHANNEL_FD_ENV),
     }
+}
+
+#[cfg(target_os = "linux")]
+mod activity_process {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/agentd/worker/activity_process.rs"
+    ));
 }

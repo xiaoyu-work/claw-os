@@ -80,6 +80,12 @@ chmod 0755 "$STAGE_ROOT/DEBIAN"
 
 # The desktop package owns only the explicitly listed COSMIC/panel app
 # manifests. Every other app is shipped by claw-os-agent.
+APP_SOURCE_LOCK="$STAGE_ROOT/usr/share/doc/claw-os-desktop/app-sources.json"
+if [ ! -f "$APP_SOURCE_LOCK" ]; then
+    echo "error: desktop App source snapshot missing; rebuild the desktop from prepared App main sources" >&2
+    exit 1
+fi
+export CLAW_APP_SOURCE_LOCK="$APP_SOURCE_LOCK"
 DESKTOP_APPS_FILE="$SCRIPT_DIR/claw-os-desktop/apps.list"
 mkdir -p "$STAGE_ROOT/usr/lib/cos/apps"
 while IFS= read -r app_id; do

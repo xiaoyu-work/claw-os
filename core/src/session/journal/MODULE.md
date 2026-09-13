@@ -123,6 +123,12 @@ survives any number of restarts. `journal.mutation.resolve` is the
 root-only route that records that statement; it re-runs nothing and
 grants nothing.
 
+An indeterminate provider response calls `MutationBracket::indeterminate`,
+never `fail`: even a failed flag append leaves the original start unresolved.
+Session replay lookup derives the owner UID from the authenticated head
+anchor, so a non-root session's identity is not accidentally recomputed with
+UID zero.
+
 ### `journal.status` derives ownership, it does not infer it
 
 Naming a session in the request body selects a *lookup*, never an

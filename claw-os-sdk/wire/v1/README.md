@@ -103,6 +103,31 @@ and supports MCP progress tokens plus cooperative
 `notifications/cancelled`. MCP-first runtimes reject calls without a valid
 Gateway context.
 
+## App effect metadata
+
+Optional ordinary-operation and MCP-tool `effects` declarations support
+[truthful metadata-only previews](operation-effects.md). These are App claims,
+not authority or confirmed outcomes. Missing declarations mean unknown
+effects, and recovery guidance is not proof that an inverse exists.
+
+## App object data contract
+
+[`object_ref.schema.json`](object_ref.schema.json) describes a portable
+identifier, not another request family or transport. The pure helpers across
+all four SDKs use [one canonical URI contract](object-references.md), with
+shared byte limits and golden vectors. App manifests can optionally declare
+`objects` with ordinary operation/MCP command resolvers. References carry no owner, grant,
+data payload, or nested `wire_version`.
+
+## App-reported file change plans
+
+[`file_change_plan.schema.json`](file_change_plan.schema.json) defines the
+public staged-plan value, including a bounded App-reported diff. See
+[file change plans](file-change-plans.md) for the closed shape, semantic
+validation, existing App object reference, and external-writer race
+limitations. Plan IDs and review fingerprints are data, never authority or
+OS-confirmed mutation.
+
 ## Error codes
 
 See `error_codes.md` for the canonical list. The minimum:

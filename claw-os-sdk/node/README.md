@@ -23,6 +23,7 @@ npm install \
 | `ai`         | Stable gated `chat` / `chat-untrusted` access                 | `cos ai chat --app <id>`             |
 | `tools`      | Call catalog tools the model proposes (`call`, `catalog`)      | `cos ai tool <name> --app <id>`      |
 | `gui`        | Desktop GUI bootstrap (kernel context, agent overlay)          | launched via `cos app <id> --gui`    |
+| `objects`    | Pure canonical App object identifiers                        | No transport or dispatch           |
 | `transport`  | The subprocess transport + error types (advanced)              | —                                    |
 | (root)       | Typed structs generated from `wire/v1/*.schema.json`           | —                                    |
 
@@ -60,6 +61,30 @@ token.
 which enforces capabilities, prompt-origin allowlists, monthly budget, safety,
 and audit before model or computer operations run.
 
+## App object references
+
+```ts
+import { objects, type ObjectRef } from "@claw-os/sdk";
+
+const reference: ObjectRef = {
+  app_id: "notes",
+  object_type: "note",
+  object_id: "draft/1",
+};
+const uri = objects.format_reference(reference);
+const parsed = objects.parse_reference(uri);
+// uri === "app://notes/note?id=draft%2F1"; parsed.object_id === "draft/1"
+```
+
+CamelCase aliases `objects.formatReference` and `objects.parseReference` are
+also exported. Helpers validate the generated structure and semantic bounds,
+reject unpaired UTF-16 surrogates rather than replacement-encoding them, and
+preserve opaque IDs unchanged. They perform no discovery, filesystem access,
+or dispatch, and references do not assert existence, freshness, or permission.
+
+See [the shared contract](../wire/v1/object-references.md) for canonical
+spelling, byte limits, and the optional manifest `objects` resolver declaration.
+
 ## AI support
 
 `ai.chat` is the public model API. Setting `origin: "external-content"`
@@ -79,13 +104,16 @@ published as placeholder APIs.
 
 ## Errors
 
-All errors extend `transport.BridgeError`:
+Transport-facing domain errors extend `transport.BridgeError`:
 
 - `ai.AiDenied` / `ai.AiBudgetExceeded` / `ai.AiSafetyViolation` — a gate
   refused the call; `.payload` carries the structured kernel envelope.
 - `ai.AiUnavailable` / `tools.ToolUnavailable` — transport failure
   (binary missing, timeout, non-JSON output).
 - `tools.ToolDenied` — capability / unknown-tool / arg-shape refusal.
+
+Pure reference validation throws `objects.ObjectRefError`, which extends
+`Error` directly and does not imply a transport call was attempted.
 
 ## Binary resolution
 

@@ -22,9 +22,10 @@ shared build helpers.
 | `lib/image-identity.sh` | Image user/identity assertions |
 | `lib/git-readonly.sh` | Read-only Git wrapper for privileged builds |
 | `app_platform.py` | Reproducible, versioned SDK/runtime/toolkit development artifact; excludes App helpers and OS providers |
-| `app_sources.py` | Resolve the immutable App repository pin and stage explicitly kinded product/capability assets |
-| `app_sources.py --stage-shared <root>` | Forward to the pinned public App common staging CLI; stage only App-owned support under `usr/lib/cos/python` |
-| `app_sources.py --native` | Validate and refresh product-declared native libraries/assets, standalone Launcher/Editor/Files/Terminal/Store/Capture/Media Player/Notifications and nested Settings workspace at stable ignored build paths from the immutable pin |
+| `app_sources.py` | Resolve current App `main` into an immutable build snapshot and stage explicitly kinded product/capability assets |
+| `app_sources.py --write-lock <path>` | Record the selected SHA for later build steps through `CLAW_APP_SOURCE_LOCK`; never changes the repository selection |
+| `app_sources.py --stage-shared <root>` | Forward to the selected snapshot's public App common staging CLI; stage only App-owned support under `usr/lib/cos/python` |
+| `app_sources.py --native` | Refresh product-declared native inputs and record their source snapshot alongside stable ignored build paths |
 
 ## Dependencies
 
@@ -52,8 +53,12 @@ requires the same exact clean source pin, invokes public
 support is never sourced from OS `apps/` or duplicated beside App payloads.
 The current Agent compatibility build calls it once; SDK/runtime staging and
 future independent App APT ownership remain separate contracts.
-The version-1 lock retains nonempty `products`/`apps` lists and accepts an
-optional `capabilities` list. Group names are unique across kinds. Each kind
+The version-2 selection tracks `main` without a fixed revision and retains
+nonempty `products`/`apps` lists plus optional `capabilities`. Fresh preparation
+must resolve the branch even when a cache exists; failure never selects stale
+source. Resolved version-1 snapshots keep one exact commit across package
+steps, and remain usable for explicit build reproduction. They must match the
+configured repository and ownership lists. Group names are unique across kinds. Each kind
 resolves only its declared root and matching package metadata; missing sources,
 duplicate identities, escaping paths and unlocked Python-library owners fail.
 `doc` resolves to `capabilities/document-engine/apps/doc`, never `apps/doc`.
@@ -75,6 +80,7 @@ Nested `native_libraries` exports require exact Cargo identity and a path
 inside their declared product component. Duplicate names and escapes are
 rejected before replacement. `native-libraries.json` records the resolved
 library paths and full source revision for consumers/assembly validation.
+`source-lock.json` retains the same resolved selection for desktop packaging.
 Notifications' private config/util crates remain whole-component build inputs
 for the current OS applet/panel links, not declared public library exports.
 The original daemon and all its build inputs are composed, not recreated under

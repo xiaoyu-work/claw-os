@@ -52,6 +52,286 @@ pub struct AppPermissions {
 }
 
 // ---------------------------------------------------------------------------
+// Activities
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityResource {
+    pub label: Text<240>,
+    pub reference: Text<4096>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(transparent)]
+pub struct ActivityResources(Vec<ActivityResource>);
+
+impl<'de> Deserialize<'de> for ActivityResources {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let resources = Vec::<ActivityResource>::deserialize(deserializer)?;
+        if resources.len() > 32 {
+            return Err(serde::de::Error::custom(
+                "activity resource list exceeds its maximum length",
+            ));
+        }
+        Ok(Self(resources))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityCreate {
+    pub title: Text<240>,
+    pub goal: Text<16384>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_criteria: Option<Text<8192>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundaries: Option<Text<8192>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resources: Option<ActivityResources>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityList {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<crate::activities::ActivityState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityGet {
+    pub id: Token,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityUpdate {
+    pub id: Token,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<Text<240>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<Text<16384>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_criteria: Option<Text<8192>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boundaries: Option<Text<8192>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resources: Option<ActivityResources>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityTransition {
+    pub id: Token,
+    pub state: crate::activities::ActivityState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completion_note: Option<Text<8192>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityRun {
+    pub id: Token,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<Text<PROMPT_BYTES>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<Token>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_turns: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub use_memory: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(transparent)]
+pub struct BoundedObjectRef(pub crate::objects::ObjectRef);
+
+impl<'de> Deserialize<'de> for BoundedObjectRef {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        claw_os_sdk::generated::validate_object_ref(&value)
+            .map_err(|_| serde::de::Error::custom("invalid App object reference fields"))?;
+        let object: crate::objects::ObjectRef = serde_json::from_value(value)
+            .map_err(|_| serde::de::Error::custom("invalid App object reference types"))?;
+        crate::objects::validate(&object)
+            .map_err(|_| serde::de::Error::custom("invalid or oversized App object reference"))?;
+        Ok(Self(object))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityObjects {
+    pub id: Token,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(transparent)]
+pub struct BoundedExecutionLimits(pub crate::activities::ExecutionLimitsDraft);
+
+impl<'de> Deserialize<'de> for BoundedExecutionLimits {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let limits = crate::activities::ExecutionLimitsDraft::deserialize(deserializer)?;
+        limits
+            .validate()
+            .map_err(|_| serde::de::Error::custom("invalid Activity execution limits"))?;
+        Ok(Self(limits))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityExecutionLimitsGet {
+    pub id: Token,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityExecutionLimitsSet {
+    pub id: Token,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_revision: Option<u64>,
+    pub limits: BoundedExecutionLimits,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityExecutionLimitsEnabled {
+    pub id: Token,
+    pub expected_revision: u64,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityObjectAttach {
+    pub id: Token,
+    pub label: Text<240>,
+    pub object: BoundedObjectRef,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(transparent)]
+pub struct BoundedCapabilityPolicy(pub crate::activities::CapabilityPolicyDraft);
+
+impl<'de> Deserialize<'de> for BoundedCapabilityPolicy {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let policy = crate::activities::CapabilityPolicyDraft::deserialize(deserializer)?;
+        policy
+            .validate()
+            .map_err(|_| serde::de::Error::custom("invalid Activity capability policy"))?;
+        Ok(Self(policy))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityCapabilityPolicyGet {
+    pub id: Token,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityCapabilityPolicySet {
+    pub id: Token,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_revision: Option<u64>,
+    pub policy: BoundedCapabilityPolicy,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityCapabilityPolicyEnabled {
+    pub id: Token,
+    pub expected_revision: u64,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(transparent)]
+pub struct BoundedObjectStateDraft(pub crate::activities::ObjectStateDraft);
+
+impl<'de> Deserialize<'de> for BoundedObjectStateDraft {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let draft = crate::activities::ObjectStateDraft::deserialize(deserializer)?;
+        draft
+            .validate()
+            .map_err(|_| serde::de::Error::custom("invalid or oversized object-state entry"))?;
+        Ok(Self(draft))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityObjectState {
+    pub id: Token,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<Text<4096>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityObjectStateRecord {
+    pub id: Token,
+    pub entry: BoundedObjectStateDraft,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OperationPreview {
+    pub app_id: Name<128>,
+    pub operation: Token<128>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<TextList<64, 8192>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityOperationPreview {
+    pub id: Token,
+    pub app_id: Name<128>,
+    pub operation: Token<128>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<TextList<64, 8192>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(transparent)]
+pub struct BoundedReceiptReport(pub crate::activities::ReceiptReport);
+
+impl<'de> Deserialize<'de> for BoundedReceiptReport {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let report = crate::activities::ReceiptReport::deserialize(deserializer)?;
+        report
+            .validate()
+            .map_err(|_| serde::de::Error::custom("invalid or oversized receipt report"))?;
+        Ok(Self(report))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityReceipts {
+    pub id: Token,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActivityReceiptRecord {
+    pub id: Token,
+    pub report: BoundedReceiptReport,
+}
+
+// ---------------------------------------------------------------------------
 // Agent tasks
 // ---------------------------------------------------------------------------
 
@@ -59,6 +339,8 @@ pub struct AppPermissions {
 #[serde(deny_unknown_fields)]
 pub struct TaskSubmit {
     pub prompt: Text<PROMPT_BYTES>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity_id: Option<Token>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<Text<PROMPT_BYTES>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -74,6 +356,8 @@ pub struct TaskSubmit {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TaskList {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity_id: Option<Token>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<Token>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -611,6 +895,61 @@ pub struct CredentialOauthRefresh {
 // ---------------------------------------------------------------------------
 // System services
 // ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileState {
+    #[serde(deserialize_with = "file_state_sha256")]
+    pub sha256: String,
+    #[serde(deserialize_with = "file_state_size")]
+    pub size: u64,
+    pub device: u64,
+    pub inode: u64,
+    /// Full st_mode, including the regular-file type bits.
+    pub mode: u32,
+    pub modified_ns: i64,
+    pub changed_ns: i64,
+}
+
+fn file_state_sha256<'de, D: serde::Deserializer<'de>>(de: D) -> Result<String, D::Error> {
+    let value = Text::<71>::deserialize(de)?;
+    let Some(hash) = value.as_str().strip_prefix("sha256:") else {
+        return Err(serde::de::Error::custom("invalid file SHA-256"));
+    };
+    if hash.len() != 64
+        || !hash
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return Err(serde::de::Error::custom("invalid file SHA-256"));
+    }
+    Ok(value.as_str().to_string())
+}
+
+fn file_state_size<'de, D: serde::Deserializer<'de>>(de: D) -> Result<u64, D::Error> {
+    let size = u64::deserialize(de)?;
+    if size > 65_536 {
+        return Err(serde::de::Error::custom("file state exceeds 64 KiB"));
+    }
+    Ok(size)
+}
+
+fn required_file_state<'de, D: serde::Deserializer<'de>>(
+    de: D,
+) -> Result<Option<FileState>, D::Error> {
+    Option::<FileState>::deserialize(de)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileReplace {
+    pub session: Token,
+    pub path: Text<PATH_BYTES>,
+    // An omitted precondition is not an assertion that the target is absent.
+    #[serde(deserialize_with = "required_file_state")]
+    pub expected: Option<FileState>,
+    pub content_base64: Text<90_000>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

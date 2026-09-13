@@ -3,8 +3,15 @@ use crate::clawd::authority::{MAX_CHILDREN, MAX_LINEAGE_DEPTH};
 
 use crate::caps::{Cap, Scope, Verb};
 
-/// Every test binds to the running test process, which is the only
-/// process a unit test can prove anything about.
+mod activity_policy {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/clawd/authority/activity_policy.rs"
+    ));
+}
+
+/// Most fixtures bind to this process; relay tests keep a separate live
+/// App process so resolving and consuming cannot confuse the two principals.
 fn self_principal() -> Principal {
     Principal::of_process(current_uid(), std::process::id())
         .expect("the test process can name itself")
@@ -61,40 +68,215 @@ fn store() -> Authority {
     Authority::new()
 }
 
+#[cfg(unix)]
+struct RelayFixture {
+    child: std::process::Child,
+    relay: GrantView,
+    session: GrantView,
+    presentation: Presentation,
+    proof: RelayProof,
+}
+
+#[cfg(unix)]
+impl RelayFixture {
+    fn new(store: &Authority, uses: u32) -> Self {
+        let child = std::process::Command::new("/bin/sleep")
+            .arg("60")
+            .spawn()
+            .unwrap();
+        let mut session = issuance("relayed-app", &[Audience::SystemService]);
+        session.principal = Principal::of_process(current_uid(), child.id()).unwrap();
+        session.uses = Uses::Budget(uses);
+        let (_, session) = store.issue(session).unwrap();
+        let mut relay = issuance("relayed-app", &[Audience::AppRelay]);
+        relay.binding = Binding::Process;
+        relay.caps = CapSet::new();
+        relay.index_session = false;
+        let (_, relay) = store.issue(relay).unwrap();
+        let mut presentation = presentation(Audience::SystemService);
+        presentation.session_id = Some("relayed-app".into());
+        let proof = RelayProof::for_session("relayed-app", relay.id);
+        Self {
+            child,
+            relay,
+            session,
+            presentation,
+            proof,
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for RelayFixture {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn relayed_consumption_preserves_both_principals_and_the_all_or_none_budget() {
+    let store = store();
+    let fixture = RelayFixture::new(&store, 1);
+    store
+        .resolve_session_relayed("relayed-app", &fixture.presentation, &fixture.proof)
+        .unwrap();
+    assert_eq!(
+        store
+            .consume(fixture.session.id, &[read_cap()], &fixture.presentation)
+            .unwrap_err(),
+        AuthorityError::PrincipalMismatch,
+    );
+    let missing = Cap::new(Verb::FS_READ, Scope::path("/not-granted"));
+    assert!(matches!(
+        store.consume_relayed(
+            fixture.session.id,
+            &[read_cap(), missing],
+            &fixture.presentation,
+            &fixture.proof
+        ),
+        Err(AuthorityError::Capability { .. })
+    ));
+    store
+        .consume_relayed(
+            fixture.session.id,
+            &[read_cap(), write_cap()],
+            &fixture.presentation,
+            &fixture.proof,
+        )
+        .unwrap();
+    assert!(store
+        .consume_relayed(
+            fixture.session.id,
+            &[read_cap()],
+            &fixture.presentation,
+            &fixture.proof
+        )
+        .is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn relayed_consumption_rechecks_revocation_session_and_presenting_process() {
+    let store = store();
+    let fixture = RelayFixture::new(&store, 2);
+    store
+        .resolve_session_relayed("relayed-app", &fixture.presentation, &fixture.proof)
+        .unwrap();
+    let mut wrong_process = fixture.presentation.clone();
+    wrong_process.pid = fixture.child.id();
+    wrong_process.start_time_ticks = crate::proc::read_start_time_ticks_pub(fixture.child.id());
+    assert_eq!(
+        store
+            .consume_relayed(
+                fixture.session.id,
+                &[read_cap()],
+                &wrong_process,
+                &fixture.proof
+            )
+            .unwrap_err(),
+        AuthorityError::PrincipalMismatch,
+    );
+    let wrong_session = RelayProof::for_session("other-session", fixture.relay.id);
+    assert!(store
+        .consume_relayed(
+            fixture.session.id,
+            &[read_cap()],
+            &fixture.presentation,
+            &wrong_session
+        )
+        .is_err());
+    store.revoke(fixture.relay.id);
+    assert!(store
+        .consume_relayed(
+            fixture.session.id,
+            &[read_cap()],
+            &fixture.presentation,
+            &fixture.proof
+        )
+        .is_err());
+    assert!(store
+        .resolve_session_relayed("relayed-app", &fixture.presentation, &fixture.proof)
+        .is_err());
+    let direct = Presentation {
+        uid: current_uid(),
+        pid: fixture.child.id(),
+        start_time_ticks: crate::proc::read_start_time_ticks_pub(fixture.child.id()),
+        audience: Audience::SystemService,
+        route: "direct-test",
+        session_id: Some("relayed-app".into()),
+    };
+    let remaining = store.resolve_session("relayed-app", &direct).unwrap();
+    assert_eq!(remaining.uses_remaining, Some(2));
+}
+
 #[test]
 fn app_permission_revocation_blocks_live_spending_and_retires_only_target_app() {
     let _lock = crate::test_env::lock_env();
-    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../build");
-    let dir = tempfile::tempdir_in(root).unwrap();
+    let dir = tempfile::tempdir().unwrap();
     let _env = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", dir.path());
     let store = store();
-    let (_, target) = store.issue(issuance("policy-target", &[Audience::SystemService])).unwrap();
+    let (_, target) = store
+        .issue(issuance("policy-target", &[Audience::SystemService]))
+        .unwrap();
     let mut sibling_issue = issuance("policy-sibling", &[Audience::SystemService]);
     sibling_issue.subject.app_id = Some("other-app".into());
     let (_, sibling) = store.issue(sibling_issue).unwrap();
     let presenter = presentation(Audience::SystemService);
     store.consume(target.id, &[read_cap()], &presenter).unwrap();
-    let block = crate::approvals::app_policy::revoke(current_uid(), "power-manager", read_cap()).unwrap();
+    let block =
+        crate::approvals::app_policy::revoke(current_uid(), "power-manager", read_cap()).unwrap();
     assert!(store.consume(target.id, &[read_cap()], &presenter).is_err());
-    store.consume(sibling.id, &[read_cap()], &presenter).unwrap();
+    store
+        .consume(sibling.id, &[read_cap()], &presenter)
+        .unwrap();
     assert_eq!(store.revoke_app(current_uid(), "power-manager"), 1);
     assert!(store.resolve_session("policy-target", &presenter).is_err());
-    store.consume(sibling.id, &[read_cap()], &presenter).unwrap();
-    let id = crate::approvals::submit_owned(block.cap.verb, block.cap.scope.clone(),
-        block.session(current_uid(), "power-manager"), "restore", None, Some(current_uid())).unwrap();
+    store
+        .consume(sibling.id, &[read_cap()], &presenter)
+        .unwrap();
+    let id = crate::approvals::submit_owned(
+        block.cap.verb,
+        block.cap.scope.clone(),
+        block.session(current_uid(), "power-manager"),
+        "restore",
+        None,
+        Some(current_uid()),
+    )
+    .unwrap();
     crate::approvals::approve_for_owner(
-        &id, crate::approvals::GrantDuration::Forever, None, None, Some(current_uid()),
-    ).unwrap();
-    assert!(store.resolve_session("policy-target", &presenter).is_err(),
-        "restoration must not resurrect the retired daemon grant");
-    let (_, renewed) = store.issue(issuance("policy-renewed", &[Audience::SystemService])).unwrap();
-    store.consume(renewed.id, &[read_cap()], &presenter).unwrap();
+        &id,
+        crate::approvals::GrantDuration::Forever,
+        None,
+        None,
+        Some(current_uid()),
+    )
+    .unwrap();
+    assert!(
+        store.resolve_session("policy-target", &presenter).is_err(),
+        "restoration must not resurrect the retired daemon grant"
+    );
+    let (_, renewed) = store
+        .issue(issuance("policy-renewed", &[Audience::SystemService]))
+        .unwrap();
+    store
+        .consume(renewed.id, &[read_cap()], &presenter)
+        .unwrap();
     crate::approvals::generations::revoke(&crate::approvals::RevocationScope::Session {
-        uid: Some(current_uid()), session: block.session(current_uid(), "power-manager"),
-    }).unwrap();
-    assert!(store.consume(renewed.id, &[read_cap()], &presenter).is_err(),
-        "generic session revocation must also retire restored policy on live spends");
-    store.consume(sibling.id, &[read_cap()], &presenter).unwrap();
+        uid: Some(current_uid()),
+        session: block.session(current_uid(), "power-manager"),
+    })
+    .unwrap();
+    assert!(
+        store
+            .consume(renewed.id, &[read_cap()], &presenter)
+            .is_err(),
+        "generic session revocation must also retire restored policy on live spends"
+    );
+    store
+        .consume(sibling.id, &[read_cap()], &presenter)
+        .unwrap();
 }
 
 #[test]
@@ -756,14 +938,15 @@ fn approval_revocation_does_not_retire_the_sessions_base_grant() {
     let mut approval = issuance("agent-session", &[Audience::AgentWorker]);
     approval.issuer = Issuer::Approval;
     approval.binding = Binding::Process;
-    approval.subject =
-        Subject::session("agent-session").with_task(Some("task-a".to_string()));
+    approval.subject = Subject::session("agent-session").with_task(Some("task-a".to_string()));
     approval.uses = Uses::Budget(1);
     approval.index_session = false;
-    let (_approval_handle, approval_view) =
-        store.issue_with_generation(approval, 3).unwrap();
+    let (_approval_handle, approval_view) = store.issue_with_generation(approval, 3).unwrap();
 
-    assert_eq!(store.revoke_approvals_for_session(current_uid(), "agent-session"), 1);
+    assert_eq!(
+        store.revoke_approvals_for_session(current_uid(), "agent-session"),
+        1
+    );
     store
         .resolve_session(
             "agent-session",
@@ -797,10 +980,19 @@ fn approval_session_revocation_requires_the_exact_owner() {
     store.issue_with_generation(approval, 3).unwrap();
 
     let foreign = current_uid().checked_add(1).unwrap();
-    assert_eq!(store.revoke_approvals_for_session(foreign, "shared-session-name"), 0);
-    assert_eq!(store.revoke_approvals_for_session(current_uid(), "other-session"), 0);
+    assert_eq!(
+        store.revoke_approvals_for_session(foreign, "shared-session-name"),
+        0
+    );
+    assert_eq!(
+        store.revoke_approvals_for_session(current_uid(), "other-session"),
+        0
+    );
     assert_eq!(store.len(), 1);
-    assert_eq!(store.revoke_approvals_for_session(current_uid(), "shared-session-name"), 1);
+    assert_eq!(
+        store.revoke_approvals_for_session(current_uid(), "shared-session-name"),
+        1
+    );
     assert_eq!(store.len(), 0);
 }
 

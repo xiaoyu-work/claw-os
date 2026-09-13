@@ -88,7 +88,6 @@ fn every_admissible_route_is_explicitly_mapped() {
         let error = admit(command, &wide).unwrap_err();
         assert!(error.contains("no admission rule"), "{name}: {error}");
     }
-
 }
 
 #[test]
@@ -96,8 +95,10 @@ fn notification_intent_requires_ui_notify_not_owner_wide_notification_access() {
     let granted = relaying_authority(vec![Cap::unscoped(Verb::UI_NOTIFY)]);
     admit(Command::SystemNotificationControl, &granted).unwrap();
     for command in [
-        Command::NotificationList, Command::NotificationPublish,
-        Command::NotificationAcknowledge, Command::NotificationDismiss,
+        Command::NotificationList,
+        Command::NotificationPublish,
+        Command::NotificationAcknowledge,
+        Command::NotificationDismiss,
         Command::NotificationDeliveryClaim,
     ] {
         assert!(admit(command, &granted).is_err(), "{command:?}");
@@ -111,8 +112,10 @@ fn notification_inbox_grant_admits_only_the_typed_source_scoped_provider() {
     let granted = relaying_authority(vec![Cap::new(Verb::DATA_INBOX_READ, Scope::Wild)]);
     admit(Command::SystemNotificationControl, &granted).unwrap();
     for command in [
-        Command::NotificationList, Command::NotificationPublish,
-        Command::NotificationAcknowledge, Command::NotificationDismiss,
+        Command::NotificationList,
+        Command::NotificationPublish,
+        Command::NotificationAcknowledge,
+        Command::NotificationDismiss,
         Command::NotificationDeliveryClaim,
     ] {
         assert!(admit(command, &granted).is_err(), "{command:?}");
@@ -134,7 +137,11 @@ fn media_player_relay_requires_a_media_verb_not_other_desktop_authority() {
             assert!(admit(command, &granted).is_err(), "{command:?}");
         }
     }
-    for verb in [Verb::DESKTOP_LAUNCH, Verb::DEVICE_MEDIA_ROUTE, Verb::SYS_OBSERVE] {
+    for verb in [
+        Verb::DESKTOP_LAUNCH,
+        Verb::DEVICE_MEDIA_ROUTE,
+        Verb::SYS_OBSERVE,
+    ] {
         let unrelated = relaying_authority(vec![Cap::new(verb, Scope::name("cosmic-player"))]);
         assert!(admit(Command::SystemMediaPlayerControl, &unrelated).is_err());
     }
@@ -167,7 +174,11 @@ fn ai_chat_admission_is_explicit_and_cannot_admit_app_invocation() {
 fn settings_permission_management_relay_is_not_approval_authority() {
     let granted = relaying_authority(vec![Cap::new(Verb::SYS_PERMISSIONS, Scope::name("manage"))]);
     admit(Command::SystemAppPermissions, &granted).unwrap();
-    for command in [Command::PermissionApps, Command::PermissionDecide, Command::PermissionRevoke] {
+    for command in [
+        Command::PermissionApps,
+        Command::PermissionDecide,
+        Command::PermissionRevoke,
+    ] {
         assert!(admit(command, &granted).is_err());
     }
     let observation = relaying_authority(vec![Cap::new(Verb::SYS_OBSERVE, Scope::Wild)]);
@@ -211,6 +222,30 @@ fn network_diagnostic_route_requires_one_of_its_capability_families() {
 
     let unrelated = relaying_authority(vec![Cap::new(Verb::NET_MANAGE, Scope::Wild)]);
     assert!(admit(command, &unrelated).is_err());
+}
+
+#[test]
+fn file_replace_admission_only_prechecks_the_write_family() {
+    let command = Command::SystemFileReplace;
+    assert_eq!(required_verbs(command), &[Verb::FS_WRITE]);
+    assert!(admit(
+        command,
+        &relaying_authority(vec![Cap::new(Verb::FS_READ, Scope::path("/srv/document"))])
+    )
+    .is_err());
+    assert!(admit(
+        command,
+        &authority(vec![Cap::new(Verb::FS_WRITE, Scope::path("/srv/document"))])
+    )
+    .is_err());
+    admit(
+        command,
+        &relaying_authority(vec![Cap::new(Verb::FS_WRITE, Scope::path("/srv/document"))]),
+    )
+    .unwrap();
+    // Admission has not authorized any particular path or supplied fs.read.
+    // Those checks are mandatory in the provider's single Decision.
+    assert!(required_verbs(Command::PermissionRequest).is_empty());
 }
 
 #[test]
@@ -294,10 +329,10 @@ fn the_endpoint_answers_a_policy_check_and_refuses_identity_control() {
     )
     .expect("start endpoint");
 
-    let ask = |command: &str, params: serde_json::Value| -> serde_json::Value {
+    let ask = |version: u32, command: &str, params: serde_json::Value| -> serde_json::Value {
         let mut stream = UnixStream::connect(endpoint.socket_path()).expect("connect");
         let body = serde_json::json!({
-            "v": crate::clawd::wire::PROTOCOL_VERSION,
+            "v": version,
             "id": "test",
             "command": command,
             "params": params,
@@ -323,17 +358,24 @@ fn the_endpoint_answers_a_policy_check_and_refuses_identity_control() {
     };
 
     let allowed = ask(
+        PROTOCOL_VERSION,
         POLICY_CHECK_COMMAND,
         serde_json::json!({
             "verb": "fs.read",
             "scope": { "kind": "path", "value": "/srv/a.txt" },
         }),
     );
+    assert_eq!(allowed["v"], PROTOCOL_VERSION);
+    assert_eq!(allowed["id"], "test");
     assert_eq!(allowed["ok"], true);
     assert_eq!(allowed["v"], crate::clawd::wire::PROTOCOL_VERSION);
     assert_eq!(allowed["result"]["decision"], "allow");
 
-    let refused = ask("app_session.register", serde_json::json!({}));
+    let refused = ask(
+        PROTOCOL_VERSION,
+        "app_session.register",
+        serde_json::json!({}),
+    );
     assert_eq!(refused["ok"], false);
     assert!(
         refused["error"]["message"]
@@ -343,8 +385,17 @@ fn the_endpoint_answers_a_policy_check_and_refuses_identity_control() {
         "{refused}"
     );
 
-    let unknown = ask("not.a.route", serde_json::json!({}));
+    let unknown = ask(PROTOCOL_VERSION, "not.a.route", serde_json::json!({}));
     assert_eq!(unknown["ok"], false);
+    for version in [0, PROTOCOL_VERSION - 1, PROTOCOL_VERSION + 1] {
+        let incompatible = ask(version, POLICY_CHECK_COMMAND, serde_json::json!({}));
+        assert_eq!(incompatible["ok"], false);
+        assert_eq!(incompatible["v"], PROTOCOL_VERSION);
+        assert_eq!(
+            incompatible["error"]["code"],
+            Fault::UnsupportedVersion.class()
+        );
+    }
 
     // Nothing the worker can see names the relay grant.
     let rendered = format!("{allowed}{refused}{unknown}");
@@ -394,6 +445,69 @@ fn relay_error_bodies_keep_their_broker_classification() {
 
 #[cfg(unix)]
 #[test]
+fn sandbox_responses_must_match_the_protocol_and_request() {
+    use crate::test_env::TestEnvVarGuard;
+    use std::os::unix::net::UnixListener;
+
+    let _lock = crate::test_env::lock_env();
+    let _private = TestEnvVarGuard::remove(crate::extension_host::protocol::BROKER_SOCKET_ENV);
+    for mode in ["matching", "version", "request", "missing-id"] {
+        let root = tempfile::tempdir().unwrap();
+        let _runtime = TestEnvVarGuard::set("COS_RUNTIME_DIR", root.path());
+        let listener = UnixListener::bind(crate::paths::clawd_socket_path()).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let server = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(
+                            std::time::Instant::now() < deadline,
+                            "sandbox client did not connect"
+                        );
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("accept sandbox response fixture: {error}"),
+                }
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut header = [0; HEADER_BYTES];
+            stream.read_exact(&mut header).unwrap();
+            let size = crate::clawd::transport::frame::parse_header(
+                &header,
+                KIND_REQUEST,
+                MAX_REQUEST_BYTES,
+            )
+            .unwrap();
+            let mut bytes = vec![0; size];
+            stream.read_exact(&mut bytes).unwrap();
+            let request: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(request["command"], POLICY_CHECK_COMMAND);
+            let mut response = serde_json::json!({
+                "v":PROTOCOL_VERSION,"id":request["id"],"ok":true,"result":{}
+            });
+            match mode {
+                "matching" => {}
+                "version" => response["v"] = serde_json::json!(PROTOCOL_VERSION - 1),
+                "request" => response["id"] = serde_json::json!("other"),
+                "missing-id" => {
+                    response.as_object_mut().unwrap().remove("id");
+                }
+                _ => unreachable!(),
+            }
+            write_response(&mut stream, &response);
+        });
+        let result = sandbox_exchange(POLICY_CHECK_COMMAND, serde_json::json!({}));
+        server.join().unwrap();
+        assert_eq!(result.is_ok(), mode == "matching", "{mode}: {result:?}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn dropping_the_endpoint_removes_the_socket() {
     let dir = tempfile::tempdir().expect("tempdir");
     let socket = dir.path().join("broker.sock");
@@ -407,56 +521,94 @@ fn dropping_the_endpoint_removes_the_socket() {
 #[cfg(target_os = "linux")]
 #[tokio::test(flavor = "multi_thread")]
 async fn settings_request_crosses_the_private_worker_proxy_without_exposing_approval() {
-    use std::os::fd::AsRawFd;
-    use crate::clawd::transport::{frame::PeerStream, peer, ReadOutcome};
     use crate::clawd::protocol::{encode_response, Request, Response};
+    use crate::clawd::transport::{frame::PeerStream, peer, ReadOutcome};
+    use std::os::fd::AsRawFd;
     let _lock = crate::test_env::lock_env();
-    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../build");
-    let dir = tempfile::tempdir_in(root).unwrap();
+    let dir = tempfile::tempdir().unwrap();
     let _runtime = crate::test_env::TestEnvVarGuard::set("COS_RUNTIME_DIR", dir.path());
     let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", dir.path().join("data"));
-    let _proxy = crate::test_env::TestEnvVarGuard::remove(crate::extension_host::protocol::BROKER_SOCKET_ENV);
+    let _proxy = crate::test_env::TestEnvVarGuard::remove(
+        crate::extension_host::protocol::BROKER_SOCKET_ENV,
+    );
     let listener = tokio::net::UnixListener::bind(dir.path().join("clawd.sock")).unwrap();
     peer::enable_credential_passing(listener.as_raw_fd()).unwrap();
     let uid = unsafe { libc::geteuid() };
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
         let mut stream = PeerStream::new(stream).unwrap();
-        let ReadOutcome::Frame(frame) = stream.read_request(crate::clawd::wire::MAX_REQUEST_BYTES).await.unwrap() else {
+        let ReadOutcome::Frame(frame) = stream
+            .read_request(crate::clawd::wire::MAX_REQUEST_BYTES)
+            .await
+            .unwrap()
+        else {
             panic!("framed worker relay expected");
         };
         assert_eq!(frame.credentials.uid, uid);
-        let request: crate::clawd::wire::InboundRequest = serde_json::from_slice(&frame.body).unwrap();
+        let request: crate::clawd::wire::InboundRequest =
+            serde_json::from_slice(&frame.body).unwrap();
         assert_eq!(request.command.as_str(), Command::AppSessionRelay.as_str());
         assert_eq!(request.params["session_id"], "app-settings-test");
         assert_eq!(request.params["command"], "system.app-permissions");
-        let params = (Command::SystemAppPermissions.route().decode)(request.params["params"].clone()).unwrap();
+        let params =
+            (Command::SystemAppPermissions.route().decode)(request.params["params"].clone())
+                .unwrap();
         assert_eq!(params["session"], "app-settings-test");
         assert_eq!(params["action"], "request");
         assert_eq!(params["app_id"], "audio-manager");
         assert!(params.get("owner_uid").is_none());
-        let response = Response::ok(request.id, serde_json::json!({"result":{"status":"pending","id":"ap-fixture","enabled":false}}));
-        stream.write_response(&encode_response(&response).unwrap()).await.unwrap();
+        let response = Response::ok(
+            request.id,
+            serde_json::json!({"result":{"status":"pending","id":"ap-fixture","enabled":false}}),
+        );
+        stream
+            .write_response(&encode_response(&response).unwrap())
+            .await
+            .unwrap();
     });
     let slot = crate::worker::relay_slot();
     crate::worker::install_relay(&slot, Some("daemon-only-handle".into()));
-    let authority = BrokerAuthority::new("app-settings-test", Some("independent-permission-manager".into()),
-        CapSet::from_caps([Cap::new(Verb::SYS_PERMISSIONS, Scope::name("manage"))]), slot);
+    let authority = BrokerAuthority::new(
+        "app-settings-test",
+        Some("independent-permission-manager".into()),
+        CapSet::from_caps([Cap::new(Verb::SYS_PERMISSIONS, Scope::name("manage"))]),
+        slot,
+    );
     let endpoint = BrokerEndpoint::start(dir.path().join("worker.sock"), authority, uid).unwrap();
     let socket = endpoint.socket_path().to_path_buf();
-    let response = tokio::task::spawn_blocking(move || crate::clawd::client::request_blocking(
-        socket, Request::build(Command::SystemAppPermissions, serde_json::json!({
-            "session":"app-settings-test", "action":"request", "app_id":"audio-manager",
-            "permission_id":"fixed-capability-key", "reason":"restore audio status"
-        })))).await.unwrap().unwrap();
+    let response = tokio::task::spawn_blocking(move || {
+        crate::clawd::client::request_blocking(
+            socket,
+            Request::build(
+                Command::SystemAppPermissions,
+                serde_json::json!({
+                    "session":"app-settings-test", "action":"request", "app_id":"audio-manager",
+                    "permission_id":"fixed-capability-key", "reason":"restore audio status"
+                }),
+            ),
+        )
+    })
+    .await
+    .unwrap()
+    .unwrap();
     assert!(response.ok, "{response:?}");
     assert_eq!(response.result.unwrap()["status"], "pending");
     server.await.unwrap();
     let socket = endpoint.socket_path().to_path_buf();
-    let refused = tokio::task::spawn_blocking(move || crate::clawd::client::request_blocking(
-        socket, Request::build(Command::PermissionDecide, serde_json::json!({
-            "id":"ap-fixture", "decision":"approve", "owner_uid":uid
-        })))).await.unwrap().unwrap();
+    let refused = tokio::task::spawn_blocking(move || {
+        crate::clawd::client::request_blocking(
+            socket,
+            Request::build(
+                Command::PermissionDecide,
+                serde_json::json!({
+                    "id":"ap-fixture", "decision":"approve", "owner_uid":uid
+                }),
+            ),
+        )
+    })
+    .await
+    .unwrap()
+    .unwrap();
     assert!(!refused.ok);
     assert_eq!(endpoint.facts()["relayed"], 1);
 }

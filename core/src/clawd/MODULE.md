@@ -16,6 +16,8 @@ and agent tasks.
   action-bound authorizations for calls relayed by authenticated task Hosts.
 - Own task ownership/lease, durable approval waits, retry, and task
   lifecycle RPC.
+- Expose one owner-scoped Activity lifecycle and task/session projection for
+  terminal-only, Web, and native desktop clients.
 - Expose owner-scoped approval views used by the Agent Web control center;
   permission decisions still cross the polkit helper.
 - Expose owner-scoped notification publication, subscription, state, and
@@ -39,6 +41,14 @@ and agent tasks.
 | `agent_client.rs` | Client RPC for agent task submit/result/cancel/status |
 | `ai.rs` | Authenticated App single-shot AI gate; owner configuration, current transient capabilities, bounded concurrency/deadline, no App-local provider execution |
 | `tasks.rs` | Task queue, summary/list, cancel, retry, and session continuity |
+| `activities.rs` | Shared Activity CRUD/lifecycle, related-job views, and submission through the existing task path |
+| `activity_execution_limits.rs` | Owner-scoped revision-checked attempt/turn/expiry controls; constraints only, never capability grants |
+| `activity_capability_policy.rs` | Owner-scoped rule/CAS controls shared by terminal, Web and native desktop; never permission decisions or grant issuance |
+| `activity_objects.rs` | Owner-scoped reference attachment and authenticated object descriptions; never fetches App data |
+| `activity_object_state.rs` | Shared owner-scoped observation/relationship history and immutable correction/retraction submission |
+| `operation_previews.rs` | Shared App effect previews and owner-scoped Activity adaptation; never executes Apps |
+| `activity_receipts.rs` | Shared immutable receipt recording for owner-scoped peers and authenticated task reports, with separate declaration snapshots |
+| `file_changes.rs` | Exact read/write-capability atomic file replacement, owner-aware path protection, and effect-level indeterminate journal brackets |
 | `usage.rs` | Peer-UID-scoped Agent token usage queries |
 | `app_sessions.rs` | App/native/MCP session authority: derives identity and capabilities, plans approvals, issues launch grants, consumes service-bound call tickets |
 | `app_permissions.rs` | Capability-gated App permission service: verified declarations, owner/App deny gates, pending durable restoration, fine-grained revocation; no approval authority or fixed UI identity |
@@ -346,6 +356,12 @@ descriptor says it derives its own exact capability must spend it through
 withheld, so "the provider forgot to check" fails closed instead of succeeding
 silently.
 
+Activity-associated App grants also retain the root plan's policy revision
+and confirmed invocation scopes. Attenuation carries that binding forward;
+broker effects recheck live policy before spending ordinary grant authority.
+No serialized policy or registry row can reconstruct confirmation, and a
+policy denial cannot be overridden by filing another permission request.
+
 Three subject kinds cover the surface. `Peer` routes act for the connecting
 process and resolve no grant. `Session` routes are addressed by an App/MCP
 session and run under the grant derived at bind. `Handle` routes are addressed
@@ -399,6 +415,15 @@ flooding the socket.
 
 ## Error Boundaries
 
+- `system.file.replace` is a Session/SystemService mutation. Its provider
+  requires both exact target read/write capabilities, pins the parent and
+  refuses unsafe metadata rather than widening a worker mount. It retains an
+  effect-level bracket with a stable proposal identity on both direct and
+  relay paths, independently of a launcher's transport correlation id.
+  The root relay preserves typed provider errors, so an unknown rename/link
+  or durability result leaves both its outer bracket and the file bracket
+  unresolved. Worker-side error flattening is not a claim of no effect.
+  No rollback or universal filesystem CAS is claimed.
 - `state::StateError` owns transaction recovery, in-memory context/transaction
   locks, ownership conflicts, and corrupted daemon state. Poisoned locks are
   unavailable state and are never recovered with `PoisonError::into_inner`.

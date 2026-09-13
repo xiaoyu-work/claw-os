@@ -134,8 +134,8 @@ slice does not rename the App identity or migrate mailbox accounts/data;
 those changes are tracked in the [product redesign plan](app-product-redesign.md).
 
 Mail product source now lives in the separate `xiaoyu-work/clawos-app`
-repository. OS package builds consume the exact published revision in
-[`packaging/apps.lock.json`](../packaging/apps.lock.json), keeping the Python
+repository. OS package builds consume the exact revision recorded in
+[their resolved App-main build snapshot](../packaging/README.md), keeping the Python
 implementation and XPI together. This is a source-ownership change, not a
 second installed updater: APT still upgrades the signed package, App identity
 and data paths are unchanged, and runtime discovery never downloads from Git.
@@ -150,6 +150,15 @@ libraries under `/usr/lib/cos/apps`. Helper tests/vectors are App-owned test
 inputs and are not installed. `python3-idna (>= 3.3), python3-idna (<< 4)`
 remains an Agent dependency. No OS helper source, symlink or import fallback
 is retained.
+
+The version-2 `packaging/apps.lock.json` now tracks App `main`, not a
+manually updated commit pin. Each new build resolves the branch and records
+one exact source snapshot for all subsequent steps. Agent packages retain
+`/usr/share/doc/claw-os-agent/app-sources.json`; Desktop retains the equivalent
+`claw-os-desktop` document captured before native compilation. A branch/network
+failure is an error, never permission to reuse stale source. This changes build
+selection only: installed systems still use signed package updates, no running
+App follows Git, and SDK/platform artifact versions and digests remain pinned.
 
 These files still belong to the existing Agent Debian package. This source
 ownership checkpoint preserves current package delivery and legacy native/Mail
@@ -396,9 +405,9 @@ upgrade replaces the whole set. Agent tasks run in `claw-agentd` processes that
   against a half-upgraded pair. The broker additionally measures the installed
   worker and `claw-extension-host` binaries against the security floor before
   spawning them, so either component being replaced on disk is refused before
-  it becomes a process. Agentd worker protocol v10 and grant format v9 bind
-  owner-qualified Agent-extension package receipts into the signed task
-  authority. A v9 worker frame or v8 grant is rejected explicitly.
+  it becomes a process. Agentd worker protocol v11 adds Activity boundary and
+  receipt messages while retaining grant format v9 and its owner-qualified
+  Agent-extension package receipts. A v10 worker frame or v8 grant is rejected explicitly.
   Extension-host control protocol v9 remains the independently floored host
   channel, and the child Agent-extension ABI remains v2.
 - If the worker binary is missing or the daemon is started with
@@ -462,6 +471,73 @@ This last move completes source ownership of all 75 original App identities,
 not full boot/upgrade/native-visual acceptance, backend/state/identity
 consolidation or independent distribution. Declared source exports, bundled
 `cos_runtime` and App-pin/OS-package delivery remain explicit coupling.
+
+### Activity receipt storage
+
+The receipt-capable Activity service transactionally migrates `activities.db`
+from database schema 1 to schema 2. Existing goals, states, resource references,
+and completion notes are preserved; the migration adds an owner-scoped receipt
+ledger. This database version is separate from Activity wire schema 1, which
+does not change.
+
+An older binary that only supports database schema 1 refuses a migrated
+database rather than silently dropping receipt data. Do not downgrade only
+`cos`/`clawd` against schema-2 state. Preserve the database and restore a
+compatible Agent package, or restore a consistent pre-upgrade backup through
+the operator's recovery process. Receipt records remain caller-reported data,
+never restored authorization.
+
+Activity boundary checks and authenticated task reports use worker protocol
+v11. `clawd` and `claw-agentd` must be upgraded together; a mixed pair fails
+closed at assignment rather than dropping reports or inventing compatibility.
+The release-security policy records this same protocol generation. Activity
+wire schema 1 is unchanged, as is the separate extension-host control protocol
+v9. App code continues to run in isolated extension/service Hosts, never in
+the model worker. Root authorizes each service call and records its Activity
+result; no upgrade restores the former `app_host` worker-channel route.
+
+Owner/App service Hosts retain their existing persistent, idmapped App
+partition. Individual Activity calls carry root-pinned policy through their
+single-use action ticket and transient grant, not a standing Activity policy
+on the shared service. No upgrade copies App data, expands lifetime mounts
+or launches a session outside the sandbox.
+
+Object-state history adds database schema 3 through a transactional migration
+from schemas 1 and 2. Activity planning/lifecycle data and immutable receipt
+rows are preserved; observations, planning relations and corrections use new
+tables in the same `activities.db`, not an App-data copy. Invalid state or a
+failed migration is an error rather than permission to reset the database.
+Older schema-2 cores refuse schema-3 state. Restore a compatible package or a
+consistent pre-upgrade backup; do not delete the ledger to force a downgrade.
+See [object state](object-state.md) for its source and validity semantics.
+
+Database schema 4 adds finite Activity execution policies and attempt
+reservations without rewriting goals, receipts or object-state history.
+Activities without a policy retain their existing behavior. Once configured,
+disabled or expired policies do not fall back to unlimited work. Old cores
+must not open schema-4 state; preserve the database and restore a compatible
+package or a consistent pre-upgrade backup. See
+[execution limits](activity-execution-limits.md).
+
+Database schema 5 adds owner-scoped Activity capability policies without
+rewriting goals, receipts, object-state history or execution reservations.
+An existing attempt is stopped when its capability policy changes or is first
+configured; it must restart under the new revision. Disabling a policy is a
+revocation, not deletion or unrestricted fallback. Existing associated Apps
+lose broker authority when their root-held policy binding becomes stale.
+Already-admitted effects are not undone.
+
+Upgrade `cos`, `clawd` and `claw-agentd` together for the v11 boundary/consent
+messages. Older cores refuse schema-5 state; preserve the database and restore
+a compatible package or a consistent pre-upgrade backup, never delete policy
+rows or deserialize an old grant to bypass the version check. See
+[Activity capability policies](activity-capability-policies.md).
+
+Session receipts use the new `session:<tool>` identifier vocabulary in the
+existing receipt string field. Older cores may reject these identifiers while
+validating stored schema-2 receipts. Keep `cos`, `clawd` and `claw-agentd`
+paired, preserve receipt data, and use a consistent pre-upgrade backup if
+rolling back to a core that predates session receipts.
 
 ### App data moves into per-App directories
 

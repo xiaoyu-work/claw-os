@@ -57,6 +57,12 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | Tool/capability layer | Model-visible tool registry, guardrails, MCP attachment, scope checks, and approval boundaries | `core/src/agent/tools/`, `core/src/caps/` |
 | Credential service | Validated credential identities, cryptography and master-key ownership, encrypted atomic persistence, authorization, refresh lifecycle, OAuth flows, and stable CLI facade | `core/src/credential/` |
 | Memory and sessions | SQLite/FTS memory, semantic recall, session/message persistence, curation, and checkpoints | `core/src/agent/memory/`, `core/src/session/`, `core/src/checkpoint.rs` |
+| Activities | Desktop-independent persistent user goals, explicit completion, planning metadata, and owner-scoped task/session projections | `core/src/activities/`, `core/src/clawd/activities.rs`, `core/src/activity.rs` |
+| App object catalogue | Authenticated App-owned object declarations, portable SDK references, and explicit resolution through ordinary App operations | `core/src/objects/`, `core/src/caps/manifest/objects.rs`, `core/src/clawd/activity_objects.rs` |
+| Activity object state | Bounded caller-reported observations, receipt links, planning relations and immutable correction/retraction history | `core/src/activities/object_state.rs`, `core/src/clawd/activity_object_state.rs` |
+| Operation previews | Non-executing, authenticated App effect declarations and requested target projections; never execution permission or confirmed effects | `core/src/operations/`, `core/src/clawd/operation_previews.rs` |
+| Activity execution receipts | Immutable owner-scoped caller reports, separate authenticated declaration snapshots, and normal App execution capture | `core/src/activities/receipts.rs`, `core/src/clawd/activity_receipts.rs`, `core/src/router/operation_commands.rs` |
+| Staged file changes | App-owned bounded proposals and review fingerprints, applied through exact-capability broker replacement without expanding target mounts for rename | External Files App, `core/src/clawd/file_changes.rs`, `docs/file-change-plans.md` |
 | Session event journal | Root-owned, MAC-chained record of session lifecycle and privileged mutation brackets; the ordering and recovery authority the other session/audit views project from | `core/src/session/journal/`, `core/src/clawd/journal.rs` |
 | Audit | Hash-chained JSONL events and agent audit/query commands | `core/src/audit.rs`, `core/src/agent/audit_cli.rs` |
 | Notification service | Durable owner/source-scoped user-attention records, bounded native intent, delivery policy, DND, deduplication, retries, and channel leases | `core/src/notifications/`, `core/src/clawd/notifications.rs`, `core/src/clawd/app_notifications.rs` |
@@ -591,9 +597,11 @@ block and runtime capability checks.
 The remaining Apps
 stay here until their own paired migration. The App
 repository pins SDK/runtime source independently and does not import a sibling
-OS checkout. `packaging/apps.lock.json` pins a published App commit, and
-`scripts/app_sources.py` invokes its kind-aware staging during OS package
-assembly. Installed execution still uses the existing authenticated package,
+OS checkout. `packaging/apps.lock.json` selects App `main`, and
+`scripts/app_sources.py` resolves it into one immutable commit per build before
+kind-aware staging. The resolved source snapshot is recorded with the package;
+all steps reuse it rather than fetching different commits mid-build.
+Installed execution still uses the existing authenticated package,
 App Host, capabilities and SDK; it never follows a Git branch or downloads
 product code at runtime. The OS retains native authority launchers and services.
 
@@ -1045,6 +1053,230 @@ a worker lease lapses, or a deadline passes.
 `core/src/caps/` remains the vocabulary: verbs, scopes, catalog, manifests and
 the `require` gate. It describes authority; the broker authority decides it.
 
+### Activities across terminal and desktop
+
+```text
+cos activity / Agent Web / native desktop Agent
+  -> authenticated activity.* broker route
+  -> owner-scoped ActivityService
+  -> private activities.db
+       |
+       +-- activity.run -> ordinary task.submit -> claw-agentd
+       +-- activity.get -> associated job/session projection
+```
+
+`core/src/activities/` owns the definition and SQLite provider. Neither depends
+on a graphical session or the model loop. `core/src/activity.rs` is the terminal
+client; Web and native desktop adapters expose the same broker state rather
+than maintaining local lifecycle or persistence logic. Root has no implicit
+cross-owner Activity view.
+
+An Activity is a long-lived goal; a Job is one execution attempt; a Session
+retains conversation and capability context. Associations are optional for
+backward compatibility. Associated work records a snapshot of Activity planning
+context through the existing transient-context path, not a rewritten canonical
+prompt. Activity text never grants authority. Pausing gates later work without
+undoing in-flight effects, and goal completion requires explicit user
+confirmation instead of being inferred from a successful Job or final answer.
+
+Activity mutations retain the broker's normal authorization, bounded decoding,
+audit projection and journal bracketing. Related job results are projections
+from the existing task store, not a second copy of its state. See
+[`docs/activities.md`](docs/activities.md) for commands and the initial scope.
+
+### Activity execution limits
+
+Finite Activity policies constrain attempts, turns per attempt and expiry
+without granting capabilities. The same Activity database owns revision-checked
+settings and immutable attempt reservations. Claiming a job charges a bounded
+attempt before the filesystem running transition; a later failure may consume
+that charge. Updates preserve usage and enabled state, and disabling a policy
+does not restore unlimited work.
+
+The supervisor assigns the reserved turn ceiling to the actual worker and
+uses the shared service guard for live revision/enabled/expiry checks plus a
+monotonic deadline independent of heartbeat renewal. The standalone executor
+uses the same guard. Stops close the task extension lease and reuse normal
+cancellation and verified containment cleanup without promising to undo
+admitted mutations; budget failures remain
+distinct from user cancellation and goal completion.
+
+Terminal, Web and native controls use the same owner-scoped broker contract.
+Policy or reservation JSON is accounting/constraint data, never restored
+authority. Schema 4 preserves existing Activity, receipt and object-state
+data. See [`docs/activity-execution-limits.md`](docs/activity-execution-limits.md).
+
+### Activity capability boundaries
+
+The same Activity service stores revision-checked capability constraints.
+`caps/activity_boundary.rs` consumes that service; `normal` proceeds through
+ordinary authorization, `require_approval` additionally requires exact
+single-use confirmation, and `deny` blocks both authority use and consent
+escalation. A missing rule is normal, not a grant. Disabling a configured
+policy blocks controlled checks rather than restoring unrestricted behavior.
+
+The supervisor selects owner, Activity and session from its retained Job and
+lease. Worker protocol v11 carries a bounded verb/scope boundary question
+alongside the existing nonce-bound, operation-aware consent exchange.
+Boundary replies cannot satisfy consent waiters. A
+bounded policy snapshot is recorded in the task stream before assignment.
+Both supervised and standalone attempts stop on policy changes, including
+the first policy being introduced while an attempt is already running.
+
+App launch and service-call plans settle ordinary missing needs and
+Activity-required confirmations together, all or none. Brokered clients do
+not spend that consent in a local preflight. Root-created grants retain a
+non-serialized policy binding and their confirmed invocation scopes; children
+inherit it and cannot replace it. Broker effects recheck the binding and
+ordinary live grant without consuming the invocation's confirmation twice.
+The task extension lease retains the supervisor's exact root-pinned boundary.
+Owner/App service Hosts remain shared; their single-use, action-bound call
+tickets carry each invocation's constraints instead of adopting a standing
+Activity policy.
+Peer-session grants cannot reconstruct an App's confirmation from a registry
+row. A raw non-App broker grant is not an App-confirmation proof.
+
+Policy and confirmation boundaries share conservative whole-scope matching.
+Executable Path checks also apply the ordinary symlink-aware containment
+check, including not-yet-created leaves. Validation and stored-policy
+canonicalization remain metadata-only.
+
+These are constraints on controlled execution, not a replacement for App
+sandboxing or a kernel sandbox for a compromised same-UID Agent. A verb
+denial is not a semantic guarantee against equivalent effects through other
+verbs, and admitted effects are not undone. Schema 5 preserves existing
+Activity data and budgets. Terminal, Web and native desktop use the same
+owner-scoped policy routes; see
+[`docs/activity-capability-policies.md`](docs/activity-capability-policies.md).
+
+### App-owned object references
+
+Public SDK wire definitions and pure URI helpers identify an object by App,
+type, opaque ID and optional revision. `core/src/objects/` consumes those
+definitions and authenticated App manifests; it maintains no object-data store.
+Manifest `objects` entries bind a type to a public App command and explicit
+ID/revision arguments. An explicit operation takes precedence; otherwise the
+exact App-prefixed MCP tool defines that command. Catalogue descriptions retain the verified package
+snapshot and do not execute the App or infer access to its data.
+
+`cos object resolve` reuses the existing App dispatch, capability, provenance,
+worker and audit path. Terminal, Web and native desktop Activities attach and
+describe references through `activity.object.attach` and `activity.objects`.
+The owner-scoped core service atomically stores the URI in its existing
+resource list, preserving schema version 1 and ordinary resource compatibility.
+Missing or revoked declarations remain visible as diagnostics; `declared`
+proves authenticated metadata, not existence, freshness or successful access.
+See [`docs/app-objects.md`](docs/app-objects.md).
+
+### Object-state annotations
+
+The Activity service stores bounded annotations in the same owner-scoped
+database, keyed by canonical App references already attached to the Activity.
+Statements, inferences, linked App receipt reports and planning relationships
+remain data, not authority, verified facts or execution dependencies. App
+reports link existing immutable owner/Activity/App-matching receipts rather
+than accepting replacement App output. That linkage is still caller-reported,
+not proof of semantic object binding or execution.
+
+Corrections and retractions append new entries and preserve history. Unique
+supersession prevents a delayed correction from overwriting a newer one.
+Reported time windows are projected independently of server recording time;
+within-window data is not declared fresh or true. Removing a resource or ending
+an Activity does not erase its history or reopen its lifecycle.
+
+Terminal, Web and native clients use `activity.object_state.list/record`.
+At task claim, bounded unsuperseded excerpts enter the existing untrusted
+Activity context and exact task-stream record; retries refresh that snapshot.
+The backend never fetches App data or starts an LLM for metadata. Database
+schema 3 preserves Activity and receipt rows while adding this history; wire
+schemas remain 1. See [`docs/object-state.md`](docs/object-state.md).
+
+### Operation effect previews
+
+Optional App effect declarations are validated with the manifest and displayed
+only from authenticated package bytes. `core/src/operations/` binds the declared
+argument grammar and literal defaults without a filesystem path context.
+Retired runtime-selector fields are rejected by the manifest schema.
+It does not execute App code, read object
+data, select credentials, start tasks, or approve permissions.
+
+`operation.preview` and owner-scoped `activity.operation.preview` serve the
+same result to terminal, Web and native desktop clients. Targets are requested
+values, not final canonical resources; optional arguments without values and
+missing targets remain explicit. Recovery is App-declared guidance, and absent effects
+mean unknown, never implicitly read-only. Every preview says that authorization,
+execution and effect confirmation have not occurred. Normal App execution and
+its existing audit/journal boundaries remain separate. See
+[`docs/operation-previews.md`](docs/operation-previews.md).
+
+### Execution receipts
+
+`cos operation execute` checks the owner's active Activity and then reuses the
+ordinary App invocation, permission, provenance, sandbox and audit path. It
+captures returned JSON, text, empty output, reported errors or unavailable
+results without asserting that effects occurred. The broker records only
+bounded, redacted reports under the authenticated owner, fixes their source to
+`caller_reported`, and timestamps storage.
+
+App declaration metadata is included separately only when current verified
+package bytes match the reported package digest; otherwise the report retains
+an explicit declaration error. A match authenticates metadata, not execution.
+Recording is immutable and idempotent per owner/report ID and never changes
+Activity state, grants authority, or replays an operation.
+
+The receipt ledger migrates Activity database schema 1 to 2 without changing
+Activity wire schema 1. Terminal, Web and native desktop read the same records.
+Session/mutation journals remain the source for OS-observed privileged changes;
+caller reports are not promoted into that evidence. See
+[`docs/execution-receipts.md`](docs/execution-receipts.md).
+
+### Agent operation reporting
+
+Model-visible App calls use the existing MCP App Mesh, not a second one-shot
+tool projection. Root captures service results from the retained prepared
+App/tool/package and the task's Activity binding before model-input trust
+fencing, then records them through the shared receipt service.
+`session:<tool>` names select the MCP tool's own effect declaration; a
+same-named ordinary operation cannot supply it.
+
+Worker protocol v11 also retains a bounded reporting-only request and
+correlated acknowledgement for authenticated task reports.
+The supervisor checks the signed reporting route and live task lease, derives
+the owner and Activity from the lease and its own Job, then calls the same
+receipt service used by direct clients. A metadata-only task-stream link
+records which task submitted the report. Receipt source remains
+`caller_reported`; neither this link nor authenticated declaration metadata
+attests to execution.
+
+Neither path owns a new store, App launcher, permission or UI-specific
+lifecycle. Recording errors preserve the original result and expose a
+report-only retry, never repeat the operation. Unassociated tasks and schema
+inspection do not enable automatic capture. Explicit ordinary operations
+retain their existing CLI/Host execution path and receipt orchestration;
+they are not projected as model-callable tools.
+
+### Staged file changes
+
+The Files App prepares bounded UTF-8 proposals in its own private data
+partition. Public plan values contain real diffs and immutable proposal
+fingerprints, not private content fields or authority. `plan_show` requires
+current target read permission before disclosing cached plan data; the
+`change-plan` object binds an absolute path and an optional plan revision.
+
+Apply takes the target path, plan ID, review fingerprint and confirmation
+explicitly. Normal App permissions grant only the target's read/write scopes.
+The App durably opens an apply bracket, then calls a Session/SystemService
+file-replacement route through the existing worker relay. The root provider
+independently checks exact capabilities, protected paths and file state,
+performs bounded atomic replacement or no-replace creation, and retains the
+broker journal's indeterminate semantics. It does not grant a parent-directory
+mount to a worker merely to enable rename.
+
+App plan state and receipts remain reports, not OS execution attestation.
+Unknown outcomes are not automatically replayed, and the final precondition
+check is not a universal CAS guarantee against uncooperative host writers.
+See [`docs/file-change-plans.md`](docs/file-change-plans.md).
+
 ### Agent ask/chat turn
 
 ```text
@@ -1158,8 +1390,55 @@ The projection in `core/src/agent/runtime/presentation.rs` affects display
 events only; complete tool inputs/results remain in the runtime trajectory,
 session memory, audit records, and evidence verifier. Canonical prompt snapshots
 live in content-addressed memory tables and are restored byte-for-byte across
-continuations. Dynamic due/App context is logged separately as injected audit
-data and never becomes user-authored history.
+continuations. Canonical version 4 does not freeze memory notes into system
+instructions. `context/packet.rs` and `runtime/context.rs` compose each request
+from explicit App/Activity context, due reminders, bounded `USER.md` and
+`[always]`-pinned note entries, and exposed memory-tool handles. The main model
+chooses additional memory, App, Skill and system reads through the ordinary
+guarded tool loop; there is no keyword router or pre-request retrieval model.
+
+Packets carry source revisions and are recorded exactly as injected audit data,
+with selection/omission metadata kept separately. Neither packet records nor
+compaction records are replayed as user-authored history or fed back into
+memory/Skill curation. A new request refreshes its profile even in an existing
+session. Historical system/tool rows replay as untrusted data, never new system
+authority. These changes do not implement cross-store erasure or replace the
+existing broker's per-operation authorization.
+
+`context/budget.rs` bounds the complete request by the configured input target
+and any known model/fallback windows after response headroom. Unknown models
+retain the configured input target without an invented window size. Compression
+preserves the exact current input and tool pairs, records the generated handoff,
+and retains history on summarization failure; a remaining oversized request
+returns an explicit context error rather than dropping constraints silently.
+The multilingual estimator is conservative, not a provider tokenizer.
+
+Memory tools support progressive reads: notes and individual conversation
+messages, App reports and semantic snapshots return character-based pages.
+Search results include bounded excerpts, scope/coverage information and read
+handles. `revision` binds pages to one content snapshot; nonzero offsets require
+it, and a changed source rejects the read instead of mixing versions.
+`source_complete` means this response contains the whole source, not merely its
+last page. Similarity/BM25 scores express retrieval relevance, never factual
+confidence; semantic index timestamps are not original event times.
+
+The main model must continue retrieving when a result is insufficient,
+off-topic, stale, conflicting or partial: change the query/scope, read the
+original source and surrounding context, or use an authorized current App/OS
+observation. It must not repeat an unchanged lookup that adds no evidence.
+Existing turn/token/authorization limits still apply; unresolved gaps are
+reported explicitly rather than filled with invented memories.
+
+`cos_memory search` searches literal text within notes selected by the model;
+it is not a pre-request task classifier. The terminal equivalent is
+`cos agent notes search <query> [name] [limit]`. `cos_recall show` expands one
+recorded message (`cos agent recall --message <id>` in the terminal).
+`cos_recall_semantic read` expands a namespace/key and supplies an original
+conversation/App read handle where that identity is known. Model-backed
+semantic searches reject incompatible models/dimensions or damaged vectors.
+App filters apply before the FTS limit, and bounded kind-filter scans disclose
+their incomplete coverage. `cos agent dev prompt show` previews the stable
+prefix and pinned request profile separately.
 
 The embedded Agent Web app uses this same queue rather than running an
 in-process model loop. Chat submits and streams durable tasks, Tasks lists and
@@ -1614,6 +1893,15 @@ next call. Returned stdout, stderr-derived failures, descriptors, and tool
 results are bounded and treated as untrusted model data. A missing host,
 invalid package, stale generation, mismatched principal, expired deadline, or
 failed sandbox refuses execution; there is no in-worker fallback.
+
+Activity-associated execution uses these same extension and App-service
+Hosts. It does not restore the former in-worker App host or an `app_host`
+worker-channel route. Task leases pin root-selected Activity policy, while
+service tickets and transient grants bind each call's exact authority and
+confirmation. Clearing a call returns the shared service to its own base
+authority, not another Activity's standing constraints. Root rechecks the
+binding before broker effects and before durable task COMMIT; loss after
+COMMIT remains indeterminate rather than becoming replayable work.
 
 ### Proactive scheduling
 

@@ -103,6 +103,7 @@ fn app_authorization(expires_at_ms: u64) -> super::super::app_services::AppCallA
         service_extension_uid: 61_056,
         action_digest: "c".repeat(64),
         expires_at_ms,
+        activity: None,
     }
 }
 

@@ -922,7 +922,7 @@ func parseMCPManifest(manifest map[string]any) (*MCPApp, error) {
 		manifest,
 		"App manifest",
 		"id", "version", "schema_version", "name", "summary", "icon", "runtime",
-		"entry", "operations", "ai", "mcp", "desktop", "dependencies",
+		"entry", "operations", "objects", "ai", "mcp", "desktop", "dependencies",
 	); err != nil {
 		return nil, err
 	}
@@ -992,7 +992,7 @@ func parseMCPManifest(manifest map[string]any) (*MCPApp, error) {
 		if err := rejectMCPUnknownFields(
 			object,
 			fmt.Sprintf("`mcp.tools[%d]`", index),
-			"name", "summary", "args", "needs",
+			"name", "summary", "args", "needs", "effects",
 		); err != nil {
 			return nil, err
 		}

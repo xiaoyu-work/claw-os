@@ -9,6 +9,8 @@
     clippy::type_complexity
 )]
 
+pub mod activities;
+pub mod activity;
 pub mod agent;
 pub mod agent_extensions;
 pub mod agentd;
@@ -39,6 +41,8 @@ pub mod ipc;
 pub mod model;
 pub mod netfilter;
 pub mod notifications;
+pub mod objects;
+pub mod operations;
 pub mod paths;
 pub mod perms;
 pub mod policy;

@@ -112,6 +112,25 @@ def _drive(app: mcp.App, *frames: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 class ManifestBindingTests(unittest.TestCase):
+    def test_shared_object_and_effect_metadata_preserves_mcp_only_tool_binding(self) -> None:
+        vectors_path = Path(__file__).resolve().parents[3] / "wire" / "v1" / "manifest_extensions.vectors.json"
+        vectors = json.loads(vectors_path.read_text(encoding="utf-8"))
+        for case in vectors["cases"]:
+            with self.subTest(case=case["name"]):
+                directory, path = _write_manifest(case["manifest"])
+                self.addCleanup(directory.cleanup)
+                app = mcp.App.from_manifest(path)
+
+                @app.tool("notes.get")
+                def get_note(note_id: str) -> dict[str, Any]:
+                    self.fail("loading/listing metadata must not invoke an object resolver")
+
+                frames = _drive(app, {"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
+                tools = frames[0]["result"]["tools"]
+                self.assertEqual([tool["name"] for tool in tools], ["notes.get"])
+                self.assertEqual(set(tools[0]["inputSchema"]["properties"]), {"note_id"})
+                self.assertNotIn("binding", json.dumps(tools[0]["inputSchema"]))
+
     def test_manifest_contract_is_closed_and_requires_tools(self) -> None:
         tool = {
             "name": "mail.status",

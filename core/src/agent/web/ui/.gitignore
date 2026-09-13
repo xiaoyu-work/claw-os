@@ -1,5 +1,6 @@
 node_modules/
 .vite/
+.activity-validation/
 *.log
 bun.lockb
 .env

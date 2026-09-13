@@ -9,11 +9,66 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestSharedObjectAndEffectMetadataPreservesMCPOnlyTools(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "wire", "v1", "manifest_extensions.vectors.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vectors struct {
+		Cases []struct {
+			Name     string          `json:"name"`
+			Manifest json.RawMessage `json:"manifest"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(data, &vectors); err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range vectors.Cases {
+		t.Run(entry.Name, func(t *testing.T) {
+			var typed Manifest
+			if err := json.Unmarshal(entry.Manifest, &typed); err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := json.Marshal(typed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(decodeWireValue(t, string(encoded)), decodeWireValue(t, string(entry.Manifest))) {
+				t.Fatalf("combined manifest metadata changed: %s", encoded)
+			}
+			app, err := LoadMCPApp(writeMCPRawManifest(t, string(entry.Manifest)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := app.Bind("notes.get", func(map[string]any, *MCPCall) (any, error) {
+				t.Error("metadata listing must not invoke a resolver")
+				return nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			frames := serveMCPFrames(t, app, `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+			tools := frames[0]["result"].(map[string]any)["tools"].([]any)
+			if len(tools) != 1 || tools[0].(map[string]any)["name"] != "notes.get" {
+				t.Fatalf("metadata became extra tools: %#v", tools)
+			}
+			schema := tools[0].(map[string]any)["inputSchema"].(map[string]any)
+			properties := schema["properties"].(map[string]any)
+			if len(properties) != 1 || properties["note_id"] == nil {
+				t.Fatalf("unexpected input schema: %#v", schema)
+			}
+			if _, present := properties["note_id"].(map[string]any)["binding"]; present {
+				t.Fatal("CLI binding became MCP input schema")
+			}
+		})
+	}
+}
 
 func TestRemovedCrossAppContractIsRejected(t *testing.T) {
 	path := writeMCPRawManifest(t, `{"schema_version":2,"id":"example","version":"1","name":{"en":"Example"},"mcp":{"access":{"apps":[]},"tools":[{"name":"example.noop","summary":{"en":"Noop"}}]}}`)

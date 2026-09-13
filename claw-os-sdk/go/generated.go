@@ -101,6 +101,36 @@ type Envelope struct {
 	Detail map[string]interface{} `json:"detail,omitempty"`
 }
 
+// FileChangePlan — App-reported file change plan.
+// Public App-reported staged-plan data, not OS-confirmed mutation, authority, or
+// universal rollback. Semantic validation is owned by the App/core; see file-
+// change-plans.md. Private before/proposed contents are never fields of this
+// value.
+type FileChangePlan struct {
+	Schema int `json:"schema"`
+	Kind string `json:"kind"`
+	PlanId string `json:"plan_id"`
+	Path string `json:"path"`
+	State string `json:"state"`
+	BeforeExists bool `json:"before_exists"`
+	BeforeSha256 *string `json:"before_sha256"`
+	AfterSha256 string `json:"after_sha256"`
+	BeforeBytes uint64 `json:"before_bytes"`
+	AfterBytes uint64 `json:"after_bytes"`
+	WouldChange bool `json:"would_change"`
+	Review string `json:"review"`
+	Reference string `json:"reference"`
+	Diff string `json:"diff"`
+	DiffTruncated bool `json:"diff_truncated"`
+	CreatedAt string `json:"created_at"`
+	ExpiresAt string `json:"expires_at"`
+	Warnings []string `json:"warnings"`
+	Snapshot *string `json:"snapshot,omitempty"`
+	AppliedAt *string `json:"applied_at,omitempty"`
+	Changed *bool `json:"changed,omitempty"`
+	Diagnostic *string `json:"diagnostic,omitempty"`
+}
+
 // Manifest — App manifest (app.json).
 // The manifest every app under COS_APPS_DIR must provide. MCP Apps declare one
 // versioned service with tools, lifecycle, caller restrictions, capability
@@ -117,8 +147,27 @@ type Manifest struct {
 	Operations map[string]interface{} `json:"operations,omitempty"`
 	Ai *Aipolicy `json:"ai,omitempty"`
 	Mcp *Mcpservice `json:"mcp,omitempty"`
+	Objects map[string]interface{} `json:"objects,omitempty"`
 	Desktop *Desktop `json:"desktop,omitempty"`
 	Dependencies map[string]interface{} `json:"dependencies,omitempty"`
+}
+
+// Objecttype — objectType.
+type Objecttype struct {
+	Label Localizedtext `json:"label"`
+	Summary *Localizedtext `json:"summary,omitempty"`
+	Resolve Objectresolver `json:"resolve"`
+}
+
+// Objectresolver — objectResolver.
+// The kernel verifies the ordinary App command and argument bindings. The
+// operation field retains its name for compatibility; resolution uses normal App
+// operation/MCP dispatch, capabilities, approvals, and audit, never an SDK or
+// App-local fallback.
+type Objectresolver struct {
+	Operation string `json:"operation"`
+	IdArg string `json:"id_arg"`
+	RevisionArg string `json:"revision_arg,omitempty"`
 }
 
 // Localizedtext — localizedText.
@@ -129,13 +178,25 @@ type Localizedtext struct {
 }
 
 // Operation — operation.
-// A one-shot operation: its inputs and the capabilities it needs.
+// A one-shot operation: its inputs, capability needs, and optional App-declared
+// effect guidance.
 type Operation struct {
 	Label Localizedtext `json:"label"`
 	Summary *Localizedtext `json:"summary,omitempty"`
 	Stdin bool `json:"stdin,omitempty"`
 	Args []Arg `json:"args,omitempty"`
 	Needs []Need `json:"needs,omitempty"`
+	Effects *[]Operationeffect `json:"effects,omitempty"`
+}
+
+// Operationeffect — operationEffect.
+// App-declared guidance for a metadata-only preview, not authority, an OS-
+// confirmed effect, or proof that an inverse exists.
+type Operationeffect struct {
+	Kind string `json:"kind"`
+	Label Localizedtext `json:"label"`
+	TargetArg *string `json:"target_arg,omitempty"`
+	Recovery *string `json:"recovery,omitempty"`
 }
 
 // Arg — arg.
@@ -234,13 +295,15 @@ type Mcpaccess struct {
 }
 
 // Mcptool — mcpTool.
-// One MCP-callable tool. Mirrors operation: args + needs drive the model's view
-// and the kernel's enforcement.
+// One MCP-callable tool. Args and needs drive the model's view and kernel
+// enforcement; optional effects are App-declared preview metadata, never
+// authority or confirmed outcomes.
 type Mcptool struct {
 	Name string `json:"name"`
 	Summary Localizedtext `json:"summary"`
 	Args []Arg `json:"args,omitempty"`
 	Needs []Need `json:"needs,omitempty"`
+	Effects *[]Operationeffect `json:"effects,omitempty"`
 }
 
 // Desktop — desktop.
@@ -275,6 +338,17 @@ type McpPrincipal struct {
 	Kind string `json:"kind"`
 	Id string `json:"id"`
 	OwnerUid uint64 `json:"owner_uid"`
+}
+
+// ObjectRef — App object reference.
+// A portable identifier for App-owned data, not authority, a payload, or proof
+// of existence or readability. Component, UTF-8, and canonical URI semantics are
+// specified in object-references.md and enforced by the public objects helpers.
+type ObjectRef struct {
+	AppId string `json:"app_id"`
+	ObjectType string `json:"object_type"`
+	ObjectId string `json:"object_id"`
+	Revision *string `json:"revision,omitempty"`
 }
 
 // Perms — Permissions request / reply.
@@ -330,6 +404,15 @@ func ValidateAiReviewSafety(value string) error {
 		return nil
 	}
 	return fmt.Errorf("invalid ai_review.safety value: %q", value)
+}
+
+// ValidateFileChangePlanState reports an error if value is not in the file_change_plan.state enum.
+func ValidateFileChangePlanState(value string) error {
+	switch value {
+	case "draft", "applying", "applied", "conflicted", "indeterminate", "expired":
+		return nil
+	}
+	return fmt.Errorf("invalid file_change_plan.state value: %q", value)
 }
 
 // ValidateManifestRuntime reports an error if value is not in the manifest.runtime enum.
@@ -659,6 +742,19 @@ func ValidateEnvelope(value any) error {
 	return validateWireSchema(schema, schema, value, "Envelope", "$")
 }
 
+const wireSchemaFileChangePlan = "{\"$id\":\"https://claw-os.dev/wire/v1/file_change_plan.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":\"Public App-reported staged-plan data, not OS-confirmed mutation, authority, or universal rollback. Semantic validation is owned by the App/core; see file-change-plans.md. Private before/proposed contents are never fields of this value.\",\"properties\":{\"after_bytes\":{\"maximum\":65536,\"minimum\":0,\"type\":\"integer\"},\"after_sha256\":{\"description\":\"Canonical sha256: plus 64 lowercase hexadecimal digits for the proposal. App/core validates the digest.\",\"type\":\"string\"},\"applied_at\":{\"description\":\"Optional App-reported RFC3339 application timestamp, not OS confirmation.\",\"oneOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"x-go-type\":\"*string\",\"x-rust-type\":\"String\",\"x-ts-type\":\"string | null\"},\"before_bytes\":{\"maximum\":65536,\"minimum\":0,\"type\":\"integer\"},\"before_exists\":{\"type\":\"boolean\"},\"before_sha256\":{\"description\":\"Canonical sha256: plus 64 lowercase hexadecimal digits for an existing preimage, otherwise null. Validated semantically by the App/core.\",\"oneOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"x-go-type\":\"*string\",\"x-rust-type\":\"Option<String>\",\"x-ts-type\":\"string | null\"},\"changed\":{\"description\":\"Optional App-reported change result, not OS-confirmed mutation.\",\"oneOf\":[{\"type\":\"boolean\"},{\"type\":\"null\"}],\"x-go-type\":\"*bool\",\"x-rust-type\":\"bool\",\"x-ts-type\":\"boolean | null\"},\"created_at\":{\"description\":\"App-reported RFC3339 creation timestamp.\",\"type\":\"string\"},\"diagnostic\":{\"oneOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"x-go-type\":\"*string\",\"x-rust-type\":\"String\",\"x-ts-type\":\"string | null\"},\"diff\":{\"description\":\"App-reported staged diff, at most 65536 UTF-8 bytes. This is not a private before/proposed-content field.\",\"type\":\"string\"},\"diff_truncated\":{\"type\":\"boolean\"},\"expires_at\":{\"description\":\"App-reported RFC3339 expiration timestamp.\",\"type\":\"string\"},\"kind\":{\"const\":\"file_change_plan\",\"type\":\"string\"},\"path\":{\"description\":\"Absolute target path, at most 4096 UTF-8 bytes. Existing object-reference bounds also apply.\",\"type\":\"string\"},\"plan_id\":{\"description\":\"UUID identifying the immutable proposal.\",\"type\":\"string\"},\"reference\":{\"description\":\"Canonical app://fs/change-plan?id=<encoded absolute path>&revision=<encoded plan UUID>, using the existing ObjectRef helpers.\",\"type\":\"string\"},\"review\":{\"description\":\"Canonical sha256 fingerprint binding the immutable proposal. Data only, never authorization or permission to apply.\",\"type\":\"string\"},\"schema\":{\"const\":1,\"type\":\"integer\"},\"snapshot\":{\"description\":\"Optional App-reported snapshot identifier, not snapshot contents or proof of rollback capability.\",\"oneOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"x-go-type\":\"*string\",\"x-rust-type\":\"String\",\"x-ts-type\":\"string | null\"},\"state\":{\"enum\":[\"draft\",\"applying\",\"applied\",\"conflicted\",\"indeterminate\",\"expired\"],\"type\":\"string\"},\"warnings\":{\"description\":\"At most 16 App-reported warnings. External writers can race after the final precondition check; this plan does not provide atomic compare-and-swap.\",\"items\":{\"description\":\"At most 1024 UTF-8 bytes; validated by the App/core.\",\"type\":\"string\"},\"maxItems\":16,\"type\":\"array\"},\"would_change\":{\"type\":\"boolean\"}},\"required\":[\"schema\",\"kind\",\"plan_id\",\"path\",\"state\",\"before_exists\",\"before_sha256\",\"after_sha256\",\"before_bytes\",\"after_bytes\",\"would_change\",\"review\",\"reference\",\"diff\",\"diff_truncated\",\"created_at\",\"expires_at\",\"warnings\"],\"title\":\"App-reported file change plan\",\"type\":\"object\"}"
+
+// ValidateFileChangePlan validates a value against wire/v1/file_change_plan.schema.json.
+func ValidateFileChangePlan(value any) error {
+	var schema map[string]any
+	decoder := json.NewDecoder(strings.NewReader(wireSchemaFileChangePlan))
+	decoder.UseNumber()
+	if err := decoder.Decode(&schema); err != nil {
+		panic("generated wire schema is invalid: " + err.Error())
+	}
+	return validateWireSchema(schema, schema, value, "FileChangePlan", "$")
+}
+
 const wireSchemaMcpCallContext = "{\"$defs\":{\"McpPrincipal\":{\"additionalProperties\":false,\"properties\":{\"id\":{\"maxLength\":256,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$\",\"type\":\"string\",\"x-full-match\":true},\"kind\":{\"enum\":[\"system-agent\",\"external-agent\",\"cli\"],\"type\":\"string\"},\"owner_uid\":{\"maximum\":4294967295,\"minimum\":0,\"type\":\"integer\"}},\"required\":[\"kind\",\"id\",\"owner_uid\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/mcp_call_context.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":\"Authenticated call identity and lineage injected by the Claw MCP Gateway over the private App-host transport. Caller-supplied MCP arguments must never populate this object.\",\"properties\":{\"call_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:-]*$\",\"type\":\"string\",\"x-full-match\":true},\"caller\":{\"$ref\":\"#/$defs/McpPrincipal\"},\"deadline_unix_ms\":{\"maximum\":9007199254740991,\"minimum\":1,\"type\":\"integer\"},\"session_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$\",\"type\":\"string\",\"x-full-match\":true},\"task_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$\",\"type\":\"string\",\"x-full-match\":true},\"trace_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:-]*$\",\"type\":\"string\",\"x-full-match\":true},\"wire_version\":{\"const\":1,\"maximum\":1,\"minimum\":1,\"type\":\"integer\"}},\"required\":[\"wire_version\",\"call_id\",\"trace_id\",\"caller\"],\"title\":\"MCP call context\",\"type\":\"object\"}"
 
 // ValidateMcpCallContext validates a value against wire/v1/mcp_call_context.schema.json.
@@ -670,6 +766,19 @@ func ValidateMcpCallContext(value any) error {
 		panic("generated wire schema is invalid: " + err.Error())
 	}
 	return validateWireSchema(schema, schema, value, "McpCallContext", "$")
+}
+
+const wireSchemaObjectRef = "{\"$id\":\"https://claw-os.dev/wire/v1/object_ref.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":\"A portable identifier for App-owned data, not authority, a payload, or proof of existence or readability. Component, UTF-8, and canonical URI semantics are specified in object-references.md and enforced by the public objects helpers.\",\"properties\":{\"app_id\":{\"description\":\"App identifier; lowercase ASCII component, at most 128 UTF-8 bytes.\",\"type\":\"string\"},\"object_id\":{\"description\":\"Opaque, nonempty UTF-8 identifier, at most 1024 bytes, without Unicode control characters. Never trimmed or normalized.\",\"type\":\"string\"},\"object_type\":{\"description\":\"Object type declared by the App; lowercase ASCII component, at most 64 UTF-8 bytes.\",\"type\":\"string\"},\"revision\":{\"description\":\"Optional opaque, nonempty UTF-8 revision, at most 128 bytes, without Unicode control characters. Absence differs from an empty string.\",\"type\":\"string\",\"x-go-type\":\"*string\"}},\"required\":[\"app_id\",\"object_type\",\"object_id\"],\"title\":\"App object reference\",\"type\":\"object\"}"
+
+// ValidateObjectRef validates a value against wire/v1/object_ref.schema.json.
+func ValidateObjectRef(value any) error {
+	var schema map[string]any
+	decoder := json.NewDecoder(strings.NewReader(wireSchemaObjectRef))
+	decoder.UseNumber()
+	if err := decoder.Decode(&schema); err != nil {
+		panic("generated wire schema is invalid: " + err.Error())
+	}
+	return validateWireSchema(schema, schema, value, "ObjectRef", "$")
 }
 
 const wireSchemaToolCatalog = "{\"$defs\":{\"WireCatalogEntry\":{\"additionalProperties\":true,\"properties\":{\"args_schema\":{\"additionalProperties\":true,\"type\":\"object\"},\"name\":{\"type\":\"string\"},\"returns_schema\":{\"additionalProperties\":true,\"type\":\"object\"},\"stability\":{\"enum\":[\"stable\",\"experimental\"],\"type\":\"string\"},\"summary\":{\"type\":\"string\"},\"verb\":{\"type\":\"string\"}},\"required\":[\"name\",\"summary\",\"verb\",\"stability\",\"args_schema\",\"returns_schema\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/tool_catalog.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":true,\"description\":\"Shape returned by `cos ai tools`.\",\"properties\":{\"tools\":{\"items\":{\"$ref\":\"#/$defs/WireCatalogEntry\"},\"type\":\"array\"}},\"required\":[\"tools\"],\"title\":\"Catalog tool list reply\",\"type\":\"object\"}"

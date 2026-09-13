@@ -399,7 +399,10 @@ async fn app_owned_tasks_cannot_run_apps_or_relay_forged_system_agent_calls() {
         )
         .await
         .expect_err("App-owned tasks must not launch even their own App");
-        assert!(error.contains("App-owned agents cannot launch Apps"), "{error}");
+        assert!(
+            error.contains("App-owned agents cannot launch Apps"),
+            "{error}"
+        );
 
         let context = McpCallContext {
             wire_version: CALL_CONTEXT_WIRE_VERSION,
@@ -434,6 +437,80 @@ async fn app_owned_tasks_cannot_run_apps_or_relay_forged_system_agent_calls() {
         .expect_err("a forged system Agent context must not reach the broker");
         assert!(error.contains("authenticated task"), "{error}");
     }
+}
+
+#[tokio::test]
+async fn daemon_authorized_calls_cannot_execute_in_the_model_workers_task_host() {
+    use crate::agent::tools::app_gateway::{
+        McpCallContext, McpPrincipal, McpPrincipalKind, CALL_CONTEXT_WIRE_VERSION,
+    };
+    let task = Arc::new(state());
+    let context = McpCallContext {
+        wire_version: CALL_CONTEXT_WIRE_VERSION,
+        call_id: "service-call-a".into(),
+        trace_id: "service-call-a".into(),
+        deadline_unix_ms: Some(crate::agentd::grant::now_ms() + 1_000),
+        session_id: task.binding.session_id.clone(),
+        task_id: Some(task.task_id.clone()),
+        caller: McpPrincipal {
+            kind: McpPrincipalKind::SystemAgent,
+            id: task.binding.session_id.clone().unwrap(),
+            owner_uid: task.binding.owner_uid,
+        },
+    };
+    let error = dispatch(
+        HostAction::AuthorizedAppCall {
+            app_id: "notes".into(),
+            tool: "write".into(),
+            arguments: serde_json::json!({"path":"/workspace/never-written"}),
+            authorized_mounts: Vec::new(),
+            authorization: "a".repeat(64),
+            context,
+        },
+        task,
+    )
+    .await
+    .unwrap_err();
+    assert!(error.contains("App service"), "{error}");
+}
+
+#[tokio::test]
+async fn persistent_service_cannot_change_app_identity_or_fall_back_to_unverified_code() {
+    let _lock = crate::test_env::lock_env();
+    let root = tempfile::tempdir().unwrap();
+    let _apps = crate::test_env::TestEnvVarGuard::set("COS_APPS_DIR", root.path());
+    let mut service = state();
+    service.binding.purpose = super::super::protocol::HostPurpose::AppService;
+    service.binding.app_id = Some("notes".into());
+    service.binding.package = Some(crate::provenance::runtime::PackageRef {
+        kind: crate::provenance::PackageKind::App,
+        id: "notes".into(),
+        content_digest: "a".repeat(64),
+        publisher_key_id: None,
+        tier: "system".into(),
+    });
+    let service = Arc::new(service);
+    let error = dispatch(
+        HostAction::WarmApp {
+            app_id: "other-app".into(),
+        },
+        service.clone(),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.contains("different App"), "{error}");
+    assert!(dispatch(
+        HostAction::WarmApp {
+            app_id: "notes".into()
+        },
+        service
+    )
+    .await
+    .is_err());
+    assert!(
+        std::fs::read_dir(root.path()).unwrap().next().is_none(),
+        "missing verified source must not create a fallback App or state"
+    );
 }
 
 #[tokio::test]

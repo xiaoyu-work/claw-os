@@ -835,6 +835,7 @@ function loadManifest(path: string): {
     "runtime",
     "entry",
     "operations",
+    "objects",
     "ai",
     "mcp",
     "desktop",
@@ -907,6 +908,7 @@ function loadManifest(path: string): {
       "summary",
       "args",
       "needs",
+      "effects",
     ]);
     if (typeof rawTool.name !== "string" || !TOOL_NAME_PATTERN.test(rawTool.name)) {
       throw new ManifestError(`\`mcp.tools[${index}].name\` is invalid`);

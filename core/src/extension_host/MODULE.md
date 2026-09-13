@@ -138,6 +138,15 @@ checks reject forged or stale acknowledgements, and the broker's own rolling
 lease is still checked before every routed effect. App service Hosts do not
 accept task heartbeat renewal.
 
+Activity-associated task Hosts also retain the same root-created capability
+boundary used by their supervisor. It is not a worker-supplied policy and is
+never serialized into authority. The private broker rechecks its live
+revision before admission and installs that exact context around dispatch,
+so App planning cannot silently adopt a newer policy while an old task is
+still stopping. Owner/App service Hosts remain shared across tasks; their
+individual calls must carry their own root-authorized constraints, not a
+standing policy copied from one Activity.
+
 `HostPaths` never performs privileged metadata changes through a pathname
 under user control. It upgrades a legacy task-owned per-user directory by
 pinning it without following links, taking ownership through the descriptor,

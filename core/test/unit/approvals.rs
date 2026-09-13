@@ -150,6 +150,7 @@ fn operation_bound_approval_rejects_executable_and_argument_substitution() {
                         Some(1000),
                         Some(crate::caps::ConsentContext::Attended),
                         Some(substituted),
+                        false,
                     )
                     .unwrap()
                     .is_none(),
@@ -163,6 +164,7 @@ fn operation_bound_approval_rejects_executable_and_argument_substitution() {
                 Some(1000),
                 Some(crate::caps::ConsentContext::Attended),
                 Some(&harmless),
+                false,
             )
             .unwrap()
             .is_some());
@@ -192,6 +194,80 @@ fn approval_persists_and_matches_the_canonical_scope() {
         .unwrap(),
         Some(GrantDuration::Once)
     );
+}
+
+#[test]
+fn activity_confirmation_retires_consent_without_losing_operation_or_context_binding() {
+    let _tmp = isolated_env();
+    for retire_all in [false, true] {
+        let invocation = format!("web:activity-once:{retire_all}");
+        LocalApprovalInvocation::new(&invocation)
+            .unwrap()
+            .sync_scope(|| {
+                let session = format!("activity-once-{retire_all}");
+                let scope = Scope::path("/work/activity-test");
+                let digest = crate::crypto::sha256_hex(b"read exact document");
+                let changed = crate::crypto::sha256_hex(b"read another document");
+                let id = submit_owned_with_context_for_operation(
+                    Verb::FS_READ,
+                    scope.clone(),
+                    &session,
+                    "read",
+                    None,
+                    Some(1000),
+                    Some(ConsentContext::Attended),
+                    Some(&digest),
+                )
+                .unwrap();
+                approve_for_owner(&id, GrantDuration::Session, None, None, Some(1000)).unwrap();
+                for (context, operation) in [
+                    (ConsentContext::Attended, changed.as_str()),
+                    (ConsentContext::Unattended, digest.as_str()),
+                ] {
+                    assert!(redeem_matching_grant_for_owner_operation(
+                        &session,
+                        Verb::FS_READ,
+                        &scope,
+                        Some(1000),
+                        Some(context),
+                        Some(operation),
+                        true,
+                    )
+                    .unwrap()
+                    .is_none());
+                    assert!(approved_dir().join(format!("{id}.json")).is_file());
+                }
+                let consumed = redeem_matching_grant_for_owner_operation(
+                    &session,
+                    Verb::FS_READ,
+                    &scope,
+                    Some(1000),
+                    Some(ConsentContext::Attended),
+                    Some(&digest),
+                    retire_all,
+                )
+                .unwrap()
+                .unwrap();
+                assert_eq!(consumed.uses_remaining == 0, retire_all);
+                assert_eq!(
+                    consumed.authorization.operation_digest.as_deref(),
+                    Some(digest.as_str())
+                );
+                let retry = redeem_matching_grant_for_owner_operation(
+                    &session,
+                    Verb::FS_READ,
+                    &scope,
+                    Some(1000),
+                    Some(ConsentContext::Attended),
+                    Some(&digest),
+                    true,
+                )
+                .unwrap();
+                assert_eq!(retry.is_none(), retire_all);
+                assert!(!approved_dir().join(format!("{id}.json")).exists());
+                assert!(consumed_dir().join(format!("{id}.json")).is_file());
+            });
+    }
 }
 
 #[test]

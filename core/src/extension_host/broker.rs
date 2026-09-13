@@ -49,6 +49,7 @@ const CHILD_PROVIDER_ROUTES: &[Command] = &[
     Command::SystemDesktopControl,
     Command::SystemFilesystemRead,
     Command::SystemFilesystemWrite,
+    Command::SystemFileReplace,
     Command::SystemScreenshotCapture,
     Command::SystemMediaPlayerControl,
     Command::SystemNotificationControl,
@@ -90,6 +91,7 @@ pub struct ExtensionLease {
     pub host_start_time_ticks: Option<u64>,
     deadline_ms: AtomicU64,
     closed: AtomicBool,
+    activity: Option<Arc<crate::caps::activity_boundary::ActivityBoundary>>,
 }
 
 impl ExtensionLease {
@@ -124,7 +126,22 @@ impl ExtensionLease {
             host_start_time_ticks,
             deadline_ms: AtomicU64::new(deadline_ms),
             closed: AtomicBool::new(false),
+            activity: None,
         }
+    }
+
+    pub(crate) fn with_activity(
+        mut self,
+        activity: Option<Arc<crate::caps::activity_boundary::ActivityBoundary>>,
+    ) -> Self {
+        self.activity = activity;
+        self
+    }
+
+    pub(crate) fn activity_boundary(
+        &self,
+    ) -> Option<Arc<crate::caps::activity_boundary::ActivityBoundary>> {
+        self.activity.clone()
     }
 
     pub fn renew(&self, lease: Duration) -> u64 {
@@ -149,6 +166,10 @@ impl ExtensionLease {
         }
         if !process_matches(self.host_pid, self.host_start_time_ticks) {
             return Err("extension host is no longer live".to_string());
+        }
+        if let Some(activity) = &self.activity {
+            activity.require_identity(self.owner_uid, self.task_session_id.as_deref())?;
+            activity.check()?;
         }
         Ok(())
     }
@@ -390,8 +411,13 @@ async fn serve_connection(
         write_fault(&mut peer_stream, id, Fault::PeerUnverified).await;
         return;
     };
-    if lease.verify_live().is_err()
-        || process.uid != lease.extension_uid
+    if let Err(error) = lease.verify_live() {
+        tracing::warn!(task = %lease.task_id, owner_uid = lease.owner_uid, %error,
+            "extension authority lease rejected");
+        write_fault(&mut peer_stream, id, Fault::NotAuthorized).await;
+        return;
+    }
+    if process.uid != lease.extension_uid
         || process.gid != lease.owner_gid
         || !request_allowed(&request, process, &lease)
     {
@@ -417,8 +443,11 @@ async fn serve_connection(
         },
     );
 
-    let response =
-        crate::clawd::server::dispatch_verified_request(request, &client, &state, &admission).await;
+    let response = crate::caps::activity_boundary::scope(
+        lease.activity_boundary(),
+        crate::clawd::server::dispatch_verified_request(request, &client, &state, &admission),
+    )
+    .await;
     write_response(&mut peer_stream, response).await;
 }
 

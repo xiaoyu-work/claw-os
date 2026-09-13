@@ -202,6 +202,8 @@ CHROOT_RUNTIME="$ROOTFS/build/cos-runtime"
 CHROOT_SDK="$ROOTFS/build/claw-os-sdk"
 CHROOT_NATIVE_APPS="$ROOTFS/build/build/native-apps"
 NATIVE_APP_SOURCES="$(python3 "$PROJECT_DIR/scripts/app_sources.py" --native)"
+install -D -m 644 "$NATIVE_APP_SOURCES/source-lock.json" \
+    "$DESKTOP_PACKAGE_ROOT/usr/share/doc/claw-os-desktop/app-sources.json"
 test -f "$NATIVE_APP_SOURCES/cosmic-notifications/cosmic-notifications-config/Cargo.toml"
 test -f "$NATIVE_APP_SOURCES/cosmic-notifications/cosmic-notifications-util/Cargo.toml"
 PROJECT_CRATES="$PROJECT_DIR/crates"

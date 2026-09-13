@@ -268,13 +268,40 @@ async fn mint_peer_session_grant(
         });
     }
 
+    let activity = if session.app_id.is_some() || session.group.as_deref() == Some("mcp") {
+        // Reuse held invocation authority, including service-Host calls whose
+        // parent is not a durable task session. Registry data cannot restore it.
+        let live = authority().resolve_session(
+            session_id,
+            &Presentation::new(
+                uid,
+                pid,
+                client.start_time_ticks,
+                descriptor.audience,
+                route_name,
+            ),
+        )?;
+        if let Some(binding) = &live.subject.activity {
+            binding
+                .check()
+                .map_err(|_| AuthorityError::ActivityPolicy)?;
+        }
+        caps = live.caps.intersect(&caps);
+        live.subject.activity
+    } else {
+        crate::caps::activity_boundary::ActivityBoundary::for_session(uid, session_id)
+            .map_err(|_| AuthorityError::ActivityPolicy)?
+            .map(|boundary| boundary.binding())
+    };
     let principal =
         Principal::of_process(uid, session.pid).ok_or(AuthorityError::UnverifiablePrincipal)?;
     let (_handle, view) = authority().issue(Issuance {
         issuer: Issuer::TrustedSession,
         principal,
         binding: Binding::ProcessTree,
-        subject: Subject::session(session_id).with_app(session.app_id.clone()),
+        subject: Subject::session(session_id)
+            .with_app(session.app_id.clone())
+            .with_activity(activity),
         audience: AudienceSet::one(descriptor.audience),
         caps,
         lifetime: PEER_SESSION_GRANT_TTL,
@@ -393,6 +420,9 @@ async fn finish(
     uid: u32,
     client: &ClientIdentity,
 ) -> Result<Option<Decision>, Fault> {
+    if view.owner_uid != uid {
+        return Err(Fault::NotAuthorized);
+    }
     // The routed registry is partitioned per owner, so the row is read
     // under the owner's own path view — the same view the provider used
     // to read it before this decision existed.
@@ -494,7 +524,7 @@ pub async fn authorize_relayed(
         tracing::debug!(route = route_name, error = %error, "relayed route refused its own request shape");
         Fault::InvalidParams
     })?;
-    let proof = RelayProof::for_session(session_id);
+    let proof = RelayProof::for_session(session_id, relay.id);
     // The subject is named *before* the resolve, not patched in after
     // it, so the store's own subject check decides this call: a relay
     // proof answers "who is speaking", and the grant still has to be

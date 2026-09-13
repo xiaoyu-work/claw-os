@@ -31,9 +31,17 @@ executes neither.
 | `spawn.rs` | `socketpair` + `pre_exec` privilege drop, fd/env isolation, session/process-group isolation, worker image checks |
 | `grant.rs` | HMAC-signed job grant, its bindings, and both verification directions |
 | `protocol.rs` | Frames, route allowlist, protocol version, bounded framing, lease-renewal and permission-mediation types |
+| `receipts.rs` | Reporting-only Activity receipt association from the authenticated lease and broker-owned Job |
 | `supervisor.rs` | Broker-side claim → spawn → lease → pump → finish, permission mediation, reconciliation |
 | `worker.rs` | Worker-side handshake, dedicated channel thread, sinks, audit forwarding, approval gateway, cancellation |
 | `../extension_host/` | Dynamic App/MCP host, task-bound control, route-filtered broker proxy, cleanup |
+
+Activity execution reservations bound the actual assigned model turns and a
+monotonic expiry independent of heartbeat renewal. The shared service guard
+also rechecks live policy state/revision. A limit stop closes the task extension
+lease and uses the existing verified containment cleanup, reports its own reason, and
+does not promise to undo an already-admitted privileged mutation. See
+[execution limits](../../../docs/activity-execution-limits.md).
 
 ## Threat Boundary
 
@@ -157,6 +165,71 @@ Channel I/O runs on its own thread inside the worker. `caps::require` is
 synchronous, so the gateway blocks its caller while it waits; keeping the
 reader off the agent runtime's threads is what stops that from deadlocking
 against streaming or tool execution.
+
+## Activity capability boundaries
+
+The supervisor pins the Activity association and policy revision from its
+retained Job, records the bounded policy snapshot before assignment, and
+rechecks the live revision independently of heartbeat renewal. Disabled,
+changed or newly introduced policies stop old attempts through normal
+cancellation and exact-child cleanup; admitted effects are not undone.
+
+Worker protocol v11 adds a `Boundary` question to the consent seam. It carries
+only verb/scope, never Activity, owner or policy selectors. Its typed reply is
+a constraint, not an approval, and cannot satisfy a consent waiter. Up to
+4096 boundary checks have their own counter, separate from 128 consent asks.
+Root also rechecks the boundary when a worker directly requests or consumes
+consent: deny cannot escalate, and required confirmation retires an exact
+scope grant once rather than borrowing a broader reusable approval.
+
+App hosting uses the same root-pinned context through the task extension
+lease. Registration and each App-service call settle their full approval set
+all-or-none; local preflights enforce extension ceilings without consuming
+consent. Root-held per-call tickets and App grants carry their confirmed
+invocation and policy revision, checked again before effects. Shared owner/App
+service Hosts do not inherit one Activity's standing policy. This does not
+turn the model worker's same-UID process into a kernel sandbox. See
+[Activity policies](../../../docs/activity-capability-policies.md).
+
+## Activity receipt reporting
+
+The reporting request/reply remains reporting-only in worker protocol v11. The broker marks
+Activity-associated assignments for capture; an enabled assignment requires
+the signed `receipt` route. The supervisor retains that handshake decision
+and checks the route, task and live lease before recording.
+
+The worker sends only a closed, bounded `ReceiptReport` and correlation ID
+under its existing task identity. The broker selects owner/Activity from its
+lease and Job, uses the shared Activity receipt service, and records a
+metadata-only task-stream link. Source remains `caller_reported`, never an
+OS mutation attestation. There are at most 128 reports per worker and 16 KiB
+per report; acknowledgements are correlated and cannot satisfy permission
+waiters. Channel loss releases waiting calls explicitly.
+
+Reporting failures never retry an App invocation. Late reports may arrive
+during cancellation, and receipt persistence does not change Activity state.
+This route provides no App launch, broker proxy, capability, or approval
+decision. App execution uses the separate extension and service Hosts below.
+
+## App execution and receipts
+
+The model worker never hosts dynamic App code. Its purpose-bound
+[`claw-extension-host`](../extension_host/MODULE.md) executes one-shot
+operations and relays typed MCP App calls to the root App-service manager.
+Each MCP call is freshly authorized and runs in the independently isolated,
+owner/App-scoped service Host. Protected package review, exact needs, live
+grants, persistent owner/App data binding and mandatory containment remain
+the existing hosting contract. The worker channel has no `app_host` route.
+
+The worker retains the bounded reporting-only receipt adapter. Root records
+automatic MCP service results from the retained prepared call, its package
+identity and Activity binding, before model-input trust fencing. These are
+caller reports, not proof that declared effects occurred. A recording failure
+preserves the original outcome and offers only recording repair; it never
+repeats an App invocation. Both paths use the same Activity receipt ledger.
+Human CLI calls do not enable this automatic task capture; explicit
+`cos operation execute --activity` owns its one receipt, avoiding a second
+Root report when the caller's session is already Activity-associated.
 
 ## Residual Same-UID Boundary
 

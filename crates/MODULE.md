@@ -36,6 +36,9 @@ desktop UI or privileged broker implementation.
 System-review commands authenticate the connected Unix peer as root before
 sending a request. A socket override or an approved-looking JSON response from
 an ordinary user process cannot substitute for OS confirmation.
+Its typed command inventory must be updated with every desktop-consumed broker
+route, including Activity object-state and policy controls; core route additions alone
+do not update this independent client.
 Keep Obscura changes scoped and preserve upstream licensing/provenance. Add a
 new crate only for a coherent reusable responsibility.
 

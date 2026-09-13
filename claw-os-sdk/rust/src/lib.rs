@@ -29,6 +29,7 @@
 //! | [`mcp`]       | MCP         | App-hosted tools over JSON-RPC  |
 //! | [`tools`]     | `tool`      | `cos ai tool <name> --app <id>` |
 //! | [`envelope`]  | shared      | the common reply envelope       |
+//! | [`objects`]   | object_ref  | pure App object identifiers; no dispatch |
 //! | [`generated`] | shared      | typed structs codegen'd from `wire/v1/*.schema.json` |
 //!
 //! Everything except `generated` is hand-written. `generated.rs` is
@@ -46,7 +47,7 @@
 //!
 //! ## Transport
 //!
-//! Calls default to the `cos` binary on `$PATH`. The
+//! Transport-backed calls shell out to the `cos` binary on `$PATH`. The
 //! subprocess model is intentional — identity, audit, and session
 //! context come from process ancestry. Set `CLAW_COS_BIN` to override
 //! the resolved binary (used by tests + dev setups). Installed native clients
@@ -71,7 +72,10 @@ pub mod envelope;
 pub mod generated;
 pub mod gui;
 pub mod mcp;
+pub mod objects;
 pub mod tools;
+
+pub use objects::ObjectRefError;
 
 /// Errors returned by every bridge call.
 #[derive(Debug, thiserror::Error)]

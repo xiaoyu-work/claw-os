@@ -2,8 +2,9 @@
 //!
 //! The channel is a private `socketpair(2)` handed to the child as fd
 //! 3 and carries newline-delimited JSON. It exposes nothing but the
-//! lifecycle of the single task the worker was spawned for: there is no
-//! admin, App-session, scheduler or permission-decision route here, and
+//! lifecycle of the single task the worker was spawned for, including a
+//! closed App operation/session control surface. There is no general broker
+//! proxy, admin, scheduler or permission-decision route here, and
 //! every payload is a typed, already policy-projected structure rather
 //! than free-form JSON, so a compromised worker cannot widen what it
 //! reports.
@@ -28,7 +29,7 @@ use super::grant::SignedGrant;
 /// Bumped whenever a frame changes shape. `clawd` refuses a worker that
 /// reports a different version, and the worker refuses an assignment
 /// that carries one.
-pub const PROTOCOL_VERSION: u32 = 10;
+pub const PROTOCOL_VERSION: u32 = 11;
 
 /// Descriptor the broker dups the worker end of the channel onto.
 pub const CHANNEL_FD: i32 = 3;
@@ -58,6 +59,7 @@ pub const ROUTE_RESULT: &str = "result";
 /// plus an optional digest of validated operation inputs — never a
 /// session, an owner, a decision, raw arguments, or a capability set.
 pub const ROUTE_APPROVAL: &str = "approval";
+pub const ROUTE_RECEIPT: &str = "receipt";
 
 /// The complete route surface a worker grant may carry. Nothing else
 /// exists on this channel, so a leaked descriptor is still only an
@@ -71,11 +73,15 @@ pub const WORKER_ROUTES: &[&str] = &[
     ROUTE_HEARTBEAT,
     ROUTE_RESULT,
     ROUTE_APPROVAL,
+    ROUTE_RECEIPT,
 ];
 
 /// Hard ceiling on permission mediation for one task, so a looping
 /// model cannot flood the consent store or the broker.
 pub const MAX_APPROVAL_ASKS: u32 = 128;
+pub const MAX_BOUNDARY_CHECKS: u32 = 4096;
+pub const MAX_RECEIPT_REPORTS: u32 = 128;
+pub const MAX_RECEIPT_REPORT_BYTES: usize = 16 * 1024;
 
 pub fn worker_routes() -> Vec<String> {
     WORKER_ROUTES
@@ -116,6 +122,43 @@ pub enum BrokerFrame {
         exchange: ApprovalExchange,
         reply: ApprovalReply,
     },
+    ReceiptReply {
+        correlation_id: u64,
+        reply: ReceiptReply,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ReceiptReply {
+    Recorded { receipt_id: String },
+    Refused { message: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReceiptRequest {
+    pub task_id: String,
+    pub correlation_id: u64,
+    #[serde(deserialize_with = "receipt_report")]
+    pub report: Box<crate::activities::ReceiptReport>,
+}
+
+pub fn validate_receipt_report(report: &crate::activities::ReceiptReport) -> Result<(), String> {
+    report.validate().map_err(|error| error.to_string())?;
+    let encoded = serde_json::to_vec(report).map_err(|error| error.to_string())?;
+    if encoded.len() > MAX_RECEIPT_REPORT_BYTES {
+        return Err("receipt report exceeds 16 KiB".to_string());
+    }
+    Ok(())
+}
+
+fn receipt_report<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Box<crate::activities::ReceiptReport>, D::Error> {
+    let report = crate::activities::ReceiptReport::deserialize(deserializer)?;
+    validate_receipt_report(&report).map_err(serde::de::Error::custom)?;
+    Ok(Box::new(report))
 }
 
 /// What a worker may say when a capability check fails: the exact verb,
@@ -123,8 +166,10 @@ pub enum BrokerFrame {
 /// inputs. Session, owner, task and worker identity are never sent — the
 /// broker takes all four from the verified grant.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "ask", rename_all = "snake_case")]
+#[serde(tag = "ask", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ApprovalAsk {
+    /// Read a live Activity constraint without consuming or filing consent.
+    Boundary { verb: String, scope: Scope },
     /// Spend an already-approved, exactly-matching grant. One-shot: the
     /// broker consumes it, so a replay finds nothing.
     Consume {
@@ -145,18 +190,23 @@ pub enum ApprovalAsk {
 impl ApprovalAsk {
     pub fn verb(&self) -> &str {
         match self {
-            ApprovalAsk::Consume { verb, .. } | ApprovalAsk::Request { verb, .. } => verb.as_str(),
+            ApprovalAsk::Boundary { verb, .. }
+            | ApprovalAsk::Consume { verb, .. }
+            | ApprovalAsk::Request { verb, .. } => verb.as_str(),
         }
     }
 
     pub fn scope(&self) -> &Scope {
         match self {
-            ApprovalAsk::Consume { scope, .. } | ApprovalAsk::Request { scope, .. } => scope,
+            ApprovalAsk::Boundary { scope, .. }
+            | ApprovalAsk::Consume { scope, .. }
+            | ApprovalAsk::Request { scope, .. } => scope,
         }
     }
 
     pub fn operation_digest(&self) -> Option<&str> {
         match self {
+            ApprovalAsk::Boundary { .. } => None,
             ApprovalAsk::Consume {
                 operation_digest, ..
             }
@@ -196,8 +246,12 @@ impl ApprovalExchange {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "status", rename_all = "snake_case")]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ApprovalReply {
+    /// A constraint only; this cannot satisfy an approval-consumption waiter.
+    Boundary {
+        decision: crate::activities::CapabilityBoundaryDecision,
+    },
     /// An exact approved grant existed and has been spent.
     Granted,
     /// No grant to spend, or the request is still waiting on the user.
@@ -272,6 +326,13 @@ pub struct JobSpec {
     pub use_memory: bool,
     pub owner_uid: u32,
     pub owner_home: String,
+    /// Reporting hint only; the broker resolves the Activity from its own Job.
+    #[serde(default)]
+    pub record_activity_receipts: bool,
+    /// The ordinary worker checks each capability through its private channel.
+    /// Root still derives the actual policy from its own Job, not this hint.
+    #[serde(default)]
+    pub activity_capability_checks: bool,
 }
 
 fn default_true() -> bool {
@@ -312,6 +373,7 @@ pub enum WorkerFrame {
         correlation_id: u64,
         exchange: ApprovalExchange,
     },
+    Receipt(Box<ReceiptRequest>),
     Result {
         task_id: String,
         outcome: Box<WorkerOutcome>,
@@ -328,6 +390,7 @@ impl WorkerFrame {
             WorkerFrame::Audit { .. } => ROUTE_AUDIT,
             WorkerFrame::Heartbeat { .. } => ROUTE_HEARTBEAT,
             WorkerFrame::Approval { .. } => ROUTE_APPROVAL,
+            WorkerFrame::Receipt(_) => ROUTE_RECEIPT,
             WorkerFrame::Result { .. } => ROUTE_RESULT,
         }
     }
@@ -338,6 +401,7 @@ impl WorkerFrame {
         match self {
             WorkerFrame::Prepared(prepared) => Some(prepared.grant.claims.task_id.as_str()),
             WorkerFrame::Hello(hello) => Some(hello.grant.claims.task_id.as_str()),
+            WorkerFrame::Receipt(request) => Some(request.task_id.as_str()),
             WorkerFrame::Stream { task_id, .. }
             | WorkerFrame::Progress { task_id, .. }
             | WorkerFrame::Audit { task_id, .. }

@@ -743,6 +743,7 @@ dependencies = [
  "chrono",
  "claw-display-control",
  "claw-embed",
+ "claw-os-sdk",
  "clawd-client",
  "cosmic-client-toolkit",
  "crc32fast",

@@ -92,7 +92,7 @@ jobs:
       - name: Clippy lint (cos)
         run: cd core && cargo clippy -- -D warnings
 
-      - name: Prepare immutable product test inputs
+      - name: Resolve App main into immutable test inputs
         run: python3 scripts/app_sources.py
 
       - name: Run cos tests

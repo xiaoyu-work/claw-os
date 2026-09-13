@@ -1,7 +1,8 @@
 # claw-os-sdk (Python)
 
-The official Python SDK for Claw OS. Every Python app under
-`apps/<name>/` imports this package as `claw_os_sdk`.
+The official Python SDK for Claw OS. Python App packages import this package
+as `claw_os_sdk`; bundled App implementations live in the external App source
+repository rather than an OS-local `apps/` tree.
 
 ## Install
 
@@ -34,6 +35,7 @@ def handle_summarize(args):
 | `claw_os_sdk.gui`       | Desktop GUI bootstrap and kernel-provided launch context.              |
 | `claw_os_sdk.mcp`       | Manifest-bound App MCP server, call context, progress, and cancellation. |
 | `claw_os_sdk.kernel`    | Explicit installed-CLI stdin transport with shared wire errors and cancellation. |
+| `claw_os_sdk.objects`   | Pure canonical App object identifiers, without discovery or dispatch. |
 | `claw_os_sdk.claw_os_session` | Read / observe `COS_SESSION` from inside an app.                 |
 | `claw_os_sdk.generated` | TypedDicts generated from `wire/v1/*.schema.json`.                     |
 
@@ -84,6 +86,31 @@ structured `.payload`, or `KernelUnavailable` for transport/decode failures.
 Cancellation and deadlines kill/reap the CLI, but cannot undo an already
 accepted OS mutation. Do not automatically retry an indeterminate mutation.
 This helper is not an App dispatcher or a capability grant.
+
+## App object references
+
+```python
+from claw_os_sdk import objects
+from claw_os_sdk.generated import ObjectRef
+
+reference: ObjectRef = {
+    "app_id": "notes",
+    "object_type": "note",
+    "object_id": "draft/1",
+}
+uri = objects.format_reference(reference)
+assert uri == "app://notes/note?id=draft%2F1"
+assert objects.parse_reference(uri) == reference
+```
+
+`objects.ObjectRefError` is a `ValueError`. These pure helpers enforce the
+generated structural contract plus component/UTF-8 bounds and canonical
+spelling. Omit an absent `revision`; do not supply `None` or an empty string.
+They never trim opaque IDs, discover Apps, access files, or invoke an
+operation. A reference does not assert existence, freshness, or permission.
+
+See [the shared contract](../wire/v1/object-references.md) for byte limits and
+the optional App manifest `objects` resolver declaration.
 
 ## AI support
 

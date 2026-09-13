@@ -55,6 +55,8 @@ pub const MAX_GRANTS_PER_PROCESS: usize = 256;
 /// Why a grant could not be resolved or spent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthorityError {
+    /// Live Activity constraints refused this use, independently of permission.
+    ActivityPolicy,
     /// No live grant answers to this handle. Deliberately the same
     /// answer for a guessed handle, an expired one and a revoked one,
     /// so a caller learns nothing by probing.
@@ -85,6 +87,9 @@ pub enum AuthorityError {
 impl std::fmt::Display for AuthorityError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            AuthorityError::ActivityPolicy => {
+                f.write_str("Activity capability policy refused this grant")
+            }
             AuthorityError::UnknownGrant => {
                 f.write_str("no live capability grant answers to this reference")
             }
@@ -118,6 +123,7 @@ impl AuthorityError {
     /// any caller-authored string.
     pub fn class(&self) -> &'static str {
         match self {
+            AuthorityError::ActivityPolicy => "activity_policy",
             AuthorityError::UnknownGrant => "unknown_grant",
             AuthorityError::PrincipalMismatch => "principal_mismatch",
             AuthorityError::Audience { .. } => "audience",
@@ -208,13 +214,45 @@ impl Presentation {
 #[derive(Debug, Clone)]
 pub(super) struct RelayProof {
     session_id: String,
+    relay_id: GrantId,
 }
 
 impl RelayProof {
-    pub(super) fn for_session(session_id: &str) -> Self {
+    pub(super) fn for_session(session_id: &str, relay_id: GrantId) -> Self {
         Self {
             session_id: session_id.to_string(),
+            relay_id,
         }
+    }
+
+    fn validate(
+        &self,
+        inner: &Inner,
+        presentation: &Presentation,
+        now: Instant,
+    ) -> Result<(), AuthorityError> {
+        if presentation.audience != Audience::SystemService
+            || presentation.session_id.as_deref() != Some(self.session_id.as_str())
+        {
+            return Err(AuthorityError::Subject);
+        }
+        let key = inner
+            .id_index
+            .get(&self.relay_id)
+            .ok_or(AuthorityError::UnknownGrant)?;
+        let grant = inner.grants.get(key).ok_or(AuthorityError::UnknownGrant)?;
+        if grant.binding != Binding::Process || !self.covers(grant) {
+            return Err(AuthorityError::PrincipalMismatch);
+        }
+        let relay_presentation = Presentation {
+            uid: presentation.uid,
+            pid: presentation.pid,
+            start_time_ticks: presentation.start_time_ticks,
+            audience: Audience::AppRelay,
+            route: presentation.route,
+            session_id: Some(self.session_id.clone()),
+        };
+        check_presentation(grant, &relay_presentation, now)
     }
 
     /// Does this proof authorize presenting `grant`?
@@ -287,6 +325,14 @@ impl Authority {
         if issuance.audience.is_empty() {
             return Err(AuthorityError::Audience { route: "issue" });
         }
+        if issuance
+            .subject
+            .activity
+            .as_ref()
+            .is_some_and(|binding| binding.owner_uid != issuance.principal.uid)
+        {
+            return Err(AuthorityError::Subject);
+        }
         let handle = GrantHandle::generate().map_err(|_| AuthorityError::UnverifiablePrincipal)?;
         let key = handle.key();
         let now = Instant::now();
@@ -339,7 +385,7 @@ impl Authority {
     pub fn attenuate(
         &self,
         parent_handle: &str,
-        request: Attenuation,
+        mut request: Attenuation,
     ) -> Result<(GrantHandle, GrantView), AuthorityError> {
         if request.principal.start_time_ticks.is_none() {
             return Err(AuthorityError::UnverifiablePrincipal);
@@ -358,6 +404,7 @@ impl Authority {
         let expires_at = request
             .check(parent, now)
             .map_err(AuthorityError::Attenuation)?;
+        request.subject.activity = parent.subject.activity.clone();
         let parent_id = parent.id;
         let depth = parent.depth + 1;
         inner.check_quota(&request.principal, request.subject.session_id.as_deref())?;
@@ -445,6 +492,9 @@ impl Authority {
         let now = Instant::now();
         let mut inner = self.lock();
         inner.sweep(now);
+        if let Some(proof) = relay {
+            proof.validate(&inner, presentation, now)?;
+        }
         let key = *inner
             .by_session
             .get(session_id)
@@ -490,6 +540,9 @@ impl Authority {
         let now = Instant::now();
         let mut inner = self.lock();
         inner.sweep(now);
+        if let Some(proof) = relay {
+            proof.validate(&inner, presentation, now)?;
+        }
         let key = *inner
             .id_index
             .get(&id)

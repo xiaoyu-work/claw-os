@@ -117,10 +117,14 @@ if [ "$DO_BUILD" = 1 ]; then
     echo "   - $t  ($cargo_dir/target/release/$bin)"
   done
   build_script=""
+  native_prepared=0
   for t in "${TARGETS[@]}"; do
     IFS='|' read -r cargo_dir bin _ <<<"$(target_spec "$t")"
     if [ "$t" = cosmic-edit ] || [ "$t" = cosmic-files ]; then
-      build_script+="python3 scripts/app_sources.py --native; "
+      if [ "$native_prepared" = 0 ]; then
+        build_script+="python3 scripts/app_sources.py --native; "
+        native_prepared=1
+      fi
     fi
     build_script+="echo '== build $bin ($cargo_dir) =='; (cd '$cargo_dir' && cargo build --release --bin '$bin') || exit 1; "
   done

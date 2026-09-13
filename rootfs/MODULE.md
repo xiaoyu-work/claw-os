@@ -31,13 +31,16 @@ Installed Claw OS binaries arrive through packages built from the current
 source. Reuse is allowed only when the complete stamp, artifacts, environment,
 architecture, and feature list match.
 
-Desktop builds prepare all pinned native App inputs on the host and
+Desktop builds resolve App `main` once and prepare its native inputs on the host, then
 bind `build/native-apps` at the matching relative dependency path inside the
 chroot. The shell, shared services and forked toolkit stay OS-owned; the App
 source cache and generated inputs never enter the installed image.
 The source mounts preserve the repository-relative `desktop`, SDK/runtime
 and `build/native-apps` layout, including standalone Launcher/Editor/Files/Terminal/Store/Capture/Media Player
 and nested Settings workspace dependencies.
+The native preparation's resolved source lock is copied into the desktop
+package stage before compilation, so packaging cannot pair an older binary
+with a newly fetched App manifest. Source selection adds no runtime Git updater.
 Notifications' standalone daemon and exported config/util crates use that
 same layout; image preparation verifies both libraries before binding the
 native tree. The applet/panel retain their own toolkit graphs and the

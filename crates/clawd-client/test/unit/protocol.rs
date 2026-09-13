@@ -3,6 +3,168 @@ use crate::{ErrorCode, RemoteError};
 use serde_json::json;
 
 #[test]
+fn activity_commands_have_stable_names_and_round_trip() {
+    for (command, name) in [
+        (Command::ActivityCreate, "activity.create"),
+        (Command::ActivityList, "activity.list"),
+        (Command::ActivityGet, "activity.get"),
+        (Command::ActivityUpdate, "activity.update"),
+        (Command::ActivityTransition, "activity.transition"),
+        (Command::ActivityRun, "activity.run"),
+        (
+            Command::ActivityExecutionLimitsGet,
+            "activity.execution_limits.get",
+        ),
+        (
+            Command::ActivityExecutionLimitsSet,
+            "activity.execution_limits.set",
+        ),
+        (
+            Command::ActivityExecutionLimitsEnabled,
+            "activity.execution_limits.enabled",
+        ),
+        (
+            Command::ActivityCapabilityPolicyGet,
+            "activity.capability_policy.get",
+        ),
+        (
+            Command::ActivityCapabilityPolicySet,
+            "activity.capability_policy.set",
+        ),
+        (
+            Command::ActivityCapabilityPolicyEnabled,
+            "activity.capability_policy.enabled",
+        ),
+        (Command::ActivityObjects, "activity.objects"),
+        (Command::ActivityObjectAttach, "activity.object.attach"),
+        (
+            Command::ActivityObjectStateList,
+            "activity.object_state.list",
+        ),
+        (
+            Command::ActivityObjectStateRecord,
+            "activity.object_state.record",
+        ),
+        (
+            Command::ActivityOperationPreview,
+            "activity.operation.preview",
+        ),
+        (Command::ActivityReceipts, "activity.receipts"),
+        (Command::TaskGet, "task.get"),
+        (Command::TaskRetry, "task.retry"),
+    ] {
+        assert_eq!(command.as_str(), name);
+        assert!(Command::ALL.contains(&command));
+        assert_eq!(serde_json::to_value(command).unwrap(), json!(name));
+        assert_eq!(
+            serde_json::from_value::<Command>(json!(name)).unwrap(),
+            command
+        );
+    }
+}
+
+#[test]
+fn capability_policy_commands_have_stable_names_and_unique_inventory_entries() {
+    for (command, name) in [
+        (
+            Command::ActivityCapabilityPolicyGet,
+            "activity.capability_policy.get",
+        ),
+        (
+            Command::ActivityCapabilityPolicySet,
+            "activity.capability_policy.set",
+        ),
+        (
+            Command::ActivityCapabilityPolicyEnabled,
+            "activity.capability_policy.enabled",
+        ),
+    ] {
+        assert_eq!(command.as_str(), name);
+        assert_eq!(command.to_string(), name);
+        assert_eq!(
+            Command::ALL
+                .iter()
+                .filter(|entry| **entry == command)
+                .count(),
+            1
+        );
+        assert_eq!(serde_json::to_value(command).unwrap(), json!(name));
+        assert_eq!(
+            serde_json::from_value::<Command>(json!(name)).unwrap(),
+            command
+        );
+    }
+    assert!(serde_json::from_value::<Command>(json!("activity.capability_policy.grant")).is_err());
+    assert!(
+        serde_json::from_value::<Command>(json!("activity.capability_policy.approve")).is_err()
+    );
+}
+
+#[test]
+fn main_routes_survive_activity_inventory_merge() {
+    let main_routes = [
+        (Command::TaskSubmit, "task.submit"),
+        (Command::TaskStream, "task.stream"),
+        (Command::TaskCancel, "task.cancel"),
+        (Command::MemorySessions, "memory.sessions"),
+        (Command::MemoryHistory, "memory.history"),
+        (Command::PermissionPending, "permission.pending"),
+        (Command::SystemReviewPrepare, "system.review.prepare"),
+        (Command::SystemReviewPending, "system.review.pending"),
+        (Command::SystemReviewShow, "system.review.show"),
+        (Command::SystemReviewConsume, "system.review.consume"),
+        (Command::SystemReviewCancel, "system.review.cancel"),
+        (Command::NotificationSubscribe, "notification.subscribe"),
+        (
+            Command::NotificationDeliveryClaim,
+            "notification.delivery.claim",
+        ),
+        (
+            Command::NotificationDeliveryComplete,
+            "notification.delivery.complete",
+        ),
+        (Command::NotificationAcknowledge, "notification.acknowledge"),
+        (Command::NotificationDismiss, "notification.dismiss"),
+    ];
+    assert_eq!(Command::ALL.len(), 36);
+    let mut names = std::collections::HashSet::new();
+    for command in Command::ALL {
+        assert!(names.insert(command.as_str()), "duplicate {command}");
+        assert_eq!(
+            serde_json::to_value(command).unwrap(),
+            json!(command.as_str())
+        );
+        assert_eq!(
+            serde_json::from_value::<Command>(json!(command.as_str())).unwrap(),
+            command,
+        );
+    }
+    for (command, name) in main_routes {
+        assert!(Command::ALL.contains(&command), "missing {name}");
+        assert_eq!(command.as_str(), name);
+    }
+}
+
+#[test]
+fn system_review_root_peer_requirement_survives_activity_merge() {
+    let protected = [
+        Command::SystemReviewPrepare,
+        Command::SystemReviewPending,
+        Command::SystemReviewShow,
+        Command::SystemReviewConsume,
+        Command::SystemReviewCancel,
+    ];
+    for command in Command::ALL {
+        assert_eq!(
+            command.requires_root_peer(),
+            protected.contains(&command),
+            "{command}",
+        );
+    }
+    assert!(serde_json::from_value::<Command>(json!("system.review.decide")).is_err());
+}
+
+#[test]
 fn requests_are_closed_typed_envelopes_with_fresh_bounded_ids() {
     let first = Request::new(Command::TaskSubmit, json!({"prompt": "hello"}));
     let second = Request::new(Command::TaskSubmit, json!({"prompt": "hello"}));
@@ -13,14 +175,16 @@ fn requests_are_closed_typed_envelopes_with_fresh_bounded_ids() {
         serde_json::to_value(&first).unwrap()["command"],
         json!("task.submit")
     );
-    assert!(serde_json::from_value::<Request>(json!({
-        "v": PROTOCOL_VERSION,
-        "id": "r1",
-        "command": "task.submit",
-        "params": {},
-        "uid": 0,
-    }))
-    .is_err());
+    assert!(
+        serde_json::from_value::<Request>(json!({
+            "v": PROTOCOL_VERSION,
+            "id": "r1",
+            "command": "task.submit",
+            "params": {},
+            "uid": 0,
+        }))
+        .is_err()
+    );
 }
 
 #[test]

@@ -80,6 +80,7 @@ fn legacy_operations_and_mcp_both_contribute_without_losing_their_uses() {
             stdin: false,
             args: tool.args,
             needs: tool.needs,
+            effects: Vec::new(),
         },
     );
     let review = PermissionReview::from_manifest(&manifest).unwrap();

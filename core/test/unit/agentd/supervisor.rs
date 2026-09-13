@@ -3,6 +3,21 @@ use super::*;
 use crate::agent::service::{JobStatus, Store};
 use crate::agentd::grant::GRANT_AUDIENCE;
 
+mod activity_policy {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/agentd/supervisor/activity_policy.rs"
+    ));
+}
+
+#[cfg(target_os = "linux")]
+mod activity_process {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/agentd/supervisor/activity_process.rs"
+    ));
+}
+
 fn new_lease() -> Lease {
     Lease {
         task_id: "task-a".to_string(),
@@ -26,6 +41,7 @@ fn new_lease() -> Lease {
         approval_nonce: "0123456789abcdef".to_string(),
         consent_context: crate::caps::ConsentContext::Attended,
         resumed_after_approval: Vec::new(),
+        receipts_authorized: false,
     }
 }
 
@@ -97,6 +113,60 @@ fn a_worker_cannot_report_on_another_owners_task() {
     let error = accept(&signer, broker_pid, &mut lease, &stolen, true)
         .expect_err("a frame for another task must be refused");
     assert!(error.contains("different task"), "{error}");
+}
+
+#[test]
+fn receipt_reporting_requires_its_signed_route_and_the_exact_live_task() {
+    let mut lease = new_lease();
+    let (signer, hello) = signer_and_hello(&lease);
+    let report = crate::operations::receipts::capture(
+        uuid::Uuid::new_v4().to_string(),
+        "demo".into(),
+        "read".into(),
+        format!("sha256:{}", "a".repeat(64)),
+        Ok(Some("result".into())),
+    );
+    let frame = WorkerFrame::Receipt(Box::new(protocol::ReceiptRequest {
+        task_id: lease.task_id.clone(),
+        correlation_id: 1,
+        report: Box::new(report),
+    }));
+    assert!(accept(&signer, std::process::id(), &mut lease, &frame, false).is_err());
+    assert!(accept(&signer, std::process::id(), &mut lease, &frame, true).is_err());
+    accept(&signer, std::process::id(), &mut lease, &hello, false).unwrap();
+    accept(&signer, std::process::id(), &mut lease, &frame, true).unwrap();
+    let mut foreign = frame.clone();
+    if let WorkerFrame::Receipt(request) = &mut foreign {
+        request.task_id = "another-task".into();
+    }
+    assert!(accept(&signer, std::process::id(), &mut lease, &foreign, true).is_err());
+    let mut restricted = hello.clone();
+    if let WorkerFrame::Hello(hello) = &mut restricted {
+        let mut claims = hello.grant.claims.clone();
+        claims
+            .routes
+            .retain(|route| route != protocol::ROUTE_RECEIPT);
+        hello.grant = signer.issue(claims);
+    }
+    accept(&signer, std::process::id(), &mut lease, &restricted, false).unwrap();
+    assert!(!lease.receipts_authorized);
+    assert!(accept(&signer, std::process::id(), &mut lease, &frame, true).is_err());
+    accept(&signer, std::process::id(), &mut lease, &hello, false).unwrap();
+    lease.deadline = Instant::now() - Duration::from_secs(1);
+    assert!(accept(&signer, std::process::id(), &mut lease, &frame, true).is_err());
+}
+
+#[test]
+fn extension_control_cannot_be_smuggled_through_the_worker_reporting_channel() {
+    let lease = new_lease();
+    let claims = claims_for(std::process::id(), &lease, Duration::from_secs(60));
+    assert!(!claims.routes.iter().any(|route| route == "app_host"));
+    for kind in ["app_host", "app_service_call", "authorized_app_call"] {
+        assert!(serde_json::from_value::<WorkerFrame>(serde_json::json!({
+            "kind":kind,"task_id":lease.task_id,"correlation_id":1,"call":{}
+        }))
+        .is_err());
+    }
 }
 
 #[test]
@@ -288,6 +358,52 @@ fn a_pre_assignment_failure_can_return_its_task_to_the_queue() {
 }
 
 #[test]
+fn prepared_policy_stop_is_terminal_before_commit_and_post_commit_loss_is_indeterminate() {
+    use crate::agent::service::ExecutionPhase;
+    for committed in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let store = Store::with_root(root.path().to_path_buf()).unwrap();
+        let submitted = store
+            .submit("phase probe".into(), None, None, Some(1000), None)
+            .unwrap();
+        let claimed = store.claim_one().unwrap().unwrap();
+        assert_eq!(claimed.schema_version, 2);
+        assert_eq!(claimed.execution_phase, ExecutionPhase::Preparing);
+        let pid = claimed.worker_pid.unwrap();
+        let start = claimed.worker_start_time_ticks;
+        let prepare = "0123456789abcdef0123456789abcdef";
+        let commit = "fedcba9876543210fedcba9876543210";
+        let generation = "aaaaaaaaaaaaaaaa";
+        let mut job = store
+            .record_execution_prepared(&submitted.id, pid, start, prepare, commit, generation)
+            .unwrap();
+        assert_eq!(job.execution_phase, ExecutionPhase::Prepared);
+        let outcome = if committed {
+            job = store
+                .commit_execution(&job.id, pid, start, prepare, commit, generation)
+                .unwrap();
+            assert_eq!(job.execution_phase, ExecutionPhase::Committed);
+            post_assignment_interruption("extension channel lost after COMMIT".into(), false)
+        } else {
+            TaskOutcome::Failed("Activity capability policy changed before COMMIT".into())
+        };
+        finish_task_outcome(&store, &job, outcome);
+        let finished = store.locate(&job.id).unwrap().unwrap().1;
+        assert_eq!(finished.status, JobStatus::Error);
+        assert_eq!(finished.recovery_count, 0);
+        assert_eq!(
+            finished.execution_phase,
+            if committed {
+                ExecutionPhase::Indeterminate
+            } else {
+                ExecutionPhase::Prepared
+            }
+        );
+        assert!(store.claim_one().unwrap().is_none());
+    }
+}
+
+#[test]
 fn host_crash_after_a_side_effect_is_terminal_and_never_requeued() {
     let root = tempfile::tempdir().expect("tempdir");
     let marker_root = tempfile::tempdir().expect("marker tempdir");
@@ -315,6 +431,10 @@ fn host_crash_after_a_side_effect_is_terminal_and_never_requeued() {
         .expect("terminal job")
         .1;
     assert_eq!(finished.status, JobStatus::Error);
+    assert_eq!(
+        finished.execution_phase,
+        crate::agent::service::ExecutionPhase::Indeterminate
+    );
     assert_eq!(finished.recovery_count, 0);
     assert!(
         finished

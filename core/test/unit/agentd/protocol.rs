@@ -46,9 +46,13 @@ fn the_worker_channel_exposes_only_job_lifecycle_routes() {
             ROUTE_AUDIT,
             ROUTE_HEARTBEAT,
             ROUTE_RESULT,
-            ROUTE_APPROVAL
+            ROUTE_APPROVAL,
+            ROUTE_RECEIPT,
         ]
     );
+    assert_eq!(PROTOCOL_VERSION, 11);
+    assert_eq!(crate::extension_host::protocol::PROTOCOL_VERSION, 9);
+    assert!(!WORKER_ROUTES.contains(&"app_host"));
 }
 
 #[test]
@@ -93,6 +97,101 @@ fn approval_exchange_nonce_is_unpredictable_and_binds_the_exact_ask() {
     let encoded = serde_json::to_string(&first).unwrap();
     let decoded: ApprovalExchange = serde_json::from_str(&encoded).unwrap();
     assert_eq!(decoded, first);
+}
+
+#[test]
+fn activity_boundary_messages_are_constraints_not_authority_or_selectable_identity() {
+    let ask = json!({"ask":"boundary","verb":"fs.read","scope":{"kind":"path","value":"/workspace/file"}});
+    let decoded: ApprovalAsk = serde_json::from_value(ask.clone()).unwrap();
+    assert_eq!(decoded.verb(), "fs.read");
+    for key in [
+        "owner_uid",
+        "session_id",
+        "task_id",
+        "activity_id",
+        "revision",
+        "decision",
+        "caps",
+    ] {
+        let mut forged = ask.clone();
+        forged[key] = json!("forged");
+        assert!(
+            serde_json::from_value::<ApprovalAsk>(forged).is_err(),
+            "{key}"
+        );
+    }
+    for decision in ["normal", "require_approval", "deny"] {
+        assert!(serde_json::from_value::<ApprovalReply>(
+            json!({"status":"boundary","decision":decision})
+        )
+        .is_ok());
+    }
+    assert!(serde_json::from_value::<ApprovalReply>(
+        json!({"status":"boundary","decision":"allow"})
+    )
+    .is_err());
+    assert!(serde_json::from_value::<ApprovalReply>(
+        json!({"status":"boundary","decision":"normal","grant":"forged"})
+    )
+    .is_err());
+    assert_eq!(MAX_BOUNDARY_CHECKS, 4096);
+    assert_eq!(MAX_APPROVAL_ASKS, 128);
+}
+
+#[test]
+fn receipt_requests_are_closed_reports_not_identity_or_authority_requests() {
+    let report = crate::operations::receipts::capture(
+        uuid::Uuid::new_v4().to_string(),
+        "demo".into(),
+        "read".into(),
+        format!("sha256:{}", "a".repeat(64)),
+        Ok(Some("reported result".into())),
+    );
+    let frame = WorkerFrame::Receipt(Box::new(ReceiptRequest {
+        task_id: "task-a".into(),
+        correlation_id: 7,
+        report: Box::new(report),
+    }));
+    assert_eq!(frame.route(), ROUTE_RECEIPT);
+    assert_eq!(frame.task_id(), Some("task-a"));
+    let value = serde_json::to_value(&frame).unwrap();
+    for field in [
+        "owner_uid",
+        "activity_id",
+        "session_id",
+        "caps",
+        "source",
+        "effects_confirmed",
+    ] {
+        assert!(value["report"].get(field).is_none());
+        let mut forged = value.clone();
+        forged["report"][field] = serde_json::json!("forged");
+        assert!(serde_json::from_value::<WorkerFrame>(forged).is_err());
+        let mut forged = value.clone();
+        forged[field] = serde_json::json!("forged");
+        assert!(serde_json::from_value::<WorkerFrame>(forged).is_err());
+    }
+    let mut oversized = value;
+    oversized["report"]["result"]["preview"] = serde_json::json!("x".repeat(2049));
+    assert!(serde_json::from_value::<WorkerFrame>(oversized).is_err());
+    assert!(serde_json::from_value::<ReceiptReply>(serde_json::json!({
+        "status":"recorded","receipt_id":"id","caps":[]
+    }))
+    .is_err());
+}
+
+#[test]
+fn legacy_app_host_frames_cannot_reintroduce_dynamic_code_into_the_worker() {
+    for kind in ["app_host", "app_register", "app_service_call"] {
+        assert!(
+            serde_json::from_value::<WorkerFrame>(json!({
+                "kind":kind,"task_id":"task-a","correlation_id":1,
+                "request_id":"legacy","call":{"method":"check","params":{}}
+            }))
+            .is_err(),
+            "{kind}"
+        );
+    }
 }
 
 #[test]

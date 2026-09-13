@@ -866,6 +866,7 @@ def _load_manifest_service(path: pathlib.Path) -> tuple[str, str, List[_Tool]]:
             "runtime",
             "entry",
             "operations",
+            "objects",
             "ai",
             "mcp",
             "desktop",
@@ -920,7 +921,7 @@ def _load_manifest_service(path: pathlib.Path) -> tuple[str, str, List[_Tool]]:
             raise ManifestError(f"`mcp.tools[{index}]` must be an object")
         _reject_unknown_fields(
             raw_tool,
-            {"name", "summary", "args", "needs"},
+            {"name", "summary", "args", "needs", "effects"},
             f"`mcp.tools[{index}]`",
         )
         name = raw_tool.get("name")

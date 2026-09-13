@@ -139,6 +139,64 @@ fn declared_capability_and_product_resolve_only_their_locked_roots() {
     );
 }
 
+fn main_fixture() -> tempfile::TempDir {
+    let root = fixture();
+    let mut resolved: Value = serde_json::from_slice(
+        &std::fs::read(root.path().join("packaging/apps.lock.json")).unwrap(),
+    )
+    .unwrap();
+    resolved["repository"] = json!("https://github.com/example/apps.git");
+    resolved["branch"] = json!("main");
+    let mut selection = resolved.clone();
+    selection["version"] = json!(2);
+    selection.as_object_mut().unwrap().remove("revision");
+    write_json(root.path(), "packaging/apps.lock.json", &selection);
+    write_json(root.path(), "build/app-sources/resolved.json", &resolved);
+    root
+}
+
+#[test]
+fn main_selection_uses_the_prepared_immutable_snapshot_without_downloading() {
+    let root = main_fixture();
+    assert_eq!(
+        app_sources::app_dir_in(root.path(), "kv"),
+        root.path().join(format!(
+            "build/app-sources/{REVISION}/capabilities/storage-sdk/apps/kv"
+        ))
+    );
+    let selection: Value = serde_json::from_slice(
+        &std::fs::read(root.path().join("packaging/apps.lock.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(selection["branch"], "main");
+    assert!(selection.get("revision").is_none());
+}
+
+#[test]
+fn main_selection_requires_a_matching_prepared_snapshot() {
+    for field in [
+        "repository",
+        "branch",
+        "products",
+        "capabilities",
+        "apps",
+        "revision",
+    ] {
+        let root = main_fixture();
+        let path = root.path().join("build/app-sources/resolved.json");
+        let mut resolved: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        resolved[field] = json!("incorrect");
+        write_json(root.path(), "build/app-sources/resolved.json", &resolved);
+        assert!(
+            std::panic::catch_unwind(|| app_sources::app_dir_in(root.path(), "kv")).is_err(),
+            "{field}"
+        );
+    }
+    let root = main_fixture();
+    std::fs::remove_file(root.path().join("build/app-sources/resolved.json")).unwrap();
+    assert!(std::panic::catch_unwind(|| app_sources::app_dir_in(root.path(), "kv")).is_err());
+}
+
 #[test]
 fn missing_locked_capability_never_uses_the_local_os_copy() {
     for (group, app) in [

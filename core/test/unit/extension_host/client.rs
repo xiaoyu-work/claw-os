@@ -75,6 +75,111 @@ fn control_requests_carry_the_exact_task_session_and_lease() {
 }
 
 #[test]
+fn app_control_retains_main_task_identity_and_rejects_owner_or_policy_selectors() {
+    use crate::agent::tools::app_gateway::{
+        McpCallContext, McpPrincipal, McpPrincipalKind, CALL_CONTEXT_WIRE_VERSION,
+    };
+    let binding = binding();
+    let context = McpCallContext {
+        wire_version: CALL_CONTEXT_WIRE_VERSION,
+        call_id: "app-call-a".into(),
+        trace_id: "app-call-a".into(),
+        deadline_unix_ms: Some(crate::agentd::grant::now_ms() + 1_000),
+        session_id: binding.session_id.clone(),
+        task_id: Some(binding.task_id.clone()),
+        caller: McpPrincipal {
+            kind: McpPrincipalKind::SystemAgent,
+            id: binding.session_id.clone().unwrap(),
+            owner_uid: binding.owner_uid,
+        },
+    };
+    let audit = super::super::protocol::AppInvocationAudit::new(
+        "notes",
+        "list",
+        binding.capability_generation.clone(),
+        context,
+    )
+    .unwrap();
+    audit.validate_live_binding(&binding).unwrap();
+    let request = ControlRequest::new(
+        &binding,
+        HostAction::AppCall {
+            app_id: "notes".into(),
+            tool: "list".into(),
+            arguments: serde_json::json!({"prefix":"inert"}),
+            audit: audit.clone(),
+        },
+        1000,
+    );
+    assert_eq!(request.binding_digest, binding.digest().unwrap());
+    assert_eq!(request.lease_nonce, binding.lease_nonce);
+    for key in [
+        "owner_uid",
+        "activity_id",
+        "activity_policy",
+        "caps",
+        "execution_uid",
+    ] {
+        let mut value = serde_json::to_value(&request).unwrap();
+        value[key] = serde_json::json!("caller-selected");
+        assert!(
+            serde_json::from_value::<ControlRequest>(value).is_err(),
+            "{key}"
+        );
+    }
+    let mut other = binding.clone();
+    other.session_id = Some("other-session".into());
+    assert!(audit.validate_live_binding(&other).is_err());
+    other = binding.clone();
+    other.owner_uid += 1;
+    assert!(audit.validate_live_binding(&other).is_err());
+    other = binding.clone();
+    other.capability_generation = "b".repeat(16);
+    assert!(audit.validate_live_binding(&other).is_err());
+    other = binding;
+    other.purpose = super::super::protocol::HostPurpose::AppService;
+    assert!(audit.validate_live_binding(&other).is_err());
+}
+
+#[test]
+fn app_control_replies_cannot_be_substituted_by_receipts_or_another_request() {
+    let binding = binding();
+    let request = ControlRequest::new(
+        &binding,
+        HostAction::RunApp {
+            app_id: "notes".into(),
+            command: "read".into(),
+            args: vec!["/workspace/note".into()],
+        },
+        1000,
+    );
+    let reply = ControlResponse::ok(
+        RequestId::generate(),
+        HostResult::AppOutput {
+            output: Some("a reported result".into()),
+        },
+    );
+    let error = validate_control_response(&request, reply).unwrap_err();
+    assert_eq!(error.category, ExtensionErrorCategory::Protocol);
+    for result in [
+        serde_json::json!({"result":"receipt","receipt_id":"not-an-app-result"}),
+        serde_json::json!({"result":"approval","status":"granted"}),
+    ] {
+        let encoded = serde_json::json!({
+            "protocol":PROTOCOL_VERSION,"id":request.id,"ok":true,"result":result
+        });
+        assert!(serde_json::from_value::<ControlResponse>(encoded).is_err());
+    }
+    let response = ControlResponse::error(
+        request.id.clone(),
+        ExtensionErrorCategory::RemoteCallFailure,
+        "App invocation refused after live policy check",
+    );
+    let error = validate_control_response(&request, response).unwrap_err();
+    assert_eq!(error.category, ExtensionErrorCategory::RemoteCallFailure);
+}
+
+#[test]
 fn lifecycle_events_are_forwarded_as_typed_worker_audit() {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let binding = binding();

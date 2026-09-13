@@ -7,9 +7,10 @@ import json
 import subprocess
 import unittest
 from decimal import Decimal
+from pathlib import Path
 from unittest import mock
 
-from claw_os_sdk import ai, tools
+from claw_os_sdk import ai, objects, tools
 from claw_os_sdk.generated import (
     WIRE_ENUM,
     WIRE_MAX_LENGTH,
@@ -20,13 +21,20 @@ from claw_os_sdk.generated import (
     WIRE_REQUIRED,
     WIRE_TYPE,
     WIRE_UNKNOWN_FIELD,
+    FileChangePlan,
+    Manifest,
+    Mcptool,
+    Operation,
+    Operationeffect,
     WireDecodeError,
     WireDecimal,
+    _validate_wire_schema,
     decode_wire_json,
     encode_wire_json,
     validate_ai,
     validate_budget_show,
     validate_envelope,
+    validate_file_change_plan,
     validate_mcp_call_context,
     validate_tool,
     validate_tool_catalog,
@@ -460,6 +468,208 @@ class WireValidationTests(unittest.TestCase):
             ):
                 with self.assertRaises(tools.ToolUnavailable):
                     tools.call("echo", {}, app_id="notes")
+
+
+class FileChangePlanWireTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        root = Path(__file__).resolve().parents[3] / "wire" / "v1"
+        cls.vectors = json.loads((root / "file_change_plan.vectors.json").read_text(encoding="utf-8"))
+        cls.schema = json.loads((root / "file_change_plan.schema.json").read_text(encoding="utf-8"))
+
+    def test_file_change_plan_shared_vectors(self) -> None:
+        for case in self.vectors["cases"]:
+            value = copy.deepcopy(case["root"] if "root" in case else self.vectors["base"])
+            if "set" in case:
+                value.update(case["set"])
+            with self.subTest(name=case["name"]):
+                if case["code"] is None:
+                    validate_file_change_plan(value)
+                else:
+                    with self.assertRaises(WireDecodeError) as raised:
+                        validate_file_change_plan(value)
+                    self.assertEqual(raised.exception.code, case["code"])
+                    self.assertEqual(raised.exception.path, case["path"])
+
+    def test_file_change_plan_required_and_nullable_fields(self) -> None:
+        self.assertEqual(FileChangePlan.__required_keys__, set(self.vectors["base"]))
+        self.assertEqual(
+            FileChangePlan.__optional_keys__,
+            {"snapshot", "applied_at", "changed", "diagnostic"},
+        )
+        for field in self.vectors["base"]:
+            value = copy.deepcopy(self.vectors["base"])
+            del value[field]
+            with self.subTest(field=field), self.assertRaises(WireDecodeError) as raised:
+                validate_file_change_plan(value)
+            self.assertEqual(raised.exception.code, WIRE_REQUIRED)
+            self.assertEqual(raised.exception.path, f"$.{field}")
+        value = copy.deepcopy(self.vectors["base"])
+        value.update(snapshot=None, applied_at=None, changed=None, diagnostic=None)
+        validate_file_change_plan(value)
+        self.assertEqual(json.loads(encode_wire_json(value)), value)
+
+    def test_file_change_plan_schema_distinguishes_wire_and_semantic_bounds(self) -> None:
+        self.assertFalse(self.schema["additionalProperties"])
+        properties = self.schema["properties"]
+        for field in ("before_bytes", "after_bytes"):
+            self.assertEqual(properties[field]["minimum"], 0)
+            self.assertEqual(properties[field]["maximum"], 65536)
+        self.assertEqual(properties["warnings"]["maxItems"], 16)
+        self.assertIn("65536 UTF-8 bytes", properties["diff"]["description"])
+        self.assertIn("4096 UTF-8 bytes", properties["path"]["description"])
+        self.assertIn("1024 UTF-8 bytes", properties["warnings"]["items"]["description"])
+        for field in ("diff", "path"):
+            self.assertNotIn("maxLength", properties[field])
+        self.assertNotIn("wire_version", properties)
+
+    def test_file_change_plan_reference_uses_existing_object_helpers(self) -> None:
+        value = self.vectors["base"]
+        reference = objects.parse_reference(value["reference"])
+        self.assertEqual(reference["app_id"], "fs")
+        self.assertEqual(reference["object_type"], "change-plan")
+        self.assertEqual(reference["object_id"], value["path"])
+        self.assertEqual(reference["revision"], value["plan_id"])
+        self.assertEqual(objects.format_reference(reference), value["reference"])
+
+
+class OperationEffectSchemaTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        path = Path(__file__).resolve().parents[3] / "wire" / "v1" / "manifest.schema.json"
+        cls.schema = json.loads(path.read_text(encoding="utf-8"))
+        cls.operation = cls.schema["$defs"]["operation"]
+        cls.effect = cls.schema["$defs"]["operationEffect"]
+
+    def validate_effect(self, value: object) -> None:
+        _validate_wire_schema(self.effect, self.schema, value, "OperationEffect", "$")
+
+    def test_mcp_and_activity_manifest_contracts_coexist_without_legacy_session(self) -> None:
+        self.assertEqual(self.schema["properties"]["schema_version"]["const"], 2)
+        self.assertNotIn("session", self.schema["properties"])
+        self.assertEqual(self.schema["properties"]["mcp"]["$ref"], "#/$defs/mcpService")
+        self.assertEqual(self.schema["properties"]["objects"]["additionalProperties"], {"$ref": "#/$defs/objectType"})
+        self.assertNotIn("operations", self.schema["required"])
+        self.assertIn("mcp", Manifest.__optional_keys__)
+        self.assertIn("objects", Manifest.__optional_keys__)
+        self.assertNotIn("effects", self.schema["$defs"]["mcpTool"]["required"])
+        self.assertEqual(
+            self.schema["$defs"]["mcpTool"]["properties"]["effects"],
+            self.operation["properties"]["effects"],
+        )
+        self.assertIn("effects", Mcptool.__optional_keys__)
+        vectors_path = Path(__file__).resolve().parents[3] / "wire" / "v1" / "manifest_extensions.vectors.json"
+        vectors = json.loads(vectors_path.read_text(encoding="utf-8"))
+        for case in vectors["cases"]:
+            with self.subTest(case=case["name"]):
+                _validate_wire_schema(self.schema, self.schema, case["manifest"], "Manifest", "$")
+                self.assertEqual(json.loads(encode_wire_json(case["manifest"])), case["manifest"])
+                with self.assertRaises(WireDecodeError) as raised:
+                    _validate_wire_schema(self.schema, self.schema, {**case["manifest"], "session": {}}, "Manifest", "$")
+                self.assertEqual(raised.exception.code, WIRE_UNKNOWN_FIELD)
+                self.assertEqual(raised.exception.path, "$.session")
+
+    def test_operation_effect_schema_declares_optional_bounded_guidance(self) -> None:
+        self.assertNotIn("effects", self.operation["required"])
+        effects = self.operation["properties"]["effects"]
+        self.assertEqual(effects["type"], "array")
+        self.assertEqual(effects["maxItems"], 16)
+        self.assertEqual(effects["items"], {"$ref": "#/$defs/operationEffect"})
+        self.assertNotIn("default", effects)
+        self.assertEqual(self.effect["required"], ["kind", "label"])
+        self.assertFalse(self.effect["additionalProperties"])
+        properties = self.effect["properties"]
+        self.assertEqual(set(properties), {"kind", "label", "target_arg", "recovery"})
+        self.assertEqual(
+            properties["kind"]["enum"],
+            ["read", "create", "update", "delete", "external", "execute"],
+        )
+        self.assertEqual(
+            properties["recovery"]["enum"],
+            ["not_applicable", "reversible", "compensatable", "irreversible", "unknown"],
+        )
+        self.assertEqual(properties["recovery"]["default"], "unknown")
+        self.assertEqual(properties["label"]["$ref"], "#/$defs/localizedText")
+        self.assertIn("512 UTF-8 bytes", properties["label"]["description"])
+        self.assertEqual(properties["target_arg"]["type"], "string")
+
+    def test_operation_effect_structural_rules_accept_declared_kinds_and_recovery(self) -> None:
+        for kind in self.effect["properties"]["kind"]["enum"]:
+            self.validate_effect({"kind": kind, "label": {"en": "Declared effect"}})
+            for recovery in self.effect["properties"]["recovery"]["enum"]:
+                self.validate_effect(
+                    {
+                        "kind": kind,
+                        "label": {"en": "Declared effect", "fr": "Effet declare"},
+                        "target_arg": "paths",
+                        "recovery": recovery,
+                    }
+                )
+        for effects in ([], [{"kind": "read", "label": {"en": "Read"}}] * 16):
+            _validate_wire_schema(
+                self.operation["properties"]["effects"],
+                self.schema,
+                effects,
+                "OperationEffects",
+                "$",
+            )
+
+    def test_operation_effect_structural_rules_reject_invalid_or_authoritative_fields(self) -> None:
+        label = {"en": "Declared effect"}
+        cases = [
+            ({}, WIRE_REQUIRED, "$.kind"),
+            ({"kind": "read"}, WIRE_REQUIRED, "$.label"),
+            ({"kind": "write", "label": label}, WIRE_ENUM, "$.kind"),
+            ({"kind": False, "label": label}, WIRE_TYPE, "$.kind"),
+            ({"kind": "read", "label": "Read"}, WIRE_TYPE, "$.label"),
+            ({"kind": "read", "label": {"fr": "Lire"}}, WIRE_REQUIRED, "$.label.en"),
+            ({"kind": "read", "label": {"en": "Read", "fr": 1}}, WIRE_TYPE, "$.label.fr"),
+            ({"kind": "read", "label": label, "target_arg": []}, WIRE_TYPE, "$.target_arg"),
+            ({"kind": "read", "label": label, "recovery": None}, WIRE_TYPE, "$.recovery"),
+            ({"kind": "read", "label": label, "recovery": "automatic"}, WIRE_ENUM, "$.recovery"),
+        ]
+        for field in ("authority", "grant", "receipt", "file_diff", "inverse"):
+            cases.append(
+                ({"kind": "read", "label": label, field: True}, WIRE_UNKNOWN_FIELD, f"$.{field}")
+            )
+        for value, code, path in cases:
+            with self.subTest(value=value), self.assertRaises(WireDecodeError) as raised:
+                self.validate_effect(value)
+            self.assertEqual(raised.exception.code, code)
+            self.assertEqual(raised.exception.path, path)
+
+    def test_operation_effect_codegen_preserves_omission_and_explicit_declarations(self) -> None:
+        self.assertIn("effects", Operation.__optional_keys__)
+        self.assertEqual(Operationeffect.__required_keys__, {"kind", "label"})
+        self.assertEqual(Operationeffect.__optional_keys__, {"target_arg", "recovery"})
+        minimal: Operation = {"label": {"en": "Inspect"}}
+        self.assertNotIn("effects", json.loads(encode_wire_json(minimal)))
+        effect: Operationeffect = {"kind": "read", "label": {"en": "Read requested paths"}}
+        for effects in ([], [effect]):
+            operation: Operation = {"label": {"en": "Inspect"}, "effects": effects}
+            decoded = json.loads(encode_wire_json(operation))
+            self.assertEqual(decoded, operation)
+            if effects:
+                self.assertNotIn("recovery", decoded["effects"][0])
+                self.assertNotIn("target_arg", decoded["effects"][0])
+
+
+class McpEffectBindingTests(unittest.TestCase):
+    def test_mcp_effect_bindings_preserve_omission_empty_and_declared_values(self) -> None:
+        legacy: Mcptool = {"name": "notes.get", "summary": {"en": "Get note"}}
+        self.assertNotIn("effects", json.loads(encode_wire_json(legacy)))
+        minimal: Operationeffect = {"kind": "read", "label": {"en": "Read note"}}
+        for effects in (
+            [],
+            [minimal],
+            [{**minimal, "target_arg": "note_id", "recovery": "not_applicable"}],
+        ):
+            value: Mcptool = {**legacy, "effects": effects}
+            decoded = json.loads(encode_wire_json(value))
+            self.assertEqual(decoded, value)
+            self.assertIn("effects", decoded)
+        self.assertNotIn("recovery", minimal)
+        self.assertNotIn("target_arg", minimal)
 
 
 if __name__ == "__main__":

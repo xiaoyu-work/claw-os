@@ -4,9 +4,8 @@
 //! In-process callers file and spend approvals directly against
 //! `<caps-data>/approvals`, which is root-owned. An `agentd` worker runs
 //! as the task owner with no access to that tree and no broker route, so
-//! it installs a gateway that carries exactly two questions to `clawd`
-//! over its private job channel: "is there an approved grant for this
-//! exact verb and scope?" and "file or reuse a pending request for it".
+//! it installs a gateway that checks the Activity boundary, spends exact
+//! consent, or files a pending request over its private job channel.
 //!
 //! The gateway never carries a session, an owner, a task, a decision or
 //! a capability set. It may carry a digest of validated operation inputs,
@@ -35,6 +34,14 @@ pub trait ApprovalGateway: Send + Sync + std::fmt::Debug {
     /// Trusted execution context supplied by the broker assignment.
     /// The broker independently enforces the same value.
     fn context(&self) -> ConsentContext;
+
+    /// Read the broker's live Activity constraint before a standing-cap check.
+    /// Normal is not a grant; an unavailable answer must keep the gate closed.
+    fn boundary(
+        &self,
+        verb: Verb,
+        scope: &Scope,
+    ) -> Result<crate::activities::CapabilityBoundaryDecision, String>;
 
     /// Spend an exactly-matching approved grant, if one exists. `true`
     /// means the gate may proceed this once.

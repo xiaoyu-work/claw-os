@@ -1,4 +1,4 @@
-"""Pinned external App inputs must not create an unsigned runtime fallback."""
+"""App main resolves to coherent build snapshots without a runtime fallback."""
 
 import fnmatch
 import importlib.util
@@ -39,6 +39,7 @@ def published_source():
 
 @pytest.fixture
 def locked_source(tmp_path, monkeypatch):
+    monkeypatch.delenv(sources.SOURCE_LOCK_ENV, raising=False)
     upstream = tmp_path / "upstream"
     upstream.mkdir()
     git = ["git", "-C", str(upstream)]
@@ -66,6 +67,143 @@ def locked_source(tmp_path, monkeypatch):
     (root / "packaging" / "apps.lock.json").write_text(json.dumps(lock))
     monkeypatch.setattr(sources, "ROOT", root)
     return root, lock
+
+
+@pytest.fixture
+def main_source(locked_source):
+    root, locked = locked_source
+    subprocess.run(["git", "-C", locked["repository"], "branch", "-M", "main"], check=True)
+    selection = {key: value for key, value in locked.items() if key != "revision"}
+    selection.update(version=2, branch="main")
+    (root / "packaging/apps.lock.json").write_text(json.dumps(selection))
+    return root, selection
+
+
+def advance_source(selection, text):
+    upstream = Path(selection["repository"])
+    (upstream / "source-version").write_text(text)
+    git = ["git", "-C", str(upstream)]
+    subprocess.run([*git, "add", "--", "source-version"], check=True)
+    subprocess.run([*git, "commit", "--quiet", "-m", text], check=True)
+    return subprocess.check_output([*git, "rev-parse", "HEAD"], text=True).strip()
+
+
+def test_main_refreshes_without_editing_selection_or_previous_snapshot(main_source):
+    root, selection = main_source
+    original = (root / "packaging/apps.lock.json").read_bytes()
+    first = sources.prepare_sources(selection)
+    first_manifest = (first / "products/mail/apps/mail-ai/app.json").read_bytes()
+    latest = advance_source(selection, "next-main")
+    second = sources.prepare_sources(sources.read_lock())
+    assert second.name == latest
+    assert second != first
+    assert (second / "source-version").read_text() == "next-main"
+    assert not (first / "source-version").exists()
+    assert (first / "products/mail/apps/mail-ai/app.json").read_bytes() == first_manifest
+    assert (root / "packaging/apps.lock.json").read_bytes() == original
+    resolved = json.loads((root / "build/app-sources/resolved.json").read_text())
+    assert resolved["version"] == 1
+    assert resolved["branch"] == "main"
+    assert resolved["revision"] == latest
+
+
+def test_main_does_not_follow_another_branch(main_source):
+    _, selection = main_source
+    first = sources.prepare_sources(selection)
+    subprocess.run(["git", "-C", selection["repository"], "checkout", "-qb", "other"], check=True)
+    other = advance_source(selection, "other-branch")
+    assert other != first.name
+    assert sources.prepare_sources(selection) == first
+
+
+def test_failed_main_resolution_does_not_use_cached_source(main_source):
+    root, selection = main_source
+    source = sources.prepare_sources(selection)
+    recorded = (root / "build/app-sources/resolved.json").read_bytes()
+    subprocess.run(["git", "-C", selection["repository"], "branch", "-m", "gone"], check=True)
+    with pytest.raises(subprocess.CalledProcessError):
+        sources.prepare_sources(selection)
+    assert source.is_dir()
+    assert (root / "build/app-sources/resolved.json").read_bytes() == recorded
+
+
+def test_main_rejects_modified_snapshot_instead_of_resetting_it(main_source):
+    _, selection = main_source
+    source = sources.prepare_sources(selection)
+    changed = source / "products/mail/apps/mail-ai/app.json"
+    changed.write_text('{"modified": true}')
+    with pytest.raises(RuntimeError, match="modified"):
+        sources.prepare_sources(selection)
+    assert changed.read_text() == '{"modified": true}'
+
+
+def test_one_build_keeps_its_resolved_main_after_upstream_advances(main_source, tmp_path, monkeypatch):
+    root, selection = main_source
+    first = sources.prepare_sources(selection)
+    snapshot = tmp_path / "build-source.json"
+    sources.write_lock(snapshot, sources.resolved_lock(selection, first))
+    latest = advance_source(selection, "newer-main")
+    monkeypatch.setenv(sources.SOURCE_LOCK_ENV, str(snapshot))
+    assert sources.prepare_sources(sources.read_lock()) == first
+    assert sources.stage_products(tmp_path / "stage") == ["mail-ai"]
+    assert sources.read_lock()["revision"] == first.name
+    monkeypatch.delenv(sources.SOURCE_LOCK_ENV)
+    assert sources.prepare_sources(sources.read_lock()).name == latest
+    assert json.loads((root / "packaging/apps.lock.json").read_text()) == selection
+
+
+def test_main_cli_records_one_snapshot_for_all_build_steps(main_source, tmp_path):
+    root, selection = main_source
+    script = root / "scripts/app_sources.py"
+    script.parent.mkdir()
+    shutil.copy2(ROOT / "scripts/app_sources.py", script)
+    snapshot = tmp_path / "package/app-sources.json"
+    stage = tmp_path / "stage"
+    result = subprocess.run(
+        [sys.executable, str(script), "--write-lock", str(snapshot), "--stage", str(stage)],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "1"
+    resolved = json.loads(snapshot.read_text())
+    assert resolved["version"] == 1 and resolved["branch"] == "main"
+    assert (stage / "usr/lib/cos/apps/mail-ai").is_dir()
+    latest = advance_source(selection, "after-build-start")
+    assert latest != resolved["revision"]
+    reused = subprocess.run(
+        [sys.executable, str(script), "--app-path", "mail-ai"],
+        env={**os.environ, sources.SOURCE_LOCK_ENV: str(snapshot)},
+        capture_output=True, text=True,
+    )
+    assert reused.returncode == 0, reused.stderr
+    assert Path(reused.stdout.strip()) == (
+        root / "build/app-sources" / resolved["revision"] / "products/mail/apps/mail-ai"
+    )
+
+
+@pytest.mark.parametrize("field,value", [
+    ("branch", "other"), ("repository", "another-repository"), ("apps", ["other-app"]),
+])
+def test_prepared_snapshot_must_match_source_selection(main_source, tmp_path, monkeypatch, field, value):
+    _, selection = main_source
+    source = sources.prepare_sources(selection)
+    resolved = sources.resolved_lock(selection, source)
+    resolved[field] = value
+    snapshot = tmp_path / "wrong-source.json"
+    sources.write_lock(snapshot, resolved)
+    monkeypatch.setenv(sources.SOURCE_LOCK_ENV, str(snapshot))
+    with pytest.raises(ValueError, match="do not match"):
+        sources.read_lock()
+
+
+@pytest.mark.parametrize("change", [
+    {"branch": "other"}, {"revision": "a" * 40}, {"version": 3},
+])
+def test_main_selection_rejects_ambiguous_or_unsupported_inputs(main_source, change):
+    root, selection = main_source
+    (root / "packaging/apps.lock.json").write_text(json.dumps({**selection, **change}))
+    with pytest.raises(ValueError):
+        sources.read_lock()
 
 
 def test_staging_uses_exact_locked_source(locked_source, tmp_path):
@@ -446,11 +584,17 @@ def test_real_agent_block_stages_common_once_and_counts_external_nested_apps(tmp
     (packaging / "claw-os-desktop/apps.list").write_text("desktop-app\n")
     (project / "scripts").mkdir()
     (project / "scripts/app_sources.py").write_text(
-        'import json\n'
+        'import json, os\n'
         'from pathlib import Path\n'
         'import sys\n'
         'with Path(__file__).with_name("calls.jsonl").open("a") as log:\n'
         '    log.write(json.dumps(sys.argv[1:]) + "\\n")\n'
+        'if "--write-lock" in sys.argv:\n'
+        '    snapshot = Path(sys.argv[sys.argv.index("--write-lock") + 1])\n'
+        '    snapshot.parent.mkdir(parents=True)\n'
+        '    snapshot.write_text("RESOLVED_MAIN_SNAPSHOT")\n'
+        'else:\n'
+        '    assert Path(os.environ["CLAW_APP_SOURCE_LOCK"]).read_text() == "RESOLVED_MAIN_SNAPSHOT"\n'
         'if "--stage" in sys.argv:\n'
         '    for relative in ("alpha", "gateway/slack", "gateway/email"):\n'
         '        app = Path(sys.argv[sys.argv.index("--stage") + 1]) / "usr/lib/cos/apps" / relative\n'
@@ -468,7 +612,7 @@ def test_real_agent_block_stages_common_once_and_counts_external_nested_apps(tmp
     (stage / "usr/lib/cos/python").mkdir()
     script = (ROOT / "packaging/deb/build-debs.sh").read_text()
     block = script.split("# All non-graphical apps", 1)[1]
-    block = block[block.index("DESKTOP_APPS_FILE="):]
+    block = block[block.index("APP_SOURCE_LOCK="):]
     block = block.split('if [ -d "$PROJECT_DIR/skills" ]; then', 1)[0]
     subprocess.run(["bash", "-euc", block], check=True, env={
         **os.environ, "PROJECT_DIR": str(project), "SCRIPT_DIR": str(packaging),
@@ -483,6 +627,7 @@ def test_real_agent_block_stages_common_once_and_counts_external_nested_apps(tmp
     assert (stage / "usr/lib/cos/python/canonical_argv.py").read_text() == "SHARED_PARSER = True\n"
     calls = [json.loads(line) for line in (project / "scripts/calls.jsonl").read_text().splitlines()]
     assert calls == [
+        ["--write-lock", str(stage / "usr/share/doc/claw-os-agent/app-sources.json")],
         ["--app-path", "desktop-app"], ["--stage-shared", str(stage)],
         ["--stage", str(stage), "--package", "agent"], ["--count"],
     ]
@@ -638,19 +783,22 @@ def test_published_capability_pin_stages_all_partitions_and_real_agent_runtime(t
     assert len(lock["products"]) == 24
     assert len(lock["apps"]) == 75
     source = sources.prepare_sources(lock)
+    lock = sources.resolved_lock(lock, source)
+    snapshot = tmp_path / "selected-apps.json"
+    sources.write_lock(snapshot, lock)
     expected = set(lock["apps"])
     desktop = expected & set(sources.desktop_apps())
     assert len(desktop) == 12
     assert len(expected - desktop) == 63
-    assert set(sources.stage_products(tmp_path / "all")) == expected
-    assert set(sources.stage_products(tmp_path / "agent", "agent")) == expected - desktop
-    assert set(sources.stage_products(tmp_path / "desktop", "desktop")) == desktop
+    assert set(sources.stage_products(tmp_path / "all", lock=lock)) == expected
+    assert set(sources.stage_products(tmp_path / "agent", "agent", lock=lock)) == expected - desktop
+    assert set(sources.stage_products(tmp_path / "desktop", "desktop", lock=lock)) == desktop
     assert not (tmp_path / "desktop/usr/lib/cos/python/claw_files").exists()
-    assert sources.app_path("doc") == source / "capabilities/document-engine/apps/doc"
-    assert sources.app_path("db") == source / "capabilities/storage-sdk/apps/db"
-    assert sources.app_path("kv") == source / "capabilities/storage-sdk/apps/kv"
-    assert sources.app_path("net") == source / "capabilities/http/apps/net"
-    assert sources.app_path("summarize") == source / "capabilities/ai-helpers/apps/summarize"
+    assert sources.app_path("doc", lock=lock) == source / "capabilities/document-engine/apps/doc"
+    assert sources.app_path("db", lock=lock) == source / "capabilities/storage-sdk/apps/db"
+    assert sources.app_path("kv", lock=lock) == source / "capabilities/storage-sdk/apps/kv"
+    assert sources.app_path("net", lock=lock) == source / "capabilities/http/apps/net"
+    assert sources.app_path("summarize", lock=lock) == source / "capabilities/ai-helpers/apps/summarize"
     assert not (ROOT / "apps").exists()
     for partition_name in ("all", "agent", "desktop"):
         assert not (tmp_path / partition_name / "usr/lib/cos/apps/_shared").exists()
@@ -670,12 +818,15 @@ def test_published_capability_pin_stages_all_partitions_and_real_agent_runtime(t
                         ignore=shutil.ignore_patterns("__pycache__", "test_*.py"))
     script = (ROOT / "packaging/deb/build-debs.sh").read_text()
     block = script.split("# All non-graphical apps", 1)[1]
-    block = block[block.index("DESKTOP_APPS_FILE="):]
+    block = block[block.index("APP_SOURCE_LOCK="):]
     block = block.split('if [ -d "$PROJECT_DIR/skills" ]; then', 1)[0]
     subprocess.run(["bash", "-euc", block], check=True, env={
         **os.environ, "PROJECT_DIR": str(ROOT), "SCRIPT_DIR": str(ROOT / "packaging/deb"),
-        "AGENT_STAGE": str(staged),
+        "AGENT_STAGE": str(staged), sources.SOURCE_LOCK_ENV: str(snapshot),
     })
+    assert json.loads(
+        (staged / "usr/share/doc/claw-os-agent/app-sources.json").read_text()
+    ) == lock
     for name in ("_shared", "gateway", "canonical_argv.py"):
         assert _app_payload(python / name) == _app_payload(source / "shared/python" / name, source=True)
     assert not (staged / "usr/lib/cos/apps/_shared").exists()
@@ -968,6 +1119,7 @@ def test_native_inputs_follow_lock_updates_without_stale_files(locked_source):
     assert not (destination / "claw-applet-calendar/removed.rs").exists()
     assert (destination / "unrelated/keep").read_text() == "preserve"
     assert (destination / "revision").read_text().strip() == lock["revision"]
+    assert json.loads((destination / "source-lock.json").read_text()) == lock
     cached = sources.prepare_sources(lock)
     (cached / "products/calendar/native/Cargo.toml").write_text("tampered")
     with pytest.raises(RuntimeError, match="modified"):

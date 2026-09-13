@@ -87,7 +87,7 @@ pub(crate) fn show_apps(
 }
 
 pub(crate) fn show_app_help(name: &str, app: &apps::App) -> Result<Option<String>, String> {
-    let output = json!({
+    let mut output = json!({
         "app": name,
         "label": app.manifest.name.current(),
         "version": app.manifest.version,
@@ -95,6 +95,7 @@ pub(crate) fn show_app_help(name: &str, app: &apps::App) -> Result<Option<String
         "commands": app_command_labels(app),
         "hint": format!("Run: cos app {name} <command> [args]"),
     });
+    append_object_schema(&mut output, app);
     Ok(Some(output.to_string()))
 }
 
@@ -244,6 +245,41 @@ pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandS
                     example: "cos review deny rv-0123456789abcdef0123456789abcdef",
                 },
             ],
+        ),
+        (
+            "activity",
+            "Owner-scoped goals shared by terminal, Web, and desktop",
+            activity_schemas(),
+        ),
+        (
+            "object",
+            "Authenticated App object contracts and explicit resolution",
+            object_schemas(),
+        ),
+        (
+            "operation",
+            "Non-executing App effect previews",
+            vec![CommandSchema {
+                command: "preview",
+                description: "Preview App declarations, never authorize or execute them",
+                params: vec![
+                    Param::positional("app", "string", true, "Installed App ID"),
+                    Param::positional("operation", "string", true, "Declared operation"),
+                    Param::flag("--activity", "uuid", false, "Owner-scoped Activity context"),
+                    Param::positional("args", "array<string>", false, "App arguments after --; not executed"),
+                ],
+                example: "cos operation preview fs write -- /home/user/draft.md --content Draft",
+            }, CommandSchema {
+                command: "execute",
+                description: "Execute through the normal App gate and record an unverified outcome report",
+                params: vec![
+                    Param::positional("app", "string", true, "Installed App ID"),
+                    Param::positional("operation", "string", true, "Declared operation"),
+                    Param::flag("--activity", "uuid", true, "Active owner-scoped Activity"),
+                    Param::positional("args", "array<string>", false, "App arguments after --; stdin is not forwarded"),
+                ],
+                example: "cos operation execute kv get --activity 00000000-0000-4000-8000-000000000001 -- release.status",
+            }],
         ),
         (
             "checkpoint",
@@ -608,6 +644,404 @@ pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandS
     ]
 }
 
+fn activity_schemas() -> Vec<CommandSchema> {
+    let metadata = |goal_required| {
+        vec![
+            Param::flag("--goal", "string", goal_required, "Desired outcome"),
+            Param::flag(
+                "--criteria",
+                "string",
+                false,
+                "How goal achievement will be confirmed",
+            ),
+            Param::flag(
+                "--boundaries",
+                "string",
+                false,
+                "Planning constraints; does not grant additional permissions",
+            ),
+            Param::flag(
+                "--resource",
+                "string",
+                false,
+                "LABEL=REFERENCE (repeatable; replaces the resource list)",
+            ),
+        ]
+    };
+    let id = || Param::positional("id", "uuid", true, "Activity ID");
+    let state_entry = || {
+        vec![
+            id(),
+            Param::flag(
+                "--reference",
+                "string",
+                true,
+                "Existing canonical App resource reference",
+            ),
+            Param::flag(
+                "--id",
+                "uuid",
+                false,
+                "Idempotency key; reuse it when retrying a submission",
+            ),
+            Param::flag(
+                "--supersedes",
+                "uuid",
+                false,
+                "Current entry to correct; history is preserved",
+            ),
+        ]
+    };
+    let mut observation = state_entry();
+    observation.extend([
+        Param::flag(
+            "--source",
+            "enum:user_statement|agent_inference",
+            false,
+            "Reported classification; not proof of authorship or truth",
+        ),
+        Param::flag(
+            "--text",
+            "string",
+            false,
+            "Statement or inference (required unless linking a receipt)",
+        ),
+        Param::flag(
+            "--receipt",
+            "uuid",
+            false,
+            "Link an existing Activity/App receipt instead of supplying text",
+        ),
+        Param::flag(
+            "--observed-at",
+            "RFC3339 timestamp",
+            false,
+            "Reported window start; requires --valid-until",
+        ),
+        Param::flag(
+            "--valid-until",
+            "RFC3339 timestamp",
+            false,
+            "Reported window end; not verified freshness",
+        ),
+    ]);
+    let mut relation = state_entry();
+    relation.extend([
+        Param::flag(
+            "--target",
+            "string",
+            true,
+            "Another attached canonical App reference",
+        ),
+        Param::flag(
+            "--relation",
+            "enum:related_to|depends_on|derived_from",
+            true,
+            "Planning relation; never an execution dependency",
+        ),
+        Param::flag("--note", "string", false, "Optional relationship note"),
+    ]);
+    let mut retraction = state_entry();
+    retraction.push(Param::flag(
+        "--reason",
+        "string",
+        true,
+        "Why the --supersedes entry is retracted",
+    ));
+    let mut create = vec![Param::positional("title", "string", true, "Activity title")];
+    create.extend(metadata(true));
+    let mut update = vec![
+        id(),
+        Param::flag("--title", "string", false, "Replacement title"),
+    ];
+    update.extend(metadata(false));
+    update.push(Param::flag(
+        "--clear-resources",
+        "bool",
+        false,
+        "Remove references without deleting the referenced data",
+    ));
+    let mut schemas = vec![
+        CommandSchema {
+            command: "capability-policy",
+            description: "Read shared Activity capability constraints; missing rules mean ordinary permission checks",
+            params: vec![id()],
+            example: "cos activity capability-policy 00000000-0000-4000-8000-000000000001",
+        },
+        CommandSchema {
+            command: "set-capability-policy",
+            description: "Create or revise a policy without granting permissions or re-enabling a disabled policy; changes stop old-policy attempts, not admitted effects",
+            params: vec![
+                id(),
+                Param::flag("--policy", "json", true, "Draft {rules:[{verb,mode,scopes}]}, at most 16 KiB and 64 unique catalogue verbs; normal/require_approval require 1-32 compatible scopes; deny uses []"),
+                Param::flag("--expected-revision", "integer", false, "Positive current revision when updating; omit only for initial creation"),
+            ],
+            example: r#"cos activity set-capability-policy 00000000-0000-4000-8000-000000000001 --policy '{"rules":[{"verb":"fs.delete","mode":"deny","scopes":[]}]}'"#,
+        },
+        CommandSchema {
+            command: "enable-capability-policy",
+            description: "Enable an existing policy for an active or paused Activity; ordinary capability and provenance checks still apply",
+            params: vec![id(), Param::flag("--expected-revision", "integer", true, "Positive current policy revision; stale writes are refused")],
+            example: "cos activity enable-capability-policy 00000000-0000-4000-8000-000000000001 --expected-revision 2",
+        },
+        CommandSchema {
+            command: "disable-capability-policy",
+            description: "Block all controlled capability checks, including for terminal Activities; never delete the policy or undo admitted effects",
+            params: vec![id(), Param::flag("--expected-revision", "integer", true, "Positive current policy revision; stale writes are refused")],
+            example: "cos activity disable-capability-policy 00000000-0000-4000-8000-000000000001 --expected-revision 2",
+        },
+        CommandSchema {
+            command: "execution-limits",
+            description: "Read Activity attempt/turn/expiry controls; no capabilities are granted",
+            params: vec![id()],
+            example: "cos activity execution-limits 00000000-0000-4000-8000-000000000001",
+        },
+        CommandSchema {
+            command: "set-execution-limits",
+            description: "Create or revise finite Activity limits without resetting usage or enabling a disabled policy",
+            params: vec![
+                id(),
+                Param::flag("--revision", "integer", false, "Current revision when updating; omit only for initial creation"),
+                Param::flag("--max-attempts", "integer", true, "Lifetime attempt ceiling, 1-1000"),
+                Param::flag("--max-turns", "integer", true, "Maximum model turns per attempt, 1-100"),
+                Param::flag("--expires-at", "RFC3339 timestamp", true, "Future expiry of this limit policy"),
+            ],
+            example: "cos activity set-execution-limits 00000000-0000-4000-8000-000000000001 --max-attempts 10 --max-turns 5 --expires-at 2026-09-18T00:00:00Z",
+        },
+        CommandSchema {
+            command: "enable-execution-limits",
+            description: "Explicitly enable an unexpired policy at the expected revision",
+            params: vec![id(), Param::flag("--revision", "integer", true, "Current policy revision")],
+            example: "cos activity enable-execution-limits 00000000-0000-4000-8000-000000000001 --revision 2",
+        },
+        CommandSchema {
+            command: "disable-execution-limits",
+            description: "Disable bounded work without deleting its policy, clearing usage or granting unlimited work",
+            params: vec![id(), Param::flag("--revision", "integer", true, "Current policy revision")],
+            example: "cos activity disable-execution-limits 00000000-0000-4000-8000-000000000001 --revision 2",
+        },
+        CommandSchema {
+            command: "object-state",
+            description: "Read caller-reported object state, time windows, relations and correction history",
+            params: vec![
+                id(),
+                Param::flag("--reference", "string", false, "Filter by exact attached App reference"),
+                Param::flag("--limit", "integer", false, "Maximum entries, 1-100 (default 50)"),
+            ],
+            example: "cos activity object-state 00000000-0000-4000-8000-000000000001",
+        },
+        CommandSchema {
+            command: "observe",
+            description: "Annotate an attached object without fetching its data or granting authority",
+            params: observation,
+            example: "cos activity observe 00000000-0000-4000-8000-000000000001 --reference 'app://kv/entry?id=release.status' --text 'Waiting for review'",
+        },
+        CommandSchema {
+            command: "relate",
+            description: "Add a non-executing planning relationship between attached objects",
+            params: relation,
+            example: "cos activity relate 00000000-0000-4000-8000-000000000001 --reference 'app://kv/entry?id=release.status' --target 'app://kv/entry?id=review.status' --relation depends_on",
+        },
+        CommandSchema {
+            command: "retract-object-state",
+            description: "Supersede an entry with an explicit retraction while preserving history",
+            params: retraction,
+            example: "cos activity retract-object-state 00000000-0000-4000-8000-000000000001 --reference 'app://kv/entry?id=release.status' --supersedes 00000000-0000-4000-8000-000000000002 --reason 'No longer supported'",
+        },
+        CommandSchema {
+            command: "record-object-state",
+            description: "Submit the same bounded object-state draft used by graphical clients",
+            params: vec![
+                id(),
+                Param::flag("--stdin", "bool", true, "Read at most 16 KiB of entry JSON from piped stdin"),
+            ],
+            example: "cos activity record-object-state 00000000-0000-4000-8000-000000000001 --stdin < entry.json",
+        },
+        CommandSchema {
+            command: "receipts",
+            description: "Read caller-reported results without inferring goal completion or verified effects",
+            params: vec![
+                id(),
+                Param::flag("--limit", "integer", false, "Maximum receipts, 1-100 (default 50)"),
+            ],
+            example: "cos activity receipts 00000000-0000-4000-8000-000000000001",
+        },
+        CommandSchema {
+            command: "record-receipt",
+            description: "Retry recording a bounded report from stdin without re-executing the operation",
+            params: vec![
+                id(),
+                Param::flag("--stdin", "bool", true, "Read at most 16 KiB of report JSON from piped stdin"),
+            ],
+            example: "cos activity record-receipt 00000000-0000-4000-8000-000000000001 --stdin < report.json",
+        },
+        CommandSchema {
+            command: "objects",
+            description: "Describe attached App references without reading their data",
+            params: vec![id()],
+            example: "cos activity objects 00000000-0000-4000-8000-000000000001",
+        },
+        CommandSchema {
+            command: "attach-object",
+            description: "Atomically attach a declared App object without invoking it",
+            params: vec![
+                id(),
+                Param::flag("--label", "string", true, "User-facing label"),
+                Param::flag("--app", "string", true, "Installed App ID"),
+                Param::flag("--type", "string", true, "Object type declared by the App"),
+                Param::flag("--object-id", "string", true, "Opaque App-owned object ID"),
+                Param::flag("--revision", "string", false, "Optional App revision constraint"),
+            ],
+            example: "cos activity attach-object 00000000-0000-4000-8000-000000000001 --label Release --app kv --type entry --object-id release.status",
+        },
+        CommandSchema {
+            command: "create",
+            description: "Create a persistent Activity without starting a task",
+            params: create,
+            example: "cos activity create \"Release v2\" --goal \"Publish next Friday\"",
+        },
+        CommandSchema {
+            command: "list",
+            description: "List only the authenticated owner's Activities",
+            params: vec![
+                Param::flag(
+                    "--state",
+                    "enum:active|paused|completed|cancelled",
+                    false,
+                    "Filter by Activity lifecycle state",
+                ),
+                Param::flag("--limit", "integer", false, "Maximum records, 1-100 (default 50)"),
+            ],
+            example: "cos activity list --state active",
+        },
+        CommandSchema {
+            command: "show",
+            description: "Read a shared Activity view with bounded recent job results",
+            params: vec![
+                id(),
+                Param::flag("--limit", "integer", false, "Maximum related jobs, 1-100 (default 50)"),
+            ],
+            example: "cos activity show 00000000-0000-4000-8000-000000000001",
+        },
+        CommandSchema {
+            command: "update",
+            description: "Change supplied fields of an active or paused Activity",
+            params: update,
+            example: "cos activity update 00000000-0000-4000-8000-000000000001 --criteria \"Release is available\"",
+        },
+        CommandSchema {
+            command: "run",
+            description: "Submit durable work using the Activity goal or an explicit prompt",
+            params: vec![
+                id(),
+                Param::positional("prompt", "string", false, "Work request (default: Activity goal)"),
+                Param::flag("--session", "string", false, "Continue an associated session"),
+                Param::flag("--max-turns", "integer", false, "Positive per-job model-turn limit"),
+            ],
+            example: "cos activity run 00000000-0000-4000-8000-000000000001 \"Prepare a release draft\"",
+        },
+        CommandSchema {
+            command: "complete",
+            description: "Explicitly confirm that the goal has been achieved",
+            params: vec![
+                id(),
+                Param::flag("--note", "string", true, "User confirmation of the achieved outcome"),
+            ],
+            example: "cos activity complete 00000000-0000-4000-8000-000000000001 --note \"Reviewed and published\"",
+        },
+    ];
+    for (command, description, example) in [
+        (
+            "pause",
+            "Prevent future work without undoing in-flight effects",
+            "cos activity pause 00000000-0000-4000-8000-000000000001",
+        ),
+        (
+            "resume",
+            "Resume or explicitly reopen an Activity",
+            "cos activity resume 00000000-0000-4000-8000-000000000001",
+        ),
+        (
+            "cancel",
+            "End an Activity without claiming that its goal was achieved",
+            "cos activity cancel 00000000-0000-4000-8000-000000000001",
+        ),
+    ] {
+        schemas.push(CommandSchema {
+            command,
+            description,
+            params: vec![id()],
+            example,
+        });
+    }
+    schemas
+}
+
+fn object_schemas() -> Vec<CommandSchema> {
+    vec![
+        CommandSchema {
+            command: "catalog",
+            description: "List verified App object declarations without executing Apps",
+            params: vec![Param::positional("app", "string", false, "Optional App ID")],
+            example: "cos object catalog kv",
+        },
+        CommandSchema {
+            command: "reference",
+            description:
+                "Create a canonical reference; this does not prove existence or grant access",
+            params: vec![
+                Param::positional("app", "string", true, "App ID"),
+                Param::positional("type", "string", true, "App-declared object type"),
+                Param::positional("id", "string", true, "Opaque object ID"),
+                Param::flag(
+                    "--revision",
+                    "string",
+                    false,
+                    "Optional revision constraint",
+                ),
+            ],
+            example: "cos object reference kv entry release.status",
+        },
+        CommandSchema {
+            command: "describe",
+            description: "Read authenticated declaration and invocation metadata, not object data",
+            params: vec![Param::positional(
+                "reference",
+                "string",
+                true,
+                "Canonical App object URI",
+            )],
+            example: "cos object describe 'app://kv/entry?id=release.status'",
+        },
+        CommandSchema {
+            command: "resolve",
+            description:
+                "Execute the declared App operation with its ordinary permissions and audit",
+            params: vec![Param::positional(
+                "reference",
+                "string",
+                true,
+                "Canonical App object URI",
+            )],
+            example: "cos object resolve 'app://kv/entry?id=release.status'",
+        },
+    ]
+}
+
+fn append_object_schema(output: &mut Value, app: &apps::App) {
+    match apps::verified_object_schema(app) {
+        Ok(objects)
+            if objects
+                .as_object()
+                .is_some_and(|objects| !objects.is_empty()) =>
+        {
+            output["objects"] = objects;
+        }
+        Ok(_) => {}
+        Err(error) => output["objects_error"] = json!(error),
+    }
+}
+
 fn command_schema_value(app_name: &str, command: &str) -> Result<Value, String> {
     let mut output = cli_catalog::command_help(app_name, command)
         .ok_or_else(|| format!("unknown command: cos {app_name} {command}"))?;
@@ -718,11 +1152,20 @@ pub(crate) fn show_app_schema(app_name: &str, app: &apps::App) -> Result<Option<
         }));
     }
 
-    let output = json!({
+    let mut output = json!({
         "app": app_name,
         "label": app.manifest.name.current(),
         "description": app.manifest.summary.current(),
         "commands": commands,
     });
+    append_object_schema(&mut output, app);
     Ok(Some(output.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/cli_help.rs"
+    ));
 }

@@ -15,8 +15,48 @@ pub const MAX_REQUEST_ID_BYTES: usize = 64;
 /// Routes used by unprivileged desktop consumers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Command {
+    #[serde(rename = "activity.create")]
+    ActivityCreate,
+    #[serde(rename = "activity.list")]
+    ActivityList,
+    #[serde(rename = "activity.get")]
+    ActivityGet,
+    #[serde(rename = "activity.update")]
+    ActivityUpdate,
+    #[serde(rename = "activity.transition")]
+    ActivityTransition,
+    #[serde(rename = "activity.run")]
+    ActivityRun,
+    #[serde(rename = "activity.execution_limits.get")]
+    ActivityExecutionLimitsGet,
+    #[serde(rename = "activity.execution_limits.set")]
+    ActivityExecutionLimitsSet,
+    #[serde(rename = "activity.execution_limits.enabled")]
+    ActivityExecutionLimitsEnabled,
+    #[serde(rename = "activity.capability_policy.get")]
+    ActivityCapabilityPolicyGet,
+    #[serde(rename = "activity.capability_policy.set")]
+    ActivityCapabilityPolicySet,
+    #[serde(rename = "activity.capability_policy.enabled")]
+    ActivityCapabilityPolicyEnabled,
+    #[serde(rename = "activity.objects")]
+    ActivityObjects,
+    #[serde(rename = "activity.object.attach")]
+    ActivityObjectAttach,
+    #[serde(rename = "activity.object_state.list")]
+    ActivityObjectStateList,
+    #[serde(rename = "activity.object_state.record")]
+    ActivityObjectStateRecord,
+    #[serde(rename = "activity.operation.preview")]
+    ActivityOperationPreview,
+    #[serde(rename = "activity.receipts")]
+    ActivityReceipts,
     #[serde(rename = "task.submit")]
     TaskSubmit,
+    #[serde(rename = "task.get")]
+    TaskGet,
+    #[serde(rename = "task.retry")]
+    TaskRetry,
     #[serde(rename = "task.stream")]
     TaskStream,
     #[serde(rename = "task.cancel")]
@@ -61,8 +101,28 @@ impl Command {
         )
     }
 
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 36] = [
+        Self::ActivityCreate,
+        Self::ActivityList,
+        Self::ActivityGet,
+        Self::ActivityUpdate,
+        Self::ActivityTransition,
+        Self::ActivityRun,
+        Self::ActivityExecutionLimitsGet,
+        Self::ActivityExecutionLimitsSet,
+        Self::ActivityExecutionLimitsEnabled,
+        Self::ActivityCapabilityPolicyGet,
+        Self::ActivityCapabilityPolicySet,
+        Self::ActivityCapabilityPolicyEnabled,
+        Self::ActivityObjects,
+        Self::ActivityObjectAttach,
+        Self::ActivityObjectStateList,
+        Self::ActivityObjectStateRecord,
+        Self::ActivityOperationPreview,
+        Self::ActivityReceipts,
         Self::TaskSubmit,
+        Self::TaskGet,
+        Self::TaskRetry,
         Self::TaskStream,
         Self::TaskCancel,
         Self::MemorySessions,
@@ -82,7 +142,27 @@ impl Command {
 
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::ActivityCreate => "activity.create",
+            Self::ActivityList => "activity.list",
+            Self::ActivityGet => "activity.get",
+            Self::ActivityUpdate => "activity.update",
+            Self::ActivityTransition => "activity.transition",
+            Self::ActivityRun => "activity.run",
+            Self::ActivityExecutionLimitsGet => "activity.execution_limits.get",
+            Self::ActivityExecutionLimitsSet => "activity.execution_limits.set",
+            Self::ActivityExecutionLimitsEnabled => "activity.execution_limits.enabled",
+            Self::ActivityCapabilityPolicyGet => "activity.capability_policy.get",
+            Self::ActivityCapabilityPolicySet => "activity.capability_policy.set",
+            Self::ActivityCapabilityPolicyEnabled => "activity.capability_policy.enabled",
+            Self::ActivityObjects => "activity.objects",
+            Self::ActivityObjectAttach => "activity.object.attach",
+            Self::ActivityObjectStateList => "activity.object_state.list",
+            Self::ActivityObjectStateRecord => "activity.object_state.record",
+            Self::ActivityOperationPreview => "activity.operation.preview",
+            Self::ActivityReceipts => "activity.receipts",
             Self::TaskSubmit => "task.submit",
+            Self::TaskGet => "task.get",
+            Self::TaskRetry => "task.retry",
             Self::TaskStream => "task.stream",
             Self::TaskCancel => "task.cancel",
             Self::MemorySessions => "memory.sessions",

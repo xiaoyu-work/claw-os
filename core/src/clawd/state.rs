@@ -247,6 +247,12 @@ impl DaemonState {
         &self,
         authorization: super::app_services::AppCallAuthorization,
     ) -> Result<String, String> {
+        if let Some(activity) = &authorization.activity {
+            if activity.owner_uid != authorization.owner_uid {
+                return Err("App call Activity owner does not match its authorization".to_string());
+            }
+            activity.check()?;
+        }
         let now = crate::agentd::grant::now_ms();
         let mut authorizations = self
             .inner
@@ -286,6 +292,9 @@ impl DaemonState {
         }
         if authorization.action_digest != action_digest {
             return Err("App call authorization does not match the requested action".to_string());
+        }
+        if let Some(activity) = &authorization.activity {
+            activity.check()?;
         }
         Ok(authorization)
     }

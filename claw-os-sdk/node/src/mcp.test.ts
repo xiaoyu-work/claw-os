@@ -2,10 +2,11 @@ import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import {
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { PassThrough, Writable } from "node:stream";
 
 import {
@@ -212,6 +213,28 @@ test("manifest contract is closed and requires tools", () => {
     { ...base, mcp: { tools: [] } },
   ]) {
     assert.throws(() => App.fromManifest(writeManifest(manifest)), ManifestError);
+  }
+});
+
+test("shared object and effect metadata preserves MCP-only tool binding", async () => {
+  const vectors = JSON.parse(readFileSync(resolve(
+    __dirname, "..", "..", "wire", "v1", "manifest_extensions.vectors.json",
+  ), "utf8")) as { cases: Array<{ name: string; manifest: Frame }> };
+  for (const entry of vectors.cases) {
+    const app = App.fromManifest(writeManifest(entry.manifest));
+    app.tool("notes.get", () => assert.fail("metadata listing must not invoke a resolver"));
+    const harness = new Harness(app);
+    try {
+      harness.send({ jsonrpc: "2.0", id: 1, method: "tools/list" });
+      const listed = await harness.waitFor((frame) => frame.id === 1);
+      const tools = (listed.result as Frame).tools as Frame[];
+      assert.deepEqual(tools.map((tool) => tool.name), ["notes.get"], entry.name);
+      const schema = tools[0].inputSchema as Frame;
+      assert.deepEqual(Object.keys(schema.properties as Frame), ["note_id"]);
+      assert.equal(JSON.stringify(schema).includes("binding"), false);
+    } finally {
+      await harness.close();
+    }
   }
 });
 

@@ -5,7 +5,9 @@
       "ai",
       "budget_show",
       "envelope",
+      "file_change_plan",
       "mcp_call_context",
+      "object_ref",
       "tool_catalog",
       "tool"
     ],

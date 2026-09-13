@@ -328,7 +328,6 @@ fn check_root_broker_registration(root: &Path, parent_caps: &CapSet) {
                     args: &[],
                 },
                 parent_caps.clone(),
-                CapSet::new(),
                 Some(&launch.ceiling()),
                 &launch.package_ref(),
             )

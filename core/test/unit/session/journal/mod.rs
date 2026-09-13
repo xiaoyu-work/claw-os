@@ -102,6 +102,30 @@ fn a_completion_that_cannot_be_recorded_is_indeterminate() {
 }
 
 #[test]
+fn session_replay_uses_the_authenticated_anchor_owner_not_uid_zero() {
+    let harness = Harness::new();
+    let partition = Partition::Session(crate::session::SessionId::generate());
+    let owner_uid = if harness.owner_uid() == 0 { 1001 } else { harness.owner_uid() };
+    let bracket = begin_mutation(MutationStart {
+        partition: partition.clone(), owner_uid, route: "system.file.replace",
+        request_key: "owner-session-replacement", grant: None,
+        session_mutation: None, context_ingest: false,
+    }).unwrap();
+    let operation = bracket.operation().as_str().to_string();
+    let unresolved = bracket.indeterminate();
+    assert_eq!(unresolved.operation, operation);
+    assert_eq!(harness.lease().load_anchor(&partition, 0).unwrap().open_brackets, 1);
+    for _ in 0..3 {
+        assert!(replays_unresolved(&partition, "system.file.replace", "owner-session-replacement"));
+        assert!(!replays_unresolved(&partition, "system.file.replace", "different-request"));
+        harness.cold_restart();
+        startup_recovery(RecoverySource::DaemonStart).unwrap();
+    }
+    resolve_mutation(&partition, owner_uid, &operation, Resolution::Abandoned, 0).unwrap();
+    assert!(!replays_unresolved(&partition, "system.file.replace", "owner-session-replacement"));
+}
+
+#[test]
 fn the_durable_identity_ignores_transport_context() {
     let harness = Harness::new();
     let first = operation_identity(1000, "system.package.install", "op-1").unwrap();

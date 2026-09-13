@@ -127,6 +127,14 @@ The existing nine-row absolute-entry/native MCP planner, sandbox tiers and
 legacy native-host authority remain in this checkpoint for shipped App
 compatibility. Their later retirement is not stdio admission.
 
+## Runtime directories
+
+Per-launch sockets prefer `XDG_RUNTIME_DIR/cos-worker`. Without a usable XDG
+runtime directory, routed/owner-scoped launches use the owner's user data
+directory, not the broker's `COS_DATA_DIR`; ordinary unscoped launches retain
+their existing data-directory fallback. Runtime directories remain private
+and are removed when the launch ends.
+
 ## Policy derivation
 
 GUI policies require the Root-owned [GUI Host](../clawd/gui/MODULE.md) and its
@@ -175,6 +183,29 @@ Mounts come from the capabilities the authority already granted:
 - a scope resolving into a kernel-owned root or a credential store
   (`/proc`, `/sys`, `/run/cos`, `/var/lib/cos`, `~/.ssh`, `~/.gnupg`, …)
   fails the launch instead of being silently skipped.
+
+Protected-root checks also reject canonical aliases of credential stores in
+the submitting owner's home. The shared broker check takes that home from
+authenticated owner identity rather than the root daemon's `HOME`.
+`system.file.replace` has a narrow `fs.write` admission rule; clawd still
+requires both exact target read/write capabilities. It does the atomic rename
+outside the sandbox, without changing any of the mount rules above.
+The launch endpoint and its local policy/memory clients use the same broker
+protocol version as clawd. Both request version and response correlation are
+checked; a forwarded successful mutation must not become an unusable v1 reply.
+When the launcher is a leased Agent task, its process-local App-host gateway
+forwards only the closed control methods. Package liveness is checked at root,
+where the protected runtime record is owned, instead of giving the launcher
+write access to that record or its lock. The ordinary socket-backed launcher
+path remains unchanged outside this gateway.
+
+For App-owned persistent sessions, the same provider uses streamed stdio and
+server limits. Only package/runtime/private App data are mounted for the
+session lifetime; per-call capabilities do not create standing host-file or
+network access. The task host freshly authorizes mediated calls and rotates
+their grants. Its endpoint threads obtain current capabilities from root,
+including grant expiry and process binding, without depending on task-local
+owner paths that a newly spawned thread does not inherit.
 
 Granted paths are mounted at the *same absolute path* they have on the
 host, so the argument the App receives, the scope the authority granted,
@@ -345,7 +376,8 @@ per-launch broker endpoint bind-mounted at that path, which:
 
 - accepts only connections whose `SO_PEERCRED` uid is the worker's;
 - answers `worker.policy.check` itself from the launch's **live**
-  capability set — read from the routed registry row at call time, so a
+  capability set — a controlled task host queries the root grant; ordinary
+  launchers read their routed registry row. Thus a
   transient capability set for one MCP tool call appears and disappears
   with that call — which is what `cos __policy check`, and therefore
   `cos_runtime.policy`, needs inside the sandbox;

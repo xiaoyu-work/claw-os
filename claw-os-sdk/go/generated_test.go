@@ -2,6 +2,8 @@ package clawossdk
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -31,6 +33,34 @@ func validAIWire(t *testing.T) map[string]any {
 		"review":{"safety":"strict","prompt_redacted":false},
 		"tool_calls":[{"id":"c1","name":"echo","input":{"value":"ok"}}]
 	}`)
+}
+
+func TestMCPEffectBindingsPreserveOmissionEmptyAndDeclaredValues(t *testing.T) {
+	var legacy Mcptool
+	if err := json.Unmarshal([]byte(`{"name":"notes.get","summary":{"en":"Get note"}}`), &legacy); err != nil {
+		t.Fatal(err)
+	}
+	if legacy.Effects != nil {
+		t.Fatal("missing MCP effects must remain unknown")
+	}
+	for _, body := range []string{
+		`{"name":"notes.get","summary":{"en":"Get note"}}`,
+		`{"name":"notes.get","summary":{"en":"Get note"},"effects":[]}`,
+		`{"name":"notes.get","summary":{"en":"Get note"},"effects":[{"kind":"read","label":{"en":"Read note"}}]}`,
+		`{"name":"notes.get","summary":{"en":"Get note"},"effects":[{"kind":"read","label":{"en":"Read note"},"target_arg":"note_id","recovery":"not_applicable"}]}`,
+	} {
+		var tool Mcptool
+		if err := json.Unmarshal([]byte(body), &tool); err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := json.Marshal(tool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(decodeWireValue(t, string(encoded)), decodeWireValue(t, body)) {
+			t.Fatalf("MCP effect metadata changed: %s -> %s", body, encoded)
+		}
+	}
 }
 
 func TestWireEnvelopeAcceptsOnlyCoherentV1Branches(t *testing.T) {
@@ -250,6 +280,145 @@ func TestMcpCallContextIsClosed(t *testing.T) {
 		err = ValidateMcpCallContext(malformed).(*WireDecodeError)
 		if err.Code != test.code || err.Path != "$.call_id" {
 			t.Fatalf("call id %q error = %#v", test.callID, err)
+		}
+	}
+}
+
+type filePlanVectors struct {
+	Base  json.RawMessage `json:"base"`
+	Cases []struct {
+		Name string                     `json:"name"`
+		Root json.RawMessage            `json:"root"`
+		Set  map[string]json.RawMessage `json:"set"`
+		Code *string                    `json:"code"`
+		Path *string                    `json:"path"`
+	} `json:"cases"`
+}
+
+func loadFilePlanVectors(t *testing.T) filePlanVectors {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "wire", "v1", "file_change_plan.vectors.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vectors filePlanVectors
+	if err := json.Unmarshal(data, &vectors); err != nil {
+		t.Fatal(err)
+	}
+	return vectors
+}
+
+func TestFileChangePlanSharedVectorsAndRequiredFields(t *testing.T) {
+	vectors := loadFilePlanVectors(t)
+	for _, entry := range vectors.Cases {
+		value := decodeWireValue(t, string(vectors.Base))
+		if len(entry.Root) != 0 {
+			value = decodeWireValue(t, string(entry.Root))
+		} else {
+			fields := value.(map[string]any)
+			for field, replacement := range entry.Set {
+				fields[field] = decodeWireValue(t, string(replacement))
+			}
+		}
+		err := ValidateFileChangePlan(value)
+		if entry.Code == nil {
+			if err != nil {
+				t.Fatalf("%s: %v", entry.Name, err)
+			}
+		} else {
+			wireErr, ok := err.(*WireDecodeError)
+			if !ok || wireErr.Code != *entry.Code || entry.Path == nil || wireErr.Path != *entry.Path {
+				t.Fatalf("%s: unexpected error %#v", entry.Name, err)
+			}
+		}
+	}
+	for field := range decodeWireTest(t, string(vectors.Base)) {
+		value := decodeWireTest(t, string(vectors.Base))
+		delete(value, field)
+		err, ok := ValidateFileChangePlan(value).(*WireDecodeError)
+		if !ok || err.Code != WireRequired || err.Path != "$."+field {
+			t.Fatalf("missing %s: %#v", field, err)
+		}
+	}
+}
+
+func TestFileChangePlanGeneratedTypeNullableFields(t *testing.T) {
+	value := decodeWireTest(t, string(loadFilePlanVectors(t).Base))
+	for _, field := range []string{"snapshot", "applied_at", "changed", "diagnostic"} {
+		value[field] = nil
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plan FileChangePlan
+	if err := json.Unmarshal(encoded, &plan); err != nil {
+		t.Fatal(err)
+	}
+	if plan.BeforeSha256 != nil || plan.Snapshot != nil || plan.AppliedAt != nil || plan.Changed != nil || plan.Diagnostic != nil {
+		t.Fatal("nullable fields did not remain unknown")
+	}
+	encoded, err = json.Marshal(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roundTrip := decodeWireTest(t, string(encoded))
+	if before, present := roundTrip["before_sha256"]; !present || before != nil {
+		t.Fatal("required null before_sha256 was omitted")
+	}
+	if err := ValidateFileChangePlan(roundTrip); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, appliedAt, diagnostic := "snapshot-1", "2026-09-10T12:05:00Z", "App-reported result"
+	changed := false
+	plan.Snapshot, plan.AppliedAt, plan.Diagnostic, plan.Changed = &snapshot, &appliedAt, &diagnostic, &changed
+	plan.State = "applied"
+	encoded, err = json.Marshal(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roundTrip = decodeWireTest(t, string(encoded))
+	if roundTrip["changed"] != false || roundTrip["snapshot"] != snapshot || roundTrip["applied_at"] != appliedAt {
+		t.Fatal("non-null optional fields were lost")
+	}
+	if err := ValidateFileChangePlan(roundTrip); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOperationEffectBindingsPreserveOmissionAndExplicitDeclarations(t *testing.T) {
+	var legacy Operation
+	if err := json.Unmarshal([]byte(`{"label":{"en":"Inspect"}}`), &legacy); err != nil {
+		t.Fatal(err)
+	}
+	if legacy.Effects != nil {
+		t.Fatal("missing effects must not become an empty declaration")
+	}
+	var minimal Operationeffect
+	if err := json.Unmarshal(
+		[]byte(`{"kind":"read","label":{"en":"Read requested paths"}}`), &minimal,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if minimal.TargetArg != nil || minimal.Recovery != nil {
+		t.Fatal("omitted metadata must not materialize target or recovery claims")
+	}
+	for _, body := range []string{
+		`{"label":{"en":"Inspect"}}`,
+		`{"label":{"en":"Inspect"},"effects":[]}`,
+		`{"label":{"en":"Inspect"},"effects":[{"kind":"read","label":{"en":"Read requested paths"}}]}`,
+		`{"label":{"en":"Update"},"effects":[{"kind":"update","label":{"en":"Update requested paths"},"target_arg":"paths","recovery":"compensatable"}]}`,
+	} {
+		var operation Operation
+		if err := json.Unmarshal([]byte(body), &operation); err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := json.Marshal(operation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(decodeWireValue(t, string(encoded)), decodeWireValue(t, body)) {
+			t.Fatalf("effect declaration changed: %s -> %s", body, encoded)
 		}
 	}
 }

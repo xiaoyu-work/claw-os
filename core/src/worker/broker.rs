@@ -402,6 +402,7 @@ fn required_verbs(command: Command) -> &'static [Verb] {
     match command.as_str() {
         "ai.chat" => &[Verb::AI_CHAT, Verb::AI_CHAT_UNTRUSTED],
         "system.app-permissions" => &[Verb::SYS_PERMISSIONS],
+        "system.file.replace" => &[Verb::FS_WRITE],
         "system.network.control" => &[Verb::NET_MANAGE],
         "system.network.diagnose" => &[Verb::SYS_OBSERVE, Verb::NET_RESOLVE, Verb::NET_PROBE],
         "system.firewall.control" => &[Verb::NET_FIREWALL],
@@ -416,7 +417,9 @@ fn required_verbs(command: Command) -> &'static [Verb] {
         "system.filesystem.read" => &[Verb::FS_READ],
         "system.filesystem.write" => &[Verb::FS_WRITE],
         "system.screenshot.capture" => &[Verb::DESKTOP_CAPTURE],
-        "system.media-player.control" => &[Verb::DESKTOP_MEDIA_OBSERVE, Verb::DESKTOP_MEDIA_CONTROL],
+        "system.media-player.control" => {
+            &[Verb::DESKTOP_MEDIA_OBSERVE, Verb::DESKTOP_MEDIA_CONTROL]
+        }
         "system.notification.control" => &[Verb::UI_NOTIFY, Verb::DATA_INBOX_READ],
         "system.browser.control" => &[
             Verb::BROWSER_TABS_READ,

@@ -1,24 +1,55 @@
-"""Resolve pinned application sources for OS package assembly, never at runtime."""
+"""Resolve App main once per build and stage verified source snapshots, never at runtime."""
 
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import tomllib
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_ROOTS = {"product": "products", "capability": "capabilities"}
 PACKAGE_KINDS = {"product": "product", "capability": "shared-capability-client"}
+SOURCE_LOCK_ENV = "CLAW_APP_SOURCE_LOCK"
 
 
 def read_lock():
-    lock = json.loads((ROOT / "packaging" / "apps.lock.json").read_text())
-    if lock["version"] != 1 or not re.fullmatch(r"[0-9a-f]{40}", lock["revision"]):
-        raise ValueError("App sources require a version-1 lock with a full Git revision")
+    selection = json.loads((ROOT / "packaging/apps.lock.json").read_text())
+    validate_lock(selection)
+    if SOURCE_LOCK_ENV not in os.environ:
+        return selection
+    lock = json.loads(Path(os.environ[SOURCE_LOCK_ENV]).read_text())
+    validate_lock(lock)
+    if lock["version"] != 1:
+        raise ValueError("The prepared App source lock must contain an exact revision")
+    fields = ("repository", "products", "apps", "capabilities")
+    if selection["version"] == 2:
+        fields += ("branch",)
+    else:
+        fields += ("revision",)
+    if any(lock.get(field, []) != selection.get(field, []) for field in fields):
+        raise ValueError("Prepared App sources do not match the current source selection")
+    return lock
+
+
+def validate_lock(lock):
+    if lock.get("version") == 1:
+        if not isinstance(lock.get("revision"), str) or not re.fullmatch(
+            r"[0-9a-f]{40}", lock["revision"]
+        ):
+            raise ValueError("Resolved App sources require a full Git revision")
+    elif lock.get("version") == 2:
+        if lock.get("branch") != "main" or "revision" in lock:
+            raise ValueError("App source selection must track main without a fixed revision")
+    else:
+        raise ValueError("Unsupported App source selection version")
+    if not isinstance(lock.get("repository"), str) or not lock["repository"]:
+        raise ValueError("App source repository is required")
     for field in ("products", "capabilities", "apps"):
         values = lock.get(field, []) if field == "capabilities" else lock[field]
         if not isinstance(values, list) or (not values and field != "capabilities") or any(
@@ -28,11 +59,40 @@ def read_lock():
             raise ValueError(f"Invalid or duplicate {field} in App source lock")
     if set(lock["products"]) & set(lock.get("capabilities", [])):
         raise ValueError("Duplicate source group across products and capabilities")
-    return lock
+
+
+def resolve_main(lock):
+    ref = f"refs/heads/{lock['branch']}"
+    output = subprocess.check_output(
+        ["git", "ls-remote", "--exit-code", lock["repository"], ref], text=True,
+    )
+    matches = output.strip().splitlines()
+    if len(matches) != 1 or not re.fullmatch(rf"[0-9a-f]{{40}}\s+{re.escape(ref)}", matches[0]):
+        raise RuntimeError("App main did not resolve to one immutable Git commit")
+    return matches[0].split()[0]
+
+
+def resolved_lock(lock, source):
+    resolved = {**lock, "version": 1, "revision": source.name}
+    validate_lock(resolved)
+    return resolved
+
+
+def write_lock(path, lock):
+    validate_lock(lock)
+    if lock["version"] != 1:
+        raise ValueError("Only a resolved App source snapshot can be recorded")
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".app-source-", dir=path.parent) as temporary:
+        candidate = Path(temporary) / "resolved.json"
+        candidate.write_text(json.dumps(lock, indent=2) + "\n", encoding="utf-8")
+        os.replace(candidate, path)
 
 
 def prepare_sources(lock):
-    revision = lock["revision"]
+    validate_lock(lock)
+    revision = resolve_main(lock) if lock["version"] == 2 else lock["revision"]
     destination = ROOT / "build" / "app-sources" / revision
     if not destination.exists():
         destination.mkdir(parents=True)
@@ -50,6 +110,8 @@ def prepare_sources(lock):
     )
     if dirty:
         raise RuntimeError(f"App source cache is modified: {destination}")
+    if lock["version"] == 2:
+        write_lock(ROOT / "build/app-sources/resolved.json", resolved_lock(lock, destination))
     return destination
 
 
@@ -121,8 +183,8 @@ def desktop_apps():
     return (ROOT / "packaging/deb/claw-os-desktop/apps.list").read_text().split()
 
 
-def stage_shared(destination):
-    lock = read_lock()
+def stage_shared(destination, *, lock=None):
+    lock = read_lock() if lock is None else lock
     source = prepare_sources(lock)
     locked_app_paths(lock, source)
     destination = destination.resolve()
@@ -137,8 +199,8 @@ def stage_shared(destination):
     return python
 
 
-def stage_products(destination, package=None):
-    lock = read_lock()
+def stage_products(destination, package=None, *, lock=None):
+    lock = read_lock() if lock is None else lock
     source = prepare_sources(lock)
     locked_app_paths(lock, source)
     installed = []
@@ -184,8 +246,8 @@ def native_libraries(package, product_root):
     return result
 
 
-def prepare_native():
-    lock = read_lock()
+def prepare_native(*, lock=None):
+    lock = read_lock() if lock is None else lock
     source = prepare_sources(lock)
     destination = ROOT / "build/native-apps"
     products = {}
@@ -225,15 +287,16 @@ def prepare_native():
         )
         if json.loads(result) != components:
             raise RuntimeError(f"Unexpected native build inputs for {product}")
-    (destination / "revision").write_text(lock["revision"] + "\n")
+    (destination / "revision").write_text(source.name + "\n")
     (destination / "native-libraries.json").write_text(json.dumps({
-        "revision": lock["revision"], "libraries": libraries,
+        "revision": source.name, "libraries": libraries,
     }, indent=2) + "\n")
+    write_lock(destination / "source-lock.json", resolved_lock(lock, source))
     return destination
 
 
-def app_path(app_id):
-    lock = read_lock()
+def app_path(app_id, *, lock=None):
+    lock = read_lock() if lock is None else lock
     if app_id not in lock["apps"]:
         raise ValueError(f"App is not in the source lock: {app_id}")
     source = prepare_sources(lock)
@@ -244,23 +307,33 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--stage", type=Path)
     parser.add_argument("--stage-shared", type=Path,
-                        help="stage pinned App common support separately from product payloads")
+                        help="stage App common support from the same resolved build snapshot")
     parser.add_argument("--package", choices=["agent", "desktop"])
     parser.add_argument("--native", action="store_true")
     parser.add_argument("--app-path")
     parser.add_argument("--count", action="store_true")
+    parser.add_argument("--write-lock", type=Path,
+                        help="record the resolved source snapshot for subsequent build steps")
     args = parser.parse_args()
     if args.stage_shared and any((args.stage, args.package, args.native, args.app_path, args.count)):
         parser.error("--stage-shared cannot be combined with product or source selectors")
+    if args.count and args.write_lock:
+        parser.error("--count does not resolve App source revisions")
+    lock = None
+    if args.write_lock:
+        selection = read_lock()
+        source = prepare_sources(selection)
+        lock = resolved_lock(selection, source)
+        write_lock(args.write_lock, lock)
     if args.stage_shared:
-        print(stage_shared(args.stage_shared))
+        print(stage_shared(args.stage_shared, lock=lock))
     elif args.native:
-        print(prepare_native())
+        print(prepare_native(lock=lock))
     elif args.app_path:
-        print(app_path(args.app_path))
+        print(app_path(args.app_path, lock=lock))
     elif args.count:
         print(len(read_lock()["apps"]))
     elif args.stage:
-        print(len(stage_products(args.stage, args.package)))
+        print(len(stage_products(args.stage, args.package, lock=lock)))
     else:
-        print(prepare_sources(read_lock()))
+        print(prepare_sources(read_lock() if lock is None else lock))

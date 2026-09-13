@@ -119,6 +119,41 @@ pub struct Envelope {
     pub detail: Option<serde_json::Value>,
 }
 
+/// App-reported file change plan
+/// Public App-reported staged-plan data, not OS-confirmed mutation, authority, or
+/// universal rollback. Semantic validation is owned by the App/core; see file-
+/// change-plans.md. Private before/proposed contents are never fields of this
+/// value.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FileChangePlan {
+    pub schema: i64,
+    pub kind: String,
+    pub plan_id: String,
+    pub path: String,
+    pub state: String,
+    pub before_exists: bool,
+    pub before_sha256: Option<String>,
+    pub after_sha256: String,
+    pub before_bytes: u64,
+    pub after_bytes: u64,
+    pub would_change: bool,
+    pub review: String,
+    pub reference: String,
+    pub diff: String,
+    pub diff_truncated: bool,
+    pub created_at: String,
+    pub expires_at: String,
+    pub warnings: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagnostic: Option<String>,
+}
+
 /// App manifest (app.json)
 /// The manifest every app under COS_APPS_DIR must provide. MCP Apps declare one
 /// versioned service with tools, lifecycle, caller restrictions, capability
@@ -145,9 +180,33 @@ pub struct Manifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp: Option<Mcpservice>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub objects: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub desktop: Option<Desktop>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dependencies: Option<serde_json::Value>,
+}
+
+/// objectType
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Objecttype {
+    pub label: Localizedtext,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<Localizedtext>,
+    pub resolve: Objectresolver,
+}
+
+/// objectResolver
+/// The kernel verifies the ordinary App command and argument bindings. The
+/// operation field retains its name for compatibility; resolution uses normal App
+/// operation/MCP dispatch, capabilities, approvals, and audit, never an SDK or
+/// App-local fallback.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Objectresolver {
+    pub operation: String,
+    pub id_arg: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision_arg: Option<String>,
 }
 
 /// localizedText
@@ -159,7 +218,8 @@ pub struct Localizedtext {
 }
 
 /// operation
-/// A one-shot operation: its inputs and the capabilities it needs.
+/// A one-shot operation: its inputs, capability needs, and optional App-declared
+/// effect guidance.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Operation {
     pub label: Localizedtext,
@@ -171,6 +231,21 @@ pub struct Operation {
     pub args: Option<Vec<Arg>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub needs: Option<Vec<Need>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effects: Option<Vec<Operationeffect>>,
+}
+
+/// operationEffect
+/// App-declared guidance for a metadata-only preview, not authority, an OS-
+/// confirmed effect, or proof that an inverse exists.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Operationeffect {
+    pub kind: String,
+    pub label: Localizedtext,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_arg: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<String>,
 }
 
 /// arg
@@ -306,8 +381,9 @@ pub struct Mcpaccess {
 }
 
 /// mcpTool
-/// One MCP-callable tool. Mirrors operation: args + needs drive the model's view
-/// and the kernel's enforcement.
+/// One MCP-callable tool. Args and needs drive the model's view and kernel
+/// enforcement; optional effects are App-declared preview metadata, never
+/// authority or confirmed outcomes.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Mcptool {
     pub name: String,
@@ -316,6 +392,8 @@ pub struct Mcptool {
     pub args: Option<Vec<Arg>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub needs: Option<Vec<Need>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effects: Option<Vec<Operationeffect>>,
 }
 
 /// desktop
@@ -363,6 +441,19 @@ pub struct McpPrincipal {
     pub kind: String,
     pub id: String,
     pub owner_uid: u64,
+}
+
+/// App object reference
+/// A portable identifier for App-owned data, not authority, a payload, or proof
+/// of existence or readability. Component, UTF-8, and canonical URI semantics are
+/// specified in object-references.md and enforced by the public objects helpers.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ObjectRef {
+    pub app_id: String,
+    pub object_type: String,
+    pub object_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
 }
 
 /// Permissions request / reply
@@ -433,6 +524,19 @@ pub fn validate_ai_review_safety(value: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!("invalid ai_review.safety value: {value}"))
+    }
+}
+
+/// Reject values outside the file_change_plan.state enum.
+///
+/// The wire schema lists a closed set of allowed values; a kernel
+/// that emits an unknown one should not be silently accepted.
+pub fn validate_file_change_plan_state(value: &str) -> Result<(), String> {
+    const ALLOWED: &[&str] = &["draft", "applying", "applied", "conflicted", "indeterminate", "expired"];
+    if ALLOWED.iter().any(|a| *a == value) {
+        Ok(())
+    } else {
+        Err(format!("invalid file_change_plan.state value: {value}"))
     }
 }
 
@@ -794,6 +898,19 @@ pub fn normalize_envelope_integers(value: &mut serde_json::Value) {
     normalize_wire_integers(&schema, &schema, value);
 }
 
+const _WIRE_SCHEMA_FILE_CHANGE_PLAN: &str = r###"{"$id":"https://claw-os.dev/wire/v1/file_change_plan.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"description":"Public App-reported staged-plan data, not OS-confirmed mutation, authority, or universal rollback. Semantic validation is owned by the App/core; see file-change-plans.md. Private before/proposed contents are never fields of this value.","properties":{"after_bytes":{"maximum":65536,"minimum":0,"type":"integer"},"after_sha256":{"description":"Canonical sha256: plus 64 lowercase hexadecimal digits for the proposal. App/core validates the digest.","type":"string"},"applied_at":{"description":"Optional App-reported RFC3339 application timestamp, not OS confirmation.","oneOf":[{"type":"string"},{"type":"null"}],"x-go-type":"*string","x-rust-type":"String","x-ts-type":"string | null"},"before_bytes":{"maximum":65536,"minimum":0,"type":"integer"},"before_exists":{"type":"boolean"},"before_sha256":{"description":"Canonical sha256: plus 64 lowercase hexadecimal digits for an existing preimage, otherwise null. Validated semantically by the App/core.","oneOf":[{"type":"string"},{"type":"null"}],"x-go-type":"*string","x-rust-type":"Option<String>","x-ts-type":"string | null"},"changed":{"description":"Optional App-reported change result, not OS-confirmed mutation.","oneOf":[{"type":"boolean"},{"type":"null"}],"x-go-type":"*bool","x-rust-type":"bool","x-ts-type":"boolean | null"},"created_at":{"description":"App-reported RFC3339 creation timestamp.","type":"string"},"diagnostic":{"oneOf":[{"type":"string"},{"type":"null"}],"x-go-type":"*string","x-rust-type":"String","x-ts-type":"string | null"},"diff":{"description":"App-reported staged diff, at most 65536 UTF-8 bytes. This is not a private before/proposed-content field.","type":"string"},"diff_truncated":{"type":"boolean"},"expires_at":{"description":"App-reported RFC3339 expiration timestamp.","type":"string"},"kind":{"const":"file_change_plan","type":"string"},"path":{"description":"Absolute target path, at most 4096 UTF-8 bytes. Existing object-reference bounds also apply.","type":"string"},"plan_id":{"description":"UUID identifying the immutable proposal.","type":"string"},"reference":{"description":"Canonical app://fs/change-plan?id=<encoded absolute path>&revision=<encoded plan UUID>, using the existing ObjectRef helpers.","type":"string"},"review":{"description":"Canonical sha256 fingerprint binding the immutable proposal. Data only, never authorization or permission to apply.","type":"string"},"schema":{"const":1,"type":"integer"},"snapshot":{"description":"Optional App-reported snapshot identifier, not snapshot contents or proof of rollback capability.","oneOf":[{"type":"string"},{"type":"null"}],"x-go-type":"*string","x-rust-type":"String","x-ts-type":"string | null"},"state":{"enum":["draft","applying","applied","conflicted","indeterminate","expired"],"type":"string"},"warnings":{"description":"At most 16 App-reported warnings. External writers can race after the final precondition check; this plan does not provide atomic compare-and-swap.","items":{"description":"At most 1024 UTF-8 bytes; validated by the App/core.","type":"string"},"maxItems":16,"type":"array"},"would_change":{"type":"boolean"}},"required":["schema","kind","plan_id","path","state","before_exists","before_sha256","after_sha256","before_bytes","after_bytes","would_change","review","reference","diff","diff_truncated","created_at","expires_at","warnings"],"title":"App-reported file change plan","type":"object"}"###;
+pub fn validate_file_change_plan(value: &serde_json::Value) -> Result<(), WireDecodeError> {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_FILE_CHANGE_PLAN)
+        .expect("generated wire schema must be valid JSON");
+    validate_wire_schema(&schema, &schema, value, "FileChangePlan", "$")
+}
+
+pub fn normalize_file_change_plan_integers(value: &mut serde_json::Value) {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_FILE_CHANGE_PLAN)
+        .expect("generated wire schema must be valid JSON");
+    normalize_wire_integers(&schema, &schema, value);
+}
+
 const _WIRE_SCHEMA_MCP_CALL_CONTEXT: &str = r###"{"$defs":{"McpPrincipal":{"additionalProperties":false,"properties":{"id":{"maxLength":256,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$","type":"string","x-full-match":true},"kind":{"enum":["system-agent","external-agent","cli"],"type":"string"},"owner_uid":{"maximum":4294967295,"minimum":0,"type":"integer"}},"required":["kind","id","owner_uid"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/mcp_call_context.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"description":"Authenticated call identity and lineage injected by the Claw MCP Gateway over the private App-host transport. Caller-supplied MCP arguments must never populate this object.","properties":{"call_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$","type":"string","x-full-match":true},"caller":{"$ref":"#/$defs/McpPrincipal"},"deadline_unix_ms":{"maximum":9007199254740991,"minimum":1,"type":"integer"},"session_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$","type":"string","x-full-match":true},"task_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$","type":"string","x-full-match":true},"trace_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$","type":"string","x-full-match":true},"wire_version":{"const":1,"maximum":1,"minimum":1,"type":"integer"}},"required":["wire_version","call_id","trace_id","caller"],"title":"MCP call context","type":"object"}"###;
 pub fn validate_mcp_call_context(value: &serde_json::Value) -> Result<(), WireDecodeError> {
     let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_MCP_CALL_CONTEXT)
@@ -803,6 +920,19 @@ pub fn validate_mcp_call_context(value: &serde_json::Value) -> Result<(), WireDe
 
 pub fn normalize_mcp_call_context_integers(value: &mut serde_json::Value) {
     let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_MCP_CALL_CONTEXT)
+        .expect("generated wire schema must be valid JSON");
+    normalize_wire_integers(&schema, &schema, value);
+}
+
+const _WIRE_SCHEMA_OBJECT_REF: &str = r###"{"$id":"https://claw-os.dev/wire/v1/object_ref.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"description":"A portable identifier for App-owned data, not authority, a payload, or proof of existence or readability. Component, UTF-8, and canonical URI semantics are specified in object-references.md and enforced by the public objects helpers.","properties":{"app_id":{"description":"App identifier; lowercase ASCII component, at most 128 UTF-8 bytes.","type":"string"},"object_id":{"description":"Opaque, nonempty UTF-8 identifier, at most 1024 bytes, without Unicode control characters. Never trimmed or normalized.","type":"string"},"object_type":{"description":"Object type declared by the App; lowercase ASCII component, at most 64 UTF-8 bytes.","type":"string"},"revision":{"description":"Optional opaque, nonempty UTF-8 revision, at most 128 bytes, without Unicode control characters. Absence differs from an empty string.","type":"string","x-go-type":"*string"}},"required":["app_id","object_type","object_id"],"title":"App object reference","type":"object"}"###;
+pub fn validate_object_ref(value: &serde_json::Value) -> Result<(), WireDecodeError> {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_OBJECT_REF)
+        .expect("generated wire schema must be valid JSON");
+    validate_wire_schema(&schema, &schema, value, "ObjectRef", "$")
+}
+
+pub fn normalize_object_ref_integers(value: &mut serde_json::Value) {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_OBJECT_REF)
         .expect("generated wire schema must be valid JSON");
     normalize_wire_integers(&schema, &schema, value);
 }

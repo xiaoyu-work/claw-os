@@ -420,13 +420,14 @@ Return `None` to print nothing.
 ### Agent-launched isolation
 
 An App invoked from a daemon-backed Agent task does not run in root `clawd` or
-inside the `claw-agentd` model/tool process. `clawd` starts one
-`claw-extension-host` as the task owner, and the worker sends App lifecycle and
-call requests to that host over a versioned task-bound control socket.
+inside the `claw-agentd` model/tool process. `clawd` starts a task
+`claw-extension-host` under an exclusively leased execution UID, distinct from
+the task owner. The worker uses its versioned, purpose-bound control socket;
+MCP App calls are relayed to the root-managed owner/App service Host.
 
 The host starts with no supplementary groups, `NoNewPrivs`, a `0077` umask,
-sanitized environment and descriptors, finite resource limits, and its own
-session/process group. App children receive a separate private broker proxy
+sanitized environment and descriptors, finite resource limits, mandatory
+cgroup containment and its own session/process group. App children receive a separate private broker proxy
 path, never `/run/cos/clawd.sock`. The proxy accepts only routes for the
 child's nearest registered App/MCP session, then re-enters the normal
 capability authority and final provider checks. Session registration,
@@ -435,9 +436,31 @@ manifest-derived policy as direct launches.
 
 Do not depend on inherited file descriptors, arbitrary parent environment
 variables, the broker socket pathname, or daemonized children. Calls and
-frames are bounded; cancellation, timeout, host failure, and task completion
-terminate the hosted process tree. App stdout/stderr and returned values are
-treated as untrusted Agent input.
+frames are bounded. Task completion retires its task Host; shared App service
+Hosts follow their separately authenticated lifecycle and per-call authority.
+App stdout/stderr and returned values are treated as untrusted Agent input.
+See the [Host contract](../core/src/extension_host/MODULE.md).
+
+### App-owned object references
+
+Apps may optionally declare an `objects` map that binds named object types to
+public App commands. An explicit operation takes precedence; otherwise the
+exact `<app-id>.<command>` MCP tool supplies the resolver's arguments.
+The shared OS catalogue authenticates these declarations
+without executing the App; explicit resolution still uses the ordinary App
+permission and runtime path. Public SDK helpers format portable references,
+and Activities can attach them without copying or reading the App's data.
+See [App-owned objects](app-objects.md) for the manifest contract, canonical
+URI format, examples, and the distinction between a verified declaration and
+an existing, readable object.
+
+### Expected operation effects
+
+An operation or MCP tool may optionally declare bounded `effects` metadata. The shared OS
+preview service displays authenticated declarations and requested targets
+without executing the App, reading object data, or granting permissions.
+Missing metadata remains unknown. See [operation previews](operation-previews.md)
+for the declaration vocabulary and its limits.
 
 ## 4. The dev loop — no rebuild, no restart
 
@@ -868,6 +891,29 @@ authenticated instance binding, write checks and verified resource retirement
 must be integrated before those controls can be presented as effective.
 An App-side permission preflight is not a substitute for enforcement on the
 actual desktop or backend resource.
+
+### MCP service lifetime and Activity work
+
+An App's signed `mcp.entry` runs through the isolated owner/App service Host.
+Its declared lifecycle controls service reuse; the existing owner/App data
+partition persists independently of a task or leased execution UID. A service
+never mounts the union of all its tools' host paths or receives lifetime
+network access.
+
+Each `tools/call` is checked against `mcp.tools[].args` and `needs`, receives
+canonical arguments, and carries a single-use, action-bound authorization.
+Caller invoke authority does not enter the App. Broker-mediated effects can
+use a reusable child with no standing target authority; direct-resource calls
+receive a freshly authorized call-scoped sandbox. Exact grants, RPC and
+clearing retain their ordinary serialized lifecycle. There is no in-worker
+or unsandboxed fallback.
+
+Activity constraints belong to the individual invocation, not the shared
+service Host. Root rechecks the pinned policy before broker effects and
+records Activity-associated task results as
+[caller-reported receipts](execution-receipts.md) to the same backend used by
+terminal, Web and native desktop. Unknown call outcomes remain indeterminate;
+receipt recording never repeats an App call.
 
 ## 11. Ship it
 

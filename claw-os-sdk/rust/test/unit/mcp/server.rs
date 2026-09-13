@@ -41,7 +41,11 @@ async fn removed_cross_app_contract_is_rejected_before_handlers() {
         cases.push((value, "WIRE_UNKNOWN_FIELD"));
     }
     for (index, (value, code)) in cases.into_iter().enumerate() {
-        send(&client, call(json!(index), "echo", json!({"text": "x"}), value)).await;
+        send(
+            &client,
+            call(json!(index), "echo", json!({"text": "x"}), value),
+        )
+        .await;
         let reply = receive(&client).await;
         assert_eq!(reply["error"]["code"], ERR_INVALID_PARAMS);
         assert!(reply["error"]["message"].as_str().unwrap().contains(code));
@@ -141,6 +145,57 @@ impl Tool for Echo {
 
     async fn handle(&self, args: Value, _: CallContext) -> ToolResult {
         ToolResult::text(args["text"].as_str().unwrap())
+    }
+}
+
+struct ObjectMetadataTool;
+
+#[async_trait]
+impl Tool for ObjectMetadataTool {
+    fn name(&self) -> &str {
+        "notes.get"
+    }
+
+    async fn handle(&self, _: Value, _: CallContext) -> ToolResult {
+        panic!("metadata listing must not invoke an object resolver");
+    }
+}
+
+#[tokio::test]
+async fn shared_object_and_effect_metadata_preserves_mcp_only_tools() {
+    let vectors: Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../wire/v1/manifest_extensions.vectors.json"
+    )))
+    .unwrap();
+    for case in vectors["cases"].as_array().unwrap() {
+        let value = &case["manifest"];
+        let typed: crate::generated::Manifest = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(typed).unwrap(),
+            *value,
+            "{}",
+            case["name"]
+        );
+        let mut app = load_app(value);
+        app.bind(Arc::new(ObjectMetadataTool)).unwrap();
+        let (client, server) = in_memory_pair();
+        let task = tokio::spawn(app.serve(server));
+        send(
+            &client,
+            json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),
+        )
+        .await;
+        let listed = receive(&client).await;
+        let tools = listed["result"]["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["name"], "notes.get");
+        let properties = tools[0]["inputSchema"]["properties"].as_object().unwrap();
+        assert_eq!(properties.len(), 1);
+        assert!(properties.contains_key("note_id"));
+        assert!(properties["note_id"].get("binding").is_none());
+        drop(client);
+        task.await.unwrap().unwrap();
     }
 }
 

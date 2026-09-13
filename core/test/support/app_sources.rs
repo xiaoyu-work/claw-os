@@ -25,11 +25,43 @@ pub fn app_dir(relative: &str) -> PathBuf {
 }
 
 fn read_lock(repository: &Path) -> SourceLock {
-    let lock: SourceLock = serde_json::from_str(
+    let selection: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(repository.join("packaging/apps.lock.json"))
-            .expect("App source lock"),
+            .expect("App source selection"),
     )
-    .expect("valid App source lock");
+    .expect("valid App source selection");
+    let resolved = if selection["version"] == 2 {
+        assert_eq!(selection["branch"], "main", "App sources must track main");
+        assert!(
+            selection.get("revision").is_none(),
+            "main selection cannot carry a fixed pin"
+        );
+        assert!(
+            selection["repository"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty()),
+            "App source repository is required"
+        );
+        let path = std::env::var_os("CLAW_APP_SOURCE_LOCK")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| repository.join("build/app-sources/resolved.json"));
+        let resolved: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(path)
+                .expect("Run `python3 scripts/app_sources.py` to resolve App main before testing"),
+        )
+        .expect("valid prepared App source snapshot");
+        for field in ["repository", "branch", "products", "capabilities", "apps"] {
+            assert_eq!(
+                resolved.get(field),
+                selection.get(field),
+                "prepared App source selection changed; run `python3 scripts/app_sources.py`"
+            );
+        }
+        resolved
+    } else {
+        selection
+    };
+    let lock: SourceLock = serde_json::from_value(resolved).expect("resolved App source lock");
     assert!(
         lock.version == 1
             && lock.revision.len() == 40
@@ -58,6 +90,12 @@ fn read_lock(repository: &Path) -> SourceLock {
         "duplicate source group across products and capabilities"
     );
     lock
+}
+
+#[allow(dead_code)]
+pub fn source_revision() -> String {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    read_lock(repository).revision
 }
 
 fn source_cache(repository: &Path, lock: &SourceLock) -> PathBuf {

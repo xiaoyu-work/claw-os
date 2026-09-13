@@ -39,7 +39,7 @@ before its handler runs.
 
 | Subject | Meaning | Used by |
 | --- | --- | --- |
-| `Peer` | Acts for the connecting process; no grant is resolved | daemon, task, context, permission, transaction, App registration, scheduler |
+| `Peer` | Acts for the connecting process; no grant is resolved | daemon, task/Activity views, operation previews, context, permission, transaction, App registration, scheduler |
 | `Session` | Addressed by an App/MCP session; runs under the grant derived at bind | privileged system providers |
 | `PeerSession` | Addressed by the caller's own registered session; authenticated from process ancestry and given a single-use request-scoped grant | `system.package.restore`, `system.service.restore`, `credential.oauth-refresh` |
 | `Handle` | Addressed by the opaque handle itself | App session bind / set-transient / deregister |
@@ -85,6 +85,13 @@ highest-risk privileged mutations take it by reference:
 Two related refusals close the same gap from the other side: an empty capability
 set is not an authorization, and only a *successful* spend marks the route's
 obligation met, so a provider that dropped an `Err` has its response withheld.
+
+Relayed decisions retain a private proof identifying the launcher grant and
+the exact App session. Resolving a relay once is not enough: capability
+consumption rechecks the live, process-bound relay grant and the live App
+grant under the same store lock before spending. Revocation, wrong launcher,
+wrong session and exhausted budgets still fail closed. Direct consumption
+keeps its ordinary process-binding checks.
 
 ## What Is Not Authority
 

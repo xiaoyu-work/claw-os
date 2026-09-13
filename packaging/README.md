@@ -59,17 +59,30 @@ must upgrade with its native host and Python implementation, not wait for an
 independent desktop release. It adds no Thunderbird runtime dependency;
 desktop/rootfs registration enables it when Thunderbird is installed.
 
-[`apps.lock.json`](apps.lock.json) pins an immutable published App repository
-commit, business `products`, optional shared-client `capabilities`, and the
-exact installed App IDs. `scripts/app_sources.py` fetches that revision into
-`build/app-sources/` and invokes explicitly kinded payload staging.
-Package builds reject modified caches and unexpected App IDs; there is no
-moving-branch or sibling-checkout fallback. The OS still owns capability
-enforcement, the native launcher and package signing. Product source changes
-are released by updating this pin and publishing the normal OS packages;
-installed systems do not fetch executable code from Git.
+[`apps.lock.json`](apps.lock.json) selects the App repository's `main` branch,
+business `products`, optional shared-client `capabilities`, and the exact
+installed App IDs. Its version-2 selection has no manually maintained commit
+pin. `scripts/app_sources.py` queries `main` on each fresh preparation, fetches
+the resolved commit into an immutable `build/app-sources/<sha>` cache, and
+records `build/app-sources/resolved.json`. Failed branch resolution never
+falls back to an older cache.
 
-Common App support comes from that same pin's `shared/python`. The OS wrapper
+Each package build freezes that selection once. Agent packaging uses
+`--write-lock` and passes the resulting snapshot through `CLAW_APP_SOURCE_LOCK`
+to all later staging steps. Desktop packaging consumes the snapshot captured
+when its native sources were prepared, not a newer manifest fetched after
+compilation. Both packages retain the selection and exact SHA in
+`/usr/share/doc/<package>/app-sources.json`. Explicit version-1 snapshots
+remain readable for reproducing a build; they are not the repository's default
+source policy. Modified caches, mismatched selections and unexpected App IDs
+remain errors.
+
+The OS still owns capability enforcement, native launch authority and package
+signing. New builds consume new App `main` commits without a pin-edit commit;
+installed changes still arrive through signed packages, never runtime Git
+downloads. The separate SDK/runtime/toolkit artifact pin is unchanged.
+
+Common App support comes from the same build snapshot's `shared/python`. The OS wrapper
 `python3 scripts/app_sources.py --stage-shared <root>` invokes the public
 `tools/stage.py --shared --root <root>` contract once, separately from product
 staging and OS SDK/runtime. It installs the three owned names `_shared`,
@@ -79,7 +92,7 @@ fail before copying any common library. Tests, vectors and bytecode are excluded
 No OS `apps/` source tree or duplicate support under `usr/lib/cos/apps` remains.
 Agent keeps its `python3-idna (>= 3.3), python3-idna (<< 4)` dependency.
 
-This is the existing source-pin compatibility delivery: `claw-os-agent` still
+This is the existing compatibility delivery: `claw-os-agent` still
 owns the installed common files. Independent App APT/common packages must replace
 that delivery in a separately coordinated ownership cutover. This checkpoint
 adds neither a permanent new source-build dependency for that cutover nor an
@@ -89,7 +102,7 @@ A compatible App business change needs no OS core implementation change.
 The remaining coupling is explicit source composition and release delivery:
 package metadata and the staging CLI are build contracts, development selects
 the versioned SDK/runtime/toolkit platform artifact, and
-installed changes still require an App-pin/package release here. Bundled
+installed changes still require a package release here. Bundled
 `cos_runtime` is not an independently published third-party SDK. Paired
 migration commits are cutover choreography, not a requirement to edit both
 implementations for every future feature. Pins alone do not prove complete

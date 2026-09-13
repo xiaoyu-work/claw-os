@@ -5,13 +5,13 @@
 //! it — `/proc/<pid>/status`, `/proc/<pid>/fd`, `/proc/<pid>/environ` —
 //! rather than trusting a helper's return value.
 //!
-//! The suite runs unprivileged, so the uid/gid drop itself is a no-op
-//! here (the child is already the test account). What it does verify on
-//! any account is the part that is identical either way: descriptor
-//! isolation, the rebuilt environment, `PR_SET_NO_NEW_PRIVS`, the grant
-//! binding, and fail-closed behaviour on a protocol or identity
-//! mismatch. `agentd::spawn`'s unit tests cover the ordering and
-//! verification of the privileged drop.
+//! Containment cases require Root, a non-root `SUDO_UID`, the current worker
+//! and extension-Host binaries, a delegated cgroup-v2 tree with working kill,
+//! and the main execution-isolation boundary. An unavailable harness reports
+//! its prerequisite failure; such a return is not runtime acceptance.
+//! PREPARE/COMMIT, process identity, private descriptors and verified cleanup
+//! remain the production paths. Activity-specific opt-in task/service cases
+//! additionally live in `test/unit/agentd/{supervisor,worker}/activity_process.rs`.
 
 #![cfg(all(unix, target_os = "linux"))]
 
@@ -28,7 +28,7 @@ use cos::agentd::protocol::{
 };
 use cos::agentd::spawn::{self, ExecutionIsolation, SpawnedWorker, WorkerIdentity};
 use cos::extension_host::protocol::HostPurpose;
-use tokio::io::{AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 
 const WORKER_BIN: &str = env!("CARGO_BIN_EXE_claw-agentd");
 const EXTENSION_HOST_BIN: &str = env!("CARGO_BIN_EXE_claw-extension-host");
@@ -309,6 +309,8 @@ fn assignment(
             session_id: None,
             max_turns: Some(1),
             use_memory: true,
+            record_activity_receipts: false,
+            activity_capability_checks: false,
             owner_uid,
             owner_home: home.to_string_lossy().into_owned(),
         },
@@ -396,6 +398,22 @@ async fn prepare_and_commit(worker: &mut SpawnedWorker, assignment: Assignment) 
         })),
     )
     .await;
+}
+
+async fn worker_exit_diagnostic(child: &mut tokio::process::Child) -> String {
+    let status = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+    let mut stderr = String::new();
+    if let Some(pipe) = child.stderr.take() {
+        let read = tokio::time::timeout(
+            Duration::from_secs(2),
+            pipe.take(16 * 1024).read_to_string(&mut stderr),
+        )
+        .await;
+        if !matches!(read, Ok(Ok(_))) {
+            stderr.push_str(" [stderr unavailable or incomplete]");
+        }
+    }
+    format!("status={status:?}; stderr={stderr}")
 }
 
 fn proc_field(pid: u32, field: &str) -> Option<String> {
@@ -1007,7 +1025,10 @@ async fn a_worker_inherits_no_broker_descriptor_environment_or_privilege() {
             | Some(WorkerFrame::Heartbeat { task_id }) => {
                 assert_eq!(task_id, "task-boundary");
             }
-            other => panic!("expected a result frame, got {other:?}"),
+            other => panic!(
+                "expected a result frame, got {other:?}; {}",
+                worker_exit_diagnostic(&mut child).await
+            ),
         }
     }
     let status = tokio::time::timeout(Duration::from_secs(30), child.wait())
@@ -2723,6 +2744,46 @@ async fn a_grant_without_the_approval_route_refuses_to_start() {
     assert!(
         !status.success(),
         "a grant without permission mediation must fail closed"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_activity_assignment_without_the_receipt_route_refuses_to_start() {
+    let Some(harness) = harness() else {
+        eprintln!("skipping: no usable unprivileged account for the worker harness");
+        return;
+    };
+    let signer = GrantSigner::generate().expect("signer");
+    let mut worker = spawn::spawn_worker(&harness.identity, &harness.isolation, "task-no-receipts")
+        .expect("spawn");
+    let mut claims = grant_for(
+        &signer,
+        "task-no-receipts",
+        &harness.identity,
+        harness.isolation.execution_gid(),
+        worker.pid,
+        worker.start_time_ticks,
+    )
+    .claims;
+    claims
+        .routes
+        .retain(|route| route != protocol::ROUTE_RECEIPT);
+    let mut assignment = assignment(
+        signer.issue(claims),
+        protocol::PROTOCOL_VERSION,
+        "task-no-receipts",
+        harness.identity.uid,
+        &harness.identity.home,
+    );
+    assignment.job.record_activity_receipts = true;
+    send(&mut worker, &BrokerFrame::Prepare(Box::new(assignment))).await;
+    let status = tokio::time::timeout(Duration::from_secs(30), worker.child.wait())
+        .await
+        .expect("worker did not exit")
+        .expect("wait");
+    assert!(
+        !status.success(),
+        "required receipt capture cannot start without its reporting route"
     );
 }
 

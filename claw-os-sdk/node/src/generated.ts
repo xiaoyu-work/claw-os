@@ -97,6 +97,38 @@ export interface Envelope {
 }
 
 /**
+ * App-reported file change plan.
+ * Public App-reported staged-plan data, not OS-confirmed mutation, authority,
+ * or universal rollback. Semantic validation is owned by the App/core; see
+ * file-change-plans.md. Private before/proposed contents are never fields of
+ * this value.
+ */
+export interface FileChangePlan {
+  schema: 1;
+  kind: "file_change_plan";
+  plan_id: string;
+  path: string;
+  state: "draft" | "applying" | "applied" | "conflicted" | "indeterminate" | "expired";
+  before_exists: boolean;
+  before_sha256: string | null;
+  after_sha256: string;
+  before_bytes: number;
+  after_bytes: number;
+  would_change: boolean;
+  review: string;
+  reference: string;
+  diff: string;
+  diff_truncated: boolean;
+  created_at: string;
+  expires_at: string;
+  warnings: string[];
+  snapshot?: string | null;
+  applied_at?: string | null;
+  changed?: boolean | null;
+  diagnostic?: string | null;
+}
+
+/**
  * App manifest (app.json).
  * The manifest every app under COS_APPS_DIR must provide. MCP Apps declare one
  * versioned service with tools, lifecycle, caller restrictions, capability
@@ -114,8 +146,31 @@ export interface Manifest {
   operations?: Record<string, unknown>;
   ai?: Aipolicy;
   mcp?: Mcpservice;
+  objects?: Record<string, unknown>;
   desktop?: Desktop;
   dependencies?: Record<string, unknown>;
+}
+
+/**
+ * objectType.
+ */
+export interface Objecttype {
+  label: Localizedtext;
+  summary?: Localizedtext;
+  resolve: Objectresolver;
+}
+
+/**
+ * objectResolver.
+ * The kernel verifies the ordinary App command and argument bindings. The
+ * operation field retains its name for compatibility; resolution uses normal
+ * App operation/MCP dispatch, capabilities, approvals, and audit, never an SDK
+ * or App-local fallback.
+ */
+export interface Objectresolver {
+  operation: string;
+  id_arg: string;
+  revision_arg?: string;
 }
 
 /**
@@ -129,7 +184,8 @@ export interface Localizedtext {
 
 /**
  * operation.
- * A one-shot operation: its inputs and the capabilities it needs.
+ * A one-shot operation: its inputs, capability needs, and optional App-
+ * declared effect guidance.
  */
 export interface Operation {
   label: Localizedtext;
@@ -137,6 +193,19 @@ export interface Operation {
   stdin?: boolean;
   args?: Arg[];
   needs?: Need[];
+  effects?: Operationeffect[];
+}
+
+/**
+ * operationEffect.
+ * App-declared guidance for a metadata-only preview, not authority, an OS-
+ * confirmed effect, or proof that an inverse exists.
+ */
+export interface Operationeffect {
+  kind: "read" | "create" | "update" | "delete" | "external" | "execute";
+  label: Localizedtext;
+  target_arg?: string;
+  recovery?: "not_applicable" | "reversible" | "compensatable" | "irreversible" | "unknown";
 }
 
 /**
@@ -261,14 +330,16 @@ export interface Mcpaccess {
 
 /**
  * mcpTool.
- * One MCP-callable tool. Mirrors operation: args + needs drive the model's
- * view and the kernel's enforcement.
+ * One MCP-callable tool. Args and needs drive the model's view and kernel
+ * enforcement; optional effects are App-declared preview metadata, never
+ * authority or confirmed outcomes.
  */
 export interface Mcptool {
   name: string;
   summary: Localizedtext;
   args?: Arg[];
   needs?: Need[];
+  effects?: Operationeffect[];
 }
 
 /**
@@ -309,6 +380,20 @@ export interface McpPrincipal {
   kind: "system-agent" | "external-agent" | "cli";
   id: string;
   owner_uid: number;
+}
+
+/**
+ * App object reference.
+ * A portable identifier for App-owned data, not authority, a payload, or proof
+ * of existence or readability. Component, UTF-8, and canonical URI semantics
+ * are specified in object-references.md and enforced by the public objects
+ * helpers.
+ */
+export interface ObjectRef {
+  app_id: string;
+  object_type: string;
+  object_id: string;
+  revision?: string;
 }
 
 /**
@@ -701,6 +786,17 @@ export function normalizeEnvelopeIntegers(value: unknown): void {
   normalizeWireIntegers(_WIRE_SCHEMA_ENVELOPE, _WIRE_SCHEMA_ENVELOPE, value);
 }
 
+const _WIRE_SCHEMA_FILE_CHANGE_PLAN: WireRule = decodeWireJson("{\"$id\":\"https://claw-os.dev/wire/v1/file_change_plan.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":\"Public App-reported staged-plan data, not OS-confirmed mutation, authority, or universal rollback. Semantic validation is owned by the App/core; see file-change-plans.md. Private before/proposed contents are never fields of this value.\",\"properties\":{\"after_bytes\":{\"maximum\":65536,\"minimum\":0,\"type\":\"integer\"},\"after_sha256\":{\"description\":\"Canonical sha256: plus 64 lowercase hexadecimal digits for the proposal. App/core validates the digest.\",\"type\":\"string\"},\"applied_at\":{\"description\":\"Optional App-reported RFC3339 application timestamp, not OS confirmation.\",\"oneOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"x-go-type\":\"*string\",\"x-rust-type\":\"String\",\"x-ts-type\":\"string | null\"},\"before_bytes\":{\"maximum\":65536,\"minimum\":0,\"type\":\"integer\"},\"before_exists\":{\"type\":\"boolean\"},\"before_sha256\":{\"description\":\"Canonical sha256: plus 64 lowercase hexadecimal digits for an existing preimage, otherwise null. Validated semantically by the App/core.\",\"oneOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"x-go-type\":\"*string\",\"x-rust-type\":\"Option<String>\",\"x-ts-type\":\"string | null\"},\"changed\":{\"description\":\"Optional App-reported change result, not OS-confirmed mutation.\",\"oneOf\":[{\"type\":\"boolean\"},{\"type\":\"null\"}],\"x-go-type\":\"*bool\",\"x-rust-type\":\"bool\",\"x-ts-type\":\"boolean | null\"},\"created_at\":{\"description\":\"App-reported RFC3339 creation timestamp.\",\"type\":\"string\"},\"diagnostic\":{\"oneOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"x-go-type\":\"*string\",\"x-rust-type\":\"String\",\"x-ts-type\":\"string | null\"},\"diff\":{\"description\":\"App-reported staged diff, at most 65536 UTF-8 bytes. This is not a private before/proposed-content field.\",\"type\":\"string\"},\"diff_truncated\":{\"type\":\"boolean\"},\"expires_at\":{\"description\":\"App-reported RFC3339 expiration timestamp.\",\"type\":\"string\"},\"kind\":{\"const\":\"file_change_plan\",\"type\":\"string\"},\"path\":{\"description\":\"Absolute target path, at most 4096 UTF-8 bytes. Existing object-reference bounds also apply.\",\"type\":\"string\"},\"plan_id\":{\"description\":\"UUID identifying the immutable proposal.\",\"type\":\"string\"},\"reference\":{\"description\":\"Canonical app://fs/change-plan?id=<encoded absolute path>&revision=<encoded plan UUID>, using the existing ObjectRef helpers.\",\"type\":\"string\"},\"review\":{\"description\":\"Canonical sha256 fingerprint binding the immutable proposal. Data only, never authorization or permission to apply.\",\"type\":\"string\"},\"schema\":{\"const\":1,\"type\":\"integer\"},\"snapshot\":{\"description\":\"Optional App-reported snapshot identifier, not snapshot contents or proof of rollback capability.\",\"oneOf\":[{\"type\":\"string\"},{\"type\":\"null\"}],\"x-go-type\":\"*string\",\"x-rust-type\":\"String\",\"x-ts-type\":\"string | null\"},\"state\":{\"enum\":[\"draft\",\"applying\",\"applied\",\"conflicted\",\"indeterminate\",\"expired\"],\"type\":\"string\"},\"warnings\":{\"description\":\"At most 16 App-reported warnings. External writers can race after the final precondition check; this plan does not provide atomic compare-and-swap.\",\"items\":{\"description\":\"At most 1024 UTF-8 bytes; validated by the App/core.\",\"type\":\"string\"},\"maxItems\":16,\"type\":\"array\"},\"would_change\":{\"type\":\"boolean\"}},\"required\":[\"schema\",\"kind\",\"plan_id\",\"path\",\"state\",\"before_exists\",\"before_sha256\",\"after_sha256\",\"before_bytes\",\"after_bytes\",\"would_change\",\"review\",\"reference\",\"diff\",\"diff_truncated\",\"created_at\",\"expires_at\",\"warnings\"],\"title\":\"App-reported file change plan\",\"type\":\"object\"}") as WireRule;
+
+export function validateFileChangePlan(value: unknown): asserts value is FileChangePlan & Record<string, unknown> {
+  validateWireSchema(_WIRE_SCHEMA_FILE_CHANGE_PLAN, _WIRE_SCHEMA_FILE_CHANGE_PLAN, value, "FileChangePlan", "$");
+  normalizeWireIntegers(_WIRE_SCHEMA_FILE_CHANGE_PLAN, _WIRE_SCHEMA_FILE_CHANGE_PLAN, value);
+}
+
+export function normalizeFileChangePlanIntegers(value: unknown): void {
+  normalizeWireIntegers(_WIRE_SCHEMA_FILE_CHANGE_PLAN, _WIRE_SCHEMA_FILE_CHANGE_PLAN, value);
+}
+
 const _WIRE_SCHEMA_MCP_CALL_CONTEXT: WireRule = decodeWireJson("{\"$defs\":{\"McpPrincipal\":{\"additionalProperties\":false,\"properties\":{\"id\":{\"maxLength\":256,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$\",\"type\":\"string\",\"x-full-match\":true},\"kind\":{\"enum\":[\"system-agent\",\"external-agent\",\"cli\"],\"type\":\"string\"},\"owner_uid\":{\"maximum\":4294967295,\"minimum\":0,\"type\":\"integer\"}},\"required\":[\"kind\",\"id\",\"owner_uid\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/mcp_call_context.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":\"Authenticated call identity and lineage injected by the Claw MCP Gateway over the private App-host transport. Caller-supplied MCP arguments must never populate this object.\",\"properties\":{\"call_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:-]*$\",\"type\":\"string\",\"x-full-match\":true},\"caller\":{\"$ref\":\"#/$defs/McpPrincipal\"},\"deadline_unix_ms\":{\"maximum\":9007199254740991,\"minimum\":1,\"type\":\"integer\"},\"session_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$\",\"type\":\"string\",\"x-full-match\":true},\"task_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$\",\"type\":\"string\",\"x-full-match\":true},\"trace_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:-]*$\",\"type\":\"string\",\"x-full-match\":true},\"wire_version\":{\"const\":1,\"maximum\":1,\"minimum\":1,\"type\":\"integer\"}},\"required\":[\"wire_version\",\"call_id\",\"trace_id\",\"caller\"],\"title\":\"MCP call context\",\"type\":\"object\"}") as WireRule;
 
 export function validateMcpCallContext(value: unknown): asserts value is McpCallContext & Record<string, unknown> {
@@ -710,6 +806,17 @@ export function validateMcpCallContext(value: unknown): asserts value is McpCall
 
 export function normalizeMcpCallContextIntegers(value: unknown): void {
   normalizeWireIntegers(_WIRE_SCHEMA_MCP_CALL_CONTEXT, _WIRE_SCHEMA_MCP_CALL_CONTEXT, value);
+}
+
+const _WIRE_SCHEMA_OBJECT_REF: WireRule = decodeWireJson("{\"$id\":\"https://claw-os.dev/wire/v1/object_ref.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":\"A portable identifier for App-owned data, not authority, a payload, or proof of existence or readability. Component, UTF-8, and canonical URI semantics are specified in object-references.md and enforced by the public objects helpers.\",\"properties\":{\"app_id\":{\"description\":\"App identifier; lowercase ASCII component, at most 128 UTF-8 bytes.\",\"type\":\"string\"},\"object_id\":{\"description\":\"Opaque, nonempty UTF-8 identifier, at most 1024 bytes, without Unicode control characters. Never trimmed or normalized.\",\"type\":\"string\"},\"object_type\":{\"description\":\"Object type declared by the App; lowercase ASCII component, at most 64 UTF-8 bytes.\",\"type\":\"string\"},\"revision\":{\"description\":\"Optional opaque, nonempty UTF-8 revision, at most 128 bytes, without Unicode control characters. Absence differs from an empty string.\",\"type\":\"string\",\"x-go-type\":\"*string\"}},\"required\":[\"app_id\",\"object_type\",\"object_id\"],\"title\":\"App object reference\",\"type\":\"object\"}") as WireRule;
+
+export function validateObjectRef(value: unknown): asserts value is ObjectRef & Record<string, unknown> {
+  validateWireSchema(_WIRE_SCHEMA_OBJECT_REF, _WIRE_SCHEMA_OBJECT_REF, value, "ObjectRef", "$");
+  normalizeWireIntegers(_WIRE_SCHEMA_OBJECT_REF, _WIRE_SCHEMA_OBJECT_REF, value);
+}
+
+export function normalizeObjectRefIntegers(value: unknown): void {
+  normalizeWireIntegers(_WIRE_SCHEMA_OBJECT_REF, _WIRE_SCHEMA_OBJECT_REF, value);
 }
 
 const _WIRE_SCHEMA_TOOL_CATALOG: WireRule = decodeWireJson("{\"$defs\":{\"WireCatalogEntry\":{\"additionalProperties\":true,\"properties\":{\"args_schema\":{\"additionalProperties\":true,\"type\":\"object\"},\"name\":{\"type\":\"string\"},\"returns_schema\":{\"additionalProperties\":true,\"type\":\"object\"},\"stability\":{\"enum\":[\"stable\",\"experimental\"],\"type\":\"string\"},\"summary\":{\"type\":\"string\"},\"verb\":{\"type\":\"string\"}},\"required\":[\"name\",\"summary\",\"verb\",\"stability\",\"args_schema\",\"returns_schema\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/tool_catalog.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":true,\"description\":\"Shape returned by `cos ai tools`.\",\"properties\":{\"tools\":{\"items\":{\"$ref\":\"#/$defs/WireCatalogEntry\"},\"type\":\"array\"}},\"required\":[\"tools\"],\"title\":\"Catalog tool list reply\",\"type\":\"object\"}") as WireRule;

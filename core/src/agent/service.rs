@@ -10,9 +10,9 @@
 //!
 //! The protocol is intentionally tiny:
 //!
-//!   - `submit "<prompt>" [--session ID] [--max-turns N]`
+//!   - `submit "<prompt>" [--session ID] [--activity ID] [--max-turns N]`
 //!     drops a `pending/<job_id>.json` and returns `{job_id, status}`.
-//!   - `list [--status pending|running|done|cancelled] [--limit N]`
+//!   - `list [--status pending|running|done|cancelled] [--activity ID] [--limit N]`
 //!     enumerates jobs across one or all status buckets.
 //!   - `status [<job_id>]` returns either bucket counts (no id) or the
 //!     full job document (with id).
@@ -48,7 +48,12 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::activities::{Activity, ActivityService, ActivityState};
 use crate::paths::agent_jobs_dir;
+
+mod activity_context;
+pub(crate) mod execution_limits;
+use activity_context::build as activity_execution_context;
 
 /// Maximum number of times a job may be recovered from `running/` after
 /// its worker died before we give up and fail it (see
@@ -58,6 +63,7 @@ const MAX_RECOVERIES: u32 = 3;
 const JOB_SCHEMA_VERSION: u32 = 2;
 const APPROVAL_WAIT_TIMEOUT_SECS: i64 = 8 * 60 * 60;
 const STREAM_PRUNE_TOMBSTONE_SUFFIX: &str = ".jsonl.prune";
+const ACTIVITY_CONTEXT_MAX_CHARS: usize = 16 * 1024;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -149,6 +155,10 @@ pub struct Job {
     pub branch_context: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_reservation: Option<crate::activities::ExecutionReservation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_turns: Option<u32>,
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
@@ -277,6 +287,8 @@ impl Job {
             context,
             branch_context,
             session_id,
+            activity_id: None,
+            execution_reservation: None,
             max_turns,
             use_memory: true,
             status: JobStatus::Pending,
@@ -314,6 +326,14 @@ impl Job {
         } else {
             let cut: String = s.chars().take(max).collect();
             format!("{cut}…")
+        }
+    }
+
+    pub(crate) fn effective_max_turns(&self) -> Option<u32> {
+        match (&self.execution_reservation, self.max_turns) {
+            (Some(reservation), Some(requested)) => Some(reservation.max_turns.min(requested)),
+            (Some(reservation), None) => Some(reservation.max_turns),
+            (None, requested) => requested,
         }
     }
 }
@@ -573,7 +593,83 @@ impl Store {
         self.publish(job)
     }
 
-    pub(crate) fn publish(&self, job: Job) -> io::Result<Job> {
+    #[allow(clippy::too_many_arguments)]
+    pub fn submit_with_activity(
+        &self,
+        prompt: String,
+        context: Option<String>,
+        branch_context: Option<String>,
+        session_id: Option<String>,
+        max_turns: Option<u32>,
+        use_memory: bool,
+        owner_uid: Option<u32>,
+        owner_home: Option<String>,
+        activity_id: Option<String>,
+    ) -> io::Result<Job> {
+        let mut job = Job::new_pending(
+            prompt,
+            context,
+            branch_context,
+            session_id,
+            max_turns,
+            owner_uid,
+            owner_home,
+        );
+        job.use_memory = use_memory;
+        job.activity_id = activity_id;
+        self.publish(job)
+    }
+
+    pub(crate) fn publish(&self, mut job: Job) -> io::Result<Job> {
+        let _session_lock = job
+            .session_id
+            .as_deref()
+            .map(|session| self.lock_for_session(session))
+            .transpose()?;
+        let session_meta =
+            submission_session_meta(job.session_id.as_deref(), job.activity_id.is_some())?;
+        let inherited = session_meta
+            .as_ref()
+            .and_then(|meta| meta.activity_id.as_deref());
+        job.activity_id = if inherited.is_some() || job.activity_id.is_some() {
+            let owner_uid = job.owner_uid.ok_or_else(|| {
+                io::Error::new(
+                    ErrorKind::PermissionDenied,
+                    "Activity task has no recorded owner",
+                )
+            })?;
+            resolve_activity_id(owner_uid, inherited, job.activity_id.as_deref())?
+        } else {
+            None
+        };
+        if job.activity_id.is_some() {
+            if let Some(session_id) = job.session_id.as_deref() {
+                for status in [
+                    JobStatus::Pending,
+                    JobStatus::Running,
+                    JobStatus::WaitingApproval,
+                ] {
+                    if let Some(active) = self
+                        .list_bucket(status, None)?
+                        .into_iter()
+                        .find(|active| active.session_id.as_deref() == Some(session_id))
+                    {
+                        return Err(io::Error::new(
+                            ErrorKind::AlreadyExists,
+                            format!(
+                                "Activity session {session_id} already has active task {}",
+                                active.id
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+        if let (Some(activity_id), Some(owner_uid), Some(meta)) =
+            (job.activity_id.as_deref(), job.owner_uid, session_meta)
+        {
+            associate_task_session(&meta.id, owner_uid, activity_id)?;
+        }
         let path = self.path_for(JobStatus::Pending, &job.id);
         write_json_atomic(&path, &job)?;
         crate::clawd::audit::record_task_event("clawd.task.submitted", &job);
@@ -642,6 +738,39 @@ impl Store {
         if let Some(limit) = limit {
             jobs.truncate(limit);
         }
+        Ok(jobs)
+    }
+
+    /// Read projection across all buckets, filtering ownership and association
+    /// before selecting the newest jobs. Activity state remains in its service.
+    pub fn list_for_activity(
+        &self,
+        owner_uid: u32,
+        activity_id: &str,
+        limit: usize,
+    ) -> io::Result<Vec<Job>> {
+        let mut jobs = Vec::new();
+        for bucket in [
+            JobStatus::Pending,
+            JobStatus::Running,
+            JobStatus::WaitingApproval,
+            JobStatus::Ok,
+        ] {
+            jobs.extend(
+                self.list_bucket_for_owner(bucket, None, Some(owner_uid))?
+                    .into_iter()
+                    .filter(|job| job.activity_id.as_deref() == Some(activity_id)),
+            );
+        }
+        jobs.sort_by(|left, right| {
+            right
+                .created_at
+                .cmp(&left.created_at)
+                .then_with(|| right.id.cmp(&left.id))
+        });
+        let mut seen = std::collections::HashSet::new();
+        jobs.retain(|job| seen.insert(job.id.clone()));
+        jobs.truncate(limit);
         Ok(jobs)
     }
 
@@ -728,6 +857,128 @@ impl Store {
                 )?;
                 continue;
             }
+            let activity = match job.activity_id.as_deref() {
+                Some(activity_id) => {
+                    let owner_uid = job.owner_uid.ok_or_else(|| {
+                        io::Error::new(
+                            ErrorKind::PermissionDenied,
+                            "Activity task has no recorded owner",
+                        )
+                    })?;
+                    let activity = load_activity(owner_uid, activity_id)?;
+                    if let Some(meta) = submission_session_meta(job.session_id.as_deref(), true)? {
+                        if meta.owner_uid != Some(owner_uid)
+                            || meta.activity_id.as_deref() != Some(activity.id.as_str())
+                        {
+                            return Err(io::Error::new(
+                                ErrorKind::PermissionDenied,
+                                "Activity task session owner or association does not match the job",
+                            ));
+                        }
+                    }
+                    match activity.state {
+                        ActivityState::Active => Some(activity),
+                        ActivityState::Paused => continue,
+                        ActivityState::Completed | ActivityState::Cancelled => {
+                            // Cancellation takes this same job lock. Release it
+                            // before using the existing durable transition.
+                            drop(_lock);
+                            self.cancel_pending_for_owner(&id, Some(owner_uid))?;
+                            continue;
+                        }
+                    }
+                }
+                None => None,
+            };
+            if let Some(activity) = &activity {
+                let attempt_id = uuid::Uuid::new_v4().to_string();
+                let reserved = crate::activities::open_default().and_then(|service| {
+                    service.reserve_execution(
+                        activity.owner_uid,
+                        &activity.id,
+                        &attempt_id,
+                        &job.id,
+                        job.max_turns,
+                    )
+                });
+                match reserved {
+                    Ok(reservation) => job.execution_reservation = reservation,
+                    Err(crate::activities::ActivityError::ExecutionBlocked(
+                        crate::activities::ExecutionBlockedReason::Inactive,
+                    )) => continue,
+                    Err(error @ crate::activities::ActivityError::ExecutionBlocked(_)) => {
+                        self.fail_waiting_job(
+                            &src,
+                            &id,
+                            job,
+                            error.to_string(),
+                            "clawd.task.execution-blocked",
+                        )?;
+                        continue;
+                    }
+                    Err(error) => {
+                        return Err(io::Error::other(format!(
+                            "reserve Activity execution: {error}"
+                        )))
+                    }
+                }
+                if let Some(reservation) = &job.execution_reservation {
+                    self.append_stream_progress(
+                        &job.id,
+                        json!({
+                            "kind":"activity_execution_reserved",
+                            "activity_id":activity.id,
+                            "reservation_id":reservation.id,
+                            "policy_revision":reservation.policy_revision,
+                            "max_turns":reservation.max_turns,
+                            "expires_at":reservation.expires_at,
+                        }),
+                    )?;
+                }
+            } else {
+                job.execution_reservation = None;
+            }
+            let execution_context = activity
+                .as_ref()
+                .map(|activity| {
+                    let entries = crate::activities::open_default()
+                        .and_then(|service| {
+                            service.object_state(
+                                activity.owner_uid,
+                                &activity.id,
+                                None,
+                                crate::activities::MAX_LIST_LIMIT,
+                            )
+                        })
+                        .map_err(|error| {
+                            tracing::warn!(activity_id = %activity.id, %error,
+                                "Activity object-state lookup failed; task admission is refused");
+                            io::Error::other(format!("load Activity object state: {error}"))
+                        })?;
+                    Ok::<_, io::Error>(activity_execution_context(
+                        activity,
+                        &entries,
+                        job.context.as_deref(),
+                    ))
+                })
+                .transpose()?;
+            if let (Some(activity), Some(context)) = (&activity, &execution_context) {
+                // Keep the exact transient payload reconstructable even when
+                // the caller disabled conversation memory.
+                self.append_stream_progress(
+                    &job.id,
+                    json!({
+                        "kind": "activity_context",
+                        "activity_id": activity.id,
+                        "activity_updated_at": activity.updated_at,
+                        "source": crate::agent::prompt::INJECTED_SOURCE_TRANSIENT_APP_CONTEXT,
+                        "context": crate::agent::safety::untrusted::wrap_untrusted(
+                            crate::agent::safety::untrusted::APP_CONTEXT_TAG,
+                            context,
+                        ),
+                    }),
+                )?;
+            }
             let dst = self.path_for(JobStatus::Running, &id);
             match durable_rename(&src, &dst) {
                 Ok(()) => {
@@ -747,6 +998,12 @@ impl Store {
                     write_json_atomic(&dst, &job)?;
                     crate::clawd::audit::record_task_event("clawd.task.started", &job);
                     self.notify(&job, "started");
+                    // Only the execution copy carries current planning data.
+                    // finish/recovery reload the original context from disk, so
+                    // retries never accumulate stale or nested Activity context.
+                    if let Some(context) = execution_context {
+                        job.context = Some(context);
+                    }
                     return Ok(Some(job));
                 }
                 Err(e) if e.kind() == ErrorKind::NotFound => continue, // raced
@@ -2006,9 +2263,17 @@ impl Store {
     /// stable across rename storms.
     fn lock_for_id(&self, id: &str) -> io::Result<JobLock> {
         validate_job_id(id)?;
+        self.lock_path(self.job_lock_path(id))
+    }
+
+    fn lock_for_session(&self, session_id: &str) -> io::Result<JobLock> {
+        let name = crate::crypto::sha256_hex(session_id.as_bytes());
+        self.lock_path(self.root.join("locks").join(format!("session-{name}.lock")))
+    }
+
+    fn lock_path(&self, lock_path: PathBuf) -> io::Result<JobLock> {
         let lock_dir = self.root.join("locks");
         crate::agent::util::ensure_durable_private_dir(&lock_dir)?;
-        let lock_path = self.job_lock_path(id);
         let mut options = fs::OpenOptions::new();
         options.create(true).write(true).truncate(false);
         #[cfg(unix)]
@@ -2028,6 +2293,115 @@ impl Store {
         }
         Ok(JobLock { file: f })
     }
+}
+
+fn submission_session_meta(
+    session_id: Option<&str>,
+    require_session: bool,
+) -> io::Result<Option<crate::session::SessionMeta>> {
+    let Some(session_id) = session_id else {
+        return Ok(None);
+    };
+    let sid = match session_id.parse::<crate::session::SessionId>() {
+        Ok(sid) => sid,
+        Err(_) if !require_session => return Ok(None),
+        Err(error) => return Err(io::Error::new(ErrorKind::InvalidInput, error)),
+    };
+    match crate::session::get_meta(&sid) {
+        Ok(meta) if meta.id == sid => Ok(Some(meta)),
+        Ok(_) => Err(io::Error::new(
+            ErrorKind::InvalidData,
+            "task session metadata does not match its session id",
+        )),
+        Err(crate::session::SessionError::NotFound(_)) if !require_session => Ok(None),
+        Err(error) => Err(io_other(error)),
+    }
+}
+
+fn associate_task_session(
+    sid: &crate::session::SessionId,
+    owner_uid: u32,
+    activity_id: &str,
+) -> io::Result<()> {
+    let validate = |meta: &crate::session::SessionMeta| {
+        if meta.owner_uid != Some(owner_uid) {
+            return Err(io::Error::new(
+                ErrorKind::PermissionDenied,
+                "Activity task session is not owned by its submitter",
+            ));
+        }
+        if meta
+            .activity_id
+            .as_deref()
+            .is_some_and(|current| current != activity_id)
+        {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "task session is already associated with a different Activity",
+            ));
+        }
+        Ok(())
+    };
+    validate(&crate::session::get_meta(sid).map_err(io_other)?)?;
+    let mut result = Ok(());
+    crate::session::update_meta(sid, |meta| {
+        result = validate(meta);
+        if result.is_ok() {
+            meta.activity_id = Some(activity_id.to_string());
+        }
+    })
+    .map_err(io_other)?;
+    result
+}
+
+pub(crate) fn load_activity(owner_uid: u32, activity_id: &str) -> io::Result<Activity> {
+    crate::activities::validate_id(activity_id)
+        .and_then(|()| crate::activities::open_default())
+        .and_then(|service| service.get(owner_uid, activity_id))
+        .map_err(|error| {
+            tracing::warn!(
+                owner_uid,
+                activity_id,
+                %error,
+                "Activity lookup failed; associated task admission is refused"
+            );
+            io::Error::other(format!("load Activity: {error}"))
+        })
+}
+
+pub(crate) fn require_active_activity(owner_uid: u32, activity_id: &str) -> io::Result<Activity> {
+    let activity = load_activity(owner_uid, activity_id)?;
+    if !activity.state.allows_work() {
+        return Err(io::Error::new(
+            ErrorKind::InvalidInput,
+            format!(
+                "Activity {} is {} and does not accept new work",
+                activity.id,
+                activity.state.as_str()
+            ),
+        ));
+    }
+    Ok(activity)
+}
+
+pub(crate) fn resolve_activity_id(
+    owner_uid: u32,
+    inherited: Option<&str>,
+    requested: Option<&str>,
+) -> io::Result<Option<String>> {
+    let Some(activity_id) = requested.or(inherited) else {
+        return Ok(None);
+    };
+    let activity = require_active_activity(owner_uid, activity_id)?;
+    if let Some(current) = inherited {
+        if current != activity.id && load_activity(owner_uid, current)?.id != activity.id {
+            return Err(io::Error::new(
+                ErrorKind::InvalidInput,
+                "task session is already associated with a different Activity",
+            ));
+        }
+    }
+    Ok(Some(activity.id))
 }
 
 fn job_visible_to(job: &Job, owner_uid: Option<u32>) -> bool {
@@ -2459,6 +2833,8 @@ fn current_owner_identity() -> (Option<u32>, Option<String>) {
 fn job_to_summary(job: &Job) -> Value {
     json!({
         "id": job.id,
+        "session_id": job.session_id,
+        "activity_id": job.activity_id,
         "status": job.status.as_str(),
         "schema_version": job.schema_version,
         "execution_phase": job.execution_phase.as_str(),
@@ -2482,6 +2858,9 @@ pub fn cmd(args: &[String]) -> Result<Value, String> {
     };
     match sub {
         "" | "help" | "-h" | "--help" => Ok(help_value()),
+        "submit" | "list" if rest.iter().any(|arg| arg == "--activity") => {
+            crate::clawd::agent_client::service_cmd(args)
+        }
         "submit" => cmd_submit(rest),
         "list" => cmd_list(rest),
         "status" => cmd_status(rest),
@@ -2498,8 +2877,8 @@ pub fn cmd(args: &[String]) -> Result<Value, String> {
 fn help_value() -> Value {
     json!({
         "subcommands": [
-            "submit  \"<prompt>\" [--session ID] [--max-turns N]",
-            "list    [--status pending|running|done|cancelled] [--limit N]",
+            "submit  \"<prompt>\" [--session ID] [--activity ID] [--max-turns N]",
+            "list    [--status pending|running|waiting_approval|done|cancelled] [--activity ID] [--limit N]",
             "status  [<job_id>]",
             "result  <job_id> [--wait-secs N]",
             "work    [--once] [--poll-ms N] [--max-jobs N]",
@@ -3026,6 +3405,15 @@ async fn run_one_job_inner(job: &Job) -> FinishOutcome {
 }
 
 async fn run_one_job_scoped(job: &Job) -> FinishOutcome {
+    let activity_boundary = match crate::caps::activity_boundary::ActivityBoundary::for_job(job) {
+        Ok(boundary) => boundary,
+        Err(error) => return FinishOutcome::Error(error),
+    };
+    let mut execution_limits = match execution_limits::ExecutionLimitsGuard::new(job) {
+        Ok(guard) => guard,
+        Err(error) => return FinishOutcome::Error(error),
+    };
+    let hooks = standalone_runtime_hooks();
     let stream_sink: Arc<dyn crate::agent::llm::accumulate::StreamSink> = Arc::new(JobStreamSink {
         job_id: job.id.clone(),
     });
@@ -3033,21 +3421,57 @@ async fn run_one_job_scoped(job: &Job) -> FinishOutcome {
         Arc::new(JobProgressSink {
             job_id: job.id.clone(),
         });
-    execute_job(
+    let run = execute_job_with_hooks(
         JobExecution {
             id: job.id.clone(),
             prompt: job.prompt.clone(),
             context: job.context.clone(),
             branch_context: job.branch_context.clone(),
             session_id: job.session_id.clone(),
-            max_turns: job.max_turns,
+            max_turns: job.effective_max_turns(),
             use_memory: job.use_memory,
             presence: None,
         },
         stream_sink,
         progress_sink,
-    )
-    .await
+        hooks,
+    );
+    let mut run = Box::pin(crate::caps::activity_boundary::scope(
+        activity_boundary.clone(),
+        Box::pin(run),
+    ));
+    let mut tick = tokio::time::interval(Duration::from_millis(250));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut next_boundary_check = std::time::Instant::now();
+    loop {
+        tokio::select! {
+            outcome = &mut run => {
+                if let Some(boundary) = &activity_boundary {
+                    if let Err(error) = boundary.check() {
+                        return FinishOutcome::Error(error);
+                    }
+                }
+                return match execution_limits.check_now(job) {
+                    Ok(None) => outcome,
+                    Ok(Some(reason)) | Err(reason) => FinishOutcome::Error(reason),
+                };
+            }
+            _ = tick.tick() => {
+                match execution_limits.check(job) {
+                    Ok(None) => {}
+                    Ok(Some(reason)) | Err(reason) => return FinishOutcome::Error(reason),
+                }
+                if std::time::Instant::now() >= next_boundary_check {
+                    next_boundary_check = std::time::Instant::now() + Duration::from_secs(1);
+                    if let Some(boundary) = &activity_boundary {
+                        if let Err(error) = boundary.check() {
+                            return FinishOutcome::Error(error);
+                        }
+                    }
+                }
+            },
+        }
+    }
 }
 
 /// One unit of agent work, decoupled from where the job record lives.
@@ -3082,13 +3506,7 @@ pub async fn execute_job(
     stream_sink: Arc<dyn crate::agent::llm::accumulate::StreamSink>,
     progress_sink: Arc<dyn crate::agent::runtime::progress::ProgressSink>,
 ) -> FinishOutcome {
-    execute_job_with_hooks(
-        job,
-        stream_sink,
-        progress_sink,
-        standalone_runtime_hooks(),
-    )
-    .await
+    execute_job_with_hooks(job, stream_sink, progress_sink, standalone_runtime_hooks()).await
 }
 
 pub async fn execute_job_with_hooks(

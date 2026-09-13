@@ -33,10 +33,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::caps::{Cap, ConsentContext, Risk, Scope, ScopeKind, Verb};
 
-pub mod generations;
 pub mod app_policy;
-pub mod system_review;
+pub mod generations;
 pub(crate) mod presentation;
+pub mod system_review;
 
 pub use generations::RevocationScope;
 
@@ -568,7 +568,8 @@ impl GrantBinding {
         expected_execution: Option<&ApprovalExecutionIdentity>,
         resumed_request_ids: &[String],
     ) -> bool {
-        if self.uses_remaining == 0 || now >= self.expires_at
+        if self.uses_remaining == 0
+            || now >= self.expires_at
             || expected.session.starts_with(app_policy::SESSION_PREFIX)
         {
             return false;
@@ -1021,10 +1022,14 @@ fn validate_agent_duration(
 
 pub(crate) fn supported_durations(request: &Request) -> Result<Vec<GrantDuration>, String> {
     let authorization = authorization_for_request(request)?;
-    Ok([GrantDuration::Once, GrantDuration::Session, GrantDuration::Forever]
-        .into_iter()
-        .filter(|duration| validate_agent_duration(&authorization, *duration).is_ok())
-        .collect())
+    Ok([
+        GrantDuration::Once,
+        GrantDuration::Session,
+        GrantDuration::Forever,
+    ]
+    .into_iter()
+    .filter(|duration| validate_agent_duration(&authorization, *duration).is_ok())
+    .collect())
 }
 
 // ---------------------------------------------------------------------------
@@ -1443,12 +1448,24 @@ fn resolve_locked(
         Outcome::Denied => None,
     };
     let (grant, restoration) = match generation.zip(authorization) {
-        Some((generation, authorization)) if policy_restore => (None, Some(app_policy::RestorationBinding {
-            authorization, generation, reference: crate::audit_policy::text_digest(id).digest,
-        })),
-        Some((generation, authorization)) => (Some(GrantBinding::mint(
-            duration.unwrap_or(GrantDuration::Once), id, decided_at, generation, authorization,
-        )), None),
+        Some((generation, authorization)) if policy_restore => (
+            None,
+            Some(app_policy::RestorationBinding {
+                authorization,
+                generation,
+                reference: crate::audit_policy::text_digest(id).digest,
+            }),
+        ),
+        Some((generation, authorization)) => (
+            Some(GrantBinding::mint(
+                duration.unwrap_or(GrantDuration::Once),
+                id,
+                decided_at,
+                generation,
+                authorization,
+            )),
+            None,
+        ),
         None => (None, None),
     };
     let decision = Decision {
@@ -1467,12 +1484,16 @@ fn resolve_locked(
     };
     let dest = dest_dir.join(format!("{id}.json"));
     let payload = serde_json::to_string_pretty(&resolved).map_err(|e| e.to_string())?;
-    write_atomic_with(&dest, payload.as_bytes(), if policy_restore {
-        Durability::Committed
-    } else {
-        Durability::BestEffort
-    })
-        .map_err(|e| format!("write {} {id}: {e}", outcome_dir_name(outcome)))?;
+    write_atomic_with(
+        &dest,
+        payload.as_bytes(),
+        if policy_restore {
+            Durability::Committed
+        } else {
+            Durability::BestEffort
+        },
+    )
+    .map_err(|e| format!("write {} {id}: {e}", outcome_dir_name(outcome)))?;
 
     // Best-effort cleanup of the scratch file. If this fails the
     // authoritative copy is already in approved/ or denied/ and the
@@ -1504,12 +1525,16 @@ fn invalidate_claimed_request(
     };
     let dest = denied_dir().join(format!("{id}.json"));
     let payload = serde_json::to_string_pretty(&resolved).map_err(|error| error.to_string())?;
-    write_atomic_with(&dest, payload.as_bytes(), if request.session.starts_with(app_policy::SESSION_PREFIX) {
-        Durability::Committed
-    } else {
-        Durability::BestEffort
-    })
-        .map_err(|error| format!("invalidate approval {id}: {error}"))?;
+    write_atomic_with(
+        &dest,
+        payload.as_bytes(),
+        if request.session.starts_with(app_policy::SESSION_PREFIX) {
+            Durability::Committed
+        } else {
+            Durability::BestEffort
+        },
+    )
+    .map_err(|error| format!("invalidate approval {id}: {error}"))?;
     let _ = fs::remove_file(scratch);
     journal_decision(&resolved)?;
     Ok(())
@@ -1517,7 +1542,11 @@ fn invalidate_claimed_request(
 
 fn journal_decision(resolved: &Resolved) -> Result<(), String> {
     let result = crate::clawd::system_journal::record_approval_decision(resolved);
-    if resolved.request.session.starts_with(app_policy::SESSION_PREFIX) {
+    if resolved
+        .request
+        .session
+        .starts_with(app_policy::SESSION_PREFIX)
+    {
         result.map_err(|error| format!(
             "App permission decision is committed but its journal projection failed: {error}; refresh status"
         ))
@@ -1730,6 +1759,7 @@ pub fn redeem_matching_grant_for_owner(
         owner_uid,
         context,
         None,
+        false,
     )
 }
 
@@ -1740,6 +1770,7 @@ pub(crate) fn redeem_matching_grant_for_owner_operation(
     owner_uid: Option<u32>,
     context: Option<ConsentContext>,
     operation_digest: Option<&str>,
+    retire_all: bool,
 ) -> Result<Option<ConsumedGrant>, String> {
     let execution = match context {
         Some(_) => Some(local_execution_identity()?),
@@ -1754,6 +1785,7 @@ pub(crate) fn redeem_matching_grant_for_owner_operation(
         execution.as_ref(),
         operation_digest,
         &[],
+        retire_all,
     )
 }
 
@@ -1774,6 +1806,7 @@ pub fn redeem_matching_grant_for_execution(
         execution,
         None,
         &[],
+        false,
     )
 }
 
@@ -1787,6 +1820,7 @@ fn redeem_matching_grant_for_execution_operation(
     execution: Option<&ApprovalExecutionIdentity>,
     operation_digest: Option<&str>,
     resumed_request_ids: &[String],
+    retire_all: bool,
 ) -> Result<Option<ConsumedGrant>, String> {
     let (capability, risk) = canonical_capability(verb, requested_scope.clone())?;
     let operation_digest = canonical_operation_digest(operation_digest)?;
@@ -1812,7 +1846,7 @@ fn redeem_matching_grant_for_execution_operation(
             else {
                 continue;
             };
-            if let Some(grant) = spend_grant(&path, resolved)? {
+            if let Some(grant) = spend_grant(&path, resolved, retire_all)? {
                 return Ok(Some(grant));
             }
         }
@@ -1854,6 +1888,7 @@ pub(crate) fn redeem_matching_worker_grant_for_owner_operation(
         Some(execution),
         operation_digest,
         &[],
+        false,
     )
 }
 
@@ -1866,6 +1901,7 @@ pub(crate) fn redeem_resumed_worker_grant_for_owner_operation(
     execution: &ApprovalExecutionIdentity,
     operation_digest: Option<&str>,
     resumed_request_ids: &[String],
+    retire_all: bool,
 ) -> Result<Option<ConsumedGrant>, String> {
     redeem_matching_grant_for_execution_operation(
         session,
@@ -1876,6 +1912,7 @@ pub(crate) fn redeem_resumed_worker_grant_for_owner_operation(
         Some(execution),
         operation_digest,
         resumed_request_ids,
+        retire_all,
     )
 }
 
@@ -1884,9 +1921,16 @@ pub(crate) fn redeem_resumed_worker_grant_for_owner_operation(
 ///
 /// Called with the store lock held. Returns `Ok(None)` when another
 /// caller won the race and the record is already gone.
-fn spend_grant(path: &Path, mut resolved: Resolved) -> Result<Option<ConsumedGrant>, String> {
+fn spend_grant(
+    path: &Path,
+    mut resolved: Resolved,
+    retire_all: bool,
+) -> Result<Option<ConsumedGrant>, String> {
     if resolved.decision.restoration.is_some()
-        || resolved.request.session.starts_with(app_policy::SESSION_PREFIX)
+        || resolved
+            .request
+            .session
+            .starts_with(app_policy::SESSION_PREFIX)
     {
         return Ok(None);
     }
@@ -1901,7 +1945,11 @@ fn spend_grant(path: &Path, mut resolved: Resolved) -> Result<Option<ConsumedGra
     let Some(authorization) = binding.authorization.clone() else {
         return Ok(None);
     };
-    binding.uses_remaining = binding.uses_remaining.saturating_sub(1);
+    binding.uses_remaining = if retire_all {
+        0
+    } else {
+        binding.uses_remaining.saturating_sub(1)
+    };
     let consumed = ConsumedGrant {
         duration,
         expires_at: binding.expires_at,

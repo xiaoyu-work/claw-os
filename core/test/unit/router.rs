@@ -1,7 +1,6 @@
 use super::app_commands::{
     consent_cmd, create_cmd, install_cmd_with_test_confirmation as install_cmd,
-    stage_app_install_with_rename,
-    stage_app_install_with_review,
+    stage_app_install_with_rename, stage_app_install_with_review,
 };
 use super::*;
 use crate::cli_help::{command_schemas, show_builtin_schema, show_command_schema};
@@ -70,7 +69,9 @@ fn app_permissions_bridge_forwards_the_exact_request_and_session() {
                     Err(error) => panic!("accept permission fixture: {error}"),
                 }
             };
-            stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
             let mut header = [0_u8; wire::HEADER_BYTES];
             stream.read_exact(&mut header).unwrap();
             let length =
@@ -109,21 +110,56 @@ fn app_permissions_bridge_forwards_the_exact_request_and_session() {
 }
 
 #[test]
+fn file_replace_stdin_body_is_closed_bounded_and_derives_its_session() {
+    let body =
+        serde_json::json!({"path":"/srv/document","expected":null,"content_base64":"YWZ0ZXI="});
+    let params = file_replace_params(&serde_json::to_vec(&body).unwrap(), "session-1").unwrap();
+    assert_eq!(params["session"], "session-1");
+    assert!(params["expected"].is_null());
+    let mut forged = body.clone();
+    forged["session"] = serde_json::json!("other-session");
+    assert!(file_replace_params(&serde_json::to_vec(&forged).unwrap(), "session-1").is_err());
+    let mut omitted = body;
+    omitted.as_object_mut().unwrap().remove("expected");
+    assert!(file_replace_params(&serde_json::to_vec(&omitted).unwrap(), "session-1").is_err());
+    assert!(file_replace_params(&vec![b' '; FILE_REPLACE_STDIN_BYTES + 1], "session-1").is_err());
+    assert!(file_replace_params(b"{}", "").is_err());
+    assert!(file_replace_params(b"not json", "session-1").is_err());
+    for args in [
+        vec!["__file"],
+        vec!["__file", "replace", "private-content"],
+        vec!["__file", "write"],
+    ] {
+        let args: Vec<String> = args.into_iter().map(str::to_string).collect();
+        assert!(file_replace_bridge(&args, Some(Vec::new())).is_err());
+    }
+}
+
+#[test]
 fn capture_bridge_is_bounded_and_cannot_supply_session_authority() {
     let request = parse_internal_request_object(
-        Some(br#"{"directory":"/work/shots","modal":true}"#), 8192, "capture",
-    ).unwrap();
+        Some(br#"{"directory":"/work/shots","modal":true}"#),
+        8192,
+        "capture",
+    )
+    .unwrap();
     assert_eq!(request["directory"], "/work/shots");
     assert!(parse_internal_request_object(
-        Some(br#"{"directory":"/work/shots","modal":true,"session":"forged"}"#), 8192, "capture",
-    ).is_err());
+        Some(br#"{"directory":"/work/shots","modal":true,"session":"forged"}"#),
+        8192,
+        "capture",
+    )
+    .is_err());
     assert!(parse_internal_request_object(Some(&vec![b'x'; 8193]), 8192, "capture").is_err());
     assert!(parse_internal_request_object(Some(b"[]"), 8192, "capture").is_err());
     assert!(parse_browser_bridge_request(Some(br#"{"directory":"/work/shots"}"#)).is_err());
 }
 
 mod app_sources {
-    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/support/app_sources.rs"));
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/support/app_sources.rs"
+    ));
 }
 
 #[test]
@@ -165,6 +201,28 @@ fn netdiag_bridge_request_is_bounded_and_cannot_assert_a_session() {
         parse_netdiag_bridge_request(Some(&vec![b'x'; NETDIAG_BRIDGE_REQUEST_BYTES + 1]))
             .unwrap_err()
             .contains("exceeds")
+    );
+}
+
+#[test]
+fn file_replace_bridge_preserves_codes_but_does_not_infer_safety_from_relay_errors() {
+    use crate::clawd::protocol::{RequestId, Response};
+    for code in ["indeterminate", "not_authorized", "execution_failed"] {
+        let error = file_replace_response(Response::error(
+            RequestId::generate(),
+            code,
+            "provider error",
+        ))
+        .unwrap_err();
+        let error: Value = serde_json::from_str(&error).unwrap();
+        assert_eq!(error["code"], code);
+        assert_eq!(error["indeterminate"], true);
+    }
+    let result =
+        serde_json::json!({"path":"/srv/document","bytes":0,"sha256":"hash","changed":true});
+    assert_eq!(
+        file_replace_response(Response::ok(RequestId::generate(), result.clone())).unwrap(),
+        result
     );
 }
 
@@ -847,6 +905,7 @@ fn consent_grant_yes_writes_record_and_show_reads_it_back() {
         runtime: Runtime::default(),
         entry: None,
         operations: BTreeMap::new(),
+        objects: BTreeMap::new(),
         ai: Some(AiPolicy {
             budget: AiBudget {
                 monthly_units: 1000,
@@ -1054,13 +1113,21 @@ fn install_yes_cannot_replace_os_confirmation_when_the_broker_is_unavailable() {
         r#"{"id":"needs-os-review","version":"1.0.0","name":{"en":"Requires OS review"}}"#,
     );
     let _apps = crate::test_env::TestEnvVarGuard::set("COS_APPS_DIR", &destination);
-    let _socket = crate::test_env::TestEnvVarGuard::set("CLAWD_SOCKET", root.path().join("missing.sock"));
+    let _socket =
+        crate::test_env::TestEnvVarGuard::set("CLAWD_SOCKET", root.path().join("missing.sock"));
     for flags in [
         vec![source.display().to_string(), "--yes".to_string()],
-        vec![source.display().to_string(), "--yes".to_string(), "--no-consent".to_string()],
+        vec![
+            source.display().to_string(),
+            "--yes".to_string(),
+            "--no-consent".to_string(),
+        ],
     ] {
         let error = super::app_commands::install_cmd(&flags).unwrap_err();
-        assert!(error.contains("system review service is unavailable"), "{error}");
+        assert!(
+            error.contains("system review service is unavailable"),
+            "{error}"
+        );
         assert!(!destination.join("needs-os-review").exists());
     }
 }

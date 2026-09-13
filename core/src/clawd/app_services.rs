@@ -40,6 +40,7 @@ pub(crate) struct AppCallAuthorization {
     pub service_extension_uid: u32,
     pub action_digest: String,
     pub expires_at_ms: u64,
+    pub activity: Option<crate::caps::activity_boundary::PolicyBinding>,
 }
 
 #[derive(Debug)]
@@ -56,6 +57,13 @@ pub(crate) struct PreparedAppServiceCall {
     pub authorized_mounts: Vec<crate::worker::AuthorizedMount>,
     pub lifecycle: McpLifecycle,
     pub deadline_ms: u64,
+    pub activity: Option<crate::caps::activity_boundary::PolicyBinding>,
+}
+
+impl PreparedAppServiceCall {
+    fn receipt_binding(&self) -> Option<(&crate::caps::activity_boundary::PolicyBinding, &str)> {
+        self.activity.as_ref().zip(self.context.task_id.as_deref())
+    }
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -276,6 +284,9 @@ impl AppServiceManager {
         self: &Arc<Self>,
         prepared: PreparedAppServiceCall,
     ) -> Result<crate::agent::tools::mcp::protocol::CallToolResult, BrokerError> {
+        if let Some(activity) = &prepared.activity {
+            activity.check().map_err(BrokerError::authorization)?;
+        }
         if prepared.deadline_ms <= crate::agentd::grant::now_ms() {
             return Err(BrokerError::authorization(
                 "App service call authorization expired before dispatch",
@@ -331,11 +342,17 @@ impl AppServiceManager {
                 let lease_expiring = runtime.expires_at_ms
                     <= crate::agentd::grant::now_ms()
                         .saturating_add(crate::extension_host::protocol::MAX_REQUEST_TIMEOUT_MS);
-                let host_exited =
-                    !package_changed && !policy_changed && !data_changed && !lease_expiring
-                        && runtime.host_exited();
+                let host_exited = !package_changed
+                    && !policy_changed
+                    && !data_changed
+                    && !lease_expiring
+                    && runtime.host_exited();
                 (
-                    package_changed || policy_changed || data_changed || lease_expiring || host_exited,
+                    package_changed
+                        || policy_changed
+                        || data_changed
+                        || lease_expiring
+                        || host_exited,
                     host_exited,
                 )
             });
@@ -426,6 +443,16 @@ impl AppServiceManager {
             .as_ref()
             .ok_or_else(|| BrokerError::unavailable("App service failed to start"))?;
         let authorization_expiry = prepared.deadline_ms;
+        let receipt = prepared.receipt_binding().map(|(activity, task)| {
+            (
+                activity.owner_uid,
+                activity.activity_id.clone(),
+                prepared.app_id.clone(),
+                prepared.tool.clone(),
+                prepared.package.content_digest.clone(),
+                task.to_string(),
+            )
+        });
         let authorization = self
             .broker
             .state
@@ -450,6 +477,7 @@ impl AppServiceManager {
                 )
                 .map_err(BrokerError::unavailable)?,
                 expires_at_ms: authorization_expiry,
+                activity: prepared.activity,
             })
             .map_err(BrokerError::unavailable)?;
         let authorization_guard = AuthorizationGuard {
@@ -478,7 +506,7 @@ impl AppServiceManager {
             .await;
         drop(authorization_guard);
         slot.last_used = Instant::now();
-        match result {
+        let outcome = match result {
             Ok(result) => Ok(result),
             Err(error) if host_fault_requires_retirement(error.category()) => {
                 slot.record_failure();
@@ -497,6 +525,20 @@ impl AppServiceManager {
                     "App service call failed: {error}"
                 )))
             }
+        };
+        match receipt {
+            Some((owner, activity, app, tool, package, task)) => {
+                super::activity_receipts::record_service_result(
+                    owner,
+                    &activity,
+                    &app,
+                    &tool,
+                    &package,
+                    Some(&task),
+                    outcome,
+                )
+            }
+            None => outcome,
         }
     }
 
@@ -518,8 +560,11 @@ impl AppServiceManager {
         }
         if !crate::approvals::system_review::has_accepted(
             spec.owner_uid,
-            app.require_verified().map_err(RuntimeStartError::admission)?,
-        ).map_err(RuntimeStartError::admission)? {
+            app.require_verified()
+                .map_err(RuntimeStartError::admission)?,
+        )
+        .map_err(RuntimeStartError::admission)?
+        {
             return Err(RuntimeStartError::admission(
                 "App service requires the owner's OS permission review",
             ));
@@ -906,8 +951,8 @@ impl AppServiceManager {
                 let package_changed = runtime.package != spec.package;
                 let data_changed = !runtime.data_current();
                 let lease_expired = runtime.expires_at_ms <= crate::agentd::grant::now_ms();
-                let host_exited = !package_changed && !data_changed && !lease_expired
-                    && runtime.host_exited();
+                let host_exited =
+                    !package_changed && !data_changed && !lease_expired && runtime.host_exited();
                 (
                     !package_changed && !data_changed && !lease_expired && !host_exited,
                     host_exited,
@@ -1054,8 +1099,12 @@ impl AppServiceManager {
                     let policy_changed =
                         current_policy.as_ref().ok() != Some(&runtime.permission_policy);
                     let data_changed = !runtime.data_current();
-                    let expected_retirement =
-                        lease_expired || contract_changed || policy_changed || data_changed || idle || app_stopped;
+                    let expected_retirement = lease_expired
+                        || contract_changed
+                        || policy_changed
+                        || data_changed
+                        || idle
+                        || app_stopped;
                     let host_exited = !expected_retirement && runtime.host_exited();
                     (expected_retirement || host_exited, host_exited)
                 }

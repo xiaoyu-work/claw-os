@@ -1085,9 +1085,16 @@ pub(crate) fn classify_app_call(app_id: &str, caps: &[crate::caps::Cap]) -> Call
     if app_id != "cosmic-edit" || matches!(placement, CallPlacement::Unsupported(_)) {
         return placement;
     }
-    let direct = caps.iter().filter(|cap| !matches!(
-        cap.verb, crate::caps::Verb::FS_READ | crate::caps::Verb::FS_WRITE,
-    )).cloned().collect::<Vec<_>>();
+    let direct = caps
+        .iter()
+        .filter(|cap| {
+            !matches!(
+                cap.verb,
+                crate::caps::Verb::FS_READ | crate::caps::Verb::FS_WRITE,
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
     classify_call(&direct)
 }
 
@@ -2226,16 +2233,14 @@ impl Tool for AppSessionTool {
 
     async fn exec(&self, input: Value) -> ToolResult {
         let started = Instant::now();
-        let supplied_args = json_to_arg_map(&input);
-        let paths = match crate::bridge::launcher_path_context() {
-            Ok(paths) => paths,
-            Err(error) => return ToolResult::err(format!("resolve App paths: {error}")),
-        };
-        let effective = match self.manifest.resolve_mcp_tool_call(
-            &self.manifest_tool_name,
-            &supplied_args,
-            &paths,
-        ) {
+        let resolved = json_to_arg_map(&input).and_then(|supplied_args| {
+            let paths = crate::bridge::launcher_path_context()
+                .map_err(|error| format!("resolve App paths: {error}"))?;
+            self.manifest
+                .resolve_mcp_tool_call(&self.manifest_tool_name, &supplied_args, &paths)
+                .map_err(|error| error.to_string())
+        });
+        let effective = match resolved {
             Ok(effective) => effective,
             Err(error) => {
                 let message = format!("argument resolution failed: {error}");
@@ -2254,9 +2259,10 @@ impl Tool for AppSessionTool {
 
         let args_map = effective.values;
 
-        if let Err(denial) =
-            crate::caps::require(crate::caps::Verb::AGENT_INVOKE, self.invoke_scope.clone())
-        {
+        if let Err(denial) = crate::caps::enforcement::require_capability_reference(
+            crate::caps::Verb::AGENT_INVOKE,
+            &self.invoke_scope,
+        ) {
             let message = denial.to_string();
             emit_audit(
                 &self.app_id,
@@ -2317,6 +2323,8 @@ impl Tool for AppSessionTool {
             return ToolResult::err(error);
         }
 
+        // Root settles invoke and target needs together for this exact call.
+        // Spending Activity confirmation in this preflight would consume it twice.
         match host
             .call_app(
                 self.app_id.clone(),
@@ -2340,12 +2348,12 @@ impl Tool for AppSessionTool {
     }
 }
 
-fn json_to_arg_map(input: &Value) -> BTreeMap<String, Value> {
+fn json_to_arg_map(input: &Value) -> Result<BTreeMap<String, Value>, String> {
     // MCP protocol metadata lives in the tools/call envelope. The arguments
     // object contains only manifest-declared values and is validated strictly.
     match input {
-        Value::Object(m) => m.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
-        _ => BTreeMap::new(),
+        Value::Object(m) => Ok(m.iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
+        _ => Err("App tool arguments must be a JSON object".to_string()),
     }
 }
 
@@ -2357,28 +2365,14 @@ fn verb_csv(caps: &[crate::caps::Cap]) -> String {
 }
 
 fn render_call_result(res: crate::agent::tools::mcp::protocol::CallToolResult) -> (String, bool) {
-    use crate::agent::tools::mcp::protocol::ContentItem;
-    let mut chunks = Vec::new();
-    for item in res.content {
-        match item {
-            ContentItem::Text { text } => chunks.push(text),
-            ContentItem::Image { mime_type, .. } => {
-                chunks.push(format!("[image content omitted ({mime_type})]"));
-            }
-        }
-    }
-    let body = if chunks.is_empty() {
-        "(tool returned no content)".to_string()
-    } else {
-        chunks.join("\n\n")
-    };
+    let (body, is_error) = crate::operations::receipts::render_mcp_result(&res);
     (
         crate::agent::safety::untrusted::wrap_labeled(
             crate::agent::trust::SourceKind::AppToolResult,
             None,
             &body,
         ),
-        res.is_error.unwrap_or(false),
+        is_error,
     )
 }
 

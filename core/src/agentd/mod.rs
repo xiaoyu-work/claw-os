@@ -20,8 +20,8 @@
 //!   `PR_SET_NO_NEW_PRIVS`, applies a `0077` umask, replaces the
 //!   environment with an allowlist and closes every inherited
 //!   descriptor except the job channel.
-//! * **`claw-extension-host`** is also spawned by [`supervisor`] as the
-//!   task owner. It owns dynamic processes and exposes only a worker-bound
+//! * **`claw-extension-host`** is spawned by [`supervisor`] under a leased
+//!   isolated execution identity. It owns dynamic processes and exposes a worker-bound
 //!   control socket plus a broker-owned, route-filtered proxy.
 //!
 //! ## Authority
@@ -37,9 +37,10 @@
 //!
 //! The channel itself is a private `socketpair(2)` created before the
 //! fork and handed to the child as fd 3. It carries the job lifecycle
-//! routes in [`protocol::WORKER_ROUTES`] plus one narrow permission
-//! mediation route — there is no admin, App-session, scheduler or
-//! permission-decision route on it, and `/run/cos/clawd.sock` stays
+//! routes in [`protocol::WORKER_ROUTES`], bounded Activity reporting,
+//! and narrow permission mediation. App execution uses the isolated extension Host. There
+//! is no general broker proxy, admin, scheduler or permission-decision route,
+//! and `/run/cos/clawd.sock` stays
 //! `0660 root:sudo` with the worker's supplementary groups cleared, so
 //! the worker cannot reach the broker socket at all. Even a leaked fd
 //! is therefore only ever an authority to report on, and ask consent
@@ -85,6 +86,8 @@
 pub mod grant;
 pub mod guard;
 pub mod protocol;
+#[cfg(unix)]
+mod receipts;
 #[cfg(unix)]
 pub mod spawn;
 #[cfg(unix)]

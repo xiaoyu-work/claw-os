@@ -7,6 +7,26 @@ const EXPECTED_USER_COMMANDS: &[&str] = &[
     "ai.chat",
     "daemon.health",
     "daemon.status",
+    "activity.create",
+    "activity.list",
+    "activity.get",
+    "activity.update",
+    "activity.transition",
+    "activity.run",
+    "activity.execution_limits.get",
+    "activity.execution_limits.set",
+    "activity.execution_limits.enabled",
+    "activity.capability_policy.get",
+    "activity.capability_policy.set",
+    "activity.capability_policy.enabled",
+    "activity.objects",
+    "activity.object.attach",
+    "activity.object_state.list",
+    "activity.object_state.record",
+    "operation.preview",
+    "activity.operation.preview",
+    "activity.receipts",
+    "activity.receipt.record",
     "task.submit",
     "task.list",
     "task.get",
@@ -40,6 +60,7 @@ const EXPECTED_USER_COMMANDS: &[&str] = &[
     "system.browser.control",
     "system.display.control",
     "system.events.control",
+    "system.file.replace",
     "system.firewall.control",
     "system.hardware.inspect",
     "system.location.query",
@@ -366,8 +387,17 @@ fn system_review_typed_wire_is_closed_bounded_and_separates_owner_cancellation()
     }});
     assert_eq!((cancel.decode)(cancellation.clone()).unwrap(), cancellation);
     assert!((cancel.decode)(json!({"owner_uid":1001,"review":decision})).is_err());
-    assert!((decide.decode)(json!({"owner_uid":1000,"id":"rv-fixture","decision":"approve","review":decision})).is_err());
-    for field in ["approved", "grant", "owner_uid", "permissions_granted", "trust"] {
+    assert!((decide.decode)(
+        json!({"owner_uid":1000,"id":"rv-fixture","decision":"approve","review":decision})
+    )
+    .is_err());
+    for field in [
+        "approved",
+        "grant",
+        "owner_uid",
+        "permissions_granted",
+        "trust",
+    ] {
         let mut forged = typed.clone();
         forged["review"][field] = json!(true);
         assert!((decide.decode)(forged).is_err(), "{field}");
@@ -375,8 +405,68 @@ fn system_review_typed_wire_is_closed_bounded_and_separates_owner_cancellation()
     let mut oversized = typed;
     oversized["review"]["id"] = json!("x".repeat(clawd_client::system_review::MAX_DECISION_BYTES));
     assert!((decide.decode)(oversized).is_err());
-    let legacy = json!({"id":"rv-0123456789abcdef0123456789abcdef","owner_uid":1000,"decision":"approve"});
+    let legacy =
+        json!({"id":"rv-0123456789abcdef0123456789abcdef","owner_uid":1000,"decision":"approve"});
     assert_eq!((decide.decode)(legacy.clone()).unwrap(), legacy);
+}
+
+#[test]
+fn file_replace_is_a_session_authorized_mutation_with_no_content_audit_fields() {
+    let route = Command::SystemFileReplace.route();
+    assert_eq!(route.name, "system.file.replace");
+    assert_eq!(route.access, Access::User);
+    assert_eq!(route.kind, Kind::Mutation);
+    assert_eq!(route.budget.deadline, Deadline::Uninterruptible);
+    assert_eq!(route.authority.subject, SubjectSource::Session);
+    assert_eq!(route.authority.audience, Audience::SystemService);
+    assert_eq!(
+        (route.authority.requirement)(&json!({})).unwrap(),
+        authority::Requirement::RouteDerived
+    );
+    let facts = crate::audit_policy::request_facts_for_route(
+        route.name,
+        route.audit_fields,
+        &json!({"session":"session-1","path":"/private/file","content_base64":"private-content","expected":{"sha256":"private-hash"}}),
+    );
+    let recorded = serde_json::to_string(&facts).unwrap();
+    for private in ["/private/file", "private-content", "private-hash"] {
+        assert!(!recorded.contains(private));
+    }
+}
+
+#[test]
+fn activity_routes_record_identity_and_sizes_not_private_planning_text() {
+    let private_text = "private-activity-planning-content";
+    for command in [
+        Command::ActivityCreate,
+        Command::ActivityList,
+        Command::ActivityGet,
+        Command::ActivityUpdate,
+        Command::ActivityTransition,
+        Command::ActivityRun,
+        Command::ActivityObjects,
+        Command::ActivityObjectAttach,
+    ] {
+        let route = command.route();
+        assert_eq!(route.authority.subject, SubjectSource::Peer);
+        let facts = crate::audit_policy::request_facts_for_route(
+            route.name,
+            route.audit_fields,
+            &json!({
+                "id": "00000000-0000-4000-8000-000000000001",
+                "title": private_text,
+                "goal": private_text,
+                "boundaries": private_text,
+                "completion_criteria": private_text,
+                "completion_note": private_text,
+                "prompt": private_text,
+                "resources": [{"label": private_text, "reference": private_text}],
+                "object": {"app_id":"demo","object_type":"entry","object_id":private_text},
+            }),
+        );
+        let recorded = serde_json::to_string(&facts).unwrap();
+        assert!(!recorded.contains(private_text), "{}", route.name);
+    }
 }
 
 #[test]
@@ -417,6 +507,12 @@ fn mutating_routes_are_never_cancelled_mid_flight() {
 #[test]
 fn read_only_routes_are_classified_as_queries() {
     for name in [
+        "activity.list",
+        "activity.get",
+        "activity.objects",
+        "operation.preview",
+        "activity.operation.preview",
+        "activity.receipts",
         "daemon.health",
         "daemon.status",
         "task.list",
@@ -442,6 +538,12 @@ fn read_only_routes_are_classified_as_queries() {
 #[test]
 fn state_changing_routes_are_classified_as_mutations() {
     for name in [
+        "activity.create",
+        "activity.update",
+        "activity.transition",
+        "activity.run",
+        "activity.object.attach",
+        "activity.receipt.record",
         "task.submit",
         "task.cancel",
         "task.retry",

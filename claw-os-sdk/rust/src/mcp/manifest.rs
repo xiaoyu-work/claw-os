@@ -125,6 +125,7 @@ fn parse(manifest: Value) -> Result<Manifest, AppError> {
             "runtime",
             "entry",
             "operations",
+            "objects",
             "ai",
             "mcp",
             "desktop",
@@ -205,7 +206,7 @@ fn parse(manifest: Value) -> Result<Manifest, AppError> {
         reject_unknown_fields(
             tool,
             &format!("`mcp.tools[{index}]`"),
-            &["name", "summary", "args", "needs"],
+            &["name", "summary", "args", "needs", "effects"],
         )?;
         let name = tool
             .get("name")

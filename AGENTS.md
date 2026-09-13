@@ -38,6 +38,15 @@ editing additional surfaces.
 | --- | --- | --- |
 | `cos` CLI command or primitive | `core/src/main.rs`, `core/src/router.rs` | The primitive module, `core/src/clawd/`, inline Rust tests |
 | Model-visible content or prompt-injection containment | `core/src/agent/trust/` | `agent/prompt/`, `agent/safety/untrusted.rs`, the ingestion adapter, `test/unit/agent/trust/` |
+| Activity goal/lifecycle or presentation | `core/src/activities/`, `core/src/clawd/activities.rs`, `docs/activities.md` | `core/src/activity.rs`, task/session associations, Agent Web, `desktop/agent/`; one shared backend for headless and desktop |
+| Activity execution limits or attempt accounting | `core/src/activities/execution_limits.rs`, `core/src/agent/service/execution_limits.rs`, `docs/activity-execution-limits.md` | Root claim reservations, actual turn ceiling, supervisor/standalone expiry and revocation, CLI/Web/native; constraints never grant capabilities |
+| Activity capability or confirmation boundaries | `core/src/caps/activity_boundary.rs`, `core/src/clawd/activity_capability_policy.rs`, `docs/activity-capability-policies.md` | Shared policy storage, root Job/lease identity, capability/approval gates, App grant bindings, live revocation and terminal/Web/native controls; policy never supplies permission |
+| App object contract or Activity object reference | `core/src/objects/`, `core/src/caps/manifest/objects.rs`, `docs/app-objects.md` | SDK wire/types/helpers, `clawd/activity_objects.rs`, ordinary App dispatch, Web/native presentations |
+| Activity object observations, relations or corrections | `core/src/activities/object_state.rs`, `core/src/clawd/activity_object_state.rs`, `docs/object-state.md` | Shared SQLite history, owner/receipt/reference binding, CLI/Web/native presentations and recorded untrusted task context; no App data copy or inferred authority |
+| App effect declaration or operation preview | `core/src/operations/`, `core/src/caps/manifest/effects.rs`, `docs/operation-previews.md` | Shared broker preview routes, SDK manifest schema, Activity Web/native views; no execution or authority |
+| Activity execution receipt | `core/src/activities/receipts.rs`, `core/src/clawd/activity_receipts.rs`, `docs/execution-receipts.md` | Normal App execution, grant-bound `agentd` reporting, immutable owner-scoped reports, redaction, terminal/Web/native views |
+| Staged file plan or guarded replacement | `docs/file-change-plans.md`, `core/src/clawd/file_changes.rs`, `packaging/apps.lock.json` | Exact session capabilities, authenticated App calls, indeterminate journal handling, external App-owned plans and shared receipts; never restore an OS-local App copy |
+| App execution from a leased Agent task | `core/src/extension_host/`, `core/src/clawd/app_services.rs`, `core/src/agentd/` | Isolated task/service Hosts, exact per-call authority, broker admission, runtime provenance, cancellation and Activity receipts; no dynamic App code in the model worker |
 | Agent ask/chat loop | `core/src/agent/runtime/loop_.rs`, `core/src/agent/runtime/turn.rs` | `prompt/`, `tools/`, `memory/`, `llm/` |
 | Request context, memory selection, or context budget | `core/src/agent/context/`, `core/src/agent/runtime/context.rs` | `prompt/`, memory tools, continuation/compaction recording; the model chooses additional reads through guarded tools |
 | Agent worker process / broker isolation | `core/src/agentd/`, `core/src/bin/claw-agentd.rs` | `clawd/server.rs`, `agent/service.rs`, `clawd.service`, `packaging/deb/build-debs.sh` |
@@ -53,7 +62,7 @@ editing additional surfaces.
 | Broker wire protocol or a new broker route | `core/src/clawd/routes.rs`, `core/src/clawd/wire/`, `core/src/clawd/transport/` | `client.rs`, every in-repo client, `audit_policy.rs`, `core/tests/clawd_broker_socket.rs` |
 | MCP client/server integration | `core/src/agent/tools/mcp/`, `core/src/config.rs` | tool registry and agent lifecycle attachment |
 | Extension package provenance (App/Skill/MCP signing, trust roots, revocation) | `core/src/provenance/`, `docs/extension-provenance.md` | `core/src/apps.rs`, `core/src/agent/skills/loader.rs`, `core/src/agent/tools/mcp/discover.rs`, `packaging/deb/build-debs.sh` |
-| App client/business/MCP operation | External `clawos-app` guide and owning `products/<group>/package.json` or `capabilities/<group>/package.json` | Declared App manifest, entrypoint and tests; versioned SDK/runtime; OS source-pin/package delivery |
+| App client/business/MCP operation | External `clawos-app` guide and owning `products/<group>/package.json` or `capabilities/<group>/package.json` | Declared App manifest, entrypoint and tests; versioned SDK/runtime; automatic App-main build selection and package delivery |
 | App installation or requested-permission disclosure | `core/src/router/app_commands.rs`, `core/src/apps/permission_review.rs` | Verified snapshots, OS catalog, protected review controller, separate runtime authorization and AI consent |
 | OS permission review UI or decision | `core/src/clawd/system_review.rs`, `crates/clawd-client/MODULE.md` | Shared App/capability DTO, protected display revisions, terminal and native renderers, bounded polkit helper, owner-only cancellation and existing approval authority |
 | Authenticated display login or GUI App lifetime | `core/src/display_session/MODULE.md`, `core/src/clawd/gui/MODULE.md` | `crates/claw-display-{control,login}/`, `core/src/worker/gui_transport/`, compositor/session/PAM startup, checked permission retirement and `docs/updating.md` |
@@ -67,7 +76,7 @@ editing additional surfaces.
 | Update downgrade protection | `core/src/update/`, `packaging/release-security/policy.json` | `packaging/deb/common/`, maintainer scripts, `packaging/apt-repo/verify-release-security.sh`, `docs/updating.md` |
 | Web desktop or website | `web/src/App.tsx`, `web/MODULE.md` | `web/src/components/`, `web/public/site/`, Pages composition workflow |
 | Desktop component | `desktop/README.md`, `desktop/PROVENANCE.md`, component README | component Cargo/just manifest and license; external native Apps via `scripts/app_sources.py --native`; Media Player uses `just player-build` and `core/src/clawd/media_player.rs` for authority |
-| Migrated App / shared-capability source | [`clawos-app`](https://github.com/xiaoyu-work/clawos-app), `packaging/apps.lock.json` | Product UI/business/MCP/native source and explicitly kinded capability clients live there; `scripts/app_sources.py` stages the pinned payload here |
+| Migrated App / shared-capability source | [`clawos-app`](https://github.com/xiaoyu-work/clawos-app), `packaging/apps.lock.json` | Product UI/business/MCP/native source and explicitly kinded capability clients live there; `scripts/app_sources.py` resolves main and stages one immutable build snapshot |
 | CI workflow | `.github/workflows/` | scripts invoked by the workflow; only `test.yml` runs on pull requests, while publication workflows are manually dispatched or reusable |
 
 ## Development
@@ -105,8 +114,12 @@ python3 wire/codegen.py
 Use the narrowest existing test first. Core tests that mutate process-wide
 environment variables must run serially when combined.
 
-Tests that exercise a migrated product use the immutable App source pin.
-Run `python3 scripts/app_sources.py` before those tests (CI does this explicitly).
+Tests that exercise a migrated product use a resolved immutable App source
+snapshot. Run `python3 scripts/app_sources.py` first to fetch current App `main`
+and record its exact SHA (CI does this explicitly). Do not maintain a commit
+pin in the version-2 repository selection. Multi-step package builds retain
+one generated snapshot through `CLAW_APP_SOURCE_LOCK`; SDK artifact pins,
+runtime package verification and installed update authority are unchanged.
 Cargo never downloads product fixtures or substitutes local App source for a
 declared external App. The lock's optional `capabilities` list resolves only
 `capabilities/<name>` with `kind: "shared-capability-client"`; `products` and
@@ -200,8 +213,8 @@ Documentation-only changes do not require code tests.
 
 Make client changes in the owning `clawos-app` source package, not an OS-local
 copy or ignored composition cache. Compatible changes need no OS implementation
-edit; consuming a new release still requires the declared App-pin/package
-delivery update. Coordinate an OS change only when its public SDK/runtime,
+edit; new builds automatically consume App `main`, while installed changes
+still require signed package delivery. Coordinate an OS change only when its public SDK/runtime,
 protocol, authorization or other platform contract actually changes.
 
 1. Update `app.json` operation args and `needs`.
@@ -267,6 +280,30 @@ separate from audit and context-event journals, publish only after the source
 state transition is durable, and cover deduplication, DND, retries, owner
 isolation, and acknowledgement in tests. Background delivery must not depend
 on an LLM choosing to invoke a notification tool.
+
+### New or changed Activity behavior
+
+Activities have one desktop-independent core service and owner-scoped broker
+contract. Terminal, Web and native desktop clients are presentations, never
+separate lifecycle or persistence authorities. Keep optional task/session
+associations backward compatible; an execution completing never proves that
+the Activity goal was achieved. Preserve explicit completion confirmation and
+the existing capability, approval, task-cancellation and audit boundaries.
+Update [`docs/activities.md`](docs/activities.md) with user-facing changes.
+
+Capability policies must constrain both standing permissions and approval
+escalation. Deny precedes any consent side effect; required confirmation is
+exact and single-use even when a capability is already held. App registration
+and calls settle their whole approval set at root, not in a consuming local
+preflight. Carry the policy binding through grant attenuation and recheck it
+before broker effects. Policy edits stop old attempts through the existing
+worker/App cleanup path, without undoing already-admitted effects.
+
+App object declarations must be authenticated before labels or resolvers are
+trusted. Keep canonical reference semantics shared through the public SDK;
+describing or attaching a reference must not execute an App, copy its data,
+or create authority. Explicit resolution reuses the normal App invocation
+pipeline. See [`docs/app-objects.md`](docs/app-objects.md).
 
 ### LLM provider change
 

@@ -11,9 +11,9 @@ use crate::clawd::routes::Command as ClawdCommand;
 use crate::proc::{deregister_session, register_session, SessionInfo};
 
 mod consent;
-pub(crate) mod gui_args;
 #[cfg(target_os = "linux")]
 pub(crate) mod gui;
+pub(crate) mod gui_args;
 mod local;
 
 #[cfg(unix)]
@@ -679,30 +679,23 @@ impl AppIdentitySession {
         }
 
         if clawd_backend {
-            let caps = local_caps(&parent_caps)?;
+            // Root settles the complete plan; local derivation must not spend
+            // one-time consent before the broker can consume it.
             return Self::register_with_clawd(
                 app_id,
                 &request,
                 parent_caps,
-                caps,
                 ceiling.as_ref(),
                 &launch.package_ref(),
             );
         }
-        Self::register_local(
-            &parent,
-            launch,
-            &request,
-            parent_caps,
-            local_caps,
-        )
+        Self::register_local(&parent, launch, &request, parent_caps, local_caps)
     }
 
     fn register_with_clawd(
         app_id: &str,
         request: &LaunchRequest<'_>,
         parent_caps: CapSet,
-        _granted_caps: CapSet,
         ceiling: Option<&crate::provenance::Ceiling>,
         package: &crate::provenance::runtime::PackageRef,
     ) -> Result<Self, String> {
@@ -1315,7 +1308,11 @@ fn clawd_request(
             Some(error) => (Some(error.code), error.message, error.data),
             None => (None, format!("clawd {command} failed"), None),
         };
-        Err(ClawdCallError { code, message, data })
+        Err(ClawdCallError {
+            code,
+            message,
+            data,
+        })
     }
 }
 
@@ -1436,7 +1433,9 @@ fn approval_statuses_complete(ids: &[String], result: &serde_json::Value) -> Res
             .and_then(serde_json::Value::as_str)
             .ok_or("App approval status response omitted an id")?;
         if !expected.contains(id) || !seen.insert(id) {
-            return Err("App approval status response contains an unexpected or duplicate id".into());
+            return Err(
+                "App approval status response contains an unexpected or duplicate id".into(),
+            );
         }
         match entry.get("status").and_then(serde_json::Value::as_str) {
             Some("approved") => {}

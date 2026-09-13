@@ -17,28 +17,124 @@ fn context() -> McpCallContext {
 }
 
 #[test]
+fn automatic_receipts_require_a_task_and_do_not_double_record_human_cli_calls() {
+    let _lock = crate::test_env::lock_env();
+    let root = tempfile::tempdir().unwrap();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", root.path());
+    let activity = super::super::activities::create(
+        serde_json::json!({"title":"Report","goal":"Record one execution"}),
+        &ClientIdentity {
+            uid: Some(1000),
+            ..ClientIdentity::unknown()
+        },
+    )
+    .unwrap();
+    let store = crate::agent::service::Store::with_root(root.path().join("jobs")).unwrap();
+    let job = store
+        .submit_with_activity(
+            "work".into(),
+            None,
+            None,
+            None,
+            None,
+            true,
+            Some(1000),
+            None,
+            Some(activity["id"].as_str().unwrap().to_string()),
+        )
+        .unwrap();
+    let binding = crate::caps::activity_boundary::ActivityBoundary::for_job(&job)
+        .unwrap()
+        .unwrap()
+        .binding();
+    let mut context = context();
+    context.task_id = Some(job.id.clone());
+    let mut prepared = PreparedAppServiceCall {
+        owner_uid: 1000,
+        app_id: "demo".into(),
+        tool: "demo.get".into(),
+        arguments: serde_json::json!({}),
+        deadline_ms: context.deadline_unix_ms.unwrap(),
+        context,
+        capability_generation: "generation".into(),
+        package: PackageRef {
+            kind: crate::provenance::PackageKind::App,
+            id: "demo".into(),
+            content_digest: format!("sha256:{}", "a".repeat(64)),
+            publisher_key_id: None,
+            tier: "vendor".into(),
+        },
+        caps: CapSet::new(),
+        placement: crate::agent::tools::cos_apps_session::CallPlacement::Reusable,
+        authorized_mounts: Vec::new(),
+        lifecycle: McpLifecycle::Lazy,
+        activity: Some(binding),
+    };
+    let (binding, task) = prepared.receipt_binding().unwrap();
+    assert_eq!(binding.activity_id, activity["id"]);
+    assert_eq!(task, job.id);
+
+    prepared.context.task_id = None;
+    prepared.context.caller.kind = crate::agent::tools::app_gateway::McpPrincipalKind::Cli;
+    assert!(
+        prepared.activity.is_some(),
+        "policy binding is not discarded"
+    );
+    assert!(prepared.receipt_binding().is_none());
+    prepared.context.task_id = Some(job.id);
+    prepared.activity = None;
+    assert!(prepared.receipt_binding().is_none());
+}
+
+#[test]
 fn permission_policy_snapshot_detects_revocation_without_restarting_other_apps() {
     let _lock = crate::test_env::lock_env();
-    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../build");
-    let dir = tempfile::tempdir_in(root).unwrap();
+    let dir = tempfile::tempdir().unwrap();
     let _caps = crate::test_env::TestEnvVarGuard::set("COS_CAPS_DATA_DIR", dir.path());
     let before = crate::approvals::app_policy::blocks(1000, "audio-manager").unwrap();
-    let cap = crate::caps::Cap::new(crate::caps::Verb::SYS_OBSERVE, crate::caps::Scope::name("audio"));
+    let cap = crate::caps::Cap::new(
+        crate::caps::Verb::SYS_OBSERVE,
+        crate::caps::Scope::name("audio"),
+    );
     let block = crate::approvals::app_policy::revoke(1000, "audio-manager", cap).unwrap();
     let after = crate::approvals::app_policy::blocks(1000, "audio-manager").unwrap();
     assert_ne!(before, after);
-    assert_eq!(before, crate::approvals::app_policy::blocks(1001, "audio-manager").unwrap());
-    assert_eq!(before, crate::approvals::app_policy::blocks(1000, "camera-manager").unwrap());
-    assert_eq!(after, crate::approvals::app_policy::blocks(1000, "audio-manager").unwrap());
+    assert_eq!(
+        before,
+        crate::approvals::app_policy::blocks(1001, "audio-manager").unwrap()
+    );
+    assert_eq!(
+        before,
+        crate::approvals::app_policy::blocks(1000, "camera-manager").unwrap()
+    );
+    assert_eq!(
+        after,
+        crate::approvals::app_policy::blocks(1000, "audio-manager").unwrap()
+    );
     let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", dir.path());
-    let id = crate::approvals::submit_owned(block.cap.verb, block.cap.scope.clone(),
-        block.session(1000, "audio-manager"), "restore", None, Some(1000)).unwrap();
+    let id = crate::approvals::submit_owned(
+        block.cap.verb,
+        block.cap.scope.clone(),
+        block.session(1000, "audio-manager"),
+        "restore",
+        None,
+        Some(1000),
+    )
+    .unwrap();
     crate::approvals::approve_for_owner(
-        &id, crate::approvals::GrantDuration::Forever, None, None, Some(1000),
-    ).unwrap();
+        &id,
+        crate::approvals::GrantDuration::Forever,
+        None,
+        None,
+        Some(1000),
+    )
+    .unwrap();
     let restored = crate::approvals::app_policy::blocks(1000, "audio-manager").unwrap();
     assert!(restored[0].enabled(1000, "audio-manager").unwrap());
-    assert_ne!(before, restored, "restoration must not roll back the snapshot used to retire a Host");
+    assert_ne!(
+        before, restored,
+        "restoration must not roll back the snapshot used to retire a Host"
+    );
     assert_eq!(after, restored);
 }
 
